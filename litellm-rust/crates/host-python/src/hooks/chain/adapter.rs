@@ -89,6 +89,7 @@ pub(super) trait ChainHooks: PythonOwned {
         result: PyResult<Py<PyAny>>,
     ) -> PyResult<ChainStep<()>>;
     fn arguments_prepared(&mut self, py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<()>;
+    fn arguments_resolved(&mut self, py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<()>;
     fn on_stream_open(&mut self, py: Python<'_>, head: &Py<PyAny>) -> PyResult<()>;
     fn on_stream_chunk(&mut self, py: Python<'_>, chunk: &Py<PyAny>) -> PyResult<()>;
 }
@@ -179,6 +180,10 @@ impl<H: PythonCallHooks> ChainHooks for HookAdapter<H> {
 
     fn arguments_prepared(&mut self, py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<()> {
         self.hooks.arguments_prepared(py, arguments)
+    }
+
+    fn arguments_resolved(&mut self, py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<()> {
+        self.hooks.arguments_resolved(py, arguments)
     }
 
     fn on_stream_open(&mut self, py: Python<'_>, head: &Py<PyAny>) -> PyResult<()> {

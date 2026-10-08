@@ -35,6 +35,14 @@ pub trait CallHooks<R: HookRuntime>: Sized {
         Ok(())
     }
 
+    fn arguments_resolved(
+        &mut self,
+        _runtime: R::Context<'_>,
+        _arguments: &R::Arguments,
+    ) -> Result<(), R::Error> {
+        Ok(())
+    }
+
     fn before_provider_request(
         &mut self,
         _runtime: R::Context<'_>,

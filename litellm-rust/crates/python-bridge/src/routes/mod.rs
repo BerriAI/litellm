@@ -10,7 +10,9 @@ pub(crate) mod traces;
 
 use litellm_callbacks_legacy_python::{LegacyLogging, LoggingOperation, PublicCall};
 use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol};
-use litellm_host_python::{HookChain, PythonBinding, PythonCallHooks, PythonHostCalls, effective};
+use litellm_host_python::{
+    CallArguments, HookChain, PythonBinding, PythonCallHooks, PythonHostCalls, effective,
+};
 use pyo3::{
     prelude::*,
     types::{PyDict, PyMapping, PyTuple},
@@ -50,18 +52,21 @@ fn call_hooks(
     operation: LoggingOperation,
     call: &NativeCall<'_>,
     asynchronous: bool,
-) -> PyResult<(Py<PyDict>, impl PythonCallHooks + use<>)> {
-    let call = PublicCall::capture(&call.base, &call.args, &call.kwargs)?;
-    let arguments = call.arguments(py);
+) -> PyResult<(CallArguments, impl PythonCallHooks + use<>)> {
+    let public = PublicCall::capture(&call.args, &call.kwargs)?;
+    let arguments = CallArguments {
+        base: call.base.clone().unbind(),
+        kwargs: public.arguments(py),
+    };
     Ok((
         arguments,
-        LegacyLogging::new(py, operation, call, asynchronous),
+        LegacyLogging::new(py, operation, public, asynchronous),
     ))
 }
 
 fn run_public_call<H, M>(
     py: Python<'_>,
-    arguments: Py<PyDict>,
+    arguments: CallArguments,
     start: impl FnOnce(
         Python<'_>,
         &Bound<'_, PyDict>,

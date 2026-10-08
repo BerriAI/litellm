@@ -47,6 +47,7 @@ struct LoggedRequest {
 pub struct LegacyLogging {
     operation: LoggingOperation,
     call: PublicCall,
+    resolved: Option<Py<PyDict>>,
     logger: Option<PythonLogger>,
     start: Py<PyAny>,
     end: Option<Py<PyAny>>,
@@ -77,6 +78,7 @@ impl LegacyLogging {
         Self {
             operation,
             call,
+            resolved: None,
             logger: None,
             start: py.None(),
             end: None,
@@ -125,6 +127,12 @@ impl LegacyLogging {
 
     pub(crate) fn adopt_arguments(&mut self, py: Python<'_>, arguments: &Py<PyDict>) {
         self.call.set_kwargs(arguments.clone_ref(py));
+    }
+
+    /// The call as the public function sees it once every rewrite is in, which is what the
+    /// pre-call payload re-aliases the caller's own objects from.
+    pub(crate) fn adopt_resolved(&mut self, py: Python<'_>, arguments: &Py<PyDict>) {
+        self.resolved = Some(arguments.clone_ref(py));
     }
 
     /// Deployment hooks are awaited, and Python's synchronous `@client` wrapper never
@@ -380,8 +388,9 @@ impl LegacyLogging {
         let body = to_py(py, &wire.body)?
             .into_bound(py)
             .cast_into::<PyDict>()?;
+        let resolved = self.resolved.as_ref().ok_or_else(missing_state)?.bind(py);
         for (name, sent) in wire.body.as_object().into_iter().flatten() {
-            if let Some(value) = self.call.lookup(py, name)?
+            if let Some(value) = resolved.get_item(name)?
                 && from_py::<Value>(&value).is_ok_and(|caller| caller == *sent)
             {
                 body.set_item(name, value)?;
@@ -565,6 +574,7 @@ impl PythonOwned for LegacyLogging {
     }
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         self.call.traverse(visit)?;
+        visit.call(&self.resolved)?;
         if let Some(logger) = &self.logger {
             logger.traverse(visit)?;
         }
@@ -951,7 +961,7 @@ class PayloadLogger(StubLogger):
         self.record('post_call', None)
         self.post = (original_response, api_key, additional_args)
 
-bound = {}
+base = {}
 kwargs = {}
 logger = PayloadLogger()
 on_pre_call = lambda additional_args: None
@@ -1123,6 +1133,7 @@ prepared = {'pages': replacement}
                 .unwrap()
                 .unbind();
             logging.arguments_prepared(py, &prepared).unwrap();
+            logging.arguments_resolved(py, &prepared).unwrap();
             let wire = WireRequest {
                 body: json!({"pages": [1]}),
                 ..route_wire()
@@ -1222,10 +1233,10 @@ on_pre_call = lambda args: observed.append(
 def check():
     assert observed == [(True, True)], observed
 ")]
-    #[case::bound_value_behind_an_omitted_keyword(c"
+    #[case::positional_value_behind_an_omitted_keyword(c"
 document = {'type': 'document_url', 'document_url': 'data:application/pdf;base64,YWJj'}
 pages = [0]
-bound['document'] = document
+base['document'] = document
 kwargs = {'pages': pages}
 observed = []
 on_pre_call = lambda args: observed.append(

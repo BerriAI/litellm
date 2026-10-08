@@ -11,9 +11,11 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.rust_bridge import catalog
 from litellm.rust_bridge.catalog import Route, RouteRule
 from litellm.rust_bridge.configuration import Rollout
+from litellm.types.utils import CallTypes
 from tests.test_litellm_rust.support.isolation import rebound
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.requests import MESSAGES, MESSAGES_RESPONSE
@@ -202,6 +204,23 @@ async def test_provider_specific_headers_scoped_to_anthropic_reach_the_wire(mess
     _, headers = sent(messages_server)
     assert headers["x-scoped"] == "yes"
     assert "x-other" not in headers
+
+
+@pytest.mark.asyncio
+async def test_extra_headers_deleted_by_a_hook_do_not_reach_the_wire(
+    messages_server: RecordingServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Drop(CustomLogger):
+        async def async_pre_call_deployment_hook(
+            self, kwargs: dict[str, object], call_type: CallTypes | None
+        ) -> dict[str, object]:
+            return {name: value for name, value in kwargs.items() if name != "extra_headers"}
+
+    monkeypatch.setattr(litellm, "callbacks", [Drop()])
+    await litellm.anthropic.messages.acreate(**arguments(messages_server, extra_headers={"x-caller": "stale"}))
+
+    _, headers = sent(messages_server)
+    assert "x-caller" not in headers
 
 
 @pytest.mark.asyncio

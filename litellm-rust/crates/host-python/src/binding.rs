@@ -11,7 +11,8 @@ pub trait PythonBinding: PythonOwned {
     /// raises it.
     type Failure: Into<PyErr>;
 
-    /// Decodes the keyword view returned by `prepare_arguments`, including preflight rewrites.
+    /// Decodes the effective call: the signature base under the keyword view that
+    /// `prepare_arguments` and the preflight rewrote.
     fn decode_request(
         &mut self,
         py: Python<'_>,

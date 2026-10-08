@@ -177,7 +177,8 @@ pub(crate) fn local_dict<'py>(locals: &Bound<'py, PyDict>, name: &str) -> Bound<
     local(locals, name).cast_into().unwrap()
 }
 
-/// A legacy call over the namespace's `kwargs` and `bound` dicts, each empty when absent.
+/// A legacy call over the namespace's `kwargs` dict laid over its `base` dict, each empty
+/// when absent, with the resolved view adopted the way the driver hands it over.
 pub(crate) fn legacy_call(
     py: Python<'_>,
     locals: &Bound<'_, PyDict>,
@@ -190,6 +191,10 @@ pub(crate) fn legacy_call(
             .map(|value| value.cast_into::<PyDict>().unwrap())
             .unwrap_or_else(|| PyDict::new(py))
     };
-    let call = PublicCall::capture(&dict("bound"), &PyTuple::empty(py), &dict("kwargs")).unwrap();
-    LegacyLogging::new(py, crate::LoggingOperation::Ocr, call, asynchronous)
+    let kwargs = dict("kwargs");
+    let call = PublicCall::capture(&PyTuple::empty(py), &kwargs).unwrap();
+    let mut logging = LegacyLogging::new(py, crate::LoggingOperation::Ocr, call, asynchronous);
+    let resolved = litellm_host_python::effective(&dict("base"), &kwargs).unwrap();
+    logging.adopt_resolved(py, &resolved.unbind());
+    logging
 }

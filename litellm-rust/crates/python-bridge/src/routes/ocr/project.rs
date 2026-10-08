@@ -21,14 +21,12 @@ pub(super) struct OcrHostHandles {
     pub provider: &'static str,
 }
 
-struct OcrArguments<'a, 'py> {
-    bound: &'a Bound<'py, PyDict>,
-    kwargs: &'a Bound<'py, PyDict>,
-}
+struct OcrArguments<'a, 'py>(&'a Bound<'py, PyDict>);
 
 impl<'py> OcrArguments<'_, 'py> {
     fn lookup(&self, name: &str) -> PyResult<Bound<'py, PyAny>> {
-        litellm_host_python::lookup(self.kwargs, self.bound, name)?
+        self.0
+            .get_item(name)?
             .ok_or_else(|| PyValueError::new_err(format!("missing argument: {name}")))
     }
 
@@ -58,7 +56,7 @@ impl<'py> OcrArguments<'_, 'py> {
     fn extra_headers(&self) -> PyResult<Option<Map<String, Value>>> {
         self.lookup("extra_headers")?
             .extract::<Option<Py<PyAny>>>()?
-            .map(|value| from_py(value.bind(self.bound.py())))
+            .map(|value| from_py(value.bind(self.0.py())))
             .transpose()
     }
 
@@ -66,7 +64,7 @@ impl<'py> OcrArguments<'_, 'py> {
         Ok(self
             .lookup("timeout")?
             .extract::<Option<Py<PyAny>>>()?
-            .map(|value| python_timeout_seconds(self.bound.py(), value))
+            .map(|value| python_timeout_seconds(self.0.py(), value))
             .transpose()?
             .flatten())
     }
@@ -110,10 +108,10 @@ impl ProjectedDocument {
 }
 
 pub(super) fn project_request(
-    bound: &Bound<'_, PyDict>,
-    kwargs: &Bound<'_, PyDict>,
+    arguments: &Bound<'_, PyDict>,
 ) -> PyResult<(LiteLLMOcrRequest<OcrDocumentInput>, OcrHostHandles)> {
-    let arguments = OcrArguments { bound, kwargs };
+    let py = arguments.py();
+    let arguments = OcrArguments(arguments);
     let model = arguments.model()?;
     let custom_llm_provider = arguments.custom_llm_provider()?;
     let document = ProjectedDocument::project(&arguments.document()?)?;
@@ -122,21 +120,21 @@ pub(super) fn project_request(
         .map_err(ocr_error_to_pyerr)?;
     let names = specs.iter().map(|spec| spec.name).collect::<Vec<_>>();
     let optional_params =
-        project_optional_fields(names.iter().copied(), |name| present(kwargs, bound, name))?;
+        project_optional_fields(names.iter().copied(), |name| present(arguments.0, name))?;
     let input_sources = request_input_sources(
-        kwargs,
+        arguments.0,
         names
             .iter()
             .copied()
             .chain(["api_key", "api_base", "extra_headers"]),
     )?;
-    let azure_ad_token_provider = credentials::azure_ad_token_provider(kwargs)?;
+    let azure_ad_token_provider = credentials::azure_ad_token_provider(arguments.0)?;
     let api_base = arguments.api_base()?;
     let extra_headers = arguments.extra_headers()?;
     let timeout_seconds = arguments.timeout_seconds()?;
     let wire = OcrWireRequest {
         model,
-        document: document.resolve(bound.py())?,
+        document: document.resolve(py)?,
         api_key,
         api_base,
         custom_llm_provider,
@@ -178,13 +176,6 @@ mod tests {
             .unwrap()
     }
 
-    fn arguments<'a, 'py>(
-        bound: &'a Bound<'py, PyDict>,
-        kwargs: &'a Bound<'py, PyDict>,
-    ) -> OcrArguments<'a, 'py> {
-        OcrArguments { bound, kwargs }
-    }
-
     fn project_document(document: &Bound<'_, PyAny>) -> PyResult<OcrDocumentInput> {
         ProjectedDocument::project(document)?.resolve(document.py())
     }
@@ -213,24 +204,20 @@ sys.modules['litellm.rust_bridge.timeouts'] = timeouts
     }
 
     #[test]
-    fn kwargs_override_bound_values_including_explicit_none() {
+    fn an_explicit_none_reads_as_unset() {
         Python::initialize();
         Python::attach(|py| {
             let locals = eval(
                 py,
-                c"
-bound = {'model': 'from-bound', 'custom_llm_provider': 'mistral'}
-kwargs = {'model': 'from-kwargs', 'custom_llm_provider': None}
-",
+                c"arguments = {'model': 'm', 'custom_llm_provider': None}",
             );
-            let (bound, kwargs) = (dict(&locals, "bound"), dict(&locals, "kwargs"));
-            let arguments = arguments(&bound, &kwargs);
-            assert_eq!(arguments.model().unwrap(), "from-kwargs");
+            let arguments = OcrArguments(&dict(&locals, "arguments"));
+            assert_eq!(arguments.model().unwrap(), "m");
             assert_eq!(arguments.custom_llm_provider().unwrap(), None);
         });
     }
 
-    /// A reader that rewrites the bound arguments while it runs shows which arguments
+    /// A reader that rewrites the arguments while it runs shows which arguments
     /// projection read before it and which after: every other argument is read first, and
     /// the read happens exactly once.
     #[test]
@@ -245,11 +232,11 @@ class Reader:
     reads = 0
     def read(self):
         Reader.reads += 1
-        bound['api_base'] = 'https://mutated.example.com'
-        bound['extra_headers'] = {'x-source': 'mutated'}
-        bound['timeout'] = 9
+        arguments['api_base'] = 'https://mutated.example.com'
+        arguments['extra_headers'] = {'x-source': 'mutated'}
+        arguments['timeout'] = 9
         return b'abc'
-bound = {
+arguments = {
     'model': 'mistral/mistral-ocr-latest',
     'custom_llm_provider': None,
     'api_key': None,
@@ -258,11 +245,9 @@ bound = {
     'timeout': 1,
     'document': {'type': 'file', 'file': Reader(), 'mime_type': 'application/pdf'},
 }
-kwargs = {}
 ",
             );
-            let (projected, _) =
-                project_request(&dict(&locals, "bound"), &dict(&locals, "kwargs")).unwrap();
+            let (projected, _) = project_request(&dict(&locals, "arguments")).unwrap();
             assert_eq!(
                 py.eval(c"Reader.reads", Some(&locals), Some(&locals))
                     .unwrap()
@@ -409,26 +394,26 @@ document = Document()
         });
     }
 
-    fn bound_and_kwargs<'py>(
-        py: Python<'py>,
-        kwargs: &std::ffi::CStr,
-    ) -> (Bound<'py, PyDict>, Bound<'py, PyDict>) {
+    /// The request the driver hands over: these defaults with `overrides` laid on top.
+    fn arguments<'py>(py: Python<'py>, overrides: &std::ffi::CStr) -> Bound<'py, PyDict> {
         let locals = eval(
             py,
             c"
-bound = {
+arguments = {
     'model': 'mistral/mistral-ocr-latest',
     'custom_llm_provider': 'mistral',
-    'document': {'type': 'document_url', 'document_url': 'https://example.com/bound.pdf'},
+    'document': {'type': 'document_url', 'document_url': 'https://example.com/base.pdf'},
     'api_key': None,
-    'api_base': 'https://bound.example.com',
-    'extra_headers': {'x-source': 'bound'},
+    'api_base': 'https://base.example.com',
+    'extra_headers': {'x-source': 'base'},
     'timeout': 1,
 }
 ",
         );
-        py.run(kwargs, Some(&locals), Some(&locals)).unwrap();
-        (dict(&locals, "bound"), dict(&locals, "kwargs"))
+        py.run(overrides, Some(&locals), Some(&locals)).unwrap();
+        py.run(c"arguments.update(overrides)", Some(&locals), Some(&locals))
+            .unwrap();
+        dict(&locals, "arguments")
     }
 
     #[test]
@@ -436,10 +421,10 @@ bound = {
         Python::initialize();
         Python::attach(|py| {
             stub_timeout_conversion(py);
-            let (bound, kwargs) = bound_and_kwargs(
+            let arguments = arguments(
                 py,
                 c"
-kwargs = {
+overrides = {
     'model': 'mistral/mistral-ocr-latest',
     'custom_llm_provider': None,
     'pages': [0],
@@ -452,7 +437,7 @@ kwargs = {
 }
 ",
             );
-            let (projected, _) = project_request(&bound, &kwargs).unwrap();
+            let (projected, _) = project_request(&arguments).unwrap();
             assert_eq!(
                 projected.optional_params.keys().collect::<Vec<_>>(),
                 ["pages"]
@@ -462,18 +447,14 @@ kwargs = {
     }
 
     #[rstest::rstest]
-    #[case::explicit_none_is_unset(c"bound['pages'] = [1]\nkwargs = {'pages': None}", None)]
-    #[case::bound_fallback(c"bound['pages'] = [1]\nkwargs = {}", Some(serde_json::json!([1])))]
-    #[case::keyword_wins(c"bound['pages'] = [1]\nkwargs = {'pages': [0]}", Some(serde_json::json!([0])))]
-    fn optional_params_read_through_bound_and_drop_none(
-        #[case] script: &std::ffi::CStr,
-        #[case] expected: Option<Value>,
-    ) {
+    #[case::explicit_none_is_unset(c"overrides = {'pages': None}", None)]
+    #[case::value(c"overrides = {'pages': [0]}", Some(serde_json::json!([0])))]
+    #[case::absent(c"overrides = {}", None)]
+    fn optional_params_drop_none(#[case] script: &std::ffi::CStr, #[case] expected: Option<Value>) {
         Python::initialize();
         Python::attach(|py| {
             stub_timeout_conversion(py);
-            let (bound, kwargs) = bound_and_kwargs(py, script);
-            let (projected, _) = project_request(&bound, &kwargs).unwrap();
+            let (projected, _) = project_request(&arguments(py, script)).unwrap();
             assert_eq!(projected.optional_params.get("pages").cloned(), expected);
         });
     }
@@ -483,10 +464,10 @@ kwargs = {
         Python::initialize();
         Python::attach(|py| {
             stub_timeout_conversion(py);
-            let (bound, kwargs) = bound_and_kwargs(
+            let arguments = arguments(
                 py,
                 c"
-kwargs = {
+overrides = {
     'model': 'mistral-ocr-latest',
     'custom_llm_provider': 'azure_ai',
     'document': {'type': 'document_url', 'document_url': 'https://example.com/kwargs.pdf'},
@@ -496,7 +477,7 @@ kwargs = {
 }
 ",
             );
-            let (projected, handles) = project_request(&bound, &kwargs).unwrap();
+            let (projected, handles) = project_request(&arguments).unwrap();
             assert_eq!(handles.provider, "azure_ai");
             assert_eq!(projected.model, "mistral-ocr-latest");
             assert_eq!(
