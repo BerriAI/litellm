@@ -21336,3 +21336,65 @@ async def test_delete_verification_tokens_stops_the_key_on_a_peer_worker_before_
     assert denied.value.code == "401"
     assert denied.value.type == ProxyErrorTypes.token_not_found_in_db
     assert json.dumps({"cache_key": hashed_token}) in coordination_redis.published
+
+
+@pytest.mark.asyncio
+async def test_delete_verification_tokens_evicts_only_the_rows_the_caller_may_delete(monkeypatch):
+    """A key owner who pads /key/delete with cache key names of other tenants' usage counters must
+    not get them evicted from the shared usage cache: only the rows the caller was authorized to
+    delete are evicted and broadcast, never the raw request list."""
+    from litellm.proxy.utils import ProxyLogging
+
+    raw_key: Final = "sk-" + uuid.uuid4().hex
+    hashed_token: Final = hash_token(raw_key)
+    other_tenant_counter: Final = "{team:other-team}:requests"
+    deleting_worker_cache: Final = UserApiKeyCache()
+    peer_worker_cache: Final = UserApiKeyCache()
+    deleting_worker_cache.set_cache(hashed_token, UserAPIKeyAuth(token=hashed_token, user_id="user-123"), model_type=UserAPIKeyAuth)
+    coordination_redis: Final = _PeerWorkerCoordinationRedis(peer_worker_cache=peer_worker_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.redis_usage_cache", coordination_redis)
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=deleting_worker_cache)
+    usage_cache: Final = proxy_logging.internal_usage_cache.dual_cache
+    usage_cache.set_cache(other_tenant_counter, 7)
+    usage_cache.set_cache(hashed_token, {"spend": 1.0})
+
+    key_row: Final = LiteLLM_VerificationToken(
+        token=hashed_token,
+        user_id="user-123",
+        team_id=None,
+        key_alias="owned-key",
+        spend=0.0,
+        max_budget=None,
+        models=[],
+        aliases={},
+        config={},
+        permissions={},
+        metadata={},
+        model_max_budget={},
+        model_spend={},
+        soft_budget_cooldown=False,
+        allowed_routes=[],
+    )
+    mock_prisma_client: Final = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[key_row])
+    mock_prisma_client.db.litellm_jwtkeymapping = _CascadingJWTMappingTable([])
+    mock_prisma_client.db.litellm_deletedverificationtoken.create_many = AsyncMock()
+    mock_prisma_client.delete_data = AsyncMock(return_value=[hashed_token])
+    mock_prisma_client.get_data = AsyncMock(return_value=None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    await delete_verification_tokens(
+        tokens=[raw_key, other_tenant_counter],
+        user_api_key_cache=deleting_worker_cache,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="user-123",
+            api_key="sk-owner",
+            user_role=LitellmUserRoles.INTERNAL_USER.value,
+        ),
+        proxy_logging_obj=proxy_logging,
+    )
+
+    assert usage_cache.get_cache(other_tenant_counter) == 7
+    assert usage_cache.get_cache(hashed_token) is None
+    assert deleting_worker_cache.get_cache(hashed_token, model_type=UserAPIKeyAuth) is None
+    assert coordination_redis.published == [json.dumps({"cache_key": hashed_token})]

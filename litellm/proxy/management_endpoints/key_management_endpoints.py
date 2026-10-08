@@ -5117,7 +5117,7 @@ async def delete_verification_tokens(
         raise e
 
     await delete_cache_key_objects(
-        hashed_tokens=tuple(tokens),
+        hashed_tokens=tuple(key.token for key in authorized_keys if key.token is not None),
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
