@@ -32,7 +32,7 @@ export function RunSearch({ value, onChange, runs, range, busy = false }: RunSea
       value={value}
       onValueChange={onChange}
       label="Search runs"
-      className="h-10 min-w-0 basis-full sm:w-auto sm:basis-0"
+      className="h-10 min-w-0 basis-full sm:w-auto sm:flex-1 sm:basis-0"
     >
       <SearchBox.Input
         className="h-full overflow-hidden rounded-none border-0 px-3 whitespace-nowrap focus-within:bg-muted/40 focus-within:ring-0 dark:bg-transparent"

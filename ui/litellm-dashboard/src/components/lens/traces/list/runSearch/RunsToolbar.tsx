@@ -27,18 +27,19 @@ export function RunsToolbar({ query, onQueryChange, runs, range, busy, children 
     { value: "error", label: "With errors" },
   ];
   return (
-    <div className="flex shrink-0 flex-col bg-card">
-      <div className="flex min-h-10 flex-wrap items-stretch border-b border-border">
-        <RunSearch value={query} onChange={onQueryChange} runs={runs} range={range} busy={busy} />
-        {children && <div className="ml-auto flex h-10 max-w-full items-stretch">{children}</div>}
-      </div>
-      <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
+    <div className="flex min-h-10 shrink-0 flex-wrap items-stretch border-b border-border">
+      <RunSearch value={query} onChange={onQueryChange} runs={runs} range={range} busy={busy} />
+      <div className="flex items-center border-l border-border px-2">
         <Select
           items={statuses}
           value={status}
           onValueChange={(value: "all" | "ok" | "error" | null) => value !== null && setStatus(value)}
         >
-          <SelectTrigger size="sm" className="h-8 min-w-28 text-xs" aria-label="Filter traces by status">
+          <SelectTrigger
+            size="sm"
+            className="h-7 min-w-28 border-0 text-xs shadow-none hover:bg-muted/60"
+            aria-label="Filter traces by status"
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -50,6 +51,7 @@ export function RunsToolbar({ query, onQueryChange, runs, range, busy, children 
           </SelectContent>
         </Select>
       </div>
+      {children && <div className="ml-auto flex h-10 max-w-full items-stretch">{children}</div>}
     </div>
   );
 }
