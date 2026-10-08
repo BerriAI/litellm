@@ -7,7 +7,7 @@ statements and outlasted the edge in front of the proxy.
 
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from types import MappingProxyType
@@ -28,8 +28,13 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     PUBLISH_BACKLOG_SLICE,
     await_publish_backlog,
     evict_and_broadcast,
+    evict_local,
 )
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
+    team_membership_auth_cache_key,
+    team_membership_reservation_cache_key,
+)
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     _persist_deleted_verification_tokens,  # pyright: ignore[reportPrivateUsage]  # same audit path /key/delete uses
@@ -273,6 +278,13 @@ async def _settle_caches(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None,
 ) -> None:
+    deleted_tokens: Final = tuple(key.token for key in removal.deleted_keys)
+    evict_local(
+        cache_keys=deleted_tokens
+        + removal.jwt_mapping_cache_keys
+        + tuple(_member_cache_keys(team.team_id, changed_user_ids)),
+        user_api_key_cache=user_api_key_cache,
+    )
     await delete_cache_team_object(
         team_id=team.team_id,
         team_alias=team.team_alias,
@@ -280,7 +292,7 @@ async def _settle_caches(
         proxy_logging_obj=proxy_logging_obj,
     )
     await delete_cache_key_objects(
-        hashed_tokens=tuple(key.token for key in removal.deleted_keys),
+        hashed_tokens=deleted_tokens,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
@@ -288,6 +300,13 @@ async def _settle_caches(
     for start in range(0, len(changed_user_ids), PUBLISH_BACKLOG_SLICE):
         await await_publish_backlog()
         await _settle_member_caches(team, changed_user_ids[start : start + PUBLISH_BACKLOG_SLICE], user_api_key_cache)
+
+
+def _member_cache_keys(team_id: str, user_ids: Sequence[str]) -> Iterator[str]:
+    for user_id in user_ids:
+        yield user_id
+        yield team_membership_auth_cache_key(team_id=team_id, user_id=user_id)
+        yield team_membership_reservation_cache_key(user_id=user_id, team_id=team_id)
 
 
 async def _settle_member_caches(

@@ -2,6 +2,7 @@
 ## Tests if 'get_end_user_object' works as expected
 
 import sys, os, asyncio, time, random, uuid
+import hashlib
 import json
 import traceback
 from dotenv import load_dotenv
@@ -32,6 +33,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.utils import PrismaClient
 import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy.auth.auth_checks import (
     can_team_access_model,
     delete_cache_key_objects,
@@ -1664,3 +1666,50 @@ async def test_evicting_more_keys_than_the_publisher_holds_pending_broadcasts_ev
         await pubsub_module.await_publish_backlog()
 
     assert {json.loads(message)["cache_key"] for message in client.published} == set(hashed_tokens)
+
+
+class _WedgedPublishRedisClient:
+    def __init__(self) -> None:
+        self.release = asyncio.Event()
+
+    async def publish(self, channel: str, message: str) -> int:
+        await self.release.wait()
+        return 1
+
+
+@pytest.mark.asyncio
+async def test_bulk_eviction_clears_this_worker_before_waiting_on_a_wedged_redis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
+    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
+    monkeypatch.setattr(pubsub_module, "_PUBLISH_BACKLOG_WAIT_SECONDS", 0.5)
+    client = _WedgedPublishRedisClient()
+    cache: Final = UserApiKeyCache(key_object_in_memory_cache=InMemoryCache(max_size_in_memory=2_000))
+    hashed_tokens: Final = tuple(
+        hashlib.sha256(f"token-{index}".encode()).hexdigest()
+        for index in range(pubsub_module.PUBLISH_BACKLOG_SLICE * 2 + 88)
+    )
+    for hashed_token in hashed_tokens:
+        cache.in_memory_cache_for(hashed_token).set_cache(key=hashed_token, value={"token": hashed_token})
+    seeded: Final = tuple(
+        token for token in hashed_tokens if cache.in_memory_cache_for(token).get_cache(token) is not None
+    )
+
+    with patch(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+        return_value=_PubSubRedisCache(client),  # pyright: ignore[reportArgumentType]  # the wedged fake only publishes
+    ):
+        eviction: Final = asyncio.create_task(
+            delete_cache_key_objects(hashed_tokens=hashed_tokens, user_api_key_cache=cache, proxy_logging_obj=None)
+        )
+        await asyncio.sleep(0.05)
+        still_cached: Final = tuple(
+            token for token in seeded if cache.in_memory_cache_for(token).get_cache(token) is not None
+        )
+        client.release.set()
+        await eviction
+        await pubsub_module.await_publish_backlog()
+
+    assert seeded == hashed_tokens
+    assert still_cached == ()

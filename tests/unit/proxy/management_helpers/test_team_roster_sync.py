@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import hashlib
 import json
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -11,9 +12,14 @@ import pytest
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
+    team_membership_auth_cache_key,
+    team_membership_reservation_cache_key,
+)
 from litellm.proxy.management_helpers.team_roster_sync import (
     MembersMissing,
     RosterDelta,
@@ -555,6 +561,65 @@ async def test_removing_hundreds_of_members_at_once_broadcasts_every_key_and_mem
     broadcast = {json.loads(message)["cache_key"] for message in client.published}
     assert {f"key-{u}-{k}" for u in removed for k in range(3)} <= broadcast
     assert set(removed) <= broadcast
+
+
+class _WedgedPublishRedisClient:
+    def __init__(self) -> None:
+        self.release = asyncio.Event()
+
+    async def publish(self, channel: str, message: str) -> int:
+        await self.release.wait()
+        return 1
+
+
+@pytest.mark.asyncio
+async def test_removing_members_clears_this_worker_before_waiting_on_a_wedged_redis(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
+    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
+    monkeypatch.setattr(pubsub_module, "_PUBLISH_BACKLOG_WAIT_SECONDS", 0.5)
+    client = _WedgedPublishRedisClient()
+    removed = [f"u{index:03d}" for index in range(300)]
+    token_of = {u: hashlib.sha256(f"key-{u}".encode()).hexdigest() for u in removed}
+    member_keys = [
+        key
+        for u in removed
+        for key in (
+            u,
+            token_of[u],
+            team_membership_auth_cache_key(team_id=TEAM, user_id=u),
+            team_membership_reservation_cache_key(user_id=u, team_id=TEAM),
+        )
+    ]  # comprehension-ok: a test fixture listing each member's four cache keys
+    cache = UserApiKeyCache(
+        in_memory_cache=InMemoryCache(max_size_in_memory=5_000),
+        key_object_in_memory_cache=InMemoryCache(max_size_in_memory=5_000),
+    )
+    for key in member_keys:
+        cache.in_memory_cache_for(key).set_cache(key=key, value={"cache_key": key})
+    seeded = [key for key in member_keys if cache.in_memory_cache_for(key).get_cache(key) is not None]
+    prisma = _FakePrisma(
+        users=[_user(u, TEAM) for u in removed],
+        teams=[_team(*(_member(u) for u in removed))],
+        memberships=[(TEAM, u) for u in removed],
+        tokens=[{"token": token_of[u], "user_id": u, "team_id": TEAM} for u in removed],
+    )
+
+    with patch(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+        return_value=_PubSubRedisCache(client),  # pyright: ignore[reportArgumentType]  # the wedged fake only publishes
+    ):
+        sync = asyncio.create_task(_sync(prisma, RosterTarget(member_ids=frozenset()), cache))
+        await asyncio.sleep(0.1)
+        still_cached = [key for key in seeded if cache.in_memory_cache_for(key).get_cache(key) is not None]
+        client.release.set()
+        outcome = await sync
+        await pubsub_module.await_publish_backlog()
+
+    assert isinstance(outcome, RosterSync) and outcome.removed == frozenset(removed)
+    assert seeded == member_keys
+    assert still_cached == []
 
 
 @pytest.mark.asyncio

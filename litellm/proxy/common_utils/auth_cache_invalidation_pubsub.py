@@ -145,6 +145,18 @@ async def await_publish_backlog() -> None:
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)
+def evict_local(cache_keys: Sequence[str], user_api_key_cache: "UserApiKeyCache") -> None:
+    """
+    Drop cached objects from this worker's memory alone, ahead of a paced broadcast.
+
+    A bulk eviction waits for the publish backlog between its slices, so every local copy is
+    dropped up front: a deleted key must stop authenticating on the handling worker the instant
+    its rows are gone, whatever Redis is doing.
+    """
+    for cache_key in cache_keys:
+        user_api_key_cache.in_memory_cache_for(cache_key).delete_cache(cache_key)
+
+
 async def evict_and_broadcast(cache_keys: Sequence[str], user_api_key_cache: "UserApiKeyCache") -> None:
     """
     Drop cached management objects here and on every other worker.
