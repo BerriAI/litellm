@@ -22,26 +22,26 @@ tiktoken = ["litellm-token-counter/tiktoken"]
 fancy-regex.workspace = true
 litellm-tracing.workspace = true
 litellm-traces.workspace = true
+litellm-traces-cache.workspace = true
+litellm-traces-clickhouse.workspace = true
+litellm-storage-clickhouse.workspace = true
 litellm-host.workspace = true
 bytes.workspace = true
 futures-util.workspace = true
 litellm-cache.workspace = true
-litellm-cache-azure-blob.workspace = true
 litellm-cache-memory.workspace = true
 litellm-cache-redis.workspace = true
-litellm-cache-s3.workspace = true
-litellm-cache-gcs.workspace = true
-litellm-cache-disk.workspace = true
-litellm-cache-redis-semantic.workspace = true
 litellm-cache-response.workspace = true
-litellm-cache-qdrant-semantic.workspace = true
-qdrant-client.workspace = true
-litellm-cache-valkey-semantic = { path = "../cache-valkey-semantic" }
 serde.workspace = true
 litellm-auth.workspace = true
 litellm-auth-aws.workspace = true
 litellm-callbacks-legacy-python.workspace = true
-litellm-core.workspace = true
+litellm-inference.workspace = true
+litellm-inference-transcription.workspace = true
+litellm-inference-responses.workspace = true
+litellm-inference-messages.workspace = true
+litellm-inference-chat.workspace = true
+litellm-inference-ocr.workspace = true
 litellm-core-utils.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true
@@ -51,6 +51,7 @@ litellm-llms-types.workspace = true
 litellm-host-python.workspace = true
 litellm-token-counter = { path = "../token-counter", default-features = false }
 pyo3.workspace = true
+prost.workspace = true
 pyo3-async-runtimes.workspace = true
 reqwest.workspace = true
 redis = { version = "1.7.0", features = ["tls-rustls"] }
@@ -59,7 +60,6 @@ strum.workspace = true
 veil.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
-url.workspace = true
 
 [dev-dependencies]
 tracing.workspace = true
@@ -70,9 +70,9 @@ serde_with.workspace = true
 criterion.workspace = true
 futures-util.workspace = true
 rstest.workspace = true
-sha2.workspace = true
+sqlx = { workspace = true, features = ["migrate"] }
 tokio-tungstenite.workspace = true
-wiremock = "0.6.5"
+wiremock.workspace = true
 aws-sdk-secretsmanager = "1.117.0"
 
 [[bench]]

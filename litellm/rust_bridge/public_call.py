@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable, Mapping, Sequence
-from typing import Final, cast  # noqa: TID251  # narrows caller-owned containers without copying them
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Final, TypeVar, cast  # noqa: TID251  # narrows caller-owned containers without copying them
 
 import litellm
 
@@ -80,3 +82,28 @@ def inference_decline_reason(parameters: tuple[str, ...], kwargs: Mapping[str, o
         if name not in parameters and name not in _INFERENCE_CONTEXT:
             return f"native inference does not implement {name}"
     return None
+
+
+@dataclass(frozen=True, slots=True)
+class NativeCall:
+    args: tuple[object, ...]
+    kwargs: Mapping[str, object]
+    bound: Mapping[str, object]
+
+
+def native_call(args: tuple[object, ...], kwargs: Mapping[str, object], fields: Mapping[str, object]) -> NativeCall:
+    extra: Final = optional_mapping(fields.get("kwargs")) or MappingProxyType({})
+    named: Final = {name: value for name, value in fields.items() if name != "kwargs"}
+    return NativeCall(args=args, kwargs=kwargs, bound=MappingProxyType({**named, **extra}))
+
+
+NativeResultT: Final = TypeVar("NativeResultT")
+
+
+def native_call_hook(
+    hook: Callable[[NativeCall], NativeResultT],
+    call: NativeCall,
+    _args: tuple[object, ...],
+    _kwargs: Mapping[str, object],
+) -> NativeResultT:
+    return hook(call)

@@ -98,6 +98,53 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03918c3dbd7701a85c6b9887732e2921175f26c350b4563841d0958c21d57e6d"
 
 [[package]]
+name = "askama"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6024d73179f43f15ccd2b881bfea6fee7f3a46ec53f33b52210dea749ebebaa4"
+dependencies = [
+ "askama_macros",
+ "itoa",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "askama_derive"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "071ee5ebf2138e3ad180e0aacf6940c2cab5e6d8333741d9925c7bee2b153f39"
+dependencies = [
+ "askama_parser",
+ "memchr",
+ "proc-macro2",
+ "quote",
+ "rustc-hash",
+ "syn 3.0.6",
+]
+
+[[package]]
+name = "askama_macros"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "643e1c7cbb6aec1d920332fe51a7c0d8219e273dcb8602db03f5263e4d16487b"
+dependencies = [
+ "askama_derive",
+]
+
+[[package]]
+name = "askama_parser"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c5ae75772275d268b03ab8bdccdd12117b6169ee23256942b34e46c9f476583"
+dependencies = [
+ "rustc-hash",
+ "unicode-ident",
+ "winnow 1.0.4",
+]
+
+[[package]]
 name = "asn1-rs"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3651,50 +3698,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-core"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "bytes",
- "futures-util",
- "litellm-auth",
- "litellm-auth-aws",
- "litellm-auth-gcp",
- "litellm-cache",
- "litellm-cache-memory",
- "litellm-cache-response",
- "litellm-core-utils",
- "litellm-framing",
- "litellm-host",
- "litellm-host-native",
- "litellm-http",
- "litellm-llms",
- "litellm-llms-types",
- "litellm-secrets",
- "litellm-tracing",
- "mime_guess",
- "moka",
- "rand 0.8.7",
- "reqwest 0.12.28",
- "rstest",
- "rstest_reuse",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "strum",
- "subtle",
- "thiserror 2.0.19",
- "time",
- "tokio",
- "tokio-tungstenite",
- "tokio-util",
- "tracing",
- "url",
- "veil",
- "wiremock",
-]
-
-[[package]]
 name = "litellm-core-utils"
 version = "0.1.0"
 dependencies = [
@@ -3749,7 +3752,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-framing"
+name = "litellm-framer"
 version = "0.1.0"
 dependencies = [
  "aws-smithy-eventstream",
@@ -3774,12 +3777,12 @@ dependencies = [
  "http-body-util",
  "litellm-auth-types",
  "litellm-config",
- "litellm-core",
  "litellm-gateway-auth",
  "litellm-gateway-inference",
  "litellm-gateway-mcp",
  "litellm-gateway-ui",
  "litellm-http",
+ "litellm-inference",
  "litellm-llms",
  "litellm-secrets",
  "litellm-tracing",
@@ -3828,11 +3831,16 @@ dependencies = [
  "litellm-auth",
  "litellm-cache-memory",
  "litellm-cache-response",
- "litellm-core",
  "litellm-gateway-auth",
  "litellm-host",
  "litellm-host-http",
  "litellm-http",
+ "litellm-inference",
+ "litellm-inference-chat",
+ "litellm-inference-messages",
+ "litellm-inference-ocr",
+ "litellm-inference-responses",
+ "litellm-inference-transcription",
  "litellm-llms",
  "litellm-llms-types",
  "litellm-router",
@@ -3992,6 +4000,217 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-inference"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "litellm-auth",
+ "litellm-cache",
+ "litellm-cache-memory",
+ "litellm-cache-response",
+ "litellm-core-utils",
+ "litellm-framer",
+ "litellm-host",
+ "litellm-http",
+ "litellm-llms",
+ "litellm-secrets",
+ "litellm-tracing",
+ "reqwest 0.12.28",
+ "rstest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "litellm-inference-chat"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "litellm-auth",
+ "litellm-cache-memory",
+ "litellm-cache-response",
+ "litellm-core-utils",
+ "litellm-host",
+ "litellm-host-native",
+ "litellm-http",
+ "litellm-inference",
+ "litellm-inference-testing",
+ "litellm-llms",
+ "litellm-llms-types",
+ "litellm-secrets",
+ "litellm-tracing",
+ "rstest",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
+name = "litellm-inference-messages"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "litellm-auth",
+ "litellm-auth-aws",
+ "litellm-cache-memory",
+ "litellm-cache-response",
+ "litellm-core-utils",
+ "litellm-host",
+ "litellm-host-native",
+ "litellm-http",
+ "litellm-inference",
+ "litellm-inference-testing",
+ "litellm-llms",
+ "litellm-llms-types",
+ "litellm-secrets",
+ "litellm-tracing",
+ "reqwest 0.12.28",
+ "rstest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
+name = "litellm-inference-ocr"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "futures-util",
+ "litellm-auth",
+ "litellm-auth-aws",
+ "litellm-auth-gcp",
+ "litellm-core-utils",
+ "litellm-host",
+ "litellm-host-native",
+ "litellm-http",
+ "litellm-inference",
+ "litellm-inference-testing",
+ "litellm-llms",
+ "litellm-llms-types",
+ "litellm-secrets",
+ "litellm-tracing",
+ "mime_guess",
+ "rand 0.8.7",
+ "rstest",
+ "serde",
+ "serde_json",
+ "time",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
+name = "litellm-inference-responses"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "litellm-auth",
+ "litellm-cache",
+ "litellm-cache-memory",
+ "litellm-cache-response",
+ "litellm-host",
+ "litellm-host-native",
+ "litellm-http",
+ "litellm-inference",
+ "litellm-inference-testing",
+ "litellm-llms",
+ "litellm-llms-types",
+ "litellm-secrets",
+ "litellm-tracing",
+ "reqwest 0.12.28",
+ "rstest",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
+name = "litellm-inference-testing"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "litellm-http",
+ "litellm-inference",
+ "litellm-secrets",
+]
+
+[[package]]
+name = "litellm-inference-transcription"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "litellm-auth",
+ "litellm-core-utils",
+ "litellm-http",
+ "litellm-inference",
+ "litellm-inference-testing",
+ "litellm-llms",
+ "litellm-secrets",
+ "litellm-tracing",
+ "rstest",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
+name = "litellm-lens"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bytes",
+ "chrono",
+ "flate2",
+ "futures-util",
+ "http 1.4.2",
+ "jsonschema",
+ "libc",
+ "litellm-http",
+ "litellm-storage-clickhouse",
+ "litellm-traces",
+ "litellm-traces-cache",
+ "litellm-traces-clickhouse",
+ "litellm-tracing",
+ "prettyplease",
+ "prost",
+ "reqwest 0.12.28",
+ "rstest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "syn 2.0.119",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "typify",
+ "unicode-casefold",
+ "url",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
 name = "litellm-llms"
 version = "0.1.0"
 dependencies = [
@@ -4006,7 +4225,7 @@ dependencies = [
  "litellm-auth-azure",
  "litellm-auth-gcp",
  "litellm-core-utils",
- "litellm-framing",
+ "litellm-framer",
  "litellm-host",
  "litellm-http",
  "litellm-llms-types",
@@ -4065,46 +4284,46 @@ dependencies = [
  "litellm-auth",
  "litellm-auth-aws",
  "litellm-cache",
- "litellm-cache-azure-blob",
- "litellm-cache-disk",
- "litellm-cache-gcs",
  "litellm-cache-memory",
- "litellm-cache-qdrant-semantic",
  "litellm-cache-redis",
- "litellm-cache-redis-semantic",
  "litellm-cache-response",
- "litellm-cache-s3",
- "litellm-cache-valkey-semantic",
  "litellm-callbacks-legacy-python",
- "litellm-core",
  "litellm-core-utils",
  "litellm-host",
  "litellm-host-python",
  "litellm-http",
+ "litellm-inference",
+ "litellm-inference-chat",
+ "litellm-inference-messages",
+ "litellm-inference-ocr",
+ "litellm-inference-responses",
+ "litellm-inference-transcription",
  "litellm-llms",
  "litellm-llms-types",
  "litellm-secrets",
  "litellm-secrets-aws",
  "litellm-secrets-types",
+ "litellm-storage-clickhouse",
  "litellm-token-counter",
  "litellm-traces",
+ "litellm-traces-cache",
+ "litellm-traces-clickhouse",
  "litellm-tracing",
+ "prost",
  "pyo3",
  "pyo3-async-runtimes",
- "qdrant-client",
  "redis",
  "reqwest 0.12.28",
  "rstest",
  "serde",
  "serde_json",
  "serde_with",
- "sha2 0.10.9",
+ "sqlx",
  "strum",
  "thiserror 2.0.19",
  "tokio",
  "tokio-tungstenite",
  "tracing",
- "url",
  "veil",
  "wiremock",
 ]
@@ -4129,7 +4348,8 @@ name = "litellm-router"
 version = "0.1.0"
 dependencies = [
  "litellm-config",
- "litellm-core",
+ "litellm-inference",
+ "litellm-inference-messages",
  "rstest",
 ]
 
@@ -4289,6 +4509,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-storage-clickhouse"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "litellm-http",
+ "rstest",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "sqlx",
+ "testcontainers-modules",
+ "thiserror 2.0.19",
+ "tokio",
+ "url",
+ "wiremock",
+]
+
+[[package]]
 name = "litellm-testkit"
 version = "0.1.0"
 dependencies = [
@@ -4368,20 +4606,70 @@ dependencies = [
 name = "litellm-traces"
 version = "0.1.0"
 dependencies = [
+ "askama",
  "base64 0.22.1",
- "flate2",
- "litellm-http",
+ "criterion",
+ "indexmap 2.14.0",
+ "litellm-llms-types",
+ "macro_rules_attribute",
  "opentelemetry-proto",
  "prost",
+ "rstest",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "sha2 0.10.9",
+ "strum",
+ "thiserror 2.0.19",
+ "time",
+]
+
+[[package]]
+name = "litellm-traces-cache"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "litellm-traces",
+ "moka",
  "rstest",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "litellm-traces-clickhouse"
+version = "0.1.0"
+dependencies = [
+ "askama",
+ "flate2",
+ "futures-util",
+ "hmac 0.12.1",
+ "jsonschema",
+ "litellm-http",
+ "litellm-storage-clickhouse",
+ "litellm-traces",
+ "litellm-traces-cache",
+ "macro_rules_attribute",
+ "moka",
+ "rstest",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "strum",
  "testcontainers-modules",
  "thiserror 2.0.19",
  "time",
  "tokio",
  "url",
+ "wiremock",
 ]
 
 [[package]]
@@ -4804,6 +5092,7 @@ dependencies = [
  "js-sys",
  "pin-project-lite",
  "thiserror 2.0.19",
+ "tracing",
 ]
 
 [[package]]
@@ -4818,6 +5107,8 @@ dependencies = [
  "opentelemetry_sdk 0.33.0",
  "prost",
  "serde",
+ "tonic",
+ "tonic-prost",
 ]
 
 [[package]]
@@ -5155,6 +5446,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
 dependencies = [
  "zerocopy",
+]
+
+[[package]]
+name = "prettyplease"
+version = "0.2.37"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
+dependencies = [
+ "proc-macro2",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -5724,6 +6025,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
+name = "regress"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "158a764437582235e3501f683b93a0a6f8d825d04a789dbe5ed30b8799b8908a"
+dependencies = [
+ "hashbrown 0.16.1",
+ "memchr",
+]
+
+[[package]]
 name = "relative-path"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5931,17 +6242,6 @@ dependencies = [
  "rustc_version",
  "syn 2.0.119",
  "unicode-ident",
-]
-
-[[package]]
-name = "rstest_reuse"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3a8fb4672e840a587a66fc577a5491375df51ddb88f2a2c2a792598c326fe14"
-dependencies = [
- "quote",
- "rand 0.8.7",
- "syn 2.0.119",
 ]
 
 [[package]]
@@ -6182,6 +6482,18 @@ dependencies = [
 
 [[package]]
 name = "schemars"
+version = "0.8.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3fbf2ae1b8bc8e02df939598064d22402220cd5bbcca1c76f7d6a310974d5615"
+dependencies = [
+ "dyn-clone",
+ "schemars_derive 0.8.22",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "schemars"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4cd191f9397d57d581cddd31014772520aa448f65ef991055d7f61582c65165f"
@@ -6201,9 +6513,21 @@ dependencies = [
  "chrono",
  "dyn-clone",
  "ref-cast",
- "schemars_derive",
+ "schemars_derive 1.2.2",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "schemars_derive"
+version = "0.8.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32e265784ad618884abaea0600a9adf15393368d840e0222d101a072f3f7534d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_derive_internals 0.29.1",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -6214,7 +6538,7 @@ checksum = "d98c67716b46af2f0b8cf752abc930f6f9aecfbf671ecfb531db8a31dbe4e2ba"
 dependencies = [
  "proc-macro2",
  "quote",
- "serde_derive_internals",
+ "serde_derive_internals 0.30.0",
  "syn 3.0.6",
 ]
 
@@ -6318,6 +6642,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.6",
+]
+
+[[package]]
+name = "serde_derive_internals"
+version = "0.29.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18d26a20a969b9e3fdf2fc2d9f21eda6c40e2de84c9408bb5d3b05d499aae711"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -7687,6 +8022,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "typify"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b715573a376585888b742ead9be5f4826105e622169180662e2c81bed4a149c3"
+dependencies = [
+ "typify-impl",
+]
+
+[[package]]
+name = "typify-impl"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fa7b026f540b148b81043c720889dbb942b08659aa8a43f624ac4f04dbfc1861"
+dependencies = [
+ "heck",
+ "log",
+ "proc-macro2",
+ "quote",
+ "regress",
+ "schemars 0.8.22",
+ "semver",
+ "serde",
+ "serde_json",
+ "syn 2.0.119",
+ "thiserror 2.0.19",
+ "unicode-ident",
+]
+
+[[package]]
 name = "ucd-trie"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7709,6 +8073,12 @@ name = "unicode-bidi"
 version = "0.3.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c1cb5db39152898a79168971543b1cb5020dff7fe43c8dc468b0885f5e29df5"
+
+[[package]]
+name = "unicode-casefold"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7f66b1c8f8caa2ab31dc6d3f35386f16efdab89668f93411e565ac368908e8f"
 
 [[package]]
 name = "unicode-general-category"

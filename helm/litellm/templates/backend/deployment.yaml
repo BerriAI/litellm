@@ -57,6 +57,9 @@ spec:
               containerPort: 4001
               protocol: TCP
           env:
+            {{- include "litellm.lensConnectionEnv" . | nindent 12 }}
+            - name: LENS_WORKER_IMAGE
+              value: {{ include "litellm.lensWorker.image" . | quote }}
             {{- include "litellm.serverEnv" (dict "root" $ "component" .Values.backend) | nindent 12 }}
             {{- if .Values.gateway.config.create }}
             - name: CONFIG_FILE_PATH

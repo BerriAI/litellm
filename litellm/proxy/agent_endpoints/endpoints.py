@@ -13,7 +13,7 @@ import os
 import uuid
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Annotated, Final, TypedDict
+from typing import Annotated, Final, NamedTuple, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import ValidationError
@@ -47,7 +47,11 @@ from litellm.proxy.agent_endpoints.agent_search import (
     global_agent_search_index,
     search_agents,
 )
-from litellm.proxy.agent_endpoints.auth.agent_permission_handler import accessible_agents
+from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+    AgentRequestHandler,
+    UnrestrictedAgentAccess,
+    accessible_agents,
+)
 from litellm.proxy.agent_endpoints.identity import reject_legacy_identity
 from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
 from litellm.proxy.agent_endpoints.kill_switch import (
@@ -63,7 +67,8 @@ from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failur
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
-from litellm.proxy.utils import get_custom_url
+from litellm.proxy.utils import PrismaClient, get_custom_url
+from litellm.repositories.chunked_in import find_many_in
 from litellm.types.agents import (
     AgentCard,
     AgentConfig,
@@ -171,9 +176,7 @@ def _redact_agent_litellm_params_dict(
     """Type-narrowing wrapper: a dict in always yields a dict back from
     ``redact_sensitive_agent_litellm_params``, which the function's general
     (possible-JSON-string, possibly-None) signature can't express."""
-    return dict(  # mutable-ok: AgentResponse.litellm_params is declared as a plain dict, not Mapping
-        parse_agent_litellm_params(redact_sensitive_agent_litellm_params(litellm_params))
-    )
+    return dict(parse_agent_litellm_params(redact_sensitive_agent_litellm_params(litellm_params)))
 
 
 def _redact_sensitive_agent_fields(
@@ -303,6 +306,73 @@ async def _rank_agents_by_query(
             raise _agent_search_error(503, "agent_search_unavailable", reason)
         case _:
             assert_never(outcome)
+
+
+class _AgentDailyActivityScope(NamedTuple):
+    agent_ids: tuple[str, ...] | None
+    agent_metadata: Mapping[str, dict[str, object]]
+
+
+async def _owned_agent_ids(*, user_id: str | None, prisma_client: PrismaClient) -> frozenset[str]:
+    if user_id is None:
+        return frozenset()
+    owned_records: Final = await agents_table(prisma_client).find_many(where={"created_by": user_id})
+    return frozenset(agent.agent_id for agent in owned_records)
+
+
+async def _permitted_daily_activity_agent_ids(
+    *, user_api_key_dict: UserAPIKeyAuth, prisma_client: PrismaClient
+) -> frozenset[str]:
+    access: Final = await AgentRequestHandler.resolve_agent_access(user_api_key_auth=user_api_key_dict)
+    if isinstance(access, UnrestrictedAgentAccess):
+        return await _owned_agent_ids(user_id=user_api_key_dict.user_id, prisma_client=prisma_client)
+    return access.agent_ids
+
+
+async def _resolve_daily_activity_agent_ids(
+    *,
+    agent_ids: tuple[str, ...] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+) -> tuple[str, ...] | None:
+    from litellm.proxy.management_endpoints.common_utils import user_api_key_has_admin_view
+
+    if user_api_key_has_admin_view(user_api_key_dict):
+        return agent_ids
+    permitted_agent_ids: Final = await _permitted_daily_activity_agent_ids(
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+    )
+    return (
+        tuple(agent_id for agent_id in agent_ids if agent_id in permitted_agent_ids)
+        if agent_ids
+        else tuple(permitted_agent_ids)
+    )
+
+
+async def resolve_agent_daily_activity_scope(
+    *,
+    agent_ids: tuple[str, ...] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+) -> _AgentDailyActivityScope:
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+
+    resolved_agent_ids: Final = await _resolve_daily_activity_agent_ids(
+        agent_ids=agent_ids,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+    )
+
+    agent_records: Final = (
+        await agents_table(prisma_client).find_many(where={})
+        if resolved_agent_ids is None
+        else await find_many_in(agents_table(prisma_client), "agent_id", resolved_agent_ids)
+    )
+    agent_metadata: Final[Mapping[str, dict[str, object]]] = MappingProxyType(
+        {agent.agent_id: {"agent_name": agent.agent_name} for agent in agent_records}
+    )
+    return _AgentDailyActivityScope(resolved_agent_ids, agent_metadata)
 
 
 @router.get(
@@ -987,7 +1057,7 @@ async def delete_agent(
 
 @router.post(
     "/v1/agents/{agent_id}/kill_switch",
-    tags=["[beta] A2A Agents"],  # mutable-ok: fastapi types tags as list[str | Enum]
+    tags=["[beta] A2A Agents"],
     dependencies=(Depends(user_api_key_auth),),
     response_model=AgentKillSwitchResult,
 )
@@ -1290,82 +1360,39 @@ async def get_agent_daily_activity(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    agent_ids_list = agent_ids.split(",") if agent_ids else None
-    exclude_agent_ids_list: list[str] | None = None
-    if exclude_agent_ids:
-        exclude_agent_ids_list = exclude_agent_ids.split(",") if exclude_agent_ids else None
-
-    # Without scoping, an empty `agent_ids` query returned every agent's
-    # spend/token rows on the proxy. Restrict non-admin callers to the
-    # agents they're permitted to invoke (or that they created), and
-    # intersect their explicit `agent_ids` filter with the same allowlist.
-    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
-        AgentRequestHandler,
-        RestrictedAgentAccess,
-        UnrestrictedAgentAccess,
+    requested_agent_ids: Final = tuple(agent_ids.split(",")) if agent_ids else None
+    exclude_agent_ids_list: Final[list[str] | None] = exclude_agent_ids.split(",") if exclude_agent_ids else None
+    agent_scope: Final = await resolve_agent_daily_activity_scope(
+        agent_ids=requested_agent_ids,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
     )
-    from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
-
-    where_condition: Final[dict[str, object]] = {}
-    if not _user_has_admin_view(user_api_key_dict):
-        permitted_agent_ids: list[str] = []
-        # An unrestricted caller is not "see everything" for activity scoping. Fall
-        # back to the agents the caller created so they cannot enumerate other
-        # tenants' agents.
-        # Guard against `user_id is None`: a literal None in Prisma
-        # `where={"created_by": None}` resolves to ``created_by IS NULL``
-        # and would expose every ownerless agent's rows.
-        match await AgentRequestHandler.resolve_agent_access(user_api_key_auth=user_api_key_dict):
-            case RestrictedAgentAccess(allowed_agent_ids):
-                permitted_agent_ids = list(allowed_agent_ids)
-            case UnrestrictedAgentAccess():
-                if user_api_key_dict.user_id is not None:
-                    owned_records: Final = await agents_table(prisma_client).find_many(
-                        where={"created_by": user_api_key_dict.user_id}
-                    )
-                    permitted_agent_ids = [a.agent_id for a in owned_records]
-
-        if agent_ids_list:
-            permitted_agent_id_set: Final = set(permitted_agent_ids)
-            agent_ids_list = [aid for aid in agent_ids_list if aid in permitted_agent_id_set]
-        else:
-            agent_ids_list = list(permitted_agent_ids)
-
-        # No accessible agents → return an empty page without querying.
-        if not agent_ids_list:
-            return SpendAnalyticsPaginatedResponse(
-                results=[],
-                metadata=DailySpendMetadata(
-                    total_spend=0.0,
-                    total_prompt_tokens=0,
-                    total_completion_tokens=0,
-                    total_tokens=0,
-                    total_api_requests=0,
-                    total_successful_requests=0,
-                    total_failed_requests=0,
-                    total_cache_read_input_tokens=0,
-                    total_cache_creation_input_tokens=0,
-                    total_compression_saved_tokens=0,
-                    page=page,
-                    total_pages=0,
-                    has_more=False,
-                ),
-            )
-
-    if agent_ids_list:
-        where_condition["agent_id"] = {"in": list(agent_ids_list)}
-
-    agent_records: Final = await agents_table(prisma_client).find_many(where=where_condition)
-    agent_metadata: Final[Mapping[str, dict[str, object]]] = {
-        agent.agent_id: {"agent_name": agent.agent_name} for agent in agent_records
-    }
+    if agent_scope.agent_ids == ():
+        return SpendAnalyticsPaginatedResponse(
+            results=[],
+            metadata=DailySpendMetadata(
+                total_spend=0.0,
+                total_prompt_tokens=0,
+                total_completion_tokens=0,
+                total_tokens=0,
+                total_api_requests=0,
+                total_successful_requests=0,
+                total_failed_requests=0,
+                total_cache_read_input_tokens=0,
+                total_cache_creation_input_tokens=0,
+                total_compression_saved_tokens=0,
+                page=page,
+                total_pages=0,
+                has_more=False,
+            ),
+        )
 
     return await get_daily_activity(
         prisma_client=prisma_client,
         table_name="litellm_dailyagentspend",
         entity_id_field="agent_id",
-        entity_id=agent_ids_list,
-        entity_metadata_field=agent_metadata,
+        entity_id=None if agent_scope.agent_ids is None else list(agent_scope.agent_ids),
+        entity_metadata_field=agent_scope.agent_metadata,
         exclude_entity_ids=exclude_agent_ids_list,
         start_date=start_date,
         end_date=end_date,

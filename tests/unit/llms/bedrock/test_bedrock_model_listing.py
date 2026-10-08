@@ -1,7 +1,7 @@
 import hashlib
 import hmac
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from functools import reduce
 from typing import Final
 from urllib.parse import parse_qsl, quote
@@ -121,33 +121,33 @@ def _bedrock(handler: Callable[[httpx.Request], httpx.Response]) -> BedrockModel
     return BedrockModelInfo(client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))))
 
 
-def _deployment(region: str = REGION, api_key: str | None = None) -> LiteLLM_Params:
+def _deployment(region: str = REGION, api_key: str | None = None) -> Mapping[str, object]:
     return LiteLLM_Params(
         model="bedrock/*",
         aws_access_key_id=ACCESS_KEY,
         aws_secret_access_key=SECRET_KEY,
         aws_region_name=region,
         api_key=api_key,
-    )
+    ).model_dump(exclude_none=True)
 
 
 def test_lists_active_profiles_and_on_demand_models_signed_for_the_deployment() -> None:
-    assert _bedrock(_control_plane()).get_models_for_deployment(_deployment()) == EXPECTED_MODELS
+    assert _bedrock(_control_plane()).discover_models(_deployment()) == EXPECTED_MODELS
 
 
 def test_lists_in_the_deployment_region_not_the_ambient_one(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AWS_REGION_NAME", REGION)
 
     with pytest.raises(BedrockError, match=r"us-west-2.*404"):
-        _bedrock(_control_plane()).get_models_for_deployment(_deployment(region="us-west-2"))
+        _bedrock(_control_plane()).discover_models(_deployment(region="us-west-2"))
 
 
 def test_bearer_token_api_key_replaces_sigv4() -> None:
     bedrock: Final = _bedrock(_control_plane(bearer_token=BEARER_TOKEN))
 
-    assert bedrock.get_models_for_deployment(_deployment(api_key=BEARER_TOKEN)) == EXPECTED_MODELS
+    assert bedrock.discover_models(_deployment(api_key=BEARER_TOKEN)) == EXPECTED_MODELS
     with pytest.raises(BedrockError, match="403"):
-        bedrock.get_models_for_deployment(_deployment())
+        bedrock.discover_models(_deployment())
 
 
 def test_get_models_without_a_deployment_uses_ambient_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -163,4 +163,4 @@ def test_listing_failure_names_the_region_and_response() -> None:
         return httpx.Response(429, json={"message": "Too many requests"})
 
     with pytest.raises(BedrockError, match=rf"{REGION}.*429.*Too many requests"):
-        _bedrock(throttled).get_models_for_deployment(_deployment())
+        _bedrock(throttled).discover_models(_deployment())

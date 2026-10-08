@@ -1,11 +1,10 @@
 "use client";
 
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { isProxyAdminRole } from "@/utils/roles";
-import { EngineView } from "./_components/EngineView";
+import { LensWorkspace } from "@/components/lens/LensWorkspace";
 
-export default function EnginePage() {
-  const { accessToken, userRole } = useAuthorized();
+export default function LensPage() {
+  const { accessToken, userRole, isViewOnly } = useAuthorized();
   if (!accessToken) return null;
-  return <EngineView accessToken={accessToken} readOnly={!isProxyAdminRole(userRole ?? "")} />;
+  return <LensWorkspace accessToken={accessToken} userRole={userRole ?? ""} readOnly={isViewOnly} />;
 }

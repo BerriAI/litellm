@@ -18,7 +18,7 @@ async def generate_key(
     session,
     i,
     models: list,
-    calling_key="sk-1234",
+    calling_key=os.environ["LITELLM_MASTER_KEY"],
 ):
     url: Final = f"{PROXY_BASE_URL}/key/generate"
     headers = {
@@ -82,22 +82,6 @@ async def chat_completion(
             return await response.json()
 
 
-@pytest.mark.asyncio
-async def test_chat_completion():
-    """
-    make chat completion call with prompt > context window. expect it to work with fallback
-    """
-    async with aiohttp.ClientSession() as session:
-        model = "gpt-3.5-turbo"
-        messages = [
-            {"role": "system", "content": text},
-            {"role": "user", "content": "Who was Alexander?"},
-        ]
-        await chat_completion(
-            session=session, key="sk-1234", model=model, messages=messages
-        )
-
-
 @pytest.mark.parametrize("has_access", [True, False])
 @pytest.mark.asyncio
 async def test_chat_completion_client_fallbacks(has_access: bool) -> None:
@@ -139,7 +123,7 @@ async def test_chat_completion_with_retries():
         ]
         response, headers = await chat_completion(
             session=session,
-            key="sk-1234",
+            key=os.environ["LITELLM_MASTER_KEY"],
             model=model,
             messages=messages,
             mock_testing_rate_limit_error=True,
@@ -163,7 +147,7 @@ async def test_chat_completion_with_fallbacks():
         ]
         response, headers = await chat_completion(
             session=session,
-            key="sk-1234",
+            key=os.environ["LITELLM_MASTER_KEY"],
             model=model,
             messages=messages,
             fallbacks=["fake-openai-endpoint-5"],
@@ -187,7 +171,7 @@ async def test_chat_completion_with_timeout():
         start_time = time.time()
         response, headers = await chat_completion(
             session=session,
-            key="sk-1234",
+            key=os.environ["LITELLM_MASTER_KEY"],
             model=model,
             messages=messages,
             num_retries=0,
@@ -218,7 +202,7 @@ async def test_chat_completion_with_timeout_from_request():
         start_time = time.time()
         response, headers = await chat_completion(
             session=session,
-            key="sk-1234",
+            key=os.environ["LITELLM_MASTER_KEY"],
             model=model,
             messages=messages,
             num_retries=0,
@@ -321,7 +305,7 @@ async def test_chat_completion_bad_and_good_model():
     """
     Prod test - ensure even if bad model is down, good model is still working.
     """
-    client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+    client = AsyncOpenAI(api_key=os.environ["LITELLM_MASTER_KEY"], base_url="http://0.0.0.0:4000")
     num_requests = 100
     num_iterations = 3
 

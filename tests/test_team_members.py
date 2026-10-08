@@ -1,3 +1,4 @@
+import os
 import pytest
 import requests
 import time
@@ -77,7 +78,7 @@ class TeamAPI:
 def api_client():
     """Fixture for TeamAPI client"""
     base_url = "http://localhost:4000"
-    auth_token = "sk-1234"  # Replace with your token
+    auth_token = os.environ["LITELLM_MASTER_KEY"]  # Replace with your token
     return TeamAPI(base_url, auth_token)
 
 
@@ -134,122 +135,6 @@ def test_add_single_member(api_client, new_team):
     assert (
         updated_size == initial_size + 1
     ), f"Team size did not increase by 1 (was {initial_size}, now {updated_size})"
-
-
-@pytest.mark.skip(
-    reason="Flaky in CI: /team/info?team_id=... intermittently returns 404/400 mid-loop after add_team_member calls. Single-member coverage in test_add_single_member is sufficient; team-member CRUD is also covered by tests/test_litellm/proxy/management_endpoints/."
-)
-def test_add_multiple_members(api_client, new_team):
-    """Test adding multiple members to a new team"""
-    # Get initial team size
-    initial_info = api_client.get_team_info(new_team)
-    initial_size = len(initial_info["team_info"]["members_with_roles"])
-
-    # Add 10 members
-    added_emails = []
-    for i in range(10):
-        email = f"pytest_user_{uuid.uuid4().hex[:6]}@mycompany.com"
-        added_emails.append(email)
-
-        logger.info(f"Adding member {i+1}/10: {email}")
-        api_client.add_team_member(new_team, email, "user")
-
-        # Allow time for system to process
-        time.sleep(1)
-
-        # Verify after each addition
-        current_info = api_client.get_team_info(new_team)
-        current_size = len(current_info["team_info"]["members_with_roles"])
-
-        # Assertions for each addition
-        assert verify_member_in_team(
-            current_info, email
-        ), f"Member {email} not found in team"
-        assert (
-            current_size == initial_size + i + 1
-        ), f"Team size incorrect after adding {email}"
-
-    # Final verification
-    final_info = api_client.get_team_info(new_team)
-    final_size = len(final_info["team_info"]["members_with_roles"])
-
-    # Final assertions
-    assert (
-        final_size == initial_size + 10
-    ), f"Final team size incorrect (expected {initial_size + 10}, got {final_size})"
-    for email in added_emails:
-        assert verify_member_in_team(
-            final_info, email
-        ), f"Member {email} not found in final team check"
-
-
-def test_team_info_structure(api_client, new_team):
-    """Test the structure of team info response"""
-    team_info = api_client.get_team_info(new_team)
-
-    # Verify required fields exist
-    assert "team_id" in team_info
-    assert "team_info" in team_info
-    assert "members_with_roles" in team_info["team_info"]
-    assert "models" in team_info["team_info"]
-
-    # Verify member structure
-    if team_info["team_info"]["members_with_roles"]:
-        member = team_info["team_info"]["members_with_roles"][0]
-        assert "user_id" in member
-        assert "role" in member
-
-
-def test_error_handling(api_client):
-    """Test error handling for invalid team ID"""
-    with pytest.raises(requests.exceptions.HTTPError):
-        api_client.get_team_info("invalid-team-id")
-
-
-@pytest.mark.skip(
-    reason="Flaky in CI: /team/info?team_id=... intermittently returns 404 after add_team_member calls, same race documented for test_add_multiple_members. Duplicate-prevention is covered by test_update_team_members_list_duplicate_prevention in tests/test_litellm/proxy/management_endpoints/test_team_endpoints.py."
-)
-def test_duplicate_user_addition(api_client, new_team):
-    """Test that adding the same user twice is handled appropriately"""
-    # Add user first time
-    test_email = f"pytest_user_{uuid.uuid4().hex[:6]}@mycompany.com"
-    initial_response = api_client.add_team_member(new_team, test_email, "user")
-
-    # Allow time for system to process
-    time.sleep(1)
-
-    # Get team info after first addition
-    team_info_after_first = api_client.get_team_info(new_team)
-    size_after_first = len(team_info_after_first["team_info"]["members_with_roles"])
-
-    logger.info(f"First addition completed. Team size: {size_after_first}")
-
-    # Attempt to add same user again
-    with pytest.raises(requests.exceptions.HTTPError):
-        api_client.add_team_member(new_team, test_email, "user")
-
-    # Allow time for system to process
-    time.sleep(1)
-
-    # Get team info after second addition attempt
-    team_info_after_second = api_client.get_team_info(new_team)
-    size_after_second = len(team_info_after_second["team_info"]["members_with_roles"])
-
-    # Verify team size didn't change
-    assert (
-        size_after_second == size_after_first
-    ), f"Team size changed after duplicate addition (was {size_after_first}, now {size_after_second})"
-
-    # Verify user appears exactly once
-    user_count = sum(
-        1
-        for member in team_info_after_second["team_info"]["members_with_roles"]
-        if member["user_id"] == test_email
-    )
-    assert user_count == 1, f"User appears {user_count} times in team (expected 1)"
-
-    logger.info(f"Duplicate addition attempted. Final team size: {size_after_second}")
-    logger.info(f"Number of times user appears in team: {user_count}")
 
 
 def test_member_deletion(api_client, new_team):

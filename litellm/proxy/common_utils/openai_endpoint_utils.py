@@ -7,7 +7,10 @@ from typing import Final
 from fastapi import Request
 
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    read_request_body,
+)
 
 SENSITIVE_DATA_MASKER: Final = SensitiveDataMasker()
 
@@ -55,7 +58,7 @@ async def get_custom_llm_provider_from_request_body(request: Request) -> str | N
 
     Safely reads the request body
     """
-    request_body: Final[dict] = await _read_request_body(request=request) or {}
+    request_body: Final[dict] = await read_request_body(request=request) or {}
     if "custom_llm_provider" in request_body:
         return request_body["custom_llm_provider"]
     return None
