@@ -16281,17 +16281,19 @@ class _TeamRowStore:
         snapshot.model_dump.return_value = dict(self.row)
         return snapshot
 
-    async def find_unique(self, where, include=None):
+    async def find_unique(self, where: Mapping[str, object], include: Mapping[str, object] | None = None) -> MagicMock:
         snapshot: Final = self._snapshot()
         self.row.update(self._committed_after_read)
         self._committed_after_read = MappingProxyType({})
         return snapshot
 
-    async def update(self, where, data, include=None):
+    async def update(
+        self, where: Mapping[str, object], data: Mapping[str, object], include: Mapping[str, object] | None = None
+    ) -> MagicMock:
         self.row.update(data)
         return self._snapshot()
 
-    async def update_many(self, where, data):
+    async def update_many(self, where: Mapping[str, object], data: Mapping[str, object]) -> int:
         if any(self.row.get(column) != value for column, value in where.items()):
             return 0
         self.row.update(data)
@@ -16504,7 +16506,7 @@ async def test_update_team_holds_a_team_admin_to_the_org_tpm_limit(disable_audit
 
 @pytest.mark.asyncio
 async def test_update_team_stops_a_team_admin_raising_an_org_team_budget_under_the_org_cap(
-    disable_audit_logging_for_mocked_team,
+    disable_audit_logging_for_mocked_team: None,
 ):
     """The org cap alone would let a team admin with max_budget enabled grow its own team's budget up to the org's."""
     import contextlib
@@ -16725,7 +16727,10 @@ async def test_update_team_keeps_an_org_move_that_lands_while_a_granted_team_adm
     ],
 )
 async def test_update_team_keeps_a_budget_cut_that_lands_while_a_team_admin_update_runs(
-    disable_audit_logging_for_mocked_team, organization_id, budget_read, requested
+    disable_audit_logging_for_mocked_team: None,
+    organization_id: str | None,
+    budget_read: float | None,
+    requested: float,
 ):
     """The team admin's check passed against the budget it read, which no longer holds once a proxy admin
     cut it to 20, so writing 90 would grow the team's live ceiling."""
