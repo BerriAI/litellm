@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use bytes::Bytes;
+use litellm_auth::ConnectionArguments;
 use litellm_host::call::CallOutput;
 use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
 use litellm_llms_types::{
@@ -16,6 +17,7 @@ pub struct MessagesCall {
     pub body: MessagesRequest,
     pub api_key: Option<String>,
     pub api_base: Option<String>,
+    pub connection: ConnectionArguments,
     pub custom_llm_provider: Option<String>,
     pub extra_headers: Option<Map<String, Value>>,
     pub provider_specific_header: Option<ProviderSpecificHeaders>,

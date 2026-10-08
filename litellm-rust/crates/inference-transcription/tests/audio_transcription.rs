@@ -1,3 +1,4 @@
+use litellm_auth::{ConnectionArguments, InputSource};
 use litellm_inference_transcription::{Error, types::AudioTranscriptionRequest};
 use rstest::{fixture, rstest};
 use serde_json::{Map, Value, json};
@@ -16,24 +17,28 @@ fn transcript_response(text: &str) -> ResponseTemplate {
     json_response(json!({"output": {"message": {"content": [{"text": text}]}}}))
 }
 
-fn aws_params(region: &str) -> Map<String, Value> {
-    Map::from_iter([
-        ("aws_access_key_id".to_string(), json!("access-key")),
-        ("aws_secret_access_key".to_string(), json!("secret-key")),
-        ("aws_region_name".to_string(), json!(region)),
-    ])
+fn aws_connection(region: &str) -> ConnectionArguments {
+    ConnectionArguments::from_arguments(
+        &Map::from_iter([
+            ("aws_access_key_id".to_string(), json!("access-key")),
+            ("aws_secret_access_key".to_string(), json!("secret-key")),
+            ("aws_region_name".to_string(), json!(region)),
+        ]),
+        |_| InputSource::Deployment,
+    )
 }
 
 #[fixture]
 fn request() -> AudioTranscriptionRequest<'static> {
     AudioTranscriptionRequest {
+        connection: aws_connection("us-east-1"),
         model: MODEL,
         audio: json!({"data": "AQI=", "format": "wav", "filename": "audio.wav"}),
         api_key: None,
         api_base: None,
         custom_llm_provider: Some("bedrock"),
         extra_headers: None,
-        optional_params: aws_params("us-east-1"),
+        optional_params: Map::new(),
         timeout: None,
     }
 }
@@ -51,7 +56,7 @@ async fn bedrock_converse_request_is_signed_for_the_requested_region(
 
     let response = transcribe(AudioTranscriptionRequest {
         api_base: Some(&base),
-        optional_params: aws_params(region),
+        connection: aws_connection(region),
         ..request
     })
     .await
@@ -104,13 +109,10 @@ async fn audio_and_transcription_params_reach_the_converse_body(
 ) {
     let upstream = upstream([transcript_response("hello")]).await;
     let base = upstream.uri();
-    let optional_params = aws_params("us-east-1")
-        .into_iter()
-        .chain([
-            ("language".to_string(), json!("fr")),
-            ("temperature".to_string(), json!(0.2)),
-        ])
-        .collect();
+    let optional_params = Map::from_iter([
+        ("language".to_string(), json!("fr")),
+        ("temperature".to_string(), json!(0.2)),
+    ]);
 
     transcribe(AudioTranscriptionRequest {
         audio: json!({"data": "AQI=", "format": format}),

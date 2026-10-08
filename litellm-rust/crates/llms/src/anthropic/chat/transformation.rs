@@ -1,3 +1,4 @@
+use litellm_auth::ConnectionArguments;
 use litellm_auth::SecretValue;
 use litellm_core_utils::{
     core_helpers::{finish_reason_for, unix_now, usage_from_parts},
@@ -100,7 +101,7 @@ impl BaseConfig for AnthropicConfig {
         &self,
         api_base: Option<&str>,
         _model: &str,
-        _optional_params: &Map<String, Value>,
+        _connection: &ConnectionArguments,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         Ok(complete_anthropic_url(api_base, env_lookup))
@@ -175,7 +176,7 @@ impl BaseConfig for AnthropicConfig {
         headers: Headers,
         api_key: Option<&str>,
         _model: &str,
-        _optional_params: &Map<String, Value>,
+        _connection: &ConnectionArguments,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
         if forwarded_oauth_bearer(&headers).is_some() {

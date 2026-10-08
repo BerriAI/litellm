@@ -76,6 +76,7 @@ async fn the_same_route_entrypoint_reports_facts_with_or_without_caching(
             .logger()
             .instrument(route.execute(
                 ChatCompletionsRequest {
+                    connection: Default::default(),
                     model: "anthropic/cache-test-model",
                     messages: json!([{"role":"user","content":"hello"}]),
                     optional_params: [("max_tokens".into(), json!(16))].into_iter().collect(),
@@ -246,6 +247,7 @@ async fn chat_cache_identity_follows_resolved_configuration_and_request_callback
         .with_cache(cache)
         .execute(
             ChatCompletionsRequest {
+                connection: Default::default(),
                 model: "anthropic/cache-test-model",
                 messages: json!([{"role":"user","content":"hello"}]),
                 optional_params: [("max_tokens".into(), json!(32))].into_iter().collect(),
@@ -317,7 +319,8 @@ async fn signed_requests_bypass_response_caching(cache: Arc<dyn ResponseCacheSer
         let response = route.execute(ChatCompletionsRequest {
             model:"bedrock/anthropic.cache-test-model",
             messages:json!([{"role":"user","content":"hello"}]),
-            optional_params:json!({"aws_access_key_id":"test-access","aws_secret_access_key":"test-secret","aws_region_name":"eu-west-1"}).as_object().unwrap().clone(),
+            optional_params:Default::default(),
+            connection:litellm_auth::ConnectionArguments::from_arguments(json!({"aws_access_key_id":"test-access","aws_secret_access_key":"test-secret","aws_region_name":"eu-west-1"}).as_object().unwrap(), |_| litellm_auth::InputSource::Deployment),
             api_key:None,api_base:Some(&upstream.uri()),custom_llm_provider:None,extra_headers:None,timeout:None,
         }, &hooks, None).await.unwrap();
         assert_eq!(

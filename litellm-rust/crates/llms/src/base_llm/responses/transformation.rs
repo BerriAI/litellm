@@ -1,3 +1,4 @@
+use litellm_auth::ConnectionArguments;
 use litellm_llms_types::formats::responses::{
     ResponsesApiResponse, streaming_websocket::ResponsesWsEvent,
 };
@@ -17,12 +18,14 @@ pub trait BaseResponsesApiConfig: Sync {
         &self,
         headers: Vec<(String, String)>,
         api_key: Option<&str>,
+        connection: &ConnectionArguments,
         lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error>;
 
     fn get_complete_url(
         &self,
         api_base: Option<&str>,
+        connection: &ConnectionArguments,
         lookup: &dyn Fn(&str) -> Option<String>,
     ) -> String;
 

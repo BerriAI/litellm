@@ -1,6 +1,7 @@
 use litellm_secrets::source::Secrets;
 use std::time::Duration;
 
+use litellm_auth::ConnectionArguments;
 use litellm_llms::base_llm::{
     audio_transcription::transformation::BaseAudioTranscriptionConfig, auth::ValidatedEnvironment,
 };
@@ -14,6 +15,7 @@ pub struct AudioTranscriptionRequest<'a> {
     pub custom_llm_provider: Option<&'a str>,
     pub extra_headers: Option<Map<String, Value>>,
     pub optional_params: Map<String, Value>,
+    pub connection: ConnectionArguments,
     pub timeout: Option<Duration>,
 }
 

@@ -64,6 +64,7 @@ impl ChatCompletionsRoute {
                 model: &call.model,
                 messages: call.messages,
                 optional_params: call.optional_params,
+                connection: call.connection,
                 api_key: call.api_key.as_deref(),
                 api_base: call.api_base.as_deref(),
                 custom_llm_provider: call.custom_llm_provider.as_deref(),

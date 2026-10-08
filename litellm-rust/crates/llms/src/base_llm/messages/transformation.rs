@@ -1,3 +1,4 @@
+use litellm_auth::ConnectionArguments;
 use litellm_llms_types::formats::messages::{MessagesRequest, MessagesResponse};
 
 use super::context::MessagesTransformContext;
@@ -20,6 +21,7 @@ pub trait BaseMessagesConfig: Sync {
         &self,
         api_base: Option<&str>,
         model: &str,
+        connection: &ConnectionArguments,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error>;
 
@@ -27,9 +29,10 @@ pub trait BaseMessagesConfig: Sync {
         &self,
         api_base: Option<&str>,
         model: &str,
+        connection: &ConnectionArguments,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
-        self.get_complete_url(api_base, model, env_lookup)
+        self.get_complete_url(api_base, model, connection, env_lookup)
     }
 
     fn transform_anthropic_messages_request(
@@ -58,6 +61,7 @@ pub trait BaseMessagesConfig: Sync {
         headers: Headers,
         api_key: Option<&str>,
         model: &str,
+        connection: &ConnectionArguments,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error>;
 
@@ -94,6 +98,7 @@ mod tests {
             &self,
             _api_base: Option<&str>,
             _model: &str,
+            _connection: &ConnectionArguments,
             _env_lookup: &dyn Fn(&str) -> Option<String>,
         ) -> Result<String, Error> {
             Ok(String::new())
@@ -104,6 +109,7 @@ mod tests {
             headers: Headers,
             _api_key: Option<&str>,
             _model: &str,
+            _connection: &ConnectionArguments,
             _env_lookup: &dyn Fn(&str) -> Option<String>,
         ) -> Result<ValidatedEnvironment, Error> {
             Ok(ValidatedEnvironment {

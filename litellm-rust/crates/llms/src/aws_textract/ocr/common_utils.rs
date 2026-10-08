@@ -236,7 +236,7 @@ pub(super) async fn environment(
 ) -> Result<TextractEnvironment, Error> {
     let env_lookup = |name: &str| request.connection.secret(name);
     let region =
-        resolve_aws_region(None, &request.optional_params, &env_lookup).ok_or_else(|| {
+        resolve_aws_region(None, &request.connection_arguments, &env_lookup).ok_or_else(|| {
             Error::InvalidRequest(
                 "Missing AWS region - pass aws_region_name or set AWS_REGION_NAME or AWS_REGION"
                     .into(),
@@ -246,7 +246,7 @@ pub(super) async fn environment(
         auth,
         region.clone(),
         TEXTRACT_SERVICE,
-        AwsCredentialSource::from_params(&request.optional_params, &env_lookup),
+        AwsCredentialSource::from_credentials(&request.connection_arguments),
         &env_lookup,
     )
     .await

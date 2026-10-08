@@ -1,3 +1,4 @@
+use litellm_auth::ConnectionArguments;
 use std::convert::Infallible;
 
 use crate::{
@@ -73,13 +74,17 @@ fn bearer_token(
 fn invoke_url(
     api_base: Option<&str>,
     model: &str,
+    connection: &ConnectionArguments,
     env_lookup: &dyn Fn(&str) -> Option<String>,
     path: &str,
 ) -> String {
     let (model_id, model_region) =
         bedrock_model_id_and_region(model.strip_prefix(INVOKE_MODEL_PREFIX).unwrap_or(model));
-    let region = resolve_bedrock_region(model_region.as_deref(), &Map::new(), env_lookup);
-    let endpoint = api_base
+    let region = resolve_bedrock_region(model_region.as_deref(), connection, env_lookup);
+    let endpoint = connection
+        .get("aws_bedrock_runtime_endpoint")
+        .and_then(Value::as_str)
+        .or(api_base)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
@@ -101,18 +106,32 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         &self,
         api_base: Option<&str>,
         model: &str,
+        connection: &ConnectionArguments,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
-        Ok(invoke_url(api_base, model, env_lookup, INVOKE_PATH))
+        Ok(invoke_url(
+            api_base,
+            model,
+            connection,
+            env_lookup,
+            INVOKE_PATH,
+        ))
     }
 
     fn complete_stream_url(
         &self,
         api_base: Option<&str>,
         model: &str,
+        connection: &ConnectionArguments,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
-        Ok(invoke_url(api_base, model, env_lookup, INVOKE_STREAM_PATH))
+        Ok(invoke_url(
+            api_base,
+            model,
+            connection,
+            env_lookup,
+            INVOKE_STREAM_PATH,
+        ))
     }
 
     fn transform_anthropic_messages_request(
@@ -136,6 +155,7 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         headers: Headers,
         api_key: Option<&str>,
         model: &str,
+        connection: &ConnectionArguments,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
         if let Some(token) = bearer_token(api_key, env_lookup) {
@@ -149,13 +169,12 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         }
         let (_, model_region) =
             bedrock_model_id_and_region(model.strip_prefix(INVOKE_MODEL_PREFIX).unwrap_or(model));
-        let params = Map::new();
         Ok(ValidatedEnvironment {
             headers,
             auth: AuthScheme::AwsSigV4 {
-                region: resolve_bedrock_region(model_region.as_deref(), &params, env_lookup),
+                region: resolve_bedrock_region(model_region.as_deref(), connection, env_lookup),
                 service: BEDROCK_SERVICE,
-                credentials: Box::new(AwsCredentialSource::from_params(&params, env_lookup)),
+                credentials: Box::new(AwsCredentialSource::from_credentials(connection)),
             },
         })
     }
@@ -509,10 +528,20 @@ mod tests {
 
         assert_eq!(
             config
-                .get_complete_url(None, "anthropic.claude-3", &env)
+                .get_complete_url(
+                    None,
+                    "anthropic.claude-3",
+                    &ConnectionArguments::default(),
+                    &env
+                )
                 .unwrap(),
             config
-                .complete_stream_url(None, "anthropic.claude-3", &env)
+                .complete_stream_url(
+                    None,
+                    "anthropic.claude-3",
+                    &ConnectionArguments::default(),
+                    &env
+                )
                 .unwrap()
                 .replace(INVOKE_STREAM_PATH, INVOKE_PATH)
         );
@@ -537,6 +566,7 @@ mod tests {
                 vec![("authorization".into(), "Bearer forwarded".into())],
                 api_key,
                 "anthropic.claude-3",
+                &ConnectionArguments::default(),
                 &env,
             )
             .unwrap();

@@ -50,12 +50,13 @@ impl MessagesRoute {
             environment,
             timeout,
             api_key,
+            secret_fields,
         } = request;
         let request_context = RequestContext {
             model: body.model.clone(),
             custom_llm_provider: provider.as_str().to_string(),
             optional_params: serde_json::to_value(&body.params).map_err(serialize_failure)?,
-            secret_fields: Vec::new(),
+            secret_fields,
             api_key,
         };
         let authenticated =

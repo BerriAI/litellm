@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
 use bytes::Bytes;
-use litellm_auth::{InputSource, SecretValue, TokenProviderHandle};
+use litellm_auth::{ConnectionArguments, InputSource, SecretValue, TokenProviderHandle};
 use litellm_core_utils::call_arguments::CallArguments;
 use litellm_llms::base_llm::ocr::{
     error::Error,
@@ -51,6 +51,7 @@ pub struct OcrConnectionInputs {
     pub extra_headers: Map<String, Value>,
     pub timeout: Option<Duration>,
     pub input_sources: BTreeMap<String, InputSource>,
+    pub arguments: ConnectionArguments,
 }
 
 impl OcrConnectionInputs {
@@ -79,7 +80,7 @@ pub struct LiteLLMOcrRequest<D = OcrDocumentInput> {
     pub credentials: OcrCredentialInputs,
     pub transport: OcrTransportConfig,
     pub optional_params: CallArguments,
-    pub input_sources: BTreeMap<String, InputSource>,
+    pub connection_arguments: ConnectionArguments,
     pub azure_ad_token_provider: Option<TokenProviderHandle>,
     pub(crate) config: OcrConfigKind,
 }
@@ -121,7 +122,7 @@ impl LiteLLMOcrRequest {
             credentials: OcrCredentialInputs::default(),
             transport,
             optional_params,
-            input_sources: BTreeMap::new(),
+            connection_arguments: ConnectionArguments::default(),
             azure_ad_token_provider: None,
             config,
         })
@@ -139,7 +140,7 @@ impl<D> LiteLLMOcrRequest<D> {
             credentials: self.credentials,
             transport: self.transport,
             optional_params: self.optional_params,
-            input_sources: self.input_sources,
+            connection_arguments: self.connection_arguments,
             azure_ad_token_provider: self.azure_ad_token_provider,
             config: self.config,
         })
@@ -152,7 +153,7 @@ impl<D> LiteLLMOcrRequest<D> {
             credentials: self.credentials,
             transport: self.transport,
             optional_params: self.optional_params,
-            input_sources: self.input_sources,
+            connection_arguments: self.connection_arguments,
             azure_ad_token_provider: self.azure_ad_token_provider,
             config: self.config,
         }
@@ -170,12 +171,12 @@ impl<D> LiteLLMOcrRequest<D> {
         self,
         credentials: OcrCredentialInputs,
         transport: OcrTransportConfig,
-        input_sources: BTreeMap<String, InputSource>,
+        connection_arguments: ConnectionArguments,
     ) -> Self {
         Self {
             credentials,
             transport,
-            input_sources,
+            connection_arguments,
             ..self
         }
     }
@@ -208,7 +209,7 @@ impl LiteLLMOcrRequest {
             connection.api_base,
             api_base_source,
         );
-        Ok(request.with_connection_inputs(credentials, transport, connection.input_sources))
+        Ok(request.with_connection_inputs(credentials, transport, connection.arguments))
     }
 }
 
@@ -245,6 +246,7 @@ mod tests {
             None,
             Default::default(),
             OcrConnectionInputs {
+                arguments: Default::default(),
                 api_key: Some(SecretValue::new(" key ")),
                 api_base: Some("".into()),
                 extra_headers: json!({"x-a": "1"}).as_object().unwrap().clone(),
@@ -268,7 +270,6 @@ mod tests {
         );
         assert_eq!(request.transport.extra_headers_source, InputSource::Request);
         assert_eq!(request.transport.timeout, Some(Duration::from_secs(7)));
-        assert_eq!(request.input_sources.len(), 2);
 
         let defaulted = LiteLLMOcrRequest::from_inputs(
             "mistral/model".into(),

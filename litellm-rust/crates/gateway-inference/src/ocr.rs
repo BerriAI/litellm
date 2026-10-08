@@ -1,3 +1,4 @@
+use litellm_auth::{ConnectionArguments, InputSource};
 use litellm_gateway_auth::AuthenticatedRequest;
 use std::sync::Arc;
 
@@ -58,6 +59,7 @@ async fn handle(
         Value::String(value) => Value::String(value.trim().to_ascii_lowercase()),
         value => value,
     });
+    let (body, arguments) = ConnectionArguments::split(body, |_| InputSource::Request);
     let options = body
         .into_iter()
         .filter(|(name, _)| !matches!(name.as_str(), "model" | "document" | "req_format"))
@@ -72,6 +74,7 @@ async fn handle(
             api_key: deployment.api_key.clone().map(SecretValue::new),
             api_base: deployment.api_base.clone(),
             timeout: deployment.timeout,
+            arguments,
             ..Default::default()
         },
     )?;

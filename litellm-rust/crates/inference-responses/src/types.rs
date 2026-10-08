@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use bytes::Bytes;
+use litellm_auth::ConnectionArguments;
 use litellm_host::call::CallOutput;
 use litellm_llms::base_llm::{
     auth::ValidatedEnvironment, responses::transformation::BaseResponsesApiConfig,
@@ -14,6 +15,7 @@ pub struct ResponsesCall {
     pub model: String,
     pub input: Value,
     pub optional_params: Map<String, Value>,
+    pub connection: ConnectionArguments,
     pub api_key: Option<String>,
     pub api_base: Option<String>,
     pub custom_llm_provider: Option<String>,

@@ -3,7 +3,7 @@ use litellm_llms_types::formats::responses::{
 };
 use serde_json::{Map, Value};
 
-use litellm_auth::{CredentialPlacement, SecretValue};
+use litellm_auth::{ConnectionArguments, CredentialPlacement, SecretValue};
 
 use crate::{
     Error,
@@ -122,6 +122,7 @@ impl BaseResponsesApiConfig for OpenAiResponsesApiConfig {
         &self,
         headers: Vec<(String, String)>,
         api_key: Option<&str>,
+        _connection: &ConnectionArguments,
         lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
         let key = api_key
@@ -148,6 +149,7 @@ impl BaseResponsesApiConfig for OpenAiResponsesApiConfig {
     fn get_complete_url(
         &self,
         api_base: Option<&str>,
+        _connection: &ConnectionArguments,
         lookup: &dyn Fn(&str) -> Option<String>,
     ) -> String {
         let base = api_base

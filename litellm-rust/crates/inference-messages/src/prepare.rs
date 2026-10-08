@@ -32,6 +32,7 @@ pub(super) struct ProviderMessagesRequest {
     pub(super) timeout: Option<Duration>,
     /// The caller's own credential, reported to the host beside the wire request.
     pub(super) api_key: Option<SecretValue>,
+    pub(super) secret_fields: Vec<String>,
 }
 
 #[tracing::instrument(name = "litellm.prepare", level = "debug", skip_all)]
@@ -69,6 +70,7 @@ fn prepare_provider_request(
         body,
         api_key,
         api_base,
+        connection,
         extra_headers,
         provider_specific_header,
         timeout,
@@ -98,6 +100,7 @@ fn prepare_provider_request(
         forwarded,
         api_key.as_deref(),
         &transformed.model,
+        &connection,
         &env_lookup,
     )?;
     let environment = ValidatedEnvironment {
@@ -109,9 +112,19 @@ fn prepare_provider_request(
     };
 
     let url = if transformed.params.stream == Some(true) {
-        config.complete_stream_url(api_base.as_deref(), &transformed.model, &env_lookup)?
+        config.complete_stream_url(
+            api_base.as_deref(),
+            &transformed.model,
+            &connection,
+            &env_lookup,
+        )?
     } else {
-        config.get_complete_url(api_base.as_deref(), &transformed.model, &env_lookup)?
+        config.get_complete_url(
+            api_base.as_deref(),
+            &transformed.model,
+            &connection,
+            &env_lookup,
+        )?
     };
 
     Ok(ProviderMessagesRequest {
@@ -121,6 +134,7 @@ fn prepare_provider_request(
         environment,
         timeout,
         api_key: api_key.map(SecretValue::new),
+        secret_fields: connection.secret_names().map(str::to_string).collect(),
     })
 }
 
@@ -221,6 +235,7 @@ mod tests {
         };
         let prepared = prepare_with_secrets(
             MessagesCall {
+                connection: Default::default(),
                 body: body(
                     json!({"model": "claude-test", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
                 ),
@@ -249,6 +264,7 @@ mod tests {
 
     fn prepared_body(fields: Value, shaping: MessagesShaping) -> Result<Value, Error> {
         prepare(MessagesCall {
+            connection: Default::default(),
             body: body(fields),
             api_key: Some("sk-test".into()),
             api_base: Some("https://anthropic.test".into()),
@@ -354,6 +370,7 @@ mod tests {
         ]))
         .unwrap();
         let prepared = prepare(MessagesCall {
+            connection: Default::default(),
             body: body(
                 json!({"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
             ),

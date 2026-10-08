@@ -1,26 +1,12 @@
 use std::{collections::BTreeMap, time::Duration};
 
-use litellm_auth::{InputSource, SecretValue};
+use litellm_auth::{ConnectionArguments, InputSource, SecretValue};
 use litellm_llms::base_llm::ocr::{error::Error, transformation::decode_request_value};
 use litellm_llms_types::formats::ocr::OcrDocument;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput};
-
-pub fn consumed_optional_params(
-    model: &str,
-    provider: Option<&str>,
-) -> Result<Vec<litellm_core_utils::call_arguments::ArgumentSpec>, Error> {
-    let specs = crate::arguments::consumed_optional_params(model, provider)?;
-    Ok(consumed_optional_param_names(model, provider)?
-        .into_iter()
-        .map(|name| litellm_core_utils::call_arguments::ArgumentSpec {
-            name,
-            secret: specs.iter().any(|spec| spec.name == name && spec.secret),
-        })
-        .collect())
-}
 
 pub fn consumed_optional_param_names(
     model: &str,
@@ -78,17 +64,21 @@ pub fn decode_request_input<D: Into<OcrDocumentInput>>(
             })
         })
         .transpose()?;
+    let (optional_params, arguments) = ConnectionArguments::split(wire.optional_params, |name| {
+        wire.input_sources.get(name).copied().unwrap_or_default()
+    });
     LiteLLMOcrRequest::from_inputs(
         wire.model,
         wire.document,
         wire.custom_llm_provider.as_deref(),
-        wire.optional_params.into(),
+        optional_params.into(),
         OcrConnectionInputs {
             api_key: wire.api_key,
             api_base: wire.api_base,
             extra_headers: wire.extra_headers.unwrap_or_default(),
             timeout,
             input_sources: wire.input_sources,
+            arguments,
         },
     )
 }
@@ -147,33 +137,37 @@ mod tests {
         assert!(!mistral.contains(&"opaque_extension"));
         let vertex = consumed_optional_param_names("vertex_ai/deepseek-ocr", None).unwrap();
         assert!(vertex.contains(&"temperature"));
-        assert!(vertex.contains(&"vertex_credentials"));
+        assert!(!vertex.contains(&"vertex_credentials"));
         assert!(!vertex.contains(&"pages"));
     }
 
     #[test]
-    fn optional_param_metadata_marks_only_credentials_as_secret() {
-        let azure = consumed_optional_params("model", Some("azure_ai")).unwrap();
-        assert!(
-            azure
-                .iter()
-                .any(|spec| spec.name == "client_secret" && spec.secret)
+    fn decode_moves_connection_fields_out_of_the_params() {
+        let request = decode_request(OcrWireRequest {
+            model: "azure_ai/mistral-ocr-latest".into(),
+            document: json!({"type": "document_url", "document_url": "https://doc.test/a.pdf"}),
+            api_key: None,
+            api_base: None,
+            custom_llm_provider: None,
+            extra_headers: None,
+            optional_params: json!({"pages": [0], "client_secret": "s", "tenant_id": "t"})
+                .as_object()
+                .unwrap()
+                .clone(),
+            input_sources: [("client_secret".to_string(), InputSource::Request)].into(),
+            timeout_seconds: None,
+        })
+        .unwrap();
+        assert_eq!(
+            request.optional_params.keys().collect::<Vec<_>>(),
+            ["pages"]
         );
-        assert!(
-            azure
-                .iter()
-                .any(|spec| spec.name == "tenant_id" && !spec.secret)
-        );
-        let vertex = consumed_optional_params("deepseek-ocr", Some("vertex_ai")).unwrap();
-        assert!(
-            vertex
-                .iter()
-                .any(|spec| spec.name == "vertex_credentials" && spec.secret)
-        );
-        assert!(
-            vertex
-                .iter()
-                .any(|spec| spec.name == "vertex_project" && !spec.secret)
+        let connection = &request.connection_arguments;
+        assert_eq!(connection.source("client_secret"), InputSource::Request);
+        assert_eq!(connection.source("tenant_id"), InputSource::Deployment);
+        assert_eq!(
+            connection.secret_names().collect::<Vec<_>>(),
+            ["client_secret"]
         );
     }
 

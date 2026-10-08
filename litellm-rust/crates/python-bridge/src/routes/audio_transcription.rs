@@ -1,4 +1,5 @@
 use crate::execution::{run_async, run_sync};
+use litellm_auth::{ConnectionArguments, InputSource};
 use litellm_inference_transcription::{
     AudioTranscriptionRoute, Error, types::AudioTranscriptionRequest,
 };
@@ -25,6 +26,8 @@ async fn execute(
         extra_headers,
         timeout,
     } = options;
+    let (optional_params, connection) =
+        ConnectionArguments::split(optional_params, |_| InputSource::Deployment);
     AudioTranscriptionRoute::new(http?, crate::http::resources().auth.clone(), secrets)
         .execute(AudioTranscriptionRequest {
             model: &model,
@@ -34,6 +37,7 @@ async fn execute(
             custom_llm_provider: custom_llm_provider.as_deref(),
             extra_headers,
             optional_params,
+            connection,
             timeout,
         })
         .await

@@ -59,7 +59,7 @@ pub(crate) fn prepare_request(
         document,
         transport,
         optional_params,
-        input_sources,
+        connection_arguments,
         azure_ad_token_provider,
         ..
     } = request;
@@ -69,7 +69,7 @@ pub(crate) fn prepare_request(
         connection: OcrConnection::new(resolved, transport, client.settings().clone(), secrets),
         caller_document,
         optional_params,
-        input_sources,
+        connection_arguments,
         azure_ad_token_provider,
     }
 }

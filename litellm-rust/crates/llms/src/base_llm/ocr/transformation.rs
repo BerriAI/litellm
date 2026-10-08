@@ -1,7 +1,7 @@
 use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
-use std::{collections::BTreeMap, future::Future, sync::Arc, time::Duration};
+use std::{future::Future, sync::Arc, time::Duration};
 
-use litellm_auth::{InputSource, SecretValue, Sourced, TokenProviderHandle};
+use litellm_auth::{ConnectionArguments, InputSource, SecretValue, Sourced, TokenProviderHandle};
 use litellm_core_utils::{call_arguments::CallArguments, settings::ProcessEnvironment};
 use litellm_http::outbound::{OutboundRequest, RequestSigner};
 use litellm_secrets::source::Secrets;
@@ -166,7 +166,7 @@ pub struct PreparedOcrRequest {
     /// is the caller's own input rather than something the route prepared.
     pub caller_document: bool,
     pub optional_params: CallArguments,
-    pub input_sources: BTreeMap<String, InputSource>,
+    pub connection_arguments: ConnectionArguments,
     pub azure_ad_token_provider: Option<TokenProviderHandle>,
 }
 

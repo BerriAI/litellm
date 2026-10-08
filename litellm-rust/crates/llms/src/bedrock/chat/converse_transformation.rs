@@ -1,3 +1,4 @@
+use litellm_auth::ConnectionArguments;
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_auth_aws::{
     AwsCredentialSource, bedrock_model_id_and_region,
@@ -44,22 +45,6 @@ const SUPPORTED_PARAMS: &[(&str, &str)] = &[
 ];
 
 const AWS_BEDROCK_RUNTIME_ENDPOINT: &str = "aws_bedrock_runtime_endpoint";
-
-/// AWS call configuration a host passes down: consumed for signing and endpoint
-/// resolution, never serialized into the Converse body.
-const CONFIG_PARAMS: &[&str] = &[
-    "aws_access_key_id",
-    "aws_secret_access_key",
-    "aws_session_token",
-    "aws_region_name",
-    "aws_session_name",
-    "aws_profile_name",
-    "aws_role_name",
-    "aws_web_identity_token",
-    "aws_sts_endpoint",
-    "aws_external_id",
-    AWS_BEDROCK_RUNTIME_ENDPOINT,
-];
 
 const CONVERSE_PATH_SUFFIX: &str = "/converse";
 
@@ -183,12 +168,12 @@ impl BaseConfig for AmazonConverseConfig {
         &self,
         api_base: Option<&str>,
         model: &str,
-        optional_params: &Map<String, Value>,
+        connection: &ConnectionArguments,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         let (model_id, model_region) = bedrock_model_id_and_region(model);
-        let region = resolve_bedrock_region(model_region.as_deref(), optional_params, env_lookup);
-        let endpoint = optional_params
+        let region = resolve_bedrock_region(model_region.as_deref(), connection, env_lookup);
+        let endpoint = connection
             .get(AWS_BEDROCK_RUNTIME_ENDPOINT)
             .and_then(Value::as_str)
             .or(api_base)
@@ -298,7 +283,7 @@ impl BaseConfig for AmazonConverseConfig {
         headers: Headers,
         api_key: Option<&str>,
         model: &str,
-        optional_params: &Map<String, Value>,
+        connection: &ConnectionArguments,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
         let bearer = match api_key {
@@ -319,16 +304,9 @@ impl BaseConfig for AmazonConverseConfig {
         Ok(ValidatedEnvironment {
             headers,
             auth: AuthScheme::AwsSigV4 {
-                region: resolve_bedrock_region(
-                    model_region.as_deref(),
-                    optional_params,
-                    env_lookup,
-                ),
+                region: resolve_bedrock_region(model_region.as_deref(), connection, env_lookup),
                 service: BEDROCK_SERVICE,
-                credentials: Box::new(AwsCredentialSource::from_params(
-                    optional_params,
-                    env_lookup,
-                )),
+                credentials: Box::new(AwsCredentialSource::from_credentials(connection)),
             },
         })
     }
@@ -337,45 +315,37 @@ impl BaseConfig for AmazonConverseConfig {
         &[("Content-Type", "application/json")]
     }
 
-    fn config_params(&self) -> &'static [&'static str] {
-        CONFIG_PARAMS
-    }
-
     fn unsupported_reason(
         &self,
         messages: &[ChatMessage],
         optional_params: &Map<String, Value>,
     ) -> Option<Unsupported> {
-        unsupported_param(
-            self.supported_openai_param_mappings(),
-            CONFIG_PARAMS,
-            optional_params,
-        )
-        .or_else(|| messages.iter().find_map(unsupported_message))
-        // Python's Converse translation drops blank text blocks instead of
-        // substituting the placeholder the shared conversation builder
-        // applies, so decline blank text rather than diverge.
-        .or_else(|| {
-            messages
-                .iter()
-                .any(has_blank_text)
-                .then_some(Unsupported("blank message text"))
-        })
-        // Converse has no assistant prefill: Python inserts a continue turn
-        // when a conversation opens or closes on an assistant message, and
-        // only under `litellm.modify_params`, which the core cannot see.
-        // Declining both ends also keeps the shared builder's final
-        // assistant right-strip (an Anthropic rule) unreachable here.
-        .or_else(|| {
-            let conversation = build_conversation(messages);
-            let ends_on_assistant = conversation
-                .turns
-                .last()
-                .is_some_and(|turn| turn.role == TurnRole::Assistant);
-            (!conversation.opens_on_user_turn() || ends_on_assistant).then_some(Unsupported(
-                "conversation does not run user turn to user turn",
-            ))
-        })
+        unsupported_param(self.supported_openai_param_mappings(), &[], optional_params)
+            .or_else(|| messages.iter().find_map(unsupported_message))
+            // Python's Converse translation drops blank text blocks instead of
+            // substituting the placeholder the shared conversation builder
+            // applies, so decline blank text rather than diverge.
+            .or_else(|| {
+                messages
+                    .iter()
+                    .any(has_blank_text)
+                    .then_some(Unsupported("blank message text"))
+            })
+            // Converse has no assistant prefill: Python inserts a continue turn
+            // when a conversation opens or closes on an assistant message, and
+            // only under `litellm.modify_params`, which the core cannot see.
+            // Declining both ends also keeps the shared builder's final
+            // assistant right-strip (an Anthropic rule) unreachable here.
+            .or_else(|| {
+                let conversation = build_conversation(messages);
+                let ends_on_assistant = conversation
+                    .turns
+                    .last()
+                    .is_some_and(|turn| turn.role == TurnRole::Assistant);
+                (!conversation.opens_on_user_turn() || ends_on_assistant).then_some(Unsupported(
+                    "conversation does not run user turn to user turn",
+                ))
+            })
     }
 }
 
@@ -406,8 +376,7 @@ fn converse_body(conversation: &Conversation, optional_params: &Map<String, Valu
     let additional_fields: Map<String, Value> = optional_params
         .iter()
         .filter(|(name, _)| {
-            !CONFIG_PARAMS.contains(&name.as_str())
-                && name.as_str() != "stream"
+            name.as_str() != "stream"
                 && name.as_str() != "requestMetadata"
                 && !SUPPORTED_PARAMS
                     .iter()

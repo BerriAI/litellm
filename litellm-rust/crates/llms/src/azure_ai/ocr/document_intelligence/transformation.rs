@@ -126,7 +126,7 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
     fn secret_names(&self) -> Vec<&'static str> {
         [
             [AZURE_DI_API_KEY_ENV, AZURE_DI_ENDPOINT_ENV].as_slice(),
-            AZURE_AUTH_SECRET_NAMES,
+            AZURE_AUTH_SECRET_NAMES.as_slice(),
         ]
         .into_iter()
         .flatten()

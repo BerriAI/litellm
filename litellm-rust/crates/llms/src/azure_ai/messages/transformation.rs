@@ -1,3 +1,4 @@
+use litellm_auth::ConnectionArguments;
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_http::request::{has_bearer_auth, has_header};
 use litellm_llms_types::formats::messages::{
@@ -47,6 +48,7 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         &self,
         api_base: Option<&str>,
         _model: &str,
+        _connection: &ConnectionArguments,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         complete_azure_anthropic_url(api_base, env_lookup)
@@ -86,6 +88,7 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         headers: Headers,
         api_key: Option<&str>,
         _model: &str,
+        _connection: &ConnectionArguments,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
         if has_header(&headers, API_KEY_PLACEMENT.header_name()) || has_bearer_auth(&headers) {
@@ -268,6 +271,7 @@ mod tests {
                     .collect(),
                 api_key,
                 "claude",
+                &ConnectionArguments::default(),
                 &|_| None,
             )
             .unwrap()
@@ -607,9 +611,15 @@ mod tests {
             Vec::new(),
             None,
             "claude",
+            &ConnectionArguments::default(),
             &record,
         );
-        let _ = AZURE_ANTHROPIC_MESSAGES_CONFIG.get_complete_url(None, "claude", &record);
+        let _ = AZURE_ANTHROPIC_MESSAGES_CONFIG.get_complete_url(
+            None,
+            "claude",
+            &ConnectionArguments::default(),
+            &record,
+        );
         let requested = requested.into_inner();
         assert!(!requested.is_empty());
         let undeclared: Vec<&String> = requested

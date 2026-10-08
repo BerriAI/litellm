@@ -3,6 +3,7 @@
 //! parameters pass through verbatim; the port keeps Python's two deviations,
 //! the `max_completion_tokens` -> `max_tokens` rename and the usage
 //! `*_tokens` null-to-zero sanitize.
+use litellm_auth::ConnectionArguments;
 
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_core_utils::core_helpers::unix_now;
@@ -56,7 +57,6 @@ const SUPPORTED_PARAMS: &[(&str, &str)] = &[
 ];
 
 /// Call configuration the caller may pass that never enters the request body.
-const CONFIG_PARAMS: &[&str] = &["custom_endpoint", "extra_headers", "max_retries"];
 
 pub struct OpenAILikeChatConfig;
 
@@ -75,10 +75,10 @@ impl BaseConfig for OpenAILikeChatConfig {
         &self,
         api_base: Option<&str>,
         _model: &str,
-        optional_params: &Map<String, Value>,
+        connection: &ConnectionArguments,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
-        let custom_endpoint = optional_params
+        let custom_endpoint = connection
             .get("custom_endpoint")
             .and_then(Value::as_bool)
             .unwrap_or(false);
@@ -91,11 +91,7 @@ impl BaseConfig for OpenAILikeChatConfig {
         messages: Vec<ChatMessage>,
         optional_params: Map<String, Value>,
     ) -> Result<ProviderChatRequestData, Error> {
-        let mut params = Map::from_iter(
-            optional_params
-                .into_iter()
-                .filter(|(key, _)| !CONFIG_PARAMS.contains(&key.as_str())),
-        );
+        let mut params = optional_params;
         // Most OpenAI-compatible endpoints take `max_tokens`, not
         // `max_completion_tokens`, so Python's `map_openai_params` renames it
         // and lets it overwrite a `max_tokens` the caller also sent.
@@ -188,7 +184,7 @@ impl BaseConfig for OpenAILikeChatConfig {
         headers: Headers,
         api_key: Option<&str>,
         _model: &str,
-        _optional_params: &Map<String, Value>,
+        _connection: &ConnectionArguments,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
         if headers
@@ -208,10 +204,6 @@ impl BaseConfig for OpenAILikeChatConfig {
                 secret: SecretValue::new(key.unwrap_or_default()),
             },
         })
-    }
-
-    fn config_params(&self) -> &'static [&'static str] {
-        CONFIG_PARAMS
     }
 }
 

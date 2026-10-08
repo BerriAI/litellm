@@ -9,10 +9,7 @@ use crate::base_llm::ocr::{
 pub(crate) fn azure_auth_inputs(request: &PreparedOcrRequest) -> Result<AzureAuthInputs, Error> {
     Ok(AzureAuthInputs {
         azure_ad_token_provider: request.azure_ad_token_provider.clone(),
-        ..AzureAuthInputs::from_sourced_optional_params(
-            &request.optional_params,
-            &request.input_sources,
-        )?
+        ..AzureAuthInputs::from_credentials(&request.connection_arguments)?
     }
     .or_configured_token_refresh(request.connection.settings.enable_azure_ad_token_refresh))
 }

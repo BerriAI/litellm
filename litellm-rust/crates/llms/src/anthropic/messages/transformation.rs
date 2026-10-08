@@ -1,3 +1,4 @@
+use litellm_auth::ConnectionArguments;
 use litellm_auth::CredentialPlacement;
 use litellm_llms_types::{
     formats::messages::{
@@ -47,6 +48,7 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         &self,
         api_base: Option<&str>,
         _model: &str,
+        _connection: &ConnectionArguments,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         Ok(complete_anthropic_url(api_base, env_lookup))
@@ -76,6 +78,7 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         headers: Headers,
         api_key: Option<&str>,
         _model: &str,
+        _connection: &ConnectionArguments,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
         let headers = match optionally_handle_anthropic_oauth(headers, api_key) {
@@ -815,7 +818,12 @@ mod tests {
         #[case] expected: &str,
     ) {
         assert_eq!(
-            ANTHROPIC_MESSAGES_CONFIG.get_complete_url(api_base, "claude", &env(vars)),
+            ANTHROPIC_MESSAGES_CONFIG.get_complete_url(
+                api_base,
+                "claude",
+                &ConnectionArguments::default(),
+                &env(vars)
+            ),
             Ok(expected.to_string())
         );
     }
@@ -833,6 +841,7 @@ mod tests {
             headers(forwarded),
             api_key,
             "claude",
+            &ConnectionArguments::default(),
             &env(vars),
         )
     }
@@ -1108,8 +1117,19 @@ mod tests {
             requested.borrow_mut().push(name.to_string());
             None
         };
-        let _ = ANTHROPIC_MESSAGES_CONFIG.validate_environment(Vec::new(), None, "claude", &record);
-        let _ = ANTHROPIC_MESSAGES_CONFIG.get_complete_url(None, "claude", &record);
+        let _ = ANTHROPIC_MESSAGES_CONFIG.validate_environment(
+            Vec::new(),
+            None,
+            "claude",
+            &ConnectionArguments::default(),
+            &record,
+        );
+        let _ = ANTHROPIC_MESSAGES_CONFIG.get_complete_url(
+            None,
+            "claude",
+            &ConnectionArguments::default(),
+            &record,
+        );
         let requested = requested.into_inner();
         assert!(!requested.is_empty());
         let undeclared: Vec<&String> = requested

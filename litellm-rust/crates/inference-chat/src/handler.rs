@@ -34,12 +34,13 @@ pub(super) async fn execute(
         secrets,
         timeout,
         api_key,
+        secret_fields,
     } = request;
     let context = RequestContext {
         model: model.clone(),
         custom_llm_provider,
         optional_params: Value::Object(optional_params),
-        secret_fields: Vec::new(),
+        secret_fields,
         api_key,
     };
     let authenticated = resolve_auth(auth, environment, &|key| secrets.get(key)).await?;
@@ -220,6 +221,7 @@ mod tests {
     fn prepared(api_base: &str) -> ProviderChatCompletionsRequest {
         prepare_provider_request(
             resolve_request(ChatCompletionsRequest {
+                connection: Default::default(),
                 model: "anthropic/claude-sonnet-4-5",
                 messages: json!([{"role": "user", "content": "hi"}]),
                 optional_params: json!({"max_tokens": 16}).as_object().unwrap().clone(),

@@ -1,7 +1,7 @@
 use litellm_secrets::source::Secrets;
 use std::time::Duration;
 
-use litellm_auth::SecretValue;
+use litellm_auth::{ConnectionArguments, SecretValue};
 use litellm_llms::base_llm::{auth::ValidatedEnvironment, chat::transformation::BaseConfig};
 use litellm_llms_types::formats::chat_completions::ChatMessage;
 use serde_json::{Map, Value};
@@ -16,6 +16,7 @@ pub struct ChatCompletionsRequest<'a> {
     pub model: &'a str,
     pub messages: Value,
     pub optional_params: Map<String, Value>,
+    pub connection: ConnectionArguments,
     pub api_key: Option<&'a str>,
     pub api_base: Option<&'a str>,
     pub custom_llm_provider: Option<&'a str>,
@@ -27,6 +28,7 @@ pub struct ChatCompletionsCall {
     pub model: String,
     pub messages: Value,
     pub optional_params: Map<String, Value>,
+    pub connection: ConnectionArguments,
     pub api_key: Option<String>,
     pub api_base: Option<String>,
     pub custom_llm_provider: Option<String>,
@@ -40,6 +42,7 @@ impl From<ChatCompletionsRequest<'_>> for ChatCompletionsCall {
             model: request.model.into(),
             messages: request.messages,
             optional_params: request.optional_params,
+            connection: request.connection,
             api_key: request.api_key.map(str::to_owned),
             api_base: request.api_base.map(str::to_owned),
             custom_llm_provider: request.custom_llm_provider.map(str::to_owned),
@@ -55,6 +58,7 @@ pub struct ResolvedChatCompletionsRequest<'a> {
     pub config: &'static dyn BaseConfig,
     pub messages: Vec<ChatMessage>,
     pub optional_params: Map<String, Value>,
+    pub connection: ConnectionArguments,
     pub api_key: Option<&'a str>,
     pub api_base: Option<&'a str>,
     pub extra_headers: Option<Map<String, Value>>,
@@ -76,4 +80,5 @@ pub struct ProviderChatCompletionsRequest {
     pub secrets: Secrets,
     pub timeout: Option<Duration>,
     pub api_key: Option<SecretValue>,
+    pub secret_fields: Vec<String>,
 }

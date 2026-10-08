@@ -1,3 +1,4 @@
+use litellm_auth::ConnectionArguments;
 use litellm_auth_aws::{
     AwsCredentialSource, bedrock_model_id_and_region,
     constants::{BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE},
@@ -153,12 +154,12 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
         &self,
         api_base: Option<&str>,
         model: &str,
-        optional_params: &Map<String, Value>,
+        connection: &ConnectionArguments,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         let (model_id, model_region) = bedrock_model_id_and_region(model);
-        let region = resolve_bedrock_region(model_region.as_deref(), optional_params, env_lookup);
-        let endpoint = optional_params
+        let region = resolve_bedrock_region(model_region.as_deref(), connection, env_lookup);
+        let endpoint = connection
             .get("aws_bedrock_runtime_endpoint")
             .and_then(Value::as_str)
             .or(api_base)
@@ -180,23 +181,16 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
         &self,
         headers: Headers,
         model: &str,
-        optional_params: &Map<String, Value>,
+        connection: &ConnectionArguments,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
         let (_, model_region) = bedrock_model_id_and_region(model);
         Ok(ValidatedEnvironment {
             headers,
             auth: AuthScheme::AwsSigV4 {
-                region: resolve_bedrock_region(
-                    model_region.as_deref(),
-                    optional_params,
-                    env_lookup,
-                ),
+                region: resolve_bedrock_region(model_region.as_deref(), connection, env_lookup),
                 service: BEDROCK_SERVICE,
-                credentials: Box::new(AwsCredentialSource::from_params(
-                    optional_params,
-                    env_lookup,
-                )),
+                credentials: Box::new(AwsCredentialSource::from_credentials(connection)),
             },
         })
     }
@@ -275,7 +269,10 @@ mod tests {
 
     #[test]
     fn region_and_url_precedence_match_python() {
-        let params = Map::from_iter([("aws_region_name".to_string(), json!("eu-west-1"))]);
+        let params = ConnectionArguments::from_arguments(
+            &Map::from_iter([("aws_region_name".to_string(), json!("eu-west-1"))]),
+            |_| litellm_auth::InputSource::Deployment,
+        );
         let url = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG
             .get_complete_url(
                 None,
