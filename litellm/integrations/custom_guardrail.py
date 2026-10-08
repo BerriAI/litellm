@@ -6,7 +6,7 @@ import secrets
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, get_args
+from typing import cast, TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, get_args
 
 import httpx
 
@@ -255,7 +255,6 @@ class CustomGuardrail(CustomLogger):
         scan_raw_request: bool = False,
         only_scan_new_messages: bool = False,
         timeout: float | None = None,
-        stream_scope: GuardrailStreamScope | Mapping[str, GuardrailStreamScope] | None = None,
         **kwargs,
     ):
         """
@@ -303,7 +302,8 @@ class CustomGuardrail(CustomLogger):
         self.run_in_parallel: bool = run_in_parallel
         self.scan_raw_request: bool = scan_raw_request
         self.only_scan_new_messages: bool = only_scan_new_messages
-        self.apply_stream_scope(stream_scope)
+        stream_scope_arg: Final[object] = cast(object, kwargs.pop("stream_scope", None))  # cast-ok: config
+        self.apply_stream_scope(stream_scope_arg)
         self.logging_only_scope = None
         if timeout is not None:
             self.timeout = timeout
@@ -1205,8 +1205,10 @@ class CustomGuardrail(CustomLogger):
                         data, self.event_hook, event_type
                     )
                     if result is not None:
-                        return bool(result) and self.stream_scope_allows(data, event_type)
-                return self.stream_scope_allows(data, event_type)
+                        tagged_result: Final[bool] = bool(cast(object, result))  # cast-ok: helper return
+                        data_obj: Final[object] = cast(object, data)  # cast-ok: data param
+                        return tagged_result and self.stream_scope_allows(data_obj, event_type)
+                return self.stream_scope_allows(cast(object, data), event_type)  # cast-ok: data param
             return False
 
         if (
@@ -1230,8 +1232,9 @@ class CustomGuardrail(CustomLogger):
                 )
             result = EnterpriseCustomGuardrailHelper._should_run_if_mode_by_tag(data, self.event_hook, event_type)
             if result is not None:
-                return bool(result) and self.stream_scope_allows(data, event_type)
-        return self.stream_scope_allows(data, event_type)
+                mode_tag_result: Final[bool] = bool(cast(object, result))  # cast-ok: helper return
+                return mode_tag_result and self.stream_scope_allows(cast(object, data), event_type)  # cast-ok: data
+        return self.stream_scope_allows(cast(object, data), event_type)  # cast-ok: data param
 
     def _event_hook_is_event_type(self, event_type: GuardrailEventHooks) -> bool:
         """

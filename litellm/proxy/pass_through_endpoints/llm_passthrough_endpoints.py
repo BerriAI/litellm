@@ -1081,16 +1081,15 @@ async def handle_bedrock_passthrough_router_model(
 
     # Use the common processing path (same as non-router models)
     # This ensures all metadata, hooks, and logging are properly initialized
+    bedrock_payload: Final[dict[str, object]] = {
+        "model": model,
+        "method": request.method,
+        "endpoint": endpoint,
+        "data": request_body,
+        "custom_llm_provider": "bedrock",
+    }
     data: Final[dict[str, object]] = guardrail_request_data_with_streaming(
-        MappingProxyType(
-            {
-                "model": model,
-                "method": request.method,
-                "endpoint": endpoint,
-                "data": request_body,
-                "custom_llm_provider": "bedrock",
-            }
-        ),
+        MappingProxyType(bedrock_payload),
         is_streaming=is_streaming,
     )
     base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
@@ -1287,15 +1286,14 @@ async def bedrock_llm_proxy_route(
     )
 
     is_streaming: Final = is_bedrock_streaming_endpoint(endpoint)
+    passthrough_payload: Final[dict[str, object]] = {
+        "method": request.method,
+        "endpoint": endpoint,
+        "data": request_body,
+        "custom_llm_provider": "bedrock",
+    }
     data: Final[dict[str, object]] = guardrail_request_data_with_streaming(
-        MappingProxyType(
-            {
-                "method": request.method,
-                "endpoint": endpoint,
-                "data": request_body,
-                "custom_llm_provider": "bedrock",
-            }
-        ),
+        MappingProxyType(passthrough_payload),
         is_streaming=is_streaming,
     )
     base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)

@@ -9,7 +9,7 @@ import copy
 import time
 from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, TypeVar
+from typing import cast, TYPE_CHECKING, Final, Literal, TypeVar
 
 from pydantic import BaseModel
 
@@ -542,7 +542,8 @@ class PipelineExecutor:
             verbose_proxy_logger.warning("Pipeline: guardrail '%s' not found in callbacks", step.guardrail)
             return ("error", None, f"Guardrail '{step.guardrail}' not found", None)
 
-        if not _pipeline_stream_scope_allows(callback, data, mode, streaming_chunks):
+        hook_data: Final[Mapping[str, object]] = cast(Mapping[str, object], data)  # cast-ok: payload
+        if not _pipeline_stream_scope_allows(callback, hook_data, mode, streaming_chunks):
             return ("skip", None, None, None)
 
         hook_input, scans_raw_request = _prepare_hook_input(step, callback, data, raw_request_snapshot)

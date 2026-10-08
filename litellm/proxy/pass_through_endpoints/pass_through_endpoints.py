@@ -604,9 +604,10 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         from litellm.proxy.proxy_server import llm_router
 
         _parsed_body = _parsed_body or {}
-        server_marker_free_body: Final = without_server_streaming_classification(_parsed_body)
-        # mutable-ok: the marker-free body must propagate through the caller's request dict,
-        # so downstream guardrail scans and snapshots never observe the server streaming marker.
+        parsed_body_typed: Final[Mapping[str, object]] = cast(Mapping[str, object], _parsed_body)  # cast-ok: json
+        server_marker_free_body: Final = without_server_streaming_classification(parsed_body_typed)
+        # The marker-free body must propagate through the caller's request dict, so
+        # downstream guardrail scans and snapshots never observe the server streaming marker.
         _parsed_body.clear()
         _parsed_body.update(server_marker_free_body)
         managed_model: Final = get_model_from_request(
@@ -830,7 +831,7 @@ def _build_passthrough_failure_request_payload(
     error response. Spend tracking only attributes a recovered cost when it
     comes paired with a usage object, so both keys are written together.
     """
-    request_payload: Final[dict] = dict(parsed_body or {})
+    request_payload: Final[dict] = dict(cast(Mapping[str, object], parsed_body or {}))  # cast-ok: json body
     if kwargs:
         request_payload.update(kwargs)
     if logging_obj is not None:
@@ -1240,7 +1241,8 @@ async def pass_through_request(
                 stream=stream,
             )
         )
-        _parsed_body = guardrail_request_data_with_streaming(_parsed_body, is_streaming=is_streaming_pass_through)
+        typed_body: Final[Mapping[str, object]] = cast(Mapping[str, object], _parsed_body)  # cast-ok: json
+        _parsed_body = guardrail_request_data_with_streaming(typed_body, is_streaming=is_streaming_pass_through)
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         _parsed_body = await proxy_logging_obj.pre_call_hook(

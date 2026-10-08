@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 from typing_extensions import ReadOnly, Required, TypedDict
@@ -954,7 +954,10 @@ def coerce_stream_scope(value: object) -> GuardrailStreamScope | dict[str, Guard
     if isinstance(value, str):
         return _as_guardrail_stream_scope(value)
     if isinstance(value, Mapping):
-        return {_validated_stream_scope_hook(key): _as_guardrail_stream_scope(scope) for key, scope in value.items()}
+        scope_map: Final[Mapping[str, object]] = cast(Mapping[str, object], value)  # cast-ok: keys validated below
+        return {
+            _validated_stream_scope_hook(key): _as_guardrail_stream_scope(scope) for key, scope in scope_map.items()
+        }
     raise ValueError(f"stream_scope must be a string or mapping, got {type(value).__name__}")
 
 
