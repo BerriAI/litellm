@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import io
 import json
+import uuid
 from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from typing import Final
@@ -54,8 +55,9 @@ def router_minute_pinned(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class _RouterLoggingCapture(CustomLogger):
-    def __init__(self) -> None:
+    def __init__(self, model_id: str) -> None:
         super().__init__()
+        self.model_id: Final = model_id
         self.success_events: asyncio.Queue[tuple[object | None, object | None]] = asyncio.Queue()
 
     async def async_log_success_event(
@@ -65,7 +67,10 @@ class _RouterLoggingCapture(CustomLogger):
         start_time: object,
         end_time: object,
     ) -> None:
-        self.success_events.put_nowait((kwargs.get("client"), kwargs.get("standard_logging_object")))
+        standard_logging_object: Final = kwargs.get("standard_logging_object")
+        if not isinstance(standard_logging_object, dict) or standard_logging_object.get("model_id") != self.model_id:
+            return
+        self.success_events.put_nowait((kwargs.get("client"), standard_logging_object))
 
     async def next_event(self) -> tuple[object | None, object | None]:
         return await asyncio.wait_for(self.success_events.get(), timeout=EVENT_TIMEOUT_SECONDS)
@@ -124,15 +129,14 @@ async def test_router_transcription_reuses_router_level_client_for_each_deployme
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
 ) -> None:
-    capture: Final = _RouterLoggingCapture()
+    model_id: Final = f"whisper-{uuid.uuid4().hex}"
+    capture: Final = _RouterLoggingCapture(model_id)
     monkeypatch.setattr(litellm, "callbacks", [capture])
     router: Final = Router(
-        model_list=[
-            {"model_name": "whisper", "litellm_params": dict(litellm_params), "model_info": {"id": "whisper-1"}}
-        ]
+        model_list=[{"model_name": "whisper", "litellm_params": dict(litellm_params), "model_info": {"id": model_id}}]
     )
     router_level_client: Final = build_client()
-    router.cache.set_cache(key="whisper-1_async_client", value=router_level_client, local_only=True)
+    router.cache.set_cache(key=f"{model_id}_async_client", value=router_level_client, local_only=True)
     route: Final = respx_mock.post(route_url).respond(200, json={"text": "hello"})
 
     response: Final = await router.atranscription(
@@ -165,13 +169,15 @@ async def test_router_speech_returns_binary_content_and_logs_model_group(
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    capture: Final = _RouterLoggingCapture()
+    model_id: Final = f"tts-{uuid.uuid4().hex}"
+    capture: Final = _RouterLoggingCapture(model_id)
     monkeypatch.setattr(litellm, "callbacks", [capture])
     router: Final = Router(
         model_list=[
             {
                 "model_name": "tts",
                 "litellm_params": {"model": "openai/tts-1", "api_key": "sk-fake"},
+                "model_info": {"id": model_id},
             }
         ]
     )
@@ -327,7 +333,7 @@ async def test_router_image_generation_returns_valid_image_response(
 async def test_router_acompletion_headers_read_post_increment_counter_and_count_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    capture: Final = _RouterLoggingCapture()
+    capture: Final = _RouterLoggingCapture("lit-3058-async")
     monkeypatch.setattr(litellm, "callbacks", [capture])
     router: Final = _rpm_tpm_router("lit-3058-async")
 
@@ -352,7 +358,7 @@ async def test_router_acompletion_headers_read_post_increment_counter_and_count_
 async def test_router_stream_counts_request_before_headers_and_tokens_once_on_completion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    capture: Final = _RouterLoggingCapture()
+    capture: Final = _RouterLoggingCapture("lit-3058-stream")
     monkeypatch.setattr(litellm, "callbacks", [capture])
     router: Final = _rpm_tpm_router("lit-3058-stream")
     stream: Final = await router.acompletion(
