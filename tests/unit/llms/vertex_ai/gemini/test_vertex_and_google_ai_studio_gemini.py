@@ -8915,28 +8915,28 @@ OPENAI_TTS_VOICES: Final[tuple[str, ...]] = (
 )
 
 
-def _mapped_voice_name(audio: dict) -> str:
+def _mapped_voice_name(audio: dict[str, str]) -> str:
     return VertexGeminiConfig()._map_audio_params(audio)["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"]
 
 
 @pytest.mark.parametrize("openai_voice", OPENAI_TTS_VOICES)
-def test_map_audio_params_maps_openai_voice_names_to_gemini_prebuilt_voices(openai_voice):
+def test_map_audio_params_maps_openai_voice_names_to_gemini_prebuilt_voices(openai_voice: str) -> None:
     """Regression for the audio_speech health check default voice (alloy) 400ing on Gemini TTS models."""
     mapped: Final = _mapped_voice_name({"voice": openai_voice, "format": "pcm16"})
     assert mapped in GEMINI_TTS_PREBUILT_VOICES
     assert _mapped_voice_name({"voice": openai_voice.capitalize()}) == mapped
 
 
-def test_map_audio_params_maps_the_health_check_default_voice_to_kore():
+def test_map_audio_params_maps_the_health_check_default_voice_to_kore() -> None:
     assert _mapped_voice_name({"voice": "alloy", "format": "pcm16"}) == "Kore"
 
 
 @pytest.mark.parametrize("gemini_voice", ("Kore", "Puck", "Sulafat", "custom-voice"))
-def test_map_audio_params_passes_non_openai_voice_names_through(gemini_voice):
+def test_map_audio_params_passes_non_openai_voice_names_through(gemini_voice: str) -> None:
     assert _mapped_voice_name({"voice": gemini_voice, "format": "pcm16"}) == gemini_voice
 
 
-def test_map_openai_params_audio_voice_reaches_speech_config_mapped():
+def test_map_openai_params_audio_voice_reaches_speech_config_mapped() -> None:
     optional_params: Final = VertexGeminiConfig().map_openai_params(
         non_default_params={"modalities": ["audio"], "audio": {"voice": "alloy", "format": "pcm16"}},
         optional_params={},
