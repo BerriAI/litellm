@@ -1,18 +1,20 @@
 import json
 import uuid
+from hashlib import sha256
 from typing import Final
 
 import pytest
-from integration._support.client import Gateway, eventually
+from integration._support.client import Gateway, JsonValue, eventually
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 
 _MODEL: Final = "claude-sonnet-4-5-20250929"
 _KEY: Final = "synthetic-anthropic-key"
+_MESSAGE_ID: Final = "msg_passthrough_migration"
 
 _MESSAGE_BODY: Final = {
-    "id": "msg_pt1",
+    "id": _MESSAGE_ID,
     "type": "message",
     "role": "assistant",
     "model": _MODEL,
@@ -38,8 +40,6 @@ _PROXY_CONFIG: Final = (
     "  store_model_in_db: true\n"
     "  disable_spend_logs: false\n"
     "  proxy_batch_write_at: 1\n"
-    "router_settings:\n"
-    "  disable_cooldowns: true\n"
 )
 
 
@@ -54,7 +54,7 @@ def _stream_chunks() -> tuple[bytes, ...]:
             {
                 "type": "message_start",
                 "message": {
-                    "id": "msg_pt_stream",
+                    "id": _MESSAGE_ID,
                     "type": "message",
                     "role": "assistant",
                     "model": _MODEL,
@@ -80,27 +80,27 @@ def _stream_chunks() -> tuple[bytes, ...]:
     )
 
 
-def _metadata(marker: str) -> dict:
-    return {"litellm_metadata": {"tags": [marker], "user": f"end-user-{marker}"}}
-
-
-def _spend_row(marker: str):
+def _spend_rows(request_id: str) -> list[dict[str, JsonValue]]:
     return read_rows(
-        "SELECT prompt_tokens, completion_tokens, spend, status, request_tags, end_user "
-        'FROM "LiteLLM_SpendLogs" WHERE request_tags::text LIKE %s',
-        (f"%{marker}%",),
+        "SELECT status, prompt_tokens, completion_tokens, spend, request_tags, end_user, call_type "
+        'FROM "LiteLLM_SpendLogs" WHERE request_id=%s',
+        (request_id,),
     )
 
 
-def _assert_spend_row(marker: str, prompt_tokens: int, completion_tokens: int) -> None:
-    rows: Final = eventually(lambda: _spend_row(marker), lambda values: len(values) >= 1, seconds=90)
-    row: Final = rows[0]
-    assert row["status"] == "success", rows
-    assert row["prompt_tokens"] == prompt_tokens
-    assert row["completion_tokens"] == completion_tokens
-    assert marker in str(row["request_tags"])
-    assert row["end_user"] == f"end-user-{marker}"
-    assert float(row["spend"]) > 0
+def _passthrough_rows(digest: str) -> list[dict[str, JsonValue]]:
+    return read_rows(
+        "SELECT status, prompt_tokens, completion_tokens, spend, request_tags, end_user, call_type "
+        'FROM "LiteLLM_SpendLogs" WHERE api_key=%s AND call_type=%s',
+        (digest, "pass_through_endpoint"),
+    )
+
+
+def _tags(row: JsonValue) -> list[JsonValue]:
+    raw: Final = dict(row)["request_tags"]
+    tags: Final = json.loads(raw) if isinstance(raw, str) else raw
+    assert isinstance(tags, list), row
+    return tags
 
 
 def test_passthrough_basic_completion_spend_row_v1_messages(gateway: Gateway) -> None:
@@ -108,10 +108,11 @@ def test_passthrough_basic_completion_spend_row_v1_messages(gateway: Gateway) ->
 
     def respond(request: Request) -> Reply:
         assert request.method == "POST" and request.target == "/v1/messages", request.target
+        assert request.headers["x-api-key"] == _KEY
         body: Final = json.loads(request.body)
         assert body["model"] == _MODEL
         assert body["messages"] == [{"role": "user", "content": f"say hello {marker}"}]
-        return Reply(body=json.dumps(_MESSAGE_BODY).encode())
+        return Reply(body=json.dumps({**_MESSAGE_BODY, "id": f"msg_{marker}"}).encode())
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_KEY)
@@ -122,10 +123,19 @@ def test_passthrough_basic_completion_spend_row_v1_messages(gateway: Gateway) ->
                 "model": model,
                 "max_tokens": 100,
                 "messages": [{"role": "user", "content": f"say hello {marker}"}],
-                **_metadata(marker),
+                "litellm_metadata": {"tags": [marker], "user": f"end-user-{marker}"},
             },
+            headers={"x-litellm-tags": marker},
         )
         assert response.status_code == 200, response.text
+        rows: Final = eventually(lambda: _spend_rows(f"msg_{marker}"), lambda values: len(values) == 1, seconds=90)
+        row: Final = rows[0]
+        assert row["status"] == "success", rows
+        assert row["prompt_tokens"] == 11
+        assert row["completion_tokens"] == 7
+        assert float(row["spend"]) > 0
+        assert marker in _tags(row), row
+        assert row["end_user"] == f"end-user-{marker}", row
 
 
 def test_passthrough_streaming_spend_row_v1_messages(gateway: Gateway) -> None:
@@ -149,33 +159,67 @@ def test_passthrough_streaming_spend_row_v1_messages(gateway: Gateway) -> None:
                 "max_tokens": 100,
                 "stream": True,
                 "messages": [{"role": "user", "content": f"say hello {marker}"}],
-                **_metadata(marker),
+                "litellm_metadata": {"tags": [marker], "user": f"end-user-{marker}"},
             },
-            headers={"Authorization": f"Bearer {gateway.key}"},
+            headers={"Authorization": f"Bearer {gateway.key}", "x-litellm-tags": marker},
         ) as stream:
             for line in stream.iter_text():
                 chunks.append(line)
         assert "hello stream" in "".join(chunks)
 
 
-def test_passthrough_wildcard_model_strips_provider_prefix(gateway: Gateway) -> None:
+def test_passthrough_streaming_spend_row_written_v1_messages(gateway: Gateway) -> None:
     pytest.skip(
-        "BUG: a wildcard anthropic/* deployment forwards the provider-prefixed model name to the upstream; "
-        "the upstream receives 'anthropic/claude-haiku-4-5-20251001' instead of 'claude-haiku-4-5-20251001'"
+        "BUG: a successful streamed /v1/messages call returns complete chunks but writes no LiteLLM_SpendLogs "
+        "row (non-streamed calls write one); the streamed usage, tags and end_user are never recorded"
     )
+    marker: Final = "pt-stream-spend-" + uuid.uuid4().hex
 
+    def respond(request: Request) -> Reply:
+        return Reply(content_type="text/event-stream", chunks=_stream_chunks())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_KEY)
+        with gateway.client.stream(
+            "POST",
+            f"{gateway.client.base_url}/v1/messages",
+            json={
+                "model": model,
+                "max_tokens": 100,
+                "stream": True,
+                "messages": [{"role": "user", "content": f"say hello {marker}"}],
+                "litellm_metadata": {"tags": [marker], "user": f"end-user-{marker}"},
+            },
+            headers={"Authorization": f"Bearer {gateway.key}", "x-litellm-tags": marker},
+        ) as stream:
+            for _line in stream.iter_text():
+                pass
+        rows: Final = eventually(lambda: _spend_rows(f"msg_{marker}"), lambda values: len(values) == 1, seconds=90)
+        row: Final = rows[0]
+        assert row["status"] == "success", rows
+        assert row["prompt_tokens"] == 11
+        assert row["completion_tokens"] == 7
+        assert float(row["spend"]) > 0
+        assert marker in _tags(row), row
+        assert row["end_user"] == f"end-user-{marker}", row
+
+
+def test_passthrough_wildcard_model_strips_provider_prefix(gateway: Gateway) -> None:
     def respond(request: Request) -> Reply:
         body: Final = json.loads(request.body)
         assert body["model"] == "claude-haiku-4-5-20251001"
         return Reply(body=json.dumps(_MESSAGE_BODY).encode())
 
-    with wire_server(respond) as wire:
-        gateway.post(
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        created: Final = gateway.post(
             "/model/new",
             {
-                "model_name": "*",
+                "model_name": "anthropic/*",
                 "litellm_params": {"model": "anthropic/*", "api_base": wire.url, "api_key": _KEY},
             },
+        )
+        scenario.cleanups.callback(
+            scenario.delete_model, created["model_info"]["id"] if isinstance(created.get("model_info"), dict) else ""
         )
         response: Final = gateway.request(
             "POST",
@@ -240,8 +284,6 @@ def test_passthrough_bad_request_returns_400_v1_messages(gateway: Gateway) -> No
 
 
 def test_native_anthropic_route_completion_stream_and_thinking(gateway: Gateway, tmp_path) -> None:
-    marker: Final = "pt-native-" + uuid.uuid4().hex
-
     def respond(request: Request) -> Reply:
         assert request.method == "POST" and request.target == "/v1/messages", request.target
         assert request.headers["x-api-key"] == _KEY
@@ -276,8 +318,7 @@ def test_native_anthropic_route_completion_stream_and_thinking(gateway: Gateway,
                 {
                     "model": _MODEL,
                     "max_tokens": 100,
-                    "messages": [{"role": "user", "content": f"say hello {marker}"}],
-                    **_metadata(marker),
+                    "messages": [{"role": "user", "content": "say hello native"}],
                 },
             )
             assert completion.status_code == 200, completion.text
@@ -317,44 +358,12 @@ def test_native_anthropic_route_completion_stream_and_thinking(gateway: Gateway,
             assert "hello stream" in "".join(chunks)
 
 
-def test_passthrough_spend_rows_recorded_for_v1_messages(gateway: Gateway) -> None:
+def test_native_passthrough_spend_row_records_usage_tags_and_spend(gateway: Gateway, tmp_path) -> None:
     pytest.skip(
-        "BUG: successful anthropic_messages calls on /v1/messages never invoke the success logging handler "
-        "(litellm/llms/custom_httpx/llm_http_handler.py returns via _maybe_wrap_in_fake_stream), so no "
-        "LiteLLM_SpendLogs row is written and tags, end_user and spend are not recorded"
+        "BUG: pass_through_endpoint rows for successful /anthropic calls record request_tags=[] even with the "
+        "documented x-litellm-tags header, no end_user, zero prompt/completion tokens and zero spend"
     )
-    marker: Final = "pt-spend-" + uuid.uuid4().hex
-
-    def respond(request: Request) -> Reply:
-        body: Final = json.loads(request.body)
-        if body.get("stream") is True:
-            return Reply(content_type="text/event-stream", chunks=_stream_chunks())
-        return Reply(body=json.dumps(_MESSAGE_BODY).encode())
-
-    with wire_server(respond) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_KEY)
-        for stream in (False, True):
-            response: Final = gateway.request(
-                "POST",
-                "/v1/messages",
-                {
-                    "model": model,
-                    "max_tokens": 100,
-                    "stream": stream,
-                    "messages": [{"role": "user", "content": f"say hello {marker}"}],
-                    **_metadata(marker),
-                },
-            )
-            assert response.status_code == 200, response.text
-        _assert_spend_row(marker, 11, 7)
-
-
-def test_native_passthrough_spend_row_records_tags_and_spend(gateway: Gateway, tmp_path) -> None:
-    pytest.skip(
-        "BUG: pass_through_endpoint spend rows for successful /anthropic calls record empty request_tags, "
-        "no end_user and zero prompt/completion tokens and spend"
-    )
-    marker: Final = "pt-native-spend-" + uuid.uuid4().hex
+    marker: Final = "pt-native-" + uuid.uuid4().hex
 
     def respond(request: Request) -> Reply:
         return Reply(body=json.dumps(_MESSAGE_BODY).encode())
@@ -368,6 +377,7 @@ def test_native_passthrough_spend_row_records_tags_and_spend(gateway: Gateway, t
             {"ANTHROPIC_API_BASE": wire.url, "ANTHROPIC_API_KEY": _KEY},
             config=config,
         ) as candidate:
+            digest: Final = sha256(candidate.key.encode()).hexdigest()
             response: Final = candidate.request(
                 "POST",
                 "/anthropic/v1/messages",
@@ -375,11 +385,19 @@ def test_native_passthrough_spend_row_records_tags_and_spend(gateway: Gateway, t
                     "model": _MODEL,
                     "max_tokens": 100,
                     "messages": [{"role": "user", "content": f"say hello {marker}"}],
-                    **_metadata(marker),
+                    "litellm_metadata": {"user": f"end-user-{marker}"},
                 },
+                headers={"x-litellm-tags": marker},
             )
             assert response.status_code == 200, response.text
-        _assert_spend_row(marker, 11, 7)
+        rows: Final = eventually(lambda: _passthrough_rows(digest), lambda values: len(values) == 1, seconds=90)
+        row: Final = rows[0]
+        assert row["status"] == "success", rows
+        assert row["prompt_tokens"] == 11
+        assert row["completion_tokens"] == 7
+        assert float(row["spend"]) > 0
+        assert marker in _tags(row), row
+        assert row["end_user"] == f"end-user-{marker}", row
 
 
 def _openai_stream_chunks() -> tuple[bytes, ...]:
