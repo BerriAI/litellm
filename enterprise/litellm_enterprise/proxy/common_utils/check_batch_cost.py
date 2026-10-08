@@ -732,6 +732,11 @@ class CheckBatchCost:
         another pod claimed it. Raises on results-fetch or cost-computation
         failures so the caller can leave the job unprocessed and retry it on a
         later poll.
+
+        When the managed-files hook is available, it also registers raw output
+        and error file IDs, forwarding the model name and output size.
+        Registration follows the writer's retry, timeout, cooldown, and fallback
+        behavior.
         """
         from litellm.batches.batch_utils import (
             count_error_file_failed_requests,

@@ -975,6 +975,12 @@ async def get_file_content(
         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
 
     ```
+
+    For managed IDs, content is read from configured storage when present or from
+    a mapped provider otherwise. Model-routed and raw provider IDs read from the
+    selected provider. This route does not fetch file metadata or write the
+    managed-file row. The 10-second retry cap applies to metadata lookups, not
+    content downloads; provider or storage failures are returned as endpoint errors.
     """
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -1287,6 +1293,17 @@ async def get_file(
         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
 
     ```
+
+    Provider-routed and raw provider IDs read metadata from the provider without
+    updating a managed-file row. When the managed-files hook handles a managed
+    ID, saved details are returned unless marked as fallback with a stored
+    provider mapping. That detail lookup retries transient failures up to three
+    times and is capped at 10 seconds; a successful refresh updates only
+    ``file_object``. On refresh failure, the saved fallback is returned. Rows
+    without file details are fetched live when a provider route is available and
+    are not persisted. Direct provider errors and live-fetch errors are returned
+    as endpoint errors. Direct provider-routed lookups do not use the managed
+    refresh retry cap.
     """
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -1486,6 +1503,14 @@ async def delete_file(
     -H "Authorization: Bearer $OPENAI_API_KEY"
 
     ```
+
+    For managed IDs handled by the managed-files hook, configured storage content
+    or mapped provider files are deleted when present before the managed-file row
+    is removed.
+    Provider-routed and raw provider IDs are deleted directly without changing a
+    managed row. This route does not fetch file metadata or use the 10-second
+    provider-detail lookup retry cap. A provider or storage deletion failure is
+    returned as an endpoint error; the hook-managed row remains.
     """
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
@@ -1713,6 +1738,13 @@ async def list_files(
         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
 
     ```
+
+    When the managed-files hook is available and no provider or model route is
+    selected, it lists saved rows only without calling the provider or writing
+    managed-file rows. Otherwise, the selected provider supplies the list and
+    managed-file rows are not written. Provider-list failures are returned as
+    endpoint errors. This route does not fetch provider file details, so the
+    10-second detail lookup retry cap does not apply.
     """
     from litellm.proxy.proxy_server import (
         general_settings,
