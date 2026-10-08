@@ -325,7 +325,7 @@ def renew_reservation(lens: Lens, reservation_id: str, now: datetime) -> Lens:
 async def wait_for_reservation(
     repo: LensRepository, lens_id: str, reservation_id: str, reserve: Callable[[Lens], Lens]
 ) -> None:
-    while (reserved := await repo.update(lens_id, reserve)) is not None:
+    while (reserved := await repo.update_locked(lens_id, reserve)) is not None:
         if any(held.id == reservation_id for held in reserved.reservations):
             return
         await asyncio.sleep(0.25)
@@ -341,7 +341,7 @@ async def renew_budget_reservation(
         try:
             async with timeout(BUDGET_RENEW_INTERVAL):
                 if (
-                    await repo.update(
+                    await repo.update_locked(
                         lens_id, lambda e: renew_reservation(e, reservation_id, datetime.now(timezone.utc))
                     )
                     is None
