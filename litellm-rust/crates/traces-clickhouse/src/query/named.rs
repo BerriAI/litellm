@@ -134,6 +134,8 @@ struct TraceSpansRowEncoding {
     pub source_url: String,
     #[serde(default)]
     pub source_title: String,
+    #[serde(default)]
+    pub source_user: String,
     pub team_id: String,
     pub api_key_hash: String,
     pub user_id: String,
@@ -355,7 +357,7 @@ mod tests {
             quoted,
         );
         round_trip::<TraceSpansRow>(
-            json!({"trace_id": "trace", "original_trace_id": "original", "span_id": "span", "parent_span_id": "parent", "name": "agent", "type": "agent", "wrapper_candidate": 1, "agent": "agent", "framework": "claude-agent-sdk", "status": "STATUS_CODE_ERROR", "status_message": "error", "error_truncated": 1, "start_ns": -1, "duration_ns": u64::MAX, "service": "service", "input_preview": "input", "model": "model", "input_tokens": u32::MAX, "output_tokens": 6, "litellm_request_id": "request", "call_keys": ["provider_response:request"], "call_evidence": "complete", "tool_call_id": "call", "source_type": "slack", "source_url": "https://acme.slack.com/archives/C1/p1", "source_title": "thread", "team_id": "team", "api_key_hash": "key", "user_id": "user"}),
+            json!({"trace_id": "trace", "original_trace_id": "original", "span_id": "span", "parent_span_id": "parent", "name": "agent", "type": "agent", "wrapper_candidate": 1, "agent": "agent", "framework": "claude-agent-sdk", "status": "STATUS_CODE_ERROR", "status_message": "error", "error_truncated": 1, "start_ns": -1, "duration_ns": u64::MAX, "service": "service", "input_preview": "input", "model": "model", "input_tokens": u32::MAX, "output_tokens": 6, "litellm_request_id": "request", "call_keys": ["provider_response:request"], "call_evidence": "complete", "tool_call_id": "call", "source_type": "slack", "source_url": "https://acme.slack.com/archives/C1/p1", "source_title": "thread", "source_user": "tin@berri.ai", "team_id": "team", "api_key_hash": "key", "user_id": "user"}),
             quoted,
         );
         round_trip::<SpanDetailRow>(

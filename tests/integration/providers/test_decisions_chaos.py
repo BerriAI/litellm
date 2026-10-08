@@ -26,8 +26,8 @@ _CONFIG_MODEL: Final = "decisions-chaos"
 _API_KEY: Final = "synthetic-decisions-key"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
-_QUESTIONS: Final[list[JsonValue]] = [{"type": "predicate", "name": "fine", "instructions": "Is the state fine?"}]
-_ROUTES: Final = ("/v1/decisions", "/decisions")
+_QUESTIONS: Final[dict[str, JsonValue]] = {"fine": {"type": "noul", "instructions": "Is the state fine?"}}
+_ROUTES: Final = ("/v1/systemone", "/systemone")
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,19 +63,13 @@ def _marker_of(request: Request) -> str:
     return state
 
 
-def _asked_questions(request: Request) -> tuple[str, ...]:
-    questions: Final = _JSON_OBJECT.validate_json(request.body)["questions"]
-    assert isinstance(questions, dict), request.body
-    return tuple(questions)
-
-
 def _reply(request: Request) -> Reply:
     marker: Final = _marker_of(request)
     if marker.startswith("fail-"):
         return Reply(status=500, body=json.dumps({"error": {"message": f"scripted outage {marker}"}}).encode())
     answer: Final = {
         "model": f"model-{marker}",
-        "answers": {name: {"type": "noul", "noul": 0.5} for name in _asked_questions(request)},
+        "answers": {"fine": {"type": "noul", "noul": 0.5}},
         "usage": {"input_tokens": 12, "output_tokens": 1},
     }
     return Reply(body=json.dumps(answer).encode())
@@ -84,7 +78,7 @@ def _reply(request: Request) -> Reply:
 async def _send(client: httpx.AsyncClient, key: str, model: str | None, call: _Call) -> _Served:
     body: Final[dict[str, JsonValue]] = {
         **({"model": model} if model is not None else {}),
-        "input": call.marker,
+        "state": call.marker,
         "questions": _QUESTIONS,
         "num_retries": 0,
     }
@@ -227,7 +221,7 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_serving_the_default_m
             release.set()
             served: Final = await burst
             assert len(served) == held_by[survivor_pid], (held_by, len(served))
-            follow_up: Final = _Call(route="/decisions", marker=f"ok-{uuid.uuid4().hex}", fail=False)
+            follow_up: Final = _Call(route="/systemone", marker=f"ok-{uuid.uuid4().hex}", fail=False)
             (answered,) = await _burst(base_url, candidate.key, None, (follow_up,))
             await asyncio.to_thread(
                 eventually,

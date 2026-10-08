@@ -13,7 +13,8 @@ from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import assert_never
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.types.decisions import (
+from litellm.types.llms.base import LiteLLMPydanticObjectBase
+from litellm.types.openai_decisions import (
     ChoiceAnswer,
     ChoiceProbability,
     ChoiceQuestion,
@@ -35,7 +36,6 @@ from litellm.types.decisions import (
     ScoreProbability,
     ScoreQuestion,
 )
-from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 
 class SystemOneObjectBase(LiteLLMPydanticObjectBase):

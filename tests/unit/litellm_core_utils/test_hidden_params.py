@@ -11,22 +11,9 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_params,
 )
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
-from litellm.types.decisions import (
-    DecisionInputTokensDetails,
-    DecisionOutputTokensDetails,
-    DecisionsResponse,
-    DecisionUsage,
-)
+from litellm.types.decisions import DecisionsResponse
 from litellm.types.llms.base import HiddenParams
 from litellm.types.utils import ModelResponse, TextChoices, TextCompletionResponse, Usage
-
-_ZERO_USAGE: Final = DecisionUsage(
-    input_tokens=0,
-    input_tokens_details=DecisionInputTokensDetails(cached_tokens=0, cache_write_tokens=0),
-    output_tokens=0,
-    output_tokens_details=DecisionOutputTokensDetails(reasoning_tokens=0),
-    total_tokens=0,
-)
 
 
 def test_get_and_set_hidden_params_on_plain_object() -> None:
@@ -202,8 +189,8 @@ def test_hidden_params_model_view_excludes_unset_fields() -> None:
     fallback_response: Final = PlainResponse()
     setattr(fallback_response, HIDDEN_PARAMS_ATTR, HiddenParams())
     fallback_view: Final = get_or_create_hidden_params(fallback_response)
-    merged_after_fallback: Final = {**fallback_view, "model_id": "m1"}
-    merged_before_fallback: Final = {"model_id": "m1", **fallback_view}
+    merged_after_fallback: Final = {**fallback_view, **{"model_id": "m1"}}
+    merged_before_fallback: Final = {**{"model_id": "m1"}, **fallback_view}
 
     assert merged_after_fallback == {"model_id": "m1"}
     assert merged_before_fallback == {"model_id": "m1"}
@@ -256,7 +243,7 @@ def test_get_hidden_params_returns_none_for_non_dict_storage() -> None:
 
 
 def test_set_hidden_params_replaces_frozen_decisions_response_private_attr() -> None:
-    response: Final = DecisionsResponse(model="decider", answers=(), usage=_ZERO_USAGE)
+    response: Final = DecisionsResponse(model="decider", answers={}, usage=None)
     replacement: Final = {"replacement": True}
 
     set_hidden_params(response, replacement)

@@ -1,7 +1,7 @@
 import asyncio
 import hashlib
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from itertools import accumulate
@@ -168,22 +168,21 @@ class StoredTraceSignal(Record):
         return value
 
 
-class PredicateAnswer(Record):
+class NoulAnswer(Record):
     model_config = ConfigDict(extra="ignore", allow_inf_nan=False, from_attributes=True)
 
-    type: Literal["predicate"]
-    name: str
-    probability: float = Field(ge=0, le=1, allow_inf_nan=False)
+    type: Literal["noul"]
+    noul: float = Field(ge=0, le=1, allow_inf_nan=False)
 
 
 class DecisionsOutput(Record):
     model_config = ConfigDict(extra="ignore", from_attributes=True)
 
-    answers: Sequence[object]
+    answers: Mapping[str, object]
 
 
 DecisionState: TypeAlias = Mapping[str, object]
-DecisionQuestions: TypeAlias = Sequence[Mapping[str, str]]
+DecisionQuestions: TypeAlias = Mapping[str, Mapping[str, str]]
 Clock: TypeAlias = Callable[[], datetime]
 RouterReady: TypeAlias = Callable[[], bool]
 
@@ -193,7 +192,7 @@ class DecisionsCall(Protocol):
         self,
         *,
         model: str,
-        input: str,
+        state: DecisionState,
         questions: DecisionQuestions,
         timeout: float,
         metadata: Mapping[str, object],
@@ -337,17 +336,11 @@ async def signal_state(reader: SourceReader, scope: Scope, execution: Execution)
     }
 
 
-def _predicate_answer(value: object) -> PredicateAnswer | None:
+def _noul_score(value: object) -> float | None:
     try:
-        return PredicateAnswer.model_validate(value)
+        return NoulAnswer.model_validate(value).noul
     except ValidationError:
         return None
-
-
-def _predicate_scores(answers: Sequence[object], config: SignalConfig) -> Mapping[str, float]:
-    wanted: Final = frozenset(signal.id for signal in config.signals)
-    parsed: Final = tuple(answer for value in answers if (answer := _predicate_answer(value)) is not None)
-    return MappingProxyType({answer.name: answer.probability for answer in parsed if answer.name in wanted})
 
 
 class SignalClassifier:
@@ -359,25 +352,31 @@ class SignalClassifier:
     async def classify(self, scope: Scope, execution: Execution, config: SignalConfig) -> SignalAttempt:
         try:
             state: Final = await signal_state(self.reader, scope, execution)
-            questions: Final = tuple(
-                {"type": "predicate", "name": signal.id, "instructions": signal.question} for signal in config.signals
-            )
+            questions: Final = {
+                signal.id: {"type": "noul", "instructions": signal.question} for signal in config.signals
+            }
             with lens_analysis(), inherit_message_logging_privacy(True):
                 response: Final = await self.completion(
                     model=config.model,
-                    input=json.dumps(state, sort_keys=True),
+                    state=state,
                     questions=questions,
                     timeout=60,
                     metadata={"tags": ["litellm-lens-signals"]},
                 )
             output: Final = DecisionsOutput.model_validate(response)
-            scores: Final = _predicate_scores(output.answers, config)
+            scores: Final = MappingProxyType(
+                {
+                    signal.id: score
+                    for signal in config.signals
+                    if (score := _noul_score(output.answers.get(signal.id))) is not None
+                }
+            )
             if len(scores) != len(config.signals):
                 return SignalAttempt(
                     status="failed",
                     scores=scores,
                     model=config.model,
-                    error="Decisions response omitted a configured predicate answer",
+                    error="Decisions response omitted a configured noul answer",
                 )
             return SignalAttempt(status="classified", scores=scores, model=config.model)
         except Exception as error:

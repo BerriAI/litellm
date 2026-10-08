@@ -13,7 +13,7 @@ from litellm.llms.base_llm.decisions.systemone import (
     to_decisions_response,
     to_system_one_request,
 )
-from litellm.types.decisions import (
+from litellm.types.openai_decisions import (
     ChoiceAnswer,
     DecisionsRequest,
     DecisionsRequestBody,

@@ -1,36 +1,56 @@
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Final
+from typing import Final, TypeAlias
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import assert_never
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
+from litellm.llms.base_llm.decisions.transformation import (
+    BaseDecisionsConfig,
+    ir_to_systemone_response,
+    systemone_request_to_ir,
+)
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.openai.decisions.transformation import ir_to_openai_response, openai_request_to_ir
 from litellm.types.decisions import (
-    DecisionInput,
     DecisionQuestion,
-    DecisionsRequest,
+    DecisionsIRRequest,
+    DecisionsIRResponse,
+    DecisionsJSON,
     DecisionsRequestBody,
     DecisionsResponse,
+    OpenAIDecisionInput,
+    OpenAIDecisionQuestion,
+    OpenAIDecisionRequestBody,
+    OpenAIDecisionResponse,
+    UnsupportedDecisionsRequest,
 )
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager, client
 
-_DECISIONS_BODY_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
+DecisionsQuestions: TypeAlias = (
+    Mapping[str, DecisionQuestion | Mapping[str, object]] | Sequence[OpenAIDecisionQuestion | Mapping[str, object]]
+)
+DecisionsRequestFormat: TypeAlias = DecisionsRequestBody | OpenAIDecisionRequestBody
+
+_SYSTEMONE_REQUEST_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
+_OPENAI_REQUEST_ADAPTER: Final[TypeAdapter[OpenAIDecisionRequestBody]] = TypeAdapter(OpenAIDecisionRequestBody)
 _HANDLER: Final = BaseLLMHTTPHandler()
 
 
 @dataclass(frozen=True, slots=True, repr=False)
 class _DecisionsCall:
     model: str
+    requested_model: str
     custom_llm_provider: str
     provider_config: BaseDecisionsConfig
-    request: DecisionsRequest
+    request: DecisionsRequestFormat
+    ir_request: DecisionsIRRequest
+    body: Mapping[str, object] = field(repr=False)
     api_base: str
     api_key: str | None = field(repr=False)
     logging_obj: LiteLLMLoggingObj | None
@@ -61,34 +81,37 @@ def _provider_config(model: str, custom_llm_provider: str) -> BaseDecisionsConfi
     return provider_config
 
 
-def _body_for_provider(
-    body: DecisionsRequestBody,
-    provider_config: BaseDecisionsConfig,
+def _validate_request(
     *,
-    model: str,
-    provider: str,
-    drop_params: object,
-) -> DecisionsRequestBody:
-    if body.safety_identifier is None or provider_config.supports_safety_identifier:
-        return body
-    if litellm.drop_params is True or normalize_drop_params(drop_params) is True:
-        return body.model_copy(update={"safety_identifier": None})
-    raise litellm.UnsupportedParamsError(
-        message=(
-            f"{provider} does not support parameters: ['safety_identifier'], for model={model}. "
-            "To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
-        ),
-        model=model,
-        llm_provider=provider,
+    state: DecisionsJSON | None,
+    questions: DecisionsQuestions | None,
+    decision_input: OpenAIDecisionInput | None,
+    safety_identifier: str | None,
+) -> DecisionsRequestFormat:
+    if decision_input is None:
+        return _SYSTEMONE_REQUEST_ADAPTER.validate_python({"state": state, "questions": questions})
+    return _OPENAI_REQUEST_ADAPTER.validate_python(
+        {"input": decision_input, "questions": questions, "safety_identifier": safety_identifier}
     )
+
+
+def _ir_request(request: DecisionsRequestFormat) -> DecisionsIRRequest:
+    match request:
+        case DecisionsRequestBody():
+            return systemone_request_to_ir(request)
+        case OpenAIDecisionRequestBody():
+            return openai_request_to_ir(request)
+        case _:
+            assert_never(request)
 
 
 def _prepare_call(
     *,
     model: str,
-    input: DecisionInput | Sequence[Mapping[str, object]],
-    questions: Sequence[DecisionQuestion | Mapping[str, object]],
-    safety_identifier: str | None = None,
+    state: DecisionsJSON | None,
+    questions: DecisionsQuestions | None,
+    decision_input: OpenAIDecisionInput | None,
+    safety_identifier: str | None,
     api_key: str | None,
     api_base: str | None,
     timeout: float | httpx.Timeout | None,
@@ -110,9 +133,15 @@ def _prepare_call(
             model=model,
             llm_provider=provider,
         )
+    if state is not None and decision_input is not None:
+        raise litellm.BadRequestError(
+            message="Pass either state (System One format) or input (OpenAI format) to the Decisions API, not both",
+            model=model,
+            llm_provider=provider,
+        )
     try:
-        body: Final = _DECISIONS_BODY_ADAPTER.validate_python(
-            {"input": input, "questions": questions, "safety_identifier": safety_identifier}
+        request: Final = _validate_request(
+            state=state, questions=questions, decision_input=decision_input, safety_identifier=safety_identifier
         )
     except ValidationError as error:
         raise litellm.BadRequestError(
@@ -120,12 +149,6 @@ def _prepare_call(
             model=model,
             llm_provider=provider,
         ) from error
-    request: Final = DecisionsRequest(
-        model=canonical_model,
-        body=_body_for_provider(
-            body, provider_config, model=model, provider=provider, drop_params=kwargs.get("drop_params")
-        ),
-    )
 
     resolved_api_base: Final = provider_config.resolve_api_base(dynamic_api_base or api_base)
     if resolved_api_base is None:
@@ -138,6 +161,17 @@ def _prepare_call(
     if resolved_api_key is None and provider_config.api_key_required:
         raise litellm.AuthenticationError(
             message=f"Missing API key for Decisions provider '{provider}'",
+            model=model,
+            llm_provider=provider,
+        )
+
+    ir_request: Final = _ir_request(request)
+    body: Final = provider_config.transform_decisions_request(
+        model=canonical_model, request=ir_request, custom_llm_provider=provider
+    )
+    if isinstance(body, UnsupportedDecisionsRequest):
+        raise litellm.BadRequestError(
+            message=f"Decisions provider '{provider}' cannot serve this request: {body.reason}",
             model=model,
             llm_provider=provider,
         )
@@ -155,15 +189,42 @@ def _prepare_call(
         )
     return _DecisionsCall(
         model=canonical_model,
+        requested_model=model,
         custom_llm_provider=provider,
         provider_config=provider_config,
         request=request,
+        ir_request=ir_request,
+        body=body,
         api_base=resolved_api_base,
         api_key=resolved_api_key,
         logging_obj=logging_obj if isinstance(logging_obj, LiteLLMLoggingObj) else None,
         headers=extra_headers or {},
         timeout=timeout,
     )
+
+
+def _format_response(response: DecisionsIRResponse, call: _DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
+    formatted: Final = _formatted_response(response, call)
+    formatted.set_hidden_params(
+        {
+            "model": f"{call.custom_llm_provider}/{call.model}",
+            "custom_llm_provider": call.custom_llm_provider,
+            "provider_response_model": f"{call.custom_llm_provider}/{call.model}",
+        }
+    )
+    return formatted
+
+
+def _formatted_response(
+    response: DecisionsIRResponse, call: _DecisionsCall
+) -> DecisionsResponse | OpenAIDecisionResponse:
+    match call.request:
+        case DecisionsRequestBody():
+            return ir_to_systemone_response(response, call.ir_request)
+        case OpenAIDecisionRequestBody():
+            return ir_to_openai_response(response, call.ir_request, call.requested_model)
+        case _:
+            assert_never(call.request)
 
 
 def _map_upstream_exception(error: Exception, call: _DecisionsCall) -> Exception:
@@ -184,20 +245,22 @@ def _map_upstream_exception(error: Exception, call: _DecisionsCall) -> Exception
 @client
 async def adecisions(
     model: str,
-    input: DecisionInput | Sequence[Mapping[str, object]],
-    questions: Sequence[DecisionQuestion | Mapping[str, object]],
-    safety_identifier: str | None = None,
+    state: DecisionsJSON | None = None,
+    questions: DecisionsQuestions | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     extra_headers: Mapping[str, str] | None = None,
+    input: OpenAIDecisionInput | None = None,
+    safety_identifier: str | None = None,
     **kwargs: object,
-) -> DecisionsResponse:
+) -> DecisionsResponse | OpenAIDecisionResponse:
     call: Final = _prepare_call(
         model=model,
-        input=input,
+        state=state,
         questions=questions,
+        decision_input=input,
         safety_identifier=safety_identifier,
         api_key=api_key,
         api_base=api_base,
@@ -207,12 +270,13 @@ async def adecisions(
         kwargs=kwargs,
     )
     try:
-        return await _HANDLER.adecisions(
+        response: Final = await _HANDLER.adecisions(
             model=call.model,
             custom_llm_provider=call.custom_llm_provider,
             logging_obj=call.logging_obj,
             provider_config=call.provider_config,
-            request=call.request,
+            request=call.ir_request,
+            body=call.body,
             api_base=call.api_base,
             api_key=call.api_key,
             headers=call.headers,
@@ -220,25 +284,28 @@ async def adecisions(
         )
     except Exception as error:
         raise _map_upstream_exception(error, call) from error
+    return _format_response(response, call)
 
 
 @client
 def decisions(
     model: str,
-    input: DecisionInput | Sequence[Mapping[str, object]],
-    questions: Sequence[DecisionQuestion | Mapping[str, object]],
-    safety_identifier: str | None = None,
+    state: DecisionsJSON | None = None,
+    questions: DecisionsQuestions | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     extra_headers: Mapping[str, str] | None = None,
+    input: OpenAIDecisionInput | None = None,
+    safety_identifier: str | None = None,
     **kwargs: object,
-) -> DecisionsResponse:
+) -> DecisionsResponse | OpenAIDecisionResponse:
     call: Final = _prepare_call(
         model=model,
-        input=input,
+        state=state,
         questions=questions,
+        decision_input=input,
         safety_identifier=safety_identifier,
         api_key=api_key,
         api_base=api_base,
@@ -248,12 +315,13 @@ def decisions(
         kwargs=kwargs,
     )
     try:
-        return _HANDLER.decisions(
+        response: Final = _HANDLER.decisions(
             model=call.model,
             custom_llm_provider=call.custom_llm_provider,
             logging_obj=call.logging_obj,
             provider_config=call.provider_config,
-            request=call.request,
+            request=call.ir_request,
+            body=call.body,
             api_base=call.api_base,
             api_key=call.api_key,
             headers=call.headers,
@@ -261,6 +329,7 @@ def decisions(
         )
     except Exception as error:
         raise _map_upstream_exception(error, call) from error
+    return _format_response(response, call)
 
 
 __all__ = ["adecisions", "decisions"]

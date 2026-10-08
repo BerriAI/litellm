@@ -40,6 +40,7 @@ function serve({ enabled = false, traces = false, requests = false, connected = 
       return Response.json({ agents: traces ? rollUpAgents([data.runs[0].trace.summary]) : [] });
     if (path === "/lens/activity/available") return Response.json({ traces, requests });
     if (path === "/lens/traces/findings") return Response.json([]);
+    if (path === "/lens/feedback/summary") return Response.json([]);
     if (path === "/lens" && method === "POST") {
       const saved = { ...data.lenses[0], settings: { ...data.lenses[0].settings, ...(body as object) } };
       list.mockResolvedValue({ lenses: [saved], workers: [worker()], tracing_enabled: true });

@@ -78,8 +78,8 @@ describe("RunView", () => {
       "title",
       research.summary.trace_id,
     );
-    expect(header).toHaveTextContent("Duration 40.20s");
-    expect(header).toHaveTextContent(`Steps ${research.summary.span_count}`);
+    expect(header).toHaveTextContent("40.20s");
+    expect(header).toHaveTextContent(`${research.summary.span_count} steps`);
     expect(header).toHaveTextContent("Recorded");
     expect(header).not.toHaveTextContent("Completed");
   });
@@ -97,6 +97,37 @@ describe("RunView", () => {
     expect(within(header).queryByTestId("span-icon")).not.toBeInTheDocument();
   });
 
+  it("puts who started the run and its Slack thread next to the agent name", async () => {
+    const thread = "https://acme.slack.com/archives/C1/p1";
+    renderRun({
+      ...research,
+      summary: {
+        ...research.summary,
+        spend: null,
+        source: { type: "slack", url: thread, title: "why is the deploy failing?", user: "tin@berri.ai" },
+      },
+    });
+
+    const header = await screen.findByRole("banner");
+    expect(within(header).getByTestId("run-user")).toHaveTextContent("tin@berri.ai");
+    expect(within(header).getByRole("link", { name: "Open Slack thread" })).toHaveAttribute("href", thread);
+    expect(header).not.toHaveTextContent("Not reported");
+  });
+
+  it("leaves the user out when the source does not say who started it", async () => {
+    renderRun({
+      ...research,
+      summary: {
+        ...research.summary,
+        source: { type: "slack", url: "https://acme.slack.com/archives/C1/p1", title: "" },
+      },
+    });
+
+    const header = await screen.findByRole("banner");
+    expect(within(header).queryByTestId("run-user")).not.toBeInTheDocument();
+    expect(within(header).getByRole("link", { name: "Open Slack thread" })).toBeInTheDocument();
+  });
+
   it("keeps the generic agent icon when the trace has no known SDK", async () => {
     renderRun({ ...research, summary: { ...research.summary, frameworks: ["some-other-sdk"] } });
 
@@ -110,7 +141,7 @@ describe("RunView", () => {
 
     const tree = await screen.findByRole("tree", { name: "Spans in time order" });
     expect(tree).toHaveTextContent("researcher×12");
-    expect(screen.getByRole("banner")).toHaveTextContent(`Step errors ${swarm.summary.error_count}`);
+    expect(screen.getByRole("banner")).toHaveTextContent(`${swarm.summary.error_count} step errors`);
   });
 
   it.each([
@@ -395,7 +426,7 @@ describe("RunView", () => {
     expect(await screen.findByTestId("detail-pane")).toHaveAttribute("data-row-id", rootSpanId(research));
     fireEvent.click(screen.getByRole("button", { name: "Refresh run" }));
     expect(await screen.findByText("newly received step")).toBeVisible();
-    expect(screen.getByRole("banner")).toHaveTextContent(`Steps ${research.summary.span_count + 1}`);
+    expect(screen.getByRole("banner")).toHaveTextContent(`${research.summary.span_count + 1} steps`);
     expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", rootSpanId(research));
   });
 
@@ -413,11 +444,11 @@ describe("RunView", () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(100);
       });
-      expect(screen.getByRole("banner")).toHaveTextContent(`Steps ${research.summary.span_count}`);
+      expect(screen.getByRole("banner")).toHaveTextContent(`${research.summary.span_count} steps`);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(30_100);
       });
-      expect(screen.getByRole("banner")).toHaveTextContent(`Steps ${research.summary.span_count + 7}`);
+      expect(screen.getByRole("banner")).toHaveTextContent(`${research.summary.span_count + 7} steps`);
       expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", rootSpanId(research));
     } finally {
       vi.useRealTimers();
@@ -476,7 +507,7 @@ describe("RunView", () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(60_100);
       });
-      expect(screen.getByRole("banner")).toHaveTextContent(`Steps ${research.summary.span_count}`);
+      expect(screen.getByRole("banner")).toHaveTextContent(`${research.summary.span_count} steps`);
       expect(vi.mocked(agentTraceCall)).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
@@ -517,7 +548,7 @@ describe("RunView", () => {
         expect(screen.queryByRole("button", { name: "Load more steps" })).not.toBeInTheDocument();
         expect(vi.mocked(agentTraceCall)).toHaveBeenCalledTimes(2);
         if (action === "Refresh run") {
-          expect(screen.getByRole("banner")).toHaveTextContent(`Steps ${updated.summary.span_count}`);
+          expect(screen.getByRole("banner")).toHaveTextContent(`${updated.summary.span_count} steps`);
         }
       } finally {
         vi.useRealTimers();
@@ -642,7 +673,7 @@ describe("RunView", () => {
     renderRun({ ...research, summary: { ...research.summary, status: "ok", error_count: 2 } });
     const header = await screen.findByRole("banner");
     expect(header).toHaveTextContent("Recorded");
-    expect(header).toHaveTextContent("Step errors 2");
+    expect(header).toHaveTextContent("Recorded · 2 step errors");
     expect(header).not.toHaveTextContent("Failed");
   });
 
@@ -684,7 +715,8 @@ describe("RunView", () => {
     const user = userEvent.setup();
     renderRun(research);
 
-    await user.click(await screen.findByRole("button", { name: /copy link/i }));
+    fireEvent.click(await screen.findByRole("button", { name: "More run actions" }));
+    await user.click(await screen.findByRole("menuitem", { name: /copy link/i }));
     const url = new URL(vi.mocked(copyToClipboard).mock.calls[0][0] as string);
     expect(url.pathname).toBe(window.location.pathname);
     expect(url.searchParams.get("trace")).toBe(research.summary.trace_id);

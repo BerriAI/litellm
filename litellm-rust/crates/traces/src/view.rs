@@ -88,6 +88,10 @@ pub struct RunSource {
     pub kind: RunSourceType,
     pub url: String,
     pub title: String,
+    /// Who started the conversation, e.g. the Slack user's email.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
+    pub user: String,
 }
 
 #[macro_rules_attribute::apply(response_type)]
