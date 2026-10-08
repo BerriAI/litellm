@@ -78,7 +78,10 @@ def get_copilot_default_headers(api_key: str) -> dict:
     }
 
 
-def pin_session_authorization(headers: MutableMapping[str, str], session_token: str) -> None:
+def pin_session_authorization(
+    headers: MutableMapping[str, str],  # mutable-ok: the helper fixes caller-owned headers in place
+    session_token: str,
+) -> None:
     """The stored per-user session token owns Authorization outright: drop every
     caller-supplied bearer header (any casing) so it can never displace the
     session's on the wire."""
