@@ -10,7 +10,6 @@ import respx
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
-from tests.unit.proxy.conftest import httpx_transport
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
@@ -27,6 +26,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import Choices, Message, ModelResponse
+from tests.unit.proxy.conftest import httpx_transport
 import time
 
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
@@ -3448,6 +3448,8 @@ async def test_extra_body_merges_with_request_data(extra_body_mock_response_data
         assert "temperature" in request_body
         assert "custom_field" in request_body
         assert request_body["custom_field"] == "custom_value"
+
+
 @pytest.mark.asyncio
 @pytest.mark.usefixtures(httpx_transport.__name__)
 async def test_aresponses_forwards_previous_response_id_to_openai() -> None:
@@ -3564,9 +3566,8 @@ def test_dict_responses_input_filters_unset_reasoning_fields() -> None:
     assert "status" not in reasoning_item
     assert "content" not in reasoning_item
     assert "encrypted_content" not in reasoning_item
-    if "id" in reasoning_item:
-        assert reasoning_item["id"] == "rs_123"
-    assert "summary" in reasoning_item
+    assert reasoning_item["id"] == "rs_123"
+    assert reasoning_item["summary"] == [{"text": "test", "type": "summary_text"}]
 
     function_call_item: Final = validated_input[2]
     assert function_call_item["type"] == "function_call"

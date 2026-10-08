@@ -71,7 +71,7 @@ async def test_web_search_preview_is_sent_as_google_search() -> None:
             model="gemini/gemini-2.5-flash",
             api_key="test-key",
             input="Find current weather",
-            tools=[{"type": "web_search_preview"}],
+            tools=[{"type": "web_search_preview", "search_context_size": "low"}],
         )
         requests: Final = tuple(route.calls)
 
