@@ -16,6 +16,9 @@ from litellm.types.files import (
 )
 from litellm.types.utils import FileTypes
 
+# libsndfile uses SF_COUNT_MAX (2**63 - 1) for "unknown length"; no real upload gets near 2**62 frames
+_MAX_PLAUSIBLE_AUDIO_FRAMES: Final = 2**62
+
 
 @dataclass
 class ProcessedAudioFile:
@@ -323,12 +326,18 @@ def calculate_request_duration(file: FileTypes) -> float | None:
         # Extract duration using soundfile
         file_object: Final = io.BytesIO(file_content)
         with sf.SoundFile(file_object) as audio:
-            duration: Final = len(audio) / audio.samplerate
-            return duration
+            frames: Final = len(audio)
+            samplerate: Final = audio.samplerate
 
     except Exception:
         # Silently fail if duration extraction fails
         return None
+
+    # libsndfile reports an unknown length (e.g. a FLAC with no sample count
+    # in STREAMINFO) as SF_COUNT_MAX, which would bill as ~2^63 frames
+    if frames >= _MAX_PLAUSIBLE_AUDIO_FRAMES or samplerate <= 0:
+        return None
+    return frames / samplerate
 
 
 DEFAULT_SPEECH_MEDIA_TYPE: Final = "audio/mpeg"

@@ -148,4 +148,11 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             response["language"] = response_json["language"]
 
         response.hidden_params = response_json
+        # Mistral bills transcription on usage.prompt_audio_seconds, so cost uses it
+        # instead of measuring the uploaded file locally
+        usage: Final = response_json.get("usage")
+        if isinstance(usage, dict):
+            prompt_audio_seconds: Final = usage.get("prompt_audio_seconds")
+            if isinstance(prompt_audio_seconds, (int, float)) and not isinstance(prompt_audio_seconds, bool):
+                response.hidden_params["audio_transcription_duration"] = float(prompt_audio_seconds)
         return response
