@@ -1,10 +1,10 @@
 import asyncio
 import json
-from collections.abc import Sequence
-from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
+from collections.abc import Mapping, Sequence
+from contextlib import AbstractContextManager, ExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Final, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, call, patch
 
@@ -16254,9 +16254,14 @@ def _update_request_stub():
 class _TeamRowStore:
     """One team row whose writes honor their where clause, as Postgres does.
 
-    `budget_set_after_read` is a proxy admin's budget change that commits after update_team read the row."""
+    `committed_after_read` is a proxy admin's change to the row that commits after update_team read it."""
 
-    def __init__(self, table: MagicMock, row: dict[str, object], budget_set_after_read: float | None = None) -> None:
+    def __init__(
+        self,
+        table: MagicMock,
+        row: dict[str, object],
+        committed_after_read: Mapping[str, object] = MappingProxyType({}),
+    ) -> None:
         self.row: Final = {
             "organization_id": None,
             "soft_budget": None,
@@ -16266,7 +16271,7 @@ class _TeamRowStore:
             "metadata": {},
             **row,
         }
-        self._budget_set_after_read = budget_set_after_read
+        self._committed_after_read = committed_after_read
         table.find_unique = self.find_unique
         table.update = self.update
         table.update_many = self.update_many
@@ -16278,9 +16283,8 @@ class _TeamRowStore:
 
     async def find_unique(self, where, include=None):
         snapshot: Final = self._snapshot()
-        if self._budget_set_after_read is not None:
-            self.row["max_budget"] = self._budget_set_after_read
-            self._budget_set_after_read = None
+        self.row.update(self._committed_after_read)
+        self._committed_after_read = MappingProxyType({})
         return snapshot
 
     async def update(self, where, data, include=None):
@@ -16556,7 +16560,12 @@ _UNBUDGETED_ORG = LiteLLM_OrganizationTable(
 )
 
 
-def _granted_raise(stack, organization_id: str | None, org_table: LiteLLM_OrganizationTable | None) -> _TeamRowStore:
+def _granted_raise(
+    stack: ExitStack,
+    organization_id: str | None,
+    org_table: LiteLLM_OrganizationTable | None,
+    committed_after_read: Mapping[str, object] = MappingProxyType({}),
+) -> _TeamRowStore:
     """A team admin granted max_budget and raise_max_budget on a team budgeted at 10, standalone or in `org_table`."""
     prisma = _wire_update_team(stack, {})
     store = _TeamRowStore(
@@ -16568,6 +16577,7 @@ def _granted_raise(stack, organization_id: str | None, org_table: LiteLLM_Organi
             "max_budget": 10.0,
             "members_with_roles": [{"user_id": "team-admin", "role": "admin"}],
         },
+        committed_after_read=committed_after_read,
     )
     stack.enter_context(_team_admin_may_edit("max_budget", "raise_max_budget"))
     stack.enter_context(_not_org_admin())
@@ -16589,7 +16599,9 @@ def _granted_raise(stack, organization_id: str | None, org_table: LiteLLM_Organi
     ],
 )
 async def test_update_team_lets_a_granted_team_admin_raise_a_budget_with_no_org_cap(
-    disable_audit_logging_for_mocked_team, organization_id, org_table
+    disable_audit_logging_for_mocked_team: None,
+    organization_id: str | None,
+    org_table: LiteLLM_OrganizationTable | None,
 ):
     """Nothing caps the raise when the team has no organization, or its organization has no max_budget."""
     import contextlib
@@ -16607,7 +16619,9 @@ async def test_update_team_lets_a_granted_team_admin_raise_a_budget_with_no_org_
 
 
 @pytest.mark.asyncio
-async def test_update_team_caps_a_granted_team_admin_raise_at_the_org_budget(disable_audit_logging_for_mocked_team):
+async def test_update_team_caps_a_granted_team_admin_raise_at_the_org_budget(
+    disable_audit_logging_for_mocked_team: None,
+):
     import contextlib
 
     budgeted_org = LiteLLM_OrganizationTable(
@@ -16639,7 +16653,9 @@ async def test_update_team_caps_a_granted_team_admin_raise_at_the_org_budget(dis
 
 
 @pytest.mark.asyncio
-async def test_update_team_still_stops_a_granted_team_admin_removing_the_budget(disable_audit_logging_for_mocked_team):
+async def test_update_team_still_stops_a_granted_team_admin_removing_the_budget(
+    disable_audit_logging_for_mocked_team: None,
+):
     import contextlib
 
     with contextlib.ExitStack() as stack:
@@ -16658,27 +16674,14 @@ async def test_update_team_still_stops_a_granted_team_admin_removing_the_budget(
 
 @pytest.mark.asyncio
 async def test_update_team_keeps_a_budget_cut_that_lands_while_a_granted_team_admin_raise_runs(
-    disable_audit_logging_for_mocked_team,
+    disable_audit_logging_for_mocked_team: None,
 ):
     """The raise was checked against the budget it read; a proxy admin's cut that commits in between still has
     to make the team admin reload rather than be silently overwritten."""
     import contextlib
 
     with contextlib.ExitStack() as stack:
-        prisma = _wire_update_team(stack, {})
-        store = _TeamRowStore(
-            prisma.db.litellm_teamtable,
-            {
-                "team_id": "test_team_id",
-                "team_alias": "test_team",
-                "organization_id": None,
-                "max_budget": 10.0,
-                "members_with_roles": [{"user_id": "team-admin", "role": "admin"}],
-            },
-            budget_set_after_read=2.0,
-        )
-        stack.enter_context(_team_admin_may_edit("max_budget", "raise_max_budget"))
-        stack.enter_context(_not_org_admin())
+        store = _granted_raise(stack, None, None, committed_after_read={"max_budget": 2.0})
         with pytest.raises(ProxyException) as raised:
             await update_team(
                 data=UpdateTeamRequest(team_id="test_team_id", max_budget=50.0),
@@ -16688,6 +16691,28 @@ async def test_update_team_keeps_a_budget_cut_that_lands_while_a_granted_team_ad
 
     assert str(raised.value.code) == "409"
     assert store.row["max_budget"] == 2.0
+
+
+@pytest.mark.asyncio
+async def test_update_team_keeps_an_org_move_that_lands_while_a_granted_team_admin_raise_runs(
+    disable_audit_logging_for_mocked_team: None,
+):
+    """The raise was checked against a standalone team, so no org cap applied; a proxy admin moving the team
+    into a budgeted org in between must not let the uncapped raise land on the now capped team."""
+    import contextlib
+
+    with contextlib.ExitStack() as stack:
+        store = _granted_raise(stack, None, None, committed_after_read={"organization_id": "budgeted-org"})
+        with pytest.raises(ProxyException) as raised:
+            await update_team(
+                data=UpdateTeamRequest(team_id="test_team_id", max_budget=500.0),
+                http_request=_update_request_stub(),
+                user_api_key_dict=_TEAM_ADMIN_CALLER,
+            )
+
+    assert str(raised.value.code) == "409"
+    assert store.row["max_budget"] == 10.0
+    assert store.row["organization_id"] == "budgeted-org"
 
 
 @pytest.mark.asyncio
@@ -16717,7 +16742,7 @@ async def test_update_team_keeps_a_budget_cut_that_lands_while_a_team_admin_upda
                 "max_budget": budget_read,
                 "members_with_roles": [{"user_id": "team-admin", "role": "admin"}],
             },
-            budget_set_after_read=20.0,
+            committed_after_read={"max_budget": 20.0},
         )
         stack.enter_context(_team_admin_may_edit("max_budget"))
         stack.enter_context(_not_org_admin())

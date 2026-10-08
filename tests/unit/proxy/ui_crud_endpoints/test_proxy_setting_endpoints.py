@@ -3962,7 +3962,7 @@ class TestTeamAdminEditableTeamFieldsSetting:
         )
 
         mock_prisma = self._as_proxy_admin(monkeypatch)
-        general_settings: dict = {"team_admin_editable_team_fields": ["max_budget"]}
+        general_settings: dict[str, object] = {"team_admin_editable_team_fields": ["max_budget"]}
         monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
         assert team_admin_may_raise_max_budget(general_settings) is False
 
