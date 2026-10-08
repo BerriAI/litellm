@@ -5,13 +5,16 @@ import time
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from types import SimpleNamespace
-from typing import Final, cast
+from typing import TYPE_CHECKING, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 from fastapi import HTTPException
 from openai import APIConnectionError
+
+if TYPE_CHECKING:
+    from litellm.types.utils import LiteLLMBatch
 
 from litellm_enterprise.proxy.hooks.managed_files import (
     PROXY_LiteLLMManagedFiles,
@@ -3076,7 +3079,10 @@ async def test_afile_retrieve_case3_includes_provider_error_text():
                 detail="provider file is missing",
             ),
         ),
-        pytest.raises(Exception) as error,
+        pytest.raises(
+            Exception,
+            match="Failed to retrieve file unified-output from provider",
+        ) as error,
     ):
         await proxy_managed_files.afile_retrieve(
             file_id="unified-output",
