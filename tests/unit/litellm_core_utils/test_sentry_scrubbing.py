@@ -28,6 +28,8 @@ VIRTUAL_KEY: Final = "sk-virtual-key-under-test"
 KEY_HASH: Final = hashlib.sha256(VIRTUAL_KEY.encode()).hexdigest()
 MASTER_KEY: Final = "sk-master-key-under-test"
 DATABASE_URL: Final = "postgresql://litellm:db-password-under-test@db.internal:5432/litellm"
+STRANDS_SECRET: Final = "strands-secret-under-test"
+CLOUDFLARE_SECRET: Final = "cloudflare-secret-under-test"
 PII_ON: Final = {"SENTRY_DSN": "https://key@sentry.example/1", "SENTRY_SEND_DEFAULT_PII": "true"}
 PII_OFF: Final = {"SENTRY_DSN": "https://key@sentry.example/1"}
 
@@ -101,6 +103,21 @@ def test_default_event_carries_no_email_hash_or_secret_anywhere() -> None:
     assert frame_vars["data"] == {"metadata": {"user_api_key_hash": FILTERED, "user_api_key_user_email": FILTERED}}
     assert "key_name='sk-...test'" in frame_vars["valid_token"]
     assert "user_role='internal_user'" in frame_vars["user_obj"]
+
+
+def raise_with_classifier_env_locals() -> None:
+    classifier_env: Final = {"STRANDS_DECIDER_API_KEY": STRANDS_SECRET, "CLOUDFLARE_API_KEY": CLOUDFLARE_SECRET}
+    raise RuntimeError(f"classifier boot failed with {len(classifier_env)} env fields")
+
+
+def test_decisions_classifier_keys_are_scrubbed_from_frame_locals() -> None:
+    serialized: Final = capture_serialized_event(PII_OFF, raise_with_classifier_env_locals)
+    assert STRANDS_SECRET not in serialized
+    assert CLOUDFLARE_SECRET not in serialized
+    assert innermost_frame_vars(serialized)["classifier_env"] == {
+        "STRANDS_DECIDER_API_KEY": FILTERED,
+        "CLOUDFLARE_API_KEY": FILTERED,
+    }
 
 
 def test_source_context_lines_are_left_readable() -> None:

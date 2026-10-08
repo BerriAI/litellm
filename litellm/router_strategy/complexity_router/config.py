@@ -715,7 +715,6 @@ _ENVIRONMENT_KEY_SCOPE: Final = MappingProxyType(
 _PROVIDER_DEFAULT_MODELS: Final = MappingProxyType(
     {"strands_decider": "strands-decider-2B-hobson-v19", "cloudflare": "clef"}
 )
-_CLOUDFLARE_CLASSIFIER_MODELS: Final = ("clef", "clef-flash")
 
 
 class OpenSourceClassifierConfig(LiteLLMBaseModel):
@@ -781,11 +780,7 @@ class OpenSourceClassifierConfig(LiteLLMBaseModel):
             case "cloudflare":
                 from litellm.llms.cloudflare.decisions.transformation import CloudflareDecisionsConfig
 
-                cloudflare: Final = CloudflareDecisionsConfig()
-                if cloudflare.canonical_model(self.model) not in {
-                    cloudflare.canonical_model(model) for model in _CLOUDFLARE_CLASSIFIER_MODELS
-                }:
-                    raise ValueError(f"cloudflare model must be one of {', '.join(_CLOUDFLARE_CLASSIFIER_MODELS)}")
+                _ = CloudflareDecisionsConfig().validate_classifier_model(self.model)
                 return self._keep_the_environment_key_home()
             case "jev":
                 return self._keep_the_environment_key_home()
