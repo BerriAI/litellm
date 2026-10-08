@@ -883,6 +883,11 @@ verbose_router_logger.addHandler(handler)
 verbose_proxy_logger.addHandler(handler)
 verbose_logger.addHandler(handler)
 
+if "LITELLM_LOG" in os.environ and numeric_level < logging.WARNING:
+    verbose_router_logger.setLevel(numeric_level)
+    verbose_proxy_logger.setLevel(numeric_level)
+    verbose_logger.setLevel(numeric_level)
+
 # Filters attached to the logger, not the handler, survive callers swapping in their own
 # handlers (JSON mode, uvicorn log config, a host app's root handler).
 verbose_router_logger.addFilter(_diagnostic_filter)

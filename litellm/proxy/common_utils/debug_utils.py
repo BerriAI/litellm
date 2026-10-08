@@ -104,7 +104,7 @@ if os.environ.get("LITELLM_PROFILE", "false").lower() == "true":
         roots: Final = objgraph.get_leaking_objects()
         profile_report.write("\n\nLeaking objects\n")
         objgraph.show_most_common_types(objects=roots, file=profile_report)
-        verbose_proxy_logger.info("%s", profile_report.getvalue())
+        verbose_proxy_logger.warning("%s", profile_report.getvalue())
     except ImportError:
         raise ImportError("objgraph not found. Please install objgraph to use this feature.")
 
