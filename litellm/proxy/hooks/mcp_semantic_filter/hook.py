@@ -45,7 +45,7 @@ async def _run_deferred_index_build(semantic_filter: "SemanticMCPToolFilter") ->
     """Background task for defer_index_build; swallows failures so requests keep passing through."""
     try:
         await semantic_filter.build_router_from_mcp_registry(async_index=True)
-    except Exception:
+    except Exception:  # noqa: BLE001  # background task must not die; requests keep passing through
         verbose_proxy_logger.exception(
             "MCP semantic tool index deferred build failed; request-time indexing remains active"
         )
