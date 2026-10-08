@@ -203,9 +203,7 @@ def clean_agent_registry():
 
 
 @pytest.mark.asyncio
-async def test_get_agent_with_read_through_recovers_agent_created_on_sibling_replica(
-    clean_agent_registry, monkeypatch
-):
+async def test_get_agent_with_read_through_recovers_agent_created_on_sibling_replica(clean_agent_registry, monkeypatch):
     from unittest.mock import AsyncMock, MagicMock
 
     import litellm.proxy.proxy_server as proxy_server
@@ -601,7 +599,9 @@ async def test_resync_guardrails_syncs_decrypted_litellm_params(monkeypatch):
     synced: list[dict] = []
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
-    monkeypatch.setattr(IN_MEMORY_GUARDRAIL_HANDLER, "sync_guardrail_from_db", lambda guardrail: synced.append(guardrail))
+    monkeypatch.setattr(
+        IN_MEMORY_GUARDRAIL_HANDLER, "sync_guardrail_from_db", lambda guardrail: synced.append(guardrail)
+    )
     monkeypatch.setattr(read_through_module, "_initialized_guardrail", lambda guardrail_name: MagicMock())
 
     assert await _resync_guardrails("enc-guardrail") is True
@@ -610,15 +610,21 @@ async def test_resync_guardrails_syncs_decrypted_litellm_params(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("lookup", ["agent-id", "Agent name"])
-async def test_agent_read_through_hydrates_identity_binding(lookup, clean_agent_registry, fresh_agent_read_through, monkeypatch):
+async def test_agent_read_through_hydrates_identity_binding(
+    lookup, clean_agent_registry, fresh_agent_read_through, monkeypatch
+):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy.common_utils.registry_read_through import get_agent_with_read_through
 
     binding = {
-        "agent_id": "agent-id", "provider": "microsoft_entra", "tenant_id": "tenant", "client_id": "client",
-        "issuer": "https://login.microsoftonline.com/tenant/v2.0", "revision": "revision",
+        "agent_id": "agent-id",
+        "provider": "microsoft_entra",
+        "tenant_id": "tenant",
+        "client_id": "client",
+        "issuer": "https://login.microsoftonline.com/tenant/v2.0",
+        "revision": "revision",
     }
 
     async def load_row(*, where, include):
@@ -733,3 +739,49 @@ async def test_agent_read_through_answers_a_loaded_agent_without_reading_the_db(
 
     assert await agent_registry_read_through.attempt("wired-loaded-agent-id") is True
     assert await agent_registry_read_through.attempt("wired-loaded-agent") is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("router_holds_the_name_after_reconcile", [True, False])
+async def test_resync_model_deployments_reconciles_every_db_row_when_the_missed_model_is_an_auto_router(
+    monkeypatch: pytest.MonkeyPatch, router_holds_the_name_after_reconcile: bool
+) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+    from litellm.proxy.common_utils.registry_read_through import _resync_model_deployments
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-auto-router-read-through")
+    router_name: Final = "auto-router-created-on-a-sibling-replica"
+    row: Final = MagicMock()
+    row.model_name = router_name
+    row.litellm_params = {
+        "model": encrypt_value_helper("auto_router/complexity-router"),
+        "auto_router_config": {"model_tiers": {"SIMPLE": "simple-tier", "COMPLEX": "complex-tier"}},
+    }
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[row])
+    router: Final = MagicMock()
+    router.model_names = []
+    router.has_model_id.return_value = False
+    reconciled: Final = MagicMock()
+
+    async def reconcile_every_row(prisma_client: object, proxy_logging_obj: object) -> None:
+        reconciled(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
+        router.model_names = (
+            [router_name, "simple-tier", "complex-tier"] if router_holds_the_name_after_reconcile else []
+        )
+
+    def reject_single_row_path(db_models: object) -> None:
+        raise AssertionError(f"an auto router row took the single-row path: {db_models}")
+
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", None)
+    monkeypatch.setattr(proxy_server.proxy_config, "add_deployment", reconcile_every_row)
+    monkeypatch.setattr(proxy_server.proxy_config, "_add_deployment", reject_single_row_path)
+
+    assert await _resync_model_deployments(router_name) is router_holds_the_name_after_reconcile
+    reconciled.assert_called_once_with(prisma_client=prisma_client, proxy_logging_obj=proxy_server.proxy_logging_obj)
