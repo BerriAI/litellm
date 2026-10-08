@@ -603,6 +603,26 @@ def test_partial_wildcard_lists_only_the_matching_models_under_their_real_ids(ri
         assert listed == expected, listed
 
 
+def test_partial_wildcard_matching_no_invocable_id_lists_nothing_instead_of_alias_names(rig: Rig) -> None:
+    key, secret = credential()
+    marker: Final = stem()
+    catalog: Final = Catalog(
+        active_profiles=(f"us.anthropic.{marker}-v1:0",),
+        on_demand_models=(f"amazon.{marker}-v1:0",),
+    )
+    with rig.gateway.scenario() as scenario, rig.plane.answering(key, catalog.respond):
+        sigv4_deployment(scenario, key, secret, "us-east-1", model_name="bedrock/*", model="bedrock/*")
+        sigv4_deployment(
+            scenario, key, secret, "us-east-1", model_name="bedrock/anthropic.*", model="bedrock/anthropic.*"
+        )
+        listed: Final = eventually(
+            lambda: from_stem(marker, listed_ids(rig.gateway)),
+            lambda ids: ids != frozenset(),
+            seconds=RELOAD_SECONDS * 4,
+        )
+        assert listed == catalog.invocable_ids(), listed
+
+
 def test_custom_prefix_wildcard_lists_the_discovered_models_under_that_prefix(rig: Rig) -> None:
     key, secret = credential()
     marker: Final = stem()

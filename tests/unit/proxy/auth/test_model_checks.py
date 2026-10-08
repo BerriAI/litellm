@@ -14,9 +14,7 @@ def test_get_team_models_for_all_models_and_team_only_models():
     model_access_groups = {}
     include_model_access_groups = False
 
-    result = get_team_models(
-        team_models, proxy_model_list, model_access_groups, include_model_access_groups
-    )
+    result = get_team_models(team_models, proxy_model_list, model_access_groups, include_model_access_groups)
     combined_models = team_models + proxy_model_list
     assert set(result) == set(combined_models)
 
@@ -249,9 +247,7 @@ def test_get_key_models_does_not_mutate_input():
         ),
     ],
 )
-def test_get_complete_model_list_order(
-    key_models, team_models, proxy_model_list, model_list, expected
-):
+def test_get_complete_model_list_order(key_models, team_models, proxy_model_list, model_list, expected):
     """
     Test that get_complete_model_list preserves order
     """
@@ -404,9 +400,7 @@ def test_wildcard_credential_hydration_preserves_deployment_params(
         captured_params["api_key"] = litellm_params.api_key
         captured_params["api_version"] = litellm_params.api_version
         captured_params["credential_name"] = litellm_params.litellm_credential_name
-        captured_params["has_unexpected_field"] = hasattr(
-            litellm_params, "unexpected_field"
-        )
+        captured_params["has_unexpected_field"] = hasattr(litellm_params, "unexpected_field")
         return ["gpt-4o"]
 
     monkeypatch.setattr(model_checks, "get_provider_models", fake_get_provider_models)
@@ -451,9 +445,7 @@ def test_wildcard_custom_prefix_does_not_stack_provider_prefix(monkeypatch):
 
     result = get_known_models_from_wildcard(
         wildcard_model="ollama_server1/*",
-        litellm_params=LiteLLM_Params(
-            model="ollama_chat/*", custom_llm_provider="ollama_chat"
-        ),
+        litellm_params=LiteLLM_Params(model="ollama_chat/*", custom_llm_provider="ollama_chat"),
     )
 
     assert result == ["ollama_server1/gemma3:1b", "ollama_server1/llama3:8b"]
@@ -480,9 +472,7 @@ def test_wildcard_custom_prefix_keeps_org_segment_for_non_provider_first_segment
 
     result = get_known_models_from_wildcard(
         wildcard_model="my_hf/*",
-        litellm_params=LiteLLM_Params(
-            model="huggingface/*", custom_llm_provider="huggingface"
-        ),
+        litellm_params=LiteLLM_Params(model="huggingface/*", custom_llm_provider="huggingface"),
     )
 
     assert result == ["my_hf/meta-llama/Llama-3-8B"]
@@ -930,9 +920,7 @@ def test_add_known_models_refreshes_models_by_provider_for_wildcard_expansion():
     assert fake_model not in litellm.models_by_provider["vertex_ai"]
     try:
         litellm.add_known_models(
-            model_cost_map={
-                fake_model: {"litellm_provider": "vertex_ai-language-models", "mode": "chat"}
-            }
+            model_cost_map={fake_model: {"litellm_provider": "vertex_ai-language-models", "mode": "chat"}}
         )
         assert fake_model in litellm.models_by_provider["vertex_ai"]
         assert litellm.models_by_provider is captured_reference
@@ -1055,9 +1043,7 @@ def test_transcribe_is_a_known_provider_for_wildcard_expansion():
     assert "transcribe" in litellm.models_by_provider
     assert "transcribe/StartTranscriptionJob" in litellm.models_by_provider["transcribe"]
     assert get_provider_models("transcribe") == ["transcribe/StartTranscriptionJob"]
-    assert get_known_models_from_wildcard("transcribe/*") == [
-        "transcribe/StartTranscriptionJob"
-    ]
+    assert get_known_models_from_wildcard("transcribe/*") == ["transcribe/StartTranscriptionJob"]
 
 
 @respx.mock
@@ -1069,7 +1055,9 @@ def test_partial_bedrock_wildcard_filters_the_discovered_ids(monkeypatch: pytest
     monkeypatch.setattr(litellm, "check_provider_endpoint", True)
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
     region: Final = "ap-south-1"
-    respx.get(f"https://bedrock.{region}.amazonaws.com/foundation-models", params={"byInferenceType": "ON_DEMAND"}).mock(
+    respx.get(
+        f"https://bedrock.{region}.amazonaws.com/foundation-models", params={"byInferenceType": "ON_DEMAND"}
+    ).mock(
         return_value=httpx.Response(
             200,
             json={
@@ -1080,7 +1068,9 @@ def test_partial_bedrock_wildcard_filters_the_discovered_ids(monkeypatch: pytest
             },
         )
     )
-    respx.get(f"https://bedrock.{region}.amazonaws.com/inference-profiles", params={"typeEquals": "SYSTEM_DEFINED"}).mock(
+    respx.get(
+        f"https://bedrock.{region}.amazonaws.com/inference-profiles", params={"typeEquals": "SYSTEM_DEFINED"}
+    ).mock(
         return_value=httpx.Response(
             200,
             json={
@@ -1100,3 +1090,39 @@ def test_partial_bedrock_wildcard_filters_the_discovered_ids(monkeypatch: pytest
     assert get_known_models_from_wildcard("bedrock/anthropic.*", deployment) == [
         "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0"
     ]
+
+
+@respx.mock
+def test_partial_bedrock_wildcard_lists_nothing_when_no_discovered_id_carries_its_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    region: Final = "ap-southeast-2"
+    respx.get(
+        f"https://bedrock.{region}.amazonaws.com/foundation-models", params={"byInferenceType": "ON_DEMAND"}
+    ).mock(return_value=httpx.Response(200, json={"modelSummaries": [{"modelId": "amazon.nova-micro-v1:0"}]}))
+    respx.get(
+        f"https://bedrock.{region}.amazonaws.com/inference-profiles", params={"typeEquals": "SYSTEM_DEFINED"}
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "inferenceProfileSummaries": [
+                    {"inferenceProfileId": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "status": "ACTIVE"}
+                ]
+            },
+        )
+    )
+    deployment: Final = LiteLLM_Params(
+        model="bedrock/anthropic.*",
+        aws_access_key_id="AKIAPROFILEONLYACCOUNT",
+        aws_secret_access_key="profile-only-secret",
+        aws_region_name=region,
+    )
+
+    assert get_known_models_from_wildcard("bedrock/anthropic.*", deployment) == []
