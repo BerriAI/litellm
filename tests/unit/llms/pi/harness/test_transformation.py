@@ -1,8 +1,7 @@
 """Unit tests for the pi harness config. No network, no real CLI.
 
-Fixtures under fixtures/ are `pi --mode json` output recorded from
-@earendil-works/pi-coding-agent 1.1.0 against a scripted OpenAI-compatible endpoint,
-with local paths replaced.
+Fixtures under fixtures/ are sanitized `pi --mode json` output recorded from
+@earendil-works/pi-coding-agent 1.1.0 against a scripted OpenAI-compatible endpoint.
 """
 
 import asyncio
@@ -24,21 +23,28 @@ from litellm.harness.handlers.cli_handler import PERSIST_DIR_SCRIPT, CLIHarnessH
 from litellm.harness.options import OpenCodeOptions, PiOptions
 from litellm.harness.sandbox.base import CompletedRun
 from litellm.harness.types import Harness, Reasoning, Text, ToolCall, ToolResult
-from litellm.llms.base_llm.harness.transformation import HarnessTurnError
+from litellm.llms.base_llm.harness.transformation import (
+    HarnessSessionSetup,
+    HarnessTurnError,
+)
 from litellm.llms.pi.harness.transformation import (
+    INSTRUCTIONS_FILENAME,
+    MODELS_FILENAME,
     PI_ISOLATION_ENV,
     PI_TOKEN_ENV,
     PiHarnessConfig,
     PiStreamState,
+    build_models_json,
     tool_args,
 )
 from litellm.utils import ProviderConfigManager
 
 FIXTURES = Path(__file__).parent / "fixtures"
 TOKEN = "tok-secret-123"
-SESSION = "01a11ca4-d40a-77eb-bbca-100787a0d1a2"
+SESSION = "01a11cb0-87cf-752e-a3e3-365c7a169871"
 PRIVATE = "/tmp/pi-1"
 MODEL = "claude-haiku-4-5-20251001"
+FULL_TOOLS = "read,bash,edit,write,grep,find,ls"
 CONFIG = PiHarnessConfig()
 
 
@@ -46,21 +52,30 @@ def load_fixture(name: str) -> list[dict]:
     return [json.loads(line) for line in (FIXTURES / name).read_text().splitlines() if line]
 
 
-def parse_all(name: str):
-    state = CONFIG.create_stream_state()
-    events = [event for obj in load_fixture(name) for event in CONFIG.transform_stream_line(obj, state)]
-    return events, state
+def parse(obj: dict, state: PiStreamState) -> list:
+    return CONFIG.transform_stream_line(obj, state)
 
 
-def parse_lines(lines: list[dict]):
-    state = CONFIG.create_stream_state()
-    events = [event for obj in lines for event in CONFIG.transform_stream_line(obj, state)]
+def parse_all(name: str, state: PiStreamState | None = None):
+    state = state or CONFIG.create_stream_state()
+    events = []
+    for obj in load_fixture(name):
+        events.extend(parse(obj, state))
     return events, state
 
 
 def assistant_end(text: str, stop_reason: str, error: str | None = None) -> dict:
-    message = {"role": "assistant", "content": [{"type": "text", "text": text}], "stopReason": stop_reason}
-    return {"type": "message_end", "message": {**message, **({"errorMessage": error} if error else {})}}
+    message = {
+        "role": "assistant",
+        "content": [{"type": "text", "text": text}],
+        "stopReason": stop_reason,
+    }
+    if error:
+        message["errorMessage"] = error
+    return {"type": "message_end", "message": message}
+
+
+# --------------------------------------------------------------------------- fakes
 
 
 class FakeStdin:
@@ -101,10 +116,12 @@ class FakeProcess:
 class FakeSandbox:
     workdir: str = "/work"
     has_binary: bool = True
+    persist_ok: bool = True
     outputs: list = field(default_factory=list)
     files: dict = field(default_factory=dict)
     execs: list = field(default_factory=list)
     runs: list = field(default_factory=list)
+    tempdirs: int = 0
 
     async def exec(self, cmd, *, env=None, cwd=None):
         self.execs.append({"cmd": cmd, "env": dict(env or {}), "cwd": cwd})
@@ -112,7 +129,12 @@ class FakeSandbox:
 
     async def run(self, cmd, *, env=None, cwd=None, timeout=None):
         self.runs.append(cmd)
-        return CompletedRun("", "", 0)
+        if self.persist_ok:
+            return CompletedRun("", "", 0)
+        return CompletedRun("", "read-only fs", 1)
+
+    async def read(self, path):
+        return self.files[path]
 
     async def write(self, path, data):
         self.files[path] = data
@@ -124,7 +146,14 @@ class FakeSandbox:
         return f"/usr/bin/{binary}" if self.has_binary else None
 
     async def tempdir(self):
-        return PRIVATE
+        self.tempdirs += 1
+        return f"/tmp/pi-{self.tempdirs}"
+
+    async def snapshot(self):
+        return {}
+
+    async def close(self):
+        return None
 
 
 @dataclass
@@ -150,8 +179,20 @@ def make_ctx(sandbox=None, **kwargs) -> SessionContext:
     )
 
 
+def setup_for(ctx: SessionContext) -> HarnessSessionSetup:
+    return CONFIG.transform_session_setup(ctx, PRIVATE)
+
+
+def setup_models(setup: HarnessSessionSetup) -> dict:
+    return json.loads(setup.files[MODELS_FILENAME])
+
+
 def fixture_proc(name: str, **kwargs) -> FakeProcess:
     return FakeProcess((FIXTURES / name).read_bytes(), **kwargs)
+
+
+async def collect(handler, ctx, prompt):
+    return [e async for e in handler.turn(ctx, prompt)]
 
 
 async def started(sandbox=None, **kwargs):
@@ -162,13 +203,13 @@ async def started(sandbox=None, **kwargs):
     return handler, ctx, sandbox
 
 
-async def collect(handler, ctx, prompt):
-    return [e async for e in handler.turn(ctx, prompt)]
+def flag(argv, name: str) -> str:
+    args = list(argv)
+    return args[args.index(name) + 1]
 
 
-def flag(argv, name):
-    argv = list(argv)
-    return argv[argv.index(name) + 1]
+def written_models(sandbox, private: str = PRIVATE) -> dict:
+    return json.loads(sandbox.files[f"{private}/{MODELS_FILENAME}"])
 
 
 # --------------------------------------------------------------------------- parsing
@@ -177,208 +218,257 @@ def flag(argv, name):
 def test_parse_write_read_turn():
     events, state = parse_all("turn1_write_read.jsonl")
     assert CONFIG.get_native_session_id(state) == SESSION
-    assert [type(e) for e in events[:5]] == [Reasoning, ToolCall, ToolResult, ToolCall, ToolResult]
-    assert all(isinstance(e, Text) for e in events[5:])
+    assert [type(e) for e in events] == [
+        Reasoning,
+        ToolCall,
+        ToolResult,
+        ToolCall,
+        ToolResult,
+        Text,
+        Text,
+        Text,
+    ]
     assert events[0] == Reasoning(delta="I should write the file first.")
-    write, write_result, read, read_result = events[1:5]
-    assert write == ToolCall(
-        id="call_w1",
-        name="write",
-        native_name="write",
-        input={"path": "hello.txt", "content": "hi"},
-        builtin=True,
-    )
-    assert write_result == ToolResult(id="call_w1", output="Successfully wrote to hello.txt", is_error=False)
-    assert read.name == "read" and read.id == "call_r1"
-    assert read_result == ToolResult(id="call_r1", output="hi", is_error=False)
-    assert "".join(e.delta for e in events[5:]) == state.final_text == "Done! hello.txt contains: hi"
+    write, write_result = events[1], events[2]
+    assert write.name == "write" and write.native_name == "write"
+    assert write.builtin is True
+    assert write.input == {"path": "hello.txt", "content": "hi"}
+    assert write_result.id == write.id == "call_w1"
+    assert write_result.output == "Successfully wrote to hello.txt"
+    assert write_result.is_error is False
+    read, read_result = events[3], events[4]
+    assert read.name == "read" and read_result.output == "hi"
+    assert "".join(e.delta for e in events[5:]) == state.final_text
+    assert state.final_text == "Done! hello.txt contains: hi"
     assert state.stop_reason == "stop" and state.error is None
 
 
-def test_parse_resumed_turn_keeps_session_id():
+def test_parse_continued_session():
     events, state = parse_all("turn2_resume.jsonl")
     assert state.session_id == SESSION
-    assert state.final_text == "You asked me to create hello.txt."
     assert all(isinstance(e, Text) for e in events)
+    assert state.final_text == "You asked me to create hello.txt."
 
 
-def test_parse_tool_unavailable_in_read_only_is_error_result():
+def test_parse_denied_tool_is_error_result():
     events, state = parse_all("readonly_denied_bash.jsonl")
     call = next(e for e in events if isinstance(e, ToolCall))
     result = next(e for e in events if isinstance(e, ToolResult))
-    assert call.name == "bash" and call.input == {"command": "echo x > blocked.txt"}
+    assert call.native_name == "bash" and call.input == {"command": "echo x > blocked.txt"}
     assert result == ToolResult(id="call_b1", output="Tool bash not found", is_error=True)
     assert state.final_text.startswith("FAILED")
 
 
-def test_parse_api_error_records_last_assistant_failure():
+def test_parse_api_error_records_error():
     events, state = parse_all("api_error.jsonl")
     assert events == []
     assert state.stop_reason == "error"
     assert "no healthy deployments" in state.error
 
 
-def test_successful_retry_after_error_is_not_a_failure():
-    _, state = parse_lines([assistant_end("", "error", "529 overloaded"), assistant_end("recovered", "stop")])
-    response = CONFIG.transform_turn_response(make_ctx(), state, 0, [])
-    assert response.final_text == "recovered"
-
-
-def test_user_and_system_message_end_do_not_replace_final_text():
-    _, state = parse_lines(
-        [
-            assistant_end("answer", "stop"),
-            {"type": "message_end", "message": {"role": "user", "content": [{"type": "text", "text": "q"}]}},
-            {"type": "message_end", "message": {"role": "system", "content": ""}},
-        ]
+def test_parse_reasoning_and_tool_error_and_name_mapping():
+    state = PiStreamState()
+    reasoning = parse(
+        {
+            "type": "message_update",
+            "assistantMessageEvent": {"type": "thinking_delta", "delta": "thinking hard"},
+        },
+        state,
     )
+    assert reasoning == [Reasoning(delta="thinking hard")]
+    failed = parse(
+        {
+            "type": "tool_execution_end",
+            "toolCallId": "c1",
+            "toolName": "bash",
+            "result": {"content": [{"type": "text", "text": "boom"}]},
+            "isError": True,
+        },
+        state,
+    )
+    assert failed == [ToolResult(id="c1", output="boom", is_error=True)]
+    for native, normalized in [
+        ("find", "glob"),
+        ("powershell", "bash"),
+        ("grep", "grep"),
+        ("ls", "ls"),
+        ("edit", "edit"),
+    ]:
+        call = parse(
+            {"type": "tool_execution_start", "toolCallId": "x", "toolName": native, "args": {}},
+            state,
+        )[0]
+        assert call.name == normalized and call.builtin is True
+    mcp = parse(
+        {"type": "tool_execution_start", "toolCallId": "m", "toolName": "mcp__gh__search", "args": {"q": 1}},
+        state,
+    )
+    assert mcp[0].builtin is False and mcp[0].input == {"q": 1}
+    plain = parse(
+        {"type": "tool_execution_end", "toolCallId": "m", "toolName": "mcp__gh__search", "result": "raw"},
+        state,
+    )
+    assert plain == [ToolResult(id="m", output="raw", is_error=False)]
+
+
+def test_final_text_is_last_assistant_message():
+    state = PiStreamState()
+    parse(assistant_end("working", "toolUse"), state)
+    parse(assistant_end("answer", "stop"), state)
+    parse(
+        {"type": "message_end", "message": {"role": "user", "content": [{"type": "text", "text": "q"}]}},
+        state,
+    )
+    parse({"type": "message_end", "message": {"role": "system", "content": ""}}, state)
     assert state.final_text == "answer"
-
-
-def test_final_text_joins_text_blocks_and_skips_thinking_and_tool_calls():
-    _, state = parse_lines(
-        [
-            {
-                "type": "message_end",
-                "message": {
-                    "role": "assistant",
-                    "stopReason": "stop",
-                    "content": [
-                        {"type": "thinking", "thinking": "hmm"},
-                        {"type": "text", "text": "a"},
-                        {"type": "toolCall", "id": "x", "name": "read", "arguments": {}},
-                        {"type": "text", "text": "b"},
-                    ],
-                },
-            }
-        ]
+    parse(
+        {
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "stopReason": "stop",
+                "content": [
+                    {"type": "thinking", "thinking": "hmm"},
+                    {"type": "text", "text": "a"},
+                    {"type": "toolCall", "id": "x", "name": "read", "arguments": {}},
+                    {"type": "text", "text": "b"},
+                ],
+            },
+        },
+        state,
     )
     assert state.final_text == "ab"
 
 
-def test_aborted_run_is_a_failure():
-    _, state = parse_lines([assistant_end("partial", "stop"), {"type": "agent_settled", "aborted": True}])
-    with pytest.raises(HarnessTurnError, match="aborted"):
-        CONFIG.transform_turn_response(make_ctx(), state, 0, [])
-    _, settled = parse_lines([assistant_end("done", "stop"), {"type": "agent_settled", "aborted": False}])
-    assert CONFIG.transform_turn_response(make_ctx(), settled, 0, []).final_text == "done"
-
-
 def test_message_update_ignores_non_delta_events():
-    events, _ = parse_lines(
-        [
-            {"type": "message_update", "assistantMessageEvent": {"type": "text_start", "contentIndex": 0}},
-            {"type": "message_update", "assistantMessageEvent": {"type": "text_end", "content": "full"}},
-            {"type": "message_update", "assistantMessageEvent": {"type": "toolcall_delta", "delta": "{"}},
-            {"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": ""}},
-            {"type": "message_update"},
-        ]
-    )
-    assert events == []
+    state = PiStreamState()
+    for update in [
+        {"type": "text_start", "contentIndex": 0},
+        {"type": "text_end", "content": "full"},
+        {"type": "toolcall_delta", "delta": "{"},
+        {"type": "text_delta", "delta": ""},
+    ]:
+        assert parse({"type": "message_update", "assistantMessageEvent": update}, state) == []
+    assert parse({"type": "message_update"}, state) == []
 
 
-@pytest.mark.parametrize(
-    "native,normalized,builtin",
-    [
-        ("find", "glob", True),
-        ("powershell", "bash", True),
-        ("ls", "ls", True),
-        ("mcp__gh__search", "mcp__gh__search", False),
-    ],
-)
-def test_tool_name_mapping(native, normalized, builtin):
-    events, _ = parse_lines(
-        [
-            {"type": "tool_execution_start", "toolCallId": "c", "toolName": native, "args": {"q": 1}},
-            {"type": "tool_execution_end", "toolCallId": "c", "toolName": native, "result": "plain", "isError": False},
-        ]
-    )
-    assert events == [
-        ToolCall(id="c", name=normalized, native_name=native, input={"q": 1}, builtin=builtin),
-        ToolResult(id="c", output="plain", is_error=False),
-    ]
+def test_retried_error_then_success_is_not_an_error():
+    state = PiStreamState()
+    parse(assistant_end("", "error", "529 overloaded"), state)
+    parse(assistant_end("recovered", "stop"), state)
+    assert state.stop_reason == "stop" and state.error is None
+    assert CONFIG.transform_turn_response(make_ctx(), state, 0, []).final_text == "recovered"
+
+
+def test_aborted_run_is_an_error():
+    state = PiStreamState()
+    parse(assistant_end("partial", "stop"), state)
+    parse({"type": "agent_settled", "aborted": False}, state)
+    assert state.stop_reason == "stop"
+    parse({"type": "agent_settled", "aborted": True}, state)
+    assert state.stop_reason == "aborted"
 
 
 # --------------------------------------------------------------------------- config
 
 
-@pytest.mark.parametrize(
-    "mode,tools",
-    [
-        ("read-only", "read,grep,find,ls"),
-        ("edit", "read,edit,write,grep,find,ls"),
-        ("full", "read,bash,edit,write,grep,find,ls"),
-    ],
-)
-def test_permission_modes_map_to_tool_allowlist(mode, tools):
-    assert tool_args(mode, ()) == ("--tools", tools)
+def test_permission_mapping():
+    assert tool_args("full", ()) == ("--tools", FULL_TOOLS)
+    assert tool_args("read-only", ()) == ("--tools", "read,grep,find,ls")
+    assert tool_args("edit", ()) == ("--tools", "read,edit,write,grep,find,ls")
+    with pytest.raises(CapabilityUnsupported):
+        tool_args("ask", ())
 
 
 def test_disable_tools_map_to_native_excludes():
-    args = tool_args("full", ["bash", "glob", "mcp__x"])
-    assert flag(args, "--exclude-tools") == "bash,powershell,find,mcp__x"
+    args = tool_args("full", ["bash", "glob", "write", "mcp__x"])
+    assert flag(args, "--tools") == FULL_TOOLS
+    assert flag(args, "--exclude-tools") == "bash,powershell,find,write,mcp__x"
 
 
-def test_ask_mode_unsupported():
-    with pytest.raises(CapabilityUnsupported, match="permissions='ask'"):
-        tool_args("ask", ())
+def test_build_models_json():
+    models = json.loads(build_models_json("m1", "http://h:1/v1"))
+    assert models == {
+        "providers": {
+            "litellm": {
+                "baseUrl": "http://h:1/v1",
+                "api": "openai-completions",
+                "apiKey": f"${PI_TOKEN_ENV}",
+                "models": [{"id": "m1"}],
+            }
+        }
+    }
+
+
+def test_config_metadata():
+    assert CONFIG.get_binary() == "pi"
+    assert "@earendil-works/pi-coding-agent" in CONFIG.get_install_hint()
+    assert CONFIG.uses_model_endpoint is True
+    assert CONFIG.capabilities.permission_modes == {"read-only", "edit", "full"}
+    assert CONFIG.capabilities.resume is True
+    assert CONFIG.capabilities.tool_filtering is True
+    assert isinstance(ProviderConfigManager.get_provider_harness_config(Harness.PI), PiHarnessConfig)
+
+
+def test_validate_environment_rejects_wrong_options_and_ask_mode():
+    CONFIG.validate_environment(make_ctx())
+    with pytest.raises(OptionsMismatch):
+        CONFIG.validate_environment(make_ctx(options=OpenCodeOptions()))
     with pytest.raises(CapabilityUnsupported):
         CONFIG.validate_environment(make_ctx(permissions="ask"))
 
 
-def test_capabilities_match_supported_modes():
-    assert CONFIG.capabilities.permission_modes == {"read-only", "edit", "full"}
-    assert CONFIG.capabilities.resume and CONFIG.capabilities.tool_filtering
-
-
-def test_wrong_options_rejected():
-    with pytest.raises(OptionsMismatch, match="PiOptions"):
-        CONFIG.validate_environment(make_ctx(options=OpenCodeOptions()))
-
-
-def test_harness_config_dispatch():
-    assert isinstance(ProviderConfigManager.get_provider_harness_config(Harness.PI), PiHarnessConfig)
-
-
-def test_session_setup_models_json_points_at_endpoint_without_token():
-    setup = CONFIG.transform_session_setup(make_ctx(), PRIVATE)
-    models = json.loads(setup.files["agent/models.json"])
-    assert models == {
-        "providers": {
-            "litellm": {
-                "baseUrl": "http://host.docker.internal:4555/v1",
-                "api": "openai-completions",
-                "apiKey": f"${PI_TOKEN_ENV}",
-                "models": [{"id": MODEL}],
-            }
-        }
-    }
+def test_session_setup_token_only_in_env():
+    setup = setup_for(make_ctx())
+    assert set(setup.files) == {MODELS_FILENAME}
     assert all(TOKEN.encode() not in data for data in setup.files.values())
     assert setup.env[PI_TOKEN_ENV] == TOKEN
+    provider = setup_models(setup)["providers"]["litellm"]
+    assert provider["baseUrl"] == "http://host.docker.internal:4555/v1"
+    assert provider["apiKey"] == f"${PI_TOKEN_ENV}"
 
 
-def test_session_setup_env_isolates_pi_and_options_cannot_override_managed_keys():
+def test_session_setup_env_and_persisted_sessions():
     options = PiOptions(env={"FOO": "1", PI_TOKEN_ENV: "evil", "PI_CODING_AGENT_DIR": "/home/u/.pi/agent"})
-    setup = CONFIG.transform_session_setup(make_ctx(options=options), PRIVATE)
-    assert setup.env["PI_CODING_AGENT_DIR"] == f"{PRIVATE}/agent"
-    assert setup.env[PI_TOKEN_ENV] == TOKEN
-    assert setup.env["FOO"] == "1"
-    for key, value in PI_ISOLATION_ENV.items():
-        assert setup.env[key] == value
+    setup = setup_for(make_ctx(options=options))
     assert list(setup.persisted_dirs) == [("sessions", "pi/sessions")]
+    assert setup.skills_dir == "skills"
+    env = setup.env
+    assert env["PI_CODING_AGENT_DIR"] == f"{PRIVATE}/agent"
+    assert env[PI_TOKEN_ENV] == TOKEN
+    for key, value in PI_ISOLATION_ENV.items():
+        assert env[key] == value
+    assert env["FOO"] == "1"
 
 
 def test_session_setup_errors():
     with pytest.raises(HarnessError):
-        CONFIG.transform_session_setup(make_ctx(endpoint=None), PRIVATE)
+        setup_for(make_ctx(endpoint=None))
     with pytest.raises(ValueError, match="needs model="):
-        CONFIG.transform_session_setup(make_ctx(model=None, endpoint=FakeEndpoint(model=None)), PRIVATE)
+        setup_for(make_ctx(model=None, endpoint=FakeEndpoint(model=None)))
 
 
-def test_first_turn_argv():
-    ctx = make_ctx()
-    request = CONFIG.transform_turn_request(ctx, CONFIG.transform_session_setup(ctx, PRIVATE), PRIVATE, "hi", None)
-    assert list(request.argv) == [
+def test_session_setup_instructions_and_skills():
+    ctx = make_ctx(instructions="Be terse.", output=Answer, skills=["/s/greeter"])
+    setup = setup_for(ctx)
+    written = setup.files[INSTRUCTIONS_FILENAME].decode()
+    assert written.startswith("Be terse.")
+    assert '"city"' in written and "single JSON object" in written
+    argv = CONFIG.transform_turn_request(ctx, setup, PRIVATE, "hi", None).argv
+    assert flag(argv, "--append-system-prompt") == f"{PRIVATE}/instructions.md"
+    assert flag(argv, "--skill") == f"{PRIVATE}/skills"
+    plain = make_ctx()
+    plain_setup = setup_for(plain)
+    plain_argv = CONFIG.transform_turn_request(plain, plain_setup, PRIVATE, "hi", None).argv
+    assert INSTRUCTIONS_FILENAME not in plain_setup.files
+    assert "--append-system-prompt" not in plain_argv and "--skill" not in plain_argv
+
+
+def test_turn_request_argv_and_session_continuation():
+    ctx = make_ctx(options=PiOptions(thinking="high"))
+    setup = setup_for(ctx)
+    first = CONFIG.transform_turn_request(ctx, setup, PRIVATE, "hello", None)
+    assert list(first.argv) == [
         "pi",
         "--mode",
         "json",
@@ -391,33 +481,34 @@ def test_first_turn_argv():
         "--session-dir",
         f"{PRIVATE}/sessions",
         "--tools",
-        "read,bash,edit,write,grep,find,ls",
+        FULL_TOOLS,
+        "--thinking",
+        "high",
     ]
-    assert request.stdin == "hi" and request.cwd == "/work"
+    assert first.cwd == "/work"
+    assert first.stdin == "hello"
+    assert first.env == setup.env
+    second = CONFIG.transform_turn_request(ctx, setup, PRIVATE, "again", SESSION)
+    assert flag(second.argv, "--session") == SESSION
+    assert "again" not in " ".join(second.argv)
 
 
-def test_turn_argv_optional_flags():
-    ctx = make_ctx(
-        options=PiOptions(thinking="high"),
-        skills=["/s/greeter"],
-        instructions="Be terse.",
-        output=Answer,
-    )
-    setup = CONFIG.transform_session_setup(ctx, PRIVATE)
-    argv = CONFIG.transform_turn_request(ctx, setup, PRIVATE, "hi", SESSION).argv
-    assert flag(argv, "--session") == SESSION
-    assert flag(argv, "--thinking") == "high"
-    assert flag(argv, "--skill") == f"{PRIVATE}/skills"
-    assert flag(argv, "--append-system-prompt") == f"{PRIVATE}/instructions.md"
-    instructions = setup.files["instructions.md"].decode()
-    assert instructions.startswith("Be terse.") and '"city"' in instructions
+def test_turn_prompt_repeats_schema_when_output_set():
+    ctx = make_ctx(output=Answer)
+    request = CONFIG.transform_turn_request(ctx, setup_for(ctx), PRIVATE, "hi", None)
+    assert request.stdin.startswith("hi\n\n") and '"city"' in request.stdin
 
 
-def test_turn_response_structured_output_and_exit_code():
+def test_turn_response_paths():
     _, state = parse_all("structured_output.jsonl")
     ok = CONFIG.transform_turn_response(make_ctx(output=Answer), state, 0, [])
     assert json.loads(ok.output_json) == {"city": "Paris", "country": "France"}
-    assert CONFIG.transform_turn_response(make_ctx(), state, 0, []).output_json is None
+    plain = CONFIG.transform_turn_response(make_ctx(), state, 0, [])
+    assert plain.output_json is None and plain.final_text == state.final_text
+    with pytest.raises(HarnessTurnError, match="boom"):
+        CONFIG.transform_turn_response(make_ctx(), PiStreamState(stop_reason="error", error="boom"), 0, [])
+    with pytest.raises(HarnessTurnError, match="aborted"):
+        CONFIG.transform_turn_response(make_ctx(), PiStreamState(stop_reason="aborted"), 0, [])
     with pytest.raises(HarnessTurnError, match="code 3: no output"):
         CONFIG.transform_turn_response(make_ctx(), PiStreamState(), 3, [])
 
@@ -425,36 +516,76 @@ def test_turn_response_structured_output_and_exit_code():
 # --------------------------------------------------------------------------- handler
 
 
-async def test_session_start_writes_config_and_persists_sessions():
-    _, _, sandbox = await started()
-    assert (
-        json.loads(sandbox.files[f"{PRIVATE}/agent/models.json"])["providers"]["litellm"]["apiKey"]
-        == "$LITELLM_HARNESS_TOKEN"
-    )
-    assert sandbox.runs == [["sh", "-c", PERSIST_DIR_SCRIPT, "sh", f"{PRIVATE}/sessions", "pi/sessions"]]
-
-
-async def test_turns_continue_native_session_and_send_prompt_on_stdin():
+async def test_start_writes_token_only_in_env():
     handler, ctx, sandbox = await started()
-    first_proc = fixture_proc("turn1_write_read.jsonl")
-    sandbox.outputs.append(first_proc)
-    events = await collect(handler, ctx, "create hello.txt")
+    assert written_models(sandbox)["providers"]["litellm"]["apiKey"] == f"${PI_TOKEN_ENV}"
+    assert all(TOKEN.encode() not in data for data in sandbox.files.values())
+    sandbox.outputs.append(fixture_proc("turn1_write_read.jsonl"))
+    await collect(handler, ctx, "create hello.txt containing hi then read it")
+    call = sandbox.execs[0]
+    assert TOKEN not in json.dumps(call["cmd"])
+    assert call["env"][PI_TOKEN_ENV] == TOKEN
+
+
+async def test_start_persists_sessions_dir():
+    _, _, sandbox = await started()
+    assert sandbox.runs == [["sh", "-c", PERSIST_DIR_SCRIPT, "sh", "/tmp/pi-1/sessions", "pi/sessions"]]
+
+
+async def test_persist_failure_still_uses_private_sessions():
+    handler, ctx, sandbox = await started(FakeSandbox(persist_ok=False))
+    sandbox.outputs.append(fixture_proc("turn1_write_read.jsonl"))
+    await collect(handler, ctx, "x")
+    assert flag(sandbox.execs[0]["cmd"], "--session-dir") == "/tmp/pi-1/sessions"
+
+
+async def test_turn_argv_env_and_session_continuation():
+    handler, ctx, sandbox = await started(options=PiOptions(env={"FOO": "1"}))
+    sandbox.outputs.append(fixture_proc("turn1_write_read.jsonl"))
+    events = await collect(handler, ctx, "create hello.txt containing hi then read it")
     first = sandbox.execs[0]
-    assert "--session" not in first["cmd"]
-    assert TOKEN not in json.dumps(first["cmd"])
-    assert first["env"][PI_TOKEN_ENV] == TOKEN
-    assert first_proc.stdin.data == b"create hello.txt" and first_proc.stdin.closed
+    assert first["cmd"] == [
+        "pi",
+        "--mode",
+        "json",
+        "--no-approve",
+        "--no-skills",
+        "--provider",
+        "litellm",
+        "--model",
+        MODEL,
+        "--session-dir",
+        "/tmp/pi-1/sessions",
+        "--tools",
+        FULL_TOOLS,
+    ]
+    assert first["cwd"] == "/work"
+    env = first["env"]
+    assert env["PI_CODING_AGENT_DIR"] == "/tmp/pi-1/agent"
+    assert env["PI_OFFLINE"] == "1" and env["PI_TELEMETRY"] == "0"
+    assert env["FOO"] == "1"
     assert any(isinstance(e, ToolCall) for e in events)
     assert ctx.final_text == "Done! hello.txt contains: hi"
     assert handler.native_session_id() == SESSION
 
     sandbox.outputs.append(fixture_proc("turn2_resume.jsonl"))
-    await collect(handler, ctx, "what did you create?")
-    assert flag(sandbox.execs[1]["cmd"], "--session") == SESSION
+    await collect(handler, ctx, "what file did you create?")
+    second = sandbox.execs[1]["cmd"]
+    assert flag(second, "--session") == SESSION
+    assert "what file" not in " ".join(second)
     assert ctx.final_text == "You asked me to create hello.txt."
 
 
-async def test_resume_uses_stored_session():
+async def test_prompt_is_sent_on_stdin_not_argv():
+    handler, ctx, sandbox = await started()
+    proc = fixture_proc("turn1_write_read.jsonl")
+    sandbox.outputs.append(proc)
+    await collect(handler, ctx, "secret prompt text")
+    assert proc.stdin.data == b"secret prompt text" and proc.stdin.closed
+    assert "secret prompt text" not in sandbox.execs[0]["cmd"]
+
+
+async def test_resume_sets_session():
     handler, ctx, sandbox = await started()
     await handler.resume(ctx, "prev-session")
     sandbox.outputs.append(fixture_proc("turn2_resume.jsonl"))
@@ -462,7 +593,73 @@ async def test_resume_uses_stored_session():
     assert flag(sandbox.execs[0]["cmd"], "--session") == "prev-session"
 
 
-async def test_provider_error_raises_even_though_pi_exits_zero():
+async def test_read_only_and_disable_tools_argv():
+    handler, ctx, sandbox = await started(permissions="read-only", disable_tools=["grep"])
+    sandbox.outputs.append(fixture_proc("readonly_denied_bash.jsonl"))
+    events = await collect(handler, ctx, "x")
+    cmd = sandbox.execs[0]["cmd"]
+    assert flag(cmd, "--tools") == "read,grep,find,ls"
+    assert flag(cmd, "--exclude-tools") == "grep"
+    assert ToolResult(id="call_b1", output="Tool bash not found", is_error=True) in events
+
+
+async def test_instructions_and_structured_output():
+    handler, ctx, sandbox = await started(instructions="Be terse.", output=Answer)
+    written = sandbox.files["/tmp/pi-1/instructions.md"].decode()
+    assert written.startswith("Be terse.")
+    assert '"city"' in written and "single JSON object" in written
+    proc = fixture_proc("structured_output.jsonl")
+    sandbox.outputs.append(proc)
+    await collect(handler, ctx, "x")
+    assert flag(sandbox.execs[0]["cmd"], "--append-system-prompt") == "/tmp/pi-1/instructions.md"
+    assert '"city"' in proc.stdin.data.decode()
+    assert json.loads(ctx.output_json) == {"city": "Paris", "country": "France"}
+
+
+async def test_skills_copied_to_private_skills_path(tmp_path):
+    skill = tmp_path / "greeter"
+    (skill / "ref").mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\nname: greeter\ndescription: d\n---\nbody")
+    (skill / "ref" / "notes.txt").write_text("n")
+    handler, ctx, sandbox = await started(skills=[str(skill)])
+    assert sandbox.files["/tmp/pi-1/skills/greeter/SKILL.md"].startswith(b"---")
+    assert sandbox.files["/tmp/pi-1/skills/greeter/ref/notes.txt"] == b"n"
+    sandbox.outputs.append(fixture_proc("turn2_resume.jsonl"))
+    await collect(handler, ctx, "x")
+    cmd = sandbox.execs[0]["cmd"]
+    assert flag(cmd, "--skill") == "/tmp/pi-1/skills"
+    assert "--no-skills" in cmd
+
+
+async def test_skill_without_manifest_rejected(tmp_path):
+    with pytest.raises(ValueError, match="SKILL.md"):
+        await started(skills=[str(tmp_path)])
+
+
+async def test_missing_binary():
+    with pytest.raises(HarnessInstallFailed, match="@earendil-works/pi-coding-agent"):
+        await started(FakeSandbox(has_binary=False))
+
+
+async def test_start_missing_endpoint_raises():
+    with pytest.raises(HarnessError):
+        await started(endpoint=None)
+
+
+async def test_wrong_options_and_ask_mode_rejected():
+    with pytest.raises(OptionsMismatch):
+        await started(options=OpenCodeOptions())
+    with pytest.raises(CapabilityUnsupported):
+        await started(permissions="ask")
+
+
+async def test_turn_before_start_raises():
+    handler = CLIHarnessHandler(PiHarnessConfig())
+    with pytest.raises(RuntimeError, match="before start"):
+        await collect(handler, make_ctx(), "x")
+
+
+async def test_api_error_raises_even_on_exit_zero():
     handler, ctx, sandbox = await started()
     sandbox.outputs.append(fixture_proc("api_error.jsonl", exit_code=0))
     with pytest.raises(HarnessTurnError, match="no healthy deployments"):
@@ -476,26 +673,51 @@ async def test_nonzero_exit_raises_with_stderr_tail():
         await collect(handler, ctx, "x")
 
 
-async def test_structured_output_reaches_context():
-    handler, ctx, sandbox = await started(output=Answer)
-    proc = fixture_proc("structured_output.jsonl")
+async def test_early_close_kills_process_and_stop_is_idempotent():
+    handler, ctx, sandbox = await started()
+    proc = fixture_proc("turn1_write_read.jsonl")
     sandbox.outputs.append(proc)
-    await collect(handler, ctx, "capital of France?")
-    assert '"city"' in proc.stdin.data.decode()
-    assert json.loads(ctx.output_json) == {"city": "Paris", "country": "France"}
+    gen = handler.turn(ctx, "x")
+    await gen.__anext__()
+    await gen.aclose()
+    assert proc.killed
+    await handler.stop(ctx)
+    await handler.stop(ctx)
 
 
-async def test_skills_copied_where_skill_flag_points(tmp_path):
-    skill = tmp_path / "greeter"
-    skill.mkdir()
-    (skill / "SKILL.md").write_text("---\nname: greeter\ndescription: d\n---\nbody")
-    handler, ctx, sandbox = await started(skills=[str(skill)])
-    assert sandbox.files[f"{PRIVATE}/skills/greeter/SKILL.md"].startswith(b"---")
-    sandbox.outputs.append(fixture_proc("turn2_resume.jsonl"))
+async def test_long_jsonl_line_is_parsed():
+    handler, ctx, sandbox = await started()
+    text = "x" * 200_000
+    lines = [
+        {"type": "session", "version": 3, "id": "s"},
+        {"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": text}},
+        assistant_end(text, "stop"),
+    ]
+    sandbox.outputs.append(FakeProcess("\n".join(json.dumps(line) for line in lines).encode()))
+    events = await collect(handler, ctx, "x")
+    assert events == [Text(delta=text)]
+    assert ctx.final_text == text
+
+
+async def test_model_falls_back_to_endpoint_model():
+    handler, ctx, sandbox = await started(model=None, endpoint=FakeEndpoint(model="gw-model"))
+    sandbox.outputs.append(fixture_proc("turn1_write_read.jsonl"))
     await collect(handler, ctx, "x")
-    assert flag(sandbox.execs[0]["cmd"], "--skill") == f"{PRIVATE}/skills"
+    assert flag(sandbox.execs[0]["cmd"], "--model") == "gw-model"
+    assert written_models(sandbox)["providers"]["litellm"]["models"] == [{"id": "gw-model"}]
 
 
-async def test_missing_binary_names_install_command():
-    with pytest.raises(HarnessInstallFailed, match="@earendil-works/pi-coding-agent"):
-        await started(FakeSandbox(has_binary=False))
+def test_turn_request_never_trusts_project_files():
+    """A repo's .pi/extensions would run as the host user at startup; --no-approve blocks it."""
+    ctx = make_ctx()
+    argv = list(CONFIG.transform_turn_request(ctx, setup_for(ctx), PRIVATE, "hi", None).argv)
+    assert argv[:4] == ["pi", "--mode", "json", "--no-approve"]
+
+
+def test_endpoint_request_fixture_documents_contract():
+    requests = load_fixture("endpoint_requests.jsonl")
+    assert {r["path"] for r in requests} == {"/v1/chat/completions"}
+    assert all(r["auth_prefix"] == "Bearer <session-token>" for r in requests)
+    assert all(r["stream"] is True for r in requests)
+    assert all(r["stream_options"] == {"include_usage": True} for r in requests)
+    assert requests[-1]["tools"] == ["read", "grep", "find", "ls"]
