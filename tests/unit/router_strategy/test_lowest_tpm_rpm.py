@@ -1,10 +1,11 @@
+import asyncio
 from datetime import datetime, timedelta
 from typing import Final
 from unittest.mock import AsyncMock
 
 import pytest
 
-from litellm import Router
+from litellm import Router, token_counter
 from litellm.caching.dual_cache import DualCache
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2, PrefetchedUsage
 from litellm.types.router import DeploymentTypedDict, LiteLLMParamsTypedDict
@@ -117,3 +118,33 @@ async def test_v2_subclass_overriding_async_get_available_deployments_with_the_o
         f"from {HIGH_USAGE_DEPLOYMENT_ID}",
         f"from {LOW_USAGE_DEPLOYMENT_ID}",
     }
+
+
+def _rate_limited_router(num_allowed_send: int) -> tuple[Router, tuple[list[dict[str, str]], ...]]:
+    conversations: Final = tuple(
+        [{"role": "user", "content": f"{index}. Hey, how's it going?"}] for index in range(num_allowed_send)
+    )
+    tpm: Final = sum(token_counter(model="gpt-4o", messages=messages) + 5 for messages in conversations)
+    deployment: Final = _deployment(LOW_USAGE_DEPLOYMENT_ID)
+    router: Final = Router(
+        model_list=[{**deployment, "rpm": num_allowed_send, "tpm": tpm}],
+        routing_strategy="usage-based-routing",
+        enable_pre_call_checks=True,
+        num_retries=0,
+    )
+    return router, conversations
+
+
+def test_usage_based_routing_v1_serves_sync_calls_within_rpm_and_tpm() -> None:
+    router, conversations = _rate_limited_router(num_allowed_send=3)
+    responses: Final = [router.completion(model=MODEL_GROUP, messages=messages) for messages in conversations[:2]]
+    assert [response.choices[0].message.content for response in responses] == [f"from {LOW_USAGE_DEPLOYMENT_ID}"] * 2
+
+
+@pytest.mark.asyncio
+async def test_usage_based_routing_v1_serves_async_calls_within_rpm_and_tpm() -> None:
+    router, conversations = _rate_limited_router(num_allowed_send=3)
+    responses: Final = await asyncio.gather(
+        *(router.acompletion(model=MODEL_GROUP, messages=messages) for messages in conversations[:2])
+    )
+    assert [response.choices[0].message.content for response in responses] == [f"from {LOW_USAGE_DEPLOYMENT_ID}"] * 2
