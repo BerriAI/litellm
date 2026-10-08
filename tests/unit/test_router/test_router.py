@@ -24593,3 +24593,44 @@ class CompletionCustomHandler(
         except Exception:
             print(f"Assertion Error: {traceback.format_exc()}")
             self.errors.append(traceback.format_exc())
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_double_failure_holds_back_fallback_lifecycle_frames():
+    router = Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": "anthropic/" + name, "api_key": "sk-test"}}
+            for name in ["primary", "fallback"]
+        ],
+        num_retries=0,
+        fallbacks=[{"primary": ["fallback"]}],
+    )
+    calls = []
+    fallback_error = litellm.APIError(
+        status_code=503, message="fallback also overloaded", llm_provider="anthropic", model="fallback"
+    )
+
+    async def provider(**kwargs):
+        calls.append(kwargs["model"])
+        if kwargs["model"] == "anthropic/primary":
+            return _AnthropicMessagesFakeByteStream([_anthropic_messages_overloaded_error_chunk()])
+        return _AnthropicMessagesRaisingByteStream([_anthropic_messages_message_start_chunk()], fallback_error)
+
+    stream = await router._aanthropic_messages_with_streaming_fallbacks(
+        original_function=provider,
+        model="primary",
+        stream=True,
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=10,
+    )
+    chunks = []
+
+    async def collect_chunks():
+        async for chunk in stream:
+            chunks.append(chunk)
+
+    with pytest.raises(litellm.APIError, match="fallback also overloaded"):
+        await collect_chunks()
+
+    assert chunks == []
+    assert calls == ["anthropic/primary", "anthropic/fallback"]

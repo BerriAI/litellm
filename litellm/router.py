@@ -5530,6 +5530,7 @@ class Router:
         self,
         response: AsyncIterator[bytes],
         initial_kwargs: dict[str, Any],  # mutable-ok: mutated in-place before re-entering the fallback chain
+        allow_fallback: bool = True,
     ) -> AsyncIterator[bytes]:
         """
         Wrap an anthropic_messages (/v1/messages) streaming response so a
@@ -5668,6 +5669,10 @@ class Router:
                 for buffered_chunk in buffered_lifecycle_chunks:
                     yield buffered_chunk
             except Exception as stream_error:  # noqa: BLE001  # any raised provider error must reach the fallback gate
+                if not allow_fallback:
+                    if isinstance(stream_error, MidStreamFallbackError) and stream_error.original_exception is not None:
+                        raise stream_error.original_exception from stream_error
+                    raise
                 async for item in self._aanthropic_messages_recover_stream_error(
                     stream_error,
                     has_generated_content,
@@ -6005,7 +6010,16 @@ class Router:
                 kwargs=initial_kwargs,
                 include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
             )
-            async for fallback_item in self._aanthropic_messages_yield_recovered(fallback_response, wrapper):
+            recovered: Final = (
+                await self._aanthropic_messages_streaming_iterator(
+                    response=cast("AsyncIterator[bytes]", fallback_response),  # cast-ok: __aiter__ checked below
+                    initial_kwargs=initial_kwargs,
+                    allow_fallback=False,
+                )
+                if hasattr(fallback_response, "__aiter__")
+                else fallback_response
+            )
+            async for fallback_item in self._aanthropic_messages_yield_recovered(recovered, wrapper):
                 yield fallback_item
         except Exception as fallback_error:
             verbose_router_logger.error("Anthropic messages streaming fallback also failed: %s", fallback_error)
