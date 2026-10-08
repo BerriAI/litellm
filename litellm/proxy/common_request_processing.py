@@ -16,7 +16,7 @@ from typing import (
     Protocol,
     TypeAlias,
     TypeVar,
-    cast,
+    cast,  # noqa: TID251  # _pre_call_with_fallbacks receives general_settings as a legacy bare dict
     overload,
     runtime_checkable,
 )
@@ -2287,6 +2287,9 @@ class ProxyBaseLLMRequestProcessing:
             ProxyRateLimitError,
         )
 
+        general_settings_view: Final = cast(  # cast-ok: this method keeps its legacy bare-dict settings parameter
+            Mapping[str, object], general_settings
+        )
         configured_fallbacks: Final = (
             self._configured_fallbacks(llm_router=llm_router, user_api_key_dict=user_api_key_dict)
             if llm_router is not None
@@ -2320,8 +2323,7 @@ class ProxyBaseLLMRequestProcessing:
                 or rate_limited_data.get("disable_fallbacks")
                 or not isinstance(original_model, str)
                 or (
-                    cast(Mapping[str, object], general_settings).get("disable_fallbacks_on_per_model_rate_limits")
-                    is True
+                    general_settings_view.get("disable_fallbacks_on_per_model_rate_limits") is True
                     and getattr(original_exc, "descriptor_key", None) in PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS
                 )
             ):
