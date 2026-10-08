@@ -24,6 +24,7 @@ from collections import defaultdict
 from collections.abc import (
     AsyncGenerator,
     AsyncIterator,
+    Awaitable,
     Callable,
     Generator,
     Iterable,
@@ -269,6 +270,12 @@ from litellm.router_utils.reasoning_effort_capability import (
     deployment_is_catalog_mapped,
     intersect_supported_reasoning_efforts,
     resolve_supported_reasoning_efforts,
+)
+from litellm.router_utils.request_priority import (
+    InvalidPriority,
+    parse_default_priority,
+    request_drops_params,
+    resolve_request_priority,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     find_deployment_metadata,
@@ -975,7 +982,7 @@ class Router:
             caching_groups (Optional[List[tuple]]): List of model groups for caching across model groups. Defaults to None.
             client_ttl (int): Time-to-live for cached clients in seconds. Defaults to 3600.
             polling_interval: (Optional[float]): frequency of polling queue. Only for '.scheduler_acompletion()'. Default is 3ms.
-            default_priority: (Optional[int]): the default priority for a request. Only for '.scheduler_acompletion()'. Default is None.
+            default_priority: (Optional[int]): the priority given to every request that sets no 'priority' of its own; '.acompletion()' queues it through the scheduler. Default is None.
             num_retries (Optional[int]): Number of retries for failed requests. Defaults to 2.
             timeout (Optional[float]): Timeout for requests. Defaults to None.
             default_litellm_params (dict): Default parameters for Router.chat.completion.create. Defaults to {}.
@@ -1109,7 +1116,15 @@ class Router:
 
         ### SCHEDULER ###
         self.scheduler = Scheduler(polling_interval=polling_interval, redis_cache=redis_cache)
-        self.default_priority = default_priority
+        parsed_default_priority: Final = parse_default_priority(default_priority)
+        if isinstance(parsed_default_priority, InvalidPriority):
+            verbose_router_logger.warning(
+                "router_settings.default_priority is ignored, no request is queued by default: %s",
+                parsed_default_priority.message,
+            )
+        self.default_priority = (
+            None if isinstance(parsed_default_priority, InvalidPriority) else parsed_default_priority
+        )
         self.default_deployment = (
             None  # use this to track the users default deployment, when they want to use model = *
         )
@@ -2916,22 +2931,25 @@ class Router:
             kwargs["original_function"] = self._acompletion
 
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
-            request_priority: Final = kwargs.get("priority") or self.default_priority
             start_time: Final = time.time()
-            _is_prompt_management_model: Final = self._is_prompt_management_model(model)
-
-            if _is_prompt_management_model:
-                return await self._prompt_management_factory(
-                    model=model,
-                    messages=messages,
-                    kwargs=kwargs,
-                )
             controls: Final = per_request_fallback_controls(kwargs)
             kwargs[MID_STREAM_FALLBACK_CONTROLS_KEY] = controls  # rebind-ok: forwarded to every hop
-            if request_priority is not None and isinstance(request_priority, int):
-                response = await self.schedule_acompletion(**kwargs)
+            request_priority, request_kwargs = self._split_request_priority(model=model, kwargs=kwargs)
+            original_function: Final[Callable[..., Awaitable[object]]] = (
+                self._prompt_management_acompletion(model=model, messages=messages)
+                if self._is_prompt_management_model(model)
+                else self.async_function_with_fallbacks
+            )
+            if request_priority is None:
+                response = await original_function(**request_kwargs)
             else:
-                response = await self.async_function_with_fallbacks(**kwargs)
+                response = await self._schedule_factory(
+                    model=model,
+                    priority=request_priority,
+                    original_function=original_function,
+                    args=(),
+                    kwargs=request_kwargs,
+                )
             end_time: Final = time.time()
             _duration: Final = end_time - start_time
             asyncio.create_task(
@@ -4524,13 +4542,18 @@ class Router:
 
     @overload
     async def schedule_acompletion(
-        self, model: str, messages: list[AllMessageValues], priority: int, stream: Literal[False] = False, **kwargs
+        self,
+        model: str,
+        messages: list[AllMessageValues],
+        priority: int | None = None,
+        stream: Literal[False] = False,
+        **kwargs,
     ) -> ModelResponse: 
         ...
 
     @overload
     async def schedule_acompletion(
-        self, model: str, messages: list[AllMessageValues], priority: int, stream: Literal[True], **kwargs
+        self, model: str, messages: list[AllMessageValues], priority: int | None, stream: Literal[True], **kwargs
     ) -> CustomStreamWrapper: 
         ...
 
@@ -4540,33 +4563,43 @@ class Router:
         self,
         model: str,
         messages: list[AllMessageValues],
-        priority: int,
+        priority: int | None = None,
         stream=False,
         **kwargs,
     ):
-        await self._wait_for_scheduler_turn(
-            model=model, priority=priority, parent_otel_span=get_parent_otel_span_from_kwargs(kwargs)
+        return await self.acompletion(model=model, messages=messages, stream=stream, priority=priority, **kwargs)
+
+    def _split_request_priority(
+        self, model: str, kwargs: Mapping[str, object]
+    ) -> tuple[int | None, Mapping[str, object]]:
+        request_priority: Final = resolve_request_priority(
+            requested=kwargs.get("priority"),
+            default_priority=self.default_priority,
+            drops_params=lambda: request_drops_params(
+                kwargs, self.default_litellm_params, self._request_deployment_params(model=model, kwargs=kwargs)
+            ),
         )
-        try:
-            _response: Final = await self.acompletion(model=model, messages=messages, stream=stream, **kwargs)
-            response_hidden_params: Final = get_hidden_params(_response)
-            if response_hidden_params is not None:
-                additional_headers: Final = cast(  # cast-ok: router headers are stored as a mutable mapping
-                    dict[str, object], response_hidden_params.setdefault("additional_headers", {})
-                )
-                additional_headers.update({"x-litellm-request-prioritization-used": True})
-            return _response
-        except Exception as e:
-            setattr(e, "priority", priority)
-            raise e
+        if isinstance(request_priority, InvalidPriority):
+            raise litellm.BadRequestError(
+                message=request_priority.message,
+                model=model,
+                llm_provider="",
+                body={
+                    "message": request_priority.message,
+                    "type": "invalid_request_error",
+                    "param": "priority",
+                    "code": "400",
+                },
+            )
+        return request_priority, {key: value for key, value in kwargs.items() if key != "priority"}
 
     async def _schedule_factory(
         self,
         model: str,
         priority: int,
-        original_function: Callable,
+        original_function: Callable[..., Awaitable[object]],
         args: tuple[object, ...],
-        kwargs: dict[str, object],
+        kwargs: Mapping[str, object],
     ):
         await self._wait_for_scheduler_turn(
             model=model, priority=priority, parent_otel_span=get_parent_otel_span_from_kwargs(kwargs)
@@ -4606,6 +4639,25 @@ class Router:
 
         split_litellm_model: Final = litellm_model.split("/")[0]
         return split_litellm_model in litellm._known_custom_logger_compatible_callbacks
+
+    def _request_deployment_params(self, model: str, kwargs: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+        deployment: Final = self.get_deployment(model_id=model) if model not in self.model_names else None
+        if deployment is not None:
+            return (deployment.litellm_params.model_dump(exclude_none=True),)
+        return tuple(
+            candidate["litellm_params"]
+            for candidate in self.get_model_list(model_name=model, team_id=get_request_team_id(kwargs)) or ()
+        )
+
+    def _prompt_management_acompletion(
+        self,
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: _prompt_management_factory takes the caller's list
+    ) -> Callable[..., Awaitable[object]]:
+        async def acompletion(**kwargs: object) -> object:  # kwargs-ok: called with the request's own keyword payload
+            return await self._prompt_management_factory(model=model, messages=messages, kwargs=dict(kwargs))
+
+        return acompletion
 
     async def _prompt_management_factory(
         self,
@@ -5093,23 +5145,22 @@ class Router:
         is_async: bool | None = False,
         **kwargs,
     ):
-        if kwargs.get("priority", None) is not None:
-            return await self._schedule_factory(
-                model=model,
-                priority=kwargs.pop("priority"),
-                original_function=self.atext_completion,
-                args=(model, prompt),
-                kwargs=kwargs,
-            )
         try:
             kwargs["model"] = model
             kwargs["prompt"] = prompt
             kwargs["original_function"] = self._atext_completion
 
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
-            response: Final = await self.async_function_with_fallbacks(**kwargs)
-
-            return response
+            request_priority, request_kwargs = self._split_request_priority(model=model, kwargs=kwargs)
+            if request_priority is None:
+                return await self.async_function_with_fallbacks(**request_kwargs)
+            return await self._schedule_factory(
+                model=model,
+                priority=request_priority,
+                original_function=self.async_function_with_fallbacks,
+                args=(),
+                kwargs=request_kwargs,
+            )
         except Exception as e:
             asyncio.create_task(
                 send_llm_exception_alert(
