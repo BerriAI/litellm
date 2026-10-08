@@ -22,6 +22,7 @@ from tests.integration._support.wire import Reply, Request, Wire, wire_server
 _GOOD: Final = "prometheus-good-endpoint"
 _LIMITED: Final = "prometheus-rate-limited-endpoint"
 _FAILING: Final = "prometheus-failing-endpoint"
+_LATENCY: Final = "prometheus-latency-endpoint"
 _END_USER: Final = f"prometheus-end-user-{uuid.uuid4().hex}"
 
 
@@ -58,15 +59,18 @@ def _config(directory: Path, upstream: Wire) -> Path:
     params: Final = {"api_key": "sk-fixture", "api_base": f"{upstream.url}/v1"}
     configuration["model_list"] = [
         *configuration["model_list"],
-        {
-            "model_name": _GOOD,
-            "litellm_params": {
-                "model": "openai/gpt-4o-mini",
-                "input_cost_per_token": 0.001,
-                "output_cost_per_token": 0.002,
-                **params,
-            },
-        },
+        *(
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "input_cost_per_token": 0.001,
+                    "output_cost_per_token": 0.002,
+                    **params,
+                },
+            }
+            for name in (_GOOD, _LATENCY)
+        ),
         {"model_name": _LIMITED, "litellm_params": {"model": "openai/429", **params}},
         {"model_name": _FAILING, "litellm_params": {"model": "openai/429", **params}},
     ]
@@ -136,13 +140,13 @@ def test_a_rate_limited_call_counts_as_a_failed_and_a_429_total_request(rig: _Ri
 
 
 def test_a_good_call_exports_latency_histograms_on_the_shared_buckets_without_the_end_user(rig: _Rig) -> None:
-    response: Final = _ask(rig, _GOOD, user=_END_USER, tags=["teamB"])
+    response: Final = _ask(rig, _LATENCY, user=_END_USER, tags=["teamB"])
     assert response.status_code == 200, response.text
     assert len(rig.upstream.drain()) == 1
     master: Final = {
         "api_key_alias": "None",
         "hashed_api_key": LITELLM_PROXY_MASTER_KEY_ALIAS,
-        "requested_model": _GOOD,
+        "requested_model": _LATENCY,
     }
     _until(rig, "litellm_request_total_latency_metric_bucket", le="0.005", **master)
     _until(rig, "litellm_llm_api_latency_metric_bucket", le="0.005", **master)
