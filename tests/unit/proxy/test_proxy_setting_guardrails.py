@@ -46,7 +46,7 @@ def test_active_callbacks(client):
 
     expected_callback_names = [
         "lakeraAI_Moderation",
-        "_OPTIONAL_PromptInjectionDetectio",
+        "OPTIONAL_PromptInjectionDetection",
         "_ENTERPRISE_SecretDetection",
     ]
 
@@ -62,5 +62,5 @@ def test_active_callbacks(client):
         ), f"{callback_name} not found in _active_callbacks={_active_callbacks}"
 
     assert not any(
-        "_ENTERPRISE_OpenAI_Moderation" in callback for callback in _active_callbacks
-    ), f"_ENTERPRISE_OpenAI_Moderation should not be in _active_callbacks={_active_callbacks}"
+        "ENTERPRISE_OpenAI_Moderation" in callback for callback in _active_callbacks
+    ), f"ENTERPRISE_OpenAI_Moderation should not be in _active_callbacks={_active_callbacks}"

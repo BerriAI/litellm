@@ -45,10 +45,10 @@ from litellm.llms.base_llm.files.transformation import (
 )
 from litellm.llms.vertex_ai.batches.transformation import vertex_embedding_prompt_token_count
 from litellm.llms.vertex_ai.common_utils import (
-    _convert_vertex_datetime_to_openai_datetime,
+    convert_vertex_datetime_to_openai_datetime,
     get_vertex_ai_fine_tuned_endpoint_id,
 )
-from litellm.llms.vertex_ai.gemini.transformation import _transform_request_body
+from litellm.llms.vertex_ai.gemini.transformation import transform_request_body
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
@@ -681,7 +681,7 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
         if _is_responses_batch_entry(openai_entry)
         else openai_request_body
     )
-    vertex_request_body: Final = _transform_request_body(
+    vertex_request_body: Final = transform_request_body(
         messages=map_developer_role_to_system_role(chat_request_body.get("messages", [])),
         model=chat_request_body.get("model", ""),
         optional_params=map_openai_to_vertex_params(chat_request_body),
@@ -770,7 +770,7 @@ def _iter_openai_jsonl_lines(openai_file_content: FileTypes) -> Iterator[str]:
 
 def _iter_openai_jsonl_entries(
     openai_file_content: FileTypes,
-) -> Iterator[dict[str, Any]]:
+) -> Iterator[dict[str, object]]:
     for line in _iter_openai_jsonl_lines(openai_file_content):
         yield json.loads(line)
 
@@ -1125,7 +1125,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             purpose=response_object.get("purpose", "batch"),
             id=f"gs://{gcs_id}",
             filename=response_object.get("name", ""),
-            created_at=_convert_vertex_datetime_to_openai_datetime(
+            created_at=convert_vertex_datetime_to_openai_datetime(
                 vertex_datetime=response_object.get("timeCreated", "")
             ),
             status="uploaded",
@@ -1172,9 +1172,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         return OpenAIFileObject(
             id=f"gs://{gcs_id}",
             bytes=int(response_json.get("size", 0)),
-            created_at=_convert_vertex_datetime_to_openai_datetime(
-                vertex_datetime=response_json.get("timeCreated", "")
-            ),
+            created_at=convert_vertex_datetime_to_openai_datetime(vertex_datetime=response_json.get("timeCreated", "")),
             filename=response_json.get("name", ""),
             object="file",
             purpose=response_json.get("metadata", {}).get("purpose", "batch"),
@@ -1490,7 +1488,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             # Use existing VertexGeminiConfig transformation
             model_response: Final = ModelResponse()
 
-            transformed_response = vertex_gemini_config._transform_google_generate_content_to_openai_model_response(
+            transformed_response = vertex_gemini_config.transform_google_generate_content_to_openai_model_response(
                 completion_response=vertex_response,
                 model_response=model_response,
                 model=model,

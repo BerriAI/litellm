@@ -8,7 +8,7 @@ import orjson
 from fastapi import Request, UploadFile, status
 from starlette._utils import get_route_path
 from starlette.datastructures import FormData
-from starlette.requests import ClientDisconnect
+from starlette.requests import ClientDisconnect, HTTPConnection
 from typing_extensions import NotRequired, ReadOnly, Required, assert_never
 
 from litellm._logging import verbose_proxy_logger
@@ -185,8 +185,10 @@ def _mark_body_received(byte_count: int | None) -> None:
     )
 
 
-def is_otlp_trace_request(request: Request) -> bool:
-    return request.method == "POST" and get_route_path(request.scope) in {"/v1/traces", "/v1/logs"}
+def is_otlp_trace_request(request: HTTPConnection) -> bool:
+    if request.scope.get("type") != "http":
+        return False
+    return request.scope.get("method") == "POST" and get_route_path(request.scope) in {"/v1/traces", "/v1/logs"}
 
 
 async def _read_form_data(request: Request) -> FormData:
@@ -212,7 +214,7 @@ async def _read_form_data(request: Request) -> FormData:
     return form_data
 
 
-async def _read_request_body(request: Request | None) -> dict:
+async def read_request_body(request: Request | None) -> dict:
     """
     Safely read the request body and parse it as JSON.
 
@@ -234,7 +236,7 @@ async def _read_request_body(request: Request | None) -> dict:
         if _cached_request_body is not None:
             return _cached_request_body
 
-        _request_headers: Final[dict] = _safe_get_request_headers(request=request)
+        _request_headers: Final[dict] = safe_get_request_headers(request=request)
         content_type: Final = _request_headers.get("content-type", "")
 
         if _normalize_media_type(content_type) in _BINARY_CONTENT_TYPES:
@@ -295,7 +297,7 @@ async def _read_request_body(request: Request | None) -> dict:
                         )
 
         # Cache the parsed result
-        _safe_set_request_parsed_body(request=request, parsed_body=parsed_body)
+        safe_set_request_parsed_body(request=request, parsed_body=parsed_body)
         return parsed_body
 
     except (json.JSONDecodeError, orjson.JSONDecodeError, ProxyException) as e:
@@ -316,6 +318,9 @@ async def _read_request_body(request: Request | None) -> dict:
         return {}
 
 
+_read_request_body: Final = read_request_body
+
+
 def is_opaque_audio_pass_through_request(route: str, content_type: str) -> bool:
     """Azure Speech bodies (raw audio, multipart uploads) are forwarded byte for byte, so auth must not consume them."""
     media_type: Final = _normalize_media_type(content_type)
@@ -327,7 +332,7 @@ def is_opaque_audio_pass_through_request(route: str, content_type: str) -> bool:
 async def read_raw_json_body(request: Request | None) -> bytes | None:
     if request is None or _safe_get_request_parsed_body(request=request) is None:
         return None
-    content_type: Final = _safe_get_request_headers(request=request).get("content-type", "")
+    content_type: Final = safe_get_request_headers(request=request).get("content-type", "")
     if _is_form_content_type(content_type):
         return None
     try:
@@ -352,7 +357,7 @@ def get_client_requested_model(request: Request | None) -> str | None:
     return model if isinstance(model, str) else None
 
 
-def _safe_get_request_query_params(request: Request | None) -> dict:
+def safe_get_request_query_params(request: Request | None) -> dict:
     if request is None:
         return {}
     try:
@@ -364,7 +369,10 @@ def _safe_get_request_query_params(request: Request | None) -> dict:
         return {}
 
 
-def _safe_set_request_parsed_body(
+_safe_get_request_query_params: Final = safe_get_request_query_params
+
+
+def safe_set_request_parsed_body(
     request: Request | None,
     parsed_body: dict,
 ) -> None:
@@ -374,6 +382,9 @@ def _safe_set_request_parsed_body(
         request.scope["parsed_body"] = (tuple(parsed_body.keys()), parsed_body)
     except Exception as e:
         verbose_proxy_logger.debug("Unexpected error setting request parsed body - %s", e)
+
+
+_safe_set_request_parsed_body: Final = safe_set_request_parsed_body
 
 
 def rewrite_request_model(
@@ -389,12 +400,12 @@ def rewrite_request_model(
         return
     cached_body: Final = _safe_get_request_parsed_body(request=request)
     body: Final = {**cached_body, "model": model} if cached_body is not None else request_data
-    _safe_set_request_parsed_body(request=request, parsed_body=body)
-    request._json = body
-    request._body = orjson.dumps(body)
+    safe_set_request_parsed_body(request=request, parsed_body=body)
+    request._json = body  # pyright: ignore[reportPrivateUsage]  # Starlette JSON cache
+    request._body = orjson.dumps(body)  # pyright: ignore[reportPrivateUsage]  # Starlette body cache
 
 
-def _safe_get_request_headers(request: Request | None) -> dict:
+def safe_get_request_headers(request: Request | None) -> dict:
     """
     [Non-Blocking] Safely get the request headers.
     Caches the result on request.state to avoid re-creating dict(request.headers) per call.
@@ -421,6 +432,9 @@ def _safe_get_request_headers(request: Request | None) -> dict:
     except Exception:
         pass  # request.state may not be available in all contexts
     return headers
+
+
+_safe_get_request_headers: Final = safe_get_request_headers
 
 
 def check_file_size_under_limit(
@@ -555,7 +569,7 @@ async def get_request_body(request: Request) -> dict[str, Any]:
     if request.method == "POST":
         content_type: Final = request.headers.get("content-type", "")
         if is_json_content_type(content_type):
-            return await _read_request_body(request)
+            return await read_request_body(request)
         elif _is_form_content_type(content_type):
             return await get_form_data(request)
         else:
@@ -703,7 +717,7 @@ def populate_request_with_path_params(request_data: dict, request: Request) -> d
         dict: Updated request_data with path parameters and query parameters added
     """
     # Add query parameters to request_data (for GET requests, etc.)
-    query_params: Final = _safe_get_request_query_params(request)
+    query_params: Final = safe_get_request_query_params(request)
     if query_params:
         for key, value in query_params.items():
             # Don't overwrite existing values from request body

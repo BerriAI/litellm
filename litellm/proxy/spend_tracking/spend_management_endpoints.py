@@ -437,7 +437,7 @@ async def spend_key_fn(
     Example Request:
     ```
     curl -X GET "http://0.0.0.0:8000/spend/keys" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
 
@@ -449,7 +449,7 @@ async def spend_key_fn(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        if _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
+        if is_admin_view_safe(user_api_key_dict=user_api_key_dict):
             return await prisma_client.get_data(table_name="key", query_type="find_all")
 
         caller_user_id: Final = user_api_key_dict.user_id
@@ -505,13 +505,13 @@ async def spend_user_fn(
     Example Request:
     ```
     curl -X GET "http://0.0.0.0:8000/spend/users" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     View User Table row for user_id
     ```
     curl -X GET "http://0.0.0.0:8000/spend/users?user_id=1234" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
@@ -522,7 +522,7 @@ async def spend_user_fn(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        if not _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
+        if not is_admin_view_safe(user_api_key_dict=user_api_key_dict):
             caller_user_id: Final = user_api_key_dict.user_id
             if not caller_user_id:
                 return []
@@ -576,13 +576,13 @@ async def view_spend_tags(
     Example Request:
     ```
     curl -X GET "http://0.0.0.0:8000/spend/tags" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Spend with Start Date and End Date
     ```
     curl -X GET "http://0.0.0.0:8000/spend/tags?start_date=2022-01-01&end_date=2022-02-01" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
 
@@ -1238,13 +1238,13 @@ async def get_spend_capture_rate(
 
     Example:
     ```
-    curl -H "Authorization: Bearer sk-1234" \
+    curl -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
       "http://localhost:4000/spend/capture_rate?provider=openai&start_date=2026-09-17&end_date=2026-09-23"
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
 
-    if not _is_admin_view_safe(user_api_key_dict):
+    if not is_admin_view_safe(user_api_key_dict):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only proxy admins can read the capture rate")
     if prisma_client is None:
         raise HTTPException(
@@ -1863,7 +1863,7 @@ def _resolve_spend_report_scope(
     viewers) may request any scope.
     """
     if requested:
-        if requested != caller_value and not _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
+        if requested != caller_value and not is_admin_view_safe(user_api_key_dict=user_api_key_dict):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Not authorized to view spend for a {scope_name} other than your own",
@@ -1887,7 +1887,7 @@ async def _resolve_org_spend_report_scope(
     Callable by proxy admins (any organization) and org admins of the target
     organization; every other caller is a 403 from ``_verify_org_access``.
     """
-    from litellm.proxy.management_endpoints.organization_endpoints import _verify_org_access
+    from litellm.proxy.management_endpoints.organization_endpoints import verify_org_access
 
     target_org = organization_id or user_api_key_dict.org_id
     if target_org is None:
@@ -1895,7 +1895,7 @@ async def _resolve_org_spend_report_scope(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No organization_id associated with this API key; pass an organization_id query param",
         )
-    await _verify_org_access(
+    await verify_org_access(
         organization_id=target_org,
         user_api_key_dict=user_api_key_dict,
         prisma_client=prisma_client,
@@ -2158,13 +2158,13 @@ async def global_view_spend_tags(
     Example Request:
     ```
     curl -X GET "http://0.0.0.0:4000/spend/tags" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Spend with Start Date and End Date
     ```
     curl -X GET "http://0.0.0.0:4000/spend/tags?start_date=2022-01-01&end_date=2022-02-01" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     import traceback
@@ -2212,10 +2212,10 @@ async def global_view_spend_tags(
         )
 
 
-async def _get_spend_report_for_time_range(
+async def get_spend_report_for_time_range(
     start_date: str,
     end_date: str,
-):
+) -> tuple[Sequence[_TeamSpendRow] | None, Sequence[_TagSpendRow] | None] | None:
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -2274,6 +2274,9 @@ async def _get_spend_report_for_time_range(
         verbose_proxy_logger.error("Exception in _get_daily_spend_reports %s", e)
 
 
+_get_spend_report_for_time_range: Final = get_spend_report_for_time_range
+
+
 @router.post(
     "/spend/calculate",
     tags=["Budget & Spend Tracking"],
@@ -2308,7 +2311,7 @@ async def calculate_spend(request: SpendCalculateRequest):
 
     ```
     curl --location 'http://localhost:4000/spend/calculate'
-    --header 'Authorization: Bearer sk-1234'
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     --header 'Content-Type: application/json'
     --data '{
         "model": "anthropic.claude-v2",
@@ -2320,7 +2323,7 @@ async def calculate_spend(request: SpendCalculateRequest):
 
     ```
     curl --location 'http://localhost:4000/spend/calculate'
-    --header 'Authorization: Bearer sk-1234'
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     --header 'Content-Type: application/json'
     --data '{
         "completion_response": {
@@ -2594,7 +2597,7 @@ async def ui_view_spend_logs(
     Example:
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs/v2?start_date=2025-11-25%2000:00:00&end_date=2025-11-26%2023:59:59&page=1&page_size=50" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
@@ -2652,7 +2655,7 @@ async def ui_view_spend_logs(
         )
 
     try:
-        is_admin_view: Final = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+        is_admin_view: Final = is_admin_view_safe(user_api_key_dict=user_api_key_dict)
         is_request_id_lookup: Final = request_id is not None and not is_v2
         is_search_lookup: Final = search is not None
         search_owns_window: Final = is_search_lookup and not is_v2
@@ -3387,7 +3390,7 @@ async def ui_view_request_response_for_request_id(
     """
     from litellm.proxy.proxy_server import prisma_client
 
-    caller_is_admin: Final = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+    caller_is_admin: Final = is_admin_view_safe(user_api_key_dict=user_api_key_dict)
     if not caller_is_admin:
         if prisma_client is None:
             raise HTTPException(
@@ -3506,31 +3509,31 @@ async def view_spend_logs(
     Example Request for all logs
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Example Request for specific request_id
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs?request_id=chatcmpl-6dcb2540-d3d7-4e49-bb27-291f863f112e" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Example Request for specific api_key
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Example Request for specific user_id
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs?user_id=ishaan@berri.ai" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Example Request for date range with individual logs (unsummarized)
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs?start_date=2024-01-01&end_date=2024-01-02&summarize=false" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
@@ -4304,7 +4307,7 @@ async def provider_budgets() -> ProviderBudgetResponse:
     ```bash
     curl -X GET http://localhost:4000/provider/budgets \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer sk-1234"
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Example Response
@@ -4353,7 +4356,7 @@ async def provider_budgets() -> ProviderBudgetResponse:
                 "No provider budget config found. Please set a provider budget config in the router settings. https://docs.litellm.ai/docs/proxy/provider_budget_routing"
             )
 
-        router_budget_logger: Final = llm_router._get_router_deployment_budget_limiter()
+        router_budget_logger: Final = llm_router.get_router_deployment_budget_limiter()
         if router_budget_logger is None:
             raise ValueError("No router budget logger found")
 
@@ -4532,7 +4535,7 @@ async def ui_view_session_spend_logs(
 
         read_scope: Final = (
             AllRows()
-            if _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+            if is_admin_view_safe(user_api_key_dict=user_api_key_dict)
             else await _spend_log_read_scope(user_api_key_dict, log_team_lookup)
             if _can_user_view_spend_log(user_api_key_dict=user_api_key_dict)
             else OwnedRows(user_api_key_dict.user_id)
@@ -4793,7 +4796,7 @@ def _span_type_sql_condition(span_type: str | None) -> str | None:
     return _SPAN_TYPE_SQL_CONDITIONS.get(span_type)
 
 
-def _is_admin_view_safe(user_api_key_dict: UserAPIKeyAuth) -> bool:
+def is_admin_view_safe(user_api_key_dict: UserAPIKeyAuth) -> bool:
     """
     Safely determine if the current user has admin view permissions.
     Defaults to False on any exception.
@@ -4808,6 +4811,9 @@ def _is_admin_view_safe(user_api_key_dict: UserAPIKeyAuth) -> bool:
         )
     except Exception:
         return False
+
+
+_is_admin_view_safe: Final = is_admin_view_safe
 
 
 async def _can_team_member_view_log(

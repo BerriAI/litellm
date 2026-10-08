@@ -503,6 +503,25 @@ fn existing_formats_win_over_new_formats(span: Span, #[case] kind: &str) {
 }
 
 #[rstest]
+fn input_preview_is_the_first_user_message(span: Span) {
+    let conversation = json!([
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "initial question"},
+        {"role": "assistant", "content": "answer"},
+        {"role": "user", "content": "follow up"},
+    ])
+    .to_string();
+    let decoded = decode(
+        span,
+        "custom",
+        &[("gen_ai.input.messages", &conversation)],
+        vec![],
+    )
+    .unwrap();
+    assert_eq!(decoded.normalized.input_preview, "initial question");
+}
+
+#[rstest]
 #[case::messages(&[("gen_ai.input.messages", r#"[{"role":"user","content":"modern"}]"#)], "modern")]
 #[case::indexed(&[("gen_ai.prompt.0.role", "user"), ("gen_ai.prompt.0.content", "indexed")], "indexed")]
 #[case::events(&[], "event")]
@@ -927,4 +946,29 @@ fn convention_markers_keep_genai_call_evidence(
         .collect::<Vec<_>>();
     let marked = decode(span, scope, &marked_attributes, vec![]).unwrap();
     assert_eq!(marked.normalized.calls, plain.normalized.calls);
+}
+
+#[rstest]
+#[case::request("req_native", CallKey::ProviderRequest("req_native".into()))]
+#[case::legacy_message("msg_legacy", CallKey::ProviderResponse("msg_legacy".into()))]
+fn native_claude_preserves_the_provider_id_family(
+    span: Span,
+    #[case] id: &str,
+    #[case] key: CallKey,
+) {
+    let native = Span {
+        name: "claude_code.llm_request".into(),
+        ..span
+    };
+    let decoded = decode(
+        native,
+        "com.anthropic.claude_code.tracing",
+        &[("gen_ai.response.id", id)],
+        Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        decoded.normalized.calls,
+        CallEvidence::Complete(std::collections::BTreeSet::from([key]))
+    );
 }

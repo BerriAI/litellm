@@ -87,16 +87,18 @@ def _responses_stream_id(response: httpx.Response) -> str:
     return response_id
 
 
-def _register_models(scenario: Scenario, upstream_url: str) -> tuple[str, str]:
+def _register_models(scenario: Scenario, upstream_url: str, num_retries: int = 0) -> tuple[str, str]:
     openai_model: Final = scenario.model(
         model="openai/gpt-4o-mini",
         api_base=upstream_url + "/v1",
         api_key="synthetic-provider-key",
+        num_retries=num_retries,
     )
     anthropic_model: Final = scenario.model(
         model="anthropic/claude-sonnet-4-5-20250929",
         api_base=upstream_url,
         api_key="synthetic-provider-key",
+        num_retries=num_retries,
     )
     return openai_model, anthropic_model
 
@@ -165,7 +167,7 @@ def test_retried_failure_uploads_one_s3_object(
     marker: Final = f"s3-a-{surface}-{uuid.uuid4().hex}"
     sink: Final = RecordingS3Sink()
     with wire_server(_failure_provider) as upstream, wire_server(sink.respond) as bucket:
-        config: Final = s3_config(tmp_path, bucket.url, {}, settings={"num_retries": 2})
+        config: Final = s3_config(tmp_path, bucket.url, {})
         with (
             owned_proxy(
                 gateway,
@@ -176,7 +178,7 @@ def test_retried_failure_uploads_one_s3_object(
             ) as candidate,
             candidate.scenario() as scenario,
         ):
-            openai_model, anthropic_model = _register_models(scenario, upstream.url)
+            openai_model, anthropic_model = _register_models(scenario, upstream.url, num_retries=2)
             key: Final = scenario.key(models=[openai_model, anthropic_model])
             response: Final = _surface_request(
                 candidate,
@@ -316,7 +318,7 @@ def test_failure_burst_through_sink_outage_lands_each_request_once(
     )
     sink: Final = RecordingS3Sink()
     with wire_server(_failure_provider) as upstream, wire_server(sink.respond) as bucket:
-        config: Final = s3_config(tmp_path, bucket.url, {}, settings={"num_retries": 2})
+        config: Final = s3_config(tmp_path, bucket.url, {})
         with (
             owned_proxy(
                 gateway,
@@ -327,7 +329,7 @@ def test_failure_burst_through_sink_outage_lands_each_request_once(
             ) as candidate,
             candidate.scenario() as scenario,
         ):
-            openai_model, anthropic_model = _register_models(scenario, upstream.url)
+            openai_model, anthropic_model = _register_models(scenario, upstream.url, num_retries=2)
             key: Final = scenario.key(models=[openai_model, anthropic_model])
             sink.fail_until = float("inf")
 

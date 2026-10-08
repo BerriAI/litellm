@@ -20,6 +20,7 @@ import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params
 from litellm.litellm_core_utils.model_response_utils import (
     is_model_response_stream_empty,
 )
@@ -59,7 +60,7 @@ _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
 _USAGE_COST_HEADER_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.OPENROUTER.value})
 
 
-def _next_sync_or_exhausted(it: Any) -> object:
+def _next_sync_or_exhausted(it: Iterator[object]) -> object:
     """
     Call next(it) from a thread and return _SYNC_ITER_EXHAUSTED on StopIteration.
 
@@ -187,7 +188,7 @@ def _provider_hidden_params(
     chunk: object,
     provider_response_model: str | None,
 ) -> Mapping[str, object] | None:
-    hidden: Final[object] = getattr(chunk, "_hidden_params", None)
+    hidden: Final = get_hidden_params(chunk)
     parsed: Final = _parsed_provider_hidden_params(hidden)
     provider_specific_fields: Final[object | None] = (
         dict(parsed.provider_specific_fields) if parsed is not None and parsed.provider_specific_fields else None
@@ -206,6 +207,14 @@ def _provider_hidden_params(
 
 
 class CustomStreamWrapper:
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
     def __init__(
         self,
         completion_stream,
@@ -258,7 +267,7 @@ class CustomStreamWrapper:
             optional_params=self.logging_obj.model_call_details.get("litellm_params", {}),
         )
 
-        self._hidden_params = {
+        self._hidden_params: dict[str, object] = {
             "model_id": (_model_info.get("id", None)),
             "api_base": _api_base,
         }  # returned as x-litellm-model-id response header in proxy
@@ -280,7 +289,7 @@ class CustomStreamWrapper:
         self._repeated_messages_count = 1
         self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
         self.created: int | None = None
-        self._last_returned_hidden_params: dict | None = None
+        self._last_returned_hidden_params: dict[str, object] | None = None
 
         _cached_logging_provider: Final = self.logging_obj.model_call_details.get("custom_llm_provider", None)
         self._cached_logging_llm_provider: str | None = _cached_logging_provider
@@ -624,8 +633,12 @@ class CustomStreamWrapper:
                     pass
                 if str_line.choices[0].finish_reason:
                     is_finished = True  # check if str_line._hidden_params["is_finished"] is True
-                    if hasattr(str_line, "_hidden_params") and str_line._hidden_params.get("is_finished") is not None:
-                        is_finished = str_line._hidden_params.get("is_finished")
+                    str_line_hidden_params: Final = get_hidden_params(str_line)
+                    is_finished_from_hidden_params: Final = (
+                        str_line_hidden_params.get("is_finished") if str_line_hidden_params is not None else None
+                    )
+                    if isinstance(is_finished_from_hidden_params, bool):
+                        is_finished = is_finished_from_hidden_params
                     finish_reason = str_line.choices[0].finish_reason
 
                 # checking for logprobs
@@ -698,7 +711,7 @@ class CustomStreamWrapper:
                 if isinstance(chunk, bytes):
                     chunk = chunk.decode("utf-8")
                 if "text_output" in chunk:
-                    response = CustomStreamWrapper._strip_sse_data_from_chunk(chunk) or ""
+                    response = CustomStreamWrapper.strip_sse_data_from_chunk(chunk) or ""
                     response = response.strip()
                     parsed_response = json.loads(response)
                 else:
@@ -758,14 +771,14 @@ class CustomStreamWrapper:
         # must win over both caller-supplied hidden_params and the computed
         # custom_llm_provider/created_at values, so it comes last.
         if hidden_params is not None:
-            model_response._hidden_params = {
+            model_response.hidden_params = {
                 **hidden_params,
                 "custom_llm_provider": _logging_obj_llm_provider,
                 "created_at": time.time(),
                 **self._base_hidden_params,
             }
         else:
-            model_response._hidden_params = {
+            model_response.hidden_params = {
                 "custom_llm_provider": _logging_obj_llm_provider,
                 "created_at": time.time(),
                 **self._base_hidden_params,
@@ -796,7 +809,7 @@ class CustomStreamWrapper:
             self.response_id = id
 
         if id and isinstance(id, str) and id.strip():
-            model_response._hidden_params["received_model_id"] = id
+            model_response.hidden_params["received_model_id"] = id
 
         if self.response_id is not None and isinstance(self.response_id, str):
             model_response.id = self.response_id
@@ -1302,7 +1315,7 @@ class CustomStreamWrapper:
                 raise ValueError(f"chunk is not a string: {chunk}")
             response_obj = cast(
                 dict[str, object],
-                litellm.CodestralTextCompletionConfig()._chunk_parser(chunk),
+                litellm.CodestralTextCompletionConfig().chunk_parser(chunk),
             )
             completion_obj["content"] = response_obj["text"]
             print_verbose(f"completion obj content: {completion_obj['content']}")
@@ -1676,15 +1689,15 @@ class CustomStreamWrapper:
         """
         Caches the streaming response
         """
-        if not cache_hit and self.logging_obj._llm_caching_handler is not None:
-            self.logging_obj._llm_caching_handler._sync_add_streaming_response_to_cache(processed_chunk)
+        if not cache_hit and self.logging_obj.llm_caching_handler is not None:
+            self.logging_obj.llm_caching_handler.sync_add_streaming_response_to_cache(processed_chunk)
 
     async def async_cache_streaming_response(self, processed_chunk, cache_hit: bool):
         """
         Caches the streaming response
         """
-        if not cache_hit and self.logging_obj._llm_caching_handler is not None:
-            await self.logging_obj._llm_caching_handler._add_streaming_response_to_cache(processed_chunk)
+        if not cache_hit and self.logging_obj.llm_caching_handler is not None:
+            await self.logging_obj.llm_caching_handler.add_streaming_response_to_cache(processed_chunk)
 
     def run_success_logging_and_cache_storage(self, processed_chunk, cache_hit: bool):
         """
@@ -1710,7 +1723,7 @@ class CustomStreamWrapper:
             asyncio.run(self.logging_obj.async_success_handler(processed_chunk, None, None, cache_hit))
         ## SYNC LOGGING — only for sync SDK entrypoints; async proxy paths export via async_success_handler
         litellm_params: Final = self.logging_obj.model_call_details.get("litellm_params", {})
-        if self.logging_obj._is_sync_litellm_request(litellm_params):
+        if self.logging_obj.is_sync_litellm_request(litellm_params):
             self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
 
     def finish_reason_handler(self):
@@ -1762,9 +1775,9 @@ class CustomStreamWrapper:
         _usage: Final[Usage | None] = getattr(response, "usage", None)
         _cost: Final = CustomStreamWrapper._resolve_provider_reported_cost(getattr(_usage, "cost", None))
         if _cost is not None:
-            if "additional_headers" not in response._hidden_params:
-                response._hidden_params["additional_headers"] = {}
-            response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = _cost
+            if "additional_headers" not in response.hidden_params:
+                response.hidden_params["additional_headers"] = {}
+            response.hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = _cost
 
     def __next__(self) -> "ModelResponseStream":
         cache_hit = False
@@ -1794,7 +1807,7 @@ class CustomStreamWrapper:
                     if response is None:
                         continue
                     if self.logging_obj.completion_start_time is None:
-                        self.logging_obj._update_completion_start_time(completion_start_time=datetime.datetime.now())
+                        self.logging_obj.update_completion_start_time(completion_start_time=datetime.datetime.now())
                     ## LOGGING
                     if not litellm.disable_streaming_logging:
                         executor.submit(
@@ -1823,14 +1836,22 @@ class CustomStreamWrapper:
                     if getattr(response, "usage", None) is not None:
                         usage_to_preserve = response.usage
                         if usage_to_preserve:
-                            response._hidden_params["usage"] = usage_to_preserve
+                            response_hidden_params_for_usage = cast(  # cast-ok: preserve dynamic mapping behavior
+                                dict[str, object], getattr(response, HIDDEN_PARAMS_ATTR)
+                            )
+                            response_hidden_params_for_usage["usage"] = usage_to_preserve
 
                         obj_dict = response.model_dump()
 
                         if "usage" in obj_dict:
                             del obj_dict["usage"]
 
-                        response = self.model_response_creator(chunk=obj_dict, hidden_params=response._hidden_params)
+                        response_hidden_params_for_model = cast(  # cast-ok: preserve dynamic mapping behavior
+                            Mapping[str, object], getattr(response, HIDDEN_PARAMS_ATTR)
+                        )
+                        response = self.model_response_creator(
+                            chunk=obj_dict, hidden_params=response_hidden_params_for_model
+                        )
                         ## check if empty
                         is_empty = is_model_response_stream_empty(model_response=cast(ModelResponseStream, response))
 
@@ -1839,8 +1860,11 @@ class CustomStreamWrapper:
                     # add usage as hidden param
                     if self.sent_last_chunk is True and self.stream_options is None:
                         usage = calculate_total_usage(chunks=self.chunks)
-                        response._hidden_params["usage"] = usage
-                        self._last_returned_hidden_params = response._hidden_params
+                        response_hidden_params_for_final_chunk = cast(  # cast-ok: preserve dynamic mapping behavior
+                            dict[str, object], getattr(response, HIDDEN_PARAMS_ATTR)
+                        )
+                        response_hidden_params_for_final_chunk["usage"] = usage
+                        self._last_returned_hidden_params = response_hidden_params_for_final_chunk
                         # Add MCP metadata to final chunk if present
                         response = self._add_mcp_metadata_to_final_chunk(response)
                     # RETURN RESULT
@@ -1937,7 +1961,7 @@ class CustomStreamWrapper:
                     self.chunks.append(processed_chunk)
                 if self.stream_options is None:  # add usage as hidden param
                     usage = calculate_total_usage(chunks=self.chunks)
-                    processed_chunk._hidden_params["usage"] = usage
+                    processed_chunk.hidden_params["usage"] = usage
                 ## LOGGING
                 executor.submit(
                     self.run_success_logging_and_cache_storage,
@@ -2005,7 +2029,7 @@ class CustomStreamWrapper:
                         continue
 
                     if self.logging_obj.completion_start_time is None:
-                        self.logging_obj._update_completion_start_time(completion_start_time=datetime.datetime.now())
+                        self.logging_obj.update_completion_start_time(completion_start_time=datetime.datetime.now())
 
                     if processed_chunk.choices:
                         choice = processed_chunk.choices[0]
@@ -2035,7 +2059,10 @@ class CustomStreamWrapper:
                         if "usage" in obj_dict:
                             del obj_dict["usage"]
                         processed_chunk = self.model_response_creator(
-                            chunk=obj_dict, hidden_params=processed_chunk._hidden_params
+                            chunk=obj_dict,
+                            hidden_params=cast(  # cast-ok: preserve mapping operations on dynamic storage
+                                Mapping[str, object], getattr(processed_chunk, HIDDEN_PARAMS_ATTR)
+                            ),
                         )
                         is_empty = is_model_response_stream_empty(
                             model_response=cast(ModelResponseStream, processed_chunk)
@@ -2049,8 +2076,11 @@ class CustomStreamWrapper:
                     # add usage as hidden param
                     if self.sent_last_chunk is True and self.stream_options is None:
                         usage = calculate_total_usage(chunks=self.chunks)
-                        processed_chunk._hidden_params["usage"] = usage
-                        self._last_returned_hidden_params = processed_chunk._hidden_params
+                        processed_chunk_hidden_params = cast(  # cast-ok: preserve dynamic mapping behavior
+                            dict[str, object], getattr(processed_chunk, HIDDEN_PARAMS_ATTR)
+                        )
+                        processed_chunk_hidden_params["usage"] = usage
+                        self._last_returned_hidden_params = processed_chunk_hidden_params
 
                     # Call post-call streaming deployment hook for final chunk
                     if self.sent_last_chunk is True:
@@ -2205,7 +2235,10 @@ class CustomStreamWrapper:
                 self.chunks.append(processed_chunk)
             if self.stream_options is None:
                 usage: Final = calculate_total_usage(chunks=self.chunks)
-                processed_chunk._hidden_params["usage"] = usage  # pyright: ignore[reportPrivateUsage]  # sync parity
+                processed_chunk_hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior
+                    dict[str, object], getattr(processed_chunk, HIDDEN_PARAMS_ATTR)
+                )
+                processed_chunk_hidden_params["usage"] = usage
             # see sync __next__'s sibling branch: deliberately do NOT restore
             # here - this chunk is still this call's own data, and restoring
             # before returning it would corrupt the caller's own log
@@ -2252,7 +2285,7 @@ class CustomStreamWrapper:
             backfill_missing_cache_usage_fields(usage)
             self.logging_obj.model_call_details["combined_usage_object"] = usage
             self.logging_obj.model_call_details["response_cost"] = (
-                self.logging_obj._response_cost_calculator(result=partial_response) or 0.0
+                self.logging_obj.response_cost_calculator(result=partial_response) or 0.0
             )
         except Exception as recover_error:
             verbose_logger.debug(
@@ -2270,8 +2303,28 @@ class CustomStreamWrapper:
 
         429 (rate-limit) is explicitly exempted from the 4xx filter because
         it is transient and the Router should switch to another model group.
+
+        An error an inner stream already wrapped (the chat-to-Responses bridge
+        consumes a Responses stream) is rebuilt around the provider exception
+        with this wrapper's own bookkeeping, so the Router's one-level unwrap
+        surfaces the provider exception and is_pre_first_chunk says whether
+        this wrapper's consumer received anything (the inner stream counts a
+        lifecycle event the bridge never forwards as its first chunk).
         """
         from litellm.exceptions import MidStreamFallbackError
+
+        if isinstance(e, MidStreamFallbackError):
+            self._restore_consumer_correlation_context()
+            if e.original_exception is None:
+                raise e
+            raise MidStreamFallbackError(
+                message=str(e.original_exception),
+                model=self.model,
+                llm_provider=self.custom_llm_provider or "anthropic",
+                original_exception=e.original_exception,
+                generated_content=self.response_uptil_now,
+                is_pre_first_chunk=not self.sent_first_chunk,
+            )
 
         # Map to OpenAI exception format. Some providers' mappers (e.g.
         # _map_anthropic_exception, _map_aleph_alpha_exception) synchronously
@@ -2334,7 +2387,7 @@ class CustomStreamWrapper:
         )
 
     @staticmethod
-    def _strip_sse_data_from_chunk(chunk: str | None) -> str | None:
+    def strip_sse_data_from_chunk(chunk: str | None) -> str | None:
         """
         Strips the 'data: ' prefix from Server-Sent Events (SSE) chunks.
 
@@ -2368,6 +2421,8 @@ class CustomStreamWrapper:
                 return chunk[_length_of_sse_data_prefix:]
 
         return chunk
+
+    _strip_sse_data_from_chunk = strip_sse_data_from_chunk
 
 
 def _cache_token_count(details: PromptTokensDetailsWrapper | None, keys: tuple[str, ...]) -> int:
