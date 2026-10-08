@@ -3476,31 +3476,59 @@ async def test_get_groups_reports_members_from_members_with_roles(mocker):
 
 
 @pytest.mark.asyncio
-async def test_apply_group_patch_updates_does_not_write_legacy_members(mocker):
+async def test_apply_group_patch_updates_writes_only_the_patched_columns_and_evicts_the_cached_team(mocker):
     """The group PATCH apply must not write the legacy ``members`` column.
 
     Membership is reconciled onto the source of truth (members_with_roles and
     each member's user.teams) separately; writing the legacy column here too
     would create a second, unread copy of membership that can drift from the
-    source of truth, which is the inconsistency this PR removes.
+    source of truth, which is the inconsistency this PR removes. The write also
+    evicts the team cached under its id and its old alias, so a rename-only PATCH
+    is not served from the stale copy until its TTL expires.
     """
+    from litellm.proxy import proxy_server
+
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
     mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
     updated = mocker.MagicMock()
     mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=updated)
+    proxy_server.user_api_key_cache.set_cache(key="team_id:team-1", value={"team_id": "team-1"})
+    proxy_server.user_api_key_cache.set_cache(key="team_alias:Old", value={"team_id": "team-1"})
 
     result = await _apply_group_patch_updates(
         group_id="team-1",
         update_data={"team_alias": "Renamed"},
         prisma_client=mock_prisma_client,
+        team_alias="Old",
     )
 
     assert result is updated
     mock_prisma_client.db.litellm_teamtable.update.assert_awaited_once()
-    written = mock_prisma_client.db.litellm_teamtable.update.call_args.kwargs["data"]
-    assert "members" not in written
-    assert written["team_alias"] == "Renamed"
+    assert mock_prisma_client.db.litellm_teamtable.update.await_args.kwargs["data"] == {"team_alias": "Renamed"}
+    assert proxy_server.user_api_key_cache.get_cache("team_id:team-1") is None
+    assert proxy_server.user_api_key_cache.get_cache("team_alias:Old") is None
+
+
+@pytest.mark.asyncio
+async def test_apply_group_patch_updates_with_nothing_to_write_reads_the_team_and_keeps_its_cache(mocker):
+    from litellm.proxy import proxy_server
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+    existing = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing)
+    mock_prisma_client.db.litellm_teamtable.update = AsyncMock()
+    proxy_server.user_api_key_cache.set_cache(key="team_id:team-2", value={"team_id": "team-2"})
+
+    result = await _apply_group_patch_updates(
+        group_id="team-2", update_data={}, prisma_client=mock_prisma_client, team_alias="Kept"
+    )
+
+    assert result is existing
+    mock_prisma_client.db.litellm_teamtable.update.assert_not_awaited()
+    assert proxy_server.user_api_key_cache.get_cache("team_id:team-2") is not None
 
 
 def _mock_prisma_for_delete_user(mocker, team):

@@ -1,6 +1,7 @@
 import copy
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from typing import Final, Literal
 
 import pytest
@@ -138,7 +139,9 @@ class _TeamTable:
     async def update(self, where: Mapping[str, str], data: Mapping[str, str]) -> LiteLLM_TeamTable:
         self.ledger.statements.append("teamtable.update")
         roster = _MEMBERS.validate_json(data["members_with_roles"])
-        updated = self.rows[where["team_id"]].model_copy(update={"members_with_roles": roster})
+        updated = self.rows[where["team_id"]].model_copy(
+            update={"members_with_roles": roster, "updated_at": datetime.now(UTC)}
+        )
         self.rows[where["team_id"]] = updated
         return updated
 
@@ -203,22 +206,29 @@ class _FakePrisma:
         budgets: Sequence[Mapping[str, object]] = (),
         jwt_mappings: Sequence[Mapping[str, object]] = (),
         fail_commit: bool = False,
+        replica_teams: Sequence[LiteLLM_TeamTable] | None = None,
     ) -> None:
+        """``db`` is the routed client, which a read replica may serve; ``writer_db`` is the writer."""
         self.ledger = _Ledger()
-        self.db = _Db(self.ledger, users, teams, memberships, tokens, budgets, jwt_mappings)
+        self.writer_db = _Db(self.ledger, users, teams, memberships, tokens, budgets, jwt_mappings)
+        self.db = (
+            _Db(self.ledger, users, replica_teams, memberships, tokens, budgets, jwt_mappings)
+            if replica_teams is not None
+            else self.writer_db
+        )
         self._fail_commit = fail_commit
         self.transactions = 0
 
     @asynccontextmanager
     async def tx(self, *, timeout: object = None):
         self.transactions += 1
-        snapshot = copy.deepcopy(self.db)
+        snapshot = copy.deepcopy(self.writer_db)
         try:
-            yield _Tx(self.db, self.ledger)
+            yield _Tx(self.writer_db, self.ledger)
             if self._fail_commit:
                 raise RuntimeError("connection reset")
         except BaseException:
-            self.db.__dict__.update(snapshot.__dict__)
+            self.writer_db.__dict__.update(snapshot.__dict__)
             raise
 
 
@@ -244,23 +254,23 @@ def _user(user_id: str, *teams: str) -> _UserRow:
 
 
 def _roster(prisma: _FakePrisma) -> list[tuple[str | None, str]]:
-    return [(m.user_id, m.role) for m in prisma.db.litellm_teamtable.rows[TEAM].members_with_roles]
+    return [(m.user_id, m.role) for m in prisma.writer_db.litellm_teamtable.rows[TEAM].members_with_roles]
 
 
 def _memberships(prisma: _FakePrisma) -> list[tuple[object, object]]:
-    return sorted((r["team_id"], r["user_id"]) for r in prisma.db.litellm_teammembership.rows)
+    return sorted((r["team_id"], r["user_id"]) for r in prisma.writer_db.litellm_teammembership.rows)
 
 
 def _membership_budget(prisma: _FakePrisma, user_id: str) -> object:
-    return next(r["budget_id"] for r in prisma.db.litellm_teammembership.rows if r["user_id"] == user_id)
+    return next(r["budget_id"] for r in prisma.writer_db.litellm_teammembership.rows if r["user_id"] == user_id)
 
 
 def _teams_of(prisma: _FakePrisma, user_id: str) -> list[str]:
-    return prisma.db.litellm_usertable.rows[user_id].teams
+    return prisma.writer_db.litellm_usertable.rows[user_id].teams
 
 
 def _tokens(prisma: _FakePrisma) -> set[object]:
-    return {r["token"] for r in prisma.db.litellm_verificationtoken.rows}
+    return {r["token"] for r in prisma.writer_db.litellm_verificationtoken.rows}
 
 
 def _writes(prisma: _FakePrisma) -> list[str]:
@@ -293,12 +303,14 @@ async def test_target_adds_the_missing_members_and_removes_the_extra_ones():
         teams=[_team(_member("alice", role="admin"), _member("bob"))],
         memberships=[(TEAM, "alice"), (TEAM, "bob")],
     )
-    cache = _cache_with("bob", "carol")
+    cache = _cache_with("bob", "carol", f"team_id:{TEAM}")
 
     outcome = await _sync(prisma, RosterTarget(member_ids=frozenset({"alice", "carol"})), cache)
 
     assert isinstance(outcome, RosterSync)
     assert (outcome.added, outcome.removed) == (frozenset({"carol"}), frozenset({"bob"}))
+    written = prisma.writer_db.litellm_teamtable.rows[TEAM]
+    assert written.updated_at is not None and outcome.team.updated_at == written.updated_at
     assert [(m.user_id, m.user_email, m.role) for m in outcome.team.members_with_roles] == [
         ("alice", "alice@example.com", "admin"),
         ("carol", "carol@example.com", "user"),
@@ -306,7 +318,7 @@ async def test_target_adds_the_missing_members_and_removes_the_extra_ones():
     assert _roster(prisma) == [("alice", "admin"), ("carol", "user")]
     assert _memberships(prisma) == [(TEAM, "alice"), (TEAM, "carol")]
     assert (_teams_of(prisma, "bob"), _teams_of(prisma, "carol")) == (["t2"], [TEAM])
-    assert (cache.get_cache("bob"), cache.get_cache("carol")) == (None, None)
+    assert (cache.get_cache("bob"), cache.get_cache("carol"), cache.get_cache(f"team_id:{TEAM}")) == (None, None, None)
 
 
 @pytest.mark.asyncio
@@ -331,18 +343,20 @@ async def test_delta_touches_only_the_named_members_and_tolerates_drift():
 
 
 @pytest.mark.asyncio
-async def test_a_plan_matching_the_roster_only_takes_the_lock_and_reads_the_team():
+async def test_a_plan_matching_the_roster_only_takes_the_lock_and_leaves_the_cached_team_in_place():
     prisma = _FakePrisma(
         users=[_user("alice", TEAM), _user("bob", TEAM)],
         teams=[_team(_member("alice"), _member("bob"))],
         memberships=[(TEAM, "alice"), (TEAM, "bob")],
     )
+    cache = _cache_with(f"team_id:{TEAM}")
 
-    outcome = await _sync(prisma, RosterTarget(member_ids=frozenset({"alice", "bob"})))
+    outcome = await _sync(prisma, RosterTarget(member_ids=frozenset({"alice", "bob"})), cache)
 
     assert isinstance(outcome, RosterSync)
     assert (outcome.added, outcome.removed) == (frozenset(), frozenset())
     assert prisma.ledger.statements == ["query_raw", "teamtable.find_unique"]
+    assert cache.get_cache(f"team_id:{TEAM}") is not None
 
 
 @pytest.mark.asyncio
@@ -360,6 +374,19 @@ async def test_a_delta_naming_nobody_reads_the_team_without_the_lock_or_a_transa
     assert (outcome.added, outcome.removed) == (frozenset(), frozenset())
     assert prisma.ledger.statements == ["teamtable.find_unique"]
     assert prisma.transactions == 0
+
+
+@pytest.mark.asyncio
+async def test_a_delta_naming_nobody_reads_the_team_from_the_writer_not_the_replica():
+    prisma = _FakePrisma(
+        teams=[_team(_member("alice")).model_copy(update={"team_alias": "renamed"})],
+        replica_teams=[_team(_member("alice")).model_copy(update={"team_alias": "stale"})],
+    )
+
+    outcome = await _sync(prisma, RosterDelta(add=frozenset(), remove=frozenset()))
+
+    assert isinstance(outcome, RosterSync)
+    assert outcome.team.team_alias == "renamed"
 
 
 @pytest.mark.asyncio
@@ -416,7 +443,7 @@ async def test_added_members_each_get_a_budget_when_the_team_scopes_member_model
 
     await _sync(prisma, RosterDelta(add=frozenset({"carol", "dave"}), remove=frozenset()))
 
-    budgets = prisma.db.litellm_budgettable.rows
+    budgets = prisma.writer_db.litellm_budgettable.rows
     assert [(b["allowed_models"], b["created_by"], b["updated_by"]) for b in budgets] == [
         (("gpt-x",), "admin", "admin")
     ] * 2
@@ -445,7 +472,7 @@ async def test_added_members_link_the_team_member_budget_when_the_team_names_one
     await _sync(prisma, RosterDelta(add=frozenset({"carol"}), remove=frozenset()))
 
     assert _membership_budget(prisma, "carol") == expected_budget_id
-    assert len(prisma.db.litellm_budgettable.rows) == len(budgets)
+    assert len(prisma.writer_db.litellm_budgettable.rows) == len(budgets)
 
 
 @pytest.mark.asyncio
@@ -468,7 +495,7 @@ async def test_removed_members_lose_their_team_keys_and_every_cache_entry_for_th
 
     assert isinstance(outcome, RosterSync) and outcome.removed == frozenset({"bob"})
     assert _tokens(prisma) == {"k-bob-personal", "k-alice"}
-    assert [(r["token"], r["deleted_by"]) for r in prisma.db.litellm_deletedverificationtoken.rows] == [
+    assert [(r["token"], r["deleted_by"]) for r in prisma.writer_db.litellm_deletedverificationtoken.rows] == [
         ("k-bob", "admin")
     ]
     assert _teams_of(prisma, "bob") == ["t2"]
@@ -494,7 +521,7 @@ async def test_a_failed_commit_leaves_every_table_and_cache_entry_as_it_was():
     assert _memberships(prisma) == [(TEAM, "alice"), (TEAM, "bob")]
     assert (_teams_of(prisma, "bob"), _teams_of(prisma, "carol")) == ([TEAM], [])
     assert _tokens(prisma) == {"k-bob"}
-    assert prisma.db.litellm_deletedverificationtoken.rows == []
+    assert prisma.writer_db.litellm_deletedverificationtoken.rows == []
     assert cache.get_cache("k-bob") is not None and cache.get_cache("carol") is not None
 
 

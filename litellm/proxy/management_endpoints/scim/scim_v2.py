@@ -45,7 +45,7 @@ from litellm.proxy._types import (
     TeamMemberDeleteRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import _delete_cache_key_object
+from litellm.proxy.auth.auth_checks import _delete_cache_key_object, delete_cache_team_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
@@ -2721,6 +2721,7 @@ async def update_group(
             where={"team_id": group_id},
             data=update_data,
         )
+        await _evict_group_cache(group_id, existing_team.team_alias)
 
         sync: Final = await _sync_group_roster(
             group_id, RosterTarget(member_ids=frozenset(member_result.all_member_ids)), prisma_client
@@ -2960,24 +2961,38 @@ async def _process_group_patch_operations(
     return update_data, final_members, replace_target
 
 
-async def _apply_group_patch_updates(group_id: str, update_data: dict[str, object], prisma_client: PrismaClient):
+async def _evict_group_cache(group_id: str, team_alias: str | None) -> None:
+    from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
+    await delete_cache_team_object(
+        team_id=group_id,
+        team_alias=team_alias,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+async def _apply_group_patch_updates(
+    group_id: str, update_data: dict[str, object], prisma_client: PrismaClient, team_alias: str | None
+):
     """Apply the group's metadata/displayName patch updates to the database.
 
     Membership itself is not written here; it is reconciled onto the source of
     truth (members_with_roles, each member's user.teams and the membership table)
     by ``_sync_group_roster`` in one bulk transaction. Writing the legacy `members`
     column here too would create a second, unread copy of membership that could
-    drift from the source of truth.
+    drift from the source of truth. A write evicts the team cached under its id and
+    its old alias, so a rename-only PATCH is not served from the stale copy until
+    its TTL expires.
     """
     if "metadata" in update_data and isinstance(update_data["metadata"], dict):
         update_data["metadata"] = safe_dumps(update_data["metadata"])
 
-    if update_data:
-        return await TeamRepository(prisma_client).table.update(
-            where={"team_id": group_id},
-            data=update_data,
-        )
-    return await TeamRepository(prisma_client).table.find_unique(where={"team_id": group_id})
+    if not update_data:
+        return await TeamRepository(prisma_client).table.find_unique(where={"team_id": group_id})
+    updated: Final = await TeamRepository(prisma_client).table.update(where={"team_id": group_id}, data=update_data)
+    await _evict_group_cache(group_id, team_alias)
+    return updated
 
 
 def _roster_ids(team: LiteLLM_TeamTable) -> frozenset[str]:
@@ -3064,7 +3079,7 @@ async def patch_group(
         )
 
         # Apply the metadata/displayName updates to the database
-        await _apply_group_patch_updates(group_id, update_data, prisma_client)
+        await _apply_group_patch_updates(group_id, update_data, prisma_client, existing_team.team_alias)
 
         sync: Final = await _sync_group_roster(group_id, plan, prisma_client)
 

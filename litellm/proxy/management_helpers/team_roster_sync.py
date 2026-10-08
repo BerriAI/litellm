@@ -45,7 +45,8 @@ if TYPE_CHECKING:
 
 _SYNC_TX_TIMEOUT: Final = timedelta(seconds=60)
 _DETACH_TEAM_SQL: Final = (
-    'UPDATE "LiteLLM_UserTable" SET teams = array_remove(teams, $1) WHERE user_id = ANY($2::text[])'
+    'UPDATE "LiteLLM_UserTable" SET teams = array_remove(teams, $1), updated_at = CURRENT_TIMESTAMP'
+    " WHERE user_id = ANY($2::text[])"
 )
 _LOCK_MEMBER_ROWS_SQL: Final = (
     'SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = ANY($1::text[]) ORDER BY user_id FOR UPDATE'
@@ -142,7 +143,7 @@ def _changes_nothing(plan: RosterPlan) -> bool:
 
 
 async def _unchanged_roster(prisma_client: PrismaClient, team_id: str) -> RosterSync | TeamGone:
-    team_row: Final = await prisma_client.db.litellm_teamtable.find_unique(where={"team_id": team_id})
+    team_row: Final = await prisma_client.writer_db.litellm_teamtable.find_unique(where={"team_id": team_id})
     if team_row is None:
         return TeamGone(team_id=team_id)
     team: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
@@ -299,9 +300,10 @@ async def sync_team_roster(
     half-applied for the caller's retry to trip over. ``TeamGone`` means the team row
     went away before the lock was taken; ``MembersMissing`` means a user the plan adds
     has no row, and nothing was written. A delta naming nobody changes nothing, so it
-    reads the team without the lock or a transaction. Every user row the plan touches is
-    locked in id order before the first write, so two groups trading members never wait on
-    each other in opposite orders.
+    reads the team from the writer without the lock or a transaction, and a plan already
+    matching the roster writes nothing and leaves every cache entry in place. Every user
+    row the plan touches is locked in id order before the first write, so two groups
+    trading members never wait on each other in opposite orders.
     """
     if _changes_nothing(plan):
         return await _unchanged_roster(prisma_client, team_id)
@@ -314,20 +316,24 @@ async def sync_team_roster(
         roster: Final = tuple(team.members_with_roles)
         roster_ids: Final = frozenset(member.user_id for member in roster if member.user_id is not None)
         to_add, to_remove = _planned_changes(plan, roster_ids)
-        if to_add or to_remove:
-            await tx.query_raw(_LOCK_MEMBER_ROWS_SQL, sorted(to_add | to_remove))
+        if not to_add and not to_remove:
+            return RosterSync(team=team, added=frozenset(), removed=frozenset())
+        await tx.query_raw(_LOCK_MEMBER_ROWS_SQL, sorted(to_add | to_remove))
         added: Final = await _add_members(tx, team, sorted(to_add), user_api_key_dict, litellm_proxy_admin_name)
         if isinstance(added, MembersMissing):
             return added
         removal: Final = await _remove_members(tx, prisma_client, team_id, sorted(to_remove), user_api_key_dict)
         after: Final = (*(member for member in roster if member.user_id not in to_remove), *added)
-        if to_add or to_remove:
-            await _team_tx_db(tx).update(
-                where={"team_id": team_id},
-                data=_RosterData(members_with_roles=json.dumps(tuple(member.model_dump() for member in after))),
-            )
+        written: Final = await _team_tx_db(tx).update(
+            where={"team_id": team_id},
+            data=_RosterData(members_with_roles=json.dumps(tuple(member.model_dump() for member in after))),
+        )
 
-    synced: Final = team.model_copy(update={"members_with_roles": list(after)})
+    synced: Final = (
+        LiteLLM_TeamTable.model_validate(written.model_dump())
+        if written is not None
+        else team.model_copy(update={"members_with_roles": list(after)})
+    )
     if removal.deleted_keys:
         KeyManagementEventHooks.create_key_deleted_audit_logs(
             keys_being_deleted=removal.deleted_keys,
