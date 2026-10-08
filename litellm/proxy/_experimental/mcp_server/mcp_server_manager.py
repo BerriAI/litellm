@@ -1735,12 +1735,12 @@ def _create_sampling_callback(
     return create_sampling_callback(user_api_key_auth, raw_headers, client_ip, operation_context)
 
 
-def _create_elicitation_callback():
+def _create_elicitation_callback(timeout: float | None = None):
     if not MCP_ELICITATION_AVAILABLE:
         return None
     from litellm.proxy._experimental.mcp_server.legacy_callbacks import create_elicitation_callback
 
-    return create_elicitation_callback()
+    return create_elicitation_callback(timeout=timeout)
 
 
 def _record_mcp_guardrail_evaluations(
@@ -4250,7 +4250,11 @@ class MCPServerManager:
                 if resolved_server.allow_sampling
                 else None
             ),
-            elicitation_callback=(_create_elicitation_callback() if resolved_server.allow_elicitation else None),
+            elicitation_callback=(
+                _create_elicitation_callback(timeout=resolved_server.timeout)
+                if resolved_server.allow_elicitation
+                else None
+            ),
         )
 
     _create_mcp_client = create_mcp_client
