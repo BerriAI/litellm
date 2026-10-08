@@ -21,6 +21,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value, string_value
+from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -40,6 +41,7 @@ BEDROCK_ROLE_ARN: Final = "arn:aws:iam::123456789012:role/integration-batch-role
 BEDROCK_JOB_ARN_PREFIX: Final = f"arn:aws:bedrock:{BEDROCK_REGION}:123456789012:model-invocation-job/"
 BEDROCK_LAST_MODIFIED: Final = "Thu, 02 Oct 2025 12:00:00 GMT"
 BEDROCK_OUTPUT_CONTENT: Final = b'{"recordId":"req-1","modelOutput":{}}\n'
+_BATCH_PROCESSED_SQL: Final = 'SELECT batch_processed FROM "LiteLLM_ManagedObjectTable" WHERE unified_object_id=%s'
 
 
 @dataclass(frozen=True, slots=True)
@@ -347,6 +349,59 @@ def test_output_file_lists_with_basic_details_when_provider_file_lookup_fails(ga
             output
         )
         assert "litellm_details_fallback" not in output, output
+
+
+def test_fallback_output_file_details_refresh_once_provider_recovers(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        batch: Final = _create_batch(
+            scenario,
+            _batch_routes(model="gpt-4o-mini", metadata_fails=True),
+            unrelated_user=True,
+        )
+        retrieved: Final = _retrieve_batch(gateway, batch)
+        output_id: Final = string_value(retrieved["output_file_id"])
+        listed_files: Final = _list_files(gateway, batch.owner_key, purpose="batch_output")
+        basic_output: Final = next((file for file in listed_files if file.get("id") == output_id), None)
+        assert basic_output is not None, f"Completed batch output {output_id} is absent after provider metadata failure"
+        assert (basic_output["purpose"], basic_output["filename"]) == (
+            "batch_output",
+            f"file-out-{batch.scenario.scenario_id}",
+        ), basic_output
+        assert basic_output["bytes"] != OUTPUT_BYTES, basic_output
+        assert "litellm_details_fallback" not in basic_output, basic_output
+
+        processed_batch_rows: Final = eventually(
+            lambda: read_rows(_BATCH_PROCESSED_SQL, (string_value(retrieved["id"]),)),
+            lambda rows: len(rows) == 1 and rows[0].get("batch_processed") is True,
+            seconds=60,
+        )
+        assert processed_batch_rows[0]["batch_processed"] is True, processed_batch_rows
+        metadata_hits_before_recovery: Final = _metadata_hit_count(gateway, batch.scenario)
+        assert metadata_hits_before_recovery >= 1, "The provider metadata route was not called before recovery"
+        register_scenario(
+            batch.scenario.scenario_id,
+            _batch_routes(model=batch.model),
+            control_url=batch.scenario.control_url,
+        )
+        details_response: Final = gateway.request("GET", f"/v1/files/{output_id}", key=batch.owner_key)
+        assert details_response.status_code == 200, details_response.text
+        details: Final = JSON_OBJECT.validate_json(details_response.content)
+        assert details["bytes"] == OUTPUT_BYTES, details
+        assert (details["filename"], details["purpose"]) == ("output.jsonl", "batch_output"), details
+        assert "litellm_details_fallback" not in details, details
+        assert _metadata_hit_count(gateway, batch.scenario) == 1
+
+        refreshed_files: Final = _list_files(gateway, batch.owner_key, purpose="batch_output")
+        refreshed_output: Final = next((file for file in refreshed_files if file.get("id") == output_id), None)
+        assert refreshed_output is not None, f"Refreshed batch output {output_id} is absent from the list"
+        assert (refreshed_output["bytes"], refreshed_output["filename"]) == (OUTPUT_BYTES, "output.jsonl"), (
+            refreshed_output
+        )
+        assert "litellm_details_fallback" not in refreshed_output, refreshed_output
+
+        assert batch.unrelated_key is not None
+        unrelated_details: Final = gateway.request("GET", f"/v1/files/{output_id}", key=batch.unrelated_key)
+        assert unrelated_details.status_code == 403, unrelated_details.text
 
 
 def _tls_context(directory: Path) -> ssl.SSLContext:
