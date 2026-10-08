@@ -601,10 +601,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
 
         litellm_metadata: Final = litellm_keys_in_body.get("litellm_metadata")
         metadata: Final = litellm_keys_in_body.get("metadata")
-        if litellm_metadata:
-            _metadata.update(litellm_metadata)
-        if metadata:
-            _metadata.update(metadata)
+        for client_metadata in (litellm_metadata, metadata):
+            if isinstance(client_metadata, dict):
+                _metadata.update(client_metadata)
 
         _metadata = _update_metadata_with_tags_in_header(
             request=request,
