@@ -1,6 +1,9 @@
 use std::convert::Infallible;
 
-use crate::anthropic::messages::handler::shape_anthropic_messages_request;
+use crate::{
+    anthropic::messages::handler::shape_anthropic_messages_request,
+    base_llm::messages::context::MessagesTransformContext,
+};
 use futures_util::StreamExt;
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_auth_aws::{
@@ -218,6 +221,16 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
             &BedrockMessagesConnection::default(),
             env_lookup,
             INVOKE_STREAM_PATH,
+        ))
+    }
+
+    fn transform_anthropic_messages_request(
+        &self,
+        _request: MessagesRequest,
+        _context: &MessagesTransformContext,
+    ) -> Result<MessagesRequest, Error> {
+        Err(Error::Unsupported(
+            "Bedrock invoke messages request shaping",
         ))
     }
 
