@@ -1,15 +1,11 @@
 import os
 
-
 import pytest
 
 import litellm
 from base_llm_unit_tests import BaseLLMChatTest, BaseOSeriesModelsTest
 
-
 class TestAzureOpenAIO3Mini(BaseOSeriesModelsTest, BaseLLMChatTest):
-    test_content_list_handling = None
-    test_empty_tools = None
     test_function_calling_with_tool_response = None
 
     def get_base_completion_call_args(self):
@@ -33,8 +29,6 @@ class TestAzureOpenAIO3Mini(BaseOSeriesModelsTest, BaseLLMChatTest):
 
     def test_basic_tool_calling(self):
         pass
-
-
 
 class TestAzureOpenAIO3(BaseOSeriesModelsTest):
     def get_base_completion_call_args(self):
