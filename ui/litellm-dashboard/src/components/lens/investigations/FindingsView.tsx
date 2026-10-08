@@ -18,6 +18,7 @@ import {
   inboxFinding,
   inboxRows,
   inboxSampledRuns,
+  inboxSummary,
   type InboxRow,
   type Priority,
 } from "../model/inbox";
@@ -28,6 +29,8 @@ import { EvidenceView } from "./Evidence";
 import { FindingDetails } from "./FindingDetails";
 import { InvestigationError, InvestigationsLoading } from "./InvestigationStates";
 import { PRIORITY_LABEL, PRIORITY_ORDER, PriorityDot } from "./PriorityMark";
+import { Panel } from "../ui/Panel";
+import { StatCell, StatStrip } from "../ui/StatStrip";
 
 const PRIORITIES: { value: Priority | "all"; label: string }[] = [
   { value: "all", label: "All priorities" },
@@ -78,19 +81,27 @@ function FindingRow({ row, now }: { row: InboxRow; now: number }) {
           role="row"
           tabIndex={0}
           aria-label={row.title}
-          className="mx-2 block cursor-pointer space-y-1 rounded-md px-2 py-2 transition-[background-color] duration-150 outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring/50 data-[state=selected]:bg-muted"
+          className="mx-2 block cursor-pointer space-y-1.5 rounded-md px-2 py-2.5 transition-[background-color] duration-150 outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring/50 data-[state=selected]:bg-muted"
         />
       }
     >
-      <div role="gridcell" className="line-clamp-2 text-xs leading-snug text-pretty text-foreground">
+      <div role="gridcell" className="line-clamp-2 text-sm leading-snug text-pretty text-foreground">
         {row.title}
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs text-muted-foreground">
-        <span className="tabular-nums" title={formatActivityTimestamp(row.lastSeen)}>
+      <div className="flex items-center gap-3 text-xs text-muted-foreground">
+        <span className="shrink-0 tabular-nums" title={formatActivityTimestamp(row.lastSeen)}>
           {agoLabel(Date.parse(row.lastSeen), now)}
         </span>
+        <span aria-hidden="true" className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
+          {frequency.total > 0 && (
+            <span
+              className="block h-full rounded-full bg-[#2b3fd6]"
+              style={{ width: `${Math.max(2, (frequency.affected / frequency.total) * 100)}%` }}
+            />
+          )}
+        </span>
         <span
-          className="whitespace-nowrap text-foreground/75 tabular-nums"
+          className="shrink-0 whitespace-nowrap text-foreground/75 tabular-nums"
           title={`${row.runs} affected ${row.runs === 1 ? "trace" : "traces"} across ${row.sources.map(({ lens }) => lens.settings.name).join(", ")}`}
         >
           {percent ? `${percent} affected` : `${row.runs} ${row.runs === 1 ? "trace" : "traces"}`}
@@ -111,7 +122,7 @@ function FindingList({ rows, now }: { rows: readonly InboxRow[]; now: number }) 
         <div role="rowgroup" key={group.priority} aria-label={`${PRIORITY_LABEL[group.priority]} priority findings`}>
           <div
             role="row"
-            className="sticky top-0 z-raised flex items-center gap-2 bg-background/95 px-4 pt-3 pb-1.5 text-xs font-medium text-muted-foreground backdrop-blur"
+            className="sticky top-0 z-raised flex items-center gap-2 bg-card/95 px-4 pt-3 pb-1.5 text-xs font-medium text-muted-foreground backdrop-blur"
           >
             <PriorityDot priority={group.priority} />
             <span role="columnheader">{PRIORITY_LABEL[group.priority]} priority</span>
@@ -125,6 +136,38 @@ function FindingList({ rows, now }: { rows: readonly InboxRow[]; now: number }) 
         </div>
       ))}
     </div>
+  );
+}
+
+function FindingStats({ rows, now }: { rows: readonly InboxRow[]; now: number }) {
+  const summary = inboxSummary(rows, now);
+  return (
+    <StatStrip>
+      <StatCell
+        label="Open findings"
+        value={summary.open.toLocaleString()}
+        hint={`${summary.newThisWeek.toLocaleString()} seen this week`}
+      />
+      <StatCell
+        label="High priority"
+        value={
+          <span className={summary.high > 0 ? "text-destructive" : undefined}>{summary.high.toLocaleString()}</span>
+        }
+        hint={
+          summary.open > 0 ? `${Math.round((summary.high / summary.open) * 100)}% of open findings` : "Nothing open"
+        }
+      />
+      <StatCell
+        label="Traces affected"
+        value={summary.affectedTraces.toLocaleString()}
+        hint="Distinct traces behind open findings"
+      />
+      <StatCell
+        label="Agents"
+        value={summary.agents.toLocaleString()}
+        hint={summary.agents === 1 ? "Has open findings" : "Have open findings"}
+      />
+    </StatStrip>
   );
 }
 
@@ -208,57 +251,65 @@ export function FindingsView({ readOnly = false }: { readOnly?: boolean }) {
       noun="finding"
       storageKey={FINDING_PANEL_WIDTH_KEY}
     >
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-background">
-        {(list.error || update.error) && (
-          <InvestigationError
-            message={(list.error ?? update.error)!.message}
-            refresh={() => {
-              update.reset();
-              void list.refetch();
-            }}
-          />
-        )}
-        <div className="flex min-h-0 flex-1">
-          <section
-            aria-label="Findings list"
-            className={`flex min-h-0 w-full flex-col border-r md:w-[22rem] md:shrink-0 lg:w-[28rem] ${selected ? "hidden md:flex" : "flex"}`}
-          >
-            <div className="flex shrink-0 items-center gap-2 px-3 py-2">
-              <FilterSelect label="Filter by agent" value={filters.agent} items={agents} onChange={filters.setAgent} />
-              <FilterSelect
-                label="Filter by priority"
-                value={filters.priority}
-                items={PRIORITIES}
-                onChange={filters.setPriority}
-              />
-            </div>
-            <FindingList rows={rows} now={now} />
-            {!rows.length && !list.error && (
-              <p className="px-4 py-16 text-center text-xs text-muted-foreground">
-                {all.length
-                  ? "No findings match these filters."
-                  : "No open findings yet. New problems show up here as soon as an investigation spots them."}
-              </p>
-            )}
-            <footer className="flex h-8 shrink-0 items-center border-t px-3 text-xs text-muted-foreground">
-              {rows.length} {rows.length === 1 ? "finding" : "findings"}
-              {rows.length !== all.length && ` of ${all.length}`}
-            </footer>
-          </section>
-          {selected ? (
-            <aside
-              aria-label="Finding details"
-              data-testid="finding-panel"
-              className="flex min-h-0 min-w-0 flex-1 flex-col"
-            >
-              <InboxDetail row={selected} readOnly={readOnly} busy={update.isPending} onReview={review} />
-            </aside>
-          ) : (
-            <div className="hidden min-w-0 flex-1 items-center justify-center p-8 text-sm text-muted-foreground md:flex">
-              {rows.length ? "Select a finding to see how often it happens and where." : null}
-            </div>
+      <div className="flex min-h-0 flex-1 flex-col gap-3">
+        <FindingStats rows={all} now={now} />
+        <Panel className="flex-1">
+          {(list.error || update.error) && (
+            <InvestigationError
+              message={(list.error ?? update.error)!.message}
+              refresh={() => {
+                update.reset();
+                void list.refetch();
+              }}
+            />
           )}
-        </div>
+          <div className="flex min-h-0 flex-1">
+            <section
+              aria-label="Findings list"
+              className={`flex min-h-0 w-full flex-col border-r md:w-[22rem] md:shrink-0 lg:w-[28rem] ${selected ? "hidden md:flex" : "flex"}`}
+            >
+              <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2">
+                <FilterSelect
+                  label="Filter by agent"
+                  value={filters.agent}
+                  items={agents}
+                  onChange={filters.setAgent}
+                />
+                <FilterSelect
+                  label="Filter by priority"
+                  value={filters.priority}
+                  items={PRIORITIES}
+                  onChange={filters.setPriority}
+                />
+              </div>
+              <FindingList rows={rows} now={now} />
+              {!rows.length && !list.error && (
+                <p className="px-4 py-16 text-center text-xs text-muted-foreground">
+                  {all.length
+                    ? "No findings match these filters."
+                    : "No open findings yet. New problems show up here as soon as an investigation spots them."}
+                </p>
+              )}
+              <footer className="flex h-9 shrink-0 items-center border-t px-3 text-xs text-muted-foreground">
+                {rows.length} {rows.length === 1 ? "finding" : "findings"}
+                {rows.length !== all.length && ` of ${all.length}`}
+              </footer>
+            </section>
+            {selected ? (
+              <aside
+                aria-label="Finding details"
+                data-testid="finding-panel"
+                className="flex min-h-0 min-w-0 flex-1 flex-col"
+              >
+                <InboxDetail row={selected} readOnly={readOnly} busy={update.isPending} onReview={review} />
+              </aside>
+            ) : (
+              <div className="hidden min-w-0 flex-1 items-center justify-center p-8 text-sm text-muted-foreground md:flex">
+                {rows.length ? "Select a finding to see how often it happens and where." : null}
+              </div>
+            )}
+          </div>
+        </Panel>
       </div>
     </Inspector.Root>
   );

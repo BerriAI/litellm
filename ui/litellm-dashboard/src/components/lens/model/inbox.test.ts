@@ -4,6 +4,7 @@ import {
   UNKNOWN_AGENT,
   inboxRows,
   inboxFinding,
+  inboxSummary,
   filterInbox,
   findFinding,
   findingAgents,
@@ -56,6 +57,30 @@ const lens = (
       ...settings,
     },
   }) as unknown as Lens;
+
+describe("inboxSummary", () => {
+  it("counts open rows, high priority, distinct affected traces, agents and recent findings", () => {
+    const now = Date.parse("2026-10-08T00:00:00Z");
+    const refund: Partial<Finding> = { id: "1", title: "Refund skipped", priority: "high", occurrences: ["r1", "r2"] };
+    const tone: Partial<Finding> = { id: "2", title: "Wrong tone", priority: "low", occurrences: ["r2"] };
+    const paging: Partial<Finding> = { id: "3", title: "Missed page", priority: "high", occurrences: ["r3"] };
+    const closed: Partial<Finding> = { id: "4", title: "Closed already", status: "resolved", occurrences: ["r9"] };
+    const rows = inboxRows([
+      lens("a", "support-bot", [
+        finding({ ...refund, last_seen: "2026-10-07T00:00:00Z" }),
+        finding({ ...tone, last_seen: "2026-09-01T00:00:00Z" }),
+      ]),
+      lens("b", "triage-bot", [finding({ ...paging, last_seen: "2026-10-06T00:00:00Z" }), finding(closed)]),
+    ]);
+    const expected = { open: 3, high: 2, affectedTraces: 3, agents: 2, newThisWeek: 2 };
+    expect(inboxSummary(rows, now)).toEqual(expected);
+  });
+
+  it("is all zeros for an empty inbox", () => {
+    const zeros = { open: 0, high: 0, affectedTraces: 0, agents: 0, newThisWeek: 0 };
+    expect(inboxSummary([], 0)).toEqual(zeros);
+  });
+});
 
 describe("findingAgents", () => {
   it("names the agents the finding's runs were actually recorded under", () => {

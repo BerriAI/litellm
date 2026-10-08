@@ -92,6 +92,27 @@ export function filterInbox(rows: readonly InboxRow[], { agent, priority }: Inbo
   return rows.filter((row) => agentMatches(row) && priorityMatches(row));
 }
 
+export interface InboxSummary {
+  readonly open: number;
+  readonly high: number;
+  readonly affectedTraces: number;
+  readonly agents: number;
+  readonly newThisWeek: number;
+}
+
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function inboxSummary(rows: readonly InboxRow[], now: number): InboxSummary {
+  const occurrences = rows.flatMap((row) => row.sources.flatMap(({ finding }) => finding.occurrences));
+  return {
+    open: rows.length,
+    high: rows.filter((row) => row.priority === "high").length,
+    affectedTraces: new Set(occurrences).size,
+    agents: inboxAgents(rows).length,
+    newThisWeek: rows.filter((row) => now - Date.parse(row.lastSeen) < WEEK_MS).length,
+  };
+}
+
 export function inboxAgents(rows: readonly InboxRow[]): string[] {
   return [...new Set(rows.flatMap((row) => row.agents))].sort();
 }
