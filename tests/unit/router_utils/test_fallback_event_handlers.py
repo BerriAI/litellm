@@ -1473,13 +1473,13 @@ def test_get_fallback_model_group_never_resolves_a_provider_without_a_prefixed_k
 
 
 def test_mid_stream_fallback_snapshot_kwargs_restores_the_popped_lists_and_shares_the_buckets():
-    controls = MidStreamFallbackControls(
+    controls: Final = MidStreamFallbackControls(
         MappingProxyType({"fallbacks": [{"primary": ["backup"]}], "context_window_fallbacks": None})
     )
-    metadata = {"model_group": "primary"}
-    kwargs = {"messages": [{"role": "user", "content": "hi"}], "stream": True, "metadata": metadata}
+    metadata: Final = {"model_group": "primary"}
+    kwargs: Final = {"messages": [{"role": "user", "content": "hi"}], "stream": True, "metadata": metadata}
 
-    snapshot = mid_stream_fallback_snapshot_kwargs(model="primary", controls=controls, kwargs=kwargs)
+    snapshot: Final = mid_stream_fallback_snapshot_kwargs(model="primary", controls=controls, kwargs=kwargs)
 
     assert snapshot == {
         **kwargs,
@@ -1491,7 +1491,7 @@ def test_mid_stream_fallback_snapshot_kwargs_restores_the_popped_lists_and_share
     assert snapshot["metadata"] is metadata
     assert "fallbacks" not in kwargs
 
-    bare = mid_stream_fallback_snapshot_kwargs(model="primary", controls=None, kwargs=kwargs)
+    bare: Final = mid_stream_fallback_snapshot_kwargs(model="primary", controls=None, kwargs=kwargs)
     assert "fallbacks" not in bare
     assert bare[MID_STREAM_FALLBACK_CONTROLS_KEY] == MidStreamFallbackControls(MappingProxyType({}))
 

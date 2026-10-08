@@ -3938,13 +3938,10 @@ def _groups_called(provider_calls: MagicMock) -> list[str]:
 
 
 def _router_internals_reached_the_provider(provider_calls: MagicMock) -> bool:
-    leaked: Final = (
-        "fallbacks",
-        "context_window_fallbacks",
-        "content_policy_fallbacks",
-        MID_STREAM_FALLBACK_CONTROLS_KEY,
+    leaked: Final = frozenset(
+        ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks", MID_STREAM_FALLBACK_CONTROLS_KEY)
     )
-    return any(key in call.kwargs for call in provider_calls.call_args_list for key in leaked)
+    return any(leaked & call.kwargs.keys() for call in provider_calls.call_args_list)
 
 
 def test_completion_mid_stream_fallback_honors_the_per_request_list():
