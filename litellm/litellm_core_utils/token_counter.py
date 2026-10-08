@@ -5,7 +5,6 @@ import io
 import math
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
 from itertools import accumulate
 from typing import Final, Literal, cast
 
@@ -808,36 +807,6 @@ def _anthropic_image_source_data(
     return ""
 
 
-@dataclass(frozen=True, slots=True)
-class _PdfPage:
-    text: str
-    width: float
-    height: float
-
-
-def _inline_pdf_pages(data_url: str) -> tuple[_PdfPage, ...] | None:
-    if not data_url.startswith(PDF_DATA_URL_PREFIX):
-        return None
-    try:
-        from pypdf import PdfReader
-    except ImportError:
-        verbose_logger.debug("pypdf is not installed, so the PDF document is priced like one image")
-        return None
-    try:
-        reader: Final = PdfReader(io.BytesIO(base64.b64decode(data_url[len(PDF_DATA_URL_PREFIX) :])))
-        return tuple(
-            _PdfPage(
-                text=page.extract_text() or "",
-                width=float(page.mediabox.width),
-                height=float(page.mediabox.height),
-            )
-            for page in reader.pages
-        )
-    except Exception as e:
-        verbose_logger.debug("Could not read the PDF document's pages (%s), so it is priced like one image", e)
-        return None
-
-
 def _anthropic_rendered_page_image_tokens(width: float, height: float) -> int:
     """A PDF page is rasterized within Anthropic's image limits, then billed by its pixel area."""
     if width <= 0 or height <= 0:
@@ -847,12 +816,23 @@ def _anthropic_rendered_page_image_tokens(width: float, height: float) -> int:
 
 
 def _count_inline_pdf_tokens(data_url: str, count_function: TokenCounterFunction) -> int | None:
-    pages: Final = _inline_pdf_pages(data_url)
-    if pages is None:
+    if not data_url.startswith(PDF_DATA_URL_PREFIX):
         return None
-    return sum(
-        count_function(page.text) + _anthropic_rendered_page_image_tokens(page.width, page.height) for page in pages
-    )
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        verbose_logger.debug("pypdf is not installed, so the PDF document is priced like one image")
+        return None
+    try:
+        reader: Final = PdfReader(io.BytesIO(base64.b64decode(data_url[len(PDF_DATA_URL_PREFIX) :])))
+        return sum(
+            count_function(page.extract_text() or "")
+            + _anthropic_rendered_page_image_tokens(float(page.mediabox.width), float(page.mediabox.height))
+            for page in reader.pages
+        )
+    except Exception as e:
+        verbose_logger.debug("Could not read the PDF document's pages (%s), so it is priced like one image", e)
+        return None
 
 
 def _count_opaque_document_tokens(

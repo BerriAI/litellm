@@ -1505,9 +1505,9 @@ def test_openai_file_block_prices_like_the_equivalent_anthropic_document():
     assert _count_user_content([prompt, inline_file]) == _count_user_content([prompt, document])
     assert _count_user_content([prompt, inline_file]) > _count_user_content([prompt])
 
-    readable = _pdf_base64(("Revenue grew eleven percent while churn fell to two percent.",))
-    readable_file = {"type": "file", "file": {"filename": "report.pdf", "file_data": "data:application/pdf;base64," + readable}}
-    readable_document = {"type": "document", "title": "report.pdf", "source": _pdf_source(readable)}
+    readable: Final = _pdf_base64(("Revenue grew eleven percent while churn fell to two percent.",))
+    readable_file: Final = {"type": "file", "file": {"filename": "report.pdf", "file_data": "data:application/pdf;base64," + readable}}
+    readable_document: Final = {"type": "document", "title": "report.pdf", "source": _pdf_source(readable)}
     assert _count_user_content([prompt, readable_file]) == _count_user_content([prompt, readable_document])
     assert _count_user_content([prompt, readable_file]) > _count_user_content([prompt, inline_file])
 
@@ -1526,8 +1526,6 @@ def test_openai_file_block_without_inline_bytes_counts_what_it_carries():
 
 
 def _pdf_base64(pages: tuple[str, ...], width: int = 612, height: int = 792) -> str:
-    """A minimal PDF with one Helvetica line per page, so the page count, text, and MediaBox can be read back."""
-
     def page_objects(index: int, text: str) -> tuple[bytes, bytes]:
         escaped: Final = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
         stream: Final = f"BT /F1 12 Tf 72 720 Td ({escaped}) Tj ET".encode("latin-1")
@@ -1570,18 +1568,18 @@ def test_base64_pdf_document_counts_every_page_text_and_rendering():
     Before the fix the whole document was priced as one 85-token image, so a count_tokens call that fell back
     to the local counter answered 116 for a 12-page PDF the provider then billed at 35941 input tokens.
     """
-    prompt = {"type": "text", "text": "Summarize this file."}
-    first = "Revenue grew eleven percent while churn fell to two percent."
-    second = "Headcount is flat and the office lease was renewed for three years."
-    base = _count_user_content([prompt])
-    blank_page = _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64(("",)))}]) - base
+    prompt: Final = {"type": "text", "text": "Summarize this file."}
+    first: Final = "Revenue grew eleven percent while churn fell to two percent."
+    second: Final = "Headcount is flat and the office lease was renewed for three years."
+    base: Final = _count_user_content([prompt])
+    blank_page: Final = _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64(("",)))}]) - base
 
     assert blank_page > 0
     assert _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64((first, second)))}]) == (
         _count_user_content([prompt, {"type": "text", "text": first}, {"type": "text", "text": second}]) + 2 * blank_page
     )
-    one_page = _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64((first,)))}]) - base
-    twelve_pages = (
+    one_page: Final = _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64((first,)))}]) - base
+    twelve_pages: Final = (
         _count_user_content([prompt, {"type": "document", "source": _pdf_source(_pdf_base64((first,) * 12))}]) - base
     )
     assert one_page > _count_user_content([prompt, {"type": "text", "text": first}]) - base
@@ -1595,29 +1593,29 @@ def test_pdf_page_rendering_cost_follows_anthropic_image_scaling(fields: dict[st
     https://platform.claude.com/docs/en/build-with-claude/vision, read 2026-10-07, when Bedrock billed about
     1550 tokens per blank Letter page on both Sonnet 4.6 and Opus 4.8.
     """
-    prompt = {"type": "text", "text": "Summarize this file."}
+    prompt: Final = {"type": "text", "text": "Summarize this file."}
 
     def blank_page_cost(width: int, height: int) -> int:
-        with_page = {"type": "document", "source": _pdf_source(_pdf_base64(("",), width, height)), **fields}
-        without_page = {"type": "document", "source": _pdf_source(_pdf_base64((), width, height)), **fields}
+        with_page: Final = {"type": "document", "source": _pdf_source(_pdf_base64(("",), width, height)), **fields}
+        without_page: Final = {"type": "document", "source": _pdf_source(_pdf_base64((), width, height)), **fields}
         return _count_user_content([prompt, with_page]) - _count_user_content([prompt, without_page])
 
-    letter = blank_page_cost(612, 792)
-    poster = blank_page_cost(2448, 3168)
-    strip = blank_page_cost(1000, 100)
+    letter: Final = blank_page_cost(612, 792)
+    poster: Final = blank_page_cost(2448, 3168)
+    strip: Final = blank_page_cost(1000, 100)
 
     assert letter == poster == 1534
     assert strip == 328
 
 
 def test_pdf_document_without_pypdf_is_priced_like_an_image(monkeypatch: pytest.MonkeyPatch):
-    prompt = {"type": "text", "text": "Summarize this file."}
-    source = _pdf_source(_pdf_base64(("Revenue grew eleven percent while churn fell to two percent.",)))
-    priced_by_page = _count_user_content([prompt, {"type": "document", "source": source}])
+    prompt: Final = {"type": "text", "text": "Summarize this file."}
+    source: Final = _pdf_source(_pdf_base64(("Revenue grew eleven percent while churn fell to two percent.",)))
+    priced_by_page: Final = _count_user_content([prompt, {"type": "document", "source": source}])
 
     monkeypatch.setitem(sys.modules, "pypdf", None)
 
-    priced_as_image = _count_user_content([prompt, {"type": "document", "source": source}])
+    priced_as_image: Final = _count_user_content([prompt, {"type": "document", "source": source}])
     assert priced_as_image == _count_user_content([prompt, {"type": "image", "source": source}])
     assert priced_as_image < priced_by_page
 
