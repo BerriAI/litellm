@@ -12,6 +12,10 @@ from respx import MockRouter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
+from litellm.constants import DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET, DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
+from litellm.llms.base_llm.base_utils import type_to_response_format_param
+from litellm.types.utils import CallTypes
+from litellm.utils import ProviderConfigManager, return_raw_request
 
 _Shape = Literal["openai", "anthropic", "gemini", "bedrock_converse", "bedrock_invoke", "bedrock_invoke_nova", "bedrock_invoke_openai"]
 
@@ -532,7 +536,7 @@ def _system_texts(case: _Case, body: Mapping[str, JsonValue]) -> tuple[str, ...]
                 for s in cast(list[JsonValue], body.get("system", ()))
             )
         case "gemini":
-            sys_inst = cast(Mapping[str, JsonValue], body.get("system_instruction", {}))
+            sys_inst: Final = cast(Mapping[str, JsonValue], body.get("system_instruction", {}))
             return tuple(
                 cast(str, cast(Mapping[str, JsonValue], p)["text"])
                 for p in cast(list[JsonValue], sys_inst.get("parts", ()))
@@ -560,10 +564,10 @@ def _tools_payload(case: _Case, body: Mapping[str, JsonValue]) -> JsonValue:
         case "anthropic" | "bedrock_invoke":
             return body.get("tools")
         case "bedrock_converse" | "bedrock_invoke_nova":
-            tool_config = cast(Mapping[str, JsonValue], body.get("toolConfig", {}))
+            tool_config: Final = cast(Mapping[str, JsonValue], body.get("toolConfig", {}))
             return tool_config.get("tools")
         case "gemini":
-            tools = cast(list[JsonValue], body.get("tools", ()))
+            tools: Final = cast(list[JsonValue], body.get("tools", ()))
             if not tools:
                 return None
             return cast(Mapping[str, JsonValue], tools[0]).get("function_declarations")
@@ -572,19 +576,19 @@ def _tools_payload(case: _Case, body: Mapping[str, JsonValue]) -> JsonValue:
 def _tool_input_schema(case: _Case, body: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
     match case["shape"]:
         case "openai" | "bedrock_invoke_openai":
-            tools = cast(list[JsonValue], body["tools"])
-            fn = cast(Mapping[str, JsonValue], cast(Mapping[str, JsonValue], tools[0])["function"])
+            tools: Final = cast(list[JsonValue], body["tools"])
+            fn: Final = cast(Mapping[str, JsonValue], cast(Mapping[str, JsonValue], tools[0])["function"])
             return cast(Mapping[str, JsonValue], fn["parameters"])
         case "anthropic" | "bedrock_invoke":
-            tools = cast(list[JsonValue], body["tools"])
+            tools = cast(list[JsonValue], body["tools"])  # noqa: LIT010  # same var reused across match arms
             return cast(Mapping[str, JsonValue], cast(Mapping[str, JsonValue], tools[0])["input_schema"])
         case "bedrock_converse" | "bedrock_invoke_nova":
-            tools = cast(list[JsonValue], cast(Mapping[str, JsonValue], body["toolConfig"])["tools"])
-            spec = cast(Mapping[str, JsonValue], cast(Mapping[str, JsonValue], tools[0])["toolSpec"])
+            tools = cast(list[JsonValue], cast(Mapping[str, JsonValue], body["toolConfig"])["tools"])  # noqa: LIT010  # same var reused across match arms
+            spec: Final = cast(Mapping[str, JsonValue], cast(Mapping[str, JsonValue], tools[0])["toolSpec"])
             return cast(Mapping[str, JsonValue], cast(Mapping[str, JsonValue], spec["inputSchema"])["json"])
         case "gemini":
-            tool0 = cast(Mapping[str, JsonValue], cast(list[JsonValue], body["tools"])[0])
-            decls = cast(list[JsonValue], tool0["function_declarations"])
+            tool0: Final = cast(Mapping[str, JsonValue], cast(list[JsonValue], body["tools"])[0])
+            decls: Final = cast(list[JsonValue], tool0["function_declarations"])
             return cast(Mapping[str, JsonValue], cast(Mapping[str, JsonValue], decls[0])["parameters"])
 
 
@@ -610,7 +614,7 @@ def _tool_input_schema(case: _Case, body: Mapping[str, JsonValue]) -> Mapping[st
 )
 def test_developer_role_translation(case: _Case, respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock, f"canned-{case['id']}")
-    response = _complete(
+    response: Final = _complete(
         case,
         {
             "messages": [
@@ -646,7 +650,7 @@ def test_developer_role_translation(case: _Case, respx_mock: MockRouter) -> None
 )
 def test_content_list_handling(case: _Case, respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock, f"canned-{case['id']}")
-    response = _complete(
+    response: Final = _complete(
         case,
         {"messages": [{"role": "user", "content": [{"type": "text", "text": "Hello, how are you?"}]}]},
     )
@@ -693,7 +697,7 @@ _TOOL_ARRAY_SCHEMA: Final[Mapping[str, JsonValue]] = {
 )
 def test_tool_call_with_property_type_array(case: _Case, respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock, f"canned-{case['id']}")
-    response = _complete(
+    response: Final = _complete(
         case,
         {
             "messages": [{"role": "user", "content": "Tell me about shoes"}],
@@ -756,7 +760,7 @@ _TOOL_ENUM_SCHEMA: Final[Mapping[str, JsonValue]] = {
 )
 def test_tool_call_with_empty_enum_property(case: _Case, respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock, f"canned-{case['id']}")
-    response = _complete(
+    response: Final = _complete(
         case,
         {
             "messages": [{"role": "user", "content": "Search for the latest iPhone models"}],
@@ -800,7 +804,7 @@ def test_tool_call_with_empty_enum_property(case: _Case, respx_mock: MockRouter)
 def test_pydantic_model_input(case: _Case, respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock, f"canned-{case['id']}")
     messages: Final = [litellm.Message(content="Hello, how are you?", role="user")]
-    response = _complete(case, {"messages": messages})
+    response: Final = _complete(case, {"messages": messages})
     assert "Hello, how are you?" in _user_texts(case, _request_body(route))
     assert response.choices[0].message.content == f"canned-{case['id']}"
 
@@ -821,12 +825,9 @@ def test_pydantic_model_input(case: _Case, respx_mock: MockRouter) -> None:
     ids=lambda c: c["id"],
 )
 def test_file_data_unit_test(case: _Case, respx_mock: MockRouter) -> None:
-    from litellm.types.utils import CallTypes
-    from litellm.utils import return_raw_request
-
     pdf_b64: Final = base64.b64encode(b"%PDF-1.4 offline dummy").decode()
     file_data_url: Final = f"data:application/pdf;base64,{pdf_b64}"
-    raw_request = return_raw_request(
+    raw_request: Final = return_raw_request(
         endpoint=CallTypes.completion,
         kwargs={
             **{k: v for k, v in dict(case["kwargs"]).items() if k != "api_key"},
@@ -871,12 +872,15 @@ def test_file_data_unit_test(case: _Case, respx_mock: MockRouter) -> None:
 )
 def test_message_with_name(case: _Case, respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock, f"canned-{case['id']}")
-    response = _complete(case, {"messages": [{"role": "user", "content": "Hello", "name": "test_name"}]})
+    response: Final = _complete(case, {"messages": [{"role": "user", "content": "Hello", "name": "test_name"}]})
     body: Final = _request_body(route)
     assert "Hello" in _user_texts(case, body)
     if case["shape"] in ("openai", "bedrock_invoke_openai"):
-        first = cast(Mapping[str, JsonValue], cast(list[JsonValue], body["messages"])[0])
-        assert first.get("name") in ("test_name", None)
+        first: Final = cast(Mapping[str, JsonValue], cast(list[JsonValue], body["messages"])[0])
+        if case["id"] == "mistral_medium":
+            assert "name" not in first
+        else:
+            assert first.get("name") == "test_name"
     else:
         assert "test_name" not in json.dumps(body)
     assert response.choices[0].message.content == f"canned-{case['id']}"
@@ -906,7 +910,7 @@ def test_message_with_name(case: _Case, respx_mock: MockRouter) -> None:
 )
 def test_json_response_format(case: _Case, response_format: Mapping[str, JsonValue], respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock, '{"city":"San Francisco","state":"CA"}')
-    response = _complete(
+    response: Final = _complete(
         case,
         {
             "messages": [
@@ -919,7 +923,7 @@ def test_json_response_format(case: _Case, response_format: Mapping[str, JsonVal
     body: Final = _request_body(route)
     if response_format["type"] == "json_object":
         if case["shape"] == "gemini":
-            config = cast(Mapping[str, JsonValue], body.get("generationConfig", {}))
+            config: Final = cast(Mapping[str, JsonValue], body.get("generationConfig", {}))
             assert config.get("response_mime_type") == "application/json"
         elif case["shape"] in ("openai", "bedrock_invoke_openai"):
             assert cast(Mapping[str, JsonValue], body["response_format"])["type"] == "json_object"
@@ -970,7 +974,7 @@ _WEATHER_TOOL: Final[Mapping[str, JsonValue]] = {
 )
 def test_response_format_type_text_with_tool_calls_no_tool_choice(case: _Case, respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock, f"canned-{case['id']}")
-    response = _complete(
+    response: Final = _complete(
         case,
         {
             "messages": [{"role": "user", "content": "What's the weather like in Boston today?"}],
@@ -991,13 +995,11 @@ def test_response_format_type_text_with_tool_calls_no_tool_choice(case: _Case, r
     ids=lambda c: c["id"],
 )
 def test_response_format_type_text(case: _Case) -> None:
-    from litellm.utils import ProviderConfigManager
-
     _, provider, _, _ = litellm.get_llm_provider(model=case["kwargs"]["model"])
-    provider_config = ProviderConfigManager.get_provider_chat_config(
+    provider_config: Final = ProviderConfigManager.get_provider_chat_config(
         case["kwargs"]["model"], litellm.LlmProviders(provider)
     )
-    translated_params = provider_config.map_openai_params(
+    translated_params: Final = provider_config.map_openai_params(
         non_default_params={"response_format": {"type": "text"}},
         optional_params={},
         model=case["kwargs"]["model"],
@@ -1047,7 +1049,7 @@ class _EventsList(BaseModel):
 )
 def test_json_response_pydantic_obj(case: _Case, respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock, '{"first_response":"paris"}')
-    response = _complete(
+    response: Final = _complete(
         case,
         {
             "messages": [
@@ -1087,7 +1089,7 @@ def test_json_response_pydantic_obj(case: _Case, respx_mock: MockRouter) -> None
 )
 def test_json_response_nested_pydantic_obj(case: _Case, respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock, '{"events":[]}')
-    response = _complete(
+    response: Final = _complete(
         case,
         {
             "messages": [{"role": "user", "content": "List 5 important events in the XIX century"}],
@@ -1124,10 +1126,8 @@ def test_json_response_nested_pydantic_obj(case: _Case, respx_mock: MockRouter) 
     ids=lambda c: c["id"],
 )
 def test_json_response_nested_json_schema(case: _Case, respx_mock: MockRouter) -> None:
-    from litellm.llms.base_llm.base_utils import type_to_response_format_param
-
     route: Final = _register(case, respx_mock, '{"events":[]}')
-    response = _complete(
+    response: Final = _complete(
         case,
         {
             "messages": [{"role": "user", "content": "List 5 important events in the XIX century"}],
@@ -1146,7 +1146,7 @@ def test_audio_input_gemini(respx_mock: MockRouter) -> None:
     case: Final = _BY_ID["gemini_25flash"]
     wav_b64: Final = base64.b64encode(b"RIFFFAKEWAVDATA").decode()
     route: Final = _register(case, respx_mock, "canned-gemini")
-    response = _complete(
+    response: Final = _complete(
         case,
         {
             "messages": [
@@ -1161,7 +1161,7 @@ def test_audio_input_gemini(respx_mock: MockRouter) -> None:
         },
     )
     body: Final = _request_body(route)
-    first_content = cast(Mapping[str, JsonValue], cast(list[JsonValue], body["contents"])[0])
+    first_content: Final = cast(Mapping[str, JsonValue], cast(list[JsonValue], body["contents"])[0])
     parts: Final = cast(list[JsonValue], first_content["parts"])
     audio_part: Final = cast(Mapping[str, JsonValue], parts[1])
     assert cast(Mapping[str, JsonValue], audio_part["inline_data"])["data"] == wav_b64
@@ -1192,7 +1192,7 @@ def test_audio_input_gemini(respx_mock: MockRouter) -> None:
 def test_json_response_format_stream(case: _Case, respx_mock: MockRouter) -> None:
     canned: Final = '{"city":"San Francisco"}'
     route: Final = _register(case, respx_mock, canned, stream=True)
-    response = _complete(
+    response: Final = _complete(
         case,
         {
             "messages": [
@@ -1222,8 +1222,8 @@ def test_json_response_format_stream(case: _Case, respx_mock: MockRouter) -> Non
     ),
     ids=lambda c: c["id"],
 )
-@pytest.mark.parametrize("detail", (None, "low", "high"))
-@pytest.mark.parametrize("image_url", _PNG_URLS)
+@pytest.mark.parametrize("detail", (None, "low", "high"), ids=("detail_none", "detail_low", "detail_high"))
+@pytest.mark.parametrize("image_url", _PNG_URLS, ids=("litellm_logo", "awsmp_png"))
 def test_image_url(case: _Case, detail: str | None, image_url: str, respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock, f"canned-{case['id']}")
     image_part: Final[Mapping[str, JsonValue]] = (
@@ -1231,7 +1231,7 @@ def test_image_url(case: _Case, detail: str | None, image_url: str, respx_mock: 
         if detail is not None
         else {"type": "image_url", "image_url": {"url": image_url}}
     )
-    response = _complete(
+    response: Final = _complete(
         case,
         {
             "messages": [
@@ -1244,10 +1244,9 @@ def test_image_url(case: _Case, detail: str | None, image_url: str, respx_mock: 
     )
     body: Final = _request_body(route)
     serialized: Final = json.dumps(body)
-    if case["shape"] in ("anthropic", "bedrock_invoke"):
-        assert "image" in serialized
-    else:
-        assert "image_url" in serialized or "image" in serialized
+    anthropic_shapes: Final = ("anthropic", "bedrock_invoke", "bedrock_converse", "bedrock_invoke_nova")
+    expected_marker: Final = "image" if case["shape"] in anthropic_shapes else "image_url"
+    assert expected_marker in serialized
     assert response.choices[0].message.content == f"canned-{case['id']}"
 
 
@@ -1268,7 +1267,7 @@ def test_image_url(case: _Case, detail: str | None, image_url: str, respx_mock: 
 )
 def test_image_url_string(case: _Case, respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock, f"canned-{case['id']}")
-    response = _complete(
+    response: Final = _complete(
         case,
         {
             "messages": [
@@ -1307,7 +1306,7 @@ def test_image_url_string(case: _Case, respx_mock: MockRouter) -> None:
 )
 def test_empty_tools(case: _Case, respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock, f"canned-{case['id']}")
-    response = _complete(
+    response: Final = _complete(
         case,
         {
             "messages": [{"role": "user", "content": "Hello, how are you?"}],
@@ -1315,9 +1314,21 @@ def test_empty_tools(case: _Case, respx_mock: MockRouter) -> None:
         },
     )
     body: Final = _request_body(route)
-    tools: Final = _tools_payload(case, body)
-    assert tools is None or tools == []
+    if case["shape"] in ("bedrock_converse", "bedrock_invoke_nova", "gemini"):
+        assert "toolConfig" not in body
+        assert "tools" not in body
+    else:
+        assert _tools_payload(case, body) == []
     assert response.choices[0].message.content == f"canned-{case['id']}"
+
+
+def _cost_model_key(case: _Case) -> str | None:
+    model: Final = cast(str, case["kwargs"]["model"])
+    stripped: Final = model.split("/", 1)[-1]
+    for candidate in (stripped, model):
+        if candidate in litellm.model_cost:
+            return candidate
+    return None
 
 
 @pytest.mark.asyncio
@@ -1344,18 +1355,31 @@ def test_empty_tools(case: _Case, respx_mock: MockRouter) -> None:
 )
 async def test_completion_cost(case: _Case, respx_mock: MockRouter) -> None:
     _register(case, respx_mock, f"canned-{case['id']}")
-    response = await _acomplete(
+    response: Final = await _acomplete(
         case,
         {"messages": [{"role": "user", "content": "Hello, how are you?"}]},
     )
-    assert response._hidden_params["response_cost"] > 0
+    usage: Final = response.usage
+    assert usage.prompt_tokens == 10
+    assert usage.completion_tokens == 5
+    assert usage.total_tokens == 15
+    model_key: Final = _cost_model_key(case)
+    cost_entry: Final = litellm.model_cost.get(model_key) if model_key is not None else None
+    actual_cost: Final = response._hidden_params["response_cost"]
+    if cost_entry is not None and "input_cost_per_token" in cost_entry:
+        expected: Final = (
+            10 * cost_entry["input_cost_per_token"]
+            + 5 * cost_entry["output_cost_per_token"]
+        )
+        assert actual_cost == pytest.approx(expected)
+    else:
+        assert actual_cost == litellm.completion_cost(
+            completion_response=response, model=cast(str, case["kwargs"]["model"])
+        )
 
 
 @pytest.mark.parametrize("input_type", ("input_audio", "audio_url"))
 def test_supports_audio_input_gemini(input_type: str) -> None:
-    from litellm.types.utils import CallTypes
-    from litellm.utils import return_raw_request
-
     wav_b64: Final = base64.b64encode(b"RIFFFAKEWAVDATA").decode()
     audio_part: Final[Mapping[str, JsonValue]] = (
         {"type": "input_audio", "input_audio": {"data": wav_b64, "format": "wav"}}
@@ -1365,7 +1389,7 @@ def test_supports_audio_input_gemini(input_type: str) -> None:
             "file": {"file_id": "gs://bucket/file.wav", "filename": "my-sample-audio-file"},
         }
     )
-    raw_request = return_raw_request(
+    raw_request: Final = return_raw_request(
         endpoint=CallTypes.completion,
         kwargs={
             "model": "gemini/gemini-2.5-flash",
@@ -1392,12 +1416,11 @@ def test_reasoning_effort_gemini(respx_mock: MockRouter) -> None:
         custom_llm_provider="gemini",
         reasoning_effort="high",
     )
-    from litellm.constants import DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
-
-    assert "reasoning_effort" in optional_params or "thinkingConfig" in json.dumps(optional_params) or str(
-        DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
-    ) in json.dumps(optional_params)
-    response = _complete(
+    assert optional_params["thinkingConfig"] == {
+        "thinkingBudget": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+        "includeThoughts": True,
+    }
+    response: Final = _complete(
         case,
         {
             "messages": [{"role": "user", "content": "Hello!"}],
@@ -1405,8 +1428,11 @@ def test_reasoning_effort_gemini(respx_mock: MockRouter) -> None:
         },
     )
     body: Final = _request_body(route)
-    config = cast(Mapping[str, JsonValue], body.get("generationConfig", {}))
-    assert "thinkingConfig" in config or "reasoningEffort" in config or "thinkingConfig" in json.dumps(config)
+    config: Final = cast(Mapping[str, JsonValue], body["generationConfig"])
+    assert config["thinkingConfig"] == {
+        "thinkingBudget": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+        "includeThoughts": True,
+    }
     assert response.choices[0].message.content == "canned-gemini"
 
 
@@ -1437,7 +1463,7 @@ def test_o_series_developer_role_kept(case: _Case, respx_mock: MockRouter) -> No
         },
     )
     body: Final = _request_body(route)
-    first = cast(Mapping[str, JsonValue], cast(list[JsonValue], body["messages"])[0])
+    first: Final = cast(Mapping[str, JsonValue], cast(list[JsonValue], body["messages"])[0])
     assert first["role"] == "developer"
     assert first["content"] == "Be a good bot!"
 

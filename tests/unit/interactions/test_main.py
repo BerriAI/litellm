@@ -1,5 +1,10 @@
+import base64
 import json
+from typing import Final
+
+import httpx
 import pytest
+from respx import MockRouter
 
 import litellm
 import litellm.interactions as interactions
@@ -29,10 +34,8 @@ def _httpx_only_transport(monkeypatch: pytest.MonkeyPatch) -> None:
 class TestInteractionsAcreateOffline:
     @pytest.mark.usefixtures("fake_provider_credentials")
     @pytest.mark.asyncio
-    async def test_acreate_simple_gemini(self, respx_mock):
-        import httpx
-
-        route = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
+    async def test_acreate_simple_gemini(self, respx_mock: MockRouter) -> None:
+        route: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
             return_value=httpx.Response(
                 200,
                 json={
@@ -45,12 +48,12 @@ class TestInteractionsAcreateOffline:
                 },
             )
         )
-        response = await interactions.acreate(
+        response: Final = await interactions.acreate(
             model="gemini/gemini-2.5-flash",
             input="What is the speed of light?",
             api_key="gemini-offline",
         )
-        body = json.loads(route.calls.last.request.content)
+        body: Final = json.loads(route.calls.last.request.content)
         assert body["model"] == "gemini-2.5-flash"
         assert body["input"] == "What is the speed of light?"
         assert response.id == "interaction-offline"
@@ -58,10 +61,8 @@ class TestInteractionsAcreateOffline:
 
     @pytest.mark.usefixtures("fake_provider_credentials")
     @pytest.mark.asyncio
-    async def test_acreate_simple_litellm_responses_bridge(self, respx_mock):
-        import httpx
-
-        route = respx_mock.post("https://api.openai.com/v1/responses").mock(
+    async def test_acreate_simple_litellm_responses_bridge(self, respx_mock: MockRouter) -> None:
+        route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
             return_value=httpx.Response(
                 200,
                 json={
@@ -81,11 +82,14 @@ class TestInteractionsAcreateOffline:
                 },
             )
         )
-        response = await interactions.acreate(
+        response: Final = await interactions.acreate(
             model="gpt-4o",
             input="What is the speed of light?",
             api_key="sk-offline",
         )
-        body = json.loads(route.calls.last.request.content)
+        body: Final = json.loads(route.calls.last.request.content)
         assert body["model"] == "gpt-4o"
-        assert response.id == "resp-offline" or response.status == "completed"
+        serialized: Final = json.dumps(body)
+        assert "What is the speed of light?" in serialized
+        assert "response_id:resp-offline" in base64.b64decode(response.id.removeprefix("resp_")).decode()
+        assert response.status == "completed"

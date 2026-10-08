@@ -11,6 +11,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import embedding
+from litellm.utils import get_optional_params_embeddings
 
 
 class _Kwargs(TypedDict, total=False):
@@ -85,12 +86,10 @@ def _httpx_only_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
 
 
-def test_embedding_optional_params_max_retries() -> None:
-    from litellm.utils import get_optional_params_embeddings
-
-    for kwargs in (dict(c["kwargs"]) for c in _CASES):
-        optional_params: Final = get_optional_params_embeddings(**kwargs, max_retries=20)
-        assert optional_params["max_retries"] == 20
+@pytest.mark.parametrize("case", _CASES, ids=lambda c: c["id"])
+def test_embedding_optional_params_max_retries(case: _Case) -> None:
+    optional_params: Final = get_optional_params_embeddings(**dict(case["kwargs"]), max_retries=20)
+    assert optional_params["max_retries"] == 20
 
 
 @pytest.mark.parametrize("case", _CASES, ids=lambda c: c["id"])
@@ -98,7 +97,7 @@ def test_image_embedding(case: _Case, respx_mock: MockRouter) -> None:
     png_b64: Final = base64.b64encode(b"\x89PNG\r\n\x1a\nFAKEPIXELS").decode()
     data_url: Final = f"data:image/png;base64,{png_b64}"
     route: Final = respx_mock.post(case["url"]).mock(return_value=_canned_response(case))
-    response = embedding(**dict(case["kwargs"]), input=[data_url])
+    response: Final = embedding(**dict(case["kwargs"]), input=[data_url])
     body: Final = json.loads(route.calls.last.request.content)
     if case["provider"] == "azure":
         assert body["input"] == [data_url]

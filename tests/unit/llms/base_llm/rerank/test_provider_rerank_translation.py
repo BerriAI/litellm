@@ -118,11 +118,11 @@ def _request_body(route: respx.Route) -> Mapping[str, JsonValue]:
 
 def _assert_translated_request(case: _Case, body: Mapping[str, JsonValue]) -> None:
     if case["provider"] == "bedrock":
-        queries = body["queries"]
+        queries: Final = body["queries"]
         assert queries == [{"textQuery": {"text": "hello"}, "type": "TEXT"}]
-        config = body["rerankingConfiguration"]["bedrockRerankingConfiguration"]["modelConfiguration"]
+        config: Final = body["rerankingConfiguration"]["bedrockRerankingConfiguration"]["modelConfiguration"]
         assert config["modelArn"].endswith((".rerank-v1:0", ".rerank-v3-5:0"))
-        sources = body["sources"]
+        sources: Final = body["sources"]
         assert len(sources) == 2
     elif case["provider"] == "nvidia_nim":
         assert body["model"] == "nvidia/llama-3.2-nv-rerankqa-1b-v2"
@@ -142,14 +142,14 @@ def _assert_translated_request(case: _Case, body: Mapping[str, JsonValue]) -> No
 async def test_basic_rerank(case: _Case, sync_mode: bool, respx_mock: MockRouter) -> None:
     route: Final = respx_mock.post(case["url"]).mock(return_value=_canned_response(case))
     if sync_mode:
-        response = litellm.rerank(
+        response: Final = litellm.rerank(
             **dict(case["kwargs"]),
             query="hello",
             documents=["hello", "world"],
             top_n=2,
         )
     else:
-        response = await litellm.arerank(
+        response: Final = await litellm.arerank(
             **dict(case["kwargs"]),
             query="hello",
             documents=["hello", "world"],
@@ -157,7 +157,6 @@ async def test_basic_rerank(case: _Case, sync_mode: bool, respx_mock: MockRouter
         )
     body: Final = _request_body(route)
     _assert_translated_request(case, body)
-    assert response.results is not None
     assert len(response.results) == 2
     assert response.results[0]["index"] == 0
     assert response.results[0]["relevance_score"] == 0.95
@@ -166,6 +165,6 @@ async def test_basic_rerank(case: _Case, sync_mode: bool, respx_mock: MockRouter
     if sync_mode:
         cost: Final = response._hidden_params["response_cost"]
         if case["expected_cost_zero"]:
-            assert cost is None or cost >= 0
+            assert cost == 0.0
         else:
-            assert cost is not None and cost > 0
+            assert cost > 0

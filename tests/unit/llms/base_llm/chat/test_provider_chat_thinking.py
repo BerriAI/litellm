@@ -1,5 +1,7 @@
 import base64
 import json
+import struct
+import zlib
 from typing import Final, Mapping, cast
 
 import httpx
@@ -7,6 +9,12 @@ import pytest
 import respx
 from pydantic import BaseModel, JsonValue
 from respx import MockRouter
+
+import litellm
+from litellm import get_llm_provider
+from litellm.constants import DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
+from litellm.main import stream_chunk_builder
+from litellm.utils import get_optional_params
 
 from tests.unit.llms.base_llm.chat.test_provider_chat_translation import (
     _BY_ID,
@@ -119,9 +127,6 @@ def _converse_response() -> httpx.Response:
 
 
 def _converse_frames(events: tuple[Mapping[str, JsonValue], ...]) -> bytes:
-    import struct
-    import zlib
-
     def frame(payload: Mapping[str, JsonValue]) -> bytes:
         raw: Final = json.dumps(payload).encode()
         event_type: Final = next(iter(payload))
@@ -224,15 +229,13 @@ _JSON_SCHEMA_ARGS: Final[Mapping[str, JsonValue]] = {
 @pytest.mark.parametrize("case", (_ANTHROPIC_CASE, _BEDROCK_THINKING_CASE), ids=lambda c: c["id"])
 def test_anthropic_response_format_streaming_vs_non_streaming(case: _Case, respx_mock: MockRouter) -> None:
     stream_route: Final = respx_mock.post(case["stream_url"]).mock(return_value=_stream_canned(case, thinking=False))
-    resp_stream = _complete(case, {**_JSON_SCHEMA_ARGS, "stream": True})
+    resp_stream: Final = _complete(case, {**_JSON_SCHEMA_ARGS, "stream": True})
     chunks: Final = tuple(resp_stream)
-    from litellm.main import stream_chunk_builder
-
-    built = stream_chunk_builder(chunks=list(chunks))
+    built: Final = stream_chunk_builder(chunks=list(chunks))
     stream_body: Final = _request_body(stream_route)
 
     non_route: Final = respx_mock.post(case["url"]).mock(return_value=_nonstream_canned(case))
-    resp_non = _complete(case, _JSON_SCHEMA_ARGS)
+    resp_non: Final = _complete(case, _JSON_SCHEMA_ARGS)
     non_body: Final = _request_body(non_route)
 
     for body in (stream_body, non_body):
@@ -264,7 +267,7 @@ def _max_tokens_value(case: _Case, body: Mapping[str, JsonValue]) -> int:
     return cast(int, cast(Mapping[str, JsonValue], body["inferenceConfig"])["maxTokens"])
 
 
-def _response_text(case: _Case, response) -> str:
+def _response_text(case: _Case, response: object) -> str:
     if case["shape"] == "anthropic" or case["shape"] == "bedrock_converse":
         return response.choices[0].message.content
     return response.choices[0].message.content
@@ -273,7 +276,7 @@ def _response_text(case: _Case, response) -> str:
 @pytest.mark.parametrize("case", (_ANTHROPIC_CASE, _BEDROCK_THINKING_CASE), ids=lambda c: c["id"])
 def test_completion_thinking_with_response_format(case: _Case, respx_mock: MockRouter) -> None:
     route: Final = respx_mock.post(case["url"]).mock(return_value=_nonstream_canned(case))
-    response = _complete(
+    response: Final = _complete(
         case,
         {
             **_thinking_kwargs(case),
@@ -294,7 +297,7 @@ def test_completion_thinking_with_response_format(case: _Case, respx_mock: MockR
 def test_completion_thinking_with_max_tokens(respx_mock: MockRouter) -> None:
     case: Final = _ANTHROPIC_CASE
     route: Final = respx_mock.post(case["url"]).mock(return_value=_nonstream_canned(case))
-    response = _complete(
+    response: Final = _complete(
         case,
         {
             **_thinking_kwargs(case),
@@ -311,7 +314,7 @@ def test_completion_thinking_with_max_tokens(respx_mock: MockRouter) -> None:
 def test_completion_thinking_without_max_tokens(respx_mock: MockRouter) -> None:
     case: Final = _ANTHROPIC_CASE
     route: Final = respx_mock.post(case["url"]).mock(return_value=_nonstream_canned(case))
-    response = _complete(
+    response: Final = _complete(
         case,
         {
             **_thinking_kwargs(case),
@@ -327,7 +330,7 @@ def test_completion_thinking_without_max_tokens(respx_mock: MockRouter) -> None:
 @pytest.mark.parametrize("case", (_ANTHROPIC_CASE, _BEDROCK_THINKING_CASE), ids=lambda c: c["id"])
 def test_anthropic_thinking_output_stream(case: _Case, respx_mock: MockRouter) -> None:
     respx_mock.post(case["stream_url"]).mock(return_value=_stream_canned(case, thinking=True))
-    resp = _complete(
+    resp: Final = _complete(
         case,
         {
             **_thinking_kwargs(case),
@@ -356,10 +359,6 @@ def test_anthropic_thinking_output_stream(case: _Case, respx_mock: MockRouter) -
 
 
 def test_anthropic_reasoning_effort_thinking_translation() -> None:
-    from litellm import get_llm_provider
-    from litellm.constants import DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
-    from litellm.utils import get_optional_params
-
     for model in ("anthropic/claude-sonnet-4-5-20250929", "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"):
         _, provider, _, _ = get_llm_provider(model=model)
         optional_params: Final = get_optional_params(
