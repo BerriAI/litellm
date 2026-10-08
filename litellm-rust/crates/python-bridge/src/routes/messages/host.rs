@@ -109,16 +109,22 @@ fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
 /// The Python side of the Messages route: projects the prepared arguments and builds the
 /// public response, chunks and exceptions.
 pub(super) struct MessagesPythonHost {
-    request: Py<PyDict>,
+    request: Option<Py<PyDict>>,
     cache: PythonCache,
 }
 
 impl MessagesPythonHost {
-    pub(super) fn new(request: Py<PyDict>, asynchronous: bool) -> Self {
+    pub(super) fn new(asynchronous: bool) -> Self {
         Self {
-            request,
+            request: None,
             cache: PythonCache::new(asynchronous),
         }
+    }
+
+    fn request<'py>(&self, py: Python<'py>) -> Bound<'py, PyDict> {
+        self.request
+            .as_ref()
+            .map_or_else(|| PyDict::new(py), |request| request.bind(py).clone())
     }
 
     fn projection(
@@ -185,8 +191,7 @@ impl MessagesPythonHost {
     }
 
     fn provider(&self, py: Python<'_>) -> String {
-        self.request
-            .bind(py)
+        self.request(py)
             .get_item("custom_llm_provider")
             .ok()
             .flatten()
@@ -201,7 +206,7 @@ impl MessagesPythonHost {
         let mapped = py
             .import(ROUTE_HOST_MODULE)
             .and_then(|module| module.getattr("map_failure"))
-            .and_then(|map| map.call1((error.value(py), self.request.bind(py), self.provider(py))))
+            .and_then(|map| map.call1((error.value(py), self.request(py), self.provider(py))))
             .and_then(|mapped| {
                 mapped
                     .extract::<Py<pyo3::exceptions::PyBaseException>>()
@@ -223,6 +228,7 @@ impl PythonBinding for MessagesPythonHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> Result<(MessagesCall, Selection), InvokeError<Error>> {
+        self.request = Some(arguments.clone().unbind());
         let selection =
             crate::cache::configure(&mut self.cache, py, arguments, "anthropic_messages")
                 .map_err(InvokeError::Python)?;
@@ -300,6 +306,7 @@ impl PythonHostCalls<Cached<Messages>> for MessagesPythonHost {
 
 impl PythonOwned for MessagesPythonHost {
     fn close(&mut self, _: Python<'_>) {
+        self.request = None;
         self.cache.close();
     }
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {

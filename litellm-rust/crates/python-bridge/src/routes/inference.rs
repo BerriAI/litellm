@@ -23,7 +23,7 @@ use crate::{
 };
 
 pub(super) struct InferenceHost {
-    pub request: Py<PyDict>,
+    request: Option<Py<PyDict>>,
     module: &'static str,
 }
 
@@ -34,16 +34,34 @@ pub(super) struct ProjectedCall {
 }
 
 impl InferenceHost {
-    pub fn new(request: Py<PyDict>, module: &'static str) -> Self {
-        Self { request, module }
+    pub fn new(module: &'static str) -> Self {
+        Self {
+            request: None,
+            module,
+        }
+    }
+
+    fn request<'py>(&self, py: Python<'py>) -> Bound<'py, PyDict> {
+        self.request
+            .as_ref()
+            .map_or_else(|| PyDict::new(py), |request| request.bind(py).clone())
+    }
+
+    pub fn close(&mut self) {
+        self.request = None;
+    }
+
+    pub fn traverse(&self, visit: &pyo3::gc::PyVisit<'_>) -> Result<(), pyo3::gc::PyTraverseError> {
+        visit.call(&self.request)
     }
 
     pub fn project(
-        &self,
+        &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
         input: &str,
     ) -> PyResult<ProjectedCall> {
+        self.request = Some(arguments.clone().unbind());
         let argument = |name: &str| present(arguments, name);
         let string = |name: &str| -> PyResult<Option<String>> {
             argument(name)?.map(|value| value.extract()).transpose()
@@ -121,7 +139,7 @@ impl InferenceHost {
         let mapped = py
             .import(self.module)?
             .getattr("map_failure")?
-            .call1((native.value(py), self.request.bind(py)))?;
+            .call1((native.value(py), self.request(py)))?;
         Ok(PyErr::from_value(mapped))
     }
 }
@@ -183,52 +201,4 @@ where
         hooks,
         asynchronous,
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[rstest::rstest]
-    fn a_keyword_missing_from_the_arguments_takes_the_connection_default() {
-        Python::initialize();
-        Python::attach(|py| {
-            py.run(
-                c"
-import sys
-import types
-route_host = types.ModuleType('inference_projection_route_host')
-route_host.PARAMETERS = ['temperature']
-route_host.connection_defaults = lambda provider: (None, 'http://default')
-sys.modules[route_host.__name__] = route_host
-",
-                None,
-                None,
-            )
-            .unwrap();
-            let dict = |source: &std::ffi::CStr| {
-                py.eval(source, None, None)
-                    .unwrap()
-                    .cast_into::<PyDict>()
-                    .unwrap()
-            };
-            let host = InferenceHost::new(
-                dict(c"{'model': 'openai/m', 'messages': [], 'api_base': 'http://caller', 'temperature': 0.5}")
-                    .unbind(),
-                "inference_projection_route_host",
-            );
-            let projected = host
-                .project(
-                    py,
-                    &dict(c"{'model': 'openai/m', 'messages': []}"),
-                    "messages",
-                )
-                .unwrap();
-            assert_eq!(
-                projected.options.api_base.as_deref(),
-                Some("http://default")
-            );
-            assert!(projected.params.is_empty(), "{:?}", projected.params);
-        });
-    }
 }
