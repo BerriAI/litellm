@@ -367,7 +367,9 @@ class PassThroughEndpointLogging:
             vertex_ai_live_handler: Final = VertexAILivePassthroughLoggingHandler()
 
             # For WebSocket responses, response_body should be a list of messages
-            websocket_messages: Final[list[dict[str, Any]]] = response_body if isinstance(response_body, list) else []
+            websocket_messages: Final[list[dict[str, object]]] = (
+                response_body if isinstance(response_body, list) else []
+            )
 
             vertex_ai_live_handler_result: Final = vertex_ai_live_handler.vertex_ai_live_passthrough_handler(
                 websocket_messages=websocket_messages,

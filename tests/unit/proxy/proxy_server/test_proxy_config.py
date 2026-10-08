@@ -17,17 +17,17 @@ import sys
 from collections.abc import Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
-from typing import Any, Dict, Final
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
-from litellm.proxy._types import CommonProxyErrors
+from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     LegacyEncryptionUnavailableError,
     decrypt_value_helper,
@@ -46,6 +46,7 @@ from litellm.proxy.proxy_server import (
     validate_deployment_max_agentic_loops,
 )
 from litellm.tracing.config import trace_storage_config
+from tests._master_key import MASTER_KEY
 
 from .conftest import normalize
 
@@ -159,7 +160,7 @@ def test__is_remote_module_url_raises_on_unexpected_iteration():
 
 
 def test__scrub_guardrail_inner_strips_remote_callbacks_and_guardrail():
-    inner: Dict[str, Any] = {
+    inner: dict[str, Any] = {
         "callbacks": ["safe.mod", "s3://attacker/m.py", "gcs://x/y.py"],
         "guardrail": "s3://attacker/g.py",
         "default_on": True,
@@ -213,7 +214,7 @@ def test__scrub_db_overlay_remote_module_loads_invalid_non_dict_returns_input():
 
 
 def test_resolve_complexity_router_plugins_no_plugins_key_is_a_noop():
-    config: Dict[str, Any] = {"tiers": {"SIMPLE": "gpt-4o-mini"}}
+    config: dict[str, Any] = {"tiers": {"SIMPLE": "gpt-4o-mini"}}
     resolve_complexity_router_plugins(model_name="smart-router", complexity_router_config=config, config_file_path=None)
     assert config == {"tiers": {"SIMPLE": "gpt-4o-mini"}}
 
@@ -223,7 +224,7 @@ def test_resolve_complexity_router_plugins_resolves_dotted_path_to_live_instance
     plugin_file.write_text(
         "class _Plugin:\n    async def run(self, context):\n        return context\n\nmy_plugin_instance = _Plugin()\n"
     )
-    config: Dict[str, Any] = {"plugins": ["my_plugin.my_plugin_instance"]}
+    config: dict[str, Any] = {"plugins": ["my_plugin.my_plugin_instance"]}
 
     resolve_complexity_router_plugins(
         model_name="smart-router",
@@ -540,7 +541,7 @@ def test_validate_deployment_max_agentic_loops_names_the_offending_model():
 def test_resolve_complexity_router_plugins_rejects_non_routing_plugin_object(tmp_path):
     plugin_file = tmp_path / "bad_plugin.py"
     plugin_file.write_text("not_a_plugin = object()\n")
-    config: Dict[str, Any] = {"plugins": ["bad_plugin.not_a_plugin"]}
+    config: dict[str, Any] = {"plugins": ["bad_plugin.not_a_plugin"]}
 
     with pytest.raises(ValueError, match="does not implement the RoutingPlugin interface"):
         resolve_complexity_router_plugins(
@@ -564,7 +565,7 @@ def test_resolve_complexity_router_plugins_rejects_synchronous_run_method(tmp_pa
         "\n"
         "sync_plugin_instance = _SyncPlugin()\n"
     )
-    config: Dict[str, Any] = {"plugins": ["sync_plugin.sync_plugin_instance"]}
+    config: dict[str, Any] = {"plugins": ["sync_plugin.sync_plugin_instance"]}
 
     with pytest.raises(ValueError, match="does not implement the RoutingPlugin interface"):
         resolve_complexity_router_plugins(
@@ -1569,7 +1570,7 @@ async def test_ProxyConfig_get_config_from_a_bucket_merges_includes(monkeypatch)
     objects = {
         "lit6982/config.yaml": {
             "include": ["model_config.yaml"],
-            "general_settings": {"master_key": "sk-1234"},
+            "general_settings": {"master_key": MASTER_KEY},
         },
         "lit6982/model_config.yaml": {"model_list": [{"model_name": "included-model"}]},
     }
@@ -2334,6 +2335,40 @@ async def test_load_config_logs_disabled_budget_reservation_once(tmp_path, monke
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("setting", ["vector_store_deny_by_default", "search_tool_deny_by_default"])
+@pytest.mark.parametrize(("yaml_value", "expected"), [("true", True), ("false", False)])
+async def test_load_config_yaml_deny_by_default_is_boolean(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setting: str, yaml_value: str, expected: bool
+):
+    config_file: Final = tmp_path / "deny_by_default.yaml"
+    config_file.write_text(f"model_list: []\nlitellm_settings: {{}}\ngeneral_settings:\n  {setting}: {yaml_value}\n")
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    _, _, general_settings = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    assert general_settings[setting] is expected
+    assert getattr(ConfigGeneralSettings.model_validate(dict(general_settings)), setting) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("setting", ["vector_store_deny_by_default", "search_tool_deny_by_default"])
+@pytest.mark.parametrize("yaml_value", ["", "enabled"], ids=["null", "string"])
+async def test_load_config_rejects_non_boolean_deny_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setting: str, yaml_value: str
+):
+    config_file: Final = tmp_path / "deny_by_default.yaml"
+    config_file.write_text(f"model_list: []\nlitellm_settings: {{}}\ngeneral_settings:\n  {setting}: {yaml_value}\n")
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    with pytest.raises(ValidationError, match=setting):
+        await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig_load_config_resolves_router_settings_plugins(tmp_path, monkeypatch):
     """Regression: router_settings.plugins dotted-path strings must be resolved to
     live RoutingPlugin instances on the created Router. Previously they were passed
@@ -2447,7 +2482,7 @@ async def test_ProxyConfig_load_config_wires_config_reload_interval(tmp_path, mo
     """general_settings.proxy_config_reload_interval_seconds must reach the proxy_server
     module global that schedules the DB config-reload jobs, so operators can tune multi-pod
     convergence from config.yaml."""
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     f = tmp_path / "c.yaml"
     f.write_text(
@@ -2946,7 +2981,7 @@ def test_ProxyConfig__add_deployment_pinned_row_follows_the_cost_map_across_relo
     assert ProxyConfig()._add_deployment(db_models=[pinned, typed]) == 2
 
     monkeypatch.setitem(litellm.model_cost["gpt-5.6"], "input_cost_per_token", 1e-06)
-    router._replay_model_cost_registrations()
+    router.replay_model_cost_registrations()
 
     assert litellm.model_cost.get("pinned-row", {}).get("input_cost_per_token") is None
     assert router.get_deployment(model_id="pinned-row").model_info.input_cost_per_token is None
@@ -2978,7 +3013,7 @@ def test_ProxyConfig__add_deployment_ptu_row_with_a_cost_map_copy_still_bills_ze
     )
 
     assert ProxyConfig()._add_deployment(db_models=[ptu]) == 1
-    router._replay_model_cost_registrations()
+    router.replay_model_cost_registrations()
 
     assert litellm.model_cost["ptu-row"]["input_cost_per_token"] == 0.0
     assert litellm.model_cost["ptu-row"]["output_cost_per_token"] == 0.0
@@ -3171,7 +3206,7 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_for_aws_bedrock_auth_para
     fake_router.upsert_deployment = MagicMock(return_value=True)
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
     pc = ProxyConfig()
-    litellm_params: Dict[str, Any] = {"model": "bedrock/anthropic.claude-v2"}
+    litellm_params: dict[str, Any] = {"model": "bedrock/anthropic.claude-v2"}
     for key, (env_name, _) in aws_env.items():
         litellm_params[key] = f"os.environ/{env_name}"
     db_model = SimpleNamespace(
@@ -3226,7 +3261,7 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_on_arbitrary_field(monkey
     ["true", "os.environ/DROP_PARAMS_FLAG"],
 )
 def test_ProxyConfig__add_deployment_turns_stored_drop_params_string_into_bool(monkeypatch, stored_drop_params):
-    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+    monkeypatch.setenv("LITELLM_SALT_KEY", MASTER_KEY)
     monkeypatch.setenv("DROP_PARAMS_FLAG", "true")
     fake_router = MagicMock()
     fake_router.upsert_deployment = MagicMock(return_value=True)
@@ -3251,7 +3286,7 @@ def test_ProxyConfig__add_deployment_turns_stored_drop_params_string_into_bool(m
 
 
 def test_ProxyConfig__add_deployment_keeps_loading_rows_after_a_non_flag_drop_params(monkeypatch):
-    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+    monkeypatch.setenv("LITELLM_SALT_KEY", MASTER_KEY)
     fake_router = MagicMock()
     fake_router.upsert_deployment = MagicMock(return_value=True)
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
@@ -3642,9 +3677,7 @@ def test_ProxyConfig__decrypt_and_set_db_env_variables_cannot_enable_mcp_stdio(m
     assert os.environ.get("LITELLM_ENABLE_MCP_STDIO") is None
 
 
-def test_ProxyConfig__decrypt_and_set_db_env_variables_warns_once_about_the_ignored_mcp_stdio_flag(
-    monkeypatch, caplog
-):
+def test_ProxyConfig__decrypt_and_set_db_env_variables_warns_once_about_the_ignored_mcp_stdio_flag(monkeypatch, caplog):
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.decrypt_value_helper",
         lambda value, key, return_original_value=False: value,
@@ -4288,6 +4321,7 @@ async def test_ProxyConfig__update_general_settings_leaves_first_registration_to
 async def test_ProxyConfig__update_general_settings_runtime_interval_job_carries_the_stagger_offset(monkeypatch):
     """Once the scheduler is running the sync owns registration and the job it adds is staggered."""
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.triggers.interval import IntervalTrigger
 
     from litellm.proxy.common_utils.scheduled_job_stagger import _OffsetTrigger
 
@@ -4296,12 +4330,17 @@ async def test_ProxyConfig__update_general_settings_runtime_interval_job_carries
     monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", real_scheduler)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     pc = ProxyConfig()
+    pc.settings.load_yaml({"scheduled_job_stagger": {"offsets": {"spend_log_cleanup_job": 120}}})
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
     try:
         await pc._update_general_settings({"maximum_daily_tag_spend_retention_period": "90d"})
         jobs = real_scheduler.get_jobs()
         assert [job.id for job in jobs] == ["spend_log_cleanup_job"]
-        assert isinstance(jobs[0].trigger, _OffsetTrigger), repr(jobs[0].trigger)
+        trigger: Final = jobs[0].trigger
+        assert isinstance(trigger, _OffsetTrigger), repr(trigger)
+        assert trigger.offset == timedelta(seconds=120)
+        assert isinstance(trigger.base, IntervalTrigger)
+        assert trigger.base.interval == timedelta(days=1)
     finally:
         real_scheduler.shutdown(wait=False)
 
@@ -4708,7 +4747,8 @@ async def test_ProxyConfig__update_config_from_db_keeps_keys_the_config_file_omi
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endpoints(monkeypatch):
+@pytest.mark.parametrize("ui_settings_already_synced", [False, True])
+async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endpoints(monkeypatch, ui_settings_already_synced):
     from litellm.proxy import proxy_server
 
     pc = ProxyConfig()
@@ -4720,14 +4760,18 @@ async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endp
         "get_config_param",
         AsyncMock(return_value=SimpleNamespace(param_value={"pass_through_endpoints": None})),
     )
-    monkeypatch.setattr(proxy_server, "sync_ui_settings_to_general_settings", AsyncMock())
+    settings_refresh = AsyncMock()
+    monkeypatch.setattr(proxy_server, "sync_ui_settings_to_general_settings", settings_refresh)
     monkeypatch.setattr(pc, "_should_load_db_object", lambda *, object_type: False)
     monkeypatch.setattr(pc, "get_credentials", AsyncMock())
     monkeypatch.setattr(pc, "_init_non_llm_objects_in_db", non_llm_initialization)
 
-    await pc.add_deployment(prisma_client=MagicMock(), proxy_logging_obj=MagicMock())
+    await pc.add_deployment(
+        prisma_client=MagicMock(), proxy_logging_obj=MagicMock(), ui_settings_already_synced=ui_settings_already_synced
+    )
 
     non_llm_initialization.assert_awaited_once()
+    assert settings_refresh.await_count == (0 if ui_settings_already_synced else 1)
 
 
 # ---------------------------------------------------------------------------
@@ -4905,7 +4949,7 @@ def clean_agent_registry():
         global_agent_registry.config_agents = original_config_agents
 
 
-def _config_agent(agent_name: str) -> Dict[str, Any]:
+def _config_agent(agent_name: str) -> dict[str, Any]:
     return {
         "agent_name": agent_name,
         "agent_card_params": {
@@ -5144,7 +5188,7 @@ async def test_add_deployment_re_reads_ui_settings_so_other_pods_converge(monkey
     Startup used to be the only read, so a proxy admin flipping a runtime flag reached the pod
     that served the PATCH and nowhere else until every other pod restarted.
     """
-    general_settings: Dict[str, Any] = {"allow_agents_for_team_admins": False}
+    general_settings: dict[str, Any] = {"allow_agents_for_team_admins": False}
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
 
     prisma_client = MagicMock()
@@ -5171,7 +5215,7 @@ async def test_add_deployment_re_reads_ui_settings_so_other_pods_converge(monkey
 @pytest.mark.asyncio
 async def test_add_deployment_syncs_ui_settings_even_when_the_model_reconcile_fails(monkeypatch):
     """A broken model reconcile must not strand every pod on stale settings."""
-    general_settings: Dict[str, Any] = {"allow_agents_for_team_admins": False}
+    general_settings: dict[str, Any] = {"allow_agents_for_team_admins": False}
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
 
     prisma_client = MagicMock()

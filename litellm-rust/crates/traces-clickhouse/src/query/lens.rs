@@ -1,6 +1,13 @@
-use litellm_storage_clickhouse::Query;
+use litellm_storage_clickhouse::{Query, ReadLimits};
 
-pub const LENS_QUERIES: [litellm_traces::ReadQuery; 5] = [
+const SAMPLE_READ_LIMITS: ReadLimits = ReadLimits {
+    result_rows: 10_000,
+    response_bytes: 16 * 1024 * 1024,
+    ..litellm_storage_clickhouse::READ_LIMITS
+};
+
+pub const LENS_QUERIES: [litellm_traces::ReadQuery; 6] = [
+    litellm_traces::ReadQuery::TraceAgents,
     litellm_traces::ReadQuery::Availability,
     litellm_traces::ReadQuery::Agents,
     litellm_traces::ReadQuery::Sample,
@@ -101,6 +108,67 @@ impl Query for LensAgents {
     const SQL: &'static str = include_str!("../../query/lens_agents.sql");
 }
 
+pub struct TraceAgents;
+
+/// Same access shape as `list_traces`: every team, the caller's own traces, or their teams' traces.
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Debug)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
+pub struct TraceAgentsParams {
+    #[serde(
+        deserialize_with = "super::number::boolean",
+        serialize_with = "litellm_traces::wire::serialize_flag"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "litellm_traces::schema::flag")
+    )]
+    pub all_teams: bool,
+    pub user_id: String,
+    pub team_ids: Vec<String>,
+    #[serde(deserialize_with = "super::number::deserialize")]
+    pub start_ms: i64,
+    #[serde(deserialize_with = "super::number::deserialize")]
+    pub end_ms: i64,
+    #[serde(deserialize_with = "super::number::deserialize")]
+    pub limit: u32,
+}
+
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Debug)]
+#[cfg_attr(feature = "schema", schemars(rename = "TraceAgentRow"))]
+pub struct TraceAgentsRow {
+    pub agent_name: String,
+    #[serde(deserialize_with = "super::number::deserialize")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::wire_schema::u64_number")
+    )]
+    pub runs: u64,
+    #[serde(deserialize_with = "super::number::deserialize")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::wire_schema::u64_number")
+    )]
+    pub failed_runs: u64,
+    #[serde(deserialize_with = "super::number::deserialize")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::wire_schema::u64_number")
+    )]
+    pub last_seen_ms: u64,
+    #[serde(default)]
+    pub frameworks: Vec<String>,
+}
+
+impl Query for TraceAgents {
+    type Params = TraceAgentsParams;
+    type Row = TraceAgentsRow;
+
+    const SQL: &'static str = include_str!("../../query/trace_agents.sql");
+}
+
 pub struct LensSample;
 
 #[macro_rules_attribute::apply(wire_type)]
@@ -188,6 +256,7 @@ impl Query for LensSample {
     type Params = LensSampleParams;
     type Row = LensSampleRow;
 
+    const READ_LIMITS: ReadLimits = SAMPLE_READ_LIMITS;
     const SQL: &'static str = include_str!("../../query/lens_sample.sql");
 }
 
@@ -202,6 +271,7 @@ pub struct LensContentParams {
     pub source: ContentSource,
     pub id: String,
     pub record_team: String,
+    pub start_time: String,
     pub trace_ref: String,
     pub cursor: String,
     #[serde(deserialize_with = "super::number::deserialize")]
@@ -216,6 +286,8 @@ pub struct LensContentRow {
     pub parent_span_id: String,
     pub name: String,
     pub kind: String,
+    pub start_time: String,
+    pub end_time: String,
     pub content: String,
     #[serde(deserialize_with = "super::number::flag")]
     #[cfg_attr(
@@ -243,6 +315,7 @@ pub struct LensEvidenceParams {
     pub source: ContentSource,
     pub id: String,
     pub record_team: String,
+    pub start_time: String,
     pub trace_ref: String,
     pub span: String,
     pub quote: String,

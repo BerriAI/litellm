@@ -10,7 +10,7 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Annotated, Final
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BeforeValidator, ConfigDict, TypeAdapter, ValidationError
 from pydantic.main import IncEx
 from typing_extensions import ReadOnly, TypedDict
 
@@ -20,6 +20,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     Member,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 _MODEL_ALIASES_ADAPTER: Final = TypeAdapter(dict[str, str])
 _JSON_COLUMNS: Final[Mapping[str, IncEx | bool]] = MappingProxyType(
@@ -37,13 +38,13 @@ def _decode_model_aliases(value: object) -> object:
         return None
 
 
-class TeamModelAliasTable(BaseModel):
+class TeamModelAliasTable(LiteLLMBaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
     model_aliases: Annotated[Mapping[str, str] | None, BeforeValidator(_decode_model_aliases)] = None
 
 
-class _TeamJsonColumns(BaseModel):
+class _TeamJsonColumns(LiteLLMBaseModel):
     """The two loosely typed columns on ``LiteLLM_TeamTable``, re-read with the shape the badge needs."""
 
     metadata: Mapping[str, object] | None = None

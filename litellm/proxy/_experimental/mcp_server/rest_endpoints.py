@@ -23,6 +23,7 @@ from litellm.exceptions import (
     GuardrailRaisedException,
     ModifyResponseException,
 )
+from litellm.proxy._experimental.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPServerListError,
     MCPServerURLCredentialsError,
@@ -54,6 +55,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.responses.mcp.request_context import MCPRequestContext
 
 if TYPE_CHECKING:
@@ -569,9 +571,8 @@ if MCP_AVAILABLE:
             "alias": server.alias,
         }
         return [
-            ListMCPToolsRestAPIResponseObject(
-                **tool.model_dump(by_alias=True, exclude={"mcp_info"}),
-                mcp_info=enriched_mcp_info,
+            ListMCPToolsRestAPIResponseObject.model_validate(
+                {**tool.model_dump(by_alias=True, exclude={"mcp_info"}), "mcp_info": enriched_mcp_info}
             )
             for tool in tools
         ]
@@ -705,16 +706,18 @@ if MCP_AVAILABLE:
         *,
         record_listing: bool,
     ) -> list[MCPTool]:
-        return await global_mcp_server_manager._get_tools_from_server(
-            server=server,
-            mcp_auth_header=server_auth_header,
-            extra_headers=extra_headers,
-            add_prefix=False,
-            raw_headers=raw_headers,
-            client_ip=client_ip,
-            user_api_key_auth=user_api_key_auth,
-            proxy_logging_obj=proxy_logging_obj,
-            record_listing=record_listing,
+        return list(
+            await global_mcp_server_manager._get_tools_from_server(
+                server=server,
+                mcp_auth_header=server_auth_header,
+                extra_headers=extra_headers,
+                add_prefix=False,
+                raw_headers=raw_headers,
+                client_ip=client_ip,
+                user_api_key_auth=user_api_key_auth,
+                proxy_logging_obj=proxy_logging_obj,
+                record_listing=record_listing,
+            )
         )
 
     async def _get_tools_for_single_server(
@@ -735,6 +738,8 @@ if MCP_AVAILABLE:
         """
         from litellm.proxy.proxy_server import proxy_logging_obj
 
+        if apply_tool_filters and proxy_logging_obj is not None:
+            await proxy_logging_obj.enforce_mcp_server_rate_limits(user_api_key_auth, server)
         listed_generation: Final = global_mcp_server_manager.listed_tools_generation(server.server_id)
         tools: Final = await _list_server_tools(
             server,
@@ -898,6 +903,8 @@ if MCP_AVAILABLE:
             # matching status code and WWW-Authenticate challenge; that is what
             # lets standards-compliant MCP clients run the upstream OAuth flow.
             raise
+        except ProxyRateLimitError:
+            raise
         except MCPServerListError as e:
             fault: Final = classify_list_exception(e)
             verbose_logger.info("Listing tools from %s failed with a %s fault", server.name, fault.tag)
@@ -949,6 +956,7 @@ if MCP_AVAILABLE:
         return await _apply_toolset_scope(user_api_key_dict, toolset.toolset_id)
 
     @router.get("/tools/list", dependencies=[Depends(user_api_key_auth)])
+    @catalog_operation(global_manager)
     async def list_tool_rest_api(
         request: Request,
         server_id: str | None = Query(None, description="The server id to list tools for"),
@@ -1173,6 +1181,7 @@ if MCP_AVAILABLE:
             }
 
     @router.post("/tools/call", dependencies=[Depends(user_api_key_auth)])
+    @catalog_operation(global_manager)
     async def call_tool_rest_api(
         request: Request,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),

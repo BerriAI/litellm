@@ -15,6 +15,7 @@ from typing import Final, Literal
 
 import pytest
 from e2e_config import SLOW_PROVIDER_TIMEOUT_SECONDS, unique_marker
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody, SpendLogRow
 from openai import OpenAI
@@ -116,6 +117,15 @@ def _assert_spend_row_matches(proxy: ProxyClient, key: str, header_cost: float) 
 
 class TestSailChatCompletions:
     @pytest.mark.covers("llm.chat_completions.sail.service_tier.nonstream.cost_logged")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.SAIL,),
+            models=(BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     @pytest.mark.parametrize(
         ("service_tier", "billed_tier"), [("balanced", "balanced"), ("auto", "base")]
     )
@@ -150,6 +160,15 @@ class TestSailChatCompletions:
         _assert_spend_row_matches(proxy, key, header_cost)
 
     @pytest.mark.covers("llm.chat_completions.sail.service_tier.nonstream.drops_unknown_tier_and_bills_asap")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.SAIL,),
+            models=(BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     @pytest.mark.parametrize("service_tier", ["bogus", 5])
     def test_unknown_service_tier_is_dropped_and_billed_asap(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, service_tier: str | int
@@ -176,6 +195,15 @@ class TestSailChatCompletions:
 
 class TestSailResponses:
     @pytest.mark.covers("llm.responses.sail.service_tier.nonstream.cost_logged")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.RESPONSES,
+            providers=(Provider.SAIL,),
+            models=(BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_caller_completion_window_bills_its_rates(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -204,6 +232,15 @@ class TestSailResponses:
 
 class TestSailMessages:
     @pytest.mark.covers("llm.messages.sail.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.SAIL,),
+            models=(BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_plain_call_returns_a_message(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:

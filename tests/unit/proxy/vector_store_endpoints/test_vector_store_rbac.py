@@ -64,7 +64,7 @@ async def test_list_vector_stores_allowed_when_not_disabled():
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
             with patch.object(litellm, "vector_store_registry", None):
                 with patch(
-                    "litellm.proxy.vector_store_endpoints.management_endpoints.VectorStoreRegistry._get_vector_stores_from_db",
+                    "litellm.proxy.vector_store_endpoints.management_endpoints.VectorStoreRegistry.get_vector_stores_from_db",
                     new=AsyncMock(return_value=[]),
                 ):
                     # Must not raise any HTTPException — if mocking is incomplete the
@@ -119,7 +119,7 @@ async def test_list_vector_stores_admin_not_blocked():
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
             with patch.object(litellm, "vector_store_registry", None):
                 with patch(
-                    "litellm.proxy.vector_store_endpoints.management_endpoints.VectorStoreRegistry._get_vector_stores_from_db",
+                    "litellm.proxy.vector_store_endpoints.management_endpoints.VectorStoreRegistry.get_vector_stores_from_db",
                     new=AsyncMock(return_value=[]),
                 ):
                     # Must not raise any HTTPException — admin is always allowed.
@@ -161,7 +161,7 @@ async def test_list_vector_stores_accepts_non_positive_page_like_base(page):
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
             with patch.object(litellm, "vector_store_registry", None):
                 with patch(
-                    "litellm.proxy.vector_store_endpoints.management_endpoints.VectorStoreRegistry._get_vector_stores_from_db",
+                    "litellm.proxy.vector_store_endpoints.management_endpoints.VectorStoreRegistry.get_vector_stores_from_db",
                     new=AsyncMock(return_value=[]),
                 ):
                     response: Final = await list_vector_stores(user_api_key_dict=admin, page=page, page_size=10)

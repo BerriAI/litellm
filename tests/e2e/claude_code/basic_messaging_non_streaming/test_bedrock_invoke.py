@@ -21,6 +21,7 @@ the matrix builder still sees three rows for this (feature, provider).
 from __future__ import annotations
 
 import pytest
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from claude_code._basic_messaging import run_basic_messaging_cell
 
 # Per-model aliases registered in the LiteLLM proxy's routing config to
@@ -35,6 +36,15 @@ BEDROCK_INVOKE_MODELS = [
 
 
 @pytest.mark.covers("llm.messages.bedrock_invoke.basic.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.BEDROCK,),
+        models=tuple(BEDROCK_INVOKE_MODELS),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_basic_messaging_non_streaming_bedrock_invoke(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert a reply."""
     run_basic_messaging_cell(

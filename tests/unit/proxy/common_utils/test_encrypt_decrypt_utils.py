@@ -322,9 +322,9 @@ def test_decrypt_failure_debug_log_omits_raw_value(monkeypatch):
 def test_explicit_key_decrypt_reads_only_values_written_under_that_key(monkeypatch, use_legacy: bool):
     if use_legacy:
         _use_legacy(monkeypatch)
-    written_with_previous_key = encrypt_value_helper("stored-secret", new_encryption_key="sk-1234")
+    written_with_previous_key = encrypt_value_helper("stored-secret", new_encryption_key="sk-9876")
 
-    assert decrypt_if_encrypted_with(written_with_previous_key, "sk-1234") == "stored-secret"
+    assert decrypt_if_encrypted_with(written_with_previous_key, "sk-9876") == "stored-secret"
     assert decrypt_if_encrypted_with(written_with_previous_key, "sk-another-key") is None
     assert decrypt_value_helper(written_with_previous_key, key="t", exception_type="debug") is None
 
@@ -349,7 +349,7 @@ def test_explicit_key_decrypt_reads_only_values_written_under_that_key(monkeypat
     ],
 )
 def test_explicit_key_decrypt_rejects_values_that_are_not_ciphertexts(not_a_ciphertext: str):
-    assert decrypt_if_encrypted_with(not_a_ciphertext, "sk-1234") is None
+    assert decrypt_if_encrypted_with(not_a_ciphertext, "sk-9876") is None
 
 
 @pytest.mark.parametrize("use_legacy", [False, True])
@@ -357,7 +357,7 @@ def test_explicit_key_decrypt_tells_an_encrypted_empty_string_from_no_ciphertext
     if use_legacy:
         _use_legacy(monkeypatch)
 
-    assert decrypt_if_encrypted_with(encrypt_value_helper("", new_encryption_key="sk-1234"), "sk-1234") == ""
+    assert decrypt_if_encrypted_with(encrypt_value_helper("", new_encryption_key="sk-9876"), "sk-9876") == ""
 
 
 def test_explicit_key_decrypt_supports_the_empty_master_key():

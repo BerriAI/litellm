@@ -134,6 +134,7 @@ def _byok_key_row(server_id):
 def _mock_prisma(null_rows, token_rows):
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=null_rows)
+    mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
     mock_prisma.db.litellm_mcpservertable.update_many = AsyncMock(return_value=MagicMock())
     mock_prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(return_value=token_rows)
     return mock_prisma

@@ -105,14 +105,14 @@ async def test_runtime_check_treats_missing_auth_key_as_authenticated():
         request=request,
         route="/forwarder",
         pass_through_endpoints=[raw_endpoint_no_auth_key],
-        api_key="sk-1234",
+        api_key="sk-9876",
     )
 
     # Result is the api_key string (auth is REQUIRED for this endpoint
     # — flow continues to normal key validation), NOT an empty
     # ``UserAPIKeyAuth()`` (which was the unauthenticated-forwarder
     # bug).
-    assert result == "sk-1234"
+    assert result == "sk-9876"
 
 
 @pytest.mark.asyncio

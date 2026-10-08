@@ -94,7 +94,7 @@ class TestEncryptedItemIdCodec:
         original_item_id = "rs_abc123def456"
         encoded = ResponsesAPIRequestUtils._build_encrypted_item_id(model_id, original_item_id)
         assert encoded.startswith("encitem_")
-        decoded = ResponsesAPIRequestUtils._decode_encrypted_item_id(encoded)
+        decoded = ResponsesAPIRequestUtils.decode_encrypted_item_id(encoded)
         assert decoded is not None
         assert decoded["model_id"] == model_id
         assert decoded["item_id"] == original_item_id
@@ -106,22 +106,22 @@ class TestEncryptedItemIdCodec:
         encoded = ResponsesAPIRequestUtils._build_encrypted_item_id(model_id, original_item_id)
         # Strip any trailing '=' to simulate what happens in transit
         stripped = encoded.rstrip("=")
-        decoded = ResponsesAPIRequestUtils._decode_encrypted_item_id(stripped)
+        decoded = ResponsesAPIRequestUtils.decode_encrypted_item_id(stripped)
         assert decoded is not None
         assert decoded["model_id"] == model_id
         assert decoded["item_id"] == original_item_id
 
     def test_non_encoded_id_returns_none(self):
-        assert ResponsesAPIRequestUtils._decode_encrypted_item_id("rs_abc123") is None
-        assert ResponsesAPIRequestUtils._decode_encrypted_item_id("msg_abc") is None
-        assert ResponsesAPIRequestUtils._decode_encrypted_item_id("") is None
+        assert ResponsesAPIRequestUtils.decode_encrypted_item_id("rs_abc123") is None
+        assert ResponsesAPIRequestUtils.decode_encrypted_item_id("msg_abc") is None
+        assert ResponsesAPIRequestUtils.decode_encrypted_item_id("") is None
 
     def test_semicolon_in_item_id(self):
         """item_id values containing ';' must survive the roundtrip."""
         model_id = "deployment-1"
         original_item_id = "rs_part1;part2;part3"
         encoded = ResponsesAPIRequestUtils._build_encrypted_item_id(model_id, original_item_id)
-        decoded = ResponsesAPIRequestUtils._decode_encrypted_item_id(encoded)
+        decoded = ResponsesAPIRequestUtils.decode_encrypted_item_id(encoded)
         assert decoded is not None
         assert decoded["item_id"] == original_item_id
 
@@ -142,7 +142,7 @@ class TestUpdateEncryptedContentItemIds:
         # Reasoning item with encrypted_content gets encoded
         encoded_id = result["output"][1]["id"]
         assert encoded_id.startswith("encitem_")
-        decoded = ResponsesAPIRequestUtils._decode_encrypted_item_id(encoded_id)
+        decoded = ResponsesAPIRequestUtils.decode_encrypted_item_id(encoded_id)
         assert decoded["model_id"] == model_id
         assert decoded["item_id"] == "rs_xyz"
 
@@ -157,14 +157,14 @@ class TestEncryptedContentWrapping:
         """Test wrapping encrypted_content with model_id metadata."""
         model_id = "deployment-1"
         original_content = "gAAAAABpnW_yEYmSNEyOG_original_encrypted_data"
-        wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(original_content, model_id)
+        wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(original_content, model_id)
         assert wrapped.startswith("litellm_enc:")
         assert wrapped != original_content
 
         (
             unwrapped_model_id,
             unwrapped_content,
-        ) = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(wrapped)
+        ) = ResponsesAPIRequestUtils.unwrap_encrypted_content_with_model_id(wrapped)
         assert unwrapped_model_id == model_id
         assert unwrapped_content == original_content
 
@@ -174,7 +174,7 @@ class TestEncryptedContentWrapping:
         (
             model_id,
             content,
-        ) = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(plain_content)
+        ) = ResponsesAPIRequestUtils.unwrap_encrypted_content_with_model_id(plain_content)
         assert model_id is None
         assert content == plain_content
 
@@ -199,7 +199,7 @@ class TestEncryptedContentWrapping:
         (
             model_id_extracted,
             unwrapped,
-        ) = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(wrapped)
+        ) = ResponsesAPIRequestUtils.unwrap_encrypted_content_with_model_id(wrapped)
         assert model_id_extracted == model_id
         assert unwrapped == "gAAAAABpnW_yEYmSNEyOG_secret"
 
@@ -214,7 +214,7 @@ class TestRestoreEncryptedContentItemIds:
             {"type": "message", "id": "msg_abc123", "role": "assistant"},
             {"type": "reasoning", "id": encoded_id, "encrypted_content": "secret"},
         ]
-        restored = ResponsesAPIRequestUtils._restore_encrypted_content_item_ids_in_input(request_input)
+        restored = ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(request_input)
         assert restored[0]["id"] == "msg_abc123"
         assert restored[1]["id"] == original_id
 
@@ -222,21 +222,21 @@ class TestRestoreEncryptedContentItemIds:
         """Test that wrapped encrypted_content is unwrapped before forwarding."""
         model_id = "deployment-1"
         original_content = "gAAAAABpnW_yEYmSNEyOG_original"
-        wrapped_content = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(original_content, model_id)
+        wrapped_content = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(original_content, model_id)
 
         request_input = [
             {"type": "reasoning", "encrypted_content": wrapped_content},
         ]
-        restored = ResponsesAPIRequestUtils._restore_encrypted_content_item_ids_in_input(request_input)
+        restored = ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(request_input)
         assert restored[0]["encrypted_content"] == original_content
 
     def test_no_op_for_plain_string_input(self):
-        result = ResponsesAPIRequestUtils._restore_encrypted_content_item_ids_in_input("Hello world")
+        result = ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input("Hello world")
         assert result == "Hello world"
 
     def test_no_op_for_unencoded_ids(self):
         request_input = [{"type": "message", "id": "msg_plain"}]
-        result = ResponsesAPIRequestUtils._restore_encrypted_content_item_ids_in_input(request_input)
+        result = ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(request_input)
         assert result[0]["id"] == "msg_plain"
 
 
@@ -330,7 +330,7 @@ async def test_encrypted_content_affinity_tracks_and_routes():
         )
 
         # Verify the encoded ID decodes back to the correct deployment + original ID
-        decoded = ResponsesAPIRequestUtils._decode_encrypted_item_id(encoded_item_id)
+        decoded = ResponsesAPIRequestUtils.decode_encrypted_item_id(encoded_item_id)
         assert decoded is not None
         assert decoded["model_id"] == first_model_id
         assert decoded["item_id"] == "rs_encrypted_item_456"
@@ -610,7 +610,7 @@ async def test_encrypted_content_affinity_with_wrapped_content_no_id():
         (
             extracted_model_id,
             _,
-        ) = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(wrapped_content)
+        ) = ResponsesAPIRequestUtils.unwrap_encrypted_content_with_model_id(wrapped_content)
         assert extracted_model_id == first_model_id
 
         # Second request: use wrapped encrypted_content WITHOUT an ID (Codex behavior)
@@ -638,7 +638,7 @@ def test_encrypted_content_wrapping_preserves_original_content():
     model_id = "test-deployment-1"
     original_encrypted_content = "gAAAAABpnW_yEYmSNEyOG_streaming_test_content_with_special_chars==+/"
 
-    wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(original_encrypted_content, model_id)
+    wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(original_encrypted_content, model_id)
 
     assert wrapped.startswith("litellm_enc:")
     assert wrapped != original_encrypted_content
@@ -646,7 +646,7 @@ def test_encrypted_content_wrapping_preserves_original_content():
     (
         extracted_model_id,
         unwrapped_content,
-    ) = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(wrapped)
+    ) = ResponsesAPIRequestUtils.unwrap_encrypted_content_with_model_id(wrapped)
 
     assert extracted_model_id == model_id
     assert unwrapped_content == original_encrypted_content
@@ -659,12 +659,12 @@ def test_encrypted_content_wrapping_with_multiple_semicolons():
     model_id = "deployment-with-semicolons"
     original_content = "gAAAAAB;some;content;with;semicolons"
 
-    wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(original_content, model_id)
+    wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(original_content, model_id)
 
     (
         extracted_model_id,
         unwrapped,
-    ) = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(wrapped)
+    ) = ResponsesAPIRequestUtils.unwrap_encrypted_content_with_model_id(wrapped)
 
     assert extracted_model_id == model_id
     assert unwrapped == original_content
@@ -741,14 +741,14 @@ def test_encrypted_content_wrapping_empty_string():
     model_id = "test-deployment"
     original_content = ""
 
-    wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(original_content, model_id)
+    wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(original_content, model_id)
 
     assert wrapped.startswith("litellm_enc:")
 
     (
         extracted_model_id,
         unwrapped,
-    ) = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(wrapped)
+    ) = ResponsesAPIRequestUtils.unwrap_encrypted_content_with_model_id(wrapped)
 
     assert extracted_model_id == model_id
     assert unwrapped == original_content
@@ -1369,7 +1369,7 @@ async def test_affinity_strips_and_dispatches_when_origin_cooled_for_non_429():
             {
                 "id": encoded_id,
                 "type": "reasoning",
-                "encrypted_content": ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+                "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
                     "gAAAAA-blob", "deployment-a-cooled"
                 ),
             }
@@ -1504,7 +1504,7 @@ async def test_affinity_serves_sibling_when_candidate_origin_has_no_boundary_pee
         originating, cooldown_entries=[], routed_group_model_ids=["region-a", "region-b", "region-c"]
     )
     check = EncryptedContentAffinityCheck(router=mock_router)
-    wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("gAAAAA-blob", "region-a")
+    wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAAA-blob", "region-a")
     siblings = [
         {
             "model_info": {"id": "region-b"},
@@ -1566,7 +1566,7 @@ async def test_affinity_strips_and_dispatches_when_origin_is_unknown_or_removed(
     mock_router.get_deployment.return_value = None
 
     check = EncryptedContentAffinityCheck(router=mock_router)
-    wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("gAAAAA-blob", "deployment-removed")
+    wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAAA-blob", "deployment-removed")
     routed_pool = [
         {
             "model_info": {"id": "deployment-b"},
@@ -1850,7 +1850,7 @@ async def test_encrypted_content_affinity_pins_anthropic_messages_replayed_throu
 
 
 def _bridge_replayed_anthropic_messages(minted_by: str) -> list:
-    wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("gAAAAA_turn_one", minted_by)
+    wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAAA_turn_one", minted_by)
     return [
         {"role": "user", "content": "Solve the zebra puzzle"},
         {
@@ -1908,7 +1908,7 @@ async def test_encrypted_content_affinity_strips_bridge_reasoning_from_messages_
 
 class TestStripEncryptedReasoningFromInput:
     def test_keeps_summary_and_drops_encrypted_content_and_id(self):
-        wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("gAAAAA-blob", "deployment-a")
+        wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAAA-blob", "deployment-a")
         encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id("deployment-a", "rs_1")
         request_input = [
             {"role": "user", "content": "first turn"},
@@ -1935,7 +1935,7 @@ class TestStripEncryptedReasoningFromInput:
         ]
 
     def test_keeps_string_form_summary_when_stripping(self):
-        wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("gAAAAA-blob", "deployment-a")
+        wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAAA-blob", "deployment-a")
         request_input = [
             {"type": "reasoning", "encrypted_content": wrapped, "summary": "plain string thought"},
             {
@@ -1962,7 +1962,7 @@ class TestStripEncryptedReasoningFromInput:
         assert request_input == before
 
     def test_strips_only_items_selected_by_predicate(self):
-        wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("gAAAAA-blob", "deployment-a")
+        wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAAA-blob", "deployment-a")
         request_input = [
             {"type": "reasoning", "id": "keep", "encrypted_content": wrapped, "summary": "keep"},
             {"type": "reasoning", "id": "strip", "encrypted_content": wrapped, "summary": "strip"},
@@ -2007,8 +2007,8 @@ async def test_real_router_selection_keeps_origin_reasoning_and_strips_foreign_o
     )
     openai_item_id = ResponsesAPIRequestUtils._build_encrypted_item_id("dep-openai", "rs-openai")
     azure_item_id = ResponsesAPIRequestUtils._build_encrypted_item_id("dep-azure", "rs-azure")
-    openai_wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("blob-openai", "dep-openai")
-    azure_wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("blob-azure", "dep-azure")
+    openai_wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("blob-openai", "dep-openai")
+    azure_wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("blob-azure", "dep-azure")
     request_input = [
         {"type": "message", "role": "user", "content": "first question"},
         {
@@ -2079,14 +2079,14 @@ async def test_affinity_keeps_mixed_origins_on_the_same_encryption_boundary():
     }
     d2_item = {
         "type": "reasoning",
-        "encrypted_content": ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("blob-d2", "d2"),
+        "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("blob-d2", "d2"),
         "summary": [{"type": "summary_text", "text": "second origin"}],
     }
     request_kwargs = {
         "input": [
             {
                 "type": "reasoning",
-                "encrypted_content": ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("blob-d1", "d1"),
+                "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("blob-d1", "d1"),
                 "summary": [{"type": "summary_text", "text": "first origin"}],
             },
             d2_item.copy(),
@@ -2124,14 +2124,14 @@ async def test_boundary_pin_strips_reasoning_from_a_different_origin():
         "input": [
             {
                 "type": "reasoning",
-                "encrypted_content": ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+                "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
                     "blob-origin-a", "origin-a"
                 ),
                 "summary": [{"type": "summary_text", "text": "origin A summary"}],
             },
             {
                 "type": "reasoning",
-                "encrypted_content": ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+                "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
                     "blob-origin-b", "origin-b"
                 ),
                 "summary": [{"type": "summary_text", "text": "origin B summary"}],
@@ -2151,7 +2151,7 @@ async def test_boundary_pin_strips_reasoning_from_a_different_origin():
     assert request_kwargs["input"] == [
         {
             "type": "reasoning",
-            "encrypted_content": ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+            "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
                 "blob-origin-a", "origin-a"
             ),
             "summary": [{"type": "summary_text", "text": "origin A summary"}],
@@ -2199,7 +2199,7 @@ async def test_affinity_keeps_only_anthropic_reasoning_from_the_pinned_origin():
             "type": "redacted_thinking",
             "data": (
                 "litellm_encrypted_reasoning:"
-                f"{ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id('gAAAAA_turn_one', 'origin-a')}"
+                f"{ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id('gAAAAA_turn_one', 'origin-a')}"
             ),
         },
         {
@@ -2207,7 +2207,7 @@ async def test_affinity_keeps_only_anthropic_reasoning_from_the_pinned_origin():
             "thinking": "The bridge packed this one",
             "signature": (
                 "litellm_encrypted_reasoning:"
-                f"{ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id('gAAAAA_turn_one', 'origin-a')}"
+                f"{ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id('gAAAAA_turn_one', 'origin-a')}"
             ),
         },
         {"type": "text", "text": "The zebra owner lives in the green house."},
@@ -2230,7 +2230,7 @@ async def test_affinity_strips_unknown_origins_but_leaves_unmarked_encrypted_con
     }
     openai_item = {
         "type": "reasoning",
-        "encrypted_content": ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("blob-a", "origin-a"),
+        "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("blob-a", "origin-a"),
         "summary": [{"type": "summary_text", "text": "origin A"}],
     }
     request_kwargs = {
@@ -2238,7 +2238,7 @@ async def test_affinity_strips_unknown_origins_but_leaves_unmarked_encrypted_con
             openai_item.copy(),
             {
                 "type": "reasoning",
-                "encrypted_content": ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+                "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
                     "blob-removed", "origin-removed"
                 ),
                 "summary": [{"type": "summary_text", "text": "removed origin"}],
@@ -2272,7 +2272,7 @@ async def test_affinity_strips_unknown_origins_but_leaves_unmarked_encrypted_con
 
 
 def _cross_group_request_kwargs():
-    wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("gAAAAA-blob", "deployment-a")
+    wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAAA-blob", "deployment-a")
     return {
         "litellm_metadata": {},
         "input": [
@@ -2405,7 +2405,7 @@ async def test_affinity_strips_when_group_is_spelled_differently_but_same_by_id(
         originating, cooldown_entries=[], routed_group_model_ids=["deployment-mini-a", "deployment-mini-b"]
     )
     check = EncryptedContentAffinityCheck(router=mock_router)
-    wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("gAAAAA-blob", "deployment-mini-a")
+    wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAAA-blob", "deployment-mini-a")
     sibling_pool = [
         {
             "model_info": {"id": "deployment-mini-b"},
@@ -2457,7 +2457,7 @@ async def test_affinity_strips_for_team_and_pattern_routes():
         originating, cooldown_entries=[], routed_group_model_ids=["deployment-team-a", "deployment-team-b"]
     )
     check = EncryptedContentAffinityCheck(router=mock_router)
-    wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("gAAAAA-blob", "deployment-team-a")
+    wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAAA-blob", "deployment-team-a")
     sibling_pool = [
         {
             "model_info": {"id": "deployment-team-b"},

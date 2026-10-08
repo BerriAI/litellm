@@ -45,6 +45,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         --extra proxy \
         --extra legacy-encryption \
         --extra proxy-runtime \
+        --group admin-mcp \
         --extra extra_proxy \
         --extra semantic-router \
         --extra saml \
@@ -58,6 +59,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         --extra proxy \
         --extra legacy-encryption \
         --extra proxy-runtime \
+        --group admin-mcp \
         --extra extra_proxy \
         --extra semantic-router \
         --extra saml \

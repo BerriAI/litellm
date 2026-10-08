@@ -47,9 +47,8 @@ The per-mode env vars and URL shapes above were captured from a real
 docs; if a CLI release changes them, the cells fail with the CLI's own
 diagnostic rather than silently testing the wrong wire.
 
-`run_models` and `env` are injection seams for
-`_driver_unit_tests/test_passthrough.py`; production callers leave
-them unset.
+`run_models` and `env` are injection seams for tests; production
+callers leave them unset.
 """
 
 from __future__ import annotations
@@ -57,6 +56,8 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 
 import pytest
+
+from e2e_metadata import step
 
 from claude_code._env import require_proxy
 from claude_code.cli_driver import (
@@ -118,6 +119,10 @@ def foundry_extra_env(proxy_base_url: str) -> Dict[str, str]:
     }
 
 
+@step(
+    "Run Claude Code headless against {models} through the proxy's native provider passthrough route"
+    " and check every model replies"
+)
 def run_passthrough_cell(
     *,
     compat_result,

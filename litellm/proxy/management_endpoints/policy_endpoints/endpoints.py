@@ -12,12 +12,12 @@ All /policy management endpoints
 import copy
 import json
 import os
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from typing import TYPE_CHECKING, Final, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict
 
 import litellm
@@ -45,6 +45,7 @@ from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.policy_engine import (
     PolicyGuardrailsResponse,
     PolicyInfoResponse,
@@ -258,7 +259,7 @@ def _request_with_json_body(body: dict) -> Request:
     return Request(scope, receive=receive)
 
 
-class TestPoliciesAndGuardrailsRequest(BaseModel):
+class TestPoliciesAndGuardrailsRequest(LiteLLMBaseModel):
     """Request body for POST /utils/test_policies_and_guardrails."""
 
     policy_names: list[str] | None = Field(default=None, description="Policy names to resolve guardrails from")
@@ -449,6 +450,23 @@ async def validate_policy(
     return result
 
 
+class _LoadedPolicy(LiteLLMBaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True, hide_input_in_errors=True)
+
+    inherit: str | None = None
+    scope: PolicyScopeResponse = Field(default_factory=PolicyScopeResponse)
+    guardrails: PolicyGuardrailsResponse = Field(default_factory=PolicyGuardrailsResponse)
+    resolved_guardrails: tuple[str, ...] = ()
+    inheritance_chain: tuple[str, ...] = ()
+
+
+class _LoadedPolicies(LiteLLMBaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True, hide_input_in_errors=True)
+
+    policies: Mapping[str, _LoadedPolicy] = Field(default_factory=dict)
+    total_count: int = 0
+
+
 @router.get(
     "/policy/list",
     tags=["policy management"],
@@ -472,19 +490,19 @@ async def list_policies(
     """
     from litellm.proxy.policy_engine.init_policies import get_policies_summary
 
-    summary: Final = get_policies_summary()
+    summary: Final = _LoadedPolicies.model_validate(get_policies_summary())
     return PolicyListResponse(
         policies={
             name: PolicySummaryItem(
-                inherit=data.get("inherit"),
-                scope=PolicyScopeResponse(**data.get("scope", {})),
-                guardrails=PolicyGuardrailsResponse(**data.get("guardrails", {})),
-                resolved_guardrails=data.get("resolved_guardrails", []),
-                inheritance_chain=data.get("inheritance_chain", []),
+                inherit=policy.inherit,
+                scope=policy.scope,
+                guardrails=policy.guardrails,
+                resolved_guardrails=list(policy.resolved_guardrails),
+                inheritance_chain=list(policy.inheritance_chain),
             )
-            for name, data in summary.get("policies", {}).items()
+            for name, policy in summary.policies.items()
         },
-        total_count=summary.get("total_count", 0),
+        total_count=summary.total_count,
     )
 
 
@@ -664,7 +682,7 @@ async def get_policy_templates(
     return _load_policy_templates_from_local_backup()
 
 
-class EnrichTemplateRequest(BaseModel):
+class EnrichTemplateRequest(LiteLLMBaseModel):
     template_id: str
     parameters: dict
     model: str | None = None
@@ -1084,7 +1102,7 @@ def _build_comparison_blocked_words(
     return result
 
 
-class SuggestTemplatesRequest(BaseModel):
+class SuggestTemplatesRequest(LiteLLMBaseModel):
     attack_examples: list[str] = Field(default_factory=list)
     description: str = Field(default="")
     model: str | None = None
@@ -1127,7 +1145,7 @@ class GuardrailTestResultEntry(TypedDict):
     details: str
 
 
-class TestPolicyTemplateRequest(BaseModel):
+class TestPolicyTemplateRequest(LiteLLMBaseModel):
     guardrail_definitions: list[dict] = Field(description="All guardrailDefinitions from the policy template")
     text: str = Field(description="Test input text to run guardrails against")
 
