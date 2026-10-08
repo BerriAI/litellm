@@ -11,6 +11,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.decisions.transformation import DecisionsProviderConfig
 from litellm.llms.cloudflare.decisions.transformation import CLOUDFLARE_DECISIONS_ENDPOINT
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client, get_httpx_client
+from litellm.llms.openai.decisions.transformation import OPENAI_DECISIONS_ENDPOINT
 from litellm.llms.openrouter.decisions.transformation import OPENROUTER_DECISIONS_ENDPOINT
 from litellm.llms.perplexity.decisions.transformation import PERPLEXITY_DECISIONS_ENDPOINT
 from litellm.llms.strands_decider.decisions.transformation import STRANDS_DECIDER_DECISIONS_ENDPOINT
@@ -31,6 +32,7 @@ DECISIONS_ENDPOINTS: Final[Mapping[str, DecisionsProviderConfig]] = MappingProxy
         "openrouter": OPENROUTER_DECISIONS_ENDPOINT,
         "cloudflare": CLOUDFLARE_DECISIONS_ENDPOINT,
         "strands_decider": STRANDS_DECIDER_DECISIONS_ENDPOINT,
+        "openai": OPENAI_DECISIONS_ENDPOINT,
     }
 )
 
@@ -147,16 +149,7 @@ def _prepare_request(
             "Content-Type": "application/json",
         }
     )
-    body: Final = MappingProxyType(
-        {
-            "model": endpoint.request_model(canonical_model),
-            "state": validated_request.state,
-            "questions": {
-                name: question.model_dump(mode="json", exclude_none=True)
-                for name, question in validated_request.questions.items()
-            },
-        }
-    )
+    body: Final = MappingProxyType(endpoint.request_body(endpoint.request_model(canonical_model), validated_request))
     return _PreparedDecisionsRequest(
         config=endpoint,
         provider=provider,

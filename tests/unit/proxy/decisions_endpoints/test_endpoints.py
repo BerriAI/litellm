@@ -320,6 +320,28 @@ _SYSTEMONE_ANSWERS_FOR_OPENAI_REQUEST: Final[Mapping[str, object]] = {
     "usage": {"input_tokens": _INPUT_TOKENS, "output_tokens": _OUTPUT_TOKENS},
 }
 
+_OPENAI_FORMAT_ANSWERS: Final = [
+    {"type": "predicate", "name": "damaged", "probability": 0.95},
+    {
+        "type": "choice",
+        "name": None,
+        "choice": True,
+        "probabilities": [{"value": True, "probability": 0.9}, {"value": "escalate", "probability": 0.1}],
+        "confidence": 0.8,
+    },
+    {
+        "type": "score",
+        "name": "severity",
+        "score": 0.7,
+        "probabilities": [
+            {"value": 0, "label": "minor", "probability": 0.3},
+            {"value": 1, "label": "major", "probability": 0.7},
+        ],
+        "confidence": 0.6,
+    },
+    {"type": "refusal", "name": "fraud"},
+]
+
 
 @pytest.mark.parametrize("endpoint", ("/v1/decisions", "/decisions"))
 def test_openai_format_decisions_translate_through_systemone(
@@ -354,27 +376,7 @@ def test_openai_format_decisions_translate_through_systemone(
     }
     body: Final = response.json()
     assert body["model"] == _SYSTEMONE_ANSWERS_FOR_OPENAI_REQUEST["model"]
-    assert body["answers"] == [
-        {"type": "predicate", "name": "damaged", "probability": 0.95},
-        {
-            "type": "choice",
-            "name": None,
-            "choice": True,
-            "probabilities": [{"value": True, "probability": 0.9}, {"value": "escalate", "probability": 0.1}],
-            "confidence": 0.8,
-        },
-        {
-            "type": "score",
-            "name": "severity",
-            "score": 0.7,
-            "probabilities": [
-                {"value": 0, "label": "minor", "probability": 0.3},
-                {"value": 1, "label": "major", "probability": 0.7},
-            ],
-            "confidence": 0.6,
-        },
-        {"type": "refusal", "name": "fraud"},
-    ]
+    assert body["answers"] == _OPENAI_FORMAT_ANSWERS
     assert body["usage"] == {
         "input_tokens": _INPUT_TOKENS,
         "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
@@ -402,7 +404,9 @@ def test_openai_format_decisions_translate_through_systemone(
         },
         {
             "model": "decider",
-            "input": [{"role": "user", "content": [{"type": "input_image", "image_url": "data:image/png;base64,AA=="}]}],
+            "input": [
+                {"role": "user", "content": [{"type": "input_image", "image_url": "data:image/png;base64,AA=="}]}
+            ],
             "questions": [{"type": "predicate", "instructions": "Is this a defect?"}],
         },
     ),
@@ -435,6 +439,79 @@ def test_a_body_that_is_not_json_is_a_client_error(
 
     assert response.status_code == 400, response.text
     assert not upstream.called
+
+
+def test_openai_format_decisions_reach_an_openai_deployment_with_the_callers_questions(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[{"model_name": "decider", "litellm_params": {"model": "openai/gpt-6-luna", "api_key": "k"}}]
+        ),
+    )
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(
+        json={
+            "model": "gpt-6-luna",
+            "answers": [
+                {"type": "predicate", "name": "0", "probability": 0.95},
+                {
+                    "type": "choice",
+                    "name": "1",
+                    "choice": "true",
+                    "probabilities": [{"value": "true", "probability": 0.9}, {"value": "escalate", "probability": 0.1}],
+                    "confidence": 0.8,
+                },
+                {
+                    "type": "score",
+                    "name": "2",
+                    "score": 0.7,
+                    "probabilities": [
+                        {"value": 0, "label": "minor", "probability": 0.3},
+                        {"value": 1, "label": "major: Product unusable", "probability": 0.7},
+                    ],
+                    "confidence": 0.6,
+                },
+                {"type": "refusal", "name": "3"},
+            ],
+            "usage": {"input_tokens": _INPUT_TOKENS, "output_tokens": _OUTPUT_TOKENS, "total_tokens": 370},
+        }
+    )
+
+    response: Final = client.post("/v1/decisions", json=_OPENAI_FORMAT_REQUEST)
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "gpt-6-luna",
+        "input": "The package arrived with a broken screen.\n\nI want a refund.\n\nOrder 1234.",
+        "questions": [
+            {"type": "predicate", "name": "0", "instructions": "Does the customer report a damaged item?"},
+            {
+                "type": "choice",
+                "name": "1",
+                "instructions": "Should we refund?",
+                "choices": [{"value": "true", "description": "Refund now"}, {"value": "escalate"}],
+            },
+            {
+                "type": "score",
+                "name": "2",
+                "instructions": "How severe is the issue?",
+                "levels": [{"label": "minor"}, {"label": "major: Product unusable"}],
+            },
+            {"type": "predicate", "name": "3", "instructions": "Is this fraud?"},
+        ],
+    }
+    assert response.json()["answers"] == _OPENAI_FORMAT_ANSWERS
+    luna_cost: Final = litellm.model_cost["gpt-6-luna"]
+    expected_cost: Final = _INPUT_TOKENS * float(luna_cost["input_cost_per_token"]) + _OUTPUT_TOKENS * float(
+        luna_cost["output_cost_per_token"]
+    )
+    assert expected_cost > 0
+    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(expected_cost)
 
 
 def _decisions_feature() -> LazyFeature:
