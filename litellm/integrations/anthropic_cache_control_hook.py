@@ -91,10 +91,10 @@ def _validated_object_list(value: object) -> list[object] | None:
 
 
 def configured_injection_points(value: object) -> Sequence[CacheControlInjectionPoint]:
-    if not isinstance(value, list):
+    if not isinstance(value, (list, tuple)):
         return ()
     if all(isinstance(entry, dict) for entry in value):
-        return cast(list[CacheControlInjectionPoint], value)
+        return cast(Sequence[CacheControlInjectionPoint], value)
     return tuple(cast(CacheControlInjectionPoint, entry) for entry in value if isinstance(entry, dict))
 
 

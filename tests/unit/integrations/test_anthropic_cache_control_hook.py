@@ -4189,6 +4189,7 @@ class TestMalformedInjectionPointsAreIgnored:
     Every entry point now reads it as no configured points, the way ``null`` already read."""
 
     SHAPES = ("system", 5, {"location": "message", "role": "system"}, ["system"], None)
+    MIXED = ["system", {"location": "message", "role": "system"}, 3]
     MESSAGES = [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
 
     @pytest.mark.parametrize("value", SHAPES)
@@ -4196,8 +4197,25 @@ class TestMalformedInjectionPointsAreIgnored:
         assert configured_injection_points(value) == ()
 
     def test_keeps_the_point_entries_of_a_mixed_list(self):
-        mixed = ["system", {"location": "message", "role": "system"}, 3]
-        assert configured_injection_points(mixed) == ({"location": "message", "role": "system"},)
+        assert configured_injection_points(self.MIXED) == ({"location": "message", "role": "system"},)
+
+    def test_the_point_beside_junk_entries_survives_the_chat_seed_on_an_unstamped_deployment(self):
+        params: dict = {"cache_control_injection_points": copy.deepcopy(self.MIXED)}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(self.MESSAGES),
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+        _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model="claude-sonnet-4-5",
+            messages=copy.deepcopy(self.MESSAGES),
+            non_default_params=params,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert processed[0] == {"role": "system", "content": "sys", "cache_control": {"type": "ephemeral"}}
 
     @pytest.mark.parametrize("value", SHAPES)
     def test_chat_prompt_hook_leaves_the_request_untouched(self, value):
