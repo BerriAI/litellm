@@ -29,7 +29,7 @@ def test_mongodb_key_routes_to_mongodb_host():
     assert get_default_base_url("al-1234567890") == MONGODB_API_BASE
 
 
-@pytest.mark.parametrize("api_key", ["pa-1234567890", "sk-1234567890", "al", "", None])
+@pytest.mark.parametrize("api_key", ["pa-1234567890", "sk-voyage-legacy-key", "al", "", None])
 def test_non_mongodb_key_routes_to_voyage_host(api_key):
     assert get_default_base_url(api_key) == VOYAGE_API_BASE
 
