@@ -1,0 +1,94 @@
+name: Lens installation smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lens-install-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-images:
+    runs-on: ubuntu-latest-16-cores
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: gateway
+            dockerfile: gateway/Dockerfile
+          - component: backend
+            dockerfile: backend/Dockerfile
+          - component: ui
+            dockerfile: ui/Dockerfile
+          - component: migrations
+            dockerfile: migrations/Dockerfile
+          - component: monolith
+            dockerfile: Dockerfile
+          - component: worker
+            dockerfile: deploy/lens/Dockerfile
+    env:
+      COMPONENT: ${{ matrix.component }}
+      DOCKERFILE: ${{ matrix.dockerfile }}
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - name: Build the matching release image
+        run: |
+          docker build --build-arg LITELLM_RELEASE_TAG=v0.0.0-lens-ci \
+            -f "$DOCKERFILE" -t "lens-ci-$COMPONENT:v0.0.0-lens-ci" .
+      - name: Save the matching release image
+        run: |
+          docker save "lens-ci-$COMPONENT:v0.0.0-lens-ci" \
+            | gzip -1 > "$RUNNER_TEMP/lens-install-$COMPONENT.tar.gz"
+      - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: lens-install-${{ matrix.component }}-${{ github.sha }}
+          path: ${{ runner.temp }}/lens-install-${{ matrix.component }}.tar.gz
+          compression-level: 0
+          retention-days: 3
+          if-no-files-found: error
+          overwrite: true
+
+  helm-install:
+    needs: build-images
+    runs-on: ubuntu-latest-16-cores
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          pattern: lens-install-*-${{ github.sha }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/lens-install-images
+      - name: Load the matching release images
+        run: |
+          for component in gateway backend ui migrations monolith worker; do
+            archive="$RUNNER_TEMP/lens-install-images/lens-install-$component.tar.gz"
+            gzip -dc "$archive" | docker load
+            rm "$archive"
+          done
+      - name: Install pinned Kubernetes test tools
+        run: |
+          curl --fail --location --output "$RUNNER_TEMP/kind" \
+            https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
+          echo "a6875aaea358acf0ac07786b1a6755d08fd640f4c79b7a2e46681cc13f49a04b  $RUNNER_TEMP/kind" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/kind"
+          curl --fail --location --output "$RUNNER_TEMP/kubectl" \
+            https://dl.k8s.io/release/v1.32.2/bin/linux/amd64/kubectl
+          echo "4f6a959dcc5b702135f8354cc7109b542a2933c46b808b248a214c1f69f817ea  $RUNNER_TEMP/kubectl" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/kubectl"
+          curl --fail --location --output "$RUNNER_TEMP/helm.tar.gz" \
+            https://get.helm.sh/helm-v3.19.0-linux-amd64.tar.gz
+          echo "a7f81ce08007091b86d8bd696eb4d86b8d0f2e1b9f6c714be62f82f96a594496  $RUNNER_TEMP/helm.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/helm.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          echo "$RUNNER_TEMP/linux-amd64" >> "$GITHUB_PATH"
+      - name: Install, ingest, upgrade, and restart both charts
+        run: bash tests/e2e/migrations/lens_helm_smoke.sh

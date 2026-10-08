@@ -8,12 +8,9 @@ use litellm_core_utils::{
     core_helpers::{finish_reason_for, unix_now, usage_from_parts},
     prompt_templates::factory::{Conversation, TurnRole, build_conversation},
 };
-use litellm_types::{
-    llms::openai::{ChatMessage, ChatMessageContent},
-    utils::{
-        ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse,
-        ChatCompletionsUsage,
-    },
+use litellm_llms_types::formats::chat_completions::{
+    ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse,
+    ChatCompletionsUsage, ChatMessage, ChatMessageContent,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -388,7 +385,7 @@ fn converse_body(conversation: &Conversation, optional_params: &Map<String, Valu
         .iter()
         .map(|turn| {
             json!({
-                "role": turn.role.as_str(),
+                "role": <&'static str>::from(turn.role),
                 "content": turn.texts.iter().map(|text| json!({"text": text})).collect::<Vec<_>>(),
             })
         })

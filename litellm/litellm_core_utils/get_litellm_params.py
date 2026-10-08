@@ -2,7 +2,7 @@ import reprlib
 from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass, fields
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -11,6 +11,7 @@ from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.types.litellm_params import MAX_CONTROL_INT_DIGITS, ControlOptions
 from litellm.types.router import CustomPricingLiteLLMParams
+from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 
 AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
     {
@@ -66,10 +67,13 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "itpm",
             "otpm",
             "use_xai_oauth",
+            "fireworks_forward_user_id",
             PROVIDER_AFFINITY_HEADER_KWARG_KEY,
         }
     )
     | AWS_CREDENTIAL_KWARGS_KEYS
+    | ANTHROPIC_WIF_KWARGS_KEYS
+    | OPENAI_WIF_KWARGS_KEYS
     | frozenset(CustomPricingLiteLLMParams.model_fields)
 )
 
@@ -99,9 +103,7 @@ class InvalidControlOption:
 
 
 def parse_control_options(kwargs: Mapping[str, object]) -> ControlOptions | InvalidControlOption:
-    given: Final = {  # mutable-ok: TypeAdapter.validate_python takes a dict
-        name: kwargs[name] for name in _CONTROL_OPTION_NAMES if name in kwargs
-    }
+    given: Final = {name: kwargs[name] for name in _CONTROL_OPTION_NAMES if name in kwargs}
     try:
         return _CONTROL_OPTIONS.validate_python(given)
     except ValidationError as e:
@@ -118,19 +120,27 @@ def stored_control_options(litellm_params: Mapping[str, object]) -> ControlOptio
 
 def with_control_options(litellm_params: Mapping[str, object], control: ControlOptions) -> dict[str, object]:
     if control == ControlOptions():
-        return dict(litellm_params)  # mutable-ok: completion() hands litellm_params to provider code typed as dict
-    return {**litellm_params, CONTROL_OPTIONS_KEY: control}  # mutable-ok: same dict contract as above
+        return dict(litellm_params)
+    return {**litellm_params, CONTROL_OPTIONS_KEY: control}
 
 
-def _get_base_model_from_litellm_call_metadata(
-    metadata: dict | None,
+def get_base_model_from_litellm_call_metadata(
+    metadata: Mapping[str, object] | None,
 ) -> str | None:
     if metadata is None:
         return None
     model_info: Final = metadata.get("model_info")
     if model_info:
-        return model_info.get("base_model")
+        model_info_mapping: Final = cast(  # cast-ok: model metadata is caller-provided and preserves its mapping shape
+            Mapping[str, object], model_info
+        )
+        return cast(  # cast-ok: model metadata values are caller-provided
+            str | None, model_info_mapping.get("base_model")
+        )
     return None
+
+
+_get_base_model_from_litellm_call_metadata = get_base_model_from_litellm_call_metadata
 
 
 def get_litellm_params(
@@ -155,6 +165,7 @@ def get_litellm_params(
     allm_passthrough_route=None,
     preset_cache_key=None,
     no_log=None,
+    cost_per_second: float | None = None,
     input_cost_per_second=None,
     input_cost_per_token=None,
     output_cost_per_token=None,
@@ -216,6 +227,7 @@ def get_litellm_params(
         "preset_cache_key": preset_cache_key,
         "no-log": no_log or kwargs.get("no-log"),
         "stream_response": {},  # litellm_call_id: ModelResponse Dict
+        "cost_per_second": cost_per_second,
         "input_cost_per_token": input_cost_per_token,
         "input_cost_per_second": input_cost_per_second,
         "output_cost_per_token": output_cost_per_token,
@@ -226,7 +238,7 @@ def get_litellm_params(
         "azure_ad_token_provider": azure_ad_token_provider,
         "user_continue_message": user_continue_message,
         "base_model": base_model
-        or (_get_base_model_from_litellm_call_metadata(metadata=metadata) if metadata else None),
+        or (get_base_model_from_litellm_call_metadata(metadata=metadata) if metadata else None),
         "litellm_trace_id": litellm_trace_id,
         "litellm_session_id": litellm_session_id,
         "hf_model_name": hf_model_name,

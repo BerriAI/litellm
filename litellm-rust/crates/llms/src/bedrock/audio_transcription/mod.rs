@@ -4,7 +4,7 @@ use litellm_auth_aws::{
     resolve_bedrock_region,
 };
 use litellm_core_utils::core_helpers::json_type_name;
-use litellm_types::audio_transcription::AudioTranscriptionResponseData;
+use litellm_llms_types::formats::audio_transcription::AudioTranscriptionResponseData;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use strum::IntoStaticStr;
@@ -30,18 +30,15 @@ pub struct BedrockAudioTranscriptionConfig;
 
 #[derive(Clone, Copy, Deserialize, IntoStaticStr)]
 #[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
 enum AudioFormat {
+    #[strum(serialize = "wav")]
     Wav,
+    #[strum(serialize = "mp3")]
     Mp3,
+    #[strum(serialize = "flac")]
     Flac,
+    #[strum(serialize = "ogg")]
     Ogg,
-}
-
-impl AudioFormat {
-    fn as_str(self) -> &'static str {
-        self.into()
-    }
 }
 
 struct AudioInput {
@@ -118,7 +115,7 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
                 "messages": [{
                     "role": "user",
                     "content": [
-                        {"audio": {"format": audio.format.as_str(), "source": {"bytes": audio.data}}},
+                        {"audio": {"format": <&'static str>::from(audio.format), "source": {"bytes": audio.data}}},
                         {"text": instruction}
                     ]
                 }],

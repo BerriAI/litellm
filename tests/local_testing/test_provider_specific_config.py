@@ -2,16 +2,15 @@
 #    This tests setting provider specific configs across providers
 # There are 2 types of tests - changing config dynamically or by setting class variables
 
+import json
 import os
 import traceback
-import json
-import pytest
-
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 import litellm
 from litellm import RateLimitError, completion
-
 
 # Anthropic
 
@@ -295,41 +294,6 @@ def aleph_alpha_test_completion():
 #  Sagemaker
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
-def sagemaker_test_completion():
-    litellm.SagemakerConfig(max_new_tokens=10)
-    # litellm.set_verbose=True
-    try:
-        # OVERRIDE WITH DYNAMIC MAX TOKENS
-        response_1 = litellm.completion(
-            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
-            messages=[
-                {
-                    "content": "Hello, how are you? Be as verbose as possible",
-                    "role": "user",
-                }
-            ],
-            max_tokens=100,
-        )
-        response_1_text = response_1.choices[0].message.content
-        print(f"response_1_text: {response_1_text}")
-
-        # USE CONFIG TOKENS
-        response_2 = litellm.completion(
-            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
-            messages=[
-                {
-                    "content": "Hello, how are you? Be as verbose as possible",
-                    "role": "user",
-                }
-            ],
-        )
-        response_2_text = response_2.choices[0].message.content
-        print(f"response_2_text: {response_2_text}")
-
-        assert len(response_2_text) < len(response_1_text)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 # sagemaker_test_completion()
