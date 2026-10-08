@@ -1,6 +1,7 @@
 from collections.abc import Mapping
 from typing import Final
 
+import pytest
 from pydantic import TypeAdapter
 
 from litellm.llms.base_llm.decisions.transformation import ir_to_systemone_response, systemone_request_to_ir
@@ -10,7 +11,12 @@ from litellm.llms.openai.decisions.transformation import (
     ir_to_openai_response,
     openai_request_to_ir,
 )
-from litellm.types.decisions import DecisionsIRRequest, DecisionsRequestBody, OpenAIDecisionRequestBody
+from litellm.types.decisions import (
+    DecisionsIRRequest,
+    DecisionsRequestBody,
+    OpenAIDecisionRequestBody,
+    UnsupportedDecisionsRequest,
+)
 
 _SYSTEMONE_BODY: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
 _OPENAI_BODY: Final[TypeAdapter[OpenAIDecisionRequestBody]] = TypeAdapter(OpenAIDecisionRequestBody)
@@ -148,9 +154,47 @@ def test_a_systemone_request_becomes_an_openai_request_with_questions_named_by_t
                 "instructions": '{"policy": "refund-v2"}',
                 "choices": [{"value": "refund", "description": "Within 30 days"}, {"value": "escalate"}],
             },
-            {"type": "score", "name": "severity", "levels": [{"label": "minor"}, {"label": '{"label": "major"}'}]},
+            {
+                "type": "score",
+                "name": "severity",
+                "instructions": "Which level best fits the input?",
+                "levels": [{"label": "minor"}, {"label": '{"label": "major"}'}],
+            },
         ],
     }
+
+
+def test_systemone_questions_without_instructions_become_valid_openai_questions() -> None:
+    request: Final = _SYSTEMONE_BODY.validate_python(
+        {
+            "state": "Screen cracked",
+            "questions": {
+                "damaged": {"type": "noul", "criteria": {"false": None}},
+                "action": {"type": "choice", "criteria": {"refund": None, "escalate": None}},
+                "severity": {"type": "score", "criteria": ["minor", "major"]},
+            },
+        }
+    )
+
+    body: Final = ir_to_openai_request("gpt-6-luna", systemone_request_to_ir(request))
+
+    assert all(question.instructions for question in _OPENAI_BODY.validate_python(body).questions)
+
+
+@pytest.mark.parametrize(
+    "question",
+    ({"type": "choice", "criteria": {"refund": None}}, {"type": "score", "criteria": ["minor"]}),
+    ids=("choice", "score"),
+)
+def test_a_systemone_question_with_one_option_is_unsupported_by_openai(question: Mapping[str, object]) -> None:
+    request: Final = _SYSTEMONE_BODY.validate_python(
+        {
+            "state": "Screen cracked",
+            "questions": {"damaged": {"type": "noul", "instructions": "Damaged?"}, "q": question},
+        }
+    )
+
+    assert isinstance(ir_to_openai_request("gpt-6-luna", systemone_request_to_ir(request)), UnsupportedDecisionsRequest)
 
 
 def test_an_openai_response_becomes_systemone_answers_with_the_callers_score_labels() -> None:
