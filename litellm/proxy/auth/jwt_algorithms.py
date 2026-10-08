@@ -17,7 +17,7 @@ def allowed_jwt_algorithms(fips_mode: bool) -> tuple[str, ...]:
     return APPROVED_JWT_ALGORITHMS if fips_mode else (*APPROVED_JWT_ALGORITHMS, *LEGACY_JWT_ALGORITHMS)
 
 
-_JWTMappingT = TypeVar("_JWTMappingT", bound=Mapping[str, object])
+_JWTMappingT: Final = TypeVar("_JWTMappingT", bound=Mapping[str, object])
 
 
 def jwks_keys_for(keys: Sequence[_JWTMappingT], algorithms: Collection[str]) -> tuple[_JWTMappingT, ...]:
