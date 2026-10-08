@@ -7566,6 +7566,12 @@ class _FakeRedisBackedCache(RedisCache):
         return self._client
 
 
+class _PinGoneBeforeRefreshCache(_FakeRedisBackedCache):
+    async def async_refresh_ttl(self, key: str, ttl: int | None = None) -> bool:
+        await self._client.delete(key)
+        return await super().async_refresh_ttl(key, ttl)
+
+
 class TestClassificationMode:
     """Test classification_mode='user_turn': classify only requests whose newest turn is a new
     human ask; tool-loop continuation turns replay the session's held routing decision."""
@@ -7650,6 +7656,38 @@ class TestClassificationMode:
         shared_redis: Final = FakeRedis(server=server)
         assert json.loads(await shared_redis.get(cache_key)) == {"model": "o1-preview", "tier": "REASONING"}
         assert 0 < await shared_redis.ttl(cache_key) <= replica_b.config.session_affinity_ttl_seconds
+
+    @pytest.mark.asyncio
+    async def test_continuation_rewrites_a_pin_that_expired_between_its_read_and_its_refresh(self, user_turn_config):
+        """A continuation reads the pin, awaits the deployment claim, then refreshes the pin's TTL; a pin
+        that expired in that gap answers the refresh with False and must be written back, or the next
+        continuation finds no held decision."""
+        server: Final = FakeServer()
+        replica_b: Final = MagicMock()
+        replica_b.cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=_PinGoneBeforeRefreshCache(server))
+        router_b: Final = ComplexityRouter(
+            model_name="test-router", litellm_router_instance=replica_b, complexity_router_config=user_turn_config
+        )
+        router_c: Final = self._replica(user_turn_config, server)
+        turns: Final = self._tool_loop_turns()
+        cache_key: Final = router_b._get_session_affinity_cache_key("gap", self._request_kwargs("gap"))
+        shared_redis: Final = FakeRedis(server=server)
+
+        first = await router_b.async_pre_routing_hook(
+            model="test-model", request_kwargs=self._request_kwargs("gap"), messages=turns[0]
+        )
+        second = await router_b.async_pre_routing_hook(
+            model="test-model", request_kwargs=self._request_kwargs("gap"), messages=turns[1]
+        )
+        assert json.loads(await shared_redis.get(cache_key)) == {"model": "o1-preview", "tier": "REASONING"}
+        assert 0 < await shared_redis.ttl(cache_key) <= router_b.config.session_affinity_ttl_seconds
+        third = await router_c.async_pre_routing_hook(
+            model="test-model", request_kwargs=self._request_kwargs("gap"), messages=turns[2]
+        )
+
+        assert [first.model, second.model, third.model] == ["o1-preview", "o1-preview", "o1-preview"]
+        assert second.routing_decision["cause"] == "user_turn_continuation"
+        assert third.routing_decision["cause"] == "user_turn_continuation"
 
     def test_default_mode_is_every_request(self, complexity_router):
         assert complexity_router.config.classification_mode == "every_request"

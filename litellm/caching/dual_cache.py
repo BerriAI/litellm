@@ -300,7 +300,7 @@ class DualCache(BaseCache):
         if self.redis_cache is None:
             return await self.in_memory_cache.async_get_cache(key)
         try:
-            return await self.redis_cache.async_get_cache(key)
+            return await self.redis_cache.async_get_cache_or_raise(key)
         except Exception as e:
             log_redis_failure(
                 verbose_logger,

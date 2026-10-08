@@ -83,6 +83,8 @@ class _AsyncRedisCommands(Protocol):
 
     def ttl(self, name: str) -> Awaitable[int]: ...
 
+    def get(self, name: str) -> Awaitable[bytes | str | None]: ...
+
     def expire(self, name: str, time: int) -> Awaitable[bool]: ...
 
     def rpush(self, name: str, *values: str | bytes | float) -> Awaitable[int]: ...
@@ -1739,6 +1741,12 @@ class RedisCache(BaseCache):
             )
             print_verbose(f"litellm.caching.caching: async get() - Got exception from REDIS: {e}")
             _record_swallowed_redis_failure(self._circuit_breaker, e)
+
+    @_redis_circuit_breaker_guard
+    async def async_get_cache_or_raise(self, key: str) -> object:
+        """GET that raises on a Redis failure, so a caller can tell a failed read from a miss."""
+        cached_response: Final = await self._async_commands().get(self.check_and_fix_namespace(key=key))
+        return self._get_cache_logic(cached_response=cached_response)
 
     @_redis_circuit_breaker_guard
     async def async_batch_get_cache(

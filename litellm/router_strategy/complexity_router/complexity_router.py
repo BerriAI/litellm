@@ -4288,8 +4288,9 @@ class ComplexityRouter(CustomLogger):
     ) -> None:
         retained_value: Final = _session_affinity_cache_value(model, tier)
         ttl: Final = self.config.session_affinity_ttl_seconds
-        if retained_value == pinned_value:
-            await self.litellm_router_instance.cache.async_refresh_ttl(key=cache_key, ttl=ttl)
+        if retained_value == pinned_value and await self.litellm_router_instance.cache.async_refresh_ttl(
+            key=cache_key, ttl=ttl
+        ):
             return
         await self.litellm_router_instance.cache.async_set_cache(key=cache_key, value=retained_value, ttl=ttl)
 

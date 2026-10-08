@@ -7,9 +7,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm._service_logger import ServiceLogging
+from litellm.caching.base_cache import BaseCache
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.caching.redis_cache import RedisCache, _redis_circuit_breaker_guard, _redis_circuit_breaker_guard_sync
+from litellm.caching.redis_cache import (
+    RedisCache,
+    RedisCircuitBreaker,
+    _redis_circuit_breaker_guard,
+    _redis_circuit_breaker_guard_sync,
+)
 from litellm.constants import DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
 from litellm.types.caching import RedisPipelineIncrementOperation
 
@@ -606,6 +613,10 @@ class _OpenBreakerRedis:
         raise AssertionError("never reached")
 
     @_redis_circuit_breaker_guard
+    async def async_get_cache_or_raise(self, key: str) -> object:
+        raise AssertionError("never reached")
+
+    @_redis_circuit_breaker_guard
     async def async_batch_get_cache(self, key_list, **kwargs):
         raise AssertionError("never reached")
 
@@ -1029,12 +1040,27 @@ class _RecordingRedis:
         self.values = values
         self.refreshed: list[tuple[str, int | None]] = []
 
-    async def async_get_cache(self, key, **kwargs):
+    async def async_get_cache_or_raise(self, key: str) -> object:
         return self.values.get(key)
 
     async def async_refresh_ttl(self, key: str, ttl: int | None = None) -> bool:
         self.refreshed.append((key, ttl))
         return key in self.values
+
+
+class _UnreachableRedis(RedisCache):
+    def __init__(self) -> None:
+        BaseCache.__init__(self)
+        self._circuit_breaker = RedisCircuitBreaker(failure_threshold=5, recovery_timeout=60)
+        self.namespace = None
+        self.service_logger_obj = ServiceLogging()
+
+    def init_async_client(self):
+        from redis.exceptions import ConnectionError as RedisConnectionError
+
+        client = MagicMock()
+        client.get = AsyncMock(side_effect=RedisConnectionError("redis is down"))
+        return client
 
 
 @pytest.mark.asyncio
@@ -1065,6 +1091,18 @@ async def test_dual_cache_async_get_cache_redis_first_reads_memory_without_redis
 async def test_dual_cache_async_get_cache_redis_first_falls_back_to_the_local_copy_when_redis_raises():
     cache = DualCache(redis_cache=_OpenBreakerRedis())
     await cache.in_memory_cache.async_set_cache("pin", "local")
+    assert await cache.async_get_cache_redis_first("pin") == "local"
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_async_get_cache_redis_first_serves_the_local_copy_while_redis_is_unreachable():
+    """The plain Redis read swallows a connection failure and answers None, which the Redis-first read
+    must not take for a miss while this process still holds the value and the breaker is still closed."""
+    redis_cache = _UnreachableRedis()
+    cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis_cache)
+    await cache.in_memory_cache.async_set_cache("pin", "local")
+    assert await redis_cache.async_get_cache("pin") is None
+    assert not redis_cache._circuit_breaker.is_open()
     assert await cache.async_get_cache_redis_first("pin") == "local"
 
 

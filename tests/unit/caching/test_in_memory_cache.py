@@ -290,3 +290,25 @@ def test_in_memory_cache_refresh_ttl_extends_a_live_key_and_rejects_an_absent_or
     assert cache.get_cache("live") == "v"
     clock.return_value = 110.0
     assert cache.get_cache("live") is None
+
+
+def test_in_memory_cache_repeated_refresh_ttl_keeps_the_heap_bounded() -> None:
+    clock = MagicMock(return_value=0.0)
+    cache = InMemoryCache(max_size_in_memory=10, clock=clock)
+    cache.set_cache("pin", "v", ttl=60)
+    for tick in range(1, 1_001):
+        clock.return_value = float(tick)
+        assert cache.refresh_ttl("pin", 60) is True
+    assert len(cache.expiration_heap) <= 2
+    assert cache.get_cache("pin") == "v"
+
+
+def test_in_memory_cache_refresh_ttl_never_evicts_a_neighbour_from_a_full_cache() -> None:
+    clock = MagicMock(return_value=0.0)
+    cache = InMemoryCache(max_size_in_memory=2, clock=clock)
+    cache.set_cache("first", "v", ttl=60)
+    cache.set_cache("second", "v", ttl=60)
+    clock.return_value = 30.0
+    assert cache.refresh_ttl("first", 60) is True
+    assert cache.get_cache("first") == "v"
+    assert cache.get_cache("second") == "v"

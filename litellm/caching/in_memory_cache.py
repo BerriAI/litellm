@@ -103,21 +103,7 @@ class InMemoryCache(BaseCache):
         self.cache_dict.pop(key, None)
         self.ttl_dict.pop(key, None)
 
-    def evict_cache(self):
-        """
-        Eviction policy:
-        1. First, remove expired items from ttl_dict and cache_dict
-        2. If cache is still at or above max_size_in_memory, evict items with earliest expiration times
-
-
-        This guarantees the following:
-        - 1. When item ttl not set: At minimum each item will remain in memory for the default ttl
-        - 2. When ttl is set: the item will remain in memory for at least that amount of time, unless cache size requires eviction
-        - 3. the size of in-memory cache is bounded
-
-        """
-        current_time: Final = self._clock()
-
+    def _prune_heap_roots(self, current_time: float) -> None:
         # Step 1: Remove expired or outdated items
         while self.expiration_heap:
             expiration_time, key = self.expiration_heap[0]
@@ -132,6 +118,22 @@ class InMemoryCache(BaseCache):
             else:
                 # Case 3: Entry is valid and not expired
                 break
+
+    def evict_cache(self):
+        """
+        Eviction policy:
+        1. First, remove expired items from ttl_dict and cache_dict
+        2. If cache is still at or above max_size_in_memory, evict items with earliest expiration times
+
+
+        This guarantees the following:
+        - 1. When item ttl not set: At minimum each item will remain in memory for the default ttl
+        - 2. When ttl is set: the item will remain in memory for at least that amount of time, unless cache size requires eviction
+        - 3. the size of in-memory cache is bounded
+
+        """
+        current_time: Final = self._clock()
+        self._prune_heap_roots(current_time)
 
         # Step 2: Evict if cache is still full
         while len(self.cache_dict) >= self.max_size_in_memory:
@@ -180,9 +182,11 @@ class InMemoryCache(BaseCache):
         self.set_cache(key=key, value=value, **kwargs)
 
     def refresh_ttl(self, key: str, ttl: float) -> bool:
-        if key not in self.cache_dict or self.evict_element_if_expired(key):
+        now: Final = self._clock()
+        self._prune_heap_roots(now)
+        if key not in self.cache_dict:
             return False
-        expires_at: Final = self._clock() + float(ttl)
+        expires_at: Final = now + float(ttl)
         self.ttl_dict[key] = expires_at
         heapq.heappush(self.expiration_heap, (expires_at, key))
         return True
