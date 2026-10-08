@@ -2650,6 +2650,7 @@ async def add_litellm_data_to_request(
     await _resolve_user_provider_credentials_for_request(
         data=data,
         authenticated_user_id=authenticated_user_id,
+        team_id=user_api_key_dict.team_id,
         llm_router=llm_router,
     )
 
@@ -2718,6 +2719,7 @@ def _fallback_target_groups(
 def _per_user_credential_names_for_groups(
     llm_router: litellm.Router,
     model_groups: frozenset[str],
+    team_id: str | None,
 ) -> tuple[str, ...]:
     from litellm.constants import (
         GITHUB_COPILOT_AUTH_TYPE_KEY,
@@ -2726,8 +2728,18 @@ def _per_user_credential_names_for_groups(
 
     names: Final[list[str]] = []  # mutable-ok: accumulates one name per per-user deployment
     for group in model_groups:
-        for deployment in llm_router.get_model_list(model_name=group) or ():
-            litellm_params = cast(object, deployment.get("litellm_params"))  # cast-ok: deployment is dict-shaped here
+        by_name: Final = llm_router.get_model_list(model_name=group, team_id=team_id) or ()
+        deployment_id_match: Final = llm_router.get_deployment(model_id=group)
+        deployments: Final[Sequence[object]] = (
+            *by_name,
+            *((deployment_id_match,) if deployment_id_match is not None else ()),
+        )
+        for deployment in deployments:
+            litellm_params: object = (
+                deployment.get("litellm_params")
+                if isinstance(deployment, Mapping)
+                else getattr(deployment, "litellm_params", None)
+            )
             credential_name_obj: object = (
                 litellm_params.get("litellm_credential_name")
                 if isinstance(litellm_params, Mapping)
@@ -2749,6 +2761,7 @@ def _per_user_credential_names_for_groups(
 async def _resolve_user_provider_credentials_for_request(
     data: dict[str, object],  # mutable-ok: writes resolved credentials into the nested secret_fields dict
     authenticated_user_id: str | None,
+    team_id: str | None,
     llm_router: litellm.Router | None,
 ) -> None:
     """Resolve the calling user's per-user provider connections into secret_fields.
@@ -2764,7 +2777,7 @@ async def _resolve_user_provider_credentials_for_request(
     if not isinstance(user_id, str) or not user_id or llm_router is None or not isinstance(model, str):
         return
     model_groups: Final = frozenset({model} | _fallback_target_groups(llm_router, model))
-    credential_names: Final = _per_user_credential_names_for_groups(llm_router, model_groups)
+    credential_names: Final = _per_user_credential_names_for_groups(llm_router, model_groups, team_id)
     if not credential_names:
         return
     if "litellm_credential_name" in data:

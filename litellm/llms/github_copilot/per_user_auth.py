@@ -66,7 +66,7 @@ class _SyncGetClient(Protocol):
     def get(
         self,
         url: str,
-        params: dict[str, str] | None = None,
+        params: dict[str, str] | None = None,  # mutable-ok: mirrors the untyped client's dict parameters
         headers: dict[str, str] | None = None,  # mutable-ok: mirrors the untyped client's dict parameters
     ) -> httpx.Response: ...
 
@@ -75,7 +75,7 @@ class _AsyncGitHubClient(Protocol):
     async def get(
         self,
         url: str,
-        params: dict[str, str] | None = None,
+        params: dict[str, str] | None = None,  # mutable-ok: mirrors the untyped client's dict parameters
         headers: dict[str, str] | None = None,  # mutable-ok: mirrors the untyped client's dict parameters
     ) -> httpx.Response: ...
 

@@ -4702,9 +4702,7 @@ def test_is_llm_api_route():
     all_llm_api_routes = llm_passthrough_router.routes
 
     for route in all_llm_api_routes:
-        print("route", route)
         route_path = str(route.path)
-        print("route_path", route_path)
         assert RouteChecks.is_llm_api_route(route_path) is True
 
 
@@ -4750,7 +4748,7 @@ def _internal_user_check(route: str, method: str, role: LitellmUserRoles = Litel
     ],
 )
 def test_internal_user_credential_connection_routes_allowed(method: str, route: str) -> None:
-    _internal_user_check(route, method)
+    assert _internal_user_check(route, method) is None
 
 
 @pytest.mark.parametrize(
