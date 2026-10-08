@@ -105,6 +105,7 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (  # noqa: F401  
     _redact_mcp_resource_url,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     canonicalize_url_identity,
     get_byok_www_authenticate,
+    needs_cimd_discovery,
     redact_mcp_resource_url,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials import (
@@ -452,6 +453,7 @@ class _AuthorizationServerMetadataPayload(TypedDict, total=False):
     authorization_endpoint: str
     token_endpoint: str
     registration_endpoint: str
+    client_id_metadata_document_supported: ReadOnly[object]
     scopes_supported: Sequence[str]
     grant_types_supported: Sequence[str]
     token_endpoint_auth_methods_supported: Sequence[str]
@@ -767,14 +769,16 @@ def _flow_endpoints_missing(
     return authorization_url is None or token_url is None
 
 
-def oauth_endpoints_unresolved(server: MCPServer) -> bool:
-    """``_flow_endpoints_missing`` over a built registry entry, for the reload fast-path check.
+def oauth_endpoints_unresolved(server: MCPServer, *, include_client_metadata: bool = True) -> bool:
+    """Whether endpoint or eligible client metadata discovery is still pending.
 
     The flow comes from ``effective_oauth2_flow``, the one column-first, shape-fallback judge every
     flow decision uses, not from the raw column: a legacy row the startup backfill deliberately left
     unstamped (the ambiguous M2M shape) serves M2M at request time, and reading the bare column here
     would classify it as interactive-missing-endpoints and re-run discovery on every reload.
     """
+    if include_client_metadata and needs_cimd_discovery(server):
+        return True
     if (
         server.auth_type == MCPAuth.oauth2_token_exchange
         and server.token_exchange_profile == "entra_obo"
@@ -868,6 +872,8 @@ def carry_forward_resolved_oauth_endpoints(new_server: MCPServer, previous_serve
     may_carry: Final = _endpoints_corroborate_authorization_url(
         previous_server.authorization_url, new_server.authorization_url
     )
+    if may_carry and new_server.client_id_metadata_document_supported is None:
+        new_server.client_id_metadata_document_supported = previous_server.client_id_metadata_document_supported
     if may_carry and new_server.issuer is None:
         new_server.issuer = previous_server.issuer
         new_server.authorization_response_iss_parameter_supported = (  # rebind-ok: publish on the existing rebuild object
@@ -908,7 +914,7 @@ def _restrict_discovery_to_corroborated_authorization_server(
         return metadata
     if _endpoints_corroborate_authorization_url(metadata.authorization_url, manual_authorization_url):
         return metadata
-    if not metadata.token_url and not metadata.registration_url:
+    if not metadata.token_url and not metadata.registration_url and not metadata.client_id_metadata_document_supported:
         return metadata
     bridge_note: Final = (
         " The discovered registration_url is rejected with it, so this dcr_bridge server stays on the"
@@ -926,7 +932,9 @@ def _restrict_discovery_to_corroborated_authorization_server(
         _normalized_authorize_endpoint(manual_authorization_url),
         bridge_note,
     )
-    return metadata.model_copy(update={"token_url": None, "registration_url": None})
+    return metadata.model_copy(
+        update={"token_url": None, "registration_url": None, "client_id_metadata_document_supported": False}
+    )
 
 
 def _redacted_origin_list(urls: Sequence[str]) -> str:
@@ -1727,12 +1735,12 @@ def _create_sampling_callback(
     return create_sampling_callback(user_api_key_auth, raw_headers, client_ip, operation_context)
 
 
-def _create_elicitation_callback():
+def _create_elicitation_callback(timeout: float | None = None):
     if not MCP_ELICITATION_AVAILABLE:
         return None
     from litellm.proxy._experimental.mcp_server.legacy_callbacks import create_elicitation_callback
 
-    return create_elicitation_callback()
+    return create_elicitation_callback(timeout=timeout)
 
 
 def _record_mcp_guardrail_evaluations(
@@ -2060,6 +2068,7 @@ class MCPServerManager:
             update={
                 "scopes": server.scopes or metadata.scopes,
                 "issuer": server.issuer or discovered_issuer,
+                "client_id_metadata_document_supported": metadata.client_id_metadata_document_supported,
                 "authorization_response_iss_parameter_supported": (
                     metadata.authorization_response_iss_parameter_supported
                     if discovered_issuer is not None
@@ -2224,12 +2233,27 @@ class MCPServerManager:
             if should_defer != has_slot:
                 self._set_oauth_discovery_deferred(server.server_id, should_defer)
 
-    async def ensure_oauth_metadata_discovered(self, server: MCPServer, *, _retry_stale: bool = True) -> MCPServer:
+    async def ensure_oauth_metadata_discovered(
+        self,
+        server: MCPServer,
+        *,
+        needed_endpoint: Callable[[MCPServer], str | None] | None = None,
+        _retry_stale: bool = True,
+    ) -> MCPServer:
         return await self.catalog.resolve_oauth_metadata(
-            server, lambda selected: self._ensure_oauth_metadata_discovered(selected, _retry_stale=_retry_stale)
+            server,
+            lambda selected: self._ensure_oauth_metadata_discovered(
+                selected, needed_endpoint=needed_endpoint, _retry_stale=_retry_stale
+            ),
         )
 
-    async def _ensure_oauth_metadata_discovered(self, server: MCPServer, *, _retry_stale: bool = True) -> MCPServer:
+    async def _ensure_oauth_metadata_discovered(
+        self,
+        server: MCPServer,
+        *,
+        needed_endpoint: Callable[[MCPServer], str | None] | None = None,
+        _retry_stale: bool = True,
+    ) -> MCPServer:
         """Join the bounded discovery task and return the resolved server.
 
         Concurrent callers share one task per server. A failed attempt remains
@@ -2237,9 +2261,12 @@ class MCPServerManager:
 
         Args:
             server: The MCP server whose OAuth metadata must be resolved.
+            needed_endpoint: A caller-specific endpoint that may remain usable when
+                optional capability discovery fails.
 
         Returns:
-            The resolved server; the registered server when no discovery is
+            The resolved server; a configured caller endpoint remains usable on
+            optional capability-discovery failure. The registered server when no discovery is
             pending, or when discovery failed for a client-forwarded-token
             server, whose session consumes no discovered endpoint.
 
@@ -2257,18 +2284,26 @@ class MCPServerManager:
             outcome: Final = await asyncio.shield(task)
         except asyncio.CancelledError:
             if task.cancelled() and not self._oauth_discovery_slot_is_current(server.server_id, generation):
-                return await self._rejoin_oauth_metadata_discovery(server, retry_stale=_retry_stale)
+                return await self._rejoin_oauth_metadata_discovery(
+                    server, needed_endpoint=needed_endpoint, retry_stale=_retry_stale
+                )
             raise
         match outcome:
             case _OAuthDiscoveryResolved(resolved_server):
                 self.catalog.assert_current(resolved_server)
                 return resolved_server
             case _OAuthDiscoveryStale():
-                return await self._rejoin_oauth_metadata_discovery(server, retry_stale=_retry_stale)
+                return await self._rejoin_oauth_metadata_discovery(
+                    server, needed_endpoint=needed_endpoint, retry_stale=_retry_stale
+                )
             case _OAuthDiscoveryFailed(timed_out=timed_out):
                 current: Final = self._registered_server(server)
                 self.catalog.assert_current(current)
-                if current.is_client_forwarded_token:
+                if (
+                    current.is_client_forwarded_token
+                    or not oauth_endpoints_unresolved(current, include_client_metadata=False)
+                    or (needed_endpoint is not None and needed_endpoint(current) is not None)
+                ):
                     return current
                 server_ref: Final = current.alias or current.server_name or current.name or current.server_id
                 reason: Final = "timed out" if timed_out else "returned incomplete metadata"
@@ -2279,11 +2314,19 @@ class MCPServerManager:
 
         return assert_never(outcome)
 
-    async def _rejoin_oauth_metadata_discovery(self, server: MCPServer, *, retry_stale: bool) -> MCPServer:
+    async def _rejoin_oauth_metadata_discovery(
+        self, server: MCPServer, *, needed_endpoint: Callable[[MCPServer], str | None] | None = None, retry_stale: bool
+    ) -> MCPServer:
         if retry_stale:
-            return await self.ensure_oauth_metadata_discovered(server, _retry_stale=False)
+            return await self.ensure_oauth_metadata_discovered(
+                server, needed_endpoint=needed_endpoint, _retry_stale=False
+            )
         current: Final = self._registered_server(server)
-        if not oauth_endpoints_unresolved(current) or current.is_client_forwarded_token:
+        if (
+            not oauth_endpoints_unresolved(current, include_client_metadata=False)
+            or current.is_client_forwarded_token
+            or (needed_endpoint is not None and needed_endpoint(current))
+        ):
             return current
         raise HTTPException(status_code=503, detail="OAuth metadata discovery changed repeatedly; retry shortly")
 
@@ -2616,6 +2659,9 @@ class MCPServerManager:
                 scopes=resolved_scopes,
                 configured_scopes=tuple(configured_scopes) if configured_scopes else None,
                 issuer=effective_issuer,
+                client_id_metadata_document_supported=(
+                    gated_oauth_metadata.client_id_metadata_document_supported if gated_oauth_metadata else None
+                ),
                 authorization_response_iss_parameter_supported=(
                     gated_oauth_metadata.authorization_response_iss_parameter_supported
                     if gated_oauth_metadata
@@ -3194,6 +3240,9 @@ class MCPServerManager:
             scopes=resolved_scopes,
             configured_scopes=configured_scopes,
             issuer=effective_issuer,
+            client_id_metadata_document_supported=(
+                gated_oauth_metadata.client_id_metadata_document_supported if gated_oauth_metadata else None
+            ),
             authorization_response_iss_parameter_supported=(
                 gated_oauth_metadata.authorization_response_iss_parameter_supported if gated_oauth_metadata else False
             ),
@@ -4201,7 +4250,11 @@ class MCPServerManager:
                 if resolved_server.allow_sampling
                 else None
             ),
-            elicitation_callback=(_create_elicitation_callback() if resolved_server.allow_elicitation else None),
+            elicitation_callback=(
+                _create_elicitation_callback(timeout=resolved_server.timeout)
+                if resolved_server.allow_elicitation
+                else None
+            ),
         )
 
     _create_mcp_client = create_mcp_client
@@ -5304,6 +5357,7 @@ class MCPServerManager:
                 authorization_url=data.get("authorization_endpoint"),
                 token_url=data.get("token_endpoint"),
                 registration_url=data.get("registration_endpoint"),
+                client_id_metadata_document_supported=data.get("client_id_metadata_document_supported") is True,
                 discovered_issuer=claimed_issuer if isinstance(claimed_issuer, str) and claimed_issuer else None,
                 authorization_response_iss_parameter_supported=data.get(
                     "authorization_response_iss_parameter_supported"
@@ -5336,6 +5390,7 @@ class MCPServerManager:
         return MCPOAuthMetadata(
             authorization_url=f"{base}/oauth2/v2.0/authorize",
             token_url=f"{base}/oauth2/v2.0/token",
+            client_id_metadata_document_supported=False,
         )
 
     @staticmethod
