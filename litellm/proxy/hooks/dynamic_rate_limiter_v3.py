@@ -11,6 +11,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm import ModelResponse, Router
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
@@ -19,11 +20,12 @@ from litellm.proxy.common_utils.proxy_rate_limit_error import (
     ProxyRateLimitError,
     map_v3_rate_limit_type,
 )
-from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401  # legacy module exports
+    PROXY_MaxParallelRequestsHandler_v3,
     RateLimitDescriptor,
     RateLimitDescriptorRateLimitObject,
     RateLimitResponse,
-    _PROXY_MaxParallelRequestsHandler_v3,
+    _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     claim_request_stash_for_data,
     get_or_create_request_stash,
 )
@@ -37,7 +39,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
     response_has_hidden_params,
 )
 from litellm.types.router import ModelGroupInfo
-from litellm.types.utils import CallTypesLiteral
+from litellm.types.utils import CallTypesLiteral, LLMResponseTypes
 
 if TYPE_CHECKING:
     from litellm.types.utils import PriorityReservationSettings
@@ -89,9 +91,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         time_provider: Callable[[], datetime] | None = None,
     ):
         self.internal_usage_cache = InternalUsageCache(dual_cache=internal_usage_cache)
-        self.v3_limiter = _PROXY_MaxParallelRequestsHandler_v3(self.internal_usage_cache, time_provider=time_provider)
+        self.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(self.internal_usage_cache, time_provider=time_provider)
 
-    def update_variables(self, llm_router: Router):
+    def update_variables(self, llm_router: Router) -> None:
         self.llm_router = llm_router
 
     def _get_saturation_check_cache_ttl(self) -> int:
@@ -569,6 +571,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         else:
             get_or_create_request_stash().rate_limit_response = atomic_response
 
+    @with_service_target("rate_limits")
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -656,7 +659,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
         return None
 
-    async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
+    @with_service_target("rate_limits")
+    async def async_post_call_success_hook(
+        self, data: dict, user_api_key_dict: UserAPIKeyAuth, response
+    ) -> LLMResponseTypes:
         """
         Post-call hook to add rate limit headers to response.
         Leverages v3 limiter's post-call hook functionality.
@@ -685,7 +691,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             verbose_proxy_logger.exception("Error in dynamic rate limiter v3 post-call hook: %s", e)
             return response
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    @with_service_target("rate_limits")
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         """
         Update token usage for priority-based rate limiting after successful API calls.
 
@@ -694,7 +701,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         - priority_model: Priority-specific token tracking
         """
         from litellm.litellm_core_utils.core_helpers import (
-            _get_parent_otel_span_from_kwargs,
+            get_parent_otel_span_from_kwargs,
         )
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
@@ -705,7 +712,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         try:
             verbose_proxy_logger.debug("INSIDE dynamic rate limiter ASYNC SUCCESS LOGGING")
 
-            litellm_parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
+            litellm_parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
 
             # Get metadata from standard_logging_object
             standard_logging_object: Final = kwargs.get("standard_logging_object") or {}
@@ -800,3 +807,6 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
         except Exception as e:
             verbose_proxy_logger.exception("Error in dynamic rate limiter success event: %s", e)
+
+
+PROXY_DynamicRateLimitHandlerV3: Final = _PROXY_DynamicRateLimitHandlerV3

@@ -540,7 +540,7 @@ async def get_all_access_groups_from_db(
     deployments: Final = await ModelRepository(prisma_client).table.find_many()
 
     # Build access group map
-    access_group_map: Final[dict[str, dict[str, Any]]] = {}
+    model_names_by_group: Final[dict[str, list[str]]] = {}
 
     for deployment in deployments:
         model_info = deployment.model_info or {}
@@ -550,25 +550,20 @@ async def get_all_access_groups_from_db(
         model_name = deployment.model_name
 
         for access_group in access_groups:
-            if access_group not in access_group_map:
-                access_group_map[access_group] = {
-                    "model_names": set(),
-                    "deployment_count": 0,
-                }
+            if access_group not in model_names_by_group:
+                model_names_by_group[access_group] = []
 
-            access_group_map[access_group]["model_names"].add(model_name)
-            access_group_map[access_group]["deployment_count"] += 1
+            model_names_by_group[access_group].append(model_name)
 
     # Convert to AccessGroupInfo objects
-    result: Final = {}
-    for access_group, data in access_group_map.items():
-        result[access_group] = AccessGroupInfo(
+    return {
+        access_group: AccessGroupInfo(
             access_group=access_group,
-            model_names=sorted(list(data["model_names"])),
-            deployment_count=data["deployment_count"],
+            model_names=sorted(frozenset(model_names)),
+            deployment_count=len(model_names),
         )
-
-    return result
+        for access_group, model_names in model_names_by_group.items()
+    }
 
 
 @router.post(
@@ -589,7 +584,7 @@ async def create_model_group(
     Example:
     ```bash
     curl -X POST 'http://localhost:4000/access_group/new' \\
-      -H 'Authorization: Bearer sk-1234' \\
+      -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
       -H 'Content-Type: application/json' \\
       -d '{
         "access_group": "production-models",
@@ -734,7 +729,7 @@ async def list_access_groups(
     Example:
     ```bash
     curl -X GET 'http://localhost:4000/access_group/list' \\
-      -H 'Authorization: Bearer sk-1234'
+      -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     
     Returns:
@@ -782,7 +777,7 @@ async def get_access_group_info(
     Example:
     ```bash
     curl -X GET 'http://localhost:4000/access_group/production-models/info' \\
-      -H 'Authorization: Bearer sk-1234'
+      -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     
     Parameters:
@@ -846,7 +841,7 @@ async def update_access_group(
     Example:
     ```bash
     curl -X PUT 'http://localhost:4000/access_group/production-models/update' \\
-      -H 'Authorization: Bearer sk-1234' \\
+      -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
       -H 'Content-Type: application/json' \\
       -d '{
         "model_names": ["gpt-4", "claude-3-sonnet"]
@@ -998,7 +993,7 @@ async def delete_access_group(
     Example:
     ```bash
     curl -X DELETE 'http://localhost:4000/access_group/production-models/delete' \\
-      -H 'Authorization: Bearer sk-1234'
+      -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     
     Parameters:
@@ -1104,7 +1099,7 @@ async def get_access_group_budget(
     Example:
     ```bash
     curl -X GET 'http://localhost:4000/access_group/production-models/budget' \\
-      -H 'Authorization: Bearer sk-1234'
+      -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Parameters:
@@ -1144,7 +1139,7 @@ async def set_access_group_budget(
     Example:
     ```bash
     curl -X PUT 'http://localhost:4000/access_group/production-models/budget' \\
-      -H 'Authorization: Bearer sk-1234' \\
+      -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
       -H 'Content-Type: application/json' \\
       -d '{
         "max_budget": 100.0,
@@ -1218,7 +1213,7 @@ async def delete_access_group_budget(
     Example:
     ```bash
     curl -X DELETE 'http://localhost:4000/access_group/production-models/budget' \\
-      -H 'Authorization: Bearer sk-1234'
+      -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Parameters:

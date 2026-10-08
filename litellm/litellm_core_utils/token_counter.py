@@ -4,17 +4,18 @@ import base64
 import io
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from itertools import accumulate
 from typing import Final, Literal, cast
 
 import anyio
 import anyio.lowlevel
 import httpx
 import tiktoken
-from tokenizers import Tokenizer
 from typing_extensions import ParamSpec, TypeVar
 
 import litellm
 from litellm import verbose_logger
+from litellm._lazy_imports import get_default_encoding
 from litellm.constants import (
     DEFAULT_IMAGE_HEIGHT,
     DEFAULT_IMAGE_TOKEN_COUNT,
@@ -29,9 +30,10 @@ from litellm.constants import (
     TOKEN_COUNTER_MAX_EXACT_CHARS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.default_encoding import encoding as default_encoding
+from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace, HuggingFaceTokenizer, OpenAIEncoding
 from litellm.litellm_core_utils.url_utils import safe_get
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.llms.custom_httpx.http_handler import get_httpx_client
+from litellm.rust_bridge.tokenizer import get_encoding
 from litellm.types.llms.anthropic import (
     AnthropicContentParamSource,
     AnthropicContentParamSourceFileId,
@@ -46,6 +48,8 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionDocumentObject,
     ChatCompletionNamedToolChoiceParam,
+    ChatCompletionRedactedThinkingBlock,
+    ChatCompletionThinkingBlock,
     ChatCompletionToolParam,
     OpenAIMessageContentListBlock,
 )
@@ -228,7 +232,7 @@ def get_image_dimensions(
     img_data = None
     if data.startswith(("http://", "https://")):
         try:
-            client: Final = _get_httpx_client()
+            client: Final = get_httpx_client()
             response: Final[httpx.Response] = safe_get(client, data)
             max_bytes: Final = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
             content_length: Final[str | None] = response.headers.get("Content-Length")
@@ -381,7 +385,7 @@ class _MessageCountParams:
         from litellm.utils import print_verbose
 
         actual_model: Final = _fix_model_name(model)
-        if actual_model == "gpt-3.5-turbo-0301":
+        if uses_legacy_message_accounting(model):
             self.tokens_per_message = 4  # every message follows <|start|>{role/name}\n{content}<|end|>\n
             self.tokens_per_name = -1  # if there's a name, the role is omitted
         elif actual_model in litellm.open_ai_chat_completion_models or actual_model in litellm.azure_llms:
@@ -454,13 +458,44 @@ def token_counter(
         params: Final = _MessageCountParams(model, custom_tokenizer)
         num_tokens = _count_messages(params, new_messages, use_default_image_token_count, default_token_count)
         if count_response_tokens is False:
-            includes_system_message: Final = any([message.get("role", None) == "system" for message in new_messages])
+            includes_system_message: Final = any(message.get("role", None) == "system" for message in new_messages)
             num_tokens += _count_extra(params.count_function, tools, tool_choice, includes_system_message)
 
     else:
         raise ValueError("Either text or messages must be provided")
 
     return num_tokens
+
+
+def messages_reach_token_count(
+    model: str,
+    messages: Sequence[AllMessageValues | Message],
+    threshold: int,
+    tools: list[ChatCompletionToolParam] | None = None,
+    use_default_image_token_count: bool = False,
+) -> bool:
+    """Whether ``messages`` plus ``tools`` hold at least ``threshold`` prompt tokens for ``model``.
+
+    Same arithmetic as ``token_counter(messages=..., tools=...) >= threshold``, counted one message
+    at a time and stopped at the first message that crosses the threshold, so a prompt far above it
+    costs the tokenizer a few messages rather than the whole conversation.
+    """
+    from litellm.utils import convert_list_message_to_dict
+
+    if litellm.disable_token_counter is True:
+        return threshold <= 0
+    new_messages: Final = cast(  # cast-ok: convert_list_message_to_dict is untyped, same as token_counter
+        list[AllMessageValues], convert_list_message_to_dict(messages)
+    )
+    params: Final = _MessageCountParams(model, None)
+    includes_system_message: Final = any(message.get("role", None) == "system" for message in new_messages)
+    per_message_counts: Final = (
+        _count_messages(params, [message], use_default_image_token_count, None) for message in new_messages
+    )
+    running_totals: Final = accumulate(
+        per_message_counts, initial=_count_extra(params.count_function, tools, None, includes_system_message)
+    )
+    return any(total >= threshold for total in running_totals)
 
 
 def _count_function_call_tokens(
@@ -615,40 +650,64 @@ def _get_exact_count_function(
 ) -> TokenCounterFunction:
     """
     Get the function to count tokens based on the model and custom tokenizer."""
-    from litellm.utils import _select_tokenizer, print_verbose
+    from litellm.utils import select_tokenizer
 
     if model is not None or custom_tokenizer is not None:
-        tokenizer_json: Final = custom_tokenizer or _select_tokenizer(model)
-        if tokenizer_json["type"] == "huggingface_tokenizer":
-            tokenizer: Final[Tokenizer] = tokenizer_json["tokenizer"]
-
-            def count_tokens(text: str) -> int:
-                return len(tokenizer.encode_batch_fast([text])[0])
-
-            return count_tokens
-        elif tokenizer_json["type"] == "openai_tokenizer":
-            model_to_use: Final = _fix_model_name(model)
-            try:
-                if "gpt-4o" in model_to_use:
-                    encoding = tiktoken.get_encoding("o200k_base")
-                else:
-                    encoding = tiktoken.encoding_for_model(model_to_use)
-            except KeyError:
-                print_verbose("Warning: model not found. Using cl100k_base encoding.")
-                encoding = tiktoken.get_encoding("cl100k_base")
-
-            def encode_length(text: str) -> int:
-                return len(encoding.encode(text, disallowed_special=()))
-
-            return _get_tiktoken_count_function(encode_length)
-        else:
-            raise ValueError("Unsupported tokenizer type")
+        tokenizer_json: Final = custom_tokenizer or select_tokenizer(model)
     else:
+        default_encoding: Final = get_default_encoding()
 
         def encode_length(text: str) -> int:
-            return len(default_encoding.encode(text, disallowed_special=()))
+            return _encoding_count(default_encoding, text)
 
         return _get_tiktoken_count_function(encode_length)
+    if tokenizer_json["type"] == "huggingface_tokenizer":
+        tokenizer: Final[HuggingFace] = tokenizer_json["tokenizer"]
+
+        def count_tokens(text: str) -> int:
+            if isinstance(tokenizer, HuggingFaceTokenizer):
+                return tokenizer.count(text)
+            return len(tokenizer.encode_batch_fast([text])[0])
+
+        return count_tokens
+    if tokenizer_json["type"] == "openai_tokenizer":
+        encoding: Final = openai_tokenizer_encoding(model)
+
+        def encode_length(text: str) -> int:
+            return _encoding_count(encoding, text)
+
+        return _get_tiktoken_count_function(encode_length)
+    raise ValueError("Unsupported tokenizer type")
+
+
+def _encoding_count(encoding: Encoding, text: str) -> int:
+    if isinstance(encoding, OpenAIEncoding):
+        return encoding.count(text)
+    return len(encoding.encode(text, disallowed_special=()))
+
+
+def openai_tokenizer_encoding(model: str) -> Encoding:
+    """The encoding `token_counter` uses for a model on the `openai_tokenizer` path."""
+    return get_encoding(openai_tokenizer_encoding_name(model))
+
+
+def openai_tokenizer_encoding_name(model: str) -> str:
+    """The tiktoken encoding name for `model`, without loading the encoding."""
+    from litellm.utils import print_verbose
+
+    model_to_use: Final = _fix_model_name(model)
+    if "gpt-4o" in model_to_use:
+        return "o200k_base"
+    try:
+        return tiktoken.encoding_name_for_model(model_to_use)
+    except KeyError:
+        print_verbose("Warning: model not found. Using cl100k_base encoding.")
+        return "cl100k_base"
+
+
+def uses_legacy_message_accounting(model: str) -> bool:
+    """Whether `token_counter` prices messages with the `gpt-3.5-turbo-0301` constants (4 per message, -1 per name)."""
+    return _fix_model_name(model) == "gpt-3.5-turbo-0301"
 
 
 def _fix_model_name(model: str) -> str:
@@ -843,6 +902,8 @@ def _count_content_list(
     content_list: str
     | Iterable[
         OpenAIMessageContentListBlock
+        | ChatCompletionThinkingBlock
+        | ChatCompletionRedactedThinkingBlock
         | AnthropicMessagesTextParam
         | AnthropicMessagesImageParam
         | AnthropicMessagesDocumentParam
@@ -887,9 +948,9 @@ def _count_content_list(
                     use_default_image_token_count,
                     default_token_count,
                 )
-            elif c["type"] == "thinking":
+            elif c["type"] in ("thinking", "redacted_thinking"):
                 # Claude extended thinking content block
-                # Count the thinking text and skip signature (opaque signature blob)
+                # Count the thinking text and skip the opaque blobs (signature, redacted data)
                 thinking_text = str(c.get("thinking", ""))
                 if thinking_text:
                     num_tokens += count_function(thinking_text)
@@ -909,7 +970,8 @@ def _count_content_list(
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
-                    f"(text, image_url, image, document, file, tool_use, tool_result, thinking, tool_reference)."
+                    f"(text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
+                    f"tool_reference)."
                 )
         return num_tokens
     except Exception as e:
@@ -920,7 +982,7 @@ def _count_content_list(
         )
 
 
-def _format_function_definitions(tools):
+def _format_function_definitions(tools: Sequence[object]) -> str:
     """Formats tool definitions in the format that OpenAI appears to use.
     Based on https://github.com/forestwanglin/openai-java/blob/main/jtokkit/src/main/java/xyz/felh/openai/jtokkit/utils/TikTokenUtils.java
     """
@@ -928,39 +990,55 @@ def _format_function_definitions(tools):
     lines.append("namespace functions {")
     lines.append("")
     for tool in tools:
-        if not isinstance(tool, dict):
+        if not isinstance(tool, Mapping):
             continue
-        function = tool.get("function")
-        if not isinstance(function, dict):
-            # Anthropic tool shape → OpenAI function dict for token counting.
-            params = tool.get("input_schema") or tool.get("parameters") or {}
-            if not isinstance(params, dict):
-                params = {}
-            function = {
-                "name": tool.get("name"),
-                "description": tool.get("description"),
-                "parameters": params,
-            }
-        function_name = function.get("name")
-        if not function_name:
-            # Skip malformed tools missing a name to avoid emitting
-            # ``type None = ...`` which would produce inaccurate token counts.
-            continue
-        if function_description := function.get("description"):
-            lines.append(f"// {function_description}")
-        parameters = function.get("parameters") or {}
-        if not isinstance(parameters, dict):
-            parameters = {}
-        properties = parameters.get("properties")
-        if properties and properties.keys():
-            lines.append(f"type {function_name} = (_: {{")
-            lines.append(_format_object_parameters(parameters, 0))
-            lines.append("}) => any;")
-        else:
-            lines.append(f"type {function_name} = () => any;")
-        lines.append("")
+        for function in _function_definitions_for_tool(cast(Mapping[str, object], tool)):
+            lines.extend(_format_single_function_definition(function))
     lines.append("} // namespace functions")
     return "\n".join(lines)
+
+
+def _function_definitions_for_tool(tool: Mapping[str, object]) -> Iterable[Mapping[str, object]]:
+    function: Final = tool.get("function")
+    if isinstance(function, Mapping):
+        yield function
+        return
+    declarations: Final = tool.get("function_declarations") or tool.get("functionDeclarations")
+    if isinstance(declarations, list):
+        for declaration in declarations:
+            if isinstance(declaration, Mapping):
+                yield declaration
+        return
+    parameters: Final = tool.get("input_schema") or tool.get("parameters") or {}
+    normalized_parameters: Final = parameters if isinstance(parameters, Mapping) else {}
+    yield {
+        "name": tool.get("name"),
+        "description": tool.get("description"),
+        "parameters": normalized_parameters,
+    }
+
+
+def _format_single_function_definition(function: Mapping[str, object]) -> tuple[str, ...]:
+    function_name: Final = function.get("name")
+    if not function_name:
+        return ()
+    function_description: Final = function.get("description")
+    parameters_value: Final = function.get("parameters") or {}
+    parameters: Final = parameters_value if isinstance(parameters_value, Mapping) else {}
+    properties: Final = parameters.get("properties")
+    if isinstance(properties, Mapping) and properties:
+        return (
+            *((f"// {function_description}",) if function_description else ()),
+            f"type {function_name} = (_: {{",
+            _format_object_parameters(parameters, 0),
+            "}) => any;",
+            "",
+        )
+    return (
+        *((f"// {function_description}",) if function_description else ()),
+        f"type {function_name} = () => any;",
+        "",
+    )
 
 
 def _format_object_parameters(parameters, indent):

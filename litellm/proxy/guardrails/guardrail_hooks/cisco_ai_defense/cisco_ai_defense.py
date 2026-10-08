@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 from fastapi import HTTPException
+from typing_extensions import TypedDict, Unpack
 
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
@@ -51,7 +52,10 @@ from litellm.types.utils import (
     TextCompletionResponse,
 )
 
-from .cisco_ai_defense_mcp import _CiscoAIDefenseMcpMixin
+from .cisco_ai_defense_mcp import (  # noqa: F401  # legacy module exports
+    CiscoAIDefenseMcpMixin,
+    _CiscoAIDefenseMcpMixin,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+)
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import (
@@ -111,7 +115,11 @@ class CiscoAIDefenseGuardrailAPIError(Exception):
     """Raised when there is an error talking to the Cisco AI Defense API."""
 
 
-class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
+
+
+class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
     """
     Cisco AI Defense guardrail integration.
 
@@ -144,7 +152,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         on_flagged_action: str | None = None,
         fallback_on_error: str | None = None,
         timeout: float | None = None,
-        **kwargs: Any,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
         resolved_api_key: Final = api_key or os.environ.get("CISCO_AI_DEFENSE_API_KEY")
         if not resolved_api_key:
@@ -209,8 +217,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         else:
             env_timeout: Final = os.environ.get("CISCO_AI_DEFENSE_TIMEOUT")
             resolved_timeout = self._coerce_timeout(env_timeout) if env_timeout is not None else None
-        self.timeout: float = resolved_timeout if resolved_timeout is not None else DEFAULT_TIMEOUT_SECONDS
-
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
 
         # Register broadly; runtime filtering happens in ``_surface_matches``.
@@ -219,6 +225,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             supported_event_hooks=list(self.get_supported_event_hooks()),
             **kwargs,
         )
+        self.timeout = resolved_timeout if resolved_timeout is not None else DEFAULT_TIMEOUT_SECONDS
 
         self._warn_if_mode_surface_mismatch(kwargs.get("event_hook"))
 
@@ -945,7 +952,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
 
     def _finalize_inspection(
         self,
-        inspect_response: dict[str, Any],
+        inspect_response: dict[str, object],
         request_data: dict,
         context: _ScanContext,
         start_time: datetime,
@@ -1185,7 +1192,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         return any(key in payload for key in cls._DECISION_FIELDS)
 
     @classmethod
-    def _unwrap_verdict_envelope(cls, inspect_response: dict[str, Any]) -> dict[str, Any]:
+    def _unwrap_verdict_envelope(cls, inspect_response: dict[str, object]) -> dict[str, Any]:
         """Return the dict that actually holds is_safe / action / rules.
 
         Cisco AI Defense returns the verdict at different nesting depths
