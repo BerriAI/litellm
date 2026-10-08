@@ -1,4 +1,4 @@
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Final
 
@@ -16,13 +16,13 @@ class InvalidPriority:
 
 
 def resolve_request_priority(
-    requested: object, default_priority: int | None, drop_params: bool
+    requested: object, default_priority: int | None, drops_params: Callable[[], bool]
 ) -> int | None | InvalidPriority:
     if requested is None:
         return default_priority
     if isinstance(requested, int) and not isinstance(requested, bool):
         return requested
-    if drop_params:
+    if drops_params():
         return default_priority
     return InvalidPriority(value=requested)
 

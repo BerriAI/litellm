@@ -2918,7 +2918,7 @@ class Router:
             request_priority: Final = resolve_request_priority(
                 requested=kwargs.get("priority"),
                 default_priority=self.default_priority,
-                drop_params=request_drops_params(
+                drops_params=lambda: request_drops_params(
                     kwargs, self.default_litellm_params, self._request_deployment_params(model=model, kwargs=kwargs)
                 ),
             )
