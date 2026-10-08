@@ -19,14 +19,12 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.llms.a2a.common_utils import resolve_a2a_hop_auth_header
-from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.a2a.version_convert import (
     A2AVersion,
@@ -36,9 +34,8 @@ from litellm.proxy.a2a.version_convert import (
     normalize_stream_event,
 )
 from litellm.proxy.agent_endpoints.databricks_oauth import (
-    AgentBackendAuth,
-    has_databricks_oauth,
-    resolve_databricks_backend_auth,
+    DATABRICKS_OAUTH_PARAM,
+    resolve_databricks_app_auth_header,
 )
 from litellm.proxy.agent_endpoints.utils import merge_agent_headers
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -80,8 +77,7 @@ _PASCAL_TO_WIRE: Final[Mapping[str, str]] = {
     "GetExtendedAgentCard": "agent/getAuthenticatedExtendedCard",
 }
 
-
-_DECODED_JSON: Final = TypeAdapter(object)
+_WIRE_TO_PASCAL: Final[Mapping[str, str]] = MappingProxyType({wire: pascal for pascal, wire in _PASCAL_TO_WIRE.items()})
 
 
 def _sse_event(payload: object) -> str:
@@ -97,7 +93,7 @@ def _to_jsonrpc_object(chunk: object) -> object:
     """
     if isinstance(chunk, (str, bytes, bytearray)):
         try:
-            return _DECODED_JSON.validate_python(json.loads(chunk))
+            return json.loads(chunk)
         except (json.JSONDecodeError, UnicodeDecodeError):
             return chunk
     if hasattr(chunk, "model_dump"):
@@ -138,6 +134,20 @@ def _served_version(agent: "AgentResponse", request: Request, original_method: s
     return "1.0" if request.headers.get("a2a-version", "").startswith("1.") else "0.3"
 
 
+def _upstream_version(agent: "AgentResponse") -> A2AVersion:
+    """Protocol version forwarded requests must speak to the upstream agent.
+
+    Only an admin-pinned ``protocolVersion`` on the agent changes the forwarded
+    wire: a 1.0-configured upstream receives native 1.0 methods, params and
+    version headers (regression: #44531), while a 0.3-configured or unconfigured
+    agent keeps the historical 0.3 wire forwarding.
+    """
+    configured: Final = (agent.agent_card_params or {}).get("protocolVersion")
+    if configured in ("0.3", "1.0"):
+        return configured
+    return "0.3"
+
+
 def _validate_push_notification_url(url: str) -> None:
     parsed: Final = urlparse(url)
     if parsed.scheme != "https":
@@ -169,17 +179,13 @@ def _caller_identity_headers(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, 
     )
 
 
-async def _resolve_backend_auth(
+async def _resolve_backend_auth_header(
     litellm_params: dict[str, object],
     custom_llm_provider: object,
-) -> AgentBackendAuth:
-    databricks_auth: Final = await resolve_databricks_backend_auth(litellm_params)
-    if has_databricks_oauth(litellm_params):
-        return databricks_auth
-    return AgentBackendAuth(
-        litellm_params=databricks_auth.litellm_params,
-        header=await resolve_a2a_hop_auth_header(litellm_params, custom_llm_provider),
-    )
+) -> Mapping[str, str] | None:
+    if litellm_params.get(DATABRICKS_OAUTH_PARAM):
+        return await resolve_databricks_app_auth_header(litellm_params)
+    return await resolve_a2a_hop_auth_header(litellm_params, custom_llm_provider)
 
 
 def _forwarding_headers(
@@ -283,14 +289,14 @@ async def _a2a_sse_event_source(
     request_id: str | int | None = None,
     extra_headers: Mapping[str, str] | None = None,
     served_version: A2AVersion = "0.3",
-) -> AsyncGenerator[object, None]:
+) -> AsyncGenerator[Mapping[str, object], None]:
     """Stream an upstream A2A SSE response as parsed JSON-RPC event dicts.
 
     Upstream HTTP/JSON-RPC errors are surfaced as a single JSON-RPC error event
     so the caller can relay them instead of breaking the stream.
     """
     from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-    from litellm.types.agents import normalize_a2a_jsonrpc_response
+    from litellm.types.agents import _normalize_a2a_jsonrpc_response
     from litellm.types.llms.custom_http import httpxSpecialProvider
 
     headers: Final = {
@@ -310,9 +316,9 @@ async def _a2a_sse_event_source(
             error_body: Final = await resp.aread()
             error_event: Mapping[str, object] | None = None
             try:
-                parsed: Final = _DECODED_JSON.validate_python(json.loads(error_body))
+                parsed: Final = json.loads(error_body)
                 if isinstance(parsed, dict) and "error" in parsed:
-                    error_event = normalize_a2a_jsonrpc_response(parsed, request_id=request_id)
+                    error_event = _normalize_a2a_jsonrpc_response(parsed, request_id=request_id)
             except Exception:
                 error_event = None
             yield error_event or {
@@ -321,7 +327,7 @@ async def _a2a_sse_event_source(
                 "error": {"code": -32603, "message": resp.reason_phrase},
             }
             return
-        async for line in aiter_sse_lines(resp.aiter_text()):
+        async for line in resp.aiter_lines():
             stripped = line.strip()
             if not stripped.startswith("data:"):
                 continue
@@ -329,14 +335,12 @@ async def _a2a_sse_event_source(
             if not payload:
                 continue
             try:
-                event = _DECODED_JSON.validate_python(json.loads(payload))
+                event = json.loads(payload)
             except Exception:
                 continue
-            event_fields = as_str_mapping(event)
-            if isinstance(event_fields, dict):
-                yield normalize_stream_event(event_fields, served_version, request_id=request_id)
-            else:
-                yield event
+            if isinstance(event, dict):
+                event = normalize_stream_event(event, served_version, request_id=request_id)
+            yield event
     finally:
         await resp.aclose()
 
@@ -431,7 +435,6 @@ async def _handle_stream_message(
     proxy_server_request: dict[str, object] | None = None,
     *,
     agent_extra_headers: dict[str, str] | None = None,
-    agent_name: str | None = None,
     user_api_key_dict: UserAPIKeyAuth | None = None,
     request_data: dict[str, object] | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
@@ -505,7 +508,6 @@ async def _handle_stream_message(
                 metadata=metadata,
                 proxy_server_request=proxy_server_request,
                 agent_extra_headers=agent_extra_headers,
-                agent_name=agent_name,
             )
 
             if (
@@ -685,7 +687,7 @@ async def invoke_agent_a2a(
     )
 
     body: dict[str, Any] = {}
-    request_data: dict[str, object] = body
+    request_data: dict[str, Any] = body
     try:
         body = await request.json()
         request_data = body
@@ -737,17 +739,13 @@ async def invoke_agent_a2a(
             )
 
         user_api_key_dict.invoked_agent_id = agent.agent_id
-        strict_policy: Final = agent.identity_managed or bool(user_api_key_dict.requires_fresh_policy)
-        user_api_key_auth_for_call: Final = await AgentRequestHandler.personal_key_agent_billing_auth(
-            user_api_key_dict, agent.agent_id, strict=strict_policy
-        )
 
         _enforce_inbound_trace_id(agent, request)
 
         # Get backend URL and agent name
         agent_card_params: Final = agent.agent_card_params or {}
         agent_url: Final = agent_card_params.get("url")
-        agent_name: Final = (as_str_mapping(agent_card_params) or {}).get("name", agent_id)
+        agent_name: Final = agent_card_params.get("name", agent_id)
 
         # Get litellm_params (may include custom_llm_provider for completion bridge)
         litellm_params: dict[str, object] = agent.litellm_params or {}
@@ -800,7 +798,7 @@ async def invoke_agent_a2a(
         data, logging_obj = await processor.common_processing_pre_call_logic(
             request=request,
             general_settings=general_settings,
-            user_api_key_dict=user_api_key_auth_for_call,
+            user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
             proxy_config=proxy_config,
             route_type="asend_message",
@@ -834,7 +832,6 @@ async def invoke_agent_a2a(
                     if header_name:
                         dynamic_headers[header_name] = val
 
-        backend_auth: Final = await _resolve_backend_auth(litellm_params, custom_llm_provider)
         agent_extra_headers: Final = _forwarding_headers(
             caller_identity=caller_identity,
             request_data=data,
@@ -842,9 +839,8 @@ async def invoke_agent_a2a(
                 dynamic_headers=dynamic_headers or None,
                 static_headers=static_headers or None,
             ),
-            backend_auth_header=backend_auth.header,
+            backend_auth_header=await _resolve_backend_auth_header(litellm_params, custom_llm_provider),
         )
-        forwarded_litellm_params: Final = backend_auth.litellm_params
 
         # Merge agent-level guardrails into data so post_call_success_hook and
         # _handle_stream_message both pick them up.  A2A agents use model
@@ -884,12 +880,12 @@ async def invoke_agent_a2a(
             )
             # Defer spend-log until after post_call_success_hook so guardrail
             # results written by the unified_guardrail hook are captured.
-            logging_obj.defer_async_logging = True
+            logging_obj._defer_async_logging = True
             response = await asend_message(
                 model=f"a2a_agent/{agent_name}",
                 request=a2a_request,
                 api_base=agent_url,
-                litellm_params=forwarded_litellm_params,
+                litellm_params=litellm_params,
                 agent_id=agent.agent_id,
                 metadata=data.get("metadata", {}),
                 proxy_server_request=data.get("proxy_server_request"),
@@ -899,17 +895,17 @@ async def invoke_agent_a2a(
 
             try:
                 response = await proxy_logging_obj.post_call_success_hook(
-                    user_api_key_dict=user_api_key_auth_for_call,
+                    user_api_key_dict=user_api_key_dict,
                     data=data,
                     response=response,
                 )
             finally:
-                _enqueue_fn: Final = getattr(logging_obj, "enqueue_deferred_logging", None)
+                _enqueue_fn: Final = getattr(logging_obj, "_enqueue_deferred_logging", None)
                 if _enqueue_fn is not None:
-                    logging_obj.enqueue_deferred_logging = None
+                    logging_obj._enqueue_deferred_logging = None
                     _enqueue_fn()
 
-            response_dict: Final[dict[str, object]] = (
+            response_dict: Final[dict[str, Any]] = (
                 response.model_dump(mode="json", exclude_none=True)
                 if hasattr(response, "model_dump")
                 else response
@@ -929,13 +925,12 @@ async def invoke_agent_a2a(
                 api_base=agent_url,
                 request_id=request_id if request_id is not None else "",
                 params=params,
-                litellm_params=forwarded_litellm_params,
+                litellm_params=litellm_params,
                 agent_id=agent.agent_id,
                 metadata=data.get("metadata", {}),
                 proxy_server_request=data.get("proxy_server_request"),
                 agent_extra_headers=agent_extra_headers,
-                agent_name=str(agent_name),
-                user_api_key_dict=user_api_key_auth_for_call,
+                user_api_key_dict=user_api_key_dict,
                 request_data=data,
                 proxy_logging_obj=proxy_logging_obj,
                 served_version=served_version,
@@ -952,7 +947,8 @@ async def invoke_agent_a2a(
         }:
             if not agent_url:
                 return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
-            if isinstance(params, dict):
+            upstream_version = _upstream_version(agent)
+            if isinstance(params, dict) and upstream_version == "0.3":
                 params = normalize_request_params(params, served_version, method=method)
             if method == "tasks/pushNotificationConfig/set":
                 if not isinstance(params, dict):
@@ -960,13 +956,13 @@ async def invoke_agent_a2a(
                         status_code=400,
                         detail="params must be an object",
                     )
-                push_config: Final = params.get("pushNotificationConfig", {})
-                if "pushNotificationConfig" in params and not isinstance(push_config, dict):
+                push_config: Final = params.get("pushNotificationConfig", params.get("config"))
+                if ("pushNotificationConfig" in params or "config" in params) and not isinstance(push_config, dict):
                     raise HTTPException(
                         status_code=400,
                         detail="pushNotificationConfig must be an object",
                     )
-                for callback_url in (params.get("url"), push_config.get("url")):
+                for callback_url in (params.get("url"), (push_config or {}).get("url")):
                     if not callback_url:
                         continue
                     if not isinstance(callback_url, str):
@@ -975,13 +971,24 @@ async def invoke_agent_a2a(
                             detail="Push notification URL must be a string",
                         )
                     _validate_push_notification_url(callback_url)
+            forward_method: str
+            forward_headers: Mapping[str, str] | None
+            if upstream_version == "1.0":
+                # A native 1.0 upstream must receive the PascalCase method,
+                # unlowered params and an explicit negotiated version header
+                # instead of the 0.3 wire (regression: #44531).
+                forward_method = _WIRE_TO_PASCAL.get(method, method)
+                forward_headers = {**(agent_extra_headers or {}), "A2A-Version": "1.0"}
+            else:
+                forward_method = method
+                forward_headers = agent_extra_headers
             forward_body: dict[str, object] = {
                 "jsonrpc": "2.0",
                 "id": request_id,
-                "method": method,
+                "method": forward_method,
                 "params": params,
             }
-            result = await _forward_jsonrpc(agent_url, forward_body, extra_headers=agent_extra_headers)
+            result = await _forward_jsonrpc(agent_url, forward_body, extra_headers=forward_headers)
             if method == "agent/getAuthenticatedExtendedCard":
                 card: Final = result.get("result")
                 if isinstance(card, dict):
@@ -1001,7 +1008,7 @@ async def invoke_agent_a2a(
 
             response = LiteLLMSendMessageResponse.from_dict(result, request_id=request_id)
             response = await proxy_logging_obj.post_call_success_hook(
-                user_api_key_dict=user_api_key_auth_for_call,
+                user_api_key_dict=user_api_key_dict,
                 data=data,
                 response=response,
             )
@@ -1014,21 +1021,28 @@ async def invoke_agent_a2a(
         elif method == "tasks/resubscribe":
             if not agent_url:
                 return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
-            if isinstance(params, dict):
+            upstream_version = _upstream_version(agent)
+            if isinstance(params, dict) and upstream_version == "0.3":
                 params = normalize_request_params(params, served_version, method=method)
+            if upstream_version == "1.0":
+                forward_method = _WIRE_TO_PASCAL.get(method, method)
+                forward_headers = {**(agent_extra_headers or {}), "A2A-Version": "1.0"}
+            else:
+                forward_method = method
+                forward_headers = agent_extra_headers
             forward_body = {
                 "jsonrpc": "2.0",
                 "id": request_id,
-                "method": method,
+                "method": forward_method,
                 "params": params,
             }
             return await _forward_jsonrpc_sse(
                 agent_url,
                 forward_body,
                 request_id=request_id,
-                extra_headers=agent_extra_headers,
+                extra_headers=forward_headers,
                 proxy_logging_obj=proxy_logging_obj,
-                user_api_key_dict=user_api_key_auth_for_call,
+                user_api_key_dict=user_api_key_dict,
                 request_data=data,
                 served_version=served_version,
             )
