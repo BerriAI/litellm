@@ -1,12 +1,16 @@
+import asyncio
 import copy
+import json
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Final, Literal
+from unittest.mock import patch
 
 import pytest
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
+import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
 from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -503,6 +507,54 @@ async def test_removed_members_lose_their_team_keys_and_every_cache_entry_for_th
     assert _teams_of(prisma, "bob") == ["t2"]
     assert (cache.get_cache("k-bob"), cache.get_cache(jwt_key), cache.get_cache("bob")) == (None, None, None)
     assert cache.get_cache("k-alice") is not None
+
+
+class _SlowPublishRedisClient:
+    def __init__(self) -> None:
+        self.published: list[str] = []
+
+    async def publish(self, channel: str, message: str) -> int:
+        await asyncio.sleep(0.001)
+        self.published.append(message)
+        return 1
+
+
+class _PubSubRedisCache:
+    namespace = None
+
+    def __init__(self, client: _SlowPublishRedisClient) -> None:
+        self._client = client
+
+    def init_pubsub_client(self) -> _SlowPublishRedisClient:
+        return self._client
+
+
+@pytest.mark.asyncio
+async def test_removing_hundreds_of_members_at_once_broadcasts_every_key_and_member_eviction(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
+    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
+    client = _SlowPublishRedisClient()
+    removed = [f"u{index:03d}" for index in range(500)]
+    prisma = _FakePrisma(
+        users=[_user(u, TEAM) for u in removed],
+        teams=[_team(*(_member(u) for u in removed))],
+        memberships=[(TEAM, u) for u in removed],
+        tokens=[{"token": f"key-{u}-{k}", "user_id": u, "team_id": TEAM} for u in removed for k in range(3)],
+    )
+
+    with patch(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+        return_value=_PubSubRedisCache(client),
+    ):
+        outcome = await _sync(prisma, RosterTarget(member_ids=frozenset()))
+        await pubsub_module.await_publish_backlog()
+
+    assert isinstance(outcome, RosterSync) and outcome.removed == frozenset(removed)
+    broadcast = {json.loads(message)["cache_key"] for message in client.published}
+    assert {f"key-{u}-{k}" for u in removed for k in range(3)} <= broadcast
+    assert set(removed) <= broadcast
 
 
 @pytest.mark.asyncio

@@ -24,7 +24,11 @@ from litellm.proxy.auth.auth_checks import (
     get_jwt_key_mapping_cache_keys_for_tokens,
     invalidate_team_member_spend_state,
 )
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    PUBLISH_BACKLOG_SLICE,
+    await_publish_backlog,
+    evict_and_broadcast,
+)
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -281,13 +285,21 @@ async def _settle_caches(
         proxy_logging_obj=proxy_logging_obj,
     )
     await evict_and_broadcast(cache_keys=removal.jwt_mapping_cache_keys, user_api_key_cache=user_api_key_cache)
-    await evict_and_broadcast(cache_keys=changed_user_ids, user_api_key_cache=user_api_key_cache)
+    for start in range(0, len(changed_user_ids), PUBLISH_BACKLOG_SLICE):
+        await await_publish_backlog()
+        await _settle_member_caches(team, changed_user_ids[start : start + PUBLISH_BACKLOG_SLICE], user_api_key_cache)
+
+
+async def _settle_member_caches(
+    team: LiteLLM_TeamTable, user_ids: Sequence[str], user_api_key_cache: UserApiKeyCache
+) -> None:
+    await evict_and_broadcast(cache_keys=user_ids, user_api_key_cache=user_api_key_cache)
     await asyncio.gather(
         *(
             invalidate_team_member_spend_state(
                 user_id=user_id, team_id=team.team_id, user_api_key_cache=user_api_key_cache
             )
-            for user_id in changed_user_ids
+            for user_id in user_ids
         )
     )
 
