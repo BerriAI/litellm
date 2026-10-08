@@ -80,6 +80,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
   const [userOptions, setUserOptions] = useState<UserOption[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [selectedField, setSelectedField] = useState<SearchField>("user_email");
+  const [searchQuery, setSearchQuery] = useState("");
   const [usersSharingEmail, setUsersSharingEmail] = useState<User[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const latestSearchRef = useRef(0);
@@ -121,6 +122,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
 
   const handleSearch = (value: string, fieldName: SearchField): void => {
     setSelectedField(fieldName);
+    setSearchQuery(value);
     void fetchUsers(value, fieldName);
   };
 
@@ -149,6 +151,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
   const handleClose = (): void => {
     form.reset(emptyValues);
     setUserOptions([]);
+    setSearchQuery("");
     setUsersSharingEmail([]);
     onCancel();
   };
@@ -168,7 +171,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
     testId?: string,
   ) => {
     const sharedEmailOptions = fieldName === "user_id" ? groupUsersByField(usersSharingEmail, "user_id") : [];
-    const items = selectedField === fieldName ? userOptions : sharedEmailOptions;
+    const items = selectedField === fieldName && searchQuery !== "" ? userOptions : sharedEmailOptions;
     const handleValueChange = (value: string | null) => {
       if (value === null) {
         form.setValue("user_email", null);

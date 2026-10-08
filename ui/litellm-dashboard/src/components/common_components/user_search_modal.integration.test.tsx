@@ -246,6 +246,27 @@ describe("UserSearchModal users sharing an email", () => {
     });
     expect(userFilterUICall).toHaveBeenCalledTimes(1);
   });
+
+  it("lists the shared email's user IDs again when the ID dropdown reopens after a search", async () => {
+    const user = userEvent.setup();
+    render(<UserSearchModal isVisible onCancel={vi.fn()} onSubmit={vi.fn()} accessToken="sk-test" />);
+
+    const emailInput = getEmailSearchInput();
+    await user.click(emailInput);
+    await user.type(emailInput, "shared");
+    await user.click((await screen.findAllByRole("option"))[0]);
+
+    vi.mocked(userFilterUICall).mockResolvedValue([] as never);
+    const idInput = screen.getByLabelText("User ID");
+    await user.click(idInput);
+    await user.type(idInput, "zzz");
+    await waitFor(() => expect(userFilterUICall).toHaveBeenCalledTimes(2), { timeout: 3000 });
+    await user.keyboard("{Escape}");
+    await user.click(idInput);
+
+    const idOptions = await screen.findAllByRole("option", {}, { timeout: 3000 });
+    expect(idOptions.map((option) => option.textContent)).toEqual(["u-first", "u-second"]);
+  });
 });
 
 describe("UserSearchModal search lifecycle", () => {
