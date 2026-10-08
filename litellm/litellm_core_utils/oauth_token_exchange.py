@@ -60,14 +60,14 @@ class OAuthTokenExchangeError(Exception):
 
 
 class _OAuthTokenResponse(BaseModel):
-    model_config = ConfigDict(extra="ignore", strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     access_token: str
     expires_in: int = Field(gt=0)
 
 
 class _OAuthErrorResponse(BaseModel):
-    model_config = ConfigDict(extra="ignore", strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     error: str | None = None
     error_description: str | None = None

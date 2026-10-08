@@ -340,7 +340,7 @@ class ModelInfo(MirroredPricingParams):
 class CredentialLiteLLMParams(LiteLLMBaseModel):
     if TYPE_CHECKING:
 
-        def __init__(self, /, **data: object) -> None: ...
+        def __init__(self, /, **data: object) -> None: ...  # kwargs-ok: credential fields vary by provider
 
     api_key: str | None = None
     api_base: str | None = None
@@ -474,7 +474,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
 
     if TYPE_CHECKING:
 
-        def __init__(self, /, **data: object) -> None: ...
+        def __init__(self, /, **data: object) -> None: ...  # kwargs-ok: provider parameters vary by deployment
 
     custom_llm_provider: str | None = None
     tpm: int | None = None
@@ -623,7 +623,7 @@ class LiteLLM_Params(GenericLiteLLMParams):
 
     if TYPE_CHECKING:
 
-        def __init__(self, *, model: str, **data: object) -> None: ...
+        def __init__(self, *, model: str, **data: object) -> None: ...  # kwargs-ok: provider fields vary by model
 
     model: str
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
@@ -650,7 +650,7 @@ class updateLiteLLMParams(GenericLiteLLMParams):
     # only differece is model is optional
     if TYPE_CHECKING:
 
-        def __init__(self, *, model: str | None = None, **data: object) -> None: ...
+        def __init__(self, *, model: str | None = None, **data: object) -> None: ...  # kwargs-ok: updates vary by provider
 
     model: str | None = None
 

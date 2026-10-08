@@ -172,15 +172,12 @@ class TestVoyageMultimodalEmbeddings:
         assert headers == {"Authorization": "Bearer test-key"}
 
     def test_validate_environment_uses_secret_fallback(self, monkeypatch):
-        import litellm.llms.voyage.embedding.transformation_multimodal as module
         from litellm.llms.voyage.embedding.transformation_multimodal import (
             VoyageMultimodalEmbeddingConfig,
         )
 
-        def fake_get_secret(name):
-            return "secret-key" if name == "VOYAGE_AI_API_KEY" else None
-
-        monkeypatch.setattr(module, "get_secret_str", fake_get_secret)
+        monkeypatch.delenv("VOYAGE_API_KEY", raising=False)
+        monkeypatch.setenv("VOYAGE_AI_API_KEY", "secret-key")
         config = VoyageMultimodalEmbeddingConfig()
         headers = config.validate_environment(
             {}, "voyage-multimodal-3.5", [], {}, {}, api_key=None
@@ -188,12 +185,12 @@ class TestVoyageMultimodalEmbeddings:
         assert headers == {"Authorization": "Bearer secret-key"}
 
     def test_validate_environment_raises_without_api_key(self, monkeypatch):
-        import litellm.llms.voyage.embedding.transformation_multimodal as module
         from litellm.llms.voyage.embedding.transformation_multimodal import (
             VoyageMultimodalEmbeddingConfig,
         )
 
-        monkeypatch.setattr(module, "get_secret_str", lambda name: None)
+        for env_var in ("VOYAGE_API_KEY", "VOYAGE_AI_API_KEY", "VOYAGE_AI_TOKEN"):
+            monkeypatch.delenv(env_var, raising=False)
         config = VoyageMultimodalEmbeddingConfig()
         with pytest.raises(ValueError, match='Voyage API key is required for multimodal embeddings\\. Set') as exc_info:
             config.validate_environment(
