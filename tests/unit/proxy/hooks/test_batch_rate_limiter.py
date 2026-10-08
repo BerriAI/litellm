@@ -380,16 +380,17 @@ async def test_batch_rate_limit_single_file_under_and_over_tpm(openai_files: res
     user_api_key_dict: Final = UserAPIKeyAuth(api_key="test-key-123", tpm_limit=200, rpm_limit=10)
     _, _, small_limiter = _make_limiters()
 
+    data_small: Final = dict(_create_batch_data("file-small"))
     result: Final = await small_limiter.async_pre_call_hook(
         user_api_key_dict=user_api_key_dict,
         cache=DualCache(),
-        data=dict(_create_batch_data("file-small")),
+        data=data_small,
         call_type="acreate_batch",
     )
 
-    assert isinstance(result, dict)
-    assert result["_batch_token_count"] == _token_counter_total(small_rows)
-    assert result["_batch_request_count"] == 3
+    assert result is data_small
+    assert data_small["_batch_token_count"] == _token_counter_total(small_rows)
+    assert data_small["_batch_request_count"] == 3
 
     _, _, big_limiter = _make_limiters()
     with pytest.raises(HTTPException) as exc_info:
@@ -416,14 +417,15 @@ async def test_batch_rate_limit_cumulative_tpm_rejects_second_request(openai_fil
     first_tokens: Final = _token_counter_total(first_rows)
     assert first_tokens <= 200 < first_tokens + _token_counter_total(second_rows)
 
+    first_data: Final = dict(_create_batch_data("file-1"))
     first_result: Final = await batch_limiter.async_pre_call_hook(
         user_api_key_dict=user_api_key_dict,
         cache=DualCache(),
-        data=dict(_create_batch_data("file-1")),
+        data=first_data,
         call_type="acreate_batch",
     )
-    assert isinstance(first_result, dict)
-    assert first_result["_batch_token_count"] == first_tokens
+    assert first_result is first_data
+    assert first_data["_batch_token_count"] == first_tokens
 
     with pytest.raises(HTTPException) as exc_info:
         await batch_limiter.async_pre_call_hook(
@@ -445,17 +447,18 @@ async def test_batch_rate_limiter_reads_a_provider_file_with_user_context(openai
     rows: Final = _batch_rows(("This is a test message for batch rate limiting with managed files. " * 5,) * 3)
     content_route: Final = _serve_file(openai_files, "file-abc123", rows)
 
+    data: Final = dict(_create_batch_data("file-abc123"))
     result: Final = await batch_limiter.async_pre_call_hook(
         user_api_key_dict=user_api_key_dict,
         cache=DualCache(),
-        data=dict(_create_batch_data("file-abc123")),
+        data=data,
         call_type="acreate_batch",
     )
 
     assert content_route.call_count == 1
-    assert isinstance(result, dict)
-    assert result["_batch_token_count"] == _token_counter_total(rows)
-    assert result["_batch_request_count"] == 3
+    assert result is data
+    assert data["_batch_token_count"] == _token_counter_total(rows)
+    assert data["_batch_request_count"] == 3
 
 
 @pytest.mark.asyncio
