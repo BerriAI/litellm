@@ -20,6 +20,7 @@ export interface AgentsAndGroups {
 export interface KeyEditFormValues {
   key_alias?: string;
   models?: string[];
+  aliases?: Record<string, string>;
   allowed_routes?: string;
   max_budget?: number | string | null;
   soft_budget?: number | string | null;
@@ -68,6 +69,7 @@ const readMetadata = (keyData: KeyResponse, key: string): unknown =>
 export const toKeyEditFormValues = (keyData: KeyResponse): KeyEditFormValues => ({
   key_alias: keyData.key_alias,
   models: keyData.models,
+  aliases: keyData.aliases ?? {},
   allowed_routes:
     Array.isArray(keyData.allowed_routes) && keyData.allowed_routes.length > 0 ? keyData.allowed_routes.join(", ") : "",
   max_budget: keyData.max_budget,
@@ -124,6 +126,7 @@ export const toKeyEditFormValues = (keyData: KeyResponse): KeyEditFormValues => 
 export const keyEditFormSchema = z.object({
   key_alias: z.custom<string | undefined>().optional(),
   models: z.custom<string[] | undefined>().optional(),
+  aliases: z.record(z.string(), z.string()).optional(),
   allowed_routes: z.custom<string | undefined>().optional(),
   max_budget: z.custom<number | string | null | undefined>().optional(),
   soft_budget: z.custom<number | string | null | undefined>().optional(),
@@ -173,14 +176,16 @@ export const keyEditFormSchema = z.object({
 export interface MountedFieldGates {
   canViewPolicies: boolean;
   canViewPrompts: boolean;
+  aliasesChanged?: boolean;
 }
 
 export const toSubmittedValues = (
   values: KeyEditFormValues,
-  { canViewPolicies, canViewPrompts }: MountedFieldGates,
+  { canViewPolicies, canViewPrompts, aliasesChanged }: MountedFieldGates,
 ): Record<string, unknown> => ({
   key_alias: values.key_alias,
   models: values.models,
+  ...(aliasesChanged ? { aliases: values.aliases } : {}),
   allowed_routes: values.allowed_routes,
   max_budget: values.max_budget,
   soft_budget: values.soft_budget,

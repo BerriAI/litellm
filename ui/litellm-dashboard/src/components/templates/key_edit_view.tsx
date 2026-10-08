@@ -33,7 +33,9 @@ import {
 import {
   KeyAgentAndSkillFields,
   KeyBudgetNumberField,
+  KeyBudgetWindowsField,
   KeyMetadataField,
+  KeyModelAliasField,
   KeyRateLimitFields,
   KeyTypeSelect,
   labelWithHint,
@@ -55,7 +57,7 @@ import {
 } from "../key_team_helpers/endUserBudgetPayload";
 import { ModelMaxBudgetField } from "../key_team_helpers/ModelMaxBudgetEditor";
 import { useModelMaxBudgetField } from "../key_team_helpers/useModelMaxBudgetField";
-import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
+import { BudgetWindowEntry } from "../key_team_helpers/BudgetWindowsEditor";
 import {
   TagRateLimitEditor,
   TagRateLimitEntry,
@@ -140,6 +142,7 @@ export function KeyEditView({
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const hasProject = Boolean(keyData.project_id);
   const detachProject = hasProject && form.watch("project_id") === null;
+  const aliasesChanged = Boolean(form.formState.dirtyFields.aliases);
   const canDetachProject = canDetachKeyProject(team, organizations, userID, userRole);
 
   const allowedRoutesValue = form.watch("allowed_routes");
@@ -235,7 +238,6 @@ export function KeyEditView({
             .filter((route: string) => route.length > 0);
         }
       }
-      // If it's already an array (shouldn't happen, but handle it), keep as is
 
       // Backend rejects non-empty allowed_routes from non-admins, so re-sending
       // an unchanged value 403s a team admin. Set compare tolerates reorder.
@@ -366,7 +368,7 @@ export function KeyEditView({
         onSubmit={(event) => {
           moveMetadataTagsToTagsField(form);
           return form.handleSubmit((values) =>
-            handleSubmit(toSubmittedValues(values, { canViewPolicies, canViewPrompts })),
+            handleSubmit(toSubmittedValues(values, { canViewPolicies, canViewPrompts, aliasesChanged })),
           )(event);
         }}
       >
@@ -400,6 +402,8 @@ export function KeyEditView({
               />
             )}
           </FormField>
+
+          <KeyModelAliasField control={form.control} accessToken={accessToken ?? ""} />
 
           <Field>
             <FieldLabel htmlFor={keyTypeFieldId}>Key Type</FieldLabel>
@@ -465,15 +469,7 @@ export function KeyEditView({
             )}
           </FormField>
 
-          <Field>
-            <FieldLabel>
-              {labelWithHint(
-                "Budget Windows",
-                "Set multiple independent budget windows (e.g., hourly $10 AND monthly $200). Each window tracks spend separately and resets on its own schedule.",
-              )}
-            </FieldLabel>
-            <BudgetWindowsEditor value={budgetLimits} onChange={setBudgetLimits} />
-          </Field>
+          <KeyBudgetWindowsField value={budgetLimits} onChange={setBudgetLimits} />
 
           <ModelMaxBudgetField
             key={keyData.token}
