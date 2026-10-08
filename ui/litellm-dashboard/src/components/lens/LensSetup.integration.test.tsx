@@ -26,7 +26,8 @@ function serve({ enabled = false, traces = false, requests = false, connected = 
     if (path === "/lens/service")
       return Response.json({
         url: "https://traces.test",
-        connected: true,
+        configured: enabled,
+        connected: enabled,
         status: { storage_ready: true, credentials_ready: true },
       });
     if (path === "/v1/traces")
@@ -222,7 +223,7 @@ describe("Lens setup journey", () => {
     const intro = within(await screen.findByRole("region", { name: "Get started with Lens" }));
     expect(await intro.findByRole("heading", { name: "Before you start" })).toBeVisible();
     expect(intro.getByRole("button", { name: "Connect worker" })).toBeEnabled();
-    await user.click(intro.getByRole("button", { name: /Enable tracing on the gateway/ }));
+    await user.click(intro.getByRole("button", { name: /Install Lens/ }));
     expect(intro.getByRole("button", { name: "Continue with request logs" })).toBeEnabled();
     await user.click(intro.getByRole("button", { name: /Send your first trace/ }));
     await user.click(intro.getByRole("button", { name: "Continue with request logs" }));

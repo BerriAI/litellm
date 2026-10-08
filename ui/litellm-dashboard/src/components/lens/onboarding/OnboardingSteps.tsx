@@ -159,8 +159,8 @@ interface StepDefinition {
 
 const STEPS: readonly StepDefinition[] = [
   {
-    title: "Enable tracing on the gateway",
-    description: "Connect ClickHouse and restart the gateway.",
+    title: "Install Lens",
+    description: "Enable Lens in your Helm or Docker deployment.",
     complete: (state) => state.tracingEnabled,
     Content: StorageStep,
   },
@@ -172,7 +172,7 @@ const STEPS: readonly StepDefinition[] = [
   },
   {
     title: "Connect a worker",
-    description: "Choose a model and run the worker on your infrastructure.",
+    description: "Choose an analysis model and spending limit.",
     complete: (state) => state.connected,
     Content: WorkerStep,
   },

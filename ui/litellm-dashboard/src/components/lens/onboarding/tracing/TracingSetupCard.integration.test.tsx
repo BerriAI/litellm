@@ -1,7 +1,7 @@
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { chooseSelectOption, renderWithProviders } from "@/../tests/test-utils";
+import { chooseSelectOption, renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { copyToClipboard } from "@/utils/dataUtils";
 import { agentTraceCall, apiClient } from "../../../networking";
 import {
@@ -51,11 +51,14 @@ const renderCard = async (
 
 const network = vi.fn<typeof fetch>();
 beforeEach(() => {
+  testQueryClient.clear();
   vi.clearAllMocks();
   vi.stubGlobal("fetch", network);
   network.mockResolvedValue(Response.json({}));
   vi.mocked(apiClient.get).mockResolvedValue({
     url: "https://traces.test",
+    configured: true,
+    release: "v1.2.3",
     connected: true,
     status: { storage_ready: true, credentials_ready: true },
   });
@@ -72,7 +75,6 @@ describe("TracingSetupCard", () => {
     expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
     expect(network).not.toHaveBeenCalled();
     expect(card).not.toHaveTextContent("store: clickhouse");
-    await user.click(screen.getByText("Set up manually"));
     expect(screen.getByText(/^export LITELLM_TRACING_KEY=/)).toBeVisible();
     expect(card).not.toHaveTextContent(/langsmith/i);
   });
@@ -114,7 +116,6 @@ describe("TracingSetupCard", () => {
       normalizeWhitespace: false,
     });
 
-    await user.click(screen.getByText("Set up manually"));
     expect(screen.getByText(/^pip install opentelemetry-distro/)).toHaveTextContent(
       "crewai openinference-instrumentation-crewai",
     );
@@ -128,7 +129,6 @@ describe("TracingSetupCard", () => {
     const user = userEvent.setup();
     const { card } = await renderCard();
     await chooseSelectOption(user, screen.getByRole("combobox", { name: "Your agent framework" }), "Vercel AI SDK");
-    await user.click(screen.getByText("Set up manually"));
     expect(screen.queryByRole("combobox", { name: "Model" })).not.toBeInTheDocument();
     expect(card).toHaveTextContent("npm install ai @ai-sdk/otel");
     expect(card).toHaveTextContent('const AGENT_NAME = "research_agent"');
@@ -145,7 +145,6 @@ describe("TracingSetupCard", () => {
     vi.mocked(apiClient.post).mockResolvedValue({ key: SECRET });
     const { card } = await renderCard();
     await chooseSelectOption(user, screen.getByRole("combobox", { name: "Your agent framework" }), "Hermes");
-    await user.click(screen.getByText("Set up manually"));
     expect(screen.queryByRole("combobox", { name: "Model" })).not.toBeInTheDocument();
     expect(card).toHaveTextContent("Keep your existing model settings");
     await user.click(screen.getByRole("button", { name: "Generate tracing key" }));
@@ -175,7 +174,6 @@ describe("TracingSetupCard", () => {
     const user = userEvent.setup();
     vi.mocked(apiClient.post).mockResolvedValue({ key: SECRET });
     const { card } = await renderCard();
-    await user.click(screen.getByText("Set up manually"));
     await user.click(screen.getByRole("button", { name: "Generate tracing key" }));
 
     expect(await screen.findByText("Your tracing key")).toBeVisible();
@@ -226,18 +224,66 @@ describe("TracingSetupCard", () => {
     expect(screen.queryByRole("button", { name: /View trace/ })).not.toBeInTheDocument();
   });
 
-  it("guides proxy setup before agent setup and allows checking readiness", async () => {
+  it("shows matching-version installation instructions without changing the landing design", async () => {
     const user = userEvent.setup();
     const onCheck = vi.fn();
+    vi.mocked(apiClient.get).mockResolvedValue({
+      configured: false,
+      connected: false,
+      release: "v1.2.3",
+      url: "",
+      status: {},
+    });
     const { card } = await renderCard({ detail: "Agent tracing is not enabled", onCheck });
-    expect(screen.getByRole("heading", { name: "Enable tracing" })).toBeVisible();
-    expect(card).toHaveTextContent("LITELLM_LENS_URL");
-    expect(card).toHaveTextContent("LITELLM_LENS_SERVICE_TOKEN");
+    expect(await screen.findByText("Install Lens")).toBeVisible();
+    expect(card).toHaveTextContent("Use Lens v1.2.3 to match this LiteLLM deployment");
+    expect(screen.getByRole("link", { name: "Helm setup" })).toHaveAttribute(
+      "href",
+      "https://docs.litellm.ai/docs/proxy/lens/deployment#using-helm",
+    );
+    expect(screen.getByRole("link", { name: "Docker setup" })).toHaveAttribute(
+      "href",
+      "https://docs.litellm.ai/docs/proxy/lens/deployment#using-docker",
+    );
     expect(screen.queryByRole("combobox", { name: "Your agent framework" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Send a test trace" })).not.toBeInTheDocument();
+    vi.mocked(apiClient.get).mockResolvedValue({
+      configured: true,
+      connected: true,
+      url: "https://traces.test",
+      status: { storage_ready: true },
+    });
     await user.click(screen.getByRole("button", { name: "Check setup" }));
     expect(onCheck).toHaveBeenCalledOnce();
-    expect(screen.getByText(/Tracing is still unavailable/)).toBeVisible();
+    expect(await screen.findByRole("combobox", { name: "Your agent framework" })).toBeVisible();
+  });
+
+  it.each([
+    [false, false, "Lens is configured, but LiteLLM cannot reach it"],
+    [true, false, "Lens is connected, but its trace storage is unavailable"],
+  ])(
+    "explains a configured service failure without recommending reinstallation",
+    async (connected, storageReady, message) => {
+      vi.mocked(apiClient.get).mockResolvedValue({
+        configured: true,
+        connected,
+        url: "https://traces.test",
+        status: { storage_ready: storageReady },
+      });
+      await renderCard({ detail: "Service unavailable" });
+      expect(await screen.findByText(message, { exact: false })).toBeVisible();
+      expect(screen.queryByText("Install Lens")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Generate tracing key" })).not.toBeInTheDocument();
+    },
+  );
+
+  it("shows the copyable configuration without another disclosure and includes the generated key", async () => {
+    const user = userEvent.setup();
+    await renderCard();
+    expect(screen.getByText(/^export LITELLM_TRACING_KEY=/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Generate tracing key" }));
+    await screen.findByText("Your tracing key");
+    await user.click(screen.getByRole("button", { name: "Copy tracing configuration" }));
+    expect(copyToClipboard).toHaveBeenLastCalledWith(tracingEnvSnippet("https://traces.test", SECRET));
   });
 });
 

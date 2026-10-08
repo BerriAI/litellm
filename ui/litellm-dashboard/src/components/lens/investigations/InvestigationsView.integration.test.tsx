@@ -445,7 +445,7 @@ it("guides a first-time administrator into worker connection and lens setup", as
     expect.objectContaining({ authorization: "Bearer test" }),
   );
   expect(guide.queryByRole("button", { name: /Send your first trace/ })).not.toBeInTheDocument();
-  expect(guide.queryByRole("button", { name: /Enable tracing on the gateway/ })).not.toBeInTheDocument();
+  expect(guide.queryByRole("button", { name: /Install Lens/ })).not.toBeInTheDocument();
   expect(guide.getByRole("button", { name: /Connect a worker/ })).toHaveAttribute("aria-expanded", "true");
   expect(guide.queryByRole("button", { name: "View traces" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();

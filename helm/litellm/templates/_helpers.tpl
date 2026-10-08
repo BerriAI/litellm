@@ -520,11 +520,11 @@ shutdown drain window.
 - name: LITELLM_LENS_URL
   value: {{ printf "http://%s-lens-worker:%v" (include "litellm.fullname" .) .Values.lensWorker.service.port | quote }}
 - name: LITELLM_LENS_PUBLIC_URL
-  value: {{ required "lensWorker.publicUrl is required" .Values.lensWorker.publicUrl | quote }}
+  value: {{ include "litellm.lensWorker.publicUrl" . | quote }}
 - name: LITELLM_LENS_SERVICE_TOKEN
   valueFrom:
     secretKeyRef:
-      name: {{ required "lensWorker.serviceTokenSecret.name is required" .Values.lensWorker.serviceTokenSecret.name | quote }}
+      name: {{ include "litellm.lensWorker.serviceTokenSecretName" . | quote }}
       key: {{ .Values.lensWorker.serviceTokenSecret.key | quote }}
 {{- end }}
 {{- end -}}
@@ -533,4 +533,25 @@ shutdown drain window.
 {{- $labels := include "litellm.commonLabels" . | fromYaml -}}
 {{- $_ := set $labels "app.kubernetes.io/name" (printf "%s-lens-worker" (include "litellm.name" . | trunc 51 | trimSuffix "-")) -}}
 {{- toYaml $labels -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.serviceTokenSecretName" -}}
+{{- .Values.lensWorker.serviceTokenSecret.name | default (printf "%s-lens-service" (include "litellm.fullname" .)) -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.bundledClickhouse" -}}
+{{- if and .Values.lensWorker.enabled .Values.lensWorker.clickhouse.enabled (not .Values.lensWorker.clickhouseSecret.name) -}}true{{- end -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.publicUrl" -}}
+{{- if .Values.lensWorker.publicUrl -}}
+{{- .Values.lensWorker.publicUrl -}}
+{{- else if .Values.lensWorker.ingress.enabled -}}
+{{- printf "%s://%s" (ternary "https" "http" (not (empty .Values.lensWorker.ingress.tls))) (required "lensWorker.ingress.host is required" .Values.lensWorker.ingress.host) -}}
+{{- else if and .Values.ingress.enabled .Values.ingress.host -}}
+{{- $tls := or (not (empty .Values.ingress.tls)) (hasKey .Values.ingress.annotations "alb.ingress.kubernetes.io/certificate-arn") -}}
+{{- printf "%s://%s/lens-ingest" (ternary "https" "http" $tls) .Values.ingress.host -}}
+{{- else -}}
+{{- fail "lensWorker.publicUrl is required when there is no single ingress hostname" -}}
+{{- end -}}
 {{- end -}}
