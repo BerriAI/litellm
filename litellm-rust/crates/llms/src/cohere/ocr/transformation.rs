@@ -25,8 +25,9 @@ const COHERE_API_KEY_ENV: &str = "COHERE_API_KEY";
 
 const COHERE_PARSE_HEALTH_CHECK_IMAGE_DATA_URI: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC";
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, strum::IntoStaticStr)]
 #[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
 pub enum OutputFormat {
     #[default]
     Markdown,
@@ -267,11 +268,7 @@ fn build_request(model: &str, image_url: String, params: &CohereOptions) -> Cohe
     CohereRequest {
         model: model.into(),
         document: CohereParseDocument::ImageUrl { image_url },
-        output_format: match params.output_format.unwrap_or_default() {
-            OutputFormat::Markdown => "markdown",
-            OutputFormat::Blocks => "blocks",
-        }
-        .into(),
+        output_format: <&'static str>::from(params.output_format.unwrap_or_default()).into(),
     }
 }
 

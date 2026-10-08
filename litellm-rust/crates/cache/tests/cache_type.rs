@@ -1,5 +1,6 @@
 use litellm_cache::CacheType;
 use rstest::rstest;
+use strum::VariantArray;
 
 #[rstest]
 #[case(CacheType::Local, "local")]
@@ -22,7 +23,7 @@ fn every_python_cache_type_has_one_round_trip_identity(
         serde_json::Value::from(name)
     );
     assert_eq!(
-        CacheType::ALL
+        CacheType::VARIANTS
             .iter()
             .filter(|candidate| candidate.as_python_name() == name)
             .count(),
@@ -33,7 +34,11 @@ fn every_python_cache_type_has_one_round_trip_identity(
 #[rstest]
 fn python_cache_types_are_listed_in_python_order() {
     assert_eq!(
-        CacheType::ALL.map(CacheType::as_python_name),
+        CacheType::VARIANTS
+            .iter()
+            .copied()
+            .map(CacheType::as_python_name)
+            .collect::<Vec<_>>(),
         [
             "local",
             "redis",

@@ -9,7 +9,7 @@ pub use content::{
 
 /// Reasoning effort level accepted or applied by the model.
 #[macro_rules_attribute::apply(crate::wire_type)]
-#[derive(Copy, Eq, IntoStaticStr)]
+#[derive(Copy, Eq, IntoStaticStr, strum::EnumString, strum::VariantArray)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum ReasoningEffort {
@@ -23,24 +23,12 @@ pub enum ReasoningEffort {
 }
 
 impl ReasoningEffort {
-    pub const ALL: [Self; 7] = [
-        Self::None,
-        Self::Minimal,
-        Self::Low,
-        Self::Medium,
-        Self::High,
-        Self::Xhigh,
-        Self::Max,
-    ];
-
     pub fn as_str(self) -> &'static str {
         self.into()
     }
 
     pub fn parse(value: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|effort| effort.as_str() == value)
+        value.parse().ok()
     }
 }
 
@@ -195,6 +183,7 @@ pub struct ChatCompletionChunk {
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
+    use strum::VariantArray;
 
     use super::*;
 
@@ -216,7 +205,7 @@ mod tests {
             Value::String(effort.as_str().to_string())
         );
         assert_eq!(ReasoningEffort::parse(effort.as_str()), Some(effort));
-        assert!(ReasoningEffort::ALL.contains(&effort));
+        assert!(ReasoningEffort::VARIANTS.contains(&effort));
     }
 
     #[rstest]

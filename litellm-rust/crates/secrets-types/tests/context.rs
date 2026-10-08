@@ -6,6 +6,7 @@ use litellm_secrets_types::{
     SecretWriteContext,
 };
 use rstest::{fixture, rstest};
+use strum::VariantArray;
 
 #[fixture]
 fn timeout() -> Duration {
@@ -129,13 +130,7 @@ fn provider_context_accepts_only_its_owner(
     #[case] owner: KeyManagementSystem,
     #[case] context: SecretOperationContext,
 ) {
-    for system in [
-        KeyManagementSystem::AwsSecretManager,
-        KeyManagementSystem::AzureKeyVault,
-        KeyManagementSystem::GoogleSecretManager,
-        KeyManagementSystem::HashicorpVault,
-        KeyManagementSystem::Cyberark,
-    ] {
+    for system in KeyManagementSystem::VARIANTS.iter().copied() {
         assert_eq!(context.validate_for(system).is_ok(), system == owner);
         assert!(SecretOperationContext::Default.validate_for(system).is_ok());
     }

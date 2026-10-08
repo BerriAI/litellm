@@ -15,6 +15,8 @@ use crate::{
 /// Claude Code's built-in tracing, identified by its instrumentation scope.
 pub(crate) struct ClaudeCode;
 
+#[derive(Debug, PartialEq, Eq, strum::EnumString)]
+#[strum(serialize_all = "snake_case")]
 enum SpanType {
     AssistantResponse,
     ToolResult,
@@ -23,6 +25,7 @@ enum SpanType {
     Interaction,
     LlmRequest,
     Tool,
+    #[strum(disabled)]
     Other,
 }
 
@@ -33,16 +36,7 @@ fn span_type(name: &str, attributes: &BTreeMap<String, String>) -> SpanType {
     } else {
         kind
     };
-    match kind {
-        "assistant_response" => SpanType::AssistantResponse,
-        "tool_result" => SpanType::ToolResult,
-        "api_request_body" => SpanType::ApiRequestBody,
-        "compaction" => SpanType::Compaction,
-        "interaction" => SpanType::Interaction,
-        "llm_request" => SpanType::LlmRequest,
-        "tool" => SpanType::Tool,
-        _ => SpanType::Other,
-    }
+    kind.parse().unwrap_or(SpanType::Other)
 }
 
 /// `agent:custom:search_agent` -> `search_agent`: the subagent a request ran for.
@@ -318,7 +312,7 @@ mod tests {
     use rstest::rstest;
     use serde_json::Value;
 
-    use super::CLAUDE_CODE_SCOPE;
+    use super::{CLAUDE_CODE_SCOPE, SpanType, span_type};
     use crate::{
         Error,
         normalize::{Normalization, NormalizedSpan, ObservationType},
@@ -353,6 +347,22 @@ mod tests {
             .iter()
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
             .collect()
+    }
+
+    #[rstest]
+    #[case::assistant_response("assistant_response", SpanType::AssistantResponse)]
+    #[case::tool_result("tool_result", SpanType::ToolResult)]
+    #[case::api_request_body("api_request_body", SpanType::ApiRequestBody)]
+    #[case::compaction("compaction", SpanType::Compaction)]
+    #[case::interaction("interaction", SpanType::Interaction)]
+    #[case::llm_request("llm_request", SpanType::LlmRequest)]
+    #[case::tool("tool", SpanType::Tool)]
+    #[case::unknown("surprise", SpanType::Other)]
+    fn span_type_maps_each_recorded_kind(#[case] kind: &str, #[case] expected: SpanType) {
+        assert_eq!(
+            span_type("anything", &attributes(&[("span.type", kind)])),
+            expected
+        );
     }
 
     #[rstest]

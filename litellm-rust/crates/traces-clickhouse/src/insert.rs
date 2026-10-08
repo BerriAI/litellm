@@ -30,6 +30,8 @@ fn max_insert_bytes() -> Result<usize, Error> {
 
 pub type InsertRow = BTreeMap<String, Shared<Value>>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::EnumString, strum::IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
 pub enum InsertTable {
     OtelTraces,
     SpendLogs,
@@ -38,20 +40,11 @@ pub enum InsertTable {
 
 impl InsertTable {
     pub fn parse(value: &str) -> Result<Self, Error> {
-        match value {
-            "otel_traces" => Ok(Self::OtelTraces),
-            "spend_logs" => Ok(Self::SpendLogs),
-            "lens_feedback" => Ok(Self::LensFeedback),
-            _ => Err(Error::InvalidTable),
-        }
+        value.parse().map_err(|_| Error::InvalidTable)
     }
 
-    fn name(&self) -> &'static str {
-        match self {
-            Self::OtelTraces => "otel_traces",
-            Self::SpendLogs => "spend_logs",
-            Self::LensFeedback => "lens_feedback",
-        }
+    fn name(self) -> &'static str {
+        self.into()
     }
 }
 
@@ -242,7 +235,22 @@ mod tests {
     use rstest::rstest;
     use serde_json::json;
 
-    use super::{Error, shared_rows, write_rows};
+    use super::{Error, InsertTable, shared_rows, write_rows};
+
+    #[rstest]
+    #[case::otel_traces("otel_traces", InsertTable::OtelTraces)]
+    #[case::spend_logs("spend_logs", InsertTable::SpendLogs)]
+    #[case::lens_feedback("lens_feedback", InsertTable::LensFeedback)]
+    fn insert_table_parses_each_table_name(#[case] name: &str, #[case] expected: InsertTable) {
+        assert_eq!(InsertTable::parse(name).unwrap(), expected);
+    }
+
+    #[rstest]
+    #[case::unknown("events")]
+    #[case::case_sensitive("OTEL_TRACES")]
+    fn insert_table_rejects_unknown_names(#[case] name: &str) {
+        assert!(matches!(InsertTable::parse(name), Err(Error::InvalidTable)));
+    }
 
     #[rstest]
     fn encoded_limit_counts_utf8_bytes_across_rows() {

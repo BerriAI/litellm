@@ -10,6 +10,7 @@ use litellm_llms_types::{
 };
 use litellm_python_compat::{json::from_json, repr::repr, truthy::truthy};
 use serde_json::Value;
+use strum::VariantArray;
 
 use crate::base_llm::messages::context::{
     MessagesModelCapabilities, ThinkingBudgets, ThinkingContext,
@@ -54,7 +55,10 @@ fn unmapped_effort(effort: &Value) -> Error {
     Error::InvalidRequest(crate::ErrorDetail::InvalidChoice {
         field: "reasoning effort",
         actual: repr(&from_json(effort.clone())),
-        choices: ReasoningEffort::ALL.map(|effort| effort.as_str()).into(),
+        choices: ReasoningEffort::VARIANTS
+            .iter()
+            .map(|effort| effort.as_str())
+            .collect(),
     })
 }
 

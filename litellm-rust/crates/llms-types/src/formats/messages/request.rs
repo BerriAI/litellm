@@ -124,7 +124,7 @@ pub struct Message {
 }
 
 #[macro_rules_attribute::apply(crate::wire_type)]
-#[derive(Copy, Hash, IntoStaticStr, Eq)]
+#[derive(Copy, Hash, IntoStaticStr, Eq, strum::VariantArray)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum EffortLevel {

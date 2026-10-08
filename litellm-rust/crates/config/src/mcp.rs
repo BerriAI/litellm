@@ -41,8 +41,9 @@ impl fmt::Debug for McpServer {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, strum::IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum McpTransport {
     #[default]
     Http,
@@ -52,16 +53,13 @@ pub enum McpTransport {
 
 impl McpTransport {
     pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Http => "http",
-            Self::Sse => "sse",
-            Self::Stdio => "stdio",
-        }
+        self.into()
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, strum::IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum McpAuth {
     None,
     ApiKey,
@@ -79,19 +77,6 @@ pub enum McpAuth {
 
 impl McpAuth {
     pub fn as_str(self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::ApiKey => "api_key",
-            Self::BearerToken => "bearer_token",
-            Self::Basic => "basic",
-            Self::Authorization => "authorization",
-            Self::Token => "token",
-            Self::Oauth2 => "oauth2",
-            Self::AwsSigv4 => "aws_sigv4",
-            Self::Oauth2TokenExchange => "oauth2_token_exchange",
-            Self::Oauth2IdJag => "oauth2_id_jag",
-            Self::TruePassthrough => "true_passthrough",
-            Self::OauthDelegate => "oauth_delegate",
-        }
+        self.into()
     }
 }
