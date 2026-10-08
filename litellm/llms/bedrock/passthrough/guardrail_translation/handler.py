@@ -1,6 +1,9 @@
-from collections.abc import Mapping, Sequence
+import json
+from collections.abc import Callable, Mapping, Sequence
+from itertools import chain, groupby
 from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, TypeAlias
 
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -8,6 +11,19 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTra
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
+    scoped_structured_message_indices,
+)
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAssistantMessage,
+    ChatCompletionAssistantToolCall,
+    ChatCompletionSystemMessage,
+    ChatCompletionTextObject,
+    ChatCompletionToolCallFunctionChunk,
+    ChatCompletionToolMessage,
+    ChatCompletionToolParam,
+    ChatCompletionToolParamFunctionChunk,
+    ChatCompletionUserMessage,
 )
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -102,8 +118,8 @@ def _extract_converse_texts(
     inflating guardrail usage for a request whose only prompt is one user
     message. No other guardrail translation handler puts tool definitions in
     ``texts``; the chat and messages handlers carry them in the structured
-    ``tools`` input instead, which this handler does not populate because a
-    Bedrock ``toolSpec`` is not the OpenAI tool shape those consumers expect.
+    ``tools`` input instead, which this handler also populates by converting
+    each Bedrock ``toolSpec`` to the OpenAI tool shape.
 
     ``additionalModelRequestFields`` is treated differently on purpose. Bedrock
     gives ``toolConfig.tools`` a fixed schema whose contents are tool metadata by
@@ -141,6 +157,175 @@ def _extract_converse_texts(
 
     texts: Final = [container[key] for container, key in holders]
     return texts, holders
+
+
+class _ConverseModel(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True, populate_by_name=True)
+
+
+class _ConverseGuardText(_ConverseModel):
+    text: str = ""
+
+
+class _ConverseGuardContent(_ConverseModel):
+    text: _ConverseGuardText | None = None
+
+
+class _ConverseToolUse(_ConverseModel):
+    tool_use_id: str = Field(default="", alias="toolUseId")
+    name: str = ""
+    tool_input: object = Field(default=None, alias="input")
+
+
+class _ConverseToolResultContent(_ConverseModel):
+    text: str = ""
+    json_value: object = Field(default=None, alias="json")
+
+
+class _ConverseToolResult(_ConverseModel):
+    tool_use_id: str = Field(default="", alias="toolUseId")
+    content: tuple[_ConverseToolResultContent, ...] = ()
+
+
+class _ConverseContentBlock(_ConverseModel):
+    text: str = ""
+    guard_content: _ConverseGuardContent | None = Field(default=None, alias="guardContent")
+    tool_use: _ConverseToolUse | None = Field(default=None, alias="toolUse")
+    tool_result: _ConverseToolResult | None = Field(default=None, alias="toolResult")
+
+
+class _ConverseMessage(_ConverseModel):
+    role: str = ""
+    content: tuple[_ConverseContentBlock, ...] = ()
+
+
+class _ConverseToolInputSchema(_ConverseModel):
+    json_schema: Mapping[str, object] | None = Field(default=None, alias="json")
+
+
+class _ConverseToolSpec(_ConverseModel):
+    name: str = ""
+    description: str = ""
+    input_schema: _ConverseToolInputSchema | None = Field(default=None, alias="inputSchema")
+
+
+class _ConverseTool(_ConverseModel):
+    tool_spec: _ConverseToolSpec | None = Field(default=None, alias="toolSpec")
+
+
+class _ConverseToolConfig(_ConverseModel):
+    tools: tuple[_ConverseTool, ...] = ()
+
+
+class _ConverseRequest(_ConverseModel):
+    system: tuple[_ConverseContentBlock, ...] = ()
+    messages: tuple[_ConverseMessage, ...] = ()
+    tool_config: _ConverseToolConfig | None = Field(default=None, alias="toolConfig")
+
+
+def _parse_converse_request(validate: Callable[[], _ConverseRequest]) -> _ConverseRequest | None:
+    try:
+        return validate()
+    except ValidationError:
+        verbose_proxy_logger.debug("BedrockPassthroughGuardrailHandler: Converse body not convertible to messages")
+        return None
+
+
+def _converse_block_text(block: _ConverseContentBlock) -> str:
+    if block.text:
+        return block.text
+    guard_text: Final = block.guard_content.text if block.guard_content else None
+    return guard_text.text if guard_text else ""
+
+
+def _converse_text_parts(blocks: Sequence[_ConverseContentBlock]) -> tuple[ChatCompletionTextObject, ...]:
+    return tuple(
+        ChatCompletionTextObject(type="text", text=text) for block in blocks if (text := _converse_block_text(block))
+    )
+
+
+def _converse_tool_message(tool_result: _ConverseToolResult) -> ChatCompletionToolMessage:
+    return ChatCompletionToolMessage(
+        role="tool",
+        tool_call_id=tool_result.tool_use_id,
+        content="\n".join(
+            part.text or json.dumps(part.json_value)
+            for part in tool_result.content
+            if part.text or part.json_value is not None
+        ),
+    )
+
+
+def _converse_tool_call(tool_use: _ConverseToolUse) -> ChatCompletionAssistantToolCall:
+    return ChatCompletionAssistantToolCall(
+        id=tool_use.tool_use_id,
+        type="function",
+        function=ChatCompletionToolCallFunctionChunk(
+            name=tool_use.name,
+            arguments="{}" if tool_use.tool_input is None else json.dumps(tool_use.tool_input),
+        ),
+    )
+
+
+def _converse_user_group(is_tool_result: bool, group: Sequence[_ConverseContentBlock]) -> tuple[AllMessageValues, ...]:
+    if is_tool_result:
+        return tuple(_converse_tool_message(block.tool_result) for block in group if block.tool_result)
+    text_parts: Final = _converse_text_parts(group)
+    if not text_parts:
+        return ()
+    content: Final = list(text_parts)
+    return (ChatCompletionUserMessage(role="user", content=content),)
+
+
+def _converse_user_messages(blocks: Sequence[_ConverseContentBlock]) -> tuple[AllMessageValues, ...]:
+    return tuple(
+        chain.from_iterable(
+            _converse_user_group(is_tool_result, tuple(group))
+            for is_tool_result, group in groupby(blocks, key=lambda block: block.tool_result is not None)
+        )
+    )
+
+
+def _converse_assistant_messages(blocks: Sequence[_ConverseContentBlock]) -> tuple[AllMessageValues, ...]:
+    text_parts: Final = _converse_text_parts(blocks)
+    content: Final = list(text_parts)
+    tool_calls: Final = list(_converse_tool_call(block.tool_use) for block in blocks if block.tool_use)
+    if tool_calls:
+        return (ChatCompletionAssistantMessage(role="assistant", content=content or None, tool_calls=tool_calls),)
+    if not content:
+        return ()
+    return (ChatCompletionAssistantMessage(role="assistant", content=content),)
+
+
+def _converse_message(message: _ConverseMessage) -> tuple[AllMessageValues, ...]:
+    if message.role == "assistant":
+        return _converse_assistant_messages(message.content)
+    return _converse_user_messages(message.content)
+
+
+def _converse_structured_messages(request: _ConverseRequest) -> tuple[AllMessageValues, ...]:
+    converted: Final = tuple(chain.from_iterable(_converse_message(message) for message in request.messages))
+    system_parts: Final = _converse_text_parts(request.system)
+    if not system_parts:
+        return converted
+    system_content: Final = list(system_parts)
+    return (ChatCompletionSystemMessage(role="system", content=system_content), *converted)
+
+
+def _converse_tools(request: _ConverseRequest) -> tuple[ChatCompletionToolParam, ...]:
+    tools: Final = request.tool_config.tools if request.tool_config else ()
+    return tuple(
+        ChatCompletionToolParam(
+            type="function",
+            function=ChatCompletionToolParamFunctionChunk(
+                name=spec.name,
+                description=spec.description,
+                parameters=dict(spec.input_schema.json_schema),
+            ),
+        )
+        for tool in tools
+        if (spec := tool.tool_spec) and spec.name and spec.input_schema and spec.input_schema.json_schema is not None
+    )
 
 
 def _extract_converse_output_texts(
@@ -448,6 +633,19 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             return data
 
         inputs: Final = GenericGuardrailAPIInputs(texts=texts)
+        converse_request: Final = _parse_converse_request(lambda: _ConverseRequest.model_validate(body))
+        structured_messages: Final = _converse_structured_messages(converse_request) if converse_request else ()
+        scoped_message_indices: Final = scoped_structured_message_indices(
+            structured_messages,
+            scan_only_tool_results=False,
+            skip_system=skip_system,
+            skip_tool=skip_tool,
+        )
+        if scoped_message_indices:
+            inputs["structured_messages"] = list(structured_messages[index] for index in scoped_message_indices)
+        tools: Final = _converse_tools(converse_request) if converse_request else ()
+        if tools:
+            inputs["tools"] = list(tools)
         model: Final = data.get("model")
         if model:
             inputs["model"] = model
