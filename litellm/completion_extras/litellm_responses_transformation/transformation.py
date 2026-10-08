@@ -121,11 +121,38 @@ def _is_audio_input_part(part: object) -> bool:
     return content_part.get("type") == "input_audio"
 
 
+def _breakpoint_of(part: object) -> object:
+    if not isinstance(part, dict):
+        return None
+    content_part: Final = cast(dict[str, object], part)  # cast-ok: isinstance confirms a content block mapping
+    return content_part.get("prompt_cache_breakpoint")
+
+
+def _trailing_audio_breakpoint(content: list[object], index: int) -> object:
+    following: Final = content[index + 1 :]
+    run_length: Final = next(
+        (offset for offset, part in enumerate(following) if not _is_audio_input_part(part)), len(following)
+    )
+    markers: Final = tuple(marker for part in following[:run_length] if (marker := _breakpoint_of(part)) is not None)
+    return markers[-1] if markers else None
+
+
+def _with_carried_breakpoint(part: object, marker: object) -> object:
+    if marker is None or not isinstance(part, dict) or _breakpoint_of(part) is not None:
+        return part
+    kept_part: Final = cast(dict[str, object], part)  # cast-ok: isinstance confirms a content block mapping
+    return {**kept_part, "prompt_cache_breakpoint": marker}
+
+
 def _without_audio_input_parts_in_content(value: object) -> object:
     if not isinstance(value, list):
         return value
     content: Final = cast(list[object], value)  # cast-ok: isinstance confirms a list of content blocks
-    return [part for part in content if not _is_audio_input_part(part)]
+    return [
+        _with_carried_breakpoint(part, _trailing_audio_breakpoint(content, index))
+        for index, part in enumerate(content)
+        if not _is_audio_input_part(part)
+    ]
 
 
 def _without_audio_input_parts_in_item(value: object) -> object:

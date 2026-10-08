@@ -4784,7 +4784,12 @@ def registered_audio_models(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(
         litellm.model_cost,
         "unit-text-only",
-        {"litellm_provider": "openai", "mode": "chat", "supports_audio_input": False},
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "supports_audio_input": False,
+            "supports_prompt_cache_breakpoint": True,
+        },
     )
 
 
@@ -4878,6 +4883,38 @@ def test_transform_request_drops_input_audio_from_tool_output_under_drop_params(
     assert forwarded[-1]["type"] == "function_call_output"
     assert forwarded[-1]["output"] == [{"type": "input_text", "text": "Transcribe this"}, _AUDIO_PART]
     assert dropped[-1]["output"] == [{"type": "input_text", "text": "Transcribe this"}]
+
+
+def test_transform_request_moves_the_dropped_audio_part_breakpoint_to_the_preceding_part(
+    monkeypatch: pytest.MonkeyPatch, registered_audio_models: None
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    messages: Final = [
+        {"role": "user", "content": [_TEXT_PART, {**_AUDIO_PART, "prompt_cache_breakpoint": {"mode": "explicit"}}]}
+    ]
+
+    assert _bridge_input("unit-text-only", drop_params=True, messages=messages)[0]["content"] == [
+        {"type": "input_text", "text": "Transcribe this", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    ]
+
+
+def test_transform_request_keeps_the_preceding_part_breakpoint_over_the_dropped_audio_part_breakpoint(
+    monkeypatch: pytest.MonkeyPatch, registered_audio_models: None
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {**_TEXT_PART, "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}},
+                {**_AUDIO_PART, "prompt_cache_breakpoint": {"mode": "explicit"}},
+            ],
+        }
+    ]
+
+    assert _bridge_input("unit-text-only", drop_params=True, messages=messages)[0]["content"] == [
+        {"type": "input_text", "text": "Transcribe this", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}}
+    ]
 
 
 def test_convert_chat_completion_messages_to_responses_api_keeps_prompt_cache_breakpoint_on_unknown_block():
