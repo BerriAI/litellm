@@ -3,7 +3,6 @@
 import moment from "moment";
 import { skipToken, useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
-import { traceAgentNames } from "../utils";
 import { useMemo, useState } from "react";
 
 import { filterRuns } from "./runSearch/runQuery";
@@ -25,6 +24,8 @@ import { type RelativeRange, type TimeWindow, timeWindow } from "@/components/sh
 import { TimeRangeControls } from "@/components/shared/timeRange/TimeRangeControls";
 import type { RelativeRangeState } from "@/components/shared/timeRange/useRelativeRange";
 import { TracesTimeline } from "./TracesTimeline";
+import { RunStatsStrip } from "./RunStatsStrip";
+import { Panel } from "../../ui/Panel";
 import { TracingSetupCard } from "../../onboarding/tracing/TracingSetupCard";
 import { useTracesLive } from "../api";
 import { type AgentTracesResult, useAgentTraces, useTraceAvailability } from "./useAgentTraces";
@@ -125,6 +126,7 @@ export function AgentTracesSection({
     [traces.traces, query, agent, status],
   );
   const runs = useMemo(() => (zoom ? filterByWindow(filtered, zoom) : filtered), [filtered, zoom]);
+  const shownWindow = zoom ?? window;
   const runRefs = useMemo(() => runs.map(traceRefOf), [runs]);
   const findings = useTraceFindings(accessToken, runs, isActive, canViewFindings);
   const signalSetup = useSignalSetup(isActive && canViewFindings !== false);
@@ -181,72 +183,74 @@ export function AgentTracesSection({
       fullScreen={fullScreen}
       onFullScreenChange={setFullScreen}
     >
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-card">
-        {checkHistory && <TraceHistoryError history={history} />}
-        <TracesReceived received={setup.received} />
-        <Inspector.Panel label="Trace details" testId="run-drawer">
-          {(shown: TraceRef) => (
-            <RunView
-              traceId={shown.traceId}
-              traceRef={shown.traceRef}
-              selection={selection}
-              accessToken={accessToken}
-              onBack={() => openRun(null)}
-              embedded
-              showSignals={signalSetup.on}
-            />
-          )}
-        </Inspector.Panel>
-        <RunsToolbar
-          query={query}
-          onQueryChange={setQuery}
-          runs={traces.traces}
-          range={zoom ?? window}
-          busy={traces.isPlaceholder}
-        >
-          <TracingSetupAction available={traces.traces.length > 0} live={live} onSetup={() => setShowSetup(true)} />
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="h-full w-10 shrink-0 rounded-none border-l"
-            aria-label="Refresh traces"
-            title="Refresh traces"
-            disabled={traces.isFetching}
-            onClick={checkTraces}
+      <Inspector.Panel label="Trace details" testId="run-drawer">
+        {(shown: TraceRef) => (
+          <RunView
+            traceId={shown.traceId}
+            traceRef={shown.traceRef}
+            selection={selection}
+            accessToken={accessToken}
+            onBack={() => openRun(null)}
+            embedded
+            showSignals={signalSetup.on}
+          />
+        )}
+      </Inspector.Panel>
+      <div className="flex min-h-0 flex-1 flex-col gap-3">
+        <RunStatsStrip runs={runs} range={shownWindow} traces={traces} />
+        <Panel className="flex-1">
+          {checkHistory && <TraceHistoryError history={history} />}
+          <TracesReceived received={setup.received} />
+          <RunsToolbar
+            query={query}
+            onQueryChange={setQuery}
+            runs={traces.traces}
+            range={shownWindow}
+            busy={traces.isPlaceholder}
           >
-            <RefreshCw className="size-3.5" />
-          </Button>
-          {timeControls && (
-            <TimeRangeControls
-              range={range}
-              zoom={zoom}
-              onHoursChange={(hours) => changeRange(hours, timeControls.setHours)}
-              showLive={live}
-              onLiveChange={timeControls.setLive}
-            />
-          )}
-        </RunsToolbar>
-        <TraceCounts runs={filtered} />
-        <TracesTimeline runs={filtered} range={window} selection={zoom} onSelect={setZoom} />
-        <AgentTracesTable
-          traces={runs}
-          findings={findings}
-          canViewFindings={canViewFindings}
-          signals={signals}
-          showSignals={signalSetup.on}
-          signalsColumn={signalSetup.on || signalSetup.missing}
-          onSetUpSignals={onSetUpSignals}
-          isLoading={traces.isLoading || (checkHistory && history.isLoading)}
-          error={traces.error}
-          hasMore={traces.hasMore}
-          isFetching={traces.isFetching}
-          isPlaceholder={traces.isPlaceholder}
-          onRetry={traces.hasMore ? traces.loadMore : traces.refetch}
-          onLoadMore={traces.loadMore}
-          rangeEmpty={traces.traces.length === 0}
-          onSetUpTracing={() => setShowSetup(true)}
-        />
-        <TraceFooter runs={runs} hasMore={traces.hasMore} />
+            <TracingSetupAction available={traces.traces.length > 0} live={live} onSetup={() => setShowSetup(true)} />
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="h-full w-10 shrink-0 rounded-none border-l"
+              aria-label="Refresh traces"
+              title="Refresh traces"
+              disabled={traces.isFetching}
+              onClick={checkTraces}
+            >
+              <RefreshCw className="size-3.5" />
+            </Button>
+            {timeControls && (
+              <TimeRangeControls
+                range={range}
+                zoom={zoom}
+                onHoursChange={(hours) => changeRange(hours, timeControls.setHours)}
+                showLive={live}
+                onLiveChange={timeControls.setLive}
+              />
+            )}
+          </RunsToolbar>
+          <TracesTimeline runs={filtered} range={window} selection={zoom} onSelect={setZoom} />
+          <AgentTracesTable
+            traces={runs}
+            findings={findings}
+            canViewFindings={canViewFindings}
+            signals={signals}
+            showSignals={signalSetup.on}
+            signalsColumn={signalSetup.on || signalSetup.missing}
+            onSetUpSignals={onSetUpSignals}
+            isLoading={traces.isLoading || (checkHistory && history.isLoading)}
+            error={traces.error}
+            hasMore={traces.hasMore}
+            isFetching={traces.isFetching}
+            isPlaceholder={traces.isPlaceholder}
+            onRetry={traces.hasMore ? traces.loadMore : traces.refetch}
+            onLoadMore={traces.loadMore}
+            rangeEmpty={traces.traces.length === 0}
+            onSetUpTracing={() => setShowSetup(true)}
+          />
+          <TraceFooter runs={runs} hasMore={traces.hasMore} />
+        </Panel>
       </div>
     </Inspector.Root>
   );
@@ -258,16 +262,6 @@ function TracesReceived({ received }: { received: boolean }) {
     <p role="status" className="border-b px-3 py-3 text-sm text-emerald-700 dark:text-emerald-400">
       Traces received. Select a run to inspect it.
     </p>
-  );
-}
-
-function TraceCounts({ runs }: { runs: readonly TraceSummary[] }) {
-  return (
-    <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 px-3 pt-2 text-xs text-muted-foreground">
-      <span>
-        {runs.length} {runs.length === 1 ? "run" : "runs"} from {new Set(runs.flatMap(traceAgentNames)).size} agents
-      </span>
-    </div>
   );
 }
 

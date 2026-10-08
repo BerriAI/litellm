@@ -324,8 +324,28 @@ describe("AgentTracesSection", () => {
     });
     renderSection();
     expect(await screen.findByTestId("agent-trace-row")).toBeVisible();
-    expect(screen.getByText(/1 run from/)).toBeVisible();
+    const totals = screen.getByRole("group", { name: "Runs" });
+    expect(totals).toHaveTextContent("1");
+    expect(totals).toHaveTextContent("0 ok · 1 failed · 1 agent");
     expect(screen.queryByText(/failed runs|with errors/)).not.toBeInTheDocument();
+  });
+
+  it("totals the loaded runs in the stat strip above the list", async () => {
+    const priced = { spend: 0.5, priced_calls: 1, llm_calls: 1, input_tokens: 1000, output_tokens: 500 };
+    const loaded = [
+      { ...runs[0], trace_id: "s1", ...priced, duration_ms: 1000 },
+      { ...runs[0], trace_id: "s2", ...priced, duration_ms: 3000, status: "error" as const },
+    ];
+    vi.mocked(agentTraceListCall).mockResolvedValue({ data: loaded, next_cursor: null });
+    renderSection();
+    expect(await screen.findAllByTestId("agent-trace-row")).toHaveLength(2);
+    expect(screen.getByRole("group", { name: "Runs" })).toHaveTextContent("1 ok · 1 failed");
+    expect(screen.getByRole("group", { name: "Spend" })).toHaveTextContent("$1.00");
+    expect(screen.getByRole("group", { name: "Spend" })).toHaveTextContent("$0.50 per run");
+    expect(screen.getByRole("group", { name: "Duration, p50" })).toHaveTextContent("1.00s");
+    expect(screen.getByRole("group", { name: "Duration, p50" })).toHaveTextContent("3.00s p95");
+    expect(screen.getByRole("group", { name: "Tokens" })).toHaveTextContent("3K");
+    expect(screen.getByRole("group", { name: "Tokens" })).toHaveTextContent("2K in · 1K out");
   });
 
   it("does not present a failed findings lookup as an uninvestigated or clean trace", async () => {
