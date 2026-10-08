@@ -1034,18 +1034,21 @@ def test_default_supported_call_types_are_not_shared_between_cache_instances() -
     assert third.supported_call_types == list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES)
 
 
-def test_explicit_supported_call_types_are_not_shared() -> None:
-    supported_call_types: Final[list[CachingSupportedCallTypes]] = ["completion", "embedding"]
+@pytest.mark.parametrize("initial_call_types", [(), ("completion", "embedding")], ids=["empty", "nonempty"])
+def test_explicit_supported_call_types_are_not_shared(
+    initial_call_types: tuple[CachingSupportedCallTypes, ...],
+) -> None:
+    supported_call_types: Final = list(initial_call_types)
     first: Final = Cache(type=LiteLLMCacheType.LOCAL, supported_call_types=supported_call_types)
     second: Final = Cache(type=LiteLLMCacheType.LOCAL, supported_call_types=supported_call_types)
 
-    supported_call_types.remove("embedding")
-    assert first.supported_call_types == ["completion", "embedding"]
-    assert second.supported_call_types == ["completion", "embedding"]
+    supported_call_types.append("acompletion")
+    assert first.supported_call_types == list(initial_call_types)
+    assert second.supported_call_types == list(initial_call_types)
 
-    first.supported_call_types.remove("completion")
-    assert second.supported_call_types == ["completion", "embedding"]
-    assert supported_call_types == ["completion"]
+    first.supported_call_types.append("aembedding")
+    assert second.supported_call_types == list(initial_call_types)
+    assert supported_call_types == [*initial_call_types, "acompletion"]
 
 
 @pytest.mark.parametrize("supported_call_types", [None, []])
