@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Final, Optional
 
 import httpx
 from httpx import Response
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.azure.common_utils import BaseAzureLLM
@@ -17,6 +17,7 @@ from litellm.llms.base_llm.passthrough.transformation import (
     strip_leading_model_segment,
 )
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues, ResponsesAPIResponse, ResponsesTerminalEvent
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes, EmbeddingResponse, ImageResponse
@@ -27,11 +28,11 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.passthrough.transformation import LoggedRelayResponse
 
 
-class RelayedChatRequest(BaseModel):
+class RelayedChatRequest(LiteLLMBaseModel):
     messages: Sequence[Mapping[str, object]] | None = None
 
 
-class RelayedCallDetails(BaseModel):
+class RelayedCallDetails(LiteLLMBaseModel):
     request_data: RelayedChatRequest | None = None
 
 
@@ -59,13 +60,21 @@ def logged_responses_stream(all_chunks: Sequence[str], logging_obj: Logging) -> 
     terminal_event: Final = OpenAIResponsesAPIConfig.parse_terminal_event_from_stream_chunks(all_chunks=all_chunks)
     if terminal_event is None:
         return None
-    logging_obj.call_type = (
-        RESPONSES_RELAY_SHAPE.call_type.value
-    )  # rebind-ok: routes cost calculation to the relayed shape's pricing path
+    logging_obj.call_type = RESPONSES_RELAY_SHAPE.call_type.value
     return terminal_event
 
 
 AZURE_DEPLOYMENT_SEGMENT: Final = re.compile(r"(?<![^/])openai/deployments/([^/]+)")
+AZURE_BODY_MODEL_INFERENCE_ENDPOINTS: Final = frozenset(
+    {"responses", "chat/completions", "completions", "embeddings", "images/generations", "audio/speech"}
+)
+
+
+def is_azure_body_model_inference_endpoint(endpoint: str) -> bool:
+    if AZURE_DEPLOYMENT_SEGMENT.search(endpoint) is not None:
+        return False
+    path: Final = endpoint.strip("/")
+    return any(path == name or path.endswith(f"/{name}") for name in AZURE_BODY_MODEL_INFERENCE_ENDPOINTS)
 
 
 def azure_router_model_in_endpoint(endpoint: str, router_models: Collection[str]) -> str | None:
@@ -119,7 +128,7 @@ class AzurePassthroughConfig(BasePassthroughConfig):
 
         caller_api_version: Final = request_query_params.get("api-version") if request_query_params else None
         relay_base: Final = without_api_version(base_target_url) if caller_api_version else base_target_url
-        complete_url: Final = BaseAzureLLM._get_base_azure_url(
+        complete_url: Final = BaseAzureLLM.get_base_azure_url(
             api_base=relay_base,
             litellm_params=MappingProxyType(
                 {**litellm_params, "api_version": caller_api_version or litellm_params.get("api_version")}
@@ -141,9 +150,9 @@ class AzurePassthroughConfig(BasePassthroughConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        return BaseAzureLLM._base_validate_azure_environment(
+        return BaseAzureLLM.base_validate_azure_environment(
             headers=headers,
-            litellm_params=GenericLiteLLMParams(**{**litellm_params, "api_key": api_key}),
+            litellm_params=GenericLiteLLMParams.model_validate({**litellm_params, "api_key": api_key}),
         )
 
     @staticmethod

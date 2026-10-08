@@ -124,9 +124,7 @@ async def create_fallback(
 
         # Load existing config
         config: Final = await proxy_config.get_config()
-        router_settings: Final = dict(
-            config.router_settings
-        )  # mutable-ok: fallback list is rewritten below before the DB upsert
+        router_settings: Final = dict(config.router_settings)
 
         # Get the appropriate fallback list based on type
         fallback_key = "fallbacks"
@@ -136,11 +134,9 @@ async def create_fallback(
             fallback_key = "content_policy_fallbacks"
 
         # Get existing fallbacks
-        existing_fallbacks: Final[list[dict[str, list[str]]]] = (
-            list(  # mutable-ok: copy so edits stay off the frozen config
-                cast(  # cast-ok: entries are model -> fallback models maps
-                    "list[dict[str, list[str]]]", router_settings.get(fallback_key) or ()
-                )
+        existing_fallbacks: Final[list[dict[str, list[str]]]] = list(
+            cast(  # cast-ok: entries are model -> fallback models maps
+                "list[dict[str, list[str]]]", router_settings.get(fallback_key) or ()
             )
         )
 
@@ -301,9 +297,7 @@ async def delete_fallback(
 
         # Load existing config
         config: Final = await proxy_config.get_config()
-        router_settings: Final = dict(
-            config.router_settings
-        )  # mutable-ok: fallback list is rewritten below before the DB upsert
+        router_settings: Final = dict(config.router_settings)
 
         # Get the appropriate fallback list based on type
         fallback_key = "fallbacks"
@@ -313,11 +307,9 @@ async def delete_fallback(
             fallback_key = "content_policy_fallbacks"
 
         # Get existing fallbacks
-        existing_fallbacks: Final[list[dict[str, list[str]]]] = (
-            list(  # mutable-ok: copy so edits stay off the frozen config
-                cast(  # cast-ok: entries are model -> fallback models maps
-                    "list[dict[str, list[str]]]", router_settings.get(fallback_key) or ()
-                )
+        existing_fallbacks: Final[list[dict[str, list[str]]]] = list(
+            cast(  # cast-ok: entries are model -> fallback models maps
+                "list[dict[str, list[str]]]", router_settings.get(fallback_key) or ()
             )
         )
 

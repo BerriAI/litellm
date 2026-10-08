@@ -1,11 +1,15 @@
 use std::{sync::Arc, time::Duration};
 
 use litellm_cache::{
-    BaseCache, BatchCache, BatchEntry, CacheConnectionResult, CacheContext, Error, FlushCache,
+    BaseCache, BatchCache, BatchEntry, CacheConnectionResult, CacheContext, ConnectionCache, Error,
+    FlushCache,
+    semantic::{SemanticCache, SemanticLookup},
 };
 use serde_json::Value;
 
-use crate::{CacheControls, CacheEntry, CacheKeyInput, PartialHits, cache_key};
+use crate::{
+    CacheControls, CacheEntry, CacheKeyInput, PartialHits, ResponseCacheConfig, cache_key,
+};
 
 #[derive(Clone)]
 pub struct ResponseCacheRequest<C: CacheContext = litellm_cache::ExactCacheContext> {
@@ -32,11 +36,23 @@ impl<C: CacheContext + Default> ResponseCacheRequest<C> {
     }
 }
 
+impl<C: CacheContext> ResponseCacheRequest<C> {
+    pub fn with_context<D: CacheContext>(self, context: D) -> ResponseCacheRequest<D> {
+        ResponseCacheRequest {
+            key: self.key,
+            controls: self.controls,
+            context,
+            max_age: self.max_age,
+        }
+    }
+}
+
 pub struct ResponseCache<B: BaseCache<Value = CacheEntry>>
 where
     B::Context: Default + PartialEq,
 {
     backend: Arc<B>,
+    config: ResponseCacheConfig,
 }
 
 impl<B> ResponseCache<B>
@@ -45,7 +61,18 @@ where
     B::Context: Default + PartialEq,
 {
     pub fn new(backend: Arc<B>) -> Self {
-        Self { backend }
+        Self {
+            backend,
+            config: ResponseCacheConfig::default(),
+        }
+    }
+
+    pub fn with_config(self, config: ResponseCacheConfig) -> Self {
+        Self { config, ..self }
+    }
+
+    pub fn config(&self) -> &ResponseCacheConfig {
+        &self.config
     }
 
     pub fn backend(&self) -> &B {
@@ -67,7 +94,10 @@ where
         self.backend.async_flush_cache().await
     }
 
-    pub async fn test_connection(&self) -> Result<CacheConnectionResult, Error> {
+    pub async fn test_connection(&self) -> Result<CacheConnectionResult, Error>
+    where
+        B: ConnectionCache,
+    {
         self.backend.test_connection().await
     }
 
@@ -108,6 +138,43 @@ where
             Err(error) => return Err(error),
         };
         Ok(Self::fresh_or_miss(entry, now, request.max_age))
+    }
+
+    /// `lookup` plus the similarity the semantic backend reports. Freshness applies to the
+    /// value only: Python stamps the similarity before its max-age check.
+    pub fn lookup_semantic(
+        &self,
+        request: &ResponseCacheRequest<B::Context>,
+        now: Duration,
+    ) -> Result<SemanticLookup<Value>, Error>
+    where
+        B: SemanticCache,
+    {
+        if !request.controls.reads() {
+            return Ok(SemanticLookup::miss(None));
+        }
+        let lookup = self
+            .backend
+            .get_cache_with_similarity(&cache_key(&request.key), &request.context);
+        Self::fresh_semantic(lookup, now, request.max_age)
+    }
+
+    pub async fn async_lookup_semantic(
+        &self,
+        request: &ResponseCacheRequest<B::Context>,
+        now: Duration,
+    ) -> Result<SemanticLookup<Value>, Error>
+    where
+        B: SemanticCache,
+    {
+        if !request.controls.reads() {
+            return Ok(SemanticLookup::miss(None));
+        }
+        let lookup = self
+            .backend
+            .async_get_cache_with_similarity(&cache_key(&request.key), &request.context)
+            .await;
+        Self::fresh_semantic(lookup, now, request.max_age)
     }
 
     pub fn lookup_batch(
@@ -168,7 +235,7 @@ where
         response: Value,
         now: Duration,
     ) -> Result<(), Error> {
-        if !request.controls.writes() {
+        if !request.controls.writes() || !self.fits(&response) {
             return Ok(());
         }
         self.backend.set_cache(
@@ -187,7 +254,7 @@ where
         response: Value,
         now: Duration,
     ) -> Result<(), Error> {
-        if !request.controls.writes() {
+        if !request.controls.writes() || !self.fits(&response) {
             return Ok(());
         }
         self.backend
@@ -224,7 +291,7 @@ where
     ) -> Result<(), Error> {
         let writable = entries
             .into_iter()
-            .filter(|(request, _, _)| request.controls.writes())
+            .filter(|(request, response, _)| request.controls.writes() && self.fits(response))
             .map(|(request, response, now)| {
                 (
                     cache_key(&request.key),
@@ -259,6 +326,11 @@ where
         Ok(())
     }
 
+    fn fits(&self, response: &Value) -> bool {
+        self.config.max_entry_bytes == usize::MAX
+            || response.to_string().len() <= self.config.max_entry_bytes
+    }
+
     fn partial_hits(
         requests: &[ResponseCacheRequest<B::Context>],
         readable: Vec<(usize, &ResponseCacheRequest<B::Context>)>,
@@ -277,6 +349,21 @@ where
             values[index] = response;
         }
         Ok(PartialHits::new(values))
+    }
+
+    fn fresh_semantic(
+        lookup: Result<SemanticLookup<CacheEntry>, Error>,
+        now: Duration,
+        max_age: Option<Duration>,
+    ) -> Result<SemanticLookup<Value>, Error> {
+        match lookup {
+            Ok(lookup) => Ok(SemanticLookup {
+                value: Self::fresh_or_miss(lookup.value, now, max_age),
+                similarity: lookup.similarity,
+            }),
+            Err(Error::InvalidEntry) => Ok(SemanticLookup::miss(None)),
+            Err(error) => Err(error),
+        }
     }
 
     fn fresh_or_miss(

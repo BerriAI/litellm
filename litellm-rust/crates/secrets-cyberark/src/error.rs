@@ -1,5 +1,7 @@
 #[derive(thiserror::Error, veil::Redact)]
 pub enum Error {
+    #[error("CyberArk Conjur operation timed out")]
+    Timeout,
     #[error("CyberArk Conjur HTTP request failed")]
     Http(
         #[from]
@@ -16,6 +18,8 @@ pub enum Error {
     MissingCredentials,
     #[error("CyberArk client certificate could not be loaded")]
     ClientCertificate,
+    #[error("CyberArk Conjur HTTP client could not be built")]
+    Client(#[redact] Box<litellm_http::Error>),
     #[error("invalid refresh interval")]
     RefreshInterval,
     #[error("invalid CyberArk Conjur endpoint")]

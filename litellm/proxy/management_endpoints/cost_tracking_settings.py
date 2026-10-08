@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 
 import litellm
 from litellm._internal_context import current_billing_time, pinned_billing_time
@@ -29,6 +28,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.prompt_cache_prediction import router as prompt_cache_prediction_router
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import (
     CostBreakdown,
     CostPerToken,
@@ -301,7 +301,7 @@ async def update_cost_discount_config(
                 {
                     **config.litellm_settings,
                     "cost_discount_config": cost_discount_config,
-                },  # mutable-ok: replacement section for save_config
+                },
             )
         )
 
@@ -476,7 +476,7 @@ async def update_cost_margin_config(
                 {
                     **config.litellm_settings,
                     "cost_margin_config": cost_margin_config,
-                },  # mutable-ok: replacement section for save_config
+                },
             )
         )
 
@@ -498,11 +498,11 @@ async def update_cost_margin_config(
         )
 
 
-class BlockUnpricedModelsRequest(BaseModel):
+class BlockUnpricedModelsRequest(LiteLLMBaseModel):
     enabled: bool
 
 
-class BlockUnpricedModelsResponse(BaseModel):
+class BlockUnpricedModelsResponse(LiteLLMBaseModel):
     enabled: bool
 
 
@@ -534,17 +534,13 @@ async def update_block_requests_for_models_without_pricing(
     if prisma_client is None:
         raise HTTPException(
             status_code=500,
-            detail={  # mutable-ok: HTTPException detail must be a plain mapping
-                "error": CommonProxyErrors.db_not_connected_error.value
-            },
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
     if store_model_in_db is not True:
         raise HTTPException(
             status_code=500,
-            detail={  # mutable-ok: HTTPException detail must be a plain mapping
-                "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
-            },
+            detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
         )
 
     try:
@@ -555,7 +551,7 @@ async def update_block_requests_for_models_without_pricing(
                 {
                     **config.litellm_settings,
                     "block_requests_for_models_without_pricing": request.enabled,
-                },  # mutable-ok: replacement section for save_config
+                },
             )
         )
 
@@ -567,9 +563,7 @@ async def update_block_requests_for_models_without_pricing(
         verbose_proxy_logger.error("Error updating block_requests_for_models_without_pricing: %s", e)
         raise HTTPException(
             status_code=500,
-            detail={  # mutable-ok: HTTPException detail must be a plain mapping
-                "error": f"Failed to update setting: {e!s}"
-            },
+            detail={"error": f"Failed to update setting: {e!s}"},
         )
 
 

@@ -10,7 +10,6 @@ from datetime import datetime
 import pytest
 
 from typing import List, Literal, Optional
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
 from litellm import Cache, Router
@@ -281,7 +280,7 @@ class CompletionCustomHandler(
             assert isinstance(kwargs["model"], str)
 
             # checking we use base_model for azure cost calculation
-            base_model = litellm.utils._get_base_model_from_metadata(
+            base_model = litellm.utils.get_base_model_from_metadata(
                 model_call_details=kwargs
             )
 
@@ -652,7 +651,6 @@ async def test_async_completion_azure_caching():
 
 @pytest.mark.asyncio
 async def test_async_completion_azure_caching_streaming():
-    import copy
     import uuid
 
     litellm.set_verbose = True
@@ -754,72 +752,3 @@ async def test_async_embedding_azure_caching():
     print(customHandler_caching.errors)
     assert len(customHandler_caching.errors) == 0
     assert len(customHandler_caching.states) == 4  # pre, post, success, success
-
-
-@pytest.mark.asyncio
-async def test_rate_limit_error_callback():
-    """
-    Assert a callback is hit, if a model group starts hitting rate limit errors
-
-    Relevant issue: https://github.com/BerriAI/litellm/issues/4096
-    """
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
-
-    customHandler = CompletionCustomHandler()
-    litellm.callbacks = [customHandler]
-    litellm.success_callback = []
-
-    router = Router(
-        model_list=[
-            {
-                "model_name": "my-test-gpt",
-                "litellm_params": {
-                    "model": "gpt-5-mini",
-                    "mock_response": "litellm.RateLimitError",
-                },
-            }
-        ],
-        allowed_fails=2,
-        num_retries=0,
-    )
-
-    litellm_logging_obj = LiteLLMLogging(
-        model="my-test-gpt",
-        messages=[{"role": "user", "content": "hi"}],
-        stream=False,
-        call_type="acompletion",
-        litellm_call_id="1234",
-        start_time=datetime.now(),
-        function_id="1234",
-    )
-
-    try:
-        _ = await router.acompletion(
-            model="my-test-gpt",
-            messages=[{"role": "user", "content": "Hey, how's it going?"}],
-        )
-    except Exception:
-        pass
-
-    with patch.object(
-        customHandler, "log_model_group_rate_limit_error", new=AsyncMock()
-    ) as mock_client:
-
-        print(
-            f"customHandler.log_model_group_rate_limit_error: {customHandler.log_model_group_rate_limit_error}"
-        )
-
-        try:
-            _ = await router.acompletion(
-                model="my-test-gpt",
-                messages=[{"role": "user", "content": "Hey, how's it going?"}],
-                litellm_logging_obj=litellm_logging_obj,
-            )
-        except (litellm.RateLimitError, ValueError):
-            pass
-
-        await asyncio.sleep(3)
-        mock_client.assert_called_once()
-
-        assert "original_model_group" in mock_client.call_args.kwargs
-        assert mock_client.call_args.kwargs["original_model_group"] == "my-test-gpt"

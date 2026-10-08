@@ -1,6 +1,8 @@
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
@@ -24,13 +26,15 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ImageObject, ImageResponse
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class GoogleImageGenConfig(BaseImageGenerationConfig):
@@ -173,7 +177,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
@@ -217,13 +221,15 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
 
             # Extract usage metadata for Gemini models
             if "usageMetadata" in response_data:
-                model_response.usage = transform_gemini_image_usage(response_data["usageMetadata"])
+                model_response.usage = transform_gemini_image_usage(
+                    _JSON_DICT.validate_python(response_data["usageMetadata"])
+                )
             web_search_requests: Final = get_gemini_image_web_search_requests(response_data)
             if web_search_requests and model_response.usage is not None:
                 setattr(model_response.usage, "web_search_requests", web_search_requests)
         else:
             # Original Imagen format - predictions with generated images
-            predictions: Final = response_data.get("predictions", [])
+            predictions: Final = _JSON_OBJECTS.validate_python(response_data.get("predictions", []))
             for prediction in predictions:
                 # Google AI returns base64 encoded images in the prediction
                 model_response.data.append(

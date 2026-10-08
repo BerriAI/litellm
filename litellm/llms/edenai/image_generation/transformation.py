@@ -19,9 +19,8 @@ from litellm.utils import convert_to_model_response_object
 from ..common_utils import EdenAIException, endpoint_url, json_headers, pick, reported_cost
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding
 
 _SUPPORTED_PARAMS: Final[tuple[OpenAIImageGenerationOptionalParams, ...]] = (
     "background",
@@ -41,7 +40,7 @@ class EdenAIImageGenerationConfig(BaseImageGenerationConfig):
     def get_supported_openai_params(
         self, model: str
     ) -> list[OpenAIImageGenerationOptionalParams]:  # mutable-ok: inherited contract
-        return list(_SUPPORTED_PARAMS)  # mutable-ok: inherited contract
+        return list(_SUPPORTED_PARAMS)
 
     def map_openai_params(
         self,
@@ -50,7 +49,7 @@ class EdenAIImageGenerationConfig(BaseImageGenerationConfig):
         model: str,
         drop_params: bool,
     ) -> dict[str, object]:  # mutable-ok: inherited contract
-        return {**optional_params, **pick(non_default_params, _SUPPORTED_PARAMS)}  # mutable-ok: inherited contract
+        return {**optional_params, **pick(non_default_params, _SUPPORTED_PARAMS)}
 
     def get_complete_url(
         self,
@@ -83,7 +82,7 @@ class EdenAIImageGenerationConfig(BaseImageGenerationConfig):
         litellm_params: dict[str, object],  # mutable-ok: inherited contract
         headers: dict[str, object],  # mutable-ok: inherited contract
     ) -> dict[str, object]:  # mutable-ok: inherited contract
-        return {"model": model, "prompt": prompt, **optional_params}  # mutable-ok: inherited contract
+        return {"model": model, "prompt": prompt, **optional_params}
 
     def transform_image_generation_response(
         self,
@@ -94,7 +93,7 @@ class EdenAIImageGenerationConfig(BaseImageGenerationConfig):
         request_data: dict[str, object],  # mutable-ok: inherited contract
         optional_params: dict[str, object],  # mutable-ok: inherited contract
         litellm_params: dict[str, object],  # mutable-ok: inherited contract
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:

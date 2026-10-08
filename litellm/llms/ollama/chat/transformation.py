@@ -10,9 +10,9 @@ import litellm
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    _extract_reasoning_content,
     convert_content_list_to_str,
     extract_images_from_message,
+    extract_reasoning_content,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -31,9 +31,8 @@ from litellm.types.utils import ModelResponse, ModelResponseStream
 from ..common_utils import OllamaError
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -118,7 +117,7 @@ class OllamaChatConfig(BaseConfig):
         system: str | None = None,
         template: str | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[dict[str, object]] = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -267,7 +266,7 @@ class OllamaChatConfig(BaseConfig):
                             )
                         )
                         new_tools.append(ollama_tool_call)
-            reasoning_content, parsed_content = _extract_reasoning_content(cast(dict, m))
+            reasoning_content, parsed_content = extract_reasoning_content(cast(dict, m))
             content_str = convert_content_list_to_str(cast(AllMessageValues, m))
             images = extract_images_from_message(cast(AllMessageValues, m))
 
@@ -321,7 +320,7 @@ class OllamaChatConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -350,10 +349,10 @@ class OllamaChatConfig(BaseConfig):
             elif response_json_message.get("content") is not None:
                 # parse reasoning content from content
                 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-                    _parse_content_for_reasoning,
+                    parse_content_for_reasoning,
                 )
 
-                reasoning_content, content = _parse_content_for_reasoning(response_json_message["content"])
+                reasoning_content, content = parse_content_for_reasoning(response_json_message["content"])
                 response_json_message["reasoning_content"] = reasoning_content
                 response_json_message["content"] = content
 

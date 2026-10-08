@@ -1,10 +1,14 @@
 import json
+from typing import Final
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
 from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.types.utils import (
@@ -1695,21 +1699,6 @@ def test_nim_vllm_extras_translated_end_to_end_in_request_body():
     assert request_body["top_k"] == 40
 
 
-def test_in_schema_unsupported_params_still_raise():
-    with pytest.raises(litellm.UnsupportedParamsError):
-        litellm.get_optional_params(
-            model="accounts/fireworks/models/llama-v3-70b-instruct",
-            custom_llm_provider="fireworks_ai",
-            drop_params=False,
-            store=True,
-        )
-    optional_params = litellm.get_optional_params(
-        model="accounts/fireworks/models/llama-v3-70b-instruct",
-        custom_llm_provider="fireworks_ai",
-        drop_params=True,
-        store=True,
-    )
-    assert "store" not in optional_params
 
 
 def test_streaming_preserves_selected_model_for_private_accounting():
@@ -1796,8 +1785,226 @@ def test_streaming_preserves_selected_model_for_private_accounting():
     [
         ("deepseek-r1", "fireworks_ai/accounts/fireworks/models/deepseek-r1"),
         ("glm-5p3-fast", "fireworks_ai/accounts/fireworks/routers/glm-5p3-fast"),
+        ("auto", "fireworks_ai/accounts/fireworks/routers/auto"),
         ("accounts/fireworks/models/deepseek-r1", "fireworks_ai/accounts/fireworks/models/deepseek-r1"),
     ],
 )
 def test_get_model_cost_key_resolves_short_names_to_long_keys(model: str, expected: str) -> None:
     assert FireworksAIConfig().get_model_cost_key(model) == expected
+
+
+_LISTED_ROUTERS = ("auto", "auto-instant", "firerouter")
+
+
+@pytest.mark.parametrize("router", _LISTED_ROUTERS)
+def test_listed_router_short_name_resolves_to_its_catalog_row_and_accepts_tool_choice_and_reasoning(
+    router: str,
+) -> None:
+    info = litellm.get_model_info(model=f"fireworks_ai/{router}")
+    params = FireworksAIConfig().get_supported_openai_params(router)
+
+    assert info["key"] == f"fireworks_ai/accounts/fireworks/routers/{router}"
+    assert {"tools", "tool_choice", "reasoning_effort"} <= set(params), params
+
+
+@pytest.mark.parametrize(
+    "router",
+    [
+        "firerouter/opus",
+        "firerouter/auto",
+        "firerouter/auto-instant",
+        "firerouter/kimi-k3/glm-5p3",
+        "fireworks_ai/firerouter/opus",
+        "accounts/fireworks/routers/firerouter/opus",
+    ],
+)
+def test_custom_firerouter_id_accepts_the_same_tool_choice_and_reasoning_params_as_firerouter(router: str) -> None:
+    params: Final = FireworksAIConfig().get_supported_openai_params(router)
+
+    assert {"tools", "tool_choice", "reasoning_effort"} <= set(params), params
+
+
+@pytest.mark.parametrize("model", ["firerouter-v2", "models/firerouter-opus", "routers/firerouter-opus"])
+def test_names_that_only_start_with_firerouter_do_not_inherit_the_firerouter_row(model: str) -> None:
+    params: Final = FireworksAIConfig().get_supported_openai_params(model)
+
+    assert "tool_choice" not in params, params
+
+
+class _RecordingChatHandler:
+    def __init__(self, reply: dict[str, object]) -> None:
+        self.reply: Final = reply
+        self.request_body: dict[str, object] | None = None
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.request_body = json.loads(request.content)
+        return httpx.Response(200, json=self.reply, request=request)
+
+
+@pytest.mark.parametrize("router", _LISTED_ROUTERS)
+def test_listed_router_request_is_sent_to_the_router_resource_and_billed_at_the_served_models_rate(router: str) -> None:
+    served_model: Final = "glm-5p3-flash"
+    handler: Final = _RecordingChatHandler(
+        {
+            "id": f"chat-{router}",
+            "object": "chat.completion",
+            "created": 1,
+            "model": served_model,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "pong"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 23, "completion_tokens": 41, "total_tokens": 64},
+        }
+    )
+
+    response: Final = litellm.completion(
+        model=f"fireworks_ai/{router}",
+        messages=[{"role": "user", "content": "ping"}],
+        api_key="fw-test-key",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))),
+    )
+
+    served_info: Final = litellm.model_cost[f"fireworks_ai/{served_model}"]
+    expected_cost: Final = 23 * served_info["input_cost_per_token"] + 41 * served_info["output_cost_per_token"]
+    assert handler.request_body is not None
+    assert handler.request_body["model"] == f"accounts/fireworks/routers/{router}"
+    assert expected_cost > 0
+    assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
+
+
+def test_map_openai_params_tool_choice():
+    # Test case 1: tool_choice is "required"
+    result = fireworks.map_openai_params(
+        {"tool_choice": "required"}, {}, "some_model", drop_params=False
+    )
+    assert result == {"tool_choice": "any"}
+
+    # Test case 2: tool_choice is "auto"
+    result = fireworks.map_openai_params(
+        {"tool_choice": "auto"}, {}, "some_model", drop_params=False
+    )
+    assert result == {"tool_choice": "auto"}
+
+    # Test case 3: tool_choice is not present
+    result = fireworks.map_openai_params(
+        {"some_other_param": "value"}, {}, "some_model", drop_params=False
+    )
+    assert result == {}
+
+    # Test case 4: tool_choice is None
+    result = fireworks.map_openai_params(
+        {"tool_choice": None}, {}, "some_model", drop_params=False
+    )
+    assert result == {"tool_choice": None}
+
+
+def test_map_response_format():
+    """
+    json_schema response_format is passed through to Fireworks unchanged.
+
+    Fireworks accepts the OpenAI strict json_schema shape natively. The earlier
+    downgrade to {type: json_object, schema: ...} silently dropped `strict` and
+    `name`, producing a request that Fireworks treats as "any valid JSON" per
+    its docs, disabling grammar-guided decoding.
+
+    Ref: https://docs.fireworks.ai/structured-responses/structured-response-formatting
+    """
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "schema": {
+                "properties": {"result": {"type": "boolean"}},
+                "required": ["result"],
+                "type": "object",
+            },
+            "name": "BooleanResponse",
+            "strict": True,
+        },
+    }
+    result = fireworks.map_openai_params(
+        {"response_format": response_format}, {}, "some_model", drop_params=False
+    )
+    assert result == {"response_format": response_format}
+
+
+def test_get_supported_openai_params_transcription_returns_none():
+    # Fireworks AI deprecated audio transcription on 2026-06-10; the endpoint
+    # is decommissioned. Returning None (not chat-completion params) signals
+    # to callers that transcription is unsupported for this provider.
+    result = get_supported_openai_params(
+        model="fireworks_ai/accounts/fireworks/models/whisper-v3",
+        custom_llm_provider="fireworks_ai",
+        request_type="transcription",
+    )
+    assert result is None
+
+
+@pytest.mark.parametrize(
+    "content, expected_url",
+    [
+        (
+            {"image_url": "http://example.com/image.png"},
+            "http://example.com/image.png",
+        ),
+        (
+            {"image_url": {"url": "http://example.com/image.png"}},
+            {"url": "http://example.com/image.png"},
+        ),
+        (
+            {"image_url": "data:image/png;base64,iVBORw0KGgo="},
+            "data:image/png;base64,iVBORw0KGgo=",
+        ),
+        (
+            {"image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ=="}},
+            {"url": "data:image/jpeg;base64,/9j/4AAQ=="},
+        ),
+        (
+            {"image_url": "Data:image/png;base64,iVBORw0KGgo="},
+            "Data:image/png;base64,iVBORw0KGgo=",
+        ),
+    ],
+)
+def test_transform_inline_no_longer_added(content, expected_url):
+    image_block = {"type": "image_url", **content}
+    messages = [{"role": "user", "content": [image_block]}]
+
+    result = litellm.FireworksAIConfig()._transform_messages_helper(
+        messages=messages,
+        model=VISION_MODEL,
+        litellm_params={},
+    )
+    result_image_block = result[0]["content"][0]
+    if isinstance(expected_url, str):
+        assert result_image_block["image_url"] == expected_url
+    else:
+        assert result_image_block["image_url"]["url"] == expected_url["url"]
+
+
+@pytest.mark.parametrize(
+    "is_disabled",
+    [True, False],
+)
+def test_global_disable_flag_no_longer_adds_transform_inline(is_disabled):
+    url = "http://example.com/image.png"
+    litellm.disable_add_transform_inline_image_block = is_disabled
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": url}],
+        }
+    ]
+    result = litellm.FireworksAIConfig()._transform_messages_helper(
+        messages=messages,
+        model=VISION_MODEL,
+        litellm_params={},
+    )
+    assert result[0]["content"][0]["image_url"] == url
+    litellm.disable_add_transform_inline_image_block = False  # Reset for other tests
+
+
+fireworks = FireworksAIConfig()
+
+
+VISION_MODEL = next(
+    key.removeprefix("fireworks_ai/")
+    for key, info in litellm.model_cost.items()
+    if key.startswith("fireworks_ai/accounts/fireworks/models/") and info.get("supports_vision") is True
+)

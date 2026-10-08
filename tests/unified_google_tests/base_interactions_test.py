@@ -32,7 +32,7 @@ class BaseInteractionsTest(ABC):
 
     def test_create_simple_string_input(self):
         """Test creating an interaction with a simple string input."""
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         api_key = self.get_api_key()
         if not api_key:
             pytest.skip(f"API key not set for {self.__class__.__name__}")

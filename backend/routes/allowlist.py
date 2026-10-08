@@ -22,10 +22,13 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/customer/",
     "/end_user/",
     "/sso/",
+    "/liteadmin/slack/connect/",
+    "/moyai/connect/",
     "/login",
     "/v2/login",
     "/v3/login",
     "/logout",
+    "/session/logout",
     "/token",
     "/onboarding/",
     "/audit",
@@ -59,6 +62,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     # Tools / agents (registry & policy admin)
     "/v1/tool/",
     "/v1/agents",
+    "/agent/daily/activity/",
     # Guardrails admin
     "/v2/guardrails/",
     # MCP server admin + BYOK OAuth flow (UI-initiated) + dynamic per-server endpoints
@@ -80,6 +84,9 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     # Spend / analytics
     "/spend/",
     "/analytics/",
+    "/lens/",
+    "/v1/traces",
+    "/v1/logs",
     "/global/",
     "/user_agent",
     "/usage/",
@@ -143,6 +150,7 @@ BACKEND_EXACT_PATHS: frozenset[str] = frozenset(
     {
         "/",
         "/routes",
+        "/lens",
         "/openapi.json",
         "/docs",
         "/docs/oauth2-redirect",
@@ -154,6 +162,7 @@ BACKEND_EXACT_PATHS: frozenset[str] = frozenset(
 
 BACKEND_MOUNT_PATHS: frozenset[str] = frozenset(
     {
+        "/admin",
         "/swagger",  # API documentation static assets belong to the backend
         "/mcp",  # lazily-mounted MCP sub-app serves on the backend component
     }

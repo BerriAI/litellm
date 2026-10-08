@@ -25,9 +25,8 @@ from litellm.utils import token_counter
 from ..common_utils import HuggingFaceError, hf_task_list, hf_tasks, output_parser
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LoggingClass = LiteLLMLoggingObj
 else:
@@ -466,7 +465,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
             total_tokens=prompt_tokens + completion_tokens,
         )
         setattr(model_response, "usage", usage)
-        model_response._hidden_params["original_response"] = completion_response
+        model_response.hidden_params["original_response"] = completion_response
         return model_response
 
     def transform_response(
@@ -479,7 +478,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

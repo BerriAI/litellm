@@ -17,21 +17,21 @@ from importlib.resources import files
 from typing import Final
 
 import httpx
-from pydantic import BaseModel
 
 from litellm import verbose_logger
+from litellm.types.llms.base import LiteLLMBaseModel
 
 BLOG_POSTS_TTL_SECONDS: Final[int] = 3600  # 1 hour
 
 
-class BlogPost(BaseModel):
+class BlogPost(LiteLLMBaseModel):
     title: str
     description: str
     date: str
     url: str
 
 
-class BlogPostsResponse(BaseModel):
+class BlogPostsResponse(LiteLLMBaseModel):
     posts: list[BlogPost]
 
 

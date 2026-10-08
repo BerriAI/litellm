@@ -108,7 +108,7 @@ _GuardrailMethodT = TypeVar("_GuardrailMethodT", bound=Callable[..., object])
 
 
 def _logged_by_inner_guardrail(method: _GuardrailMethodT) -> _GuardrailMethodT:
-    vars(method)[LOGS_GUARDRAIL_INFORMATION_MARKER] = True  # rebind-ok: stamps the method the class body just defined
+    vars(method)[LOGS_GUARDRAIL_INFORMATION_MARKER] = True
     return method
 
 
@@ -277,17 +277,15 @@ def _prepare_hook_input(
     pipeline may have already rewritten), same reason the normal sequential/parallel
     guardrail loops do this."""
     if "metadata" not in data:
-        data["metadata"] = {}  # mutable-ok: request metadata bucket, hooks mutate it
-    data["metadata"]["guardrails"] = [
-        step.guardrail
-    ]  # mutable-ok: guardrails list is part of the request-payload shape
+        data["metadata"] = {}
+    data["metadata"]["guardrails"] = [step.guardrail]
 
     scans_raw_request: Final = callback.scan_raw_request
     hook_input: Final[dict] = (  # mutable-ok: same request-payload shape as data
         independent_snapshot(raw_request_snapshot) if scans_raw_request and raw_request_snapshot is not None else data
     )
     if hook_input is not data:
-        hook_input.setdefault("metadata", {})["guardrails"] = [step.guardrail]  # mutable-ok: request metadata shape
+        hook_input.setdefault("metadata", {})["guardrails"] = [step.guardrail]
     return hook_input, scans_raw_request
 
 
@@ -456,7 +454,7 @@ class PipelineExecutor:
         observer: Final = _StreamRewriteObserver(scanner)
         deliver_rewrites: Final = type(endpoint_translation).delivers_ended_stream_rewrites
         originals: Final = copy.deepcopy(streaming_chunks)
-        hook_input.pop("response", None)  # rebind-ok: an earlier step's stored response goes so this step's is stored
+        hook_input.pop("response", None)
         try:
             if deliver_rewrites:
                 await endpoint_translation.process_output_streaming_response(
@@ -582,7 +580,7 @@ class PipelineExecutor:
                     {"response": response},
                     None,
                     None,
-                )  # mutable-ok: modified-data contract is a plain dict
+                )
             return ("pass", response if isinstance(response, dict) else None, None, None)
 
         except Exception as e:
@@ -636,7 +634,7 @@ def _allow_result(
     restored: Final = _restore_request_guardrails(working_data, request_data)
     return PipelineExecutionResult(
         terminal_action="allow",
-        step_results=list(step_results),  # mutable-ok: PipelineExecutionResult field is a list
+        step_results=list(step_results),
         modified_data=restored if restored != request_data else None,
     )
 
@@ -657,13 +655,13 @@ def _restore_request_guardrails(
         return working_data
     request_metadata: Final = request_data.get("metadata")
     original_guardrails: Final = request_metadata.get("guardrails") if isinstance(request_metadata, dict) else None
-    stripped: Final = {k: v for k, v in working_metadata.items() if k != "guardrails"}  # mutable-ok: request dict
+    stripped: Final = {k: v for k, v in working_metadata.items() if k != "guardrails"}
     if original_guardrails is not None:
-        restored: Final = {**stripped, "guardrails": original_guardrails}  # mutable-ok: request dict
-        return {**working_data, "metadata": restored}  # mutable-ok: request dict
+        restored: Final = {**stripped, "guardrails": original_guardrails}
+        return {**working_data, "metadata": restored}
     if not stripped and not isinstance(request_metadata, dict):
-        return {k: v for k, v in working_data.items() if k != "metadata"}  # mutable-ok: request dict
-    return {**working_data, "metadata": stripped}  # mutable-ok: request dict
+        return {k: v for k, v in working_data.items() if k != "metadata"}
+    return {**working_data, "metadata": stripped}
 
 
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"

@@ -1,9 +1,13 @@
 import base64
+import gc
 import json
 import struct
-import tracemalloc
+import sys
+import types
 from binascii import crc32
+from collections.abc import Callable
 from datetime import datetime
+from typing import Final
 from unittest.mock import patch
 
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -50,10 +54,7 @@ def test_bedrock_passthrough_get_complete_url_default_endpoint():
         )
 
         # Verify URL construction
-        assert (
-            str(url)
-            == "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-3-sonnet/invoke"
-        )
+        assert str(url) == "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-3-sonnet/invoke"
         assert api_base == "https://bedrock-runtime.us-east-1.amazonaws.com"
 
 
@@ -112,9 +113,7 @@ def test_bedrock_passthrough_get_complete_url_custom_endpoint_with_path():
             model="anthropic.claude-3-sonnet",
             endpoint="/model/anthropic.claude-3-sonnet/invoke",
             request_query_params=None,
-            litellm_params={
-                "aws_bedrock_runtime_endpoint": "http://proxy.com/bedrockproxy"
-            },
+            litellm_params={"aws_bedrock_runtime_endpoint": "http://proxy.com/bedrockproxy"},
         )
 
         # Verify get_runtime_endpoint was called with correct parameters
@@ -126,10 +125,7 @@ def test_bedrock_passthrough_get_complete_url_custom_endpoint_with_path():
         )
 
         # Verify URL construction preserves the proxy path
-        assert (
-            str(url)
-            == "http://proxy.com/bedrockproxy/model/anthropic.claude-3-sonnet/invoke"
-        )
+        assert str(url) == "http://proxy.com/bedrockproxy/model/anthropic.claude-3-sonnet/invoke"
         assert api_base == "http://proxy.com/bedrockproxy"
 
 
@@ -211,9 +207,7 @@ def test_bedrock_passthrough_with_application_inference_profile():
     config = BedrockPassthroughConfig()
 
     model = "anthropic.claude-sonnet-4-20250514-v1:0"
-    model_id = (
-        "arn:aws:bedrock:eu-west-1:123456789:application-inference-profile/abcdefgh1234"
-    )
+    model_id = "arn:aws:bedrock:eu-west-1:123456789:application-inference-profile/abcdefgh1234"
     endpoint = f"model/{model}/invoke"
 
     with (
@@ -239,12 +233,8 @@ def test_bedrock_passthrough_with_application_inference_profile():
         # Verify that the URL contains the encoded model_id (ARN) instead of the model name
         url_str = str(url)
         # The ARN slash should be encoded as %2F
-        assert (
-            "application-inference-profile%2F" in url_str
-        ), f"Expected encoded ARN in URL, but got: {url_str}"
-        assert (
-            model not in url_str
-        ), f"Model name should be replaced by model_id, but got: {url_str}"
+        assert "application-inference-profile%2F" in url_str, f"Expected encoded ARN in URL, but got: {url_str}"
+        assert model not in url_str, f"Model name should be replaced by model_id, but got: {url_str}"
         assert "/invoke" in url_str, "Expected /invoke action in URL"
 
         # Verify the complete URL structure with encoded ARN
@@ -258,9 +248,7 @@ def test_bedrock_passthrough_with_inference_profile_converse_endpoint():
     config = BedrockPassthroughConfig()
 
     model = "anthropic.claude-sonnet-4-20250514-v1:0"
-    model_id = (
-        "arn:aws:bedrock:us-east-1:123456789:application-inference-profile/xyz123"
-    )
+    model_id = "arn:aws:bedrock:us-east-1:123456789:application-inference-profile/xyz123"
     endpoint = f"model/{model}/converse"
 
     with (
@@ -323,12 +311,8 @@ def test_bedrock_passthrough_without_model_id_backward_compatibility():
 
         # Verify that the URL contains the model name (not replaced)
         url_str = str(url)
-        assert (
-            model in url_str
-        ), f"Expected model name in URL when model_id not provided, but got: {url_str}"
-        expected_url = (
-            f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model}/invoke"
-        )
+        assert model in url_str, f"Expected model name in URL when model_id not provided, but got: {url_str}"
+        expected_url = f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model}/invoke"
         assert url_str == expected_url
 
 
@@ -338,9 +322,7 @@ def test_bedrock_passthrough_region_extraction_from_inference_profile_arn():
 
     model = "anthropic.claude-sonnet-4-20250514-v1:0"
     # ARN contains us-west-2 region
-    model_id = (
-        "arn:aws:bedrock:us-west-2:123456789:application-inference-profile/test123"
-    )
+    model_id = "arn:aws:bedrock:us-west-2:123456789:application-inference-profile/test123"
     endpoint = f"model/{model}/invoke"
 
     # Don't provide aws_region_name in litellm_params to test ARN extraction
@@ -358,15 +340,13 @@ def test_bedrock_passthrough_region_extraction_from_inference_profile_arn():
             model=model,
             endpoint=endpoint,
             request_query_params=None,
-            litellm_params={
-                "model_id": model_id
-            },  # Region should be extracted from ARN
+            litellm_params={"model_id": model_id},  # Region should be extracted from ARN
         )
 
         # Verify that the region from ARN is used in the base URL
-        assert (
-            "us-west-2" in api_base
-        ), f"Expected region 'us-west-2' from ARN in base URL, but got: {api_base}"
+        assert "us-west-2" in api_base, f"Expected region 'us-west-2' from ARN in base URL, but got: {api_base}"
+
+
 def test_bedrock_passthrough_model_id_arn_encoding():
     """
     Test that model_id ARNs are properly URL-encoded when used in endpoints.
@@ -409,14 +389,14 @@ def test_bedrock_passthrough_model_id_arn_encoding():
         url_str = str(url)
 
         # The slash in the ARN after application-inference-profile should be encoded as %2F
-        assert (
-            "application-inference-profile%2F" in url_str
-        ), f"Expected encoded ARN with %2F in URL, but got: {url_str}"
+        assert "application-inference-profile%2F" in url_str, (
+            f"Expected encoded ARN with %2F in URL, but got: {url_str}"
+        )
 
         # The unencoded version should NOT be in the URL
-        assert (
-            "application-inference-profile/" not in url_str
-        ), f"ARN slash should be encoded, but found unencoded version in: {url_str}"
+        assert "application-inference-profile/" not in url_str, (
+            f"ARN slash should be encoded, but found unencoded version in: {url_str}"
+        )
 
         # Verify the complete expected URL structure
         expected_encoded_model_id = (
@@ -433,9 +413,7 @@ def test_bedrock_passthrough_model_id_arn_encoding_invoke_endpoint():
     config = BedrockPassthroughConfig()
 
     model = "anthropic.claude-sonnet-4-5-20250929-v1:0"
-    model_id = (
-        "arn:aws:bedrock:us-east-1:123456789:application-inference-profile/xyz789"
-    )
+    model_id = "arn:aws:bedrock:us-east-1:123456789:application-inference-profile/xyz789"
     endpoint = f"/model/{model}/invoke"
 
     with (
@@ -464,9 +442,7 @@ def test_bedrock_passthrough_model_id_arn_encoding_invoke_endpoint():
         assert "application-inference-profile%2F" in url_str
         assert "/invoke" in url_str
 
-        expected_encoded_model_id = (
-            "arn:aws:bedrock:us-east-1:123456789:application-inference-profile%2Fxyz789"
-        )
+        expected_encoded_model_id = "arn:aws:bedrock:us-east-1:123456789:application-inference-profile%2Fxyz789"
         expected_url = f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{expected_encoded_model_id}/invoke"
         assert url_str == expected_url
 
@@ -508,9 +484,7 @@ def test_bedrock_passthrough_model_id_without_arn():
         assert model_id in url_str
         assert "%2F" not in url_str, "Non-ARN model IDs should not be encoded"
 
-        expected_url = (
-            f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model_id}/converse"
-        )
+        expected_url = f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model_id}/converse"
         assert url_str == expected_url
 
 
@@ -518,8 +492,7 @@ def _event_frame(event_type: str, payload: dict) -> bytes:
     def header(name: str, value: str) -> bytes:
         name_b, value_b = name.encode(), value.encode()
         return (
-            struct.pack("!B", len(name_b)) + name_b
-            + struct.pack("!B", 7) + struct.pack("!H", len(value_b)) + value_b
+            struct.pack("!B", len(name_b)) + name_b + struct.pack("!B", 7) + struct.pack("!H", len(value_b)) + value_b
         )
 
     payload_b = json.dumps(payload, separators=(",", ":")).encode()
@@ -592,29 +565,57 @@ def _feed(collector: PassthroughStreamCollector, stream: bytes, chunk_size: int 
         collector.add(stream[offset : offset + chunk_size])
 
 
-def test_converse_stream_collector_keeps_usage_without_retaining_the_stream():
-    texts = [f"tok{i} " for i in range(4000)]
-    stream = (
-        _event_frame("messageStart", {"role": "assistant"}) + _text_block(0, texts) + _stream_tail("end_turn", 4000)
+_SHARED_OBJECT_TYPES: Final = (types.ModuleType, type, types.FunctionType, types.MethodType, types.CodeType, property)
+_SMALL_TOKENS: Final = 4000
+_LARGE_TOKENS: Final = 8000
+
+
+def _bytes_reachable_from(root: object) -> int:
+    seen: Final[set[int]] = set()
+    pending: Final[list[object]] = [root]
+    sizes: Final[list[int]] = []
+    while pending:
+        obj = pending.pop()
+        if id(obj) in seen or isinstance(obj, _SHARED_OBJECT_TYPES):
+            continue
+        seen.add(id(obj))
+        sizes.append(sys.getsizeof(obj))
+        pending.extend(gc.get_referents(obj))
+    return sum(sizes)
+
+
+def _converse_text_stream(texts: list[str]) -> bytes:
+    return (
+        _event_frame("messageStart", {"role": "assistant"})
+        + _text_block(0, texts)
+        + _stream_tail("end_turn", len(texts))
     )
-    _feed(_converse_stream_collector(), stream)
 
-    tracemalloc.start()
-    try:
-        base = tracemalloc.get_traced_memory()[0]
-        collector = _converse_stream_collector()
-        _feed(collector, stream)
-        retained = tracemalloc.get_traced_memory()[0] - base
-    finally:
-        tracemalloc.stop()
 
-    assert retained < len(stream) // 4
+def _retained_growth(build_stream: Callable[[list[str]], bytes], endpoint: str) -> tuple[int, int, list[str]]:
+    small_texts: Final = [f"tok{i} " for i in range(_SMALL_TOKENS)]
+    large_texts: Final = [f"tok{i} " for i in range(_LARGE_TOKENS)]
+    small_stream, large_stream = build_stream(small_texts), build_stream(large_texts)
+    small, large = _stream_collector(endpoint), _stream_collector(endpoint)
+    _feed(small, small_stream)
+    _feed(large, large_stream)
+    growth: Final = _bytes_reachable_from(large) - _bytes_reachable_from(small)
+    return growth, len(large_stream) - len(small_stream), large_texts
 
+
+def test_converse_stream_collector_keeps_usage_without_retaining_the_stream():
+    growth, extra_stream_bytes, texts = _retained_growth(_converse_text_stream, CONVERSE_STREAM_ENDPOINT)
+    extra_text_bytes = sum(len(text) for text in texts[_SMALL_TOKENS:])
+
+    assert extra_text_bytes <= growth < extra_stream_bytes // 4, (growth, extra_text_bytes, extra_stream_bytes)
+
+    collector = _converse_stream_collector()
+    _feed(collector, _converse_text_stream(texts))
     response = collector.build_logged_response(_converse_stream_logging_obj())
     assert isinstance(response, ModelResponse)
     assert response.choices[0].message.content == "".join(texts)
     assert response.choices[0].finish_reason == "stop"
-    assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (25, 4000)
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (25, _LARGE_TOKENS)
 
 
 def test_converse_stream_collector_keeps_tool_calls_between_text_runs():
@@ -645,9 +646,8 @@ def test_converse_stream_collector_keeps_tool_calls_between_text_runs():
     assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (25, 12)
 
 
-def test_invoke_stream_collector_keeps_usage_without_retaining_the_stream():
-    texts = [f"tok{i} " for i in range(4000)]
-    stream = (
+def _invoke_text_stream(texts: list[str]) -> bytes:
+    return (
         _invoke_chunk(
             {
                 "type": "message_start",
@@ -669,28 +669,25 @@ def test_invoke_stream_collector_keeps_usage_without_retaining_the_stream():
         )
         + _invoke_chunk({"type": "content_block_stop", "index": 0})
         + _invoke_chunk(
-            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 4000}}
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": len(texts)}}
         )
         + _invoke_chunk({"type": "message_stop"})
     )
-    _feed(_stream_collector(INVOKE_STREAM_ENDPOINT), stream)
 
-    tracemalloc.start()
-    try:
-        base = tracemalloc.get_traced_memory()[0]
-        collector = _stream_collector(INVOKE_STREAM_ENDPOINT)
-        _feed(collector, stream)
-        retained = tracemalloc.get_traced_memory()[0] - base
-    finally:
-        tracemalloc.stop()
 
-    assert retained < len(stream) // 4
+def test_invoke_stream_collector_keeps_usage_without_retaining_the_stream():
+    growth, extra_stream_bytes, texts = _retained_growth(_invoke_text_stream, INVOKE_STREAM_ENDPOINT)
+    extra_text_bytes = sum(len(text) for text in texts[_SMALL_TOKENS:])
 
+    assert extra_text_bytes <= growth < extra_stream_bytes // 4, (growth, extra_text_bytes, extra_stream_bytes)
+
+    collector = _stream_collector(INVOKE_STREAM_ENDPOINT)
+    _feed(collector, _invoke_text_stream(texts))
     response = collector.build_logged_response(_stream_logging_obj(INVOKE_STREAM_ENDPOINT))
     assert isinstance(response, ModelResponse)
     assert response.choices[0].message.content == "".join(texts)
     assert response.choices[0].finish_reason == "stop"
-    assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (25, 4000)
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (25, _LARGE_TOKENS)
 
 
 def test_stream_collector_logs_nothing_for_an_unrecognized_endpoint():
