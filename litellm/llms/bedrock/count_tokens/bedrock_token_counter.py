@@ -4,9 +4,10 @@ Bedrock Token Counter implementation using the CountTokens API.
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Final, assert_never
+from typing import Any, Final
 
 from pydantic import JsonValue
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
@@ -75,7 +76,7 @@ class BedrockTokenCounter(BaseTokenCounter):
         handler: BedrockCountTokensHandler | BedrockMantleCountTokensHandler,
         tokenizer_type: str,
         request_data: dict[str, object],
-        litellm_params: dict[str, Any],
+        litellm_params: dict[str, object],
         resolved_model: str,
     ) -> CountTokensOutcome:
         try:
@@ -87,12 +88,12 @@ class BedrockTokenCounter(BaseTokenCounter):
             )
             reply: Final = _CountTokensReply.model_validate(result)
         except BedrockError as e:
-            verbose_logger.warning(
+            verbose_logger.debug(
                 "%s CountTokens API error: status=%s, message=%s", tokenizer_type, e.status_code, e.message
             )
             return CountTokensFailure(status_code=e.status_code, message=e.message, tokenizer_type=tokenizer_type)
         except Exception as e:
-            verbose_logger.warning("Error calling %s CountTokens API: %s", tokenizer_type, e)
+            verbose_logger.debug("Error calling %s CountTokens API: %s", tokenizer_type, e)
             return CountTokensFailure(status_code=500, message=str(e), tokenizer_type=tokenizer_type)
         return CountedTokens(input_tokens=reply.input_tokens, original_response=result, tokenizer_type=tokenizer_type)
 
@@ -138,6 +139,12 @@ class BedrockTokenCounter(BaseTokenCounter):
                     original_response=dict(outcome.original_response),
                 )
             case CountTokensFailure():
+                verbose_logger.warning(
+                    "%s CountTokens API error: status=%s, message=%s",
+                    outcome.tokenizer_type,
+                    outcome.status_code,
+                    outcome.message,
+                )
                 return TokenCountResponse(
                     total_tokens=0,
                     request_model=request_model,

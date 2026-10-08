@@ -5,7 +5,8 @@ Claude Opus 4.8 is offered only through cross-region inference, and bedrock-runt
 CountTokens answers 400 for it. The proxy then has to count through bedrock-mantle's
 Anthropic count_tokens, and the answer must sit within a few percent of what `/v1/messages`
 bills as `usage.input_tokens`. The local tokenizer fallback undercounts these models by
-about 40%, so this is the line that proves the real count is served
+about 40%, so this is the line that proves the real count is served. Both calls go through
+the real Anthropic SDK, the client customers count with
 """
 
 from __future__ import annotations
@@ -13,12 +14,13 @@ from __future__ import annotations
 from typing import Final
 
 import pytest
+from anthropic.types import MessageParam
 from e2e_config import unique_marker
-from e2e_http import unwrap
 from e2e_metadata import Domain, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
-from models import AnthropicMessagesBody, ChatMessage, CountTokensBody, LiteLLMParamsBody
+from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
+from sdk_clients import NO_PROXY_CACHE, SdkClients
 
 pytestmark = pytest.mark.e2e
 
@@ -26,9 +28,9 @@ CROSS_REGION_ONLY_CLAUDE_BACKEND: Final = "bedrock/global.anthropic.claude-opus-
 COUNT_TOLERANCE: Final = 0.05
 
 
-def _register(proxy: ProxyClient, resources: ResourceManager, backend: str) -> str:
-    model = f"e2e-count-tokens-bedrock-{unique_marker()}"
-    model_id = proxy.create_model(
+def _register(proxy: ProxyClient, resources: ResourceManager, backend: str) -> tuple[str, str]:
+    model: Final = f"e2e-count-tokens-bedrock-{unique_marker()}"
+    model_id: Final = proxy.create_model(
         model,
         LiteLLMParamsBody(
             model=backend,
@@ -38,7 +40,7 @@ def _register(proxy: ProxyClient, resources: ResourceManager, backend: str) -> s
         ),
     )
     resources.defer(lambda: proxy.delete_model(model_id))
-    return model
+    return model, resources.key()
 
 
 class TestBedrockMessagesCountTokens:
@@ -51,17 +53,18 @@ class TestBedrockMessagesCountTokens:
         )
     )
     def test_count_matches_billed_input_tokens_for_a_model_bedrock_runtime_cannot_count(
-        self, proxy: ProxyClient, scoped_key: str, resources: ResourceManager
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
-        model = _register(proxy, resources, CROSS_REGION_ONLY_CLAUDE_BACKEND)
-        prompt = f"{unique_marker()} " + "The quick brown fox jumps over the lazy dog. " * 40
-        message = ChatMessage(role="user", content=prompt)
+        model, key = _register(proxy, resources, CROSS_REGION_ONLY_CLAUDE_BACKEND)
+        client: Final = sdk.anthropic(key)
+        prompt: Final = f"{unique_marker()} " + "The quick brown fox jumps over the lazy dog. " * 40
+        message: Final[MessageParam] = {"role": "user", "content": prompt}
 
-        counted = unwrap(proxy.count_tokens(scoped_key, CountTokensBody(model=model, messages=[message])))
-        answered = unwrap(
-            proxy.messages(scoped_key, AnthropicMessagesBody(model=model, messages=[message], max_tokens=1))
+        counted: Final = client.messages.count_tokens(model=model, messages=[message])
+        answered: Final = client.messages.create(
+            model=model, max_tokens=1, messages=[message], extra_body=NO_PROXY_CACHE
         )
 
-        assert answered.usage is not None and answered.usage.input_tokens, answered
-        billed = answered.usage.input_tokens
+        billed: Final = answered.usage.input_tokens
+        assert billed, answered.usage
         assert abs(counted.input_tokens - billed) <= billed * COUNT_TOLERANCE, (counted, answered.usage)

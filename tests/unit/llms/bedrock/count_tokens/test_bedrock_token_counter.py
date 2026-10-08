@@ -1,15 +1,15 @@
-import json
+from collections.abc import Mapping
 from typing import Final
-from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from pydantic import JsonValue, TypeAdapter
 
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
-RUNTIME_URL_PART: Final = "bedrock-runtime.us-east-1.amazonaws.com"
-MANTLE_URL_PART: Final = "bedrock-mantle.us-east-1.api.aws"
+RUNTIME_HOST: Final = "bedrock-runtime.us-east-1.amazonaws.com"
+MANTLE_HOST: Final = "bedrock-mantle.us-east-1.api.aws"
 UNSUPPORTED: Final = {"message": "The provided model doesn't support counting tokens."}
 DEPLOYMENT: Final = {
     "litellm_params": {
@@ -19,20 +19,26 @@ DEPLOYMENT: Final = {
     }
 }
 MESSAGES: Final = [{"role": "user", "content": "The quick brown fox jumps over the lazy dog."}]
+_JSON_BODY: Final = TypeAdapter(dict[str, JsonValue])
 
 
-def _client(runtime: tuple[int, dict[str, object]], mantle: tuple[int, dict[str, object]]) -> AsyncHTTPHandler:
-    async def _post(url: str, **kwargs: object) -> httpx.Response:  # kwargs-ok: mirrors AsyncHTTPHandler.post
-        status_code, body = runtime if RUNTIME_URL_PART in url else mantle
-        return httpx.Response(status_code, json=body, request=httpx.Request("POST", url))
+class _Bedrock:
+    def __init__(self, runtime: tuple[int, Mapping[str, object]], mantle: tuple[int, Mapping[str, object]]) -> None:
+        self.runtime: Final = runtime
+        self.mantle: Final = mantle
+        self.requests: tuple[httpx.Request, ...] = ()
 
-    client: Final = AsyncMock(spec=AsyncHTTPHandler)
-    client.post = AsyncMock(side_effect=_post)
-    return client
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests = (*self.requests, request)
+        status_code, body = self.runtime if request.url.host == RUNTIME_HOST else self.mantle
+        return httpx.Response(status_code, json=dict(body), request=request)
+
+    def posted_hosts(self) -> tuple[str, ...]:
+        return tuple(request.url.host for request in self.requests)
 
 
-def _posted_hosts(client: AsyncHTTPHandler) -> tuple[str, ...]:
-    return tuple(httpx.URL(call.args[0]).host for call in client.post.call_args_list)
+def _counter(bedrock: _Bedrock) -> BedrockTokenCounter:
+    return BedrockTokenCounter(client=AsyncHTTPHandler(transport=httpx.MockTransport(bedrock)))
 
 
 @pytest.fixture(autouse=True)
@@ -43,9 +49,9 @@ def _sigv4_only(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.asyncio
 async def test_claude_model_bedrock_runtime_cannot_count_is_counted_on_mantle() -> None:
-    client: Final = _client(runtime=(400, UNSUPPORTED), mantle=(200, {"input_tokens": 2177}))
+    bedrock: Final = _Bedrock(runtime=(400, UNSUPPORTED), mantle=(200, {"input_tokens": 2177}))
 
-    result: Final = await BedrockTokenCounter(client=client).count_tokens(
+    result: Final = await _counter(bedrock).count_tokens(
         model_to_use="global.anthropic.claude-opus-4-8",
         messages=MESSAGES,
         contents=None,
@@ -59,17 +65,17 @@ async def test_claude_model_bedrock_runtime_cannot_count_is_counted_on_mantle() 
     assert result.total_tokens == 2177
     assert result.tokenizer_type == "bedrock_mantle_api"
     assert result.original_response == {"input_tokens": 2177}
-    assert _posted_hosts(client) == (RUNTIME_URL_PART, MANTLE_URL_PART)
-    mantle_body: Final = json.loads(client.post.call_args_list[1].kwargs["data"])
+    assert bedrock.posted_hosts() == (RUNTIME_HOST, MANTLE_HOST)
+    mantle_body: Final = _JSON_BODY.validate_json(bedrock.requests[1].content)
     assert mantle_body["model"] == "anthropic.claude-opus-4-8"
     assert mantle_body["system"] == "You are a terse assistant."
 
 
 @pytest.mark.asyncio
 async def test_bedrock_runtime_count_is_kept_when_it_answers() -> None:
-    client: Final = _client(runtime=(200, {"inputTokens": 1353}), mantle=(200, {"input_tokens": 1336}))
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 1353}), mantle=(200, {"input_tokens": 1336}))
 
-    result: Final = await BedrockTokenCounter(client=client).count_tokens(
+    result: Final = await _counter(bedrock).count_tokens(
         model_to_use="global.anthropic.claude-sonnet-4-6",
         messages=MESSAGES,
         contents=None,
@@ -80,7 +86,7 @@ async def test_bedrock_runtime_count_is_kept_when_it_answers() -> None:
     assert result is not None
     assert result.total_tokens == 1353
     assert result.tokenizer_type == "bedrock_api"
-    assert _posted_hosts(client) == (RUNTIME_URL_PART,)
+    assert bedrock.posted_hosts() == (RUNTIME_HOST,)
 
 
 @pytest.mark.asyncio
@@ -92,11 +98,11 @@ async def test_bedrock_runtime_count_is_kept_when_it_answers() -> None:
     ),
 )
 async def test_other_bedrock_runtime_failures_are_not_retried_on_mantle(
-    model_to_use: str, runtime: tuple[int, dict[str, object]]
+    model_to_use: str, runtime: tuple[int, Mapping[str, object]]
 ) -> None:
-    client: Final = _client(runtime=runtime, mantle=(200, {"input_tokens": 2177}))
+    bedrock: Final = _Bedrock(runtime=runtime, mantle=(200, {"input_tokens": 2177}))
 
-    result: Final = await BedrockTokenCounter(client=client).count_tokens(
+    result: Final = await _counter(bedrock).count_tokens(
         model_to_use=model_to_use,
         messages=MESSAGES,
         contents=None,
@@ -108,17 +114,17 @@ async def test_other_bedrock_runtime_failures_are_not_retried_on_mantle(
     assert result.error is True
     assert result.status_code == runtime[0]
     assert result.tokenizer_type == "bedrock_api"
-    assert _posted_hosts(client) == (RUNTIME_URL_PART,)
+    assert bedrock.posted_hosts() == (RUNTIME_HOST,)
 
 
 @pytest.mark.asyncio
 async def test_mantle_failure_is_reported_with_its_status() -> None:
-    client: Final = _client(
+    bedrock: Final = _Bedrock(
         runtime=(400, UNSUPPORTED),
         mantle=(404, {"type": "error", "error": {"type": "not_found_error", "message": "does not exist"}}),
     )
 
-    result: Final = await BedrockTokenCounter(client=client).count_tokens(
+    result: Final = await _counter(bedrock).count_tokens(
         model_to_use="global.anthropic.claude-sonnet-5-5",
         messages=MESSAGES,
         contents=None,
@@ -131,4 +137,4 @@ async def test_mantle_failure_is_reported_with_its_status() -> None:
     assert result.status_code == 404
     assert result.tokenizer_type == "bedrock_mantle_api"
     assert "does not exist" in (result.error_message or "")
-    assert _posted_hosts(client) == (RUNTIME_URL_PART, MANTLE_URL_PART)
+    assert bedrock.posted_hosts() == (RUNTIME_HOST, MANTLE_HOST)
