@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { ArrowUpRight, Github, Play, Star } from "lucide-react";
+import { ArrowRight, ArrowUpRight, Github, Play, Plug, Star } from "lucide-react";
 import moyaiHead from "../../../public/assets/moyai/moyai-head.svg";
 import anthropicLogo from "../../../public/assets/moyai/logos/anthropic.svg";
 import bedrockLogo from "../../../public/assets/moyai/logos/bedrock.svg";
@@ -245,11 +245,13 @@ function QuickConnectDialog({ onQuickConnect }: { onQuickConnect: (url: string) 
         render={
           <button
             type="button"
-            className="text-[#8b9bff] underline underline-offset-4 transition-colors hover:text-[#cfe3ff]"
+            className={`${styles.connect} inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-sm font-semibold text-white transition-transform hover:scale-[1.03]`}
           />
         }
       >
+        <Plug aria-hidden className="size-4 text-[#cfe3ff]" />
         Quick connect
+        <ArrowRight aria-hidden className="size-4" />
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
@@ -346,11 +348,11 @@ export default function MoyaiLanding({
             </SecondaryCta>
           </div>
           <div
-            className={`${styles.rise} mt-4 text-sm text-[rgba(226,234,255,0.6)]`}
+            className={`${styles.rise} mt-6 text-[15px] text-[rgba(226,234,255,0.82)]`}
             style={{ animationDelay: "0.34s" }}
           >
             {canQuickConnect && onQuickConnect ? (
-              <span className="flex flex-wrap items-center justify-center gap-1.5">
+              <span className="inline-flex flex-wrap items-center justify-center gap-3 rounded-full bg-white/[0.05] py-1.5 pl-5 pr-1.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.12)] backdrop-blur">
                 Already have Moyai deployed?
                 <QuickConnectDialog onQuickConnect={onQuickConnect} />
               </span>
