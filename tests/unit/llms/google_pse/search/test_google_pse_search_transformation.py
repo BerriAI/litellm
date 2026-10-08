@@ -99,3 +99,12 @@ def test_google_pse_item_with_several_fields_of_wrong_type_reports_every_field()
         _transform({"items": [item]})
 
     assert [error["loc"] for error in exc_info.value.errors()] == [("title",), ("url",), ("snippet",)]
+
+
+def test_google_pse_malformed_item_is_rejected_without_naming_its_position():
+    items = [{}] * 429 + ["not-an-object"]
+
+    with pytest.raises(ValidationError) as exc_info:
+        _transform({"items": items})
+
+    assert "429" not in str(exc_info.value)

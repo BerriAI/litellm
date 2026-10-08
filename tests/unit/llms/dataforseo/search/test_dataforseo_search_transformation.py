@@ -163,6 +163,15 @@ def test_dataforseo_organic_item_with_several_non_string_fields_reports_every_fi
     assert [error["loc"] for error in exc_info.value.errors()] == [("title",), ("url",), ("snippet",)]
 
 
+def test_dataforseo_malformed_item_is_rejected_without_naming_its_position():
+    items = [{}] * 429 + ["not-an-object"]
+
+    with pytest.raises(ValidationError) as exc_info:
+        _transform(_successful_task([{"items": items}]))
+
+    assert "429" not in str(exc_info.value)
+
+
 @pytest.fixture(autouse=True)
 def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)

@@ -19,7 +19,7 @@ from litellm.llms.base_llm.search.transformation import (
 from litellm.secret_managers.main import get_secret_str
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
-_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class _SearXNGSearchRequestRequired(TypedDict):
@@ -215,7 +215,8 @@ class SearXNGSearchConfig(BaseSearchConfig):
         # Note: SearXNG doesn't natively support limiting results via API params
         # It returns ~20 results per page by default
         results: Final = []
-        for result in _JSON_OBJECTS.validate_python(response_json.get("results", [])):
+        for raw_result in _JSON_VALUES.validate_python(response_json.get("results", [])):
+            result = _JSON_OBJECT.validate_python(raw_result)
             # Get date from either publishedDate or pubdate field
             date = result.get("publishedDate") or result.get("pubdate")
 

@@ -2075,3 +2075,94 @@ def test_login_shows_the_error_detail_only_when_the_proxy_answers_with_a_json_ob
         "Authentication failed: Starting CLI login failed: HTTP 429 from https://test.example.com/sso/cli/start"
         f"{expected_detail}\n"
     )
+
+
+@pytest.mark.parametrize(
+    ("obj", "expected_exit_code", "expected_stdout", "expected_stderr"),
+    [
+        ({}, 0, "sk-stored\n", ""),
+        ({"base_url": "https://test.example.com///", "base_url_explicit": True}, 0, "sk-stored\n", ""),
+        (
+            {"base_url": "https://other.example.com", "base_url_explicit": True},
+            1,
+            "",
+            "Not authenticated for this server. Run 'lite login'.\n",
+        ),
+        ({"base_url": "https://other.example.com", "base_url_explicit": False}, 0, "sk-stored\n", ""),
+        (
+            {"base_url": "https://test.example.com", "api_key": "sk-context", "api_key_from_token_file": True},
+            0,
+            "sk-context\n",
+            "",
+        ),
+        (
+            {"base_url": "https://test.example.com", "api_key": "sk-context", "api_key_from_token_file": False},
+            0,
+            "sk-stored\n",
+            "",
+        ),
+        (
+            {"base_url": "https://other.example.com", "api_key": "sk-context", "api_key_from_token_file": True},
+            0,
+            "sk-stored\n",
+            "",
+        ),
+    ],
+)
+def test_print_token_reads_the_connection_from_the_context_object(
+    isolated_home, obj, expected_exit_code, expected_stdout, expected_stderr
+):
+    _write_token_file(isolated_home, key="sk-stored")
+
+    result = CliRunner().invoke(print_token, obj=obj)
+
+    assert result.exit_code == expected_exit_code
+    assert result.stdout == expected_stdout
+    assert result.stderr == expected_stderr
+
+
+def test_print_token_without_a_context_object_reports_no_login_when_nothing_is_stored(isolated_home):
+    result = CliRunner().invoke(print_token)
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr == "Not authenticated. Run 'lite login'.\n"
+
+
+def test_print_token_without_a_context_object_fails_reading_it_once_a_login_is_stored(isolated_home):
+    _write_token_file(isolated_home, key="sk-stored")
+
+    result = CliRunner().invoke(print_token)
+
+    assert result.exit_code == 1
+    assert type(result.exception) is AttributeError
+    assert result.stdout == ""
+    assert result.stderr == ""
+
+
+@pytest.mark.parametrize(
+    "obj",
+    [
+        {},
+        {"api_key": "sk-context", "base_url_explicit": True},
+    ],
+)
+@responses.activate
+def test_login_without_a_base_url_in_the_context_fails_before_any_request(obj):
+    result = CliRunner().invoke(login, obj=obj)
+
+    assert result.exit_code == 1
+    assert type(result.exception) is KeyError
+    assert result.exception.args == ("base_url",)
+    assert result.output == ""
+    assert len(responses.calls) == 0
+
+
+@responses.activate
+def test_login_without_a_context_object_fails_before_any_request():
+    result = CliRunner().invoke(login)
+
+    assert result.exit_code == 1
+    assert type(result.exception) is TypeError
+    assert result.output == ""
+    assert len(responses.calls) == 0

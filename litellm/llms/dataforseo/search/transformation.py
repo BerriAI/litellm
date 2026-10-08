@@ -20,7 +20,7 @@ from litellm.llms.base_llm.search.transformation import (
 from litellm.secret_managers.main import get_secret_str
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
-_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class DataForSEOSearchConfig(BaseSearchConfig):
@@ -209,7 +209,8 @@ class DataForSEOSearchConfig(BaseSearchConfig):
                     result: Final = _JSON_OBJECT.validate_python(task["result"][0])
 
                     # Items contain the actual search results
-                    for item in _JSON_OBJECTS.validate_python(result.get("items", [])):
+                    for raw_item in _JSON_VALUES.validate_python(result.get("items", [])):
+                        item = _JSON_OBJECT.validate_python(raw_item)
                         # Only process organic search results
                         if item.get("type") == "organic":
                             search_result = SearchResult.model_validate(

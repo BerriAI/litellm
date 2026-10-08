@@ -1,7 +1,9 @@
 import os
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.llms.base_llm.image_generation.transformation import (
@@ -26,6 +28,12 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_VALUE: Final = TypeAdapter(object)
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_CONTAINER: Final[TypeAdapter[Mapping[str, object] | str | Sequence[object]]] = TypeAdapter(
+    Mapping[str, object] | str | Sequence[object], config=ConfigDict(hide_input_in_errors=True)
+)
 
 
 class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
@@ -221,7 +229,7 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         Transform Imagen image generation response to litellm ImageResponse format
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _JSON_VALUE.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -233,13 +241,18 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             model_response.data = []
 
         # Imagen format - predictions with generated images
-        predictions: Final = response_data.get("predictions", [])
-        for prediction in predictions:
+        predictions: Final = _JSON_CONTAINER.validate_python(
+            _JSON_OBJECT.validate_python(response_data).get("predictions", [])
+        )
+        for raw_prediction in predictions:
+            prediction = (
+                raw_prediction if isinstance(raw_prediction, str) else _JSON_CONTAINER.validate_python(raw_prediction)
+            )
             # Imagen returns images as bytesBase64Encoded
             if "bytesBase64Encoded" in prediction:
                 model_response.data.append(
                     ImageObject(
-                        b64_json=prediction["bytesBase64Encoded"],
+                        b64_json=_JSON_OBJECT.validate_python(prediction)["bytesBase64Encoded"],
                         url=None,
                     )
                 )

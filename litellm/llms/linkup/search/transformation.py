@@ -19,7 +19,7 @@ from litellm.llms.base_llm.search.transformation import (
 from litellm.secret_managers.main import get_secret_str
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
-_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class _LinkupSearchRequestRequired(TypedDict):
@@ -176,9 +176,10 @@ class LinkupSearchConfig(BaseSearchConfig):
         results: Final = []
 
         # Process results array
-        raw_results: Final = _JSON_OBJECTS.validate_python(response_json.get("results", []))
+        raw_results: Final = _JSON_VALUES.validate_python(response_json.get("results", []))
 
-        for result in raw_results:
+        for raw_result in raw_results:
+            result = _JSON_OBJECT.validate_python(raw_result)
             # Handle both text and image result types
             result_type = result.get("type", "text")
 

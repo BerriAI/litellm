@@ -418,6 +418,15 @@ def test_searxng_result_with_several_fields_of_wrong_type_reports_every_field():
     assert [error["loc"] for error in exc_info.value.errors()] == [("title",), ("url",), ("snippet",), ("date",)]
 
 
+def test_searxng_malformed_result_is_rejected_without_naming_its_position():
+    results = [{}] * 429 + ["not-an-object"]
+
+    with pytest.raises(ValidationError) as exc_info:
+        _transform({"results": results})
+
+    assert "429" not in str(exc_info.value)
+
+
 @pytest.fixture(autouse=True)
 def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)

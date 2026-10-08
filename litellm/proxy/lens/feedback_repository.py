@@ -65,10 +65,15 @@ class ClickHouseFeedbackStore:
         self.storage: Final = storage
 
     async def _target(self, scope: Scope, trace: TraceIdentity) -> _Target | None:
+        access: Final = access_parameters(scope)
         rows: Final = await self.storage.query(
             LENS_FEEDBACK_TARGET,
             LensFeedbackTargetParams(
-                **access_parameters(scope).model_dump(), trace_id=trace.trace_id, trace_ref=trace.trace_ref
+                all_teams=access.all_teams,
+                team=access.team,
+                key_hash=access.key_hash,
+                trace_id=trace.trace_id,
+                trace_ref=trace.trace_ref,
             ),
         )
         if len(rows) != 1:
@@ -78,10 +83,15 @@ class ClickHouseFeedbackStore:
         )
 
     async def _rows(self, scope: Scope, trace: TraceIdentity) -> tuple[Feedback, ...]:
+        access: Final = access_parameters(scope)
         rows: Final = await self.storage.query(
             LENS_FEEDBACK,
             LensFeedbackParams(
-                **access_parameters(scope).model_dump(), trace_id=trace.trace_id, trace_ref=trace.trace_ref
+                all_teams=access.all_teams,
+                team=access.team,
+                key_hash=access.key_hash,
+                trace_id=trace.trace_id,
+                trace_ref=trace.trace_ref,
             ),
         )
         return tuple(_feedback(row) for row in rows)
@@ -159,10 +169,14 @@ class ClickHouseFeedbackStore:
         return True
 
     async def summaries(self, scope: Scope, traces: tuple[TraceIdentity, ...]) -> tuple[TraceFeedbackSummary, ...]:
+        access: Final = access_parameters(scope)
         rows: Final = await self.storage.query(
             LENS_FEEDBACK_SUMMARY,
             LensFeedbackSummaryParams(
-                **access_parameters(scope).model_dump(), trace_ids=sorted({t.trace_id for t in traces})
+                all_teams=access.all_teams,
+                team=access.team,
+                key_hash=access.key_hash,
+                trace_ids=sorted({t.trace_id for t in traces}),
             ),
         )
         return tuple(summary for trace in traces for summary in _summaries(trace, rows))

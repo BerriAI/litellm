@@ -290,3 +290,12 @@ def test_searchapi_result_with_several_fields_of_wrong_type_reports_every_field(
         _transform({"organic_results": [result]})
 
     assert [error["loc"] for error in exc_info.value.errors()] == [("title",), ("url",), ("snippet",), ("date",)]
+
+
+def test_searchapi_malformed_result_is_rejected_without_naming_its_position():
+    results = [{}] * 429 + ["not-an-object"]
+
+    with pytest.raises(ValidationError) as exc_info:
+        _transform({"organic_results": results})
+
+    assert "429" not in str(exc_info.value)

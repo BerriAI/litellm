@@ -108,3 +108,12 @@ def test_perplexity_result_with_several_fields_of_wrong_type_reports_every_field
         ("date",),
         ("last_updated",),
     ]
+
+
+def test_perplexity_malformed_result_is_rejected_without_naming_its_position():
+    results = [{}] * 429 + ["not-an-object"]
+
+    with pytest.raises(ValidationError) as exc_info:
+        _transform({"results": results})
+
+    assert "429" not in str(exc_info.value)

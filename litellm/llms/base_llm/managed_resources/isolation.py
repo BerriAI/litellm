@@ -10,6 +10,7 @@ they created. Callers with no admin role and no identifying ids at all
 are denied so an empty user_id can never select an unscoped query.
 """
 
+from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
 from litellm.proxy._types import (
@@ -46,7 +47,7 @@ def resolve_resource_owner_id(
     return None
 
 
-def build_list_page(items: list[Any], has_more: bool = False) -> dict[str, Any]:
+def build_list_page(items: list[Any], has_more: bool = False) -> dict[str, object]:
     """Build the OpenAI-style paginated list response shape used by managed
     file/batch/vector-store listings. ``first_id`` and ``last_id`` are
     sourced from each item's ``.id`` attribute."""
@@ -61,7 +62,7 @@ def build_list_page(items: list[Any], has_more: bool = False) -> dict[str, Any]:
 
 def build_owner_filter(
     user_api_key_dict: UserAPIKeyAuth,
-) -> dict[str, Any] | None:
+) -> dict[str, str | Sequence[Mapping[str, str]]] | None:
     """Return a Prisma `where` fragment that scopes a managed-resource listing
     to records the caller is allowed to see.
 

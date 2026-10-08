@@ -131,3 +131,12 @@ def test_transform_search_response_reports_every_wrongly_typed_field_of_a_result
         _transform({"results": [result]})
 
     assert [error["loc"] for error in exc_info.value.errors()] == [("title",), ("url",), ("snippet",), ("date",)]
+
+
+def test_transform_search_response_rejects_malformed_result_without_naming_its_position():
+    results = [{}] * 429 + ["not-an-object"]
+
+    with pytest.raises(ValidationError) as exc_info:
+        _transform({"results": results})
+
+    assert "429" not in str(exc_info.value)

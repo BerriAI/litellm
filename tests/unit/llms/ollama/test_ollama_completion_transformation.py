@@ -886,3 +886,56 @@ def test_transform_request_leaves_unreadable_images_untouched(payload: str) -> N
     data = _transform_image_request(payload, "png")
 
     assert data["images"] == [payload]
+
+
+async def _complete_in_json_mode(response_text: str) -> ModelResponse:
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"model": "llama3", "response": response_text, "done": True})
+
+    return await litellm.acompletion(
+        model="ollama/llama3",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="http://ollama.example:11434",
+        format="json",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(respond)),
+    )
+
+
+@pytest.mark.parametrize(
+    ("response_text", "expected_content"),
+    [
+        ('[{"name": "f", "arguments": {}}]', '[{"name": "f", "arguments": {}}]'),
+        ('["name", "arguments"]', '["name", "arguments"]'),
+        ('"name arguments"', '"name arguments"'),
+        ('{"name": "f"}', '{"name": "f"}'),
+        ('{"b": 1,"a": 2}', '{"b": 1, "a": 2}'),
+        ("1.50", "1.5"),
+        ("true", "true"),
+        ("null", "null"),
+    ],
+    ids=["list_of_calls", "list_of_key_names", "text_with_key_names", "name_only", "object", "number", "bool", "null"],
+)
+async def test_ollama_json_mode_completion_reserializes_json_that_is_not_a_function_call(
+    response_text: str, expected_content: str
+) -> None:
+    response = await _complete_in_json_mode(response_text)
+
+    assert response.choices[0].message.content == expected_content
+    assert response.choices[0].message.tool_calls is None
+    assert response.choices[0].finish_reason == "stop"
+
+
+@pytest.mark.parametrize(
+    ("arguments_json", "expected_arguments"),
+    [('{"city":"Paris"}', '{"city": "Paris"}'), ("[1,2]", "[1, 2]"), ('"{}"', '"{}"'), ("null", "null")],
+    ids=["object", "list", "text", "null"],
+)
+async def test_ollama_json_mode_completion_turns_a_name_and_arguments_object_into_a_tool_call(
+    arguments_json: str, expected_arguments: str
+) -> None:
+    response = await _complete_in_json_mode(f'{{"name": "get_weather", "arguments": {arguments_json}}}')
+
+    (tool_call,) = response.choices[0].message.tool_calls
+    assert (tool_call.function.name, tool_call.function.arguments) == ("get_weather", expected_arguments)
+    assert response.choices[0].message.content is None
+    assert response.choices[0].finish_reason == "tool_calls"

@@ -40,7 +40,9 @@ def _extract_cache_params() -> dict[str, object]:
         return {}
     try:
         cache_params: Final = vars(litellm.cache.cache)
-        cleaned_params: Final = HealthCheckCacheParams(**cache_params).model_dump() if cache_params else {}
+        cleaned_params: Final = (
+            HealthCheckCacheParams.model_validate(dict(**cache_params)).model_dump() if cache_params else {}
+        )
         return masker.mask_dict(cleaned_params)
     except (AttributeError, TypeError) as e:
         verbose_proxy_logger.debug("Error extracting cache params: %s", e)
