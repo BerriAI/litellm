@@ -25,10 +25,16 @@ export function useCommandPalette(): CommandPaletteContextValue {
 export function CommandPaletteProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [hintSeen, setHintSeen] = useStoredValue(COMMAND_PALETTE_HINT_KEY);
+  const [hintDismissedInMemory, setHintDismissedInMemory] = useState(false);
   const pathname = usePathname();
   const toggle = useCallback(() => setOpen((current) => !current), []);
   const value = useMemo(() => ({ open, setOpen, toggle }), [open, toggle]);
   const scope = paletteScopeForRoute(routeSegmentForPathname(pathname));
+  const markHintSeen = useCallback(() => {
+    setHintDismissedInMemory(true);
+    setHintSeen(true);
+  }, [setHintSeen]);
+  const shouldShowHint = !hintSeen && !hintDismissedInMemory && !open;
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -43,14 +49,14 @@ export function CommandPaletteProvider({ children }: { children: ReactNode }) {
   }, [toggle]);
 
   useEffect(() => {
-    if (open && !hintSeen) setHintSeen(true);
-  }, [hintSeen, open, setHintSeen]);
+    if (open) markHintSeen();
+  }, [markHintSeen, open]);
 
   return (
     <CommandPaletteContext.Provider value={value}>
       {children}
       <CommandPalette open={open} setOpen={setOpen} />
-      {!hintSeen && !open && <CommandPaletteHint scope={scope} onDismiss={() => setHintSeen(true)} />}
+      {shouldShowHint && <CommandPaletteHint scope={scope} onDismiss={markHintSeen} />}
     </CommandPaletteContext.Provider>
   );
 }

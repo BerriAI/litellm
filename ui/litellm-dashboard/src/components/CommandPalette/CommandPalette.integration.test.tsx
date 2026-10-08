@@ -44,6 +44,16 @@ const HIGH_VOLUME_KEY = keyFixture("key-prod-0", "high-volume-prod", "sk-...4zoA
 const PROD_KEY = keyFixture("key-prod-1", "prod-backend", "sk-...AHeA", "team-1");
 const STAGING_KEY = keyFixture("key-staging-1", "staging-agent", "sk-...stgB", "unknown-team");
 const KEY_FIXTURES = [HIGH_VOLUME_KEY, PROD_KEY, STAGING_KEY];
+const UI_SETTINGS_RESPONSE = {
+  server_root_path: "",
+  proxy_base_url: null,
+  admin_ui_disabled: false,
+  auto_redirect_to_sso: false,
+  sso_configured: false,
+  is_control_plane: false,
+  workers: [],
+};
+const PROD_KEY_LIST_OPTIONS = { search: "prod", sortBy: "created_at", sortOrder: "desc", expand: "user" };
 const cachedKeyResults = new Map<string, KeyResponse[]>();
 
 function keyFixture(token: string, alias: string, keyName: string, teamId: string | null = null): KeyResponse {
@@ -97,15 +107,7 @@ beforeEach(() => {
             teams: [{ team_id: "team-1", team_alias: "platform-team" }],
             total_pages: 1,
           })
-        : Response.json({
-            server_root_path: "",
-            proxy_base_url: null,
-            admin_ui_disabled: false,
-            auto_redirect_to_sso: false,
-            sso_configured: false,
-            is_control_plane: false,
-            workers: [],
-          }),
+        : Response.json(UI_SETTINGS_RESPONSE),
     ),
   );
   vi.mocked(useKeys).mockImplementation((_page, _pageSize, options) => {
@@ -127,6 +129,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   testQueryClient.clear();
   vi.unstubAllGlobals();
   document.cookie = "token=; Max-Age=0; Path=/";
@@ -169,6 +172,36 @@ describe("CommandPalette integration", () => {
     expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument();
     expect(screen.queryByText("to search keys")).not.toBeInTheDocument();
     expect(window.localStorage.getItem(COMMAND_PALETTE_HINT_KEY.name)).toBe("true");
+  });
+
+  it("hides the discovery hint in memory when storage cannot persist its dismissal", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("Storage unavailable");
+    });
+    renderPalette();
+
+    await user.click(await screen.findByRole("button", { name: "Dismiss search hint" }));
+
+    expect(screen.queryByText("to search keys")).not.toBeInTheDocument();
+    expect(window.localStorage.getItem(COMMAND_PALETTE_HINT_KEY.name)).toBeNull();
+  });
+
+  it("keeps the discovery hint hidden after closing the palette when storage is unavailable", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("Storage unavailable");
+    });
+    renderPalette();
+
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+    const input = await screen.findByRole("combobox", { name: "Search" });
+    expect(screen.queryByText("to search keys")).not.toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByText("to search keys")).not.toBeInTheDocument();
+    expect(window.localStorage.getItem(COMMAND_PALETTE_HINT_KEY.name)).toBeNull();
   });
 
   it("does not show the discovery hint when it has already been seen", () => {
@@ -215,12 +248,9 @@ describe("CommandPalette integration", () => {
 
     await user.type(input, "prod");
     await waitFor(() => {
-      expect(vi.mocked(useKeys)).toHaveBeenLastCalledWith(
-        1,
-        8,
-        expect.objectContaining({ search: "prod", sortBy: "created_at", sortOrder: "desc", expand: "user" }),
-        { enabled: true },
-      );
+      expect(vi.mocked(useKeys)).toHaveBeenLastCalledWith(1, 8, expect.objectContaining(PROD_KEY_LIST_OPTIONS), {
+        enabled: true,
+      });
     });
     const firstKeyOption = await screen.findByRole("option", { name: /high-volume-prod/ });
     const keyOption = await screen.findByRole("option", { name: /prod-backend/ });
