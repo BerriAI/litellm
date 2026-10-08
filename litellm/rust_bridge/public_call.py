@@ -28,10 +28,6 @@ def optional_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def optional_bool(value: object) -> bool | None:
-    return value if isinstance(value, bool) else None
-
-
 def optional_mapping(value: object) -> Mapping[str, object] | None:
     if not isinstance(value, Mapping):
         return None
