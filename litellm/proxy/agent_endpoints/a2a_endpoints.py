@@ -947,7 +947,7 @@ async def invoke_agent_a2a(
         }:
             if not agent_url:
                 return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
-            upstream_version: Final = _upstream_version(agent)
+            upstream_version = _upstream_version(agent)
             if isinstance(params, dict) and upstream_version == "0.3":
                 params = normalize_request_params(params, served_version, method=method)
             if method == "tasks/pushNotificationConfig/set":
@@ -1021,7 +1021,7 @@ async def invoke_agent_a2a(
         elif method == "tasks/resubscribe":
             if not agent_url:
                 return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
-            upstream_version: Final = _upstream_version(agent)
+            upstream_version = _upstream_version(agent)
             if isinstance(params, dict) and upstream_version == "0.3":
                 params = normalize_request_params(params, served_version, method=method)
             if upstream_version == "1.0":
