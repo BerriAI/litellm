@@ -45,9 +45,9 @@ def test_synap_provider_keeps_explicit_credentials(monkeypatch: pytest.MonkeyPat
 
 
 def test_synap_is_available_in_add_model_form():
-    fields_path = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
-    providers = json.loads(fields_path.read_text())
-    synap = next(provider for provider in providers if provider["litellm_provider"] == "synap")
+    fields_path: Final = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
+    providers: Final = json.loads(fields_path.read_text())
+    synap: Final = next(provider for provider in providers if provider["litellm_provider"] == "synap")
 
     assert synap["provider"] == "SYNAP"
     assert synap["provider_display_name"] == "Synap"
@@ -59,8 +59,8 @@ def test_synap_is_available_in_add_model_form():
 
 
 def test_synap_supported_endpoints():
-    matrix_path = Path(litellm.__file__).parent / "provider_endpoints_support_backup.json"
-    providers = json.loads(matrix_path.read_text())["providers"]
+    matrix_path: Final = Path(litellm.__file__).parent / "provider_endpoints_support_backup.json"
+    providers: Final = json.loads(matrix_path.read_text())["providers"]
 
     assert providers["synap"]["endpoints"] == {
         "chat_completions": True,
@@ -149,15 +149,34 @@ async def test_synap_anthropic_messages_request(monkeypatch: pytest.MonkeyPatch)
     assert response["content"][0]["text"] == "Hello from Synap"
 
 
-def test_synap_cost_map_entries_are_consistent():
-    prices_path = Path(litellm.__file__).parent / "model_prices_and_context_window_backup.json"
-    prices = json.loads(prices_path.read_text())
-    synap_entries = {name: entry for name, entry in prices.items() if name.startswith("synap/")}
+def test_synap_completion_cost_is_calculated_from_usage():
+    """Spend for a Synap call is computed by completion_cost(), not read from the map.
 
-    assert synap_entries
-    for name, entry in synap_entries.items():
-        assert entry["litellm_provider"] == "synap", name
-        assert entry["mode"] == "chat", name
-        assert entry["input_cost_per_token"] > 0, name
-        assert entry["output_cost_per_token"] > 0, name
-        assert entry["source"] == "https://pool.linkrra.com/v1/models", name
+    1M prompt + 1M completion tokens makes the expectation the published per-million
+    price directly: $0.0675 in, $0.27 out.
+    """
+    from litellm import completion_cost
+    from litellm.types.utils import Choices, Message, ModelResponse, Usage
+
+    response: Final = ModelResponse(
+        id="chatcmpl_synap_cost",
+        created=1_791_190_000,
+        model="qwen/qwen3-coder-30b-a3b-instruct",
+        object="chat.completion",
+        choices=[
+            Choices(
+                index=0,
+                message=Message(role="assistant", content="priced"),
+                finish_reason="stop",
+            )
+        ],
+        usage=Usage(prompt_tokens=1_000_000, completion_tokens=1_000_000, total_tokens=2_000_000),
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="synap/qwen/qwen3-coder-30b-a3b-instruct",
+        custom_llm_provider="synap",
+    )
+
+    assert cost == pytest.approx(0.0675 + 0.27)
