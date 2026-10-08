@@ -244,7 +244,6 @@ def owned_proxy_process(
     remove_environment: tuple[str, ...] = (),
     workers: int = 1,
     database_setup: tuple[str, ...] = DB_PUSH,
-    extra_arguments: tuple[str, ...] = (),
 ) -> Iterator[OwnedProxy]:
     root: Final = _proxy_root()
     environment: Final = _proxy_environment(gateway, overrides, remove_environment)
@@ -260,8 +259,9 @@ def owned_proxy_process(
         "127.0.0.1",
         "--num_workers",
         str(workers),
+        "--timeout_worker_healthcheck",
+        str(int(graceful_stop_seconds())),
         *database_setup,
-        *extra_arguments,
     )
     launch: Final = _launch_until_bound(command, root, environment, output, _PORT_ATTEMPTS)
     process: Final = launch.process
@@ -294,6 +294,8 @@ def owned_gateway_image(
         str(workers),
         "--host",
         "127.0.0.1",
+        "--timeout-worker-healthcheck",
+        str(int(graceful_stop_seconds())),
     )
     launch: Final = _launch_until_bound(command, root, environment, output, _PORT_ATTEMPTS)
     try:
@@ -397,9 +399,7 @@ class UpstreamSlot:
 
     __slots__ = ("certificate", "directory", "port", "process", "root")
 
-    def __init__(
-        self, directory: Path, port: int, root: Path, certificate: UpstreamCertificate | None = None
-    ) -> None:
+    def __init__(self, directory: Path, port: int, root: Path, certificate: UpstreamCertificate | None = None) -> None:
         self.directory = directory
         self.port = port
         self.root = root
