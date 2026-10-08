@@ -29,7 +29,7 @@ use instrumentation::Instrumentation;
 pub(crate) use messages::{HIDDEN_BLOCK_TYPES, MessagePayload, encode};
 pub use metadata::{AgentMetadata, AgentType, Integration};
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase", ascii_case_insensitive)]

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "schema", schemars(rename = "TraceScope"))]
 pub struct ReadAccessParams {

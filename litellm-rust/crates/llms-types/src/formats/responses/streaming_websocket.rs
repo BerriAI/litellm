@@ -38,7 +38,7 @@ impl ResponsesWsEventType {
     }
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ResponsesWsEvent {
     #[serde(rename = "type")]
     pub event_type: ResponsesWsEventType,
@@ -64,7 +64,7 @@ impl ResponsesWsEvent {
     }
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Eq)]
 pub struct ResponsesErrorFrame {
     #[serde(rename = "type")]
@@ -84,7 +84,7 @@ impl ResponsesErrorFrame {
     }
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Eq)]
 pub struct ResponsesErrorBody {
     #[serde(rename = "type")]
@@ -93,7 +93,7 @@ pub struct ResponsesErrorBody {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesEventResponse {
     pub id: Option<String>,

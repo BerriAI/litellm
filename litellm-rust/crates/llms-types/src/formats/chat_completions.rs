@@ -8,7 +8,7 @@ pub use content::{
 };
 
 /// Reasoning effort level accepted or applied by the model.
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Copy, Eq, IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -44,14 +44,14 @@ impl ReasoningEffort {
     }
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(untagged)]
 pub enum ChatMessageContent {
     Text(String),
     Parts(Vec<Value>),
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ChatMessage {
     pub role: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -62,7 +62,7 @@ pub struct ChatMessage {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ChatCompletionToolCallFunctionChunk {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -71,7 +71,7 @@ pub struct ChatCompletionToolCallFunctionChunk {
     pub provider_specific_fields: Option<Map<String, Value>>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ChatCompletionToolCallChunk {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -81,7 +81,7 @@ pub struct ChatCompletionToolCallChunk {
     pub index: i64,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ChatCompletionThinkingBlock {
     Thinking {
@@ -102,7 +102,7 @@ pub enum ChatCompletionThinkingBlock {
 
 /// OpenAI `usage`, including the `prompt_tokens_details` split LiteLLM's Python
 /// path reports so cost tracking sees the same numbers on either path.
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct PromptTokensDetails {
     pub cached_tokens: u64,
@@ -110,7 +110,7 @@ pub struct PromptTokensDetails {
     pub text_tokens: u64,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ChatCompletionsUsage {
     pub prompt_tokens: u64,
@@ -119,7 +119,7 @@ pub struct ChatCompletionsUsage {
     pub prompt_tokens_details: PromptTokensDetails,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ChatCompletionsChoiceMessage {
     pub role: String,
     // Whether an empty turn is `None` or `""` is the provider's choice, not a
@@ -129,7 +129,7 @@ pub struct ChatCompletionsChoiceMessage {
     pub content: Option<String>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ChatCompletionsChoice {
     pub index: u64,
     pub message: ChatCompletionsChoiceMessage,
@@ -141,7 +141,7 @@ pub struct ChatCompletionsChoice {
 /// There is deliberately no `id`: Python mints the `chatcmpl-…` id on the
 /// `ModelResponse` it already created, and echoing the provider's own id here
 /// would change it. Pinned by `response_carries_no_id` in the Anthropic chat transformation tests.
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ChatCompletionsResponse {
     pub created: u64,
     pub model: String,
@@ -149,7 +149,7 @@ pub struct ChatCompletionsResponse {
     pub usage: ChatCompletionsUsage,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ChatCompletionDelta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -168,7 +168,7 @@ pub struct ChatCompletionDelta {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ChatCompletionStreamingChoice {
     pub index: u64,
     pub delta: ChatCompletionDelta,
@@ -178,7 +178,7 @@ pub struct ChatCompletionStreamingChoice {
     pub logprobs: Option<Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ChatCompletionChunk {
     pub id: String,
     pub created: u64,

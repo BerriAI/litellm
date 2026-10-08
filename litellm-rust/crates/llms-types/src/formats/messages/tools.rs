@@ -4,7 +4,7 @@ use serde_json::{Map, Value};
 use super::{CacheControl, CitationsConfig, McpListedTool};
 use crate::json_schema::JsonSchema;
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Copy, Eq)]
 pub enum AllowedCaller {
     #[serde(rename = "direct")]
@@ -18,7 +18,7 @@ pub enum AllowedCaller {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct WebSearchUserLocation {
     #[serde(rename = "type")]
     pub location_type: UserLocationType,
@@ -30,14 +30,14 @@ pub struct WebSearchUserLocation {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(rename_all = "snake_case")]
 pub enum UserLocationType {
     Approximate,
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ToolChoice {
     #[serde(rename = "type")]
     pub choice_type: ToolChoiceType,
@@ -47,7 +47,7 @@ pub struct ToolChoice {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolChoiceType {
     Auto,
@@ -57,7 +57,7 @@ pub enum ToolChoiceType {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct CustomTool {
     #[serde(rename = "type")]
     pub tool_type: Option<CustomToolType>,
@@ -74,83 +74,83 @@ pub struct CustomTool {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(rename_all = "snake_case")]
 pub enum CustomToolType {
     Custom,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Copy, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum BashToolName {
     Bash,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Copy, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum StrReplaceEditorName {
     StrReplaceEditor,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Copy, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum StrReplaceBasedEditToolName {
     StrReplaceBasedEditTool,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Copy, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryToolName {
     Memory,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Copy, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ComputerToolName {
     Computer,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Copy, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CodeExecutionToolName {
     CodeExecution,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Copy, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolSearchRegexToolName {
     ToolSearchToolRegex,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Copy, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolSearchBm25ToolName {
     ToolSearchToolBm25,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Copy, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WebSearchToolName {
     WebSearch,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Copy, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WebFetchToolName {
     WebFetch,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Copy, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AdvisorToolName {
@@ -158,7 +158,7 @@ pub enum AdvisorToolName {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ServerTool<N> {
     pub name: N,
     pub allowed_callers: Option<Vec<AllowedCaller>>,
@@ -170,7 +170,7 @@ pub struct ServerTool<N> {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ClientTool<N> {
     pub name: N,
     pub allowed_callers: Option<Vec<AllowedCaller>>,
@@ -183,7 +183,7 @@ pub struct ClientTool<N> {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct TextEditorTool20250728 {
     pub name: StrReplaceBasedEditToolName,
     pub allowed_callers: Option<Vec<AllowedCaller>>,
@@ -197,7 +197,7 @@ pub struct TextEditorTool20250728 {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ComputerTool {
     pub name: ComputerToolName,
     pub display_width_px: u64,
@@ -213,7 +213,7 @@ pub struct ComputerTool {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ComputerTool20251124 {
     pub name: ComputerToolName,
     pub display_width_px: u64,
@@ -229,7 +229,7 @@ pub struct ComputerTool20251124 {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Copy, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ResponseInclusion {
@@ -238,7 +238,7 @@ pub enum ResponseInclusion {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct WebSearchTool {
     pub name: WebSearchToolName,
     pub allowed_callers: Option<Vec<AllowedCaller>>,
@@ -254,7 +254,7 @@ pub struct WebSearchTool {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct WebSearchTool20260318 {
     pub name: WebSearchToolName,
     pub allowed_callers: Option<Vec<AllowedCaller>>,
@@ -270,7 +270,7 @@ pub struct WebSearchTool20260318 {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UrlSourceToolReference {
     ToolReference {
@@ -280,7 +280,7 @@ pub enum UrlSourceToolReference {
     },
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolResultUrlSource {
     All {
@@ -303,7 +303,7 @@ pub enum ToolResultUrlSource {
     },
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UserInputUrlSource {
     All {
@@ -317,7 +317,7 @@ pub enum UserInputUrlSource {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct WebFetchUrlSources {
     pub client_tool_results: Option<ToolResultUrlSource>,
     pub server_tool_results: Option<ToolResultUrlSource>,
@@ -327,7 +327,7 @@ pub struct WebFetchUrlSources {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct WebFetchTool {
     pub name: WebFetchToolName,
     pub allowed_callers: Option<Vec<AllowedCaller>>,
@@ -345,7 +345,7 @@ pub struct WebFetchTool {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct WebFetchTool20260309 {
     pub name: WebFetchToolName,
     pub allowed_callers: Option<Vec<AllowedCaller>>,
@@ -364,7 +364,7 @@ pub struct WebFetchTool20260309 {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct WebFetchTool20260318 {
     pub name: WebFetchToolName,
     pub allowed_callers: Option<Vec<AllowedCaller>>,
@@ -384,7 +384,7 @@ pub struct WebFetchTool20260318 {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct AdvisorTool {
     pub name: AdvisorToolName,
     pub model: String,
@@ -400,7 +400,7 @@ pub struct AdvisorTool {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ToolsetToolConfig {
     pub defer_loading: Option<bool>,
     pub enabled: Option<bool>,
@@ -409,7 +409,7 @@ pub struct ToolsetToolConfig {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct McpToolset {
     pub mcp_server_name: String,
     pub cache_control: Option<CacheControl>,
@@ -421,7 +421,7 @@ pub struct McpToolset {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct BrowserToolsetConfigs {
     #[serde(rename = "type")]
     pub type_text: Option<ToolsetToolConfig>,
@@ -460,7 +460,7 @@ pub struct BrowserToolsetConfigs {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ComputerToolsetConfigs {
     #[serde(rename = "type")]
     pub type_text: Option<ToolsetToolConfig>,
@@ -485,7 +485,7 @@ pub struct ComputerToolsetConfigs {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct Toolset<C> {
     pub cache_control: Option<CacheControl>,
     pub configs: Option<Box<C>>,
@@ -493,7 +493,7 @@ pub struct Toolset<C> {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type")]
 pub enum BuiltinMessagesTool {
     #[serde(rename = "bash_20241022")]
@@ -556,7 +556,7 @@ pub enum BuiltinMessagesTool {
     McpToolset(McpToolset),
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(untagged)]
 pub enum MessagesToolParam {
     Builtin(Box<BuiltinMessagesTool>),

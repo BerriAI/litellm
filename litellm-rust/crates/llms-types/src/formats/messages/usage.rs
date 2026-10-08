@@ -3,7 +3,7 @@ use serde_json::{Map, Value};
 use crate::recognized::Recognized;
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ServerToolUsage {
     pub web_search_requests: Option<u64>,
@@ -13,7 +13,7 @@ pub struct ServerToolUsage {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct UsageIteration {
     #[serde(rename = "type")]
     pub iteration_type: Recognized<UsageIterationType>,
@@ -27,7 +27,7 @@ pub struct UsageIteration {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(rename_all = "snake_case")]
 pub enum UsageIterationType {
     Compaction,
@@ -37,7 +37,7 @@ pub enum UsageIterationType {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct MessagesUsage {
     pub input_tokens: Option<u64>,
@@ -56,7 +56,7 @@ pub struct MessagesUsage {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct CacheCreationUsage {
     pub ephemeral_1h_input_tokens: Option<u64>,
@@ -66,7 +66,7 @@ pub struct CacheCreationUsage {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct MessagesOutputTokensDetails {
     pub thinking_tokens: Option<u64>,

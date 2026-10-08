@@ -2,7 +2,7 @@ use crate::formats::chat_completions::PromptCacheBreakpoint;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponsesOutputItem {
     Message(ResponsesMessage),
@@ -35,7 +35,7 @@ pub enum ResponsesOutputItem {
     CustomToolCallOutput(ResponsesCustomToolCallOutput),
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponsesContentPart {
     OutputText {
@@ -64,7 +64,7 @@ pub enum ResponsesContentPart {
     },
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponsesAnnotation {
     UrlCitation(ResponsesUrlCitation),
@@ -73,7 +73,7 @@ pub enum ResponsesAnnotation {
     ContainerFileCitation(ResponsesFileCitation),
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponsesCodeOutput {
     Logs {
@@ -89,7 +89,7 @@ pub enum ResponsesCodeOutput {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesMessage {
     pub id: Option<String>,
@@ -102,7 +102,7 @@ pub struct ResponsesMessage {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesFunctionCall {
     pub id: Option<String>,
@@ -118,7 +118,7 @@ pub struct ResponsesFunctionCall {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesCustomToolCall {
     pub id: Option<String>,
@@ -134,7 +134,7 @@ pub struct ResponsesCustomToolCall {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesReasoning {
     pub id: Option<String>,
@@ -147,7 +147,7 @@ pub struct ResponsesReasoning {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesWebSearchCall {
     pub id: Option<String>,
@@ -158,7 +158,7 @@ pub struct ResponsesWebSearchCall {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesFileSearchCall {
     pub id: Option<String>,
@@ -170,7 +170,7 @@ pub struct ResponsesFileSearchCall {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesFileSearchResult {
     pub file_id: Option<String>,
@@ -183,7 +183,7 @@ pub struct ResponsesFileSearchResult {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesImageGenerationCall {
     pub id: Option<String>,
@@ -200,7 +200,7 @@ pub struct ResponsesImageGenerationCall {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesCodeInterpreterCall {
     pub id: Option<String>,
@@ -213,7 +213,7 @@ pub struct ResponsesCodeInterpreterCall {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesMcpCall {
     pub id: Option<String>,
@@ -229,7 +229,7 @@ pub struct ResponsesMcpCall {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesUrlCitation {
     pub url: Option<String>,
@@ -241,7 +241,7 @@ pub struct ResponsesUrlCitation {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesFileCitation {
     pub file_id: Option<String>,
@@ -254,7 +254,7 @@ pub struct ResponsesFileCitation {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponsesWebSearchAction {
     Search {
@@ -283,7 +283,7 @@ pub enum ResponsesWebSearchAction {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesWebSearchSource {
     #[serde(rename = "type")]
@@ -294,7 +294,7 @@ pub struct ResponsesWebSearchSource {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesMcpListTools {
     pub id: Option<String>,
@@ -306,7 +306,7 @@ pub struct ResponsesMcpListTools {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesMcpTool {
     pub name: Option<String>,
@@ -317,14 +317,14 @@ pub struct ResponsesMcpTool {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(untagged)]
 pub enum ResponsesMcpError {
     Message(String),
     Detail(ResponsesMcpErrorDetail),
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponsesMcpErrorDetail {
     McpProtocolError {
@@ -346,7 +346,7 @@ pub enum ResponsesMcpErrorDetail {
     },
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponsesToolCaller {
     Direct {
@@ -360,14 +360,14 @@ pub enum ResponsesToolCaller {
     },
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(untagged)]
 pub enum ResponsesToolOutput {
     Text(String),
     Content(Vec<ResponsesInputContent>),
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponsesInputContent {
     InputText {
@@ -407,7 +407,7 @@ pub enum ResponsesInputContent {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesFunctionCallOutput {
     pub id: Option<String>,
@@ -423,7 +423,7 @@ pub struct ResponsesFunctionCallOutput {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesCustomToolCallOutput {
     pub id: Option<String>,
@@ -437,7 +437,7 @@ pub struct ResponsesCustomToolCallOutput {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesSafetyCheck {
     pub id: Option<String>,
@@ -448,7 +448,7 @@ pub struct ResponsesSafetyCheck {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesComputerCall {
     pub id: Option<String>,
@@ -461,7 +461,7 @@ pub struct ResponsesComputerCall {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponsesComputerAction {
     Click {
@@ -526,7 +526,7 @@ pub enum ResponsesComputerAction {
     },
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ResponsesCoordinate {
     pub x: i64,
     pub y: i64,
@@ -535,7 +535,7 @@ pub struct ResponsesCoordinate {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesComputerCallOutput {
     pub id: Option<String>,
@@ -548,7 +548,7 @@ pub struct ResponsesComputerCallOutput {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponsesComputerOutput {
     ComputerScreenshot {
@@ -562,7 +562,7 @@ pub enum ResponsesComputerOutput {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesProgram {
     pub id: Option<String>,
@@ -574,7 +574,7 @@ pub struct ResponsesProgram {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesProgramOutput {
     pub id: Option<String>,
@@ -586,7 +586,7 @@ pub struct ResponsesProgramOutput {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesToolSearchCall {
     pub id: Option<String>,
@@ -600,7 +600,7 @@ pub struct ResponsesToolSearchCall {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesToolSearchOutput {
     pub id: Option<String>,
@@ -614,7 +614,7 @@ pub struct ResponsesToolSearchOutput {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesAdditionalTools {
     pub id: Option<String>,
@@ -625,7 +625,7 @@ pub struct ResponsesAdditionalTools {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesCompaction {
     pub id: Option<String>,
@@ -636,7 +636,7 @@ pub struct ResponsesCompaction {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesLocalShellCall {
     pub id: Option<String>,
@@ -647,7 +647,7 @@ pub struct ResponsesLocalShellCall {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponsesLocalShellAction {
     Exec {
@@ -665,7 +665,7 @@ pub enum ResponsesLocalShellAction {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesLocalShellCallOutput {
     pub id: Option<String>,
@@ -676,7 +676,7 @@ pub struct ResponsesLocalShellCallOutput {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesShellCall {
     pub id: Option<String>,
@@ -691,7 +691,7 @@ pub struct ResponsesShellCall {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesShellAction {
     pub commands: Option<Vec<String>>,
@@ -701,7 +701,7 @@ pub struct ResponsesShellAction {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponsesShellEnvironment {
     Local {
@@ -716,7 +716,7 @@ pub enum ResponsesShellEnvironment {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesShellCallOutput {
     pub id: Option<String>,
@@ -731,7 +731,7 @@ pub struct ResponsesShellCallOutput {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesShellOutputChunk {
     pub outcome: Option<ResponsesShellOutcome>,
@@ -742,7 +742,7 @@ pub struct ResponsesShellOutputChunk {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponsesShellOutcome {
     Timeout {
@@ -757,7 +757,7 @@ pub enum ResponsesShellOutcome {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesApplyPatchCall {
     pub id: Option<String>,
@@ -770,7 +770,7 @@ pub struct ResponsesApplyPatchCall {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponsesApplyPatchOperation {
     CreateFile {
@@ -793,7 +793,7 @@ pub enum ResponsesApplyPatchOperation {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesApplyPatchCallOutput {
     pub id: Option<String>,
@@ -807,7 +807,7 @@ pub struct ResponsesApplyPatchCallOutput {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesMcpApprovalRequest {
     pub id: Option<String>,
@@ -819,7 +819,7 @@ pub struct ResponsesMcpApprovalRequest {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ResponsesMcpApprovalResponse {
     pub id: Option<String>,

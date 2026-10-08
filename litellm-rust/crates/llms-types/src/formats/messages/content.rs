@@ -3,7 +3,7 @@ use serde_json::{Map, Value};
 use super::{CacheControl, MessagesToolParam};
 use crate::json_schema::JsonSchema;
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentSource {
     Base64 {
@@ -35,14 +35,14 @@ pub enum ContentSource {
     },
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(untagged)]
 pub enum BlockContent {
     Text(String),
     Blocks(Vec<MessagesContentPart>),
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolCaller {
     Direct {
@@ -64,7 +64,7 @@ pub enum ToolCaller {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct CitationsConfig {
     pub enabled: Option<bool>,
@@ -73,7 +73,7 @@ pub struct CitationsConfig {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct PageCitation {
     pub cited_text: String,
     pub document_index: u64,
@@ -86,7 +86,7 @@ pub struct PageCitation {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct CharCitation {
     pub cited_text: String,
     pub document_index: u64,
@@ -99,7 +99,7 @@ pub struct CharCitation {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ContentBlockCitation {
     pub cited_text: String,
     pub document_index: u64,
@@ -112,7 +112,7 @@ pub struct ContentBlockCitation {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct WebSearchCitation {
     pub cited_text: String,
     pub url: String,
@@ -123,7 +123,7 @@ pub struct WebSearchCitation {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct SearchResultCitation {
     pub cited_text: String,
     pub search_result_index: u64,
@@ -135,7 +135,7 @@ pub struct SearchResultCitation {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Citation {
     PageLocation(PageCitation),
@@ -145,7 +145,7 @@ pub enum Citation {
     SearchResultLocation(SearchResultCitation),
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessagesContentPart {
     Text(TextBlock),
@@ -179,7 +179,7 @@ pub enum MessagesContentPart {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct TextBlock {
     pub text: String,
     pub citations: Option<Vec<Citation>>,
@@ -189,7 +189,7 @@ pub struct TextBlock {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ImageBlock {
     pub source: ContentSource,
     pub cache_control: Option<CacheControl>,
@@ -198,7 +198,7 @@ pub struct ImageBlock {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct DocumentBlock {
     pub source: ContentSource,
     pub title: Option<String>,
@@ -210,7 +210,7 @@ pub struct DocumentBlock {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct SearchResultBlock {
     pub source: String,
     pub title: String,
@@ -221,7 +221,7 @@ pub struct SearchResultBlock {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ThinkingBlock {
     pub thinking: String,
     pub signature: String,
@@ -229,7 +229,7 @@ pub struct ThinkingBlock {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct RedactedThinkingBlock {
     pub data: String,
     #[serde(flatten)]
@@ -237,7 +237,7 @@ pub struct RedactedThinkingBlock {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ToolUseBlock {
     pub id: String,
     pub name: String,
@@ -250,7 +250,7 @@ pub struct ToolUseBlock {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ToolResultBlock {
     pub tool_use_id: String,
     pub content: Option<BlockContent>,
@@ -262,7 +262,7 @@ pub struct ToolResultBlock {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ToolReferenceBlock {
     pub tool_name: String,
     pub cache_control: Option<CacheControl>,
@@ -271,7 +271,7 @@ pub struct ToolReferenceBlock {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct BrowserStateBlock {
     pub tabs: Vec<BrowserTab>,
     pub state_changes: Option<Vec<BrowserStateChange>>,
@@ -281,7 +281,7 @@ pub struct BrowserStateBlock {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct BrowserTab {
     pub tab_id: String,
     pub title: String,
@@ -291,7 +291,7 @@ pub struct BrowserTab {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BrowserStateChange {
     TabOpened {
@@ -326,7 +326,7 @@ pub enum BrowserStateChange {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ServerToolUseBlock {
     pub id: String,
     pub name: String,
@@ -338,7 +338,7 @@ pub struct ServerToolUseBlock {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ServerToolResultBlock<C> {
     pub tool_use_id: String,
     pub content: C,
@@ -349,7 +349,7 @@ pub struct ServerToolResultBlock<C> {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ServerToolError {
     pub error_code: String,
     pub error_message: Option<String>,
@@ -357,14 +357,14 @@ pub struct ServerToolError {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(untagged)]
 pub enum WebSearchToolResultContent {
     Error(WebSearchResultError),
     Results(Vec<WebSearchResult>),
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct WebSearchResultError {
     #[serde(rename = "type")]
     pub error_type: WebSearchResultErrorType,
@@ -373,14 +373,14 @@ pub struct WebSearchResultError {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(rename_all = "snake_case")]
 pub enum WebSearchResultErrorType {
     WebSearchToolResultError,
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct WebSearchResult {
     #[serde(rename = "type")]
     pub result_type: WebSearchResultType,
@@ -392,13 +392,13 @@ pub struct WebSearchResult {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(rename_all = "snake_case")]
 pub enum WebSearchResultType {
     WebSearchResult,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WebFetchToolResultContent {
     WebFetchToolResultError(ServerToolError),
@@ -406,7 +406,7 @@ pub enum WebFetchToolResultContent {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct WebFetchResult {
     pub url: String,
     pub content: WebFetchDocument,
@@ -415,13 +415,13 @@ pub struct WebFetchResult {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WebFetchDocument {
     Document(Box<DocumentBlock>),
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CodeExecutionToolResultContent {
     CodeExecutionToolResultError(ServerToolError),
@@ -429,14 +429,14 @@ pub enum CodeExecutionToolResultContent {
     EncryptedCodeExecutionResult(EncryptedCodeExecutionResult),
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BashCodeExecutionToolResultContent {
     BashCodeExecutionToolResultError(ServerToolError),
     BashCodeExecutionResult(CodeExecutionResult<BashCodeExecutionOutput>),
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct CodeExecutionResult<O = CodeExecutionOutput> {
     pub stdout: String,
     pub stderr: String,
@@ -446,7 +446,7 @@ pub struct CodeExecutionResult<O = CodeExecutionOutput> {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct EncryptedCodeExecutionResult {
     pub encrypted_stdout: String,
     pub stderr: String,
@@ -456,7 +456,7 @@ pub struct EncryptedCodeExecutionResult {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CodeExecutionOutput {
     CodeExecutionOutput {
@@ -466,7 +466,7 @@ pub enum CodeExecutionOutput {
     },
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BashCodeExecutionOutput {
     BashCodeExecutionOutput {
@@ -476,7 +476,7 @@ pub enum BashCodeExecutionOutput {
     },
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TextEditorCodeExecutionToolResultContent {
     TextEditorCodeExecutionToolResultError(ServerToolError),
@@ -486,7 +486,7 @@ pub enum TextEditorCodeExecutionToolResultContent {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct TextEditorViewResult {
     pub content: String,
     pub file_type: TextEditorFileType,
@@ -497,7 +497,7 @@ pub struct TextEditorViewResult {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(rename_all = "snake_case")]
 pub enum TextEditorFileType {
     Text,
@@ -505,7 +505,7 @@ pub enum TextEditorFileType {
     Pdf,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct TextEditorCreateResult {
     pub is_file_update: bool,
     #[serde(flatten)]
@@ -513,7 +513,7 @@ pub struct TextEditorCreateResult {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct TextEditorStrReplaceResult {
     pub lines: Option<Vec<String>>,
@@ -525,27 +525,27 @@ pub struct TextEditorStrReplaceResult {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolSearchToolResultContent {
     ToolSearchToolResultError(ServerToolError),
     ToolSearchToolSearchResult(ToolSearchResult),
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ToolSearchResult {
     pub tool_references: Vec<ToolSearchReference>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolSearchReference {
     ToolReference(ToolReferenceBlock),
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AdvisorToolResultContent {
     AdvisorToolResultError(ServerToolError),
@@ -566,7 +566,7 @@ pub enum AdvisorToolResultContent {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ContainerUploadBlock {
     pub file_id: String,
     pub cache_control: Option<CacheControl>,
@@ -575,7 +575,7 @@ pub struct ContainerUploadBlock {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct McpToolUseBlock {
     pub id: String,
     pub name: String,
@@ -587,7 +587,7 @@ pub struct McpToolUseBlock {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct McpToolResultBlock {
     pub tool_use_id: String,
     pub content: Option<McpToolResultContent>,
@@ -597,20 +597,20 @@ pub struct McpToolResultBlock {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(untagged)]
 pub enum McpToolResultContent {
     Text(String),
     Blocks(Vec<McpToolResultText>),
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum McpToolResultText {
     Text(TextBlock),
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct McpToolListingBlock {
     pub mcp_server_name: String,
     pub tools: Vec<McpListedTool>,
@@ -619,7 +619,7 @@ pub struct McpToolListingBlock {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct McpListedTool {
     pub name: String,
     pub description: Option<String>,
@@ -629,7 +629,7 @@ pub struct McpListedTool {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct CompactionBlock {
     pub content: Option<String>,
@@ -641,7 +641,7 @@ pub struct CompactionBlock {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolChange {
     ToolAddition(ToolChangeBlock),
@@ -649,7 +649,7 @@ pub enum ToolChange {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ToolChangeBlock {
     pub tool: ToolChangeTarget,
     pub cache_control: Option<CacheControl>,
@@ -657,7 +657,7 @@ pub struct ToolChangeBlock {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolChangeTarget {
     ToolReference {
@@ -684,7 +684,7 @@ pub enum ToolChangeTarget {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct FallbackBlock {
     pub from: FallbackModel,
     pub to: FallbackModel,
@@ -693,14 +693,14 @@ pub struct FallbackBlock {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct FallbackModel {
     pub model: String,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FallbackTrigger {
     Refusal {

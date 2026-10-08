@@ -1,4 +1,4 @@
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::response_type)]
 #[derive(Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct TraceSQLResponse {
