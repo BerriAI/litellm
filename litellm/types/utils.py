@@ -319,7 +319,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_creation_input_token_cost_batches: ReadOnly[float | None]
     cache_creation_input_token_cost_above_200k_tokens_batches: ReadOnly[float | None]
     cache_creation_input_token_cost_above_272k_tokens_batches: ReadOnly[float | None]
-    cache_storage_cost_per_token_per_hour: ReadOnly[float | None]  # explicit context cache storage, e.g. Vertex AI
+    cache_storage_cost_per_token_per_hour: ReadOnly[float | None]
     # Smallest prefix this model will actually cache, whatever caching mechanism its provider uses.
     # Absent means the provider-agnostic default applies; see MINIMUM_PROMPT_CACHE_TOKEN_COUNT.
     prompt_cache_min_tokens: int | None
@@ -3926,6 +3926,8 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
 
 
 DEPLOYMENT_SCOPED_PRICING_FIELDS: Final[frozenset[str]] = frozenset({"off_peak_pricing"})
+
+SEPARATE_CHARGE_PRICING_FIELDS: Final[frozenset[str]] = frozenset({"cache_storage_cost_per_token_per_hour"})
 
 DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset({"supports_regex_lookaround"})
 

@@ -1,6 +1,6 @@
 import datetime
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, cast
@@ -5844,8 +5844,11 @@ def test_completion_cost_bills_base_when_gemini_serves_on_demand(
 _STORAGE_RATE_KEY: Final = "cache_storage_cost_per_token_per_hour"
 
 
+_FIXED_START_TIME: Final = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+
+
 @pytest.fixture
-def _storage_cost_map(_local_model_cost_map: None):
+def _storage_cost_map(_local_model_cost_map: None) -> Iterator[None]:
     litellm.get_model_info.cache_clear()
     yield
     litellm.get_model_info.cache_clear()
@@ -5874,7 +5877,7 @@ def _cache_storage_logging_obj(model: str, token_hours: float) -> Logging:
         messages=[{"role": "user", "content": "Hello"}],
         stream=False,
         call_type="completion",
-        start_time=datetime.datetime.now(),
+        start_time=_FIXED_START_TIME,
         litellm_call_id="context-cache-storage",
         function_id="f",
     )
@@ -5937,3 +5940,60 @@ def test_context_cache_storage_uses_the_deployment_storage_rate(_storage_cost_ma
     without_storage: Final = _chat_cost(model, _cache_storage_logging_obj(model, token_hours=0.0), **pricing)
 
     assert with_storage - without_storage == pytest.approx(500.0 * deployment_rate)
+
+
+_STORAGE_DEPLOYMENT_MODEL: Final = "gemini-2.5-flash"
+
+
+def _routed_request_cost(deployment_pricing: Mapping[str, float], token_hours: float) -> float | None:
+    from litellm import Router
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "storage-cost-deployment",
+                "litellm_params": {"model": f"vertex_ai/{_STORAGE_DEPLOYMENT_MODEL}", **deployment_pricing},
+            }
+        ]
+    )
+    deployment_id: Final = router.model_list[0]["model_info"]["id"]
+    return _vertex_request_cost({**deployment_pricing, "metadata": {"model_info": {"id": deployment_id}}}, token_hours)
+
+
+def _vertex_request_cost(litellm_params: Mapping[str, object], token_hours: float) -> float | None:
+    logging_obj: Final = _cache_storage_logging_obj(_STORAGE_DEPLOYMENT_MODEL, token_hours)
+    logging_obj.update_environment_variables(
+        model=_STORAGE_DEPLOYMENT_MODEL,
+        litellm_params=dict(litellm_params),
+        optional_params={},
+        custom_llm_provider="vertex_ai",
+    )
+    usage: Final = Usage(prompt_tokens=1_000, completion_tokens=100, total_tokens=1_100)
+    return logging_obj.response_cost_calculator(ModelResponse(model=_STORAGE_DEPLOYMENT_MODEL, usage=usage))
+
+
+def test_custom_token_prices_without_a_storage_rate_bill_storage_at_the_underlying_model_rate(
+    _storage_cost_map: None,
+) -> None:
+    cost_map_rate: Final = litellm.get_model_info(f"vertex_ai/{_STORAGE_DEPLOYMENT_MODEL}")[_STORAGE_RATE_KEY]
+    token_prices: Final = {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}
+
+    with_storage: Final = _routed_request_cost(token_prices, token_hours=500.0)
+    without_storage: Final = _routed_request_cost(token_prices, token_hours=0.0)
+
+    assert cost_map_rate is not None and cost_map_rate > 0
+    assert without_storage == pytest.approx(1_000 * 1e-6 + 100 * 2e-6)
+    assert with_storage == pytest.approx(without_storage + 500.0 * cost_map_rate)
+
+
+def test_a_storage_only_override_keeps_the_underlying_token_prices(_storage_cost_map: None) -> None:
+    deployment_rate: Final = litellm.get_model_info(f"vertex_ai/{_STORAGE_DEPLOYMENT_MODEL}")[_STORAGE_RATE_KEY] * 3
+    storage_only: Final = {_STORAGE_RATE_KEY: deployment_rate}
+
+    no_override: Final = _vertex_request_cost({}, token_hours=0.0)
+    without_storage: Final = _routed_request_cost(storage_only, token_hours=0.0)
+    with_storage: Final = _routed_request_cost(storage_only, token_hours=500.0)
+
+    assert no_override is not None and no_override > 0
+    assert without_storage == pytest.approx(no_override)
+    assert with_storage == pytest.approx(no_override + 500.0 * deployment_rate)

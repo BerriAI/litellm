@@ -1,8 +1,10 @@
-from typing import Final
+from collections.abc import Mapping
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 
@@ -12,6 +14,7 @@ from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching import (
     ContextCachingEndpoints,
 )
+from litellm.types.llms.openai import AllMessageValues
 
 
 @pytest.fixture
@@ -2313,7 +2316,7 @@ def _storage_logging_obj() -> Logging:
     return logging_obj
 
 
-def _storage_messages() -> list:
+def _storage_messages() -> list[AllMessageValues]:
     return [
         {
             "role": "system",
@@ -2323,7 +2326,7 @@ def _storage_messages() -> list:
     ]
 
 
-def _json_response(method: str, payload: dict) -> httpx.Response:
+def _json_response(method: str, payload: Mapping[str, object]) -> httpx.Response:
     return httpx.Response(200, json=payload, request=httpx.Request(method, "https://example.invalid"))
 
 
@@ -2336,7 +2339,22 @@ _CREATED_CACHE: Final = {
 }
 
 
-def _create_kwargs(logging_obj: Logging, client: object) -> dict:
+class _CreateCacheKwargs(TypedDict):
+    messages: ReadOnly[list[AllMessageValues]]
+    optional_params: ReadOnly[dict[str, object]]
+    api_key: ReadOnly[str]
+    api_base: ReadOnly[str | None]
+    model: ReadOnly[str]
+    client: ReadOnly[MagicMock]
+    timeout: ReadOnly[float]
+    logging_obj: ReadOnly[Logging]
+    custom_llm_provider: ReadOnly[Literal["gemini"]]
+    vertex_project: ReadOnly[str | None]
+    vertex_location: ReadOnly[str | None]
+    vertex_auth_header: ReadOnly[str | None]
+
+
+def _create_kwargs(logging_obj: Logging, client: MagicMock) -> _CreateCacheKwargs:
     return {
         "messages": _storage_messages(),
         "optional_params": {},
@@ -2353,7 +2371,7 @@ def _create_kwargs(logging_obj: Logging, client: object) -> dict:
     }
 
 
-def test_creating_a_cache_records_its_storage_token_hours(local_model_cost_map):
+def test_creating_a_cache_records_its_storage_token_hours(local_model_cost_map: None) -> None:
     logging_obj: Final = _storage_logging_obj()
     client: Final = MagicMock(spec=HTTPHandler)
     client.get.return_value = _json_response("GET", {})
@@ -2366,7 +2384,7 @@ def test_creating_a_cache_records_its_storage_token_hours(local_model_cost_map):
 
 
 @pytest.mark.asyncio
-async def test_async_creating_a_cache_records_its_storage_token_hours(local_model_cost_map):
+async def test_async_creating_a_cache_records_its_storage_token_hours(local_model_cost_map: None) -> None:
     logging_obj: Final = _storage_logging_obj()
     client: Final = MagicMock(spec=AsyncHTTPHandler)
     client.get = AsyncMock(return_value=_json_response("GET", {}))
@@ -2380,11 +2398,11 @@ async def test_async_creating_a_cache_records_its_storage_token_hours(local_mode
     assert logging_obj.context_cache_storage_token_hours == pytest.approx(7200 * 0.5)
 
 
-def _listing_with(created_body: dict) -> dict:
+def _listing_with(created_body: Mapping[str, object]) -> Mapping[str, object]:
     return {"cachedContents": [{"name": _STORAGE_TEST_CACHE_NAME, "displayName": created_body["displayName"]}]}
 
 
-def test_reusing_an_existing_cache_records_no_storage(local_model_cost_map):
+def test_reusing_an_existing_cache_records_no_storage(local_model_cost_map: None) -> None:
     client: Final = MagicMock(spec=HTTPHandler)
     client.get.return_value = _json_response("GET", {})
     client.post.return_value = _json_response("POST", _CREATED_CACHE)
@@ -2400,7 +2418,7 @@ def test_reusing_an_existing_cache_records_no_storage(local_model_cost_map):
 
 
 @pytest.mark.asyncio
-async def test_async_reusing_an_existing_cache_records_no_storage(local_model_cost_map):
+async def test_async_reusing_an_existing_cache_records_no_storage(local_model_cost_map: None) -> None:
     client: Final = MagicMock(spec=AsyncHTTPHandler)
     client.get = AsyncMock(return_value=_json_response("GET", {}))
     client.post = AsyncMock(return_value=_json_response("POST", _CREATED_CACHE))

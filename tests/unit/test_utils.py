@@ -7182,7 +7182,7 @@ async def test_nested_wrapper_exits_schedule_one_async_success_log(monkeypatch: 
     assert counting_logger.logged_results[0] is inner_result
 
 
-def test_get_model_info_surfaces_context_cache_storage_rate(monkeypatch):
+def test_get_model_info_surfaces_context_cache_storage_rate(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
     litellm.get_model_info.cache_clear()
