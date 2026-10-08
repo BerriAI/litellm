@@ -43,7 +43,6 @@ from litellm.proxy._types import (
 from litellm.proxy.management.teams.authz import TeamAccess
 from litellm.proxy.management_endpoints.team_endpoints import (
     _DETACH_DELETED_TEAM_MEMBERS_SQL,
-    _STRIP_DELETED_TEAM_FROM_USERS_SQL,
     DeletedTeams,
     GetTeamMemberPermissionsResponse,
     UpdateTeamMemberPermissionsRequest,
@@ -8497,24 +8496,21 @@ async def test_delete_team_sweeps_references_outside_members_with_roles(
 
     # array_remove strips just the deleted id in one statement; a read-filter-write of the whole
     # array would drop any team a concurrent /team/member_add appended between read and write
-    assert "array_remove" in _STRIP_DELETED_TEAM_FROM_USERS_SQL
     assert "array_remove" in _DETACH_DELETED_TEAM_MEMBERS_SQL
-    assert mock_execute_raw.await_args_list == [call(_STRIP_DELETED_TEAM_FROM_USERS_SQL, "team-doomed")], (
-        "the unlocked sweep must run once to catch pre-existing drift"
+    assert mock_execute_raw.await_args_list == [], (
+        "no sweep runs outside the lock: one there strips a member a concurrent roster write added "
+        "after the caller read the team, before the locked sweep can report them"
     )
 
-    # same two passes for the membership rows, the second under the lock alongside the delete
-    assert mock_membership_delete_many.await_args_list == [
-        call(where={"team_id": {"in": ("team-doomed",)}}),
-        call(where={"team_id": {"in": ("team-doomed",)}}),
-    ]
+    # one pass for the membership rows, under the lock alongside the delete
+    assert mock_membership_delete_many.await_args_list == [call(where={"team_id": {"in": ("team-doomed",)}})]
 
     assert mock_lock_tx.query_raw.await_args_list == [
         call(TEAM_ADVISORY_LOCK_SQL, "team-doomed"),
         call(_DETACH_DELETED_TEAM_MEMBERS_SQL, "team-doomed"),
     ], (
         "the advisory lock must be acquired before the team row is deleted, and the user sweep "
-        "must run again under it (the same lock member_add takes) so a member_add that wrote its "
+        "runs under it (the same lock member_add takes) so a member_add that wrote its "
         "reference just before losing the lock is still reaped"
     )
 

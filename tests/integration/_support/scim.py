@@ -22,7 +22,7 @@ FROM generate_series(1, %s::int) AS n
 """
 TAKE_TEAM_LOCK_SQL: Final = "SELECT pg_advisory_xact_lock(hashtext(%s))"
 WAITERS_ON_HELD_LOCK_SQL: Final = """
-SELECT count(*)::int AS waiting
+SELECT count(*)::text AS waiting
 FROM pg_locks waiter
 JOIN pg_stat_activity session ON session.pid = waiter.pid
 WHERE waiter.locktype = 'advisory'
@@ -32,6 +32,18 @@ WHERE waiter.locktype = 'advisory'
       SELECT held.classid, held.objid, held.objsubid
       FROM pg_locks held
       WHERE held.locktype = 'advisory' AND held.granted AND held.pid = %s::int
+  )
+"""
+TAKE_USER_ROW_LOCK_SQL: Final = 'SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s FOR UPDATE'
+WAITERS_ON_ROWS_LOCKED_BY_SQL: Final = """
+SELECT count(*)::text AS waiting
+FROM pg_locks waiter
+WHERE waiter.locktype = 'transactionid'
+  AND NOT waiter.granted
+  AND waiter.transactionid IN (
+      SELECT held.transactionid
+      FROM pg_locks held
+      WHERE held.locktype = 'transactionid' AND held.granted AND held.pid = %s::int
   )
 """
 
@@ -157,6 +169,23 @@ def held_team_lock(team: str) -> Generator[int]:
         yield holder.info.backend_pid
 
 
+@contextmanager
+def held_user_row(user: str) -> Generator[int]:
+    """Hold a row lock on the user's row from a session of our own and yield its backend pid, so a role write
+    that reaches the row waits until leaving the block commits."""
+    with psycopg.connect(os.environ["DATABASE_URL"]) as holder:
+        holder.execute(TAKE_USER_ROW_LOCK_SQL, (user,))
+        yield holder.info.backend_pid
+
+
 def waiters_on_lock_held_by(backend_pid: int) -> int:
-    rows: Final = read_rows(WAITERS_ON_HELD_LOCK_SQL, (str(backend_pid),))
+    return _waiting(WAITERS_ON_HELD_LOCK_SQL, backend_pid)
+
+
+def waiters_on_rows_locked_by(backend_pid: int) -> int:
+    return _waiting(WAITERS_ON_ROWS_LOCKED_BY_SQL, backend_pid)
+
+
+def _waiting(query: str, backend_pid: int) -> int:
+    rows: Final = read_rows(query, (str(backend_pid),))
     return int(string_value(rows[0]["waiting"]))

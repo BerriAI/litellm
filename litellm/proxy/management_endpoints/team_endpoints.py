@@ -398,10 +398,6 @@ class _TeamDeleteTx(AccessGroupSyncTx, Protocol):
     def litellm_teammembership(self) -> "TableActions[prisma_models.LiteLLM_TeamMembership]": ...
 
 
-_STRIP_DELETED_TEAM_FROM_USERS_SQL: Final = """
-UPDATE "LiteLLM_UserTable" SET teams = array_remove(teams, $1) WHERE $1 = ANY(teams)
-"""
-
 _DETACH_DELETED_TEAM_MEMBERS_SQL: Final = """
 UPDATE "LiteLLM_UserTable" SET teams = array_remove(teams, $1) WHERE $1 = ANY(teams)
 RETURNING user_id
@@ -4542,8 +4538,6 @@ async def delete_validated_teams(
         llm_router=llm_router,
     )
 
-    await _sweep_deleted_team_references(team_ids=team_ids, prisma_client=prisma_client)
-
     rostered_per_team: Final = await _resolve_deleted_team_member_user_ids(
         teams=teams,
         prisma_client=prisma_client,
@@ -4600,36 +4594,24 @@ def _members_per_deleted_team(
     )
 
 
-async def _sweep_deleted_team_references(team_ids: Sequence[str], prisma_client: PrismaClient) -> None:
-    """
-    Strip the deleted team ids from every user row and team-membership row that still references them.
-
-    The per-member `team_member_delete` pass above only reaches users listed in the team's
-    `members_with_roles`, so a user row that outlived its roster entry is invisible to it and keeps
-    surfacing the team on `/user/info` after the team is gone.
-
-    #36839 closed the route that created that drift, by resolving member removal off the roster
-    entry's `user_id` rather than the identifier the caller happened to pass. It does not backfill
-    rows that already drifted, which is the state this was reported against, so the sweep still has
-    to run on delete.
-
-    `array_remove` rather than read-filter-write: rewriting the whole array from a snapshot read
-    outside a transaction drops any team a concurrent `/team/member_add` appended in between.
-    """
-    for team_id in team_ids:
-        _ = await prisma_client.db.execute_raw(_STRIP_DELETED_TEAM_FROM_USERS_SQL, team_id)
-
-    _ = await _team_membership_db(prisma_client).delete_many(where=_TeamIdInFilter(team_id={"in": tuple(team_ids)}))
-
-
 async def _sweep_deleted_team_references_tx(
     team_ids: Sequence[str], tx: _TeamDeleteTx
 ) -> tuple[tuple[str, tuple[str, ...]], ...]:
-    """Same sweep as `_sweep_deleted_team_references`, run on the transaction that holds
-    every id's advisory lock and deletes the team rows, so it commits or rolls back with them.
-    Returns the users it stripped each team from: read under the lock, that is the roster as
-    it stood when the team went away, a member a concurrent roster write added after the
-    caller read the team included."""
+    """
+    Strip the deleted team ids from every user row and team-membership row that still references
+    them, on the transaction that holds every id's advisory lock and deletes the team rows, so it
+    commits or rolls back with them.
+
+    A user row that outlived its roster entry (the drift #36839 closed the route for) is reached
+    here where the roster never names it. `array_remove` rather than read-filter-write: rewriting
+    the whole array from a snapshot read drops any team a concurrent `/team/member_add` appended
+    in between.
+
+    Returns the users it stripped each team from: read under the lock, that is everyone who
+    referenced the team when it went away, a member a concurrent roster write added after the
+    caller read the team included. Only this sweep runs, none before the lock: one there would
+    strip such a member first and leave nothing here to report.
+    """
     detached: Final = tuple(
         [
             (team_id, _detached_user_ids(await tx.query_raw(_DETACH_DELETED_TEAM_MEMBERS_SQL, team_id)))

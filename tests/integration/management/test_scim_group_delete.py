@@ -2,8 +2,8 @@
 
 The members' group entries, their membership rows and every key on the team go in one locked pass whatever the
 roster size, the configured admin group's members are demoted, and a member a concurrent group write added while
-the delete waited on the team lock is demoted with the rest. The group is 404 after, on every worker and on the
-peer proxy, and an unrelated key keeps serving.
+the delete waited on the team lock, or while it was demoting the roster it had read, is demoted with the rest. The
+group is 404 after, on every worker and on the peer proxy, and an unrelated key keeps serving.
 """
 
 import os
@@ -23,6 +23,7 @@ from integration._support.client import JSON_OBJECT, Gateway, eventually, object
 from integration._support.database import read_rows
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.scim import (
+    add_to_group,
     assert_gone,
     assert_landed,
     body,
@@ -31,6 +32,7 @@ from integration._support.scim import (
     delete_group,
     groups_of,
     held_team_lock,
+    held_user_row,
     keys_of,
     member_ids,
     membership_user_ids,
@@ -39,6 +41,7 @@ from integration._support.scim import (
     team_key,
     user_role,
     waiters_on_lock_held_by,
+    waiters_on_rows_locked_by,
 )
 from pydantic import JsonValue, TypeAdapter
 
@@ -178,6 +181,45 @@ def test_a_member_added_while_the_admin_group_delete_waits_on_the_team_lock_is_d
 
         assert replaced.status_code == 200, replaced.text
         assert member_ids(body(replaced)) == frozenset((*users, late))
+        assert deleted.status_code == 204, deleted.text
+        assert_gone(candidate, team, (*users, late), key)
+        assert _roles_of(candidate, (*users, late)) == frozenset({DEMOTED_ROLE})
+
+
+@pytest.mark.timeout(OWNED_PROXY_TIMEOUT)
+def test_a_member_added_while_the_admin_group_delete_demotes_the_roster_it_read_is_demoted_too(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    admin_alias: Final = f"integration-admins-{uuid.uuid4().hex}"
+    with (
+        owned_proxy_process(
+            gateway,
+            tmp_path,
+            {"DATABASE_URL": os.environ["DATABASE_URL"]},
+            config=_admin_group_config(tmp_path, admin_alias),
+            remove_environment=("DATABASE_URL_READ_REPLICA",),
+            workers=2,
+            client_timeout=60,
+        ) as owned,
+        owned.gateway.scenario() as scenario,
+        ThreadPoolExecutor(max_workers=1) as pool,
+    ):
+        candidate: Final = owned.gateway
+        users: Final = seed_users(scenario, 5)
+        (late,) = seed_users(scenario, 1)
+        team: Final = created_team(scenario, create_group(candidate, users, display_name=admin_alias))
+        assert _roles_of(candidate, users) == frozenset({PROXY_ADMIN})
+        key: Final = team_key(candidate, team)
+
+        with held_user_row(users[0]) as holder:
+            delete: Final = pool.submit(delete_group, candidate, team)
+            eventually(lambda: waiters_on_rows_locked_by(holder), lambda waiting: waiting == 1, seconds=30)
+            added: Final = add_to_group(candidate, team, (late,))
+            assert added.status_code == 200, added.text
+            assert late in member_ids(body(added))
+            assert user_role(candidate, late) == PROXY_ADMIN
+        deleted: Final = delete.result()
+
         assert deleted.status_code == 204, deleted.text
         assert_gone(candidate, team, (*users, late), key)
         assert _roles_of(candidate, (*users, late)) == frozenset({DEMOTED_ROLE})
