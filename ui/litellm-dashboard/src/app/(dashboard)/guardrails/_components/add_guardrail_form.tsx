@@ -27,7 +27,6 @@ import {
   toModeArray,
   type GuardrailStreamScope,
   supportsDirectionalLoggingOnlyScope,
-  toModeArray,
   type LoggingOnlyScope,
   type LoggingOnlyScopeChoice,
 } from "./guardrail_info_helpers";
