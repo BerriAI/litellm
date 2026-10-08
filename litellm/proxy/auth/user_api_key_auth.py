@@ -100,6 +100,7 @@ from litellm.proxy.auth.auth_utils import (
     get_request_route_template,
     is_invalid_virtual_key_error,
     iter_request_fallback_targets,
+    log_model_access_denial,
     normalize_request_route,
     pre_db_read_auth_checks,
     request_dispatched_to_pass_through_endpoint,
@@ -732,7 +733,7 @@ async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str
     except Exception as e:
         if is_invalid_virtual_key_error(e):
             raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
-        verbose_proxy_logger.exception(e)
+        log_model_access_denial(e)
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         raise HTTPException(status_code=403, detail=str(e))
 

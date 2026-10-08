@@ -30,6 +30,7 @@ from litellm.router_utils.fallback_event_handlers import (
     get_pre_routing_selection,
     log_failure_fallback_event,
     log_success_fallback_event,
+    mid_stream_fallback_snapshot_kwargs,
     mid_stream_retry_kwargs,
     record_pre_routing_selection,
     record_retry_attempt,
@@ -1469,6 +1470,30 @@ def test_get_fallback_model_group_never_resolves_a_provider_without_a_prefixed_k
 
     assert get_fallback_model_group(fallbacks=fallbacks, model_group="my-alias") == (["gpt-5.5-mini"], 1)
     resolver.assert_not_called()
+
+
+def test_mid_stream_fallback_snapshot_kwargs_restores_the_popped_lists_and_shares_the_buckets():
+    controls: Final = MidStreamFallbackControls(
+        MappingProxyType({"fallbacks": [{"primary": ["backup"]}], "context_window_fallbacks": None})
+    )
+    metadata: Final = {"model_group": "primary"}
+    kwargs: Final = {"messages": [{"role": "user", "content": "hi"}], "stream": True, "metadata": metadata}
+
+    snapshot: Final = mid_stream_fallback_snapshot_kwargs(model="primary", controls=controls, kwargs=kwargs)
+
+    assert snapshot == {
+        **kwargs,
+        "fallbacks": [{"primary": ["backup"]}],
+        "context_window_fallbacks": None,
+        MID_STREAM_FALLBACK_CONTROLS_KEY: controls,
+        "model": "primary",
+    }
+    assert snapshot["metadata"] is metadata
+    assert "fallbacks" not in kwargs
+
+    bare: Final = mid_stream_fallback_snapshot_kwargs(model="primary", controls=None, kwargs=kwargs)
+    assert "fallbacks" not in bare
+    assert bare[MID_STREAM_FALLBACK_CONTROLS_KEY] == MidStreamFallbackControls(MappingProxyType({}))
 
 
 def test_mid_stream_retry_kwargs_strips_what_the_retry_wrapper_pops_and_keeps_the_controls_carrier():

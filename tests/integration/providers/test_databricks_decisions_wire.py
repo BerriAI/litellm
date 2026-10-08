@@ -19,8 +19,14 @@ _API_KEY: Final = "synthetic-databricks-key"
 _ENV_KEY: Final = "synthetic-databricks-env-key"
 _ENV_TOKEN: Final = "synthetic-databricks-env-token"
 _STATE: Final[dict[str, JsonValue]] = {"ticket": "The export job hangs at 99%", "component": "billing"}
-_QUESTIONS: Final[dict[str, JsonValue]] = {
-    "tier": {"type": "choice", "criteria": {"SIMPLE": "a lookup", "MEDIUM": "some work", "COMPLEX": "deep work"}}
+_TIER_CRITERIA: Final[dict[str, JsonValue]] = {"SIMPLE": "a lookup", "MEDIUM": "some work", "COMPLEX": "deep work"}
+_QUESTIONS: Final[dict[str, JsonValue]] = {"tier": {"type": "choice", "criteria": _TIER_CRITERIA}}
+_OPENAI_INPUT: Final = "The export job hangs at 99% in billing"
+_OPENAI_TIER_QUESTION: Final[dict[str, JsonValue]] = {
+    "type": "choice",
+    "name": "tier",
+    "instructions": "Which tier?",
+    "choices": [{"value": name, "description": description} for name, description in _TIER_CRITERIA.items()],
 }
 _ANSWERS: Final[dict[str, JsonValue]] = {
     "tier": {
@@ -70,7 +76,7 @@ def _register(scenario: Scenario, body: dict[str, JsonValue], *, status: int = 2
 
 
 def _decide(gateway: Gateway, model: str, *, key: str | None = None) -> httpx.Response:
-    return gateway.request("POST", "/v1/decisions", {"model": model, "state": _STATE, "questions": _QUESTIONS}, key=key)
+    return gateway.request("POST", "/v1/systemone", {"model": model, "state": _STATE, "questions": _QUESTIONS}, key=key)
 
 
 def _observed(gateway: Gateway) -> tuple[dict[str, JsonValue], ...]:
@@ -189,6 +195,68 @@ def test_a_deployment_naming_no_endpoint_is_refused_before_any_upstream_call(gat
     _assert_refused_before_any_upstream_call(gateway, "databricks/", "A model name is required for the Decisions API")
 
 
+def test_an_openai_format_request_at_v1_decisions_reaches_the_serving_endpoint_as_system_one(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, _ANSWER_BODY)
+        deployment: Final = scenario.model(
+            model=f"databricks/{_ENDPOINT}", api_base=handle.api_base(), api_key=_API_KEY
+        )
+        response: Final = gateway.request(
+            "POST",
+            "/v1/decisions",
+            {
+                "model": deployment,
+                "input": _OPENAI_INPUT,
+                "questions": [_OPENAI_TIER_QUESTION],
+                "safety_identifier": "end-user-1",
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == {
+            "model": _ENDPOINT,
+            "answers": [
+                {
+                    "type": "choice",
+                    "name": "tier",
+                    "choice": "COMPLEX",
+                    "probabilities": [
+                        {"value": "SIMPLE", "probability": 0.03},
+                        {"value": "MEDIUM", "probability": 0.06},
+                        {"value": "COMPLEX", "probability": 0.91},
+                    ],
+                    "confidence": 0.91,
+                }
+            ],
+            "usage": {
+                "input_tokens": 367,
+                "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+                "output_tokens": 3,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 370,
+            },
+        }, response.text
+        assert response.headers["x-litellm-model-name"] == f"databricks/{_ENDPOINT}", dict(response.headers)
+        (call,) = _upstream_calls(gateway, handle)
+        assert call["path"] == f"/{handle.scenario_id}/{_ENDPOINT}/invocations", call
+        assert call["authorization"] == f"Bearer {_API_KEY}", call
+        assert call["body"] == {
+            "model": _ENDPOINT,
+            "state": _OPENAI_INPUT,
+            "questions": {"tier": {"type": "choice", "instructions": "Which tier?", "criteria": _TIER_CRITERIA}},
+        }, call
+        row: Final = _spend_row(response.headers["x-litellm-call-id"])
+        assert (
+            row["status"],
+            row["call_type"],
+            row["custom_llm_provider"],
+            row["model_group"],
+            row["api_base"],
+            _number(row["spend"]),
+        ) == ("success", "adecisions", "databricks", deployment, f"{handle.api_base()}/{_ENDPOINT}/invocations", 0.0), (
+            row
+        )
+
+
 def test_a_wildcard_deployment_sends_each_request_to_the_named_endpoint_and_bills_each_once(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         handle: Final = _register(scenario, _ANSWER_BODY)
@@ -230,7 +298,7 @@ def test_a_non_string_model_is_refused_at_the_gateway_without_an_upstream_call(
         handle: Final = _register(scenario, _ANSWER_BODY)
         _wildcard_deployment(scenario, api_base=handle.api_base(), api_key=_API_KEY)
         response: Final = gateway.request(
-            "POST", "/v1/decisions", {"model": model, "state": _STATE, "questions": _QUESTIONS}
+            "POST", "/v1/systemone", {"model": model, "state": _STATE, "questions": _QUESTIONS}
         )
         assert 400 <= response.status_code < 500, response.text
         assert _upstream_calls(gateway, handle) == []
@@ -422,7 +490,7 @@ def test_a_megabyte_endpoint_name_is_refused_in_linear_time_while_liveliness_sta
         prefix: Final = _wildcard_deployment(scenario, api_base=handle.api_base(), api_key=_API_KEY)
         model: Final = f"{prefix}/{_MEGABYTE_NAME}"
         anonymous: Final = gateway.client.post(
-            "/v1/decisions", json={"model": model, "state": _STATE, "questions": _QUESTIONS}
+            "/v1/systemone", json={"model": model, "state": _STATE, "questions": _QUESTIONS}
         )
         assert anonymous.status_code == 401, anonymous.text[:300]
         liveliness: Final[list[tuple[int, float]]] = []

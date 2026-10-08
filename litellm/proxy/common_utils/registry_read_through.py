@@ -17,6 +17,8 @@ import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
+from pydantic import TypeAdapter, ValidationError
+
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
@@ -149,10 +151,15 @@ def _holds_an_auto_router(rows: Sequence["prisma_models.LiteLLM_ProxyModelTable"
     return any(_names_an_auto_router(row.litellm_params) for row in rows)
 
 
+_STORED_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
+
+
 def _names_an_auto_router(stored_litellm_params: object) -> bool:
-    if not isinstance(stored_litellm_params, Mapping):
+    try:
+        params: Final = _STORED_LITELLM_PARAMS.validate_python(stored_litellm_params)
+    except ValidationError:
         return False
-    stored_model: Final = stored_litellm_params.get("model")
+    stored_model: Final = params.get("model")
     if not isinstance(stored_model, str):
         return False
     model: Final = decrypt_value_helper(value=stored_model, key="model", return_original_value=True)

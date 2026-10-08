@@ -12,7 +12,7 @@ const request = {
   },
   provider_option: { enabled: true },
 };
-const validate = (value: unknown) => validateSystemOnePayload(JSON.stringify(value), "/v1/decisions");
+const validate = (value: unknown) => validateSystemOnePayload(JSON.stringify(value), "/v1/systemone");
 
 describe("native decisions validation", () => {
   it("accepts structured Jev criteria, optional instructions, and provider extensions without dropping fields", () => {
