@@ -3,7 +3,9 @@ use litellm_http::{
     Client, ClientVariant, HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver,
 };
 use litellm_traces_clickhouse::Config as StorageConfig;
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    net::SocketAddr, num::NonZero, sync::Arc, thread::available_parallelism, time::Duration,
+};
 
 pub struct Config {
     pub address: SocketAddr,
@@ -61,6 +63,36 @@ impl Config {
                     .map_err(|_| Error::Configuration("AGENT_TRACING_RETENTION_DAYS"))?,
                 65_536,
             )?,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeThreads {
+    pub workers: usize,
+    pub blocking: usize,
+}
+
+impl RuntimeThreads {
+    pub fn from_env() -> Result<Self, Error> {
+        Self::resolve(
+            std::env::var("LITELLM_LENS_WORKER_THREADS").ok().as_deref(),
+            available_parallelism().map_or(1, NonZero::get),
+        )
+    }
+
+    pub fn resolve(configured: Option<&str>, parallelism: usize) -> Result<Self, Error> {
+        let workers = match configured.filter(|value| !value.is_empty()) {
+            None => parallelism.max(2),
+            Some(value) => value
+                .parse::<usize>()
+                .ok()
+                .filter(|workers| *workers > 0)
+                .ok_or(Error::Configuration("LITELLM_LENS_WORKER_THREADS"))?,
+        };
+        Ok(Self {
+            workers,
+            blocking: (workers * 2).max(4),
         })
     }
 }
