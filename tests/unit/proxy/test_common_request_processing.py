@@ -2,6 +2,7 @@ import asyncio
 import copy
 import datetime
 import json
+from collections.abc import Mapping
 from types import MappingProxyType, SimpleNamespace
 from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional, Sequence
 from urllib.parse import unquote_plus
@@ -6701,6 +6702,122 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
         assert processor.data["model"] == fallback_model
         assert call_count == 2
+
+    @pytest.mark.parametrize(
+        "descriptor_key",
+        [
+            "model_per_key",
+            "model_per_team",
+            "model_per_organization",
+            "model_per_project",
+            "model_per_project_itpm",
+            "model_per_project_otpm",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_per_model_rate_limit_does_not_fallback_when_setting_enabled(
+        self, descriptor_key: str
+    ):
+        from litellm.proxy.common_utils.proxy_rate_limit_error import (
+            ProxyRateLimitError,
+        )
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+
+        primary_model: Final = "gpt-4"
+        rate_limit_error: Final = ProxyRateLimitError(
+            detail="Per-model rate limit exceeded",
+            descriptor_key=descriptor_key,
+        )
+        processor: Final = ProxyBaseLLMRequestProcessing(data={"model": primary_model})
+        mock_router: Final = MagicMock()
+        mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
+
+        with patch.object(
+            processor,
+            "common_processing_pre_call_logic",
+            side_effect=rate_limit_error,
+        ) as pre_call_logic:
+            with pytest.raises(ProxyRateLimitError) as exc_info:
+                await processor._pre_call_with_fallbacks(
+                    request=MagicMock(),
+                    general_settings={
+                        "disable_fallbacks_on_per_model_rate_limits": True
+                    },
+                    proxy_logging_obj=MagicMock(),
+                    user_api_key_dict=MagicMock(router_settings=None),
+                    version=None,
+                    proxy_config=MagicMock(),
+                    user_model=None,
+                    user_temperature=None,
+                    user_request_timeout=None,
+                    user_max_tokens=None,
+                    user_api_base=None,
+                    model=primary_model,
+                    route_type="acompletion",
+                    llm_router=mock_router,
+                )
+
+        assert exc_info.value is rate_limit_error
+        assert pre_call_logic.call_count == 1
+        assert processor.data["model"] == primary_model
+
+    @pytest.mark.parametrize(
+        "descriptor_key,general_settings",
+        [
+            ("api_key", {"disable_fallbacks_on_per_model_rate_limits": True}),
+            (None, {"disable_fallbacks_on_per_model_rate_limits": True}),
+            ("model_per_key", {}),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_other_rate_limits_still_fallback(
+        self,
+        descriptor_key: str | None,
+        general_settings: Mapping[str, bool | None],
+    ):
+        from litellm.proxy.common_utils.proxy_rate_limit_error import (
+            ProxyRateLimitError,
+        )
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+
+        primary_model: Final = "gpt-4"
+        fallback_model: Final = "gpt-3.5-turbo"
+        rate_limit_error: Final = ProxyRateLimitError(
+            detail="Rate limit exceeded",
+            descriptor_key=descriptor_key,
+        )
+        processor: Final = ProxyBaseLLMRequestProcessing(data={"model": primary_model})
+        mock_router: Final = MagicMock()
+        mock_router.fallbacks = [{"gpt-4": [fallback_model]}]
+
+        with patch.object(
+            processor,
+            "common_processing_pre_call_logic",
+            side_effect=[rate_limit_error, (processor.data, MagicMock())],
+        ) as pre_call_logic:
+            await processor._pre_call_with_fallbacks(
+                request=MagicMock(),
+                general_settings=dict(general_settings),
+                proxy_logging_obj=MagicMock(),
+                user_api_key_dict=MagicMock(router_settings=None),
+                version=None,
+                proxy_config=MagicMock(),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model=primary_model,
+                route_type="acompletion",
+                llm_router=mock_router,
+            )
+
+        assert processor.data["model"] == fallback_model
+        assert pre_call_logic.call_count == 2
 
     @pytest.mark.asyncio
     async def test_raises_when_no_fallbacks_configured(self):

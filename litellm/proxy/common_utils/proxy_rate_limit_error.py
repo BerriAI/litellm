@@ -43,6 +43,17 @@ from fastapi import HTTPException
 
 from litellm.exceptions import RateLimitError, RateLimitErrorCategory, RateLimitType
 
+PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS: Final = frozenset(
+    {
+        "model_per_key",
+        "model_per_team",
+        "model_per_organization",
+        "model_per_project",
+        "model_per_project_itpm",
+        "model_per_project_otpm",
+    }
+)
+
 
 def map_v3_rate_limit_type(
     v3_value: str | None,
@@ -149,6 +160,8 @@ class ProxyRateLimitError(HTTPException, RateLimitError):
         rate_limit_type: str | RateLimitType | None = None,
         model: str | None = None,
         llm_provider: str | None = "litellm_proxy",
+        *,
+        descriptor_key: str | None = None,
     ):
         # Normalize None → safe defaults so callers (and the resolver helper
         # in `rate_limiter_utils`) can pass `None` without producing an
@@ -191,3 +204,4 @@ class ProxyRateLimitError(HTTPException, RateLimitError):
         self.headers = stringified_headers
         self.detail = detail
         self.status_code = 429
+        self.descriptor_key = descriptor_key

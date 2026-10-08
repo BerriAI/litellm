@@ -2,17 +2,53 @@
 Unit Tests for the max parallel request limiter v1 for the proxy
 """
 
+from collections.abc import Mapping
 from datetime import datetime
+from typing import Final
 
 import pytest
 
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.parallel_request_limiter import (
     PROXY_MaxParallelRequestsHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
 from litellm.types.utils import EmbeddingResponse, TextCompletionResponse, Usage
+
+
+@pytest.mark.parametrize(
+    "current,rpm_limit",
+    [
+        (None, 0),
+        ({"current_requests": 0, "current_tpm": 0, "current_rpm": 1}, 1),
+    ],
+)
+@pytest.mark.asyncio
+async def test_model_per_key_rate_limit_error_carries_descriptor_key(
+    current: Mapping[str, int] | None, rpm_limit: int
+):
+    handler: Final = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        await handler.check_key_in_limits(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=DualCache(),
+            data={"model": "gpt-4o-mini"},
+            call_type="completion",
+            max_parallel_requests=10,
+            tpm_limit=100,
+            rpm_limit=rpm_limit,
+            current=dict(current) if current is not None else None,
+            request_count_api_key="test-key:model_per_key",
+            rate_limit_type="model_per_key",
+            values_to_update_in_cache=[],
+        )
+
+    assert exc_info.value.descriptor_key == "model_per_key"
 
 
 @pytest.mark.asyncio
