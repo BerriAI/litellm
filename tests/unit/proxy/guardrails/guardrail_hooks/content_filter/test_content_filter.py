@@ -432,7 +432,7 @@ class TestContentFilterGuardrail:
         )
 
         result: Final = guardrail._check_patterns("Please read the file at " +
-                                       "coding/projects/files/others/file/coders.txt")
+                                       "coding2/projects/files/others/file/coders.txt")
         assert result is None
 
     def test_aws_secret_key_patterns_slash_check(self):
