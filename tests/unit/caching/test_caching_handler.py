@@ -41,6 +41,7 @@ from litellm.types.utils import (
 from litellm.types.llms.openai import ResponsesAPIResponse
 from collections.abc import Awaitable, Callable
 from datetime import timedelta, datetime
+from typing import Final
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm._logging import verbose_logger
@@ -2717,25 +2718,26 @@ async def test_async_get_cache_forgets_the_worker_copy_of_a_stored_response_with
 
 
 @pytest.mark.asyncio
-async def test_async_get_cache_partial_hit_keeps_file_block_items_uncached():
+async def test_async_get_cache_partial_hit_keeps_file_block_items_uncached() -> None:
     setup_cache()
-    caching_handler = LLMCachingHandler(original_function=aembedding, request_kwargs={}, start_time=datetime.now())
-    model = "gemini/gemini-embedding-2-preview"
-    logging_obj = LiteLLMLogging(
-        litellm_call_id=str(datetime.now()),
+    fixed_start: Final = datetime(2026, 1, 1)
+    caching_handler: Final = LLMCachingHandler(original_function=aembedding, request_kwargs={}, start_time=fixed_start)
+    model: Final = "gemini/gemini-embedding-2-preview"
+    logging_obj: Final = LiteLLMLogging(
+        litellm_call_id=str(uuid.uuid4()),
         call_type=CallTypes.aembedding.value,
         model=model,
         messages=[],
         function_id=str(uuid.uuid4()),
         stream=False,
-        start_time=datetime.now(),
+        start_time=fixed_start,
     )
     await caching_handler.async_set_cache(
         result=EmbeddingResponse(model=model, data=[Embedding(embedding=[0.1, 0.2], index=0, object="embedding")]),
         original_function=aembedding,
         kwargs={"model": model, "input": ["a red bus"], "caching": True},
     )
-    clip_block = {
+    clip_block: Final = {
         "type": "file",
         "file": {
             "file_data": "data:video/mp4;base64,AAAA",
@@ -2745,11 +2747,11 @@ async def test_async_get_cache_partial_hit_keeps_file_block_items_uncached():
         "detail": "left for the provider transformation to judge",
     }
 
-    cached_response = await caching_handler.async_get_cache(
+    cached_response: Final = await caching_handler.async_get_cache(
         model=model,
         original_function=aembedding,
         logging_obj=logging_obj,
-        start_time=datetime.now(),
+        start_time=fixed_start,
         call_type=CallTypes.aembedding.value,
         kwargs={"model": model, "input": [clip_block, "a red bus"], "caching": True},
     )
