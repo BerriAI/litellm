@@ -4,16 +4,16 @@ Bedrock Token Counter implementation using the CountTokens API.
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Final, assert_never
+from typing import Any, Final
 
 from pydantic import JsonValue
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_base_model
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from litellm.llms.bedrock.count_tokens.mantle_handler import BedrockMantleCountTokensHandler
-from litellm.llms.bedrock_mantle.common_utils import is_mantle_claude_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import LiteLLMPydanticObjectBase, LlmProviders, TokenCountResponse
 
@@ -46,7 +46,7 @@ def _runtime_rejected_claude_model(outcome: CountTokensOutcome, resolved_model: 
     return (
         isinstance(outcome, CountTokensFailure)
         and outcome.status_code == 400
-        and is_mantle_claude_model(resolved_model)
+        and "claude" in resolved_model.lower()
     )
 
 
@@ -75,7 +75,7 @@ class BedrockTokenCounter(BaseTokenCounter):
         handler: BedrockCountTokensHandler | BedrockMantleCountTokensHandler,
         tokenizer_type: str,
         request_data: dict[str, object],
-        litellm_params: dict[str, Any],
+        litellm_params: dict[str, object],
         resolved_model: str,
     ) -> CountTokensOutcome:
         try:
@@ -87,12 +87,12 @@ class BedrockTokenCounter(BaseTokenCounter):
             )
             reply: Final = _CountTokensReply.model_validate(result)
         except BedrockError as e:
-            verbose_logger.warning(
+            verbose_logger.debug(
                 "%s CountTokens API error: status=%s, message=%s", tokenizer_type, e.status_code, e.message
             )
             return CountTokensFailure(status_code=e.status_code, message=e.message, tokenizer_type=tokenizer_type)
         except Exception as e:
-            verbose_logger.warning("Error calling %s CountTokens API: %s", tokenizer_type, e)
+            verbose_logger.debug("Error calling %s CountTokens API: %s", tokenizer_type, e)
             return CountTokensFailure(status_code=500, message=str(e), tokenizer_type=tokenizer_type)
         return CountedTokens(input_tokens=reply.input_tokens, original_response=result, tokenizer_type=tokenizer_type)
 
@@ -138,6 +138,12 @@ class BedrockTokenCounter(BaseTokenCounter):
                     original_response=dict(outcome.original_response),
                 )
             case CountTokensFailure():
+                verbose_logger.warning(
+                    "%s CountTokens API error: status=%s, message=%s",
+                    outcome.tokenizer_type,
+                    outcome.status_code,
+                    outcome.message,
+                )
                 return TokenCountResponse(
                     total_tokens=0,
                     request_model=request_model,
