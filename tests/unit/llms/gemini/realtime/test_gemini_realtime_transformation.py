@@ -2201,3 +2201,34 @@ def test_gemini_realtime_response_done_reports_no_grounding_when_none_ran():
 
     assert input_details.get("web_search_requests") is None
     assert input_details.get("google_maps_grounding_requests") is None
+
+
+def test_gemini_warns_once_when_dropping_a_session_update(caplog):
+    """The Gemini path reports a dropped session.update the same way Vertex does.
+
+    Both drop it for the same reason -- Live accepts setup as the first-and-only
+    client message -- so both should say so rather than log at debug and let the
+    caller discover their instructions never arrived (#44825).
+    """
+    import logging
+
+    cfg = GeminiRealtimeConfig()
+    session_update = json.dumps({"type": "session.update", "session": {"instructions": "Be concise."}})
+    already_set_up = json.dumps({"setup": {"model": "x"}})
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        for _ in range(2):
+            cfg.transform_realtime_request(
+                session_update,
+                "gemini-live-2.5-flash-preview-native-audio-09-2025",
+                session_configuration_request=already_set_up,
+            )
+
+    warnings = [
+        record
+        for record in caplog.records
+        if "Gemini Realtime" in record.message and "session.update" in record.message
+    ]
+    assert len(warnings) == 1
+    assert "instructions" in warnings[0].message
+    assert "gemini_live_defer_setup" in warnings[0].message

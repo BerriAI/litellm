@@ -235,7 +235,7 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
                     "Vertex AI in non-deferred mode."
                 )
             else:
-                verbose_logger.debug("Vertex AI Realtime: Ignoring session.update (setup already sent)")
+                self._warn_session_update_dropped(json_message.get("session") or {}, provider="Vertex AI Realtime")
             return []
 
         return super().transform_realtime_request(message, model, session_configuration_request)
