@@ -78,7 +78,7 @@ export function TimeRangeControls({
           className={cn(
             SEGMENT,
             "shrink-0 border-l border-border",
-            live ? "bg-info/10 text-info hover:bg-info/15" : "text-muted-foreground hover:text-foreground",
+            live ? "bg-muted text-foreground hover:bg-muted/80" : "text-muted-foreground hover:text-foreground",
           )}
         >
           {live ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
