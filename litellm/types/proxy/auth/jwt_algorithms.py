@@ -1,6 +1,8 @@
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 
-ApprovedJwtAlgorithm = Literal["RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512"]
+ApprovedJwtAlgorithm: TypeAlias = Literal[
+    "RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512"
+]
 
 APPROVED_JWT_ALGORITHMS: Final[tuple[ApprovedJwtAlgorithm, ...]] = (
     "RS256",
