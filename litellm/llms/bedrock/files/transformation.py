@@ -11,13 +11,13 @@ from datetime import datetime
 from email.utils import parsedate_to_datetime
 from itertools import chain
 from types import MappingProxyType
-from typing import Any, Final, Literal, TypeAlias, TypedDict, cast
+from typing import Any, Final, Literal, TypeAlias, TypedDict
 from urllib.parse import quote, unquote, urlencode
 
 import httpx
 from httpx import Headers, Response
 from openai.types.file_deleted import FileDeleted
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, TypeAdapter
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_logger
@@ -74,6 +74,10 @@ S3_SIGNED_REQUEST_HEADERS_PARAM: Final = "_s3_signed_request_headers"
 S3_RETRIEVE_FILE_ID_PARAM: Final = "_s3_retrieve_file_id"
 S3_RETRIEVE_FILE_KEY_PARAM: Final = "_s3_retrieve_file_key"
 S3_RETRIEVE_FILE_RELATIVE_KEY_PARAM: Final = "_s3_retrieve_file_relative_key"
+_S3_SIGNED_REQUEST_HEADERS_ADAPTER: Final = TypeAdapter(
+    Mapping[str, str],
+    config=ConfigDict(strict=True),
+)
 
 LIST_FILES_PURPOSE_PARAM: Final = "_s3_list_files_purpose"
 
@@ -1372,8 +1376,8 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         )
         signed_headers_object: Final = litellm_params.get(S3_SIGNED_REQUEST_HEADERS_PARAM)
         if not isinstance(signed_headers_object, Mapping):
-            raise ValueError("S3 request signing did not produce request headers")
-        signed_headers: Final = cast(Mapping[str, str], signed_headers_object)
+            raise TypeError("S3 request signing did not produce request headers")
+        signed_headers: Final = _S3_SIGNED_REQUEST_HEADERS_ADAPTER.validate_python(signed_headers_object)
         litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM] = MappingProxyType({**signed_headers, "Range": "bytes=0-0"})
         litellm_params[S3_RETRIEVE_FILE_ID_PARAM] = file_id
         litellm_params[S3_RETRIEVE_FILE_KEY_PARAM] = object_key
@@ -1391,7 +1395,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         object_key: Final = litellm_params.get(S3_RETRIEVE_FILE_KEY_PARAM)
         relative_key: Final = litellm_params.get(S3_RETRIEVE_FILE_RELATIVE_KEY_PARAM)
         if not isinstance(file_id, str) or not isinstance(object_key, str) or not isinstance(relative_key, str):
-            raise ValueError("S3 retrieve response is missing request context")
+            raise TypeError("S3 retrieve response is missing request context")
 
         file_size: Final = _retrieved_s3_file_size(raw_response)
 
