@@ -75,8 +75,7 @@ class OpenAITextCompletionHandler(BaseTranslation):
             )
 
         elif isinstance(prompt, list):
-            # cast-ok: data.get returns Unknown; narrow the list once so the element check is object, not Unknown
-            prompt_list: Final = cast(list[object], prompt)
+            prompt_list: Final = cast(list[object], prompt)  # cast-ok: narrow Unknown once for typed element checks
             if any(not isinstance(p, str) for p in prompt_list):
                 # Token-ID prompts (list[int] or list[list[int]]) carry no inspectable
                 # text, so an input guardrail cannot judge them. Fail closed instead of
