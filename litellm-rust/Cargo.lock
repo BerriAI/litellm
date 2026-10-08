@@ -3485,6 +3485,7 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+ "strum",
  "thiserror 2.0.19",
  "tokio",
 ]
@@ -3692,7 +3693,9 @@ dependencies = [
  "litellm-auth-types",
  "rstest",
  "serde",
+ "serde_json",
  "serde_yaml_ng",
+ "strum",
  "tempfile",
  "thiserror 2.0.19",
 ]
@@ -3990,6 +3993,7 @@ dependencies = [
  "rustls-native-certs",
  "serde",
  "serde_json",
+ "strum",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
@@ -4539,6 +4543,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "strum",
  "tar",
  "target-lexicon",
  "tempfile",

@@ -126,10 +126,12 @@ async fn lens_sample_keeps_spans_before_window_start_and_excludes_old_only_trace
 }
 
 #[derive(Clone, Copy, strum::AsRefStr)]
-#[strum(serialize_all = "snake_case")]
 enum ScopeCase {
+    #[strum(serialize = "admin")]
     Admin,
+    #[strum(serialize = "team")]
     Team,
+    #[strum(serialize = "other_team")]
     OtherTeam,
 }
 
