@@ -45534,8 +45534,18 @@ export interface components {
         };
         /** ServiceConnection */
         ServiceConnection: {
+            /**
+             * Configured
+             * @default false
+             */
+            configured: boolean;
             /** Connected */
             connected: boolean;
+            /**
+             * Release
+             * @default
+             */
+            release: string;
             status: components["schemas"]["ServiceStatus"];
             /** Url */
             url: string;

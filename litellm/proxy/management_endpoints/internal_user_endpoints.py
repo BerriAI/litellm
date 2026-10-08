@@ -62,20 +62,23 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity,
     raise_public,
 )
-from litellm.proxy.management_endpoints.common_utils import (
-    _user_has_admin_view,
+from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
+    _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     require_caller_user_id_for_non_admin,
+    user_api_key_has_admin_view,
     validate_budget_duration,
     validate_finite_spend,
 )
-from litellm.proxy.management_endpoints.key_management_endpoints import (
-    _check_permissions_caller_permission,
+from litellm.proxy.management_endpoints.key_management_endpoints import (  # noqa: F401  # legacy module exports
+    _check_permissions_caller_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    check_permissions_caller_permission,
     generate_key_helper_fn,
     prepare_metadata_fields,
 )
-from litellm.proxy.management_helpers.object_permission_utils import (
-    _set_object_permission,
+from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
+    _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     handle_update_object_permission_common,
+    set_object_permission,
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import handle_exception_on_proxy, hash_password
@@ -592,7 +595,7 @@ async def new_user(
         if data.auto_create_key and isinstance(user_api_key_dict, UserAPIKeyAuth):
             enforce_batch_limits_are_admin_only(data, None, user_api_key_dict, "key")
 
-        _check_permissions_caller_permission(
+        check_permissions_caller_permission(
             data=data,
             user_api_key_dict=user_api_key_dict,
         )
@@ -602,7 +605,9 @@ async def new_user(
         # Persist the requested grants as their own row and link it, mirroring key/team creation.
         # generate_key_helper_fn only forwards object_permission_id, so without this the entitlement
         # the caller sent would be dropped on the floor.
-        data_json = await _set_object_permission(data_json=data_json, prisma_client=prisma_client)
+        data_json = await set_object_permission(  # rebind-ok: pre-existing rebinding on a rename-only line
+            data_json=data_json, prisma_client=prisma_client
+        )
         data_json.pop("password", None)
         teams = data.teams
         if teams is None:
@@ -788,7 +793,7 @@ def _enforce_user_info_access(user_id: str | None, user_api_key_dict: UserAPIKey
     # Admin-view roles (PROXY_ADMIN and PROXY_ADMIN_VIEW_ONLY) bypass
     # ownership, mirroring the `/user/info` carve-out that
     # `RouteChecks.non_proxy_admin_allowed_routes_check` applies upstream.
-    if _user_has_admin_view(user_api_key_dict):
+    if user_api_key_has_admin_view(user_api_key_dict):
         return
     if user_id == user_api_key_dict.user_id:
         return
@@ -969,7 +974,7 @@ async def user_info(
             raise Exception(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
-        if user_id is None and _user_has_admin_view(user_api_key_dict):
+        if user_id is None and user_api_key_has_admin_view(user_api_key_dict):
             return await _get_user_info_for_proxy_admin(user_api_key_dict=user_api_key_dict)
         elif user_id is None:
             user_id = user_api_key_dict.user_id
@@ -1045,7 +1050,7 @@ async def _check_user_info_v2_access(
         )
 
     # Rule 1: Proxy admins — fetch and return the target row directly
-    if _user_has_admin_view(user_api_key_dict):
+    if user_api_key_has_admin_view(user_api_key_dict):
         return await _fetch_target_user()
 
     # Rule 2: Self-lookup
@@ -1423,9 +1428,9 @@ async def _invalidate_user_spend_counter_if_changed(
     and not safely subscriptable).
     """
     if non_default_values.get("spend") is not None:
-        from litellm.proxy.proxy_server import _invalidate_spend_counter
+        from litellm.proxy.proxy_server import invalidate_spend_counter
 
-        await _invalidate_spend_counter(counter_key=f"spend:user:{non_default_values['user_id']}")
+        await invalidate_spend_counter(counter_key=f"spend:user:{non_default_values['user_id']}")
 
 
 def _clears_object_permission(user_request: UpdateUserRequest) -> bool:
@@ -1488,7 +1493,7 @@ async def _update_single_user_helper(
     if not user_request.user_id and not user_request.user_email:
         raise ValueError("Either user_id or user_email must be provided")
 
-    _check_permissions_caller_permission(
+    check_permissions_caller_permission(
         data=user_request,
         user_api_key_dict=user_api_key_dict,
     )
@@ -2156,7 +2161,7 @@ async def _authorize_user_list_request(
     - Org admins: returns comma-separated org IDs scoped to their allowed orgs.
     - Others: raises 403.
     """
-    if _user_has_admin_view(user_api_key_dict):
+    if user_api_key_has_admin_view(user_api_key_dict):
         return organization_ids
 
     if user_api_key_dict.user_id is None:
@@ -2430,7 +2435,7 @@ async def delete_user(
     - user_ids: List[str] - The list of user id's to be deleted.
     """
     from litellm.proxy.management_endpoints.team_endpoints import (
-        _cleanup_members_with_roles,
+        cleanup_members_with_roles,
     )
     from litellm.proxy.management_helpers.audit_logs import (
         get_audit_log_changed_by,
@@ -2546,7 +2551,7 @@ async def delete_user(
         ).table.find_many(where={"team_id": {"in": user_row.teams}})
         teams_to_update: list[tuple[str, str]] = []
         for team in fetch_all_teams:
-            removed_team_members, new_team_members = _cleanup_members_with_roles(
+            removed_team_members, new_team_members = cleanup_members_with_roles(
                 existing_team_row=LiteLLM_TeamTable.model_validate(team.model_dump()),
                 data=TeamMemberDeleteRequest(
                     team_id=team.team_id,
@@ -2680,7 +2685,7 @@ async def _resolve_org_filter_for_user_search(
     if not ui_settings.get("scope_user_search_to_org", False):
         return None  # flag OFF — no filtering
 
-    if _user_has_admin_view(user_api_key_dict):
+    if user_api_key_has_admin_view(user_api_key_dict):
         return None  # proxy admin — see everything
 
     # Try to resolve org admin memberships
@@ -2875,7 +2880,7 @@ async def ui_view_users(
 def resolve_user_daily_activity_entity_ids(
     *, user_id: str | None, user_api_key_dict: UserAPIKeyAuth
 ) -> tuple[str, ...] | None | ScopeDenied:
-    if _user_has_admin_view(user_api_key_dict):
+    if user_api_key_has_admin_view(user_api_key_dict):
         return (user_id,) if user_id is not None else None
 
     caller_user_id: Final = require_caller_user_id_for_non_admin(user_api_key_dict)

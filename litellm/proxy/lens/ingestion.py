@@ -59,6 +59,8 @@ class ServiceConnection(Record):
     url: str
     connected: bool
     status: ServiceStatus
+    configured: bool = False
+    release: str = ""
 
 
 @dataclass(frozen=True, slots=True)
