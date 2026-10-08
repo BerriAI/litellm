@@ -73,6 +73,7 @@ from ..common_utils import (
 S3_SIGNED_REQUEST_HEADERS_PARAM: Final = "_s3_signed_request_headers"
 S3_RETRIEVE_FILE_ID_PARAM: Final = "_s3_retrieve_file_id"
 S3_RETRIEVE_FILE_KEY_PARAM: Final = "_s3_retrieve_file_key"
+S3_RETRIEVE_FILE_RELATIVE_KEY_PARAM: Final = "_s3_retrieve_file_relative_key"
 
 LIST_FILES_PURPOSE_PARAM: Final = "_s3_list_files_purpose"
 
@@ -333,6 +334,25 @@ def _resolve_managed_s3_object(file_id: str, litellm_params: Mapping[str, object
         )
     except ValueError as reason:
         raise _rejected_file_id(reason) from reason
+
+
+def _relative_s3_object_key(
+    bucket_name: str,
+    object_key: str,
+    litellm_params: Mapping[str, object],
+) -> str:
+    configured_bucket_prefixes: Final = tuple(
+        split_configured_cloud_bucket_name(configured_bucket_name)
+        for configured_bucket_name in get_configured_s3_bucket_names(litellm_params)
+    )
+    matching_prefixes: Final = tuple(
+        configured_prefix
+        for configured_bucket, configured_prefix in configured_bucket_prefixes
+        if configured_bucket == bucket_name
+        and (not configured_prefix or object_key.startswith(f"{configured_prefix}/"))
+    )
+    configured_prefix: Final = max(matching_prefixes, key=len, default="")
+    return object_key[len(configured_prefix) + 1 :] if configured_prefix else object_key
 
 
 _ANY_MANAGED_LISTING_PREFIX: Final = os.path.commonprefix(BEDROCK_MANAGED_S3_PREFIXES)
@@ -1338,7 +1358,12 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         litellm_params: MutableMapping[str, object],
     ) -> tuple[str, dict[str, str]]:
         """Prepare a ranged S3 GET for file retrieval."""
-        _, object_key = _resolve_managed_s3_object(file_id=file_id, litellm_params=litellm_params)
+        bucket_name, object_key = _resolve_managed_s3_object(file_id=file_id, litellm_params=litellm_params)
+        relative_key: Final = _relative_s3_object_key(
+            bucket_name=bucket_name,
+            object_key=object_key,
+            litellm_params=litellm_params,
+        )
         url, params = self._transform_s3_file_request(
             file_id=file_id,
             method="GET",
@@ -1352,6 +1377,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM] = MappingProxyType({**signed_headers, "Range": "bytes=0-0"})
         litellm_params[S3_RETRIEVE_FILE_ID_PARAM] = file_id
         litellm_params[S3_RETRIEVE_FILE_KEY_PARAM] = object_key
+        litellm_params[S3_RETRIEVE_FILE_RELATIVE_KEY_PARAM] = relative_key
         return url, params
 
     def transform_retrieve_file_response(
@@ -1363,14 +1389,12 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         """Build file metadata, accepting 416 only when S3 proves the object is empty."""
         file_id: Final = litellm_params.get(S3_RETRIEVE_FILE_ID_PARAM)
         object_key: Final = litellm_params.get(S3_RETRIEVE_FILE_KEY_PARAM)
-        if not isinstance(file_id, str) or not isinstance(object_key, str):
+        relative_key: Final = litellm_params.get(S3_RETRIEVE_FILE_RELATIVE_KEY_PARAM)
+        if not isinstance(file_id, str) or not isinstance(object_key, str) or not isinstance(relative_key, str):
             raise ValueError("S3 retrieve response is missing request context")
 
         file_size: Final = _retrieved_s3_file_size(raw_response)
 
-        configured_bucket_name: Final = _listing_bucket_name(litellm_params, "batch_output")
-        _, configured_prefix = split_configured_cloud_bucket_name(configured_bucket_name)
-        relative_key: Final = object_key[len(configured_prefix) + 1 :] if configured_prefix else object_key
         last_modified: Final = raw_response.headers.get("Last-Modified", "")
         created_at: Final = int(parsedate_to_datetime(last_modified).timestamp()) if last_modified else 0
         return OpenAIFileObject(

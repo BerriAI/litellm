@@ -2276,6 +2276,57 @@ class TestBedrockFileContentTransformation:
         assert response.status == "processed"
         assert response.object == "file"
 
+    @pytest.mark.parametrize(
+        ("file_id", "purpose"),
+        [
+            pytest.param(
+                "s3://out-bucket/outpfx/litellm-batch-outputs/job-123/x.jsonl.out",
+                "batch_output",
+                id="output-bucket",
+            ),
+            pytest.param(
+                "s3://in-bucket/pfx/litellm-bedrock-files/job-123/input.jsonl",
+                "batch",
+                id="input-bucket-upload",
+            ),
+            pytest.param(
+                "s3://in-bucket/pfx/litellm-batch-outputs/job-123/x.jsonl.out",
+                "batch_output",
+                id="input-bucket-output",
+            ),
+        ],
+    )
+    def test_transform_retrieve_file_response_uses_the_retrieved_bucket_prefix(
+        self, file_id: str, purpose: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import httpx
+
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+        monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+        litellm_params: Final = _trusted_bucket_snapshot(
+            s3_bucket_name="in-bucket/pfx",
+            s3_output_bucket_name="out-bucket/outpfx",
+        )
+        config: Final = BedrockFilesConfig()
+        config.transform_retrieve_file_request(
+            file_id=file_id,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+        response: Final = config.transform_retrieve_file_response(
+            raw_response=httpx.Response(
+                206,
+                headers={"Content-Range": "bytes 0-0/1"},
+                request=httpx.Request("GET", file_id),
+            ),
+            logging_obj=MagicMock(),
+            litellm_params=litellm_params,
+        )
+
+        assert response.purpose == purpose
+
     def test_transform_retrieve_file_response_accepts_verified_empty_object(self, monkeypatch):
         import httpx
 
