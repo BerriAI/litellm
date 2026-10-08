@@ -4514,6 +4514,7 @@ version = "0.1.0"
 dependencies = [
  "flate2",
  "litellm-http",
+ "reqwest 0.12.28",
  "rstest",
  "serde",
  "serde_json",
