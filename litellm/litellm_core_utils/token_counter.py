@@ -2,8 +2,10 @@
 ## Helper utilities for token counting
 import base64
 import io
+import math
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from itertools import accumulate
 from typing import Final, Literal, cast
 
@@ -17,6 +19,9 @@ import litellm
 from litellm import verbose_logger
 from litellm._lazy_imports import get_default_encoding
 from litellm.constants import (
+    ANTHROPIC_IMAGE_MAX_LONG_EDGE_PX,
+    ANTHROPIC_IMAGE_MAX_PIXELS,
+    ANTHROPIC_IMAGE_PIXELS_PER_TOKEN,
     DEFAULT_IMAGE_HEIGHT,
     DEFAULT_IMAGE_TOKEN_COUNT,
     DEFAULT_IMAGE_WIDTH,
@@ -25,6 +30,7 @@ from litellm.constants import (
     MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES,
     MAX_TILE_HEIGHT,
     MAX_TILE_WIDTH,
+    PDF_DATA_URL_PREFIX,
     TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS,
     TOKEN_COUNTER_MAX_CONCURRENT_COUNTS,
     TOKEN_COUNTER_MAX_EXACT_CHARS,
@@ -802,6 +808,68 @@ def _anthropic_image_source_data(
     return ""
 
 
+@dataclass(frozen=True, slots=True)
+class _PdfPage:
+    text: str
+    width: float
+    height: float
+
+
+def _inline_pdf_pages(data_url: str) -> tuple[_PdfPage, ...] | None:
+    if not data_url.startswith(PDF_DATA_URL_PREFIX):
+        return None
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        verbose_logger.debug("pypdf is not installed, so the PDF document is priced like one image")
+        return None
+    try:
+        reader: Final = PdfReader(io.BytesIO(base64.b64decode(data_url[len(PDF_DATA_URL_PREFIX) :])))
+        return tuple(
+            _PdfPage(
+                text=page.extract_text() or "",
+                width=float(page.mediabox.width),
+                height=float(page.mediabox.height),
+            )
+            for page in reader.pages
+        )
+    except Exception as e:
+        verbose_logger.debug("Could not read the PDF document's pages (%s), so it is priced like one image", e)
+        return None
+
+
+def _anthropic_rendered_page_image_tokens(width: float, height: float) -> int:
+    """A PDF page is rasterized within Anthropic's image limits, then billed by its pixel area."""
+    if width <= 0 or height <= 0:
+        return 0
+    area_at_max_edge: Final = ANTHROPIC_IMAGE_MAX_LONG_EDGE_PX**2 * min(width, height) / max(width, height)
+    return math.ceil(min(float(ANTHROPIC_IMAGE_MAX_PIXELS), area_at_max_edge) / ANTHROPIC_IMAGE_PIXELS_PER_TOKEN)
+
+
+def _count_inline_pdf_tokens(data_url: str, count_function: TokenCounterFunction) -> int | None:
+    pages: Final = _inline_pdf_pages(data_url)
+    if pages is None:
+        return None
+    return sum(
+        count_function(page.text) + _anthropic_rendered_page_image_tokens(page.width, page.height) for page in pages
+    )
+
+
+def _count_opaque_document_tokens(
+    data_url: str,
+    count_function: TokenCounterFunction,
+    use_default_image_token_count: bool,
+) -> int:
+    pdf_tokens: Final = _count_inline_pdf_tokens(data_url, count_function)
+    if pdf_tokens is not None:
+        return pdf_tokens
+    return calculate_img_tokens(
+        data=data_url,
+        mode="auto",
+        use_default_image_token_count=use_default_image_token_count,
+    )
+
+
 def _count_document_tokens(
     document: ChatCompletionDocumentObject | AnthropicMessagesDocumentParam,
     count_function: TokenCounterFunction,
@@ -821,10 +889,8 @@ def _count_document_tokens(
         return metadata_tokens + _count_content_list(
             count_function, content, use_default_image_token_count, default_token_count
         )
-    return metadata_tokens + calculate_img_tokens(
-        data=_anthropic_image_source_data(source),
-        mode="auto",
-        use_default_image_token_count=use_default_image_token_count,
+    return metadata_tokens + _count_opaque_document_tokens(
+        _anthropic_image_source_data(source), count_function, use_default_image_token_count
     )
 
 
@@ -841,11 +907,7 @@ def _count_file_tokens(
     name_tokens: Final = count_function(filename) if isinstance(filename, str) and filename else 0
     if not isinstance(file_data, str) or not file_data:
         return name_tokens
-    return name_tokens + calculate_img_tokens(
-        data=file_data,
-        mode="auto",
-        use_default_image_token_count=use_default_image_token_count,
-    )
+    return name_tokens + _count_opaque_document_tokens(file_data, count_function, use_default_image_token_count)
 
 
 def _count_anthropic_content(
