@@ -659,7 +659,7 @@ async def test_openai_decisions_translate_systemone_to_the_openai_wire_contract_
         ],
     }
     assert response.answers == {"is_defect": NoulAnswer(type="noul", noul=0.9)}
-    assert response.hidden_params["custom_llm_provider"] == "openai"
+    assert response._hidden_params["custom_llm_provider"] == "openai"
     luna_cost: Final = litellm.model_cost["gpt-6-luna"]
     expected_cost: Final = (
         (_INPUT_TOKENS - _CACHED_TOKENS - _CACHE_WRITE_TOKENS) * float(luna_cost["input_cost_per_token"])
