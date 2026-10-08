@@ -254,8 +254,8 @@ class CustomGuardrail(CustomLogger):
         run_in_parallel: bool = False,
         scan_raw_request: bool = False,
         only_scan_new_messages: bool = False,
-        stream_scope: GuardrailStreamScope | Mapping[str, GuardrailStreamScope] | None = None,
         timeout: float | None = None,
+        stream_scope: GuardrailStreamScope | Mapping[str, GuardrailStreamScope] | None = None,
         **kwargs,
     ):
         """
