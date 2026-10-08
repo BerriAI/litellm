@@ -161,7 +161,16 @@ async def flush_tool_usage_transactions(
                 index_rows, SPEND_LOG_WRITE_BATCH_MAX_BYTES, SPEND_LOG_WRITE_BATCH_MAX_ROWS
             ):
                 async with db_span("index_spend_log_tools", "LiteLLM_SpendLogToolIndex"):
-                    await index_table.create_many(data=statement_rows, skip_duplicates=True)
+                    try:
+                        await index_table.create_many(data=statement_rows, skip_duplicates=True)
+                    except Exception:
+                        # Fallback to row-by-row insertion to isolate and drop any oversized/failing records
+                        # (e.g. index size limits) while preserving healthy rows in the batch.
+                        for row in statement_rows:
+                            try:
+                                await index_table.create_many(data=[row], skip_duplicates=True)
+                            except Exception:
+                                pass
             async with (
                 db_span("commit_daily_tool_spend", "LiteLLM_DailyToolSpend"),
                 _tool_rollup_batch(prisma_client) as batcher,
