@@ -8,7 +8,7 @@ import time
 import traceback
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
-from typing import Final, Literal, TypedDict
+from typing import Final, Literal, Protocol, TypedDict, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -46,6 +46,7 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.model_checks import get_key_models
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils import http_parsing_utils
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.db.health_check_latest import (
@@ -78,6 +79,7 @@ from litellm.router_utils.clientside_credential_handler import (
     clientside_credential_keys,
 )
 from litellm.secret_managers.main import get_secret_bool
+from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
 
 #### Health ENDPOINTS ####
 
@@ -87,6 +89,15 @@ class _HealthBacklogResponse(TypedDict):
     admitted_requests: ReadOnly[int]
     queued_requests: ReadOnly[int]
     rejected_requests: ReadOnly[int]
+
+
+class _RequestHeadersGetter(Protocol):
+    def __call__(self, request: Request | None) -> object: ...
+
+
+_SAFE_GET_REQUEST_HEADERS: Final = cast(  # cast-ok: the returned headers are validated before use
+    _RequestHeadersGetter, http_parsing_utils.safe_get_request_headers
+)
 
 
 def _reject_os_environ_references(params: dict) -> None:
@@ -2271,10 +2282,9 @@ async def test_model_connection(
             or resolve_health_check_mode(probe_model_info, _OBJECT_MAPPING.validate_python(litellm_params))
         )
 
-        from litellm.proxy.common_utils.http_parsing_utils import safe_get_request_headers
-        from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
-
-        raw_headers: Final = TypeAdapter(dict[str, str]).validate_python(safe_get_request_headers(request))
+        raw_headers: Final[dict[str, str]] = TypeAdapter(dict[str, str]).validate_python(
+            _SAFE_GET_REQUEST_HEADERS(request)
+        )
         health_check_params: Final = {
             **_OBJECT_MAPPING.validate_python(litellm_params),
             "secret_fields": SecretFields(raw_headers=RedactedDict(raw_headers)),

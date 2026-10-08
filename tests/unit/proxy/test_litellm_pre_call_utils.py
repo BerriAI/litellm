@@ -2970,8 +2970,6 @@ def test_add_headers_to_llm_call_by_model_group_existing_headers_in_data():
         litellm.model_group_settings = original_model_group_settings
 
 
-from typing import Optional
-
 from fastapi.responses import Response
 
 from litellm.integrations.custom_logger import CustomLogger
@@ -2982,7 +2980,7 @@ from litellm.types.utils import StandardLoggingPayload
 
 class TestCustomLogger(CustomLogger):
     def __init__(self):
-        self.standard_logging_object: Optional[StandardLoggingPayload] = None
+        self.standard_logging_object: StandardLoggingPayload | None = None
         super().__init__()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -9044,6 +9042,112 @@ class TestResolveUserProviderCredentials:
         # the shared fallback credential is never looked up
         call_where = table.find_many.await_args.kwargs["where"]
         assert call_where == {"AND": ({"user_id": "user-a"}, {"credential_name": {"in": ["copilot-cred"]}})}
+
+    @pytest.mark.asyncio
+    async def test_service_key_cannot_override_a_per_user_credential(self, monkeypatch):
+        """Keys with no user_id must still hit the body check: discovery ran before the
+        missing-user return, so a litellm_credential_name override is a 400."""
+        import pytest
+
+        from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
+
+        self._env(monkeypatch)
+        router = MagicMock()
+        router.fallbacks = []
+        router.context_window_fallbacks = []
+        router.content_policy_fallbacks = []
+        router.get_model_list = MagicMock(
+            return_value=[
+                {
+                    "model_name": "copilot-chat",
+                    "litellm_params": {
+                        "model": "github_copilot/gpt-4o",
+                        "litellm_credential_name": "copilot-cred",
+                    },
+                }
+            ]
+        )
+        router.get_deployment = MagicMock(return_value=None)
+        data = {"model": "copilot-chat", "litellm_credential_name": "shared-cred", "secret_fields": {}}
+        with pytest.raises(Exception) as exc:
+            await _resolve_user_provider_credentials_for_request(
+                data=data,
+                authenticated_user_id=None,
+                team_id=None,
+                llm_router=router,
+            )
+        assert getattr(exc.value, "status_code", None) == 400
+
+    @pytest.mark.asyncio
+    async def test_service_key_without_override_leaves_data_unchanged(self, monkeypatch):
+        """Pin: no user_id and no override -> the function is a no-op."""
+        from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
+
+        self._env(monkeypatch)
+        router = MagicMock()
+        router.fallbacks = []
+        router.context_window_fallbacks = []
+        router.content_policy_fallbacks = []
+        router.get_model_list = MagicMock(
+            return_value=[
+                {
+                    "model_name": "copilot-chat",
+                    "litellm_params": {
+                        "model": "github_copilot/gpt-4o",
+                        "litellm_credential_name": "copilot-cred",
+                    },
+                }
+            ]
+        )
+        router.get_deployment = MagicMock(return_value=None)
+        data = {"model": "copilot-chat", "secret_fields": {}}
+        await _resolve_user_provider_credentials_for_request(
+            data=data,
+            authenticated_user_id=None,
+            team_id=None,
+            llm_router=router,
+        )
+        assert data == {"model": "copilot-chat", "secret_fields": {}}
+
+    @pytest.mark.asyncio
+    async def test_request_level_fallback_loads_per_user_tokens(self, monkeypatch):
+        """A request-level fallback naming a per-user group must surface its credential."""
+        from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
+
+        table = self._env(monkeypatch)
+        router = MagicMock()
+        router.fallbacks = []
+        router.context_window_fallbacks = []
+        router.content_policy_fallbacks = []
+
+        def _get_model_list(model_name=None, team_id=None):
+            if model_name != "copilot-chat":
+                return []
+            return [
+                {
+                    "model_name": "copilot-chat",
+                    "litellm_params": {
+                        "model": "github_copilot/gpt-4o",
+                        "litellm_credential_name": "copilot-cred",
+                    },
+                }
+            ]
+
+        router.get_model_list = MagicMock(side_effect=_get_model_list)
+        router.get_deployment = MagicMock(return_value=None)
+        data = {
+            "model": "gpt-4o",
+            "fallbacks": [{"gpt-4o": ["copilot-chat"]}],
+            "secret_fields": {},
+        }
+        await _resolve_user_provider_credentials_for_request(
+            data=data,
+            authenticated_user_id="user-a",
+            team_id=None,
+            llm_router=router,
+        )
+        table.find_many.assert_awaited()
+        assert data["secret_fields"]["user_provider_credentials_user_id"] == "user-a"
 
     @pytest.mark.asyncio
     async def test_team_public_model_name_resolves_per_user_deployments(self, monkeypatch):

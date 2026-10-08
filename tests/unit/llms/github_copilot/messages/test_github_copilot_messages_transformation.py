@@ -335,12 +335,32 @@ def test_validate_environment_uses_per_user_session_and_skips_authenticator():
 
     session = GithubCopilotUserSession(token="user-copilot-token", api_base="https://tenant.githubcopilot.com/")
     headers, api_base = config.validate_anthropic_messages_environment(
-        headers={}, model="github_copilot/claude-sonnet-5.5", messages=[], optional_params={},
+        headers={},
+        model="github_copilot/claude-sonnet-5.5",
+        messages=[],
+        optional_params={},
         litellm_params={"github_copilot_user_session": session},
     )
     assert headers["Authorization"] == "Bearer user-copilot-token"
     assert api_base == "https://tenant.githubcopilot.com"
     config.authenticator.get_api_key.assert_not_called()
+
+
+def test_per_user_session_token_wins_over_caller_authorization():
+    from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
+
+    config = GithubCopilotAnthropicMessagesConfig()
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_base.return_value = "https://api.githubcopilot.com"
+    session = GithubCopilotUserSession(token="user-copilot-token", api_base="https://api.githubcopilot.com")
+    headers, _ = config.validate_anthropic_messages_environment(
+        headers={"authorization": "Bearer caller-token"},
+        model="github_copilot/claude-sonnet-4.5",
+        messages=[],
+        optional_params={},
+        litellm_params={"github_copilot_user_session": session},
+    )
+    assert headers["Authorization"] == "Bearer user-copilot-token"
 
 
 def test_transform_response_carries_upstream_usage():

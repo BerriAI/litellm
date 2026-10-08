@@ -2,7 +2,7 @@
 CRUD endpoints for storing reusable credentials.
 """
 
-import json
+import time
 from collections.abc import Mapping
 from typing import (
     Annotated,
@@ -11,14 +11,13 @@ from typing import (
 )
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response, status
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     GITHUB_COPILOT_AUTH_TYPE_KEY,
-    GITHUB_COPILOT_DEVICE_FLOW_CACHE_PREFIX,
     GITHUB_COPILOT_PER_USER_AUTH_TYPE,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
@@ -32,6 +31,8 @@ from litellm.llms.anthropic.wif import (
 from litellm.models.credentials import (
     UpdateCredentialItem,
     UserConnectionDeleteResponse,
+    UserConnectionFlowHandle,
+    UserConnectionPollRequest,
     UserConnectionPollResponse,
     UserConnectionStartResponse,
     UserProviderConnection,
@@ -66,6 +67,7 @@ from .user_provider_credentials import (
     decode_user_provider_credential,
     delete_user_provider_credential,
     delete_user_provider_credentials_for_credential,
+    drop_user_provider_credential_cache,
     invalidate_user_provider_credential_cache,
     list_user_provider_credentials,
     list_user_provider_credentials_for_credential,
@@ -466,11 +468,6 @@ def _per_user_credential_or_404(credential_name: str) -> CredentialItem:
     return credential
 
 
-def _device_flow_cache_key(user_id: str, credential_name: str) -> str:
-    pair: Final = json.dumps([user_id, credential_name], separators=(",", ":"))
-    return f"{GITHUB_COPILOT_DEVICE_FLOW_CACHE_PREFIX}:{pair}"
-
-
 def _per_user_credential_names() -> tuple[str, ...]:
     return tuple(
         credential.credential_name
@@ -531,6 +528,21 @@ async def list_user_connections(
         raise handle_exception_on_proxy(e)
 
 
+def _decode_flow_handle(flow_handle: str) -> UserConnectionFlowHandle | None:
+    decrypted: Final = decrypt_value_helper(
+        value=flow_handle,
+        key="device_flow_handle",
+        exception_type="debug",
+        return_original_value=False,
+    )
+    if decrypted is None:
+        return None
+    try:
+        return UserConnectionFlowHandle.model_validate_json(decrypted)
+    except ValidationError:
+        return None
+
+
 @router.post(
     "/credentials/{credential_name:path}/user_connection/start",
     dependencies=[Depends(user_api_key_auth)],
@@ -546,7 +558,7 @@ async def start_user_connection(
 ) -> UserConnectionStartResponse:
     """Begin a GitHub device flow for the calling user's connection to a per-user credential."""
     from litellm.llms.github_copilot.per_user_auth import astart_device_flow
-    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+    from litellm.proxy.proxy_server import prisma_client
 
     try:
         user_id: Final = _authenticated_user_id(user_api_key_dict)
@@ -557,16 +569,21 @@ async def start_user_connection(
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
         flow: Final = await astart_device_flow()
-        await user_api_key_cache.async_set_cache(
-            _device_flow_cache_key(user_id, credential_name),
-            encrypt_value_helper(flow.device_code),
-            ttl=flow.expires_in,
+        handle: Final = encrypt_value_helper(
+            UserConnectionFlowHandle(
+                user_id=user_id,
+                credential_name=credential_name,
+                device_code=flow.device_code,
+                interval=flow.interval,
+                expires_at=time.time() + flow.expires_in,
+            ).model_dump_json()
         )
         return UserConnectionStartResponse(
             user_code=flow.user_code,
             verification_uri=flow.verification_uri,
             expires_in=flow.expires_in,
             interval=flow.interval,
+            flow_handle=handle,
         )
     except Exception as e:  # noqa: BLE001  # endpoint boundary: every failure becomes the proxy error contract
         raise handle_exception_on_proxy(e)
@@ -582,6 +599,7 @@ async def start_user_connection(
 async def poll_user_connection(
     request: Request,
     fastapi_response: Response,
+    body: UserConnectionPollRequest,
     credential_name: str = Path(..., description="The credential name, percent-decoded"),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI resolves the dependency from the default
 ) -> UserConnectionPollResponse:
@@ -601,31 +619,25 @@ async def poll_user_connection(
                 status_code=500,
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
-        cache_key: Final = _device_flow_cache_key(user_id, credential_name)
-        encrypted_device_code: Final[object] = await user_api_key_cache.async_get_cache(cache_key)
-        device_code: Final = (
-            decrypt_value_helper(str(encrypted_device_code), key="device_code")
-            if isinstance(encrypted_device_code, str) and encrypted_device_code
-            else None
-        )
-        if not device_code:
-            return UserConnectionPollResponse(status="expired")
+        handle: Final = _decode_flow_handle(body.flow_handle)
+        if (
+            handle is None
+            or handle.user_id != user_id
+            or handle.credential_name != credential_name
+            or handle.expires_at <= time.time()
+        ):
+            raise HTTPException(status_code=400, detail="invalid or expired flow_handle")
 
-        poll: Final = await apoll_device_flow(device_code)
-        if poll.status in ("expired", "denied"):
-            await user_api_key_cache.async_delete_cache(cache_key)
-            return UserConnectionPollResponse(status=poll.status, interval=poll.interval)
-        if poll.status in ("pending", "slow_down"):
+        poll: Final = await apoll_device_flow(handle.device_code)
+        if poll.status in ("expired", "denied", "pending", "slow_down"):
             return UserConnectionPollResponse(status=poll.status, interval=poll.interval)
 
         github_token: Final = poll.access_token
         if not github_token:
-            await user_api_key_cache.async_delete_cache(cache_key)
             raise HTTPException(status_code=502, detail="GitHub device flow completed without a token")
         try:
             await acheck_copilot_seat(user_id=user_id, github_token=github_token, credential_name=credential_name)
         except litellm.CallerCredentialAuthenticationError:
-            await user_api_key_cache.async_delete_cache(cache_key)
             return UserConnectionPollResponse(status="no_copilot_seat")
         github_login: Final = await afetch_github_login(github_token)
         await upsert_user_provider_credential(
@@ -635,8 +647,7 @@ async def poll_user_connection(
             _GITHUB_COPILOT_PROVIDER,
             GithubCopilotUserConnectionPayload(access_token=github_token, github_login=github_login),
         )
-        await user_api_key_cache.async_delete_cache(cache_key)
-        await invalidate_user_provider_credential_cache(user_api_key_cache, user_id, credential_name)
+        await drop_user_provider_credential_cache(user_api_key_cache, user_id, credential_name)
         return UserConnectionPollResponse(status="connected", github_login=github_login)
     except litellm.CallerCredentialRateLimitError as e:
         raise HTTPException(status_code=429, detail=str(e))
@@ -671,7 +682,6 @@ async def delete_user_connection(
             )
         prior: Final = await delete_user_provider_credential(prisma_client, user_id, credential_name)
         await invalidate_user_provider_credential_cache(user_api_key_cache, user_id, credential_name)
-        await user_api_key_cache.async_delete_cache(_device_flow_cache_key(user_id, credential_name))
         if prior is not None:
             evict_copilot_user_session(user_id, prior.access_token)
         return UserConnectionDeleteResponse(status="disconnected")
@@ -705,7 +715,6 @@ async def _purge_user_connections_for_credential(credential_name: str) -> None:
             access_tokens[row.user_id] = decoded.access_token
     for user_id in user_ids:
         await invalidate_user_provider_credential_cache(user_api_key_cache, user_id, credential_name)
-        await user_api_key_cache.async_delete_cache(_device_flow_cache_key(user_id, credential_name))
         token = access_tokens.get(user_id)
         if token:
             evict_copilot_user_session(user_id, token)

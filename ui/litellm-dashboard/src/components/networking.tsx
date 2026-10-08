@@ -2593,6 +2593,7 @@ export interface UserConnectionStartResponse {
   verification_uri: string;
   expires_in: number;
   interval: number;
+  flow_handle: string;
 }
 
 export type UserConnectionPollStatus = "pending" | "slow_down" | "expired" | "denied" | "no_copilot_seat" | "connected";
@@ -2618,8 +2619,12 @@ export const userConnectionStartCall = (
 export const userConnectionPollCall = (
   accessToken: string,
   credentialName: string,
+  flowHandle: string,
 ): Promise<UserConnectionPollResponse> =>
-  apiClient.post<UserConnectionPollResponse>(`${userConnectionPath(credentialName)}/poll`, { accessToken });
+  apiClient.post<UserConnectionPollResponse>(`${userConnectionPath(credentialName)}/poll`, {
+    accessToken,
+    body: { flow_handle: flowHandle },
+  });
 
 export const userConnectionDeleteCall = (accessToken: string, credentialName: string): Promise<void> =>
   apiClient.delete<void>(userConnectionPath(credentialName), { accessToken });

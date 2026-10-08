@@ -57,7 +57,7 @@ export default function GithubCopilotConnectModal({
         dispatch({ type: "timed_out" });
         return;
       }
-      userConnectionPollCall(accessToken, credentialName)
+      userConnectionPollCall(accessToken, credentialName, state.flowHandle)
         .then((response) => !cancelled && dispatch({ type: "polled", response }))
         .catch(
           (error: unknown) => !cancelled && dispatch({ type: "errored", message: extractProxyErrorMessage(error) }),

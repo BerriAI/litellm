@@ -50284,6 +50284,11 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** UserConnectionPollRequest */
+        UserConnectionPollRequest: {
+            /** Flow Handle */
+            flow_handle: string;
+        };
         /** UserConnectionPollResponse */
         UserConnectionPollResponse: {
             /** Github Login */
@@ -50300,6 +50305,8 @@ export interface components {
         UserConnectionStartResponse: {
             /** Expires In */
             expires_in: number;
+            /** Flow Handle */
+            flow_handle: string;
             /** Interval */
             interval: number;
             /** User Code */
@@ -57619,7 +57626,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserConnectionPollRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

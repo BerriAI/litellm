@@ -12,6 +12,7 @@ from litellm.proxy.credential_endpoints.user_provider_credentials import (
     decode_user_provider_credential,
     delete_user_provider_credential,
     delete_user_provider_credentials_for_credential,
+    drop_user_provider_credential_cache,
     get_user_provider_credential,
     invalidate_user_provider_credential_cache,
     upsert_user_provider_credential,
@@ -153,7 +154,7 @@ async def test_invalidate_cache_forces_db_refetch(monkeypatch):
     cache = DualCache(redis_cache=_fake_redis(monkeypatch))
 
     await aget_user_provider_tokens(prisma_client, cache, "user-a", ["copilot-cred"])
-    await invalidate_user_provider_credential_cache(cache, "user-a", "copilot-cred")
+    await drop_user_provider_credential_cache(cache, "user-a", "copilot-cred")
     tokens = await aget_user_provider_tokens(prisma_client, cache, "user-a", ["copilot-cred"])
     assert tokens == {"copilot-cred": "gho_new"}
     assert table.find_many.await_count == 2
@@ -187,13 +188,39 @@ async def test_disconnect_on_one_worker_invalidates_other_workers_via_redis(monk
     tokens_b = await aget_user_provider_tokens(prisma_client, cache_b, "user-a", ["copilot-cred"])
     assert tokens_b == {"copilot-cred": "gho_secret"}
 
-    # worker A disconnects
+    # worker A disconnects: the key is overwritten with the not-connected tombstone
     await invalidate_user_provider_credential_cache(cache_a, "user-a", "copilot-cred")
 
-    # worker B must now see not-connected (DB returns no row on the second read)
+    # worker B sees the tombstone from Redis, no worker-local staleness, no DB read needed
     tokens_b_after = await aget_user_provider_tokens(prisma_client, cache_b, "user-a", ["copilot-cred"])
     assert tokens_b_after == {}
-    assert table.find_many.await_count == 2
+    assert table.find_many.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_stale_fill_cannot_overwrite_a_disconnect_tombstone(monkeypatch):
+    """A token read racing a disconnect: the read's fill uses set-if-absent, so it
+    must lose to the tombstone the disconnect wrote."""
+    from litellm.proxy.credential_endpoints import user_provider_credentials as upc
+
+    redis = _fake_redis(monkeypatch)
+    cache = DualCache(redis_cache=redis)
+
+    payload = GithubCopilotUserConnectionPayload(access_token="gho_secret", github_login="octo")
+    ciphertext = upc._encode(payload)
+
+    async def _read_while_disconnecting(*args, **kwargs):
+        # the row was fetched before the disconnect landed; the fill that follows must
+        # lose to the tombstone instead of resurrecting the token
+        await invalidate_user_provider_credential_cache(cache, "user-a", "copilot-cred")
+        return [_row(credential_b64=ciphertext)]
+
+    table = MagicMock()
+    table.find_many = AsyncMock(side_effect=_read_while_disconnecting)
+    prisma_client = _prisma(table)
+
+    await aget_user_provider_tokens(prisma_client, cache, "user-a", ["copilot-cred"])
+    assert await aget_user_provider_tokens(prisma_client, cache, "user-a", ["copilot-cred"]) == {}
 
 
 @pytest.mark.asyncio
