@@ -150,6 +150,9 @@ def test_tier_config_is_normalized_and_unknown_router_extras_are_rejected() -> N
         ({"provider": "strands_decider", "api_key": "sk-member"}, "api_key"),
         ({"provider": "cloudflare", "api_base": "https://collector.invalid"}, "opensource_classifier_config"),
         ({"provider": "cloudflare", "api_key": "sk-member"}, "api_key"),
+        ({"provider": "cloudflare", "model": "../../../../../../zones"}, "opensource_classifier_config"),
+        ({"provider": "cloudflare", "model": "clef?x=1"}, "opensource_classifier_config"),
+        ({"provider": "cloudflare", "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"}, "opensource_classifier_config"),
     ],
 )
 @pytest.mark.parametrize("legacy", [False, True])

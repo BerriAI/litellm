@@ -715,6 +715,7 @@ _ENVIRONMENT_KEY_SCOPE: Final = MappingProxyType(
 _PROVIDER_DEFAULT_MODELS: Final = MappingProxyType(
     {"strands_decider": "strands-decider-2B-hobson-v19", "cloudflare": "clef"}
 )
+_CLOUDFLARE_CLASSIFIER_MODELS: Final = ("clef", "clef-flash")
 
 
 class OpenSourceClassifierConfig(LiteLLMBaseModel):
@@ -777,15 +778,27 @@ class OpenSourceClassifierConfig(LiteLLMBaseModel):
                 return self
             case "strands_decider":
                 return self
-            case "jev" | "cloudflare":
-                if self.api_base is not None and self.api_key is None:
-                    raise ValueError(
-                        "opensource_classifier_config.api_base requires opensource_classifier_config.api_key: "
-                        f"{_ENVIRONMENT_KEY_SCOPE[self.provider]}"
-                    )
-                return self
+            case "cloudflare":
+                from litellm.llms.cloudflare.decisions.transformation import CloudflareDecisionsConfig
+
+                cloudflare: Final = CloudflareDecisionsConfig()
+                if cloudflare.canonical_model(self.model) not in {
+                    cloudflare.canonical_model(model) for model in _CLOUDFLARE_CLASSIFIER_MODELS
+                }:
+                    raise ValueError(f"cloudflare model must be one of {', '.join(_CLOUDFLARE_CLASSIFIER_MODELS)}")
+                return self._keep_the_environment_key_home()
+            case "jev":
+                return self._keep_the_environment_key_home()
             case _:
                 assert_never(self.provider)
+
+    def _keep_the_environment_key_home(self) -> "OpenSourceClassifierConfig":
+        if self.api_base is not None and self.api_key is None:
+            raise ValueError(
+                "opensource_classifier_config.api_base requires opensource_classifier_config.api_key: "
+                f"{_ENVIRONMENT_KEY_SCOPE[self.provider]}"
+            )
+        return self
 
 
 JevClassifierConfig = OpenSourceClassifierConfig

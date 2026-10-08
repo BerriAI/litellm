@@ -15,9 +15,14 @@ from litellm._logging import verbose_router_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.cloudflare.decisions.transformation import CloudflareDecisionsConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
-from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig, JevClassifierConfig
+from litellm.router_strategy.complexity_router.config import (
+    ComplexityRouterConfig,
+    JevClassifierConfig,
+    OpenSourceClassifierConfig,
+)
 from litellm.router_strategy.complexity_router.jev_classifier import (
     DEFAULT_JEV_INSTRUCTIONS,
     HttpJevClassifierClient,
@@ -542,12 +547,12 @@ async def test_oss_routes_with_its_own_credentials_and_accounts_the_checkpoint(
 
 
 @pytest.mark.parametrize(
-    ("provider", "default_model"),
-    [("strands_decider", "strands-decider-2B-hobson-v19"), ("cloudflare", "clef")],
+    ("provider", "default_model", "chosen_model"),
+    [("strands_decider", "strands-decider-2B-hobson-v19", "custom"), ("cloudflare", "clef", "clef-flash")],
 )
-def test_decisions_providers_default_their_own_model(provider: str, default_model: str) -> None:
+def test_decisions_providers_default_their_own_model(provider: str, default_model: str, chosen_model: str) -> None:
     assert JevClassifierConfig.model_validate({"provider": provider}).model == default_model
-    assert JevClassifierConfig.model_validate({"provider": provider, "model": "custom"}).model == "custom"
+    assert JevClassifierConfig.model_validate({"provider": provider, "model": chosen_model}).model == chosen_model
 
 
 def test_cloudflare_api_base_without_its_own_key_is_rejected_so_the_environment_key_stays_home() -> None:
@@ -717,6 +722,39 @@ def test_jev_config_is_rejected_for_other_classifier_types() -> None:
                 "jev_classifier_config": {},
             }
         )
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "../../../../../../zones",
+        "clef?x=1",
+        "clef/../../zones",
+        "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        "@cf/cloudflare/clef-pro",
+        "",
+    ],
+)
+def test_cloudflare_classifier_rejects_models_outside_the_clef_family(model: str) -> None:
+    with pytest.raises(ValueError, match="cloudflare model must be one of clef, clef-flash"):
+        OpenSourceClassifierConfig(provider="cloudflare", model=model)
+
+
+@pytest.mark.parametrize(
+    ("model", "wire_path"),
+    [
+        ("clef", "@cf/cloudflare/clef"),
+        ("clef-flash", "@cf/cloudflare/clef-flash"),
+        ("@cf/cloudflare/clef", "@cf/cloudflare/clef"),
+        ("@cf/cloudflare/clef-flash", "@cf/cloudflare/clef-flash"),
+    ],
+)
+def test_cloudflare_classifier_accepts_each_clef_spelling_the_request_path_already_takes(
+    model: str, wire_path: str
+) -> None:
+    accepted: Final = OpenSourceClassifierConfig(provider="cloudflare", model=model)
+    assert accepted.model == model
+    assert CloudflareDecisionsConfig().canonical_model(accepted.model) == wire_path
 
 
 def test_jev_instructions_reject_blank_values() -> None:
