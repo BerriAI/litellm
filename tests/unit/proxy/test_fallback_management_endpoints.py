@@ -8,11 +8,13 @@ Tests:
 4. Validation tests (invalid models, duplicate fallbacks, etc.)
 """
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
+from litellm import Router
 from litellm.proxy.management_endpoints.fallback_management_endpoints import (
     FallbackCreateRequest,
     create_fallback,
@@ -104,6 +106,94 @@ class TestFallbackCreateRequest:
         assert request.fallback_type == "content_policy"
 
 
+TEAM_ID = "team-a"
+PRIMARY_INTERNAL_NAME = f"model_name_{TEAM_ID}_1a6437cb-4cab-432c-8099-1d7411731a8b"
+FALLBACK_INTERNAL_NAME = f"model_name_{TEAM_ID}_83151607-5556-4bbf-ac65-c474dbc64eba"
+
+
+def _team_scoped_deployment(internal_name: str, public_name: str, deployment_id: str) -> dict:
+    return {
+        "model_name": internal_name,
+        "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake"},
+        "model_info": {"id": deployment_id, "team_id": TEAM_ID, "team_public_model_name": public_name},
+    }
+
+
+@pytest.mark.asyncio
+class TestCreateFallbackForTeamScopedModels:
+    """POST /fallback takes the public name a caller invokes a team-scoped model by, not only the stored internal one"""
+
+    @pytest.fixture
+    def router(self) -> Router:
+        return Router(
+            model_list=[
+                {"model_name": "gpt-5.4-mini", "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake"}},
+                _team_scoped_deployment(PRIMARY_INTERNAL_NAME, "team-primary", "team-primary-id"),
+                _team_scoped_deployment(FALLBACK_INTERNAL_NAME, "team-fallback", "team-fallback-id"),
+            ]
+        )
+
+    @pytest.fixture
+    def prisma_client(self) -> MagicMock:
+        client = MagicMock()
+        client.db.litellm_config.upsert = AsyncMock()
+        return client
+
+    @pytest.fixture
+    def proxy_config(self) -> MagicMock:
+        config = MagicMock()
+        config.get_config = AsyncMock(return_value={"router_settings": {}})
+        return config
+
+    async def _create(
+        self, request: FallbackCreateRequest, router: Router, prisma_client: MagicMock, proxy_config: MagicMock
+    ):
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", router),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+            patch("litellm.proxy.proxy_server.proxy_config", proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        ):
+            return await create_fallback(request, MagicMock())
+
+    async def test_public_names_create_a_rule_keyed_on_the_public_name(self, router, prisma_client, proxy_config):
+        request = FallbackCreateRequest(model="team-primary", fallback_models=["team-fallback"])
+
+        response = await self._create(request, router, prisma_client, proxy_config)
+
+        assert response.model == "team-primary"
+        assert response.fallback_models == ["team-fallback"]
+        assert router.fallbacks == [{"team-primary": ["team-fallback"]}]
+        persisted = json.loads(prisma_client.db.litellm_config.upsert.call_args.kwargs["data"]["create"]["param_value"])
+        assert persisted["fallbacks"] == [{"team-primary": ["team-fallback"]}]
+
+    async def test_internal_names_keep_working(self, router, prisma_client, proxy_config):
+        request = FallbackCreateRequest(model=PRIMARY_INTERNAL_NAME, fallback_models=[FALLBACK_INTERNAL_NAME])
+
+        response = await self._create(request, router, prisma_client, proxy_config)
+
+        assert router.fallbacks == [{PRIMARY_INTERNAL_NAME: [FALLBACK_INTERNAL_NAME]}]
+        assert response.model == PRIMARY_INTERNAL_NAME
+
+    async def test_public_fallback_target_behind_a_gateway_primary(self, router, prisma_client, proxy_config):
+        request = FallbackCreateRequest(model="gpt-5.4-mini", fallback_models=["team-fallback"])
+
+        await self._create(request, router, prisma_client, proxy_config)
+
+        assert router.fallbacks == [{"gpt-5.4-mini": ["team-fallback"]}]
+
+    async def test_unknown_name_is_rejected_and_the_error_names_the_public_names(
+        self, router, prisma_client, proxy_config
+    ):
+        request = FallbackCreateRequest(model="team-missing", fallback_models=["team-fallback"])
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._create(request, router, prisma_client, proxy_config)
+
+        assert exc_info.value.status_code == 404
+        assert {"team-primary", "team-fallback", "gpt-5.4-mini"} <= set(exc_info.value.detail["available_models"])
+
+
 @pytest.mark.asyncio
 class TestCreateFallback:
     """Test the create_fallback endpoint"""
@@ -113,6 +203,7 @@ class TestCreateFallback:
         """Create a mock router"""
         router = MagicMock()
         router.model_names = {"gpt-3.5-turbo", "gpt-4", "claude-3-haiku"}
+        router.team_public_model_names = frozenset()
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []

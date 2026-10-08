@@ -85,24 +85,24 @@ async def create_fallback(
             )
 
         # Validate that the model exists in the router
-        model_names: Final = llm_router.model_names
-        if data.model not in model_names:
+        known_model_names: Final = frozenset(llm_router.model_names) | llm_router.team_public_model_names
+        if data.model not in known_model_names:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={
                     "error": f"Model '{data.model}' not found in router",
-                    "available_models": list(model_names),
+                    "available_models": sorted(known_model_names),
                 },
             )
 
         # Validate that all fallback models exist in the router
-        invalid_fallback_models: Final = [m for m in data.fallback_models if m not in model_names]
+        invalid_fallback_models: Final = [m for m in data.fallback_models if m not in known_model_names]
         if invalid_fallback_models:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
                     "error": f"Invalid fallback models: {invalid_fallback_models}",
-                    "available_models": list(model_names),
+                    "available_models": sorted(known_model_names),
                 },
             )
 
