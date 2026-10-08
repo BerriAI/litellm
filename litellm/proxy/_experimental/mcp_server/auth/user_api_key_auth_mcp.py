@@ -283,8 +283,7 @@ def _gateway_dcr_challenge_scope(
     unique_servers: Final = tuple(
         (entry, server)
         for index, (entry, server) in enumerate(servers)
-        if server.server_id
-        not in frozenset(previous_server.server_id for _, previous_server in servers[:index])
+        if server.server_id not in frozenset(previous_server.server_id for _, previous_server in servers[:index])
     )
     tokens: Final = tuple(
         gateway_server_scope(entry) or gateway_server_scope(server.server_id) for entry, server in unique_servers
