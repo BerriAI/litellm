@@ -512,6 +512,7 @@ describe("ProviderSpecificFields", () => {
   });
 
   it("hides credential-only auth modes from non-admin model forms", async () => {
+    const user = userEvent.setup();
     const queryClient = createQueryClient();
     render(
       <QueryClientProvider client={queryClient}>
@@ -521,10 +522,16 @@ describe("ProviderSpecificFields", () => {
       </QueryClientProvider>,
     );
 
-    expect(await screen.findByRole("combobox", { name: "Auth Type:" })).toHaveTextContent(
+    const authTypeSelect = await screen.findByRole("combobox", { name: "Auth Type:" });
+    expect(authTypeSelect).toHaveTextContent("Static delegated access token");
+    await user.click(authTypeSelect);
+    expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
       "Static delegated access token",
-    );
-    expect(screen.queryByText("OAuth token exchange (on-behalf-of)")).not.toBeInTheDocument();
+    ]);
+
+    expect(screen.queryByLabelText("Token Endpoint URL")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Client ID")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Client Secret")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Delegated Access Token")).toBeInTheDocument();
   });
 
