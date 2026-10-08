@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 from typing import Any, Final
 
-from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.competitor_intent.base import (  # noqa: F401
+from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.competitor_intent.base import (  # noqa: F401  # legacy module exports
     BaseCompetitorIntentChecker,
     _compile_marker,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _count_signals,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export

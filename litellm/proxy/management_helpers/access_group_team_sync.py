@@ -20,7 +20,7 @@ from typing import Final, Protocol
 
 from pydantic import TypeAdapter
 
-from litellm.proxy.auth.auth_checks import (  # noqa: F401
+from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
     _delete_cache_access_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     delete_cache_access_object,
 )

@@ -31,7 +31,7 @@ from litellm.proxy.common_request_processing import (
     open_sse_before_first_byte,
     ttft_keepalive_interval,
 )
-from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     get_form_data,

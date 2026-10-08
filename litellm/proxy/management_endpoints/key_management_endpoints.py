@@ -53,7 +53,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_s
 )
 from litellm.proxy._types import *
 from litellm.proxy._types import Litellm_EntityType, LiteLLM_VerificationToken, hash_token
-from litellm.proxy.auth.auth_checks import (  # noqa: F401
+from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
     _delete_cache_key_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     can_team_access_model,
     delete_cache_key_object,
@@ -89,7 +89,7 @@ from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHoo
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
 from litellm.proxy.management.teams.authz import TEAM_ADMIN_ONLY, TEAM_OR_ORG_ADMIN, is_team_admin
 from litellm.proxy.management.teams.dependencies import get_team_access
-from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401
+from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
     _check_disable_global_guardrails_caller_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _check_passthrough_routes_caller_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _set_object_metadata_field,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -105,7 +105,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401
     validate_budget_duration,
     validate_finite_spend,
 )
-from litellm.proxy.management_endpoints.model_management_endpoints import (  # noqa: F401
+from litellm.proxy.management_endpoints.model_management_endpoints import (  # noqa: F401  # legacy module exports
     _add_model_to_db,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     add_model_to_db,
 )
@@ -121,7 +121,7 @@ from litellm.proxy.management_helpers.access_group_key_sync import (
     sync_key_update_access_group_membership,
 )
 from litellm.proxy.management_helpers.key_settings_audit import with_settings_updated_at
-from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401
+from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     attach_object_permission_to_dict,
     handle_update_object_permission_common,
@@ -138,11 +138,11 @@ from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.search_endpoints.search_tool_registry import rotate_search_tools_master_key
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.spend_counter_batch import SPEND_COUNTERS_TARGET
-from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401
+from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  # legacy module exports
     _is_master_key,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     is_master_key,
 )
-from litellm.proxy.utils import (  # noqa: F401
+from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     PrismaClient,
     ProxyLogging,
     _hash_token_if_needed,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export

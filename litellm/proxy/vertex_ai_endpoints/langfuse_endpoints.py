@@ -21,11 +21,11 @@ import litellm
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     safe_get_request_headers,
 )
-from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401
+from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy module exports
     _get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     get_dynamic_logging_metadata,
 )

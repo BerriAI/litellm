@@ -37,7 +37,7 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     outcome_wire_value,
 )
 from litellm.proxy._experimental.mcp_server.faults.traversal import iter_exception_tree
-from litellm.proxy._experimental.mcp_server.oauth_utils import (  # noqa: F401
+from litellm.proxy._experimental.mcp_server.oauth_utils import (  # noqa: F401  # legacy module exports
     _redact_mcp_resource_url,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     redact_mcp_resource_url,
 )
@@ -67,7 +67,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._experimental.mcp_server.db import OAuthCredentialPayload
     from litellm.proxy.utils import ProxyLogging
-from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     safe_get_request_headers,
 )
@@ -229,7 +229,7 @@ if MCP_AVAILABLE:
     from litellm.llms.litellm_proxy.skills.skill_search import (
         DEFAULT_SKILL_SEARCH_TOP_K,
     )
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: F401
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: F401  # legacy module exports
         _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
         UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,
         ListedToolsCaller,
@@ -249,7 +249,7 @@ if MCP_AVAILABLE:
         filter_tools_by_key_team_permissions,
         fire_mcp_tool_call_failure_logging,
     )
-    from litellm.proxy._experimental.mcp_server.server import (  # noqa: F401
+    from litellm.proxy._experimental.mcp_server.server import (  # noqa: F401  # legacy module exports
         _apply_toolset_scope,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
         apply_toolset_scope,
         reject_disallowed_mcp_client,
@@ -1404,7 +1404,7 @@ if MCP_AVAILABLE:
     # /health/tools/list -> List tools from MCP server
     # For these routes users will dynamically pass the MCP connection params, they don't need to be on the MCP registry
     ########################################################
-    from litellm.proxy.management_endpoints.mcp_management_endpoints import (  # noqa: F401
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (  # noqa: F401  # legacy module exports
         NewMCPServerRequest,
         _inherit_credentials_from_existing_server,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
         inherit_credentials_from_existing_server,

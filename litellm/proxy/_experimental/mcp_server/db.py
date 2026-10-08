@@ -33,7 +33,7 @@ from litellm.proxy._types import (
     NewMCPServerRequest,
     UpdateMCPServerRequest,
 )
-from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: F401
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: F401  # legacy module exports
     SecretMapDecodeError,
     _get_salt_key,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     decode_secret_map,

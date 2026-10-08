@@ -19,7 +19,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import (  # noqa: F401
+from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
     _check_team_member_model_access,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     can_key_call_model,
     can_org_access_model,

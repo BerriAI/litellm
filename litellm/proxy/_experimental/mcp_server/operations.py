@@ -83,7 +83,7 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     classify_list_exception,
     outcome_wire_value,
 )
-from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: F401
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: F401  # legacy module exports
     MCPServerManager,
     _caller_authorization_fans_out,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _client_forwarded_authorization_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -96,12 +96,12 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa:
     resolve_openapi_tool_auth,
     should_strip_caller_authorization,
 )
-from litellm.proxy._experimental.mcp_server.oauth_utils import (  # noqa: F401
+from litellm.proxy._experimental.mcp_server.oauth_utils import (  # noqa: F401  # legacy module exports
     _redact_mcp_resource_url,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     get_byok_www_authenticate,
     redact_mcp_resource_url,
 )
-from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (  # noqa: F401
+from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (  # noqa: F401  # legacy module exports
     _request_auth_header,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _request_extra_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _request_resolved_auth_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export

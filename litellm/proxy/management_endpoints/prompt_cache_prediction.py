@@ -15,12 +15,12 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.proxy.auth.auth_utils import get_cache_prediction_deployments
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # canonical parsed-body owner; validate its legacy result at the endpoint boundary
 )
 from litellm.proxy.common_utils.prompt_cache_prediction import has_request_transforms, predict_arm
-from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401  # legacy module exports
     PROXY_MaxParallelRequestsHandler_v3,
     _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
 )

@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Final
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.common_utils.config_sync_pubsub import (  # noqa: F401
+from litellm.proxy.common_utils.config_sync_pubsub import (  # noqa: F401  # legacy module exports
     ConfigSyncPubSub,
     _ConfigSyncPubSub,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _pubsub_capable_client,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export

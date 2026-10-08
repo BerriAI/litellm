@@ -22,7 +22,7 @@ from typing import Final, TypeVar
 
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
-from litellm.proxy.db.log_db_metrics import (  # noqa: F401
+from litellm.proxy.db.log_db_metrics import (  # noqa: F401  # legacy module exports
     _is_exception_related_to_db,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     claim_db_io,
     db_io_claimed,

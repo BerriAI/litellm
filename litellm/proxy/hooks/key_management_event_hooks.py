@@ -21,7 +21,7 @@ from litellm.proxy._types import (
     UpdateKeyRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.utils import (  # noqa: F401
+from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     _hash_token_if_needed,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     hash_token_if_needed,
 )

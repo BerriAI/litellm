@@ -48,7 +48,7 @@ from litellm.proxy.management_endpoints.budget_management_endpoints import (
     update_budget,
 )
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
-from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401
+from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
     _set_object_metadata_field,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     set_object_metadata_field,

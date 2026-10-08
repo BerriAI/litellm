@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import (  # noqa: F401
+from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
     _cache_key_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _copy_user_api_key_auth_for_cache,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _fetch_key_object_from_db_with_reconnect,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export

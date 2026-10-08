@@ -35,7 +35,7 @@ from litellm.proxy._types import (  # key request types; user request types; tea
     UserAPIKeyAuth,
     VirtualKeyEvent,
 )
-from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
 )

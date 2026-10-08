@@ -15,7 +15,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 
-from .auth_checks_organization import (  # noqa: F401
+from .auth_checks_organization import (  # noqa: F401  # legacy module exports
     _user_is_org_admin,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     user_is_org_admin,
 )

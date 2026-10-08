@@ -45,7 +45,7 @@ from litellm.proxy.spend_tracking.spend_log_error_logger import (
     should_suppress_spend_log_tracebacks,
     spend_log_error,
 )
-from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401
+from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  # legacy module exports
     _sanitize_error_information_for_spend_logs,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     get_request_model_access_groups,
     sanitize_error_information_for_spend_logs,
