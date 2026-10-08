@@ -196,7 +196,6 @@ func resourceLiteLLMUserCreate(d *schema.ResourceData, m interface{}) error {
 	}
 	userData["auto_create_key"] = d.Get("auto_create_key").(bool)
 	userData["send_invite_email"] = d.Get("send_invite_email").(bool)
-	// Sent even when false: an omitted blocked is filled from default_internal_user_params, which could block the auto-created key
 	userData["blocked"] = d.Get("blocked").(bool)
 
 	log.Printf("[DEBUG] Create user request payload: %+v", userData)
