@@ -845,7 +845,7 @@ async def get_filtered_server_tools(
         listed_generation: Final = global_mcp_server_manager.listed_tools_generation(server.server_id)
         if params is None:
             page = ListToolsResult(
-                tools=await global_mcp_server_manager._get_tools_from_server(
+                tools=await global_mcp_server_manager.get_tools_from_server(
                     server=server,
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,

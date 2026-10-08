@@ -42,5 +42,6 @@ prettyplease = "0.2"
 
 [dev-dependencies]
 rstest.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 wiremock.workspace = true
 uuid.workspace = true
