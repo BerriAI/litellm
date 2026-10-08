@@ -19135,3 +19135,95 @@ def test_untrusted_metadata_cannot_enable_cimd_without_matching_authorization_en
     assert result is not None
     assert result.client_id_metadata_document_supported is False
     assert result.scopes == ["read"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["config", "database"])
+@pytest.mark.parametrize("advertised", [True, False])
+@pytest.mark.parametrize("startup", [True, False])
+async def test_manual_oauth_endpoints_discover_client_metadata_once(
+    source: str, advertised: bool, startup: bool, respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from starlette.requests import Request
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager as manager_module
+    from litellm.proxy._experimental.mcp_server.oauth_utils import get_cimd_client_id
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    monkeypatch.setenv("LITELLM_MCP_OAUTH_DISCOVERY_ON_STARTUP", "1" if startup else "0")
+    await _mock_oauth_discovery(respx_mock, monkeypatch, server_url="https://up.example.com/mcp", scopes=["read"])
+    metadata: Final = respx_mock.get("https://up.example.com/.well-known/oauth-authorization-server").respond(
+        json={
+            "issuer": "https://up.example.com",
+            "authorization_endpoint": "https://up.example.com/authorize",
+            "token_endpoint": "https://up.example.com/token",
+            "client_id_metadata_document_supported": advertised,
+        }
+    )
+    manager: Final = MCPServerManager()
+    monkeypatch.setattr(manager_module, "global_mcp_server_manager", manager)
+    configured: Final[MCPServer]
+    if source == "config":
+        await manager.load_servers_from_config({"manual": {
+            "url": "https://up.example.com/mcp", "transport": "http", "auth_type": "oauth2",
+            "oauth2_flow": "authorization_code", "authorization_url": "https://up.example.com/authorize",
+            "token_url": "https://up.example.com/token", "scopes": ["read"],
+        }})
+        configured = next(iter(manager.config_mcp_servers.values()))
+    else:
+        row: Final = LiteLLM_MCPServerTable(
+            server_id="manual", alias="manual", url="https://up.example.com/mcp", transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2, oauth2_flow="authorization_code",
+            authorization_url="https://up.example.com/authorize", token_url="https://up.example.com/token",
+            credentials={"scopes": ["read"]}, created_at=datetime.now(), updated_at=datetime.now(),
+        )
+        built: Final = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+        manager.registry[built.server_id] = built
+        configured = built
+    async with manager.catalog.operation():
+        response: Final = await discoverable_endpoints.register_client_with_server(
+            Request({"type": "http", "scheme": "https", "server": ("gateway.example.com", 443),
+                     "path": "/register", "root_path": "", "headers": [], "query_string": b""}),
+            configured, "Gateway", None, None, None,
+        )
+        body: Final = json.loads(response.body) if hasattr(response, "body") else response
+        assert body["client_id"] == (
+            "https://gateway.example.com/oauth/client-metadata.json" if advertised else configured.server_name
+        )
+        resolved: Final = await manager.ensure_oauth_metadata_discovered(configured)
+        again: Final = await manager.ensure_oauth_metadata_discovered(resolved)
+    assert metadata.call_count == 1
+    assert resolved.client_id_metadata_document_supported is advertised
+    assert again == resolved
+    assert get_cimd_client_id(resolved) == (
+        "https://gateway.example.com/oauth/client-metadata.json" if advertised else None
+    )
+    assert resolved.effective_authorization_url == "https://up.example.com/authorize"
+    assert resolved.effective_token_url == "https://up.example.com/token"
+
+
+@pytest.mark.asyncio
+async def test_optional_client_metadata_discovery_failure_preserves_manual_endpoints(
+    respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    monkeypatch.setenv("LITELLM_MCP_OAUTH_DISCOVERY_ON_STARTUP", "0")
+    await _mock_oauth_discovery(respx_mock, monkeypatch, server_url="https://up.example.com/mcp", scopes=["read"])
+    respx_mock.get("https://up.example.com/.well-known/oauth-authorization-server").respond(503)
+    respx_mock.route().respond(404)
+    manager: Final = MCPServerManager()
+    await manager.load_servers_from_config({"manual": {
+        "url": "https://up.example.com/mcp", "transport": "http", "auth_type": "oauth2",
+        "oauth2_flow": "authorization_code", "authorization_url": "https://up.example.com/authorize",
+        "token_url": "https://up.example.com/token", "scopes": ["read"],
+    }})
+    configured: Final = next(iter(manager.config_mcp_servers.values()))
+    resolved: Final = await manager.ensure_oauth_metadata_discovered(configured)
+    attempts: Final = len(respx_mock.calls)
+    retry: Final = await manager.ensure_oauth_metadata_discovered(resolved)
+    assert attempts > 0
+    assert len(respx_mock.calls) == attempts
+    assert retry == resolved
+    assert resolved.client_id_metadata_document_supported is None
+    assert resolved.effective_authorization_url == "https://up.example.com/authorize"
+    assert resolved.effective_token_url == "https://up.example.com/token"
+    assert manager.oauth_discovery_slot(resolved.server_id) is not None

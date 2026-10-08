@@ -104,6 +104,7 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     _redact_mcp_resource_url,
     canonicalize_url_identity,
     get_byok_www_authenticate,
+    needs_cimd_discovery,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials import (
     Error,
@@ -764,14 +765,16 @@ def _flow_endpoints_missing(
     return authorization_url is None or token_url is None
 
 
-def oauth_endpoints_unresolved(server: MCPServer) -> bool:
-    """``_flow_endpoints_missing`` over a built registry entry, for the reload fast-path check.
+def oauth_endpoints_unresolved(server: MCPServer, *, include_client_metadata: bool = True) -> bool:
+    """Whether endpoint or eligible client metadata discovery is still pending.
 
     The flow comes from ``effective_oauth2_flow``, the one column-first, shape-fallback judge every
     flow decision uses, not from the raw column: a legacy row the startup backfill deliberately left
     unstamped (the ambiguous M2M shape) serves M2M at request time, and reading the bare column here
     would classify it as interactive-missing-endpoints and re-run discovery on every reload.
     """
+    if include_client_metadata and needs_cimd_discovery(server):
+        return True
     if (
         server.auth_type == MCPAuth.oauth2_token_exchange
         and server.token_exchange_profile == "entra_obo"
@@ -2256,7 +2259,9 @@ class MCPServerManager:
             case _OAuthDiscoveryFailed(timed_out=timed_out):
                 current: Final = self._registered_server(server)
                 self.catalog.assert_current(current)
-                if current.is_client_forwarded_token:
+                if current.is_client_forwarded_token or not oauth_endpoints_unresolved(
+                    current, include_client_metadata=False
+                ):
                     return current
                 server_ref: Final = current.alias or current.server_name or current.name or current.server_id
                 reason: Final = "timed out" if timed_out else "returned incomplete metadata"
@@ -2271,7 +2276,7 @@ class MCPServerManager:
         if retry_stale:
             return await self.ensure_oauth_metadata_discovered(server, _retry_stale=False)
         current: Final = self._registered_server(server)
-        if not oauth_endpoints_unresolved(current) or current.is_client_forwarded_token:
+        if not oauth_endpoints_unresolved(current, include_client_metadata=False) or current.is_client_forwarded_token:
             return current
         raise HTTPException(status_code=503, detail="OAuth metadata discovery changed repeatedly; retry shortly")
 
@@ -2603,7 +2608,7 @@ class MCPServerManager:
                 configured_scopes=tuple(configured_scopes) if configured_scopes else None,
                 issuer=effective_issuer,
                 client_id_metadata_document_supported=(
-                    gated_oauth_metadata.client_id_metadata_document_supported if gated_oauth_metadata else False
+                    gated_oauth_metadata.client_id_metadata_document_supported if gated_oauth_metadata else None
                 ),
                 authorization_response_iss_parameter_supported=(
                     gated_oauth_metadata.authorization_response_iss_parameter_supported
@@ -3184,7 +3189,7 @@ class MCPServerManager:
             configured_scopes=configured_scopes,
             issuer=effective_issuer,
             client_id_metadata_document_supported=(
-                gated_oauth_metadata.client_id_metadata_document_supported if gated_oauth_metadata else False
+                gated_oauth_metadata.client_id_metadata_document_supported if gated_oauth_metadata else None
             ),
             authorization_response_iss_parameter_supported=(
                 gated_oauth_metadata.authorization_response_iss_parameter_supported if gated_oauth_metadata else False
@@ -5321,6 +5326,7 @@ class MCPServerManager:
         return MCPOAuthMetadata(
             authorization_url=f"{base}/oauth2/v2.0/authorize",
             token_url=f"{base}/oauth2/v2.0/token",
+            client_id_metadata_document_supported=False,
         )
 
     @staticmethod

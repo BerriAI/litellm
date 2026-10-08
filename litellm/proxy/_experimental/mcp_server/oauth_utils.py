@@ -141,16 +141,27 @@ def get_cimd_document_url() -> str | None:
     return f"{configured}{CIMD_METADATA_PATH}"
 
 
+def _can_use_cimd(server: "MCPServer") -> bool:
+    return (
+        server.is_gateway_managed_oauth2
+        and server.needs_user_oauth_token
+        and not server.client_id
+        and not server.client_secret
+        and server.token_endpoint_auth_method != "client_secret_basic"
+    )
+
+
+def needs_cimd_discovery(server: "MCPServer") -> bool:
+    """Resolve unknown client metadata support even when OAuth endpoints are configured."""
+    return (
+        getattr(server, "client_id_metadata_document_supported", False) is None
+        and _can_use_cimd(server)
+        and get_cimd_document_url() is not None
+    )
+
+
 def get_cimd_client_id(server: "MCPServer") -> str | None:
-    if getattr(server, "client_id_metadata_document_supported", False) is not True:
-        return None
-    if (
-        not server.is_gateway_managed_oauth2
-        or not server.needs_user_oauth_token
-        or server.client_id
-        or server.client_secret
-        or server.token_endpoint_auth_method == "client_secret_basic"
-    ):
+    if getattr(server, "client_id_metadata_document_supported", False) is not True or not _can_use_cimd(server):
         return None
     return get_cimd_document_url()
 

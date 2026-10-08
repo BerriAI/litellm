@@ -79,6 +79,7 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_cimd_client_id,
     get_cimd_document_url,
     get_request_base_url,
+    needs_cimd_discovery,
     oauth_client_registration_matches,
     resolve_upstream_resource,
     validate_trusted_redirect_uri,
@@ -769,14 +770,12 @@ async def _server_with_oauth_endpoints(
     mcp_server: MCPServer,
     needed_endpoint: Callable[[MCPServer], str | None],
 ) -> MCPServer:
-    """Join deferred OAuth discovery only when the endpoint this caller needs is still missing.
+    """Join deferred discovery for missing endpoints or unknown public-client metadata.
 
-    Admin-entered endpoints live on ``configured_*`` after an anchored issuer empties the
-    resolved fields. A caller whose needed endpoint already resolves never awaits discovery
-    and cannot 503 over a leftover pin. A server still missing it joins the deferred task;
-    no slot is a no-op and the caller 400s.
+    Capability discovery is optional when manual endpoints already resolve; the manager
+    preserves those endpoints if discovery fails. No discovery slot remains a no-op.
     """
-    if needed_endpoint(mcp_server) is not None:
+    if needed_endpoint(mcp_server) is not None and not needs_cimd_discovery(mcp_server):
         return mcp_server
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # circular import with mcp_server_manager at module load
         global_mcp_server_manager,

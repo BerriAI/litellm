@@ -13402,22 +13402,17 @@ def _cimd_request():
 
 
 @pytest.mark.asyncio
-async def test_cimd_registration_returns_https_identity_without_dcr(monkeypatch):
+async def test_cimd_registration_returns_https_identity_without_dcr(monkeypatch, respx_mock):
     from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
 
     monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
-    reuse = AsyncMock(return_value=False)
-    post = AsyncMock()
-    monkeypatch.setattr(endpoints, "_reuse_persisted_dcr_client_if_available", reuse)
-    monkeypatch.setattr(endpoints, "_post_dcr_registration", post)
     response = await endpoints.register_client_with_server(
         _cimd_request(), _cimd_oauth_server(), "Gateway", None, None, None
     )
     body = json.loads(response.body) if hasattr(response, "body") else response
     assert body["client_id"] == "https://gateway.example.com/oauth/client-metadata.json"
     assert "client_secret" not in body
-    post.assert_not_awaited()
-    reuse.assert_awaited_once()
+    assert len(respx_mock.calls) == 0
 
 
 @pytest.mark.asyncio
@@ -13426,7 +13421,7 @@ async def test_cimd_authorization_uses_metadata_identity_and_s256(monkeypatch):
     from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
 
     monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
-    monkeypatch.setattr(endpoints, "encode_state_with_base_url", lambda **kwargs: "sealed-state")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "cimd-test-state-signing-key")
     response = await endpoints.authorize_with_server(
         _cimd_request(),
         _cimd_oauth_server(),
@@ -13447,7 +13442,7 @@ async def test_cimd_authorization_rejects_missing_pkce(monkeypatch):
     from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
 
     monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
-    monkeypatch.setattr(endpoints, "encode_state_with_base_url", lambda **kwargs: "sealed-state")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "cimd-test-state-signing-key")
     with pytest.raises(HTTPException) as exc:
         await endpoints.authorize_with_server(
             _cimd_request(), _cimd_oauth_server(), "placeholder", "https://gateway.example.com/ui/"
@@ -13471,39 +13466,34 @@ def test_cimd_refresh_request_uses_same_identity_without_caller_secret(monkeypat
     "base", [None, "http://gateway.example.com", "invalid", "https://user:secret@gateway.example.com"]
 )
 @pytest.mark.asyncio
-async def test_cimd_without_stable_https_origin_reports_actionable_error(monkeypatch, base):
+async def test_cimd_without_stable_https_origin_reports_actionable_error(monkeypatch, base, respx_mock):
     from fastapi import HTTPException
     from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
 
     monkeypatch.delenv("PROXY_BASE_URL", raising=False)
     if base is not None:
         monkeypatch.setenv("PROXY_BASE_URL", base)
-    monkeypatch.setattr(endpoints, "_reuse_persisted_dcr_client_if_available", AsyncMock(return_value=False))
-    post = AsyncMock()
-    monkeypatch.setattr(endpoints, "_post_dcr_registration", post)
     with pytest.raises(HTTPException) as exc:
         await endpoints.register_client_with_server(_cimd_request(), _cimd_oauth_server(), "Gateway", None, None, None)
     assert exc.value.status_code == 400
     assert "HTTPS PROXY_BASE_URL" in str(exc.value.detail)
-    post.assert_not_awaited()
+    assert len(respx_mock.calls) == 0
 
 
 @pytest.mark.parametrize("base", [None, "http://gateway.example.com"])
 @pytest.mark.asyncio
-async def test_cimd_without_https_origin_falls_back_to_available_dcr(monkeypatch, base):
-    import httpx
+async def test_cimd_without_https_origin_falls_back_to_available_dcr(monkeypatch, base, respx_mock):
     from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
 
     monkeypatch.delenv("PROXY_BASE_URL", raising=False)
     if base is not None:
         monkeypatch.setenv("PROXY_BASE_URL", base)
     server = _cimd_oauth_server().model_copy(update={"registration_url": "https://idp.example.com/register"})
-    monkeypatch.setattr(endpoints, "_reuse_persisted_dcr_client_if_available", AsyncMock(return_value=False))
-    post = AsyncMock(return_value=httpx.Response(201, json={"client_id": "registered-client"}))
-    monkeypatch.setattr(endpoints, "_post_dcr_registration", post)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    post = respx_mock.post("https://idp.example.com/register").respond(201, json={"client_id": "registered-client"})
     response = await endpoints.register_client_with_server(_cimd_request(), server, "Gateway", None, None, None)
     assert json.loads(response.body)["client_id"] == "registered-client"
-    post.assert_awaited_once()
+    assert post.call_count == 1
 
 
 @pytest.mark.parametrize(
@@ -13561,17 +13551,14 @@ async def test_cimd_document_is_unavailable_without_configured_https_origin(monk
 
 
 @pytest.mark.asyncio
-async def test_cimd_upstream_client_rejection_is_gateway_fault(monkeypatch):
+async def test_cimd_upstream_client_rejection_is_gateway_fault(monkeypatch, respx_mock):
     from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
 
     monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
-    client = MagicMock()
-    client.post = AsyncMock(
-        return_value=_upstream_token_response(
-            401, json_body={"error": "invalid_client", "error_description": "provider-private-detail"}
-        )
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    upstream = respx_mock.post("https://idp.example.com/token").respond(
+        401, json={"error": "invalid_client", "error_description": "provider-private-detail"}
     )
-    monkeypatch.setattr(endpoints, "get_async_httpx_client", lambda **kwargs: client)
     response = await endpoints.exchange_token_with_server(
         request=_cimd_request(),
         mcp_server=_cimd_oauth_server(),
@@ -13582,6 +13569,7 @@ async def test_cimd_upstream_client_rejection_is_gateway_fault(monkeypatch):
         client_secret="dummy",
         code_verifier="verifier",
     )
+    assert upstream.call_count == 1
     assert response.status_code == 502
     body = json.loads(response.body)
     assert body["error"] == "server_error"
