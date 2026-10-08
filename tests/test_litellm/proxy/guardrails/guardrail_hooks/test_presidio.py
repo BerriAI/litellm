@@ -3223,6 +3223,51 @@ def test_finalize_presidio_anonymize_numbered_tokens_nested_higher_score_span():
     assert set(re.findall(r"<[A-Z_]+_\d+>", result)) == set(pii_tokens.keys())
 
 
+def test_finalize_presidio_anonymize_numbered_tokens_email_domain_nested():
+    """Regression test for #42130 (comment 5935626289):
+
+    Analyzer reporting a nested URL domain inside an EMAIL_ADDRESS must not cause
+    subsequent span offset miscalculations that delete surrounding text like " or ".
+    Asserts both that the surrounding text survives masking intact, and that unmasking
+    faithfully recovers the original prompt.
+    """
+    import re
+
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import (
+        _OPTIONAL_PresidioPIIMasking,
+    )
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    text = "Email dana.whitfield@example.com or call 555-234-9981."
+    analyze_results = [
+        {"entity_type": "EMAIL_ADDRESS", "start": 6, "end": 32, "score": 1.0},
+        {"entity_type": "URL", "start": 21, "end": 32, "score": 0.85},
+        {"entity_type": "PHONE_NUMBER", "start": 41, "end": 53, "score": 0.85},
+    ]
+    request_data = {"metadata": {}}
+    masked_entity_count = {}
+    result = guardrail._finalize_presidio_anonymize_numbered_tokens(
+        text=text,
+        analyze_results=analyze_results,
+        request_data=request_data,
+        masked_entity_count=masked_entity_count,
+    )
+
+    # Assert surrounding text " or " survives masking unchanged
+    assert " or " in result
+    assert result == "Email <EMAIL_ADDRESS_1> or call <PHONE_NUMBER_2>."
+    pii_tokens = request_data["metadata"]["pii_tokens"]
+    assert pii_tokens["<EMAIL_ADDRESS_1>"] == "dana.whitfield@example.com"
+    assert pii_tokens["<PHONE_NUMBER_2>"] == "555-234-9981"
+    assert "<URL_" not in pii_tokens
+    assert set(re.findall(r"<[A-Z_]+_\d+>", result)) == set(pii_tokens.keys())
+
+    # Assert unmasking recovers original text with " or " surviving unchanged
+    unmasked = guardrail._unmask_pii_text(result, pii_tokens)
+    assert unmasked == text
+    assert " or " in unmasked
+
+
 def test_resolve_overlapping_spans_empty_and_disjoint():
     from litellm.proxy.guardrails.guardrail_hooks.presidio import _OPTIONAL_PresidioPIIMasking
 
