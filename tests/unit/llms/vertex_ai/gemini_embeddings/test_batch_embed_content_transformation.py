@@ -33,7 +33,7 @@ VIDEO_DATA_URI = "data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1w
 FILES_URI = "https://generativelanguage.googleapis.com/v1beta/files/clip123"
 
 
-def _file_block(**file):
+def _file_block(**file: object) -> dict[str, object]:
     return {"type": "file", "file": file}
 
 
