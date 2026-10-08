@@ -10,7 +10,7 @@ Especially with the rust core, there are a great many decisions that need to be 
 
 ## Decision
 
-We write a short ADR for any decision that is hard to reverse or that a new contributor would reasonably question. Each ADR lives in this folder as `adr_NNN_short_title.md`, numbered in order, and has three sections: Context, Decision, and Consequences. If writing one takes more than a few minutes, it is too long.
+We write a short ADR for any decision that is hard to reverse or that a new contributor would reasonably question. Each ADR lives in this folder as `adr_NNN_short_title.md`, numbered in order, and has four sections: Context, Decision, Alternatives Considered, and Consequences. If writing one takes more than a few minutes, it is too long.
 
 ADRs are never edited after they are accepted, apart from the status line. To change course, write a new ADR and mark the old one `Superseded by ADR NNN`.
 
