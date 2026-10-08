@@ -31,10 +31,10 @@ pytestmark: Final = pytest.mark.timeout(900)
 _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 _DROPPED: Final = re.compile(r"original model: (\S+), ignoring and continuing")
 _FIXED: Final[Mapping[str, str]] = MappingProxyType(
-    {"chatgpt-fixed": "chatgpt/gpt-5.6-terra", "copilot-fixed": "github_copilot/gpt-5.2"}
+    {"chatgpt-fixed": "chatgpt/gpt-5.6-terra", "copilot-fixed": "github_copilot/gpt-5.4"}
 )
 _WILDCARDS: Final[Mapping[str, str]] = MappingProxyType(
-    {"chatgpt/*": "chatgpt/gpt-5.6-terra", "github_copilot/*": "github_copilot/gpt-5.2"}
+    {"chatgpt/*": "chatgpt/gpt-5.6-terra", "github_copilot/*": "github_copilot/gpt-5.4"}
 )
 _LOGIN_PREFIXES: Final = ("chatgpt/", "github_copilot/")
 _LOGIN_NAMES: Final = (*_FIXED, *_FIXED.values())
@@ -424,7 +424,7 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_refusing_logins_and_s
             for item in served:
                 assert item.status == 200, item.text
             refusals: Final = await _burst(
-                _base_url(owned), key, ("chatgpt/gpt-5.6-terra", "github_copilot/gpt-5.2") * 10
+                _base_url(owned), key, ("chatgpt/gpt-5.6-terra", "github_copilot/gpt-5.4") * 10
             )
             for index, answer in enumerate(refusals):
                 assert answer is not None and answer.status == 400, answer

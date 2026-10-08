@@ -45,6 +45,58 @@ def prices() -> dict:
     return json.loads(PRICES_PATH.read_text())
 
 
+GITHUB_COPILOT_CATALOG: Final[tuple[tuple[str, str, int], ...]] = (
+    ("github_copilot/gpt-5.4", "chat", 272_000),
+    ("github_copilot/gpt-5.4-mini", "responses", 272_000),
+    ("github_copilot/gpt-5.5", "responses", 272_000),
+    ("github_copilot/gpt-5.6-luna", "responses", 200_000),
+    ("github_copilot/gpt-5.6-sol", "responses", 272_000),
+    ("github_copilot/gpt-5.6-terra", "responses", 272_000),
+    ("github_copilot/gpt-6-astra", "responses", 272_000),
+    ("github_copilot/gpt-6-luna", "responses", 272_000),
+    ("github_copilot/gpt-6-sol", "responses", 272_000),
+    ("github_copilot/gpt-6.1-sol", "responses", 272_000),
+    ("github_copilot/claude-fable-5", "chat", 200_000),
+    ("github_copilot/claude-fable-5.1", "chat", 200_000),
+    ("github_copilot/claude-haiku-5.5", "chat", 100_000),
+    ("github_copilot/claude-opus-4.8", "chat", 200_000),
+    ("github_copilot/claude-opus-4.8-fast", "chat", 200_000),
+    ("github_copilot/claude-opus-5", "chat", 200_000),
+    ("github_copilot/claude-opus-5.5", "chat", 200_000),
+    ("github_copilot/claude-sonnet-5", "chat", 200_000),
+    ("github_copilot/claude-sonnet-5.5", "chat", 200_000),
+    ("github_copilot/gemini-3.7-flash", "chat", 200_000),
+    ("github_copilot/gemini-3.8-flash", "chat", 200_000),
+    ("github_copilot/mai-code-1.1-flash", "responses", 128_000),
+    ("github_copilot/kimi-k3", "chat", 917_504),
+)
+GITHUB_COPILOT_RETIRED_KEYS: Final[tuple[str, ...]] = (
+    "github_copilot/claude-opus-4.5",
+    "github_copilot/claude-opus-4.6-fast",
+    "github_copilot/claude-opus-41",
+    "github_copilot/claude-sonnet-4",
+    "github_copilot/claude-sonnet-4.5",
+    "github_copilot/gpt-5",
+    "github_copilot/gpt-5.1",
+    "github_copilot/gpt-5.1-codex-max",
+    "github_copilot/gpt-5.2",
+    "github_copilot/mai-code-1-flash",
+    "github_copilot/mai-code-1-flash-internal",
+)
+
+
+@pytest.mark.parametrize(("model", "mode", "max_input_tokens"), GITHUB_COPILOT_CATALOG)
+def test_github_copilot_catalog_entries_resolve_to_spec(model: str, mode: str, max_input_tokens: int) -> None:
+    info: Final = litellm.get_model_info(model)
+    assert info["mode"] == mode
+    assert info["max_input_tokens"] == max_input_tokens
+
+
+@pytest.mark.parametrize("model", GITHUB_COPILOT_RETIRED_KEYS)
+def test_retired_github_copilot_models_are_absent(prices: dict, model: str) -> None:
+    assert model not in prices
+
+
 def test_committed_schema_matches_generator_output(prices: dict, committed_schema: dict):
     generator = load_generator()
     regenerated = json.loads(generator.render(generator.build_schema(prices)))
