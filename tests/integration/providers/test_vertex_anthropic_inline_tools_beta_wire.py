@@ -276,15 +276,15 @@ def test_vertex_messages_through_the_anthropic_sdk_forwards_the_inline_tools_bet
     marker: Final = _marker("anthropic sdk sync")
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
         model: Final = _vertex_deployment(gateway, scenario, wire.url)
-        client: Final = anthropic.Anthropic(
+        with anthropic.Anthropic(
             base_url=str(gateway.client.base_url),
             api_key=gateway.key,
             max_retries=0,
             http_client=httpx.Client(trust_env=False, timeout=60),
-        )
-        reply: Final = client.beta.messages.create(
-            model=model, max_tokens=16, messages=[{"role": "user", "content": marker}], betas=[_INLINE_TOOLS]
-        )
+        ) as client:
+            reply: Final = client.beta.messages.create(
+                model=model, max_tokens=16, messages=[{"role": "user", "content": marker}], betas=[_INLINE_TOOLS]
+            )
         assert _REPLY_TEXT in reply.model_dump_json(), reply
         assert _one_delivery(wire, _VERTEX_TARGET, marker) == _INLINE_TOOLS
 
@@ -293,15 +293,15 @@ def test_vertex_messages_through_the_async_anthropic_sdk_forwards_the_inline_too
     marker: Final = _marker("anthropic sdk async")
 
     async def generate(model: str) -> str:
-        client: Final = anthropic.AsyncAnthropic(
+        async with anthropic.AsyncAnthropic(
             base_url=str(gateway.client.base_url),
             api_key=gateway.key,
             max_retries=0,
             http_client=httpx.AsyncClient(trust_env=False, timeout=60),
-        )
-        reply: Final = await client.beta.messages.create(
-            model=model, max_tokens=16, messages=[{"role": "user", "content": marker}], betas=[_INLINE_TOOLS]
-        )
+        ) as client:
+            reply: Final = await client.beta.messages.create(
+                model=model, max_tokens=16, messages=[{"role": "user", "content": marker}], betas=[_INLINE_TOOLS]
+            )
         return reply.model_dump_json()
 
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
@@ -314,15 +314,15 @@ def test_vertex_chat_through_the_openai_sdk_forwards_the_inline_tools_beta(gatew
     marker: Final = _marker("openai sdk sync")
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
         model: Final = _vertex_deployment(gateway, scenario, wire.url)
-        client: Final = openai.OpenAI(
+        with openai.OpenAI(
             base_url=f"{gateway.client.base_url}/v1",
             api_key=gateway.key,
             max_retries=0,
             http_client=httpx.Client(trust_env=False, timeout=60),
-        )
-        reply: Final = client.chat.completions.create(
-            model=model, messages=[{"role": "user", "content": marker}], extra_headers=_beta_headers(_INLINE_TOOLS)
-        )
+        ) as client:
+            reply: Final = client.chat.completions.create(
+                model=model, messages=[{"role": "user", "content": marker}], extra_headers=_beta_headers(_INLINE_TOOLS)
+            )
         assert reply.choices[0].message.content == _REPLY_TEXT, reply
         assert _one_delivery(wire, _VERTEX_TARGET, marker) == _INLINE_TOOLS
 
@@ -331,15 +331,15 @@ def test_vertex_chat_through_the_async_openai_sdk_forwards_the_inline_tools_beta
     marker: Final = _marker("openai sdk async")
 
     async def generate(model: str) -> str | None:
-        client: Final = openai.AsyncOpenAI(
+        async with openai.AsyncOpenAI(
             base_url=f"{gateway.client.base_url}/v1",
             api_key=gateway.key,
             max_retries=0,
             http_client=httpx.AsyncClient(trust_env=False, timeout=60),
-        )
-        reply: Final = await client.chat.completions.create(
-            model=model, messages=[{"role": "user", "content": marker}], extra_headers=_beta_headers(_INLINE_TOOLS)
-        )
+        ) as client:
+            reply: Final = await client.chat.completions.create(
+                model=model, messages=[{"role": "user", "content": marker}], extra_headers=_beta_headers(_INLINE_TOOLS)
+            )
         return reply.choices[0].message.content
 
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
