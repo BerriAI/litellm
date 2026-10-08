@@ -4256,6 +4256,58 @@ class TestConfigBaseForHealthCheck:
         )
         assert "api_key" not in base
 
+    def test_request_with_its_own_api_key_does_not_inherit_config_auth(self):
+        config: Final = {
+            **self.CONFIG,
+            "token_exchange_endpoint": "https://login.example/token",
+            "client_id": "configured-client-id",
+            "client_secret": "configured-client-secret",
+            "litellm_credential_name": "configured-credential",
+        }
+        request: Final = {"model": "openai/gpt-4o", "api_key": "sk-request"}
+        merged: Final = {**self._base(config, request), **request}
+
+        assert merged["api_key"] == "sk-request"
+        assert {
+            "token_exchange_endpoint",
+            "client_id",
+            "client_secret",
+            "litellm_credential_name",
+            "api_base",
+            "vertex_credentials",
+        }.isdisjoint(merged)
+        assert merged["rpm"] == 100
+        assert "sk-configured" not in str(merged)
+
+    def test_request_api_key_does_not_inherit_config_auth_with_client_credentials_opt_in(self):
+        config: Final = {
+            **self.CONFIG,
+            "token_exchange_endpoint": "https://login.example/token",
+            "client_id": "configured-client-id",
+            "client_secret": "configured-client-secret",
+            "litellm_credential_name": "configured-credential",
+        }
+        request: Final = {"model": "openai/gpt-4o", "api_key": "sk-request"}
+        base: Final = self._base(config, request, allow_client_side_credentials=True)
+        merged: Final = {**base, **request}
+
+        assert merged["api_key"] == "sk-request"
+        assert {
+            "token_exchange_endpoint",
+            "client_id",
+            "client_secret",
+            "litellm_credential_name",
+            "api_base",
+            "vertex_credentials",
+        }.isdisjoint(merged)
+        assert merged["rpm"] == 100
+        assert "sk-configured" not in str(merged)
+
+    def test_blank_request_api_key_inherits_config_auth(self):
+        base: Final = self._base(self.CONFIG, {"model": "openai/gpt-4o", "api_key": ""})
+
+        assert base["api_key"] == "sk-configured"
+
 
 class TestTestConnectionUsesTheNamedCredential:
     CREDENTIAL_KEY = "sk-credential-key"
@@ -4330,6 +4382,60 @@ class TestTestConnectionUsesTheNamedCredential:
         assert response.status_code == 200, response.text
         assert response.json()["status"] == "success", response.text
         return probe
+
+    def test_request_api_key_does_not_inherit_microsoft_365_oauth_config(self):
+        deployment: Final = {
+            "model_name": "microsoft_365_copilot/chat",
+            "litellm_params": {
+                "model": "microsoft_365_copilot/chat",
+                "custom_llm_provider": "microsoft_365_copilot",
+                "token_exchange_endpoint": "https://login.example/token",
+                "client_id": "configured-client-id",
+                "client_secret": "configured-client-secret",
+            },
+            "model_info": {},
+        }
+        app: Final = FastAPI()
+        app.include_router(_health_endpoints_module.router)
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        router: Final = MagicMock()
+        router.get_model_list.return_value = [deployment]
+        ahealth_check: Final = MagicMock(return_value={"status": "healthy"})
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.llm_router", router),
+            patch("litellm.proxy.proxy_server.premium_user", False),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                AsyncMock(),
+            ),
+            patch("litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check", ahealth_check),
+            patch(
+                "litellm.proxy.health_endpoints._health_endpoints.run_with_timeout",
+                AsyncMock(return_value={"status": "healthy"}),
+            ),
+        ):
+            response: Final = TestClient(app).post(
+                "/health/test_connection",
+                json={
+                    "litellm_params": {
+                        "model": "microsoft_365_copilot/chat",
+                        "custom_llm_provider": "microsoft_365_copilot",
+                        "api_key": "dummy-static-token",
+                    },
+                    "model_info": {},
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "success", response.text
+        model_params: Final = ahealth_check.call_args.kwargs["model_params"]
+        assert model_params["api_key"] == "dummy-static-token"
+        assert "token_exchange_endpoint" not in model_params
+        assert "client_id" not in model_params
+        assert "client_secret" not in model_params
 
     def test_named_credentials_key_is_sent_not_the_matched_deployments_key(self, monkeypatch):
         monkeypatch.setattr(litellm, "credential_list", [self._credential(api_key=self.CREDENTIAL_KEY)])
