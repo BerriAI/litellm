@@ -11,7 +11,8 @@ import os
 import re
 import sys
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import cache
@@ -24,6 +25,7 @@ from uuid import uuid4
 import httpx
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
+from litellm.proxy.lens.ingestion import IngestionKeyCreated
 from litellm.rust_bridge.trace.generated.types import AllQueryScope, Trace
 from litellm.rust_bridge.trace.storage import ClickHouseStorage, Tenant, span_rows
 from litellm.tracing.config import trace_storage_config
@@ -528,6 +530,24 @@ def long_sessions(
     )
 
 
+@asynccontextmanager
+async def ingestion_client(client: httpx.AsyncClient, timeout_seconds: float) -> AsyncIterator[httpx.AsyncClient]:
+    response: Final = await client.post("/lens/tracing/keys", json={"name": "Local fixture seed"})
+    response.raise_for_status()
+    created: Final = IngestionKeyCreated.model_validate_json(response.content)
+    try:
+        if not created.active:
+            raise RuntimeError("Lens ingestion is not ready; start the Lens service before seeding")
+        async with httpx.AsyncClient(
+            base_url=os.environ["LITELLM_LENS_URL"],
+            headers={"Authorization": f"Bearer {created.key}"},
+            timeout=timeout_seconds,
+        ) as uploader:
+            yield uploader
+    finally:
+        (await client.delete(f"/lens/tracing/keys/{created.record.id}")).raise_for_status()
+
+
 async def seed(profile: str = "default", copies: int | None = None, timeout_seconds: float = 120) -> int:
     from prisma import Prisma
 
@@ -550,7 +570,8 @@ async def seed(profile: str = "default", copies: int | None = None, timeout_seco
         httpx.AsyncClient(base_url=config.url, params={"database": config.database}, timeout=600) as clickhouse,
         Prisma(http={"timeout": httpx.Timeout(600)}) as database,
     ):
-        captures: Final = await seed_copy(client, storage, database, replays, fixtures, pattern)
+        async with ingestion_client(client, timeout_seconds) as uploader:
+            captures: Final = await seed_copy(uploader, storage, database, replays, fixtures, pattern)
         await verify(client, captures, "")
         repeated: Final = Copies(
             trace_ids=tuple(

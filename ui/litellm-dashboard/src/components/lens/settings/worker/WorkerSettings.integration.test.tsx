@@ -30,7 +30,8 @@ const calls = (method: string, path: string) =>
 const writes = () => sent.filter((request) => request.method !== "GET");
 
 const created = {
-  token: "lens-test-token",
+  token: "",
+  managed: true,
   image: "ghcr.io/berriai/litellm-lens-worker:v1.2.3",
   worker: {
     id: "worker",
@@ -63,32 +64,21 @@ describe("Worker setup", () => {
     vi.stubGlobal("fetch", network);
     serve(keyRoute);
   });
-  it("generates a complete command using one worker credential and the configured proxy address", async () => {
+  it("enables the installed Lens service without exposing a worker credential", async () => {
     serve((request) => (request.path === "/lens/workers/register" ? created : keyRoute(request)));
     const user = userEvent.setup();
     const { rerender } = renderWithLens(<WorkerSettings workers={[]} />, { accessToken: "admin" });
     await user.click(screen.getByText("Advanced options"));
     await user.click(screen.getByRole("switch", { name: "Use an existing virtual key" }));
-    expect(screen.getByRole("textbox", { name: "LiteLLM proxy URL" })).toHaveValue("https://gateway.example/proxy");
-    expect(screen.getByRole("button", { name: "Get install command" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Enable investigations" })).toBeDisabled();
     await user.click(screen.getByRole("combobox", { name: "Charge analysis to" }));
     await user.click(await screen.findByRole("option", { name: "Analysis" }));
-    await user.click(screen.getByRole("button", { name: "Get install command" }));
+    await user.click(screen.getByRole("button", { name: "Enable investigations" }));
     expect(calls("POST", "/lens/workers/register").map(({ body }) => body)).toEqual([
-      { name: "Lens worker", analysis_key_id: "b".repeat(64) },
+      { name: "Lens worker", analysis_key_id: "b".repeat(64), managed: true },
     ]);
-    expect(screen.getByRole("status")).toHaveTextContent("Waiting for your worker to connect");
-    expect(screen.getByLabelText("Docker command preview")).not.toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Copy Docker command" }));
-    const command = await navigator.clipboard.readText();
-    expect(command).toContain("LITELLM_URL=https://gateway.example/proxy");
-    expect(command).toContain("LENS_WORKER_TOKEN=lens-test-token");
-    expect(command).toContain("--add-host host.docker.internal:host-gateway");
-    expect(command).toContain(created.image);
-    await user.click(screen.getByText("Using Docker Compose or Helm?"));
-    await user.click(screen.getByRole("button", { name: "Copy worker token" }));
-    expect(await navigator.clipboard.readText()).toBe(created.token);
-    expect(await screen.findByRole("button", { name: "Token copied" })).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("Connecting your Lens service");
+    expect(screen.queryByRole("button", { name: "Copy Docker command" })).not.toBeInTheDocument();
     rerender(<WorkerSettings workers={[{ ...created.worker, last_seen: new Date().toISOString() }]} />);
     expect(screen.getByRole("heading", { name: "Worker connected" })).toBeVisible();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
@@ -135,10 +125,10 @@ describe("Worker setup", () => {
     renderWithLens(<WorkerSettingsHost />, { accessToken: "admin" });
     const revoke = await screen.findByRole("button", { name: "Revoke access" });
     expect(screen.queryByRole("button", { name: "Add worker" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Get install command" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Enable investigations" })).not.toBeInTheDocument();
     await user.click(revoke);
     expect(calls("DELETE", "/lens/workers/worker")).toHaveLength(1);
-    expect(await screen.findByRole("button", { name: "Get install command" })).toBeDisabled();
+    expect(await screen.findByRole("button", { name: "Enable investigations" })).toBeDisabled();
     expect(screen.getByRole("combobox", { name: "Analysis model" })).toBeVisible();
     expect(listCalls()).toBe(2);
   });
@@ -158,13 +148,12 @@ describe("Worker setup", () => {
       return { keys: [], total_pages: 0 };
     });
     renderWithLens(<WorkerSettings workers={[]} />, { accessToken: "admin" });
-    expect(screen.getByRole("button", { name: "Get install command" })).toBeDisabled();
-    expect(screen.getByRole("textbox", { name: "LiteLLM proxy URL", hidden: true })).not.toBeVisible();
+    expect(screen.getByRole("button", { name: "Enable investigations" })).toBeDisabled();
     await user.click(screen.getByRole("combobox", { name: "Analysis model" }));
     await user.click(await screen.findByRole("option", { name: "analysis-model" }));
     await user.clear(screen.getByLabelText("Monthly limit (USD)"));
     await user.type(screen.getByLabelText("Monthly limit (USD)"), "12");
-    await user.click(screen.getByRole("button", { name: "Get install command" }));
+    await user.click(screen.getByRole("button", { name: "Enable investigations" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Registration unavailable");
     expect(writes()[0]).toMatchObject({
       path: "/key/generate",
@@ -176,8 +165,8 @@ describe("Worker setup", () => {
         metadata: { purpose: "lens" },
       },
     });
-    await user.click(screen.getByRole("button", { name: "Get install command" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Waiting for your worker");
+    await user.click(screen.getByRole("button", { name: "Enable investigations" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Connecting your Lens service");
     expect(calls("POST", "/key/delete").map(({ body }) => body)).toEqual([{ keys: ["limited-key-id"] }]);
     expect(writes().map(({ path }) => path)).toEqual([
       "/key/generate",
@@ -186,7 +175,7 @@ describe("Worker setup", () => {
       "/key/generate",
       "/lens/workers/register",
     ]);
-    expect(writes().at(-1)?.body).toEqual({ name: "Lens worker", analysis_key_id: "retry-key-id" });
+    expect(writes().at(-1)?.body).toEqual({ name: "Lens worker", analysis_key_id: "retry-key-id", managed: true });
     expect(screen.queryByText("sk-secret-not-displayed")).not.toBeInTheDocument();
   });
 });

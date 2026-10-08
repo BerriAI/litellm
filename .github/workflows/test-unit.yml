@@ -483,6 +483,7 @@ jobs:
               tests/unit/sandbox
               tests/unit/skills/test_skills_main.py
               tests/unit/tracing
+              tests/proxy_behavior/lens/test_connection.py
             workers: 2
             reruns: 0
             timeout-minutes: 20

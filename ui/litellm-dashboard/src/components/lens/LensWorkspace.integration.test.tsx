@@ -328,7 +328,7 @@ describe("Lens interactive demo", () => {
     await expectUrl(onUrlUpdate, (url) => expect(url.get("tab")).toBe("settings"));
     const panel = within(await screen.findByRole("region", { name: "Settings" }));
     expect(panel.getByRole("heading", { name: "Connect a worker" })).toBeVisible();
-    expect(panel.getByRole("button", { name: "Get install command" })).toBeVisible();
+    expect(panel.getByRole("button", { name: "Enable investigations" })).toBeVisible();
   });
 
   it("keeps a pending worker install across tab switches and offers the first investigation once it connects", async () => {
@@ -349,7 +349,8 @@ describe("Lens interactive demo", () => {
       if (path === "/lens") return Response.json({ lenses: [], workers: workers(), tracing_enabled: true });
       if (path === "/lens/workers/register" && method === "POST") {
         workers.mockReturnValue([worker]);
-        return Response.json({ token: "lens-test-token", image: "lens-worker:v1", worker });
+        const created = { token: "", managed: true, image: "lens-worker:v1", worker };
+        return Response.json(created);
       }
       if (path === "/key/list") return Response.json({ keys: [{ token, key_alias: "Analysis" }], total_pages: 1 });
       if (path === "/key/info") return Response.json({ info: { models: [], max_budget: null } });
@@ -368,14 +369,28 @@ describe("Lens interactive demo", () => {
     await user.click(panel.getByRole("switch", { name: "Use an existing virtual key" }));
     await user.click(panel.getByRole("combobox", { name: "Charge analysis to" }));
     await user.click(await screen.findByRole("option", { name: "Analysis" }));
-    await user.click(panel.getByRole("button", { name: "Get install command" }));
-    expect(await panel.findByText("Waiting for your worker to connect…")).toBeInTheDocument();
+    await user.click(panel.getByRole("button", { name: "Enable investigations" }));
+    expect(
+      await panel.findByText(
+        "Connecting your Lens service… This page updates automatically. Check the service logs if it does not connect.",
+      ),
+    ).toBeInTheDocument();
     const tabs = within(screen.getByRole("tablist", { name: "Lens" }));
     await user.click(tabs.getByRole("tab", { name: "Traces" }));
-    await waitFor(() => expect(panel.getByText("Waiting for your worker to connect…")).not.toBeVisible());
+    await waitFor(() =>
+      expect(
+        panel.getByText(
+          "Connecting your Lens service… This page updates automatically. Check the service logs if it does not connect.",
+        ),
+      ).not.toBeVisible(),
+    );
     await user.click(tabs.getByRole("tab", { name: "Settings" }));
-    expect(panel.getByText("Waiting for your worker to connect…")).toBeVisible();
-    expect(panel.getByLabelText("Docker command preview")).toHaveTextContent("LENS_WORKER_TOKEN=lens-test-token");
+    expect(
+      panel.getByText(
+        "Connecting your Lens service… This page updates automatically. Check the service logs if it does not connect.",
+      ),
+    ).toBeVisible();
+    expect(panel.queryByLabelText("Docker command preview")).not.toBeInTheDocument();
     workers.mockReturnValue([{ ...worker, last_seen: new Date().toISOString() }]);
     await testQueryClient.refetchQueries({ queryKey: lensKeys.lists() });
     expect(await panel.findByRole("heading", { name: "Worker connected" })).toBeVisible();

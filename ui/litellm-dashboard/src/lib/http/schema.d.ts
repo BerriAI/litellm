@@ -9088,6 +9088,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/lens/internal/ingestion-credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ingestion Credentials */
+        get: operations["ingestion_credentials_lens_internal_ingestion_credentials_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/lens/preview/sample": {
         parameters: {
             query?: never;
@@ -9099,6 +9116,23 @@ export interface paths {
         put?: never;
         /** Preview Sample */
         post: operations["preview_sample_lens_preview_sample_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/service": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Service Connection */
+        get: operations["service_connection_lens_service_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -9152,6 +9186,41 @@ export interface paths {
         /** Trace Signal Statuses */
         post: operations["trace_signal_statuses_lens_traces_signals_post"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/tracing/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Ingestion Keys */
+        get: operations["list_ingestion_keys_lens_tracing_keys_get"];
+        put?: never;
+        /** Create Ingestion Key */
+        post: operations["create_ingestion_key_lens_tracing_keys_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/tracing/keys/{key_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke Ingestion Key */
+        delete: operations["revoke_ingestion_key_lens_tracing_keys__key_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -33650,6 +33719,79 @@ export interface components {
              */
             object: "list";
         };
+        /** IngestionCredential */
+        IngestionCredential: {
+            /** Expires At */
+            expires_at: number | null;
+            tenant: components["schemas"]["IngestionTenant"];
+            /** Token Hash */
+            token_hash: string;
+        };
+        /** IngestionKey */
+        IngestionKey: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Expires At */
+            expires_at: number | null;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            tenant: components["schemas"]["IngestionTenant"];
+        };
+        /** IngestionKeyCreated */
+        IngestionKeyCreated: {
+            /**
+             * Active
+             * @default false
+             */
+            active: boolean;
+            /** Key */
+            key: string;
+            record: components["schemas"]["IngestionKey"];
+        };
+        /** IngestionKeyRequest */
+        IngestionKeyRequest: {
+            /** Expires At */
+            expires_at?: string | null;
+            /**
+             * Name
+             * @default Agent tracing
+             */
+            name: string;
+            /**
+             * Team Id
+             * @default
+             */
+            team_id: string;
+        };
+        /** IngestionSnapshot */
+        IngestionSnapshot: {
+            /** Issued At */
+            issued_at: number;
+            /** Keys */
+            keys: components["schemas"]["IngestionCredential"][];
+        };
+        /** IngestionTenant */
+        IngestionTenant: {
+            /** Api Key Hash */
+            api_key_hash: string;
+            /**
+             * Org Id
+             * @default
+             */
+            org_id: string;
+            /**
+             * Team Id
+             * @default
+             */
+            team_id: string;
+            /** User Id */
+            user_id: string;
+        };
         /** InlineSkill */
         InlineSkill: {
             /** Description */
@@ -45328,6 +45470,37 @@ export interface components {
             /** Timeout */
             timeout?: number | null;
         };
+        /** ServiceConnection */
+        ServiceConnection: {
+            /** Connected */
+            connected: boolean;
+            status: components["schemas"]["ServiceStatus"];
+            /** Url */
+            url: string;
+        };
+        /** ServiceStatus */
+        ServiceStatus: {
+            /**
+             * Credentials Ready
+             * @default false
+             */
+            credentials_ready: boolean;
+            /**
+             * Protocol Version
+             * @default 0
+             */
+            protocol_version: number;
+            /**
+             * Release
+             * @default
+             */
+            release: string;
+            /**
+             * Storage Ready
+             * @default false
+             */
+            storage_ready: boolean;
+        };
         /** SessionLogoutResponse */
         SessionLogoutResponse: {
             /** Message */
@@ -50285,6 +50458,11 @@ export interface components {
         WorkerCreated: {
             /** Image */
             image: string;
+            /**
+             * Managed
+             * @default false
+             */
+            managed: boolean;
             /** Token */
             token: string;
             worker: components["schemas"]["Worker"];
@@ -50293,6 +50471,11 @@ export interface components {
         WorkerName: {
             /** Analysis Key Id */
             analysis_key_id: string;
+            /**
+             * Managed
+             * @default false
+             */
+            managed: boolean;
             /**
              * Name
              * @default Lens worker
@@ -63350,6 +63533,26 @@ export interface operations {
             };
         };
     };
+    ingestion_credentials_lens_internal_ingestion_credentials_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestionSnapshot"];
+                };
+            };
+        };
+    };
     preview_sample_lens_preview_sample_post: {
         parameters: {
             query?: never;
@@ -63379,6 +63582,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    service_connection_lens_service_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceConnection"];
                 };
             };
         };
@@ -63502,6 +63725,90 @@ export interface operations {
             };
         };
     };
+    list_ingestion_keys_lens_tracing_keys_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestionKey"][];
+                };
+            };
+        };
+    };
+    create_ingestion_key_lens_tracing_keys_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IngestionKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestionKeyCreated"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_ingestion_key_lens_tracing_keys__key_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": boolean;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     watch_all_lens_watch_all_post: {
         parameters: {
             query?: never;
@@ -63561,7 +63868,9 @@ export interface operations {
                 cursor?: string;
                 offset?: number;
             };
-            header?: never;
+            header?: {
+                "X-LiteLLM-Lens-Attempt"?: number;
+            };
             path: {
                 lens_id: string;
                 job_id: string;
@@ -63593,7 +63902,9 @@ export interface operations {
     heartbeat_lens_worker__lens_id___job_id__heartbeat_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-LiteLLM-Lens-Attempt"?: number;
+            };
             path: {
                 lens_id: string;
                 job_id: string;
@@ -63625,7 +63936,9 @@ export interface operations {
     model_lens_worker__lens_id___job_id__model_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-LiteLLM-Lens-Attempt"?: number;
+            };
             path: {
                 lens_id: string;
                 job_id: string;
@@ -63661,7 +63974,9 @@ export interface operations {
     progress_lens_worker__lens_id___job_id__progress_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-LiteLLM-Lens-Attempt"?: number;
+            };
             path: {
                 lens_id: string;
                 job_id: string;
@@ -63697,7 +64012,9 @@ export interface operations {
     result_lens_worker__lens_id___job_id__result_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-LiteLLM-Lens-Attempt"?: number;
+            };
             path: {
                 lens_id: string;
                 job_id: string;
@@ -63733,7 +64050,9 @@ export interface operations {
     cached_reviews_lens_worker__lens_id___job_id__reviews_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-LiteLLM-Lens-Attempt"?: number;
+            };
             path: {
                 lens_id: string;
                 job_id: string;
@@ -63765,7 +64084,9 @@ export interface operations {
     sample_lens_worker__lens_id___job_id__sample_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-LiteLLM-Lens-Attempt"?: number;
+            };
             path: {
                 lens_id: string;
                 job_id: string;

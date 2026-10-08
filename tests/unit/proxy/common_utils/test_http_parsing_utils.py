@@ -1394,12 +1394,10 @@ async def test_otlp_auth_does_not_consume_chunked_bodies_before_the_receiver_lim
 
 
 @pytest.mark.asyncio
-async def test_auth_body_read_and_trace_handler_leave_stream_for_receiver_limit() -> None:
+async def test_auth_and_retired_trace_handler_never_consume_upload_body() -> None:
     from litellm.constants import OTLP_MAX_BODY_BYTES
     from litellm.proxy import tracing_endpoints
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import _read_request_body_deferring_parse_failure
-    from litellm.tracing import TraceReceiver
 
     chunk: Final = b"x" * (OTLP_MAX_BODY_BYTES // 2 + 1)
     receive: Final = AsyncMock(side_effect=[{"type": "http.request", "body": chunk, "more_body": True}] * 2)
@@ -1407,21 +1405,14 @@ async def test_auth_body_read_and_trace_handler_leave_stream_for_receiver_limit(
         {"type": "http", "method": "POST", "path": "/v1/traces", "headers": [(b"content-type", b"application/json")]},
         receive,
     )
-    storage: Final = MagicMock()
-    storage.ingest = AsyncMock()
-    context: Final = await tracing_endpoints.provide_trace_access(
-        auth=UserAPIKeyAuth(token="key", team_id="team"), tracing=TraceReceiver(storage), log_team_lookup=AsyncMock()
-    )
-
     parsed, parse_error = await _read_request_body_deferring_parse_failure(request)
     assert parsed == {}
     assert parse_error is None
     receive.assert_not_awaited()
 
-    response: Final = await tracing_endpoints.ingest_otlp_traces(request, context)
-    assert response.status_code == 413
-    assert receive.await_count == 2
-    storage.ingest.assert_not_awaited()
+    response: Final = await tracing_endpoints.ingest_otlp_traces(request)
+    assert response.status_code == 410
+    receive.assert_not_awaited()
 
 
 @pytest.fixture()

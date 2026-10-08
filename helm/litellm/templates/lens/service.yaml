@@ -1,0 +1,18 @@
+{{- if .Values.lensWorker.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "litellm.fullname" . }}-lens-worker
+  {{- with .Values.lensWorker.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: lens-worker
+  ports:
+    - name: otlp
+      port: {{ .Values.lensWorker.service.port }}
+      targetPort: otlp
+{{- end }}

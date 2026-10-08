@@ -16,7 +16,6 @@ function AnalysisKeyPickerForm() {
       useExisting: true,
       analysisKey: null,
       access: { model: null, budget: "100" },
-      address: "http://localhost:4000",
     },
   });
   return (

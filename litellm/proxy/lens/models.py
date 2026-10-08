@@ -402,6 +402,7 @@ class WorkerCreated(Record):
     image: str
     worker: Worker
     token: str
+    managed: bool = False
 
 
 class LensList(Record):

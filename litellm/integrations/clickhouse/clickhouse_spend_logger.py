@@ -21,7 +21,7 @@ from litellm.integrations.clickhouse.context import is_lens_analysis
 from litellm.integrations.clickhouse.schema import SPEND_LOGS_TABLE
 from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
-from litellm.tracing.types import SpendLogRecord
+from litellm.tracing.types import SpendLogPayload, SpendLogRecord
 from litellm.types.utils import StandardLoggingPayload
 
 # litellm_logging.py rewrites cache-hit ids as f"{id}_cache_hit{time.time()}"
@@ -115,7 +115,7 @@ def _request_tags(value: object) -> list[str]:
     return [str(tag) for tag in value]
 
 
-def _session_id(payload: StandardLoggingPayload, kwargs: Mapping[str, Any]) -> str:
+def _session_id(payload: StandardLoggingPayload | SpendLogPayload, kwargs: Mapping[str, Any]) -> str:
     """Mirrors proxy `_get_session_id_for_spend_log`: explicit session id, else the payload trace id."""
     request_metadata = (kwargs.get("litellm_params") or MappingProxyType({})).get("metadata") or MappingProxyType({})
     return str(payload.get("session_id") or request_metadata.get("session_id") or payload.get("trace_id") or "")
@@ -126,7 +126,9 @@ def _is_trace_ingest(payload: StandardLoggingPayload) -> bool:
     return str(payload.get("call_type") or "").startswith(TRACE_INGEST_ROUTE)
 
 
-def spend_log_row_from_payload(payload: StandardLoggingPayload, kwargs: Mapping[str, Any]) -> SpendLogRecord:
+def spend_log_row_from_payload(
+    payload: StandardLoggingPayload | SpendLogPayload, kwargs: Mapping[str, Any]
+) -> SpendLogRecord:
     metadata: Mapping[str, Any] = payload.get("metadata") or MappingProxyType({})
     hidden_params: Mapping[str, Any] = payload.get("hidden_params") or MappingProxyType({})
     usage: Mapping[str, Any] = metadata.get("usage_object") or hidden_params.get("usage_object") or MappingProxyType({})

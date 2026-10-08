@@ -18,6 +18,7 @@ on:
       - backend/Dockerfile
       - backend/main.py
       - deploy/lens/**
+      - litellm-rust/**
       - litellm/proxy/lens/**
       - tests/e2e/migrations/lens_compose_smoke.sh
       - docker/component_entrypoint.sh
@@ -52,7 +53,7 @@ jobs:
     if: >-
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
-    timeout-minutes: 15
+    timeout-minutes: 45
     permissions:
       contents: read
     strategy:
@@ -79,30 +80,7 @@ jobs:
         run: |
           docker run --rm --network none --read-only --cap-drop ALL \
             --tmpfs /tmp:rw,noexec,nosuid,size=1g --security-opt no-new-privileges \
-            -e EXPECTED_RELEASE_TAG="${RELEASE_TAG}" --entrypoint python lens-worker-scan -c '
-          import os
-          import lens.worker
-          from lens.release import release_tag
-          from lens.trace_store import trace_store
-          assert os.getuid() == 65532
-          assert release_tag() == os.environ["EXPECTED_RELEASE_TAG"]
-          with trace_store() as store:
-              assert store.count() == 0
-          '
-      - name: Reject a dependency whose hash has changed
-        run: |
-          docker build --target builder -f deploy/lens/Dockerfile -t lens-worker-deps .
-          sed -E 's/sha256:[0-9a-f]{64}/sha256:0000000000000000000000000000000000000000000000000000000000000000/g' \
-            deploy/lens/requirements.lock > "$RUNNER_TEMP/tampered.lock"
-          if docker run --rm -v "$RUNNER_TEMP/tampered.lock:/tmp/tampered.lock:ro" \
-            --entrypoint uv lens-worker-deps pip sync --python /app/.venv/bin/python \
-            --require-hashes --only-binary :all: --reinstall --no-cache /tmp/tampered.lock \
-            > "$RUNNER_TEMP/hash-check.log" 2>&1; then
-            echo "::error::Dependency hash mismatch was accepted"
-            exit 1
-          fi
-          cat "$RUNNER_TEMP/hash-check.log"
-          grep -qi 'hash mismatch' "$RUNNER_TEMP/hash-check.log"
+            lens-worker-scan --version | grep -F "litellm-lens $RELEASE_TAG protocol="
       - name: Download Grype v0.114.0
         env:
           ARCH: ${{ matrix.arch }}

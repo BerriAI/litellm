@@ -71,49 +71,44 @@ async def test_proxy_config_loads_tracing_url_and_retention_from_yaml(tmp_path, 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("shutdown_error", [False, True])
-async def test_tracing_config_automatically_logs_spend_without_callback_setting(shutdown_error: bool) -> None:
-    from litellm.integrations.clickhouse.clickhouse_spend_logger import ClickHouseSpendLogger
-    from litellm.proxy.tracing_runtime import manage_tracing
-    from litellm.tracing import TraceReceiver
+async def test_tracing_config_automatically_exports_spend_without_a_storage_dependency(
+    shutdown_error: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
 
-    storage: Final = MagicMock()
-    storage.ensure_schema = AsyncMock()
-    storage.insert_rows = AsyncMock()
-    receiver: Final = TraceReceiver(storage)
+    from litellm.proxy.tracing_runtime import manage_tracing
+    from litellm.tracing.exporter import LensExporter
+    from litellm.tracing.remote import LensConnection
+
+    monkeypatch.setenv("LITELLM_LENS_URL", "http://lens.test")
+    monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "test-service-token-with-32-characters")
+    received: Final = asyncio.Future[httpx.Request]()
+
+    def accept(request: httpx.Request) -> httpx.Response:
+        received.set_result(request)
+        return httpx.Response(204)
+
+    def client(connection: LensConnection) -> httpx.AsyncClient:
+        return httpx.AsyncClient(base_url=connection.url, transport=httpx.MockTransport(accept))
 
     outcome: Final = pytest.raises(RuntimeError, match="shutdown failure") if shutdown_error else nullcontext()
     with outcome:
-        async with manage_tracing(enabled=True, receiver_factory=lambda: receiver):
-            storage.ensure_schema.assert_awaited_once()
-            logger: Final = next(
-                callback
-                for callback in litellm._async_success_callback
-                if isinstance(callback, ClickHouseSpendLogger) and callback.storage is storage
-            )
-            now: Final = datetime.now()
+        async with manage_tracing(enabled=True, client_factory=client):
+            logger: Final = next(callback for callback in litellm._async_success_callback if isinstance(callback, LensExporter))
             await logger.async_log_success_event(
-                {
-                    "standard_logging_object": {
-                        "id": "response-1",
-                        "startTime": now.timestamp(),
-                        "endTime": now.timestamp(),
-                        "response_cost": 0.25,
-                    }
-                },
-                None,
-                now,
-                now,
+                {"standard_logging_object": {"id": "response-1", "response_cost": 0.25}}, None, None, None
             )
-            storage.insert_rows.assert_not_awaited()
-
             if shutdown_error:
                 raise RuntimeError("shutdown failure")
 
-    assert storage.insert_rows.await_args.args[0] == "spend_logs"
-    assert storage.insert_rows.await_args.args[1][0]["spend"] == 0.25
+    request: Final = received.result()
+    rows: Final = json.loads(request.content)
+    assert request.url.path == "/internal/spend"
+    assert rows[0]["spend"] == 0.25
+    assert rows[0]["response_id"] == "response-1"
     assert logger not in litellm._async_success_callback
-    assert logger._flush_task is not None and logger._flush_task.done()
-    assert not logger._flush_task.cancelled()
+    assert logger.task is not None and logger.task.done() and not logger.task.cancelled()
+
 
 
 # ---------------------------------------------------------------------------

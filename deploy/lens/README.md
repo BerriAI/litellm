@@ -1,112 +1,118 @@
-# Lens worker
+# Lens service
 
-Lens reviews recorded activity and saves evidence-linked findings in the LiteLLM dashboard under Observability, Lens (`/ui/lens/`)
+Lens records agent activity and investigates it in a separate Rust service. LiteLLM serves model requests, the dashboard, and investigation settings. Lens owns trace ingestion and ClickHouse access; PostgreSQL stays with LiteLLM
 
-## Install
+Agent exporters send traces directly to Lens. LiteLLM sends its optional request logs through a bounded background queue. If Lens or ClickHouse is unavailable, model requests continue; traces can be delayed or dropped according to the exporter's retry policy. The gateway never waits for ClickHouse during startup or inference
 
-Build LiteLLM and its worker from the same source commit with the same release identity. The worker runs separately and connects to your gateway using a limited worker token
+## New local installation
 
-### New local installation
-
-Install Docker with Compose and Git. This builds LiteLLM and its worker from the same checkout and starts the existing local tracing stack:
+Install Docker with Compose and Git, then build the gateway and Lens from one checkout:
 
 ```bash
 git clone https://github.com/BerriAI/litellm.git
 cd litellm
 export LITELLM_RELEASE_TAG="sha-$(git rev-parse HEAD)"
-export LENS_WORKER_IMAGE="litellm-lens-worker:${LITELLM_RELEASE_TAG}"
-export OPENAI_API_KEY='sk-...'
-docker build --build-arg LITELLM_RELEASE_TAG="$LITELLM_RELEASE_TAG" \
-  -f deploy/lens/Dockerfile -t "$LENS_WORKER_IMAGE" .
+export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 24)"
+export LITELLM_LENS_SERVICE_TOKEN="$(openssl rand -hex 32)"
+export OPENAI_API_KEY='<your-provider-key>'
 docker compose -f docker/docker-compose.tracing.yml up -d --build
 ```
 
-Open `http://localhost:4002/ui/` and sign in as `admin` with the key saved in `.lens-dev/master_key`. Go to **Lens > Investigations > Connect worker**, choose a model and monthly budget, then **Get install command**. Expand **Using Docker Compose or Helm?** and copy the worker token. In the same terminal, run:
+Save the generated keys privately and reuse them when restarting or upgrading. This stack binds to localhost and uses development database passwords; use your normal secrets, TLS, backups, and ingress for a hosted deployment
 
-```bash
-export LITELLM_URL=http://litellm:4000
-export LENS_WORKER_TOKEN='<paste-your-worker-token>'
-docker compose -f docker/docker-compose.tracing.yml -f deploy/lens/compose.yaml up -d
-```
+Open `http://localhost:4002/ui/` and sign in as `admin` with `LITELLM_MASTER_KEY`. Under **Lens > Traces > Set up tracing**, generate a tracing key and copy the ingestion URL. Local exporters use `http://localhost:4318`. Model calls keep their existing LiteLLM URL and model key
 
-The worker joins the gateway's Docker network, and the dashboard shows **Worker connected**. Save the token privately for restarts and upgrades
+Under **Lens > Investigations > Connect worker**, choose an analysis model and monthly budget. The deployed service connects automatically after you save these settings. There is no worker command or second token to copy
 
-This stack is for local evaluation: it binds to localhost and uses development database credentials. For a hosted deployment, keep your normal database, keys, networking, and deployment process. Build both images from one source revision with the same `LITELLM_RELEASE_TAG`, publish the worker to your registry, and set `LENS_WORKER_IMAGE` on LiteLLM to that image
+## Existing LiteLLM installation
 
-### Existing LiteLLM installation
+Keep your gateway, PostgreSQL database, deployment tool, and existing encryption keys. Deploy the matching Lens image, give it access to ClickHouse, and configure the service connection on LiteLLM
 
-Keep your deployment and PostgreSQL database. A working gateway/worker pair can stay as it is until you upgrade both. For a gateway built from source, use its exact commit and `LITELLM_RELEASE_TAG`; a release version or the latest commit on `main` is not a substitute for that source identity
+| Variable | LiteLLM | Lens service |
+| --- | --- | --- |
+| `LITELLM_LENS_SERVICE_TOKEN` | Same private random secret, at least 32 characters | Same secret |
+| `LITELLM_LENS_URL` | Internal Lens URL, such as `http://lens-worker:4318` | Not needed |
+| `LITELLM_LENS_PUBLIC_URL` | Ingestion base URL reachable by your agents | Not needed |
+| `LITELLM_URL` | Not needed | LiteLLM URL reachable from Lens |
+| `CLICKHOUSE_URL` | Remove it from Lens tracing configuration | ClickHouse HTTP URL with credentials |
+| `CLICKHOUSE_DATABASE` | Not needed for Lens | Existing database name, defaults to `litellm` |
+| `AGENT_TRACING_RETENTION_DAYS` | Not needed for Lens | Retention for traces and Lens request logs, defaults to `14` |
 
-The public development package is `ghcr.io/berriai/litellm-lens-worker-dev:sha-<full-commit>`. It publishes amd64 images on Lens-related changes, so an arbitrary source commit may have no image. Check the exact image exists before using it. If it is unavailable, your gateway uses a different release identity, or you need native arm64, build the worker from the gateway's checkout:
+Remove the old `general_settings.tracing.store` configuration used for Lens from LiteLLM. Keep unrelated logging integrations and their configuration. Only Lens should reach its ClickHouse database. The shared service secret is an infrastructure credential: keep it out of browser code, agent exporters, screenshots, and public ingress headers
+
+Expose the Lens HTTP listener on port 4318 through TLS. Route `/lens-ingest` on your existing hostname directly to Lens at the load balancer, then set `LITELLM_LENS_PUBLIC_URL=https://<your-host>/lens-ingest`. The gateway must not proxy these uploads. Alternatively use a separate hostname and forward `/v1/` to Lens. Keep `/internal/` private; it requires the service secret
+
+### Standalone Docker or a container host
+
+Build from the same source commit and `LITELLM_RELEASE_TAG` as your running gateway:
 
 ```bash
 export LITELLM_RELEASE_TAG='<gateway-release-identity>'
-export LENS_WORKER_IMAGE='<your-registry>/litellm-lens-worker:<your-image-tag>'
+export LENS_WORKER_IMAGE='<your-registry>/litellm-lens-worker:<image-tag>'
 docker build --build-arg LITELLM_RELEASE_TAG="$LITELLM_RELEASE_TAG" \
   -f deploy/lens/Dockerfile -t "$LENS_WORKER_IMAGE" .
 ```
 
-For a remote worker host, publish that image to a registry the host can pull from. Set the gateway's `LENS_WORKER_IMAGE` to the resulting image reference, restart the gateway using its normal deployment process, then copy its install command. Prefer the published image digest for hosted installations. Do not change the gateway's release identity just to accept another worker
+Publish that image to a registry your host can pull from. Prefer a digest reference for hosted deployments. Public development images use `ghcr.io/berriai/litellm-lens-worker-dev:sha-<full-commit>`; check that the exact image exists before selecting it. An arbitrary commit may not have a published image
 
-For Kubernetes or Render, run the standalone worker using `LITELLM_URL` and `LENS_WORKER_TOKEN` from setup. Keep existing databases and secrets. The worker needs no inbound port.
+The image supports native amd64 and arm64. For worker-only Compose, use `deploy/lens/compose.yaml` with a private environment file containing `LENS_WORKER_IMAGE`, `LITELLM_URL`, `LITELLM_LENS_SERVICE_TOKEN`, and `CLICKHOUSE_URL`:
 
-## Helm
+```bash
+docker compose --env-file /path/to/private/lens.env \
+  -f deploy/lens/compose.yaml up -d
+```
 
-The componentized source chart at `helm/litellm` includes an optional Lens worker. Use the chart from the same checkout as your gateway and keep your component image overrides in your values. Configure PostgreSQL and ClickHouse as usual, install the chart, then obtain a limited worker token from Lens setup. Store it in a Kubernetes Secret and enable the worker in your values:
+The Compose listener binds to localhost. Your reverse proxy must reach it. On Render, run Lens as a web service with the same environment and listener port 4318, not an outbound-only background worker. Use `/health/live` for process health and `/health/ready` to check storage and tracing credentials
+
+Lens does not need provider credentials, PostgreSQL credentials, a GPU, or the LiteLLM Python package. The image includes a small CPython runtime only for the investigator's confined calculation tool. Keep the shipped security settings, temporary filesystem, and resource limits
+
+### Kubernetes with Helm
+
+Both `helm/litellm` and `helm/litellm-helm` support the Lens service. Keep your existing release, namespace, values, and database configuration. Create two Secrets through your normal secret manager: `litellm-lens-service` with key `service-token`, and `litellm-lens-clickhouse` with key `url`
 
 ```yaml
 lensWorker:
   enabled: true
   image:
-    repository: <your-worker-image-repository>
+    repository: <matching-worker-image-repository>
     digest: sha256:<matching-worker-image-digest>
-  tokenSecret:
-    name: litellm-lens-worker
-    key: token
+  serviceTokenSecret:
+    name: litellm-lens-service
+    key: service-token
+  clickhouseSecret:
+    name: litellm-lens-clickhouse
+    key: url
+  clickhouseDatabase: litellm
+  retentionDays: 14
+  publicUrl: https://<your-litellm-host>/lens-ingest
 ```
 
-Set the worker repository and digest explicitly to an image built from the gateway's source commit and release identity. The chart connects the worker to the backend service. Keep these values and the Secret when upgrading the chart and update the gateway and worker image overrides together. `lensWorker.replicaCount` controls simultaneous investigations. To use a private registry or external proxy, set `lensWorker.image.repository`, `lensWorker.image.digest` (or `tag` for a source build), and `lensWorker.url`. A digest takes precedence over the tag. The dashboard uses the chart's worker image for standalone install commands too
+Set `clickhouseDatabase` and `retentionDays` to your existing database and retention before upgrading
 
-## Standalone worker
+When the chart's main ingress is enabled, it routes `/lens-ingest` directly to Lens. With a custom ingress, add that route yourself. For a dedicated hostname, use `lensWorker.ingress.enabled`, `host`, `className`, and `tls`, and set `publicUrl` to that hostname. The chart connects LiteLLM to Lens internally and gives both services the shared secret
 
-Start with a source deployment that includes Lens, PostgreSQL, and agent tracing, and prepare its matching worker as described above. Configure one ClickHouse URL for trace writes, bounded reads, and Lens queries:
-
-```yaml
-general_settings:
-  tracing:
-    store:
-      type: clickhouse
-      url: os.environ/CLICKHOUSE_URL
-      retention_days: 14
-```
-
-The URL, database, and retention settings can also come from `CLICKHOUSE_URL`, `CLICKHOUSE_DATABASE`, and `AGENT_TRACING_RETENTION_DAYS` when omitted from YAML. A YAML value wins when both are set. The database defaults to `litellm`. `retention_days` defaults to 14 and applies to both traces and spend logs
-
-Retention changes require a proxy restart. ClickHouse removes expired rows during background merges, not immediately at startup. Enable request/response logging to analyze LLM requests. Lens can only inspect content you actually retain
-
-In **Lens > Investigations**, click **Connect worker**, choose an analysis model and monthly limit, then **Get install command**. Use **Advanced options** to select an existing virtual key or change the proxy URL if the server running Docker needs a different network address. Copy the command and run it on your server. The dashboard shows **Worker connected** when the container checks in
-
-The command already contains the compatible worker image and one worker token. The selected virtual key stays on the proxy; its secret is never sent to the worker. Once the matching image is available on the worker host, no second LiteLLM deployment is needed. Keep the command private because it includes the token. The LiteLLM release provides the dashboard and APIs; the container only runs background analysis
-
-The dashboard uses the gateway's `LENS_WORKER_IMAGE` override when set. Public `:sha-<commit>` development images must match both the gateway commit and release identity. Build from source for the worker host's native architecture
-
-After upgrading the gateway, update the worker image and redeploy it while keeping its proxy URL and token. Existing containers do not update automatically. If an investigation reports a worker compatibility error, update the image before retrying
-
-For deployments managed with Compose, download `compose.yaml` and provide `LITELLM_URL`, `LENS_WORKER_TOKEN`, and an explicit `LENS_WORKER_IMAGE` in a private environment file:
+Update your existing component image overrides to matching builds, then use the chart from that checkout:
 
 ```bash
-docker compose --env-file /path/to/lens.env -f compose.yaml up -d
+helm upgrade --install litellm ./helm/litellm \
+  --namespace litellm -f values.yaml --wait
 ```
 
-To work on Lens itself, `make lens-dev` runs the proxy, a worker from source and the hot-reload dashboard together; set `LENS_DEV_PROXY_PORT` / `LENS_DEV_UI_PORT` to move them off 4000/3000. For a local container build, set `LENS_WORKER_IMAGE=litellm-lens-worker:local` and `LITELLM_RELEASE_TAG` to the gateway's release tag, then use `docker compose -f deploy/lens/compose.yaml -f deploy/lens/compose.build.yaml up -d --build`
+Use `./helm/litellm-helm` if that is your existing chart. `lensWorker.replicaCount` scales ingestion and investigations. Each replica needs access to the same ClickHouse and gateway. Credentials refresh every 30 seconds; a newly created key may briefly receive a retryable 429. Revocations propagate on refresh, and a replica stops accepting traces when its credential snapshot reaches 90 seconds
 
-The generated command gives the worker 1 GiB of temporary memory-backed storage, shared across parallel reviews. Change `size=1g` in the Docker command or set `LENS_WORKER_TMP_SIZE` with Compose to fit your server and workload. Python reports storage failures to the reviewer and cleans up temporary files, so the reviewer can retry a smaller computation or report insufficient evidence. The worker remains available for other scans. Existing workers must be recreated with the new image and mount options
+## Upgrade
 
-The worker needs outbound HTTPS access to LiteLLM. It needs no inbound ports, provider keys, direct database access, or GPU. The proxy calls your selected model through its normal virtual-key authorization and inference pipeline; trace content reaches that model provider. Use a model with JSON output support and known token prices. One worker handles up to three investigations concurrently and can serve multiple lenses. For more throughput, start another worker with a separate credential
+Upgrade LiteLLM and Lens from the same source commit and release identity. For a coordinated published release, use its matching worker version; `deploy/lens/stack.yaml` starts LiteLLM, Lens, PostgreSQL, and ClickHouse for new installations. Standalone images remain available. Publishing an image does not update running containers
 
-If your deployment restricts `allowed_ips`, allow the worker's address. For workers behind a reverse proxy with `use_x_forwarded_for: true`, also configure `mcp_trusted_proxy_ranges` with that proxy's CIDRs and, when needed, `mcp_xff_num_trusted_hops`. Lens reuses these existing trusted-proxy settings. Forwarded addresses without an established trust boundary are rejected by the allowlist; accepting them would let a worker impersonate an allowed address
+Keep the same databases, encryption keys, shared service secret, and public ingestion URL. Pause scheduled investigations and finish or cancel active runs, update both images through your usual deployment process, then check ingestion and run an investigation before resuming schedules. Do not run `docker compose down -v`
 
-Setup, manual runs, feedback, and worker credentials are restricted to proxy administrators. Proxy-admin viewers can inspect results. Regular user and team keys cannot access the Lens API. Worker credentials can serve the administrator’s lenses. Revoke it in the connection dialog when retiring a worker. Redeploy the worker alongside proxy upgrades so their API versions match
+When upgrading from the Python worker, replace it with the Rust Lens service, move the existing ClickHouse connection to Lens, and configure the service URLs and secret on LiteLLM. Existing trace data remains in the same ClickHouse database; findings and settings remain in PostgreSQL. Stop the old worker. Generate dedicated tracing keys and change agent exporters to the ingestion URL. A virtual model key no longer authorizes uploads; the old gateway upload endpoints return 410 with setup guidance
+
+If you retain an explicit `LENS_WORKER_TOKEN`, it remains an optional investigation credential. Normal setup uses the shared service connection and registers one managed worker identity. Configure the analysis model and billing key in the dashboard; provider keys stay on LiteLLM
+
+## Development
+
+`make lens-dev` starts LiteLLM, the Rust Lens service, and the hot-reload dashboard. Set `LENS_DEV_PROXY_PORT` and `LENS_DEV_UI_PORT` to change the local ports. For containers, pass the same release identity to both builds. Unversioned or incompatible workers are refused before claiming work
 
 ## Configure a lens
 
@@ -116,7 +122,7 @@ Describe how the agent should behave and optionally add specific checks. Select 
 
 Choose your analysis model, parallelism and monthly budget. Parallelism controls simultaneous model calls, not the number of runs selected. New lenses run once by default. Turn on monitoring to repeat the same setup at a custom interval. **Run now** uses the same saved settings immediately, including the same lookback window and sampling. Each scan recalculates the window and reuses completed reviews when the selected trace content, expected behavior, enabled checks and analysis model are unchanged. Budget, name and schedule edits preserve reuse. Duplicate a lens when you want a separate investigation without changing an existing monitor
 
-Pausing stops future scheduled scans; cancel the active scan separately if needed. The worker polls every two seconds; creating a lens or clicking Run now queues a scan, and due schedules are queued when the worker polls. Scans for the same lens never overlap, and its next interval starts after completion. Closing the browser does not stop the worker. A running scan retains its analysis settings and selected execution IDs across retries. Budget edits apply to subsequent model calls, including those in an active scan
+Pausing stops future scheduled scans; cancel the active scan separately if needed. The worker polls every 2 to 15 seconds, backing off while idle; creating a lens or clicking Run now queues a scan, and due schedules are queued when the worker polls. Scans for the same lens never overlap, and its next interval starts after completion. Closing the browser does not stop the worker. A running scan retains its analysis settings and selected execution IDs across retries. Budget edits apply to subsequent model calls, including those in an active scan
 
 ## Read the results
 
@@ -192,32 +198,14 @@ For local fixture data, run `make lens-dev ARGS=--seed`. Use `make lens-dev ARGS
 
 Seeds append fresh IDs on every invocation and spread copies over recent timestamps. Restarts without `SEED` do not add data. Lens excludes activity received in the last two minutes, so wait two minutes after seeding before checking investigation previews. `LENS_DEV_SEED_COPIES` overrides total copies. Large seeds test data volume and pagination, rather than concurrent ingestion throughput or review accuracy. They can use substantial disk space; adjust `--copies` for your machine. Seeding expects the generated local tracing configuration. The old `run_tracing_proxy_local.sh --seed` command forwards to Lens dev, using its ports and saved master key
 
-Local ingestion limits are explicit and configurable. Set OTLP and ClickHouse variables before starting the proxy and seeder so both processes use the same settings. Invalid, zero and negative values fail instead of silently falling back. Changing these limits does not require rebuilding Rust
-
-| Environment variable | Default | Controls |
-| --- | --- | --- |
-| `LENS_DEV_SEED_COPIES` | 1 default, 2000 large | Total fixture copies |
-| `LENS_DEV_SEED_TIMEOUT_SECONDS` | 120 | Seeder HTTP timeout |
-| `OTLP_MAX_BODY_BYTES` | 16777216 | HTTP body and decompressed payload bytes |
-| `OTLP_MAX_CONCURRENT_INGESTS` | 2 | Concurrent proxy ingestion requests |
-| `OTLP_MAX_ATTRIBUTE_VALUE_BYTES` | 65536 | Stored attribute/content bytes |
-| `OTLP_MAX_DECODE_DEPTH` | 32 | Nested decode depth |
-| `OTLP_MAX_DECODE_NODES` | 65536 | JSON values or protobuf fields per export |
-| `OTLP_MAX_SPANS` | 4096 | Spans per export |
-| `OTLP_MAX_ATTRIBUTES` | 256 | Attributes per resource, scope, span, event or link |
-| `OTLP_MAX_EVENTS` | 256 | Events per span |
-| `OTLP_MAX_LINKS` | 256 | Links per span |
-| `OTLP_MAX_DECODED_SPAN_BYTES` | 16777216 | Decoded span allocation budget |
-| `CLICKHOUSE_TRACE_MAX_INSERT_BYTES` | 67108864 | Encoded trace or spend insert bytes |
-| `CLICKHOUSE_INSERT_TIMEOUT_SECONDS` | 30 | ClickHouse insert HTTP timeout |
-
-The wire parsers also enforce their library recursion limits (128 levels for JSON, 100 for protobuf). Raising the configured depth does not remove those parser limits.
+The Rust receiver bounds each upload and its decompressed body to 16 MiB and permits two ingestion requests at once per replica. Exporters should split large batches and retry backpressure. `LENS_DEV_SEED_COPIES` and `LENS_DEV_SEED_TIMEOUT_SECONDS` control the seeder; the receiver's limits are compiled into the service
 
 ## Quality evaluation
 
 Run the checked-in cases against a configured real model. Expected labels are used only for scoring, never passed to the model. Dev and held-out cases include missing outcomes, failed tools, recovery, handoffs, unsupported claims, repeated work, long evidence and prompt injection. The background option adds clean arithmetic traces to test rare-issue discovery at scale; those repeated synthetic cases do not establish accuracy on every production workload
 
 ```bash
+cargo build --manifest-path litellm-rust/Cargo.toml -p litellm-lens --example worker_once --locked
 python -m tests.proxy_behavior.lens.evaluate --api-base "$LITELLM_URL" \
   --model your-model-alias --split all --background 1000 --concurrency 16 \
   --output /tmp/lens-quality.json
@@ -250,7 +238,7 @@ The hourly development pipeline pins all component images to the same selected c
 
 ## Worker dependencies
 
-The worker uses the same digest-pinned Wolfi base and Python version as the component images. Python dependencies and their hashes are locked in `deploy/lens/requirements.lock`. To update them, edit `deploy/lens/requirements.in`, then run `uv pip compile --universal --python-version 3.13 --generate-hashes --no-emit-index-url deploy/lens/requirements.in -o deploy/lens/requirements.lock`. The image installs only the locked wheels with hash verification. CI builds and scans both native architectures
+The service builds from the workspace Cargo.lock with a pinned Rust toolchain and a digest-pinned Wolfi runtime. It has no Python package dependencies. CPython and libseccomp support the confined calculation tool. CI builds, runs, and scans native amd64 and arm64 images
 
 ## Python analysis boundary
 
@@ -260,14 +248,14 @@ The native worker image builds a syscall policy with libseccomp and includes the
 
 Python execution requires a native Linux worker with Landlock ABI 3 or later and seccomp filtering. Build the image for the host architecture. Missing policy files, an incompatible kernel, or an unsupported host such as a macOS source worker returns a clear tool error. There is no unrestricted execution fallback. Keep the container's non-root user, dropped capabilities, no-new-privileges setting, read-only root and writable temporary mount
 
-The worker permits two Python children at once across all investigations. Set `LENS_PYTHON_CONCURRENCY` to a positive integer to change this worker-wide pool. Queued calls consume no child process or scratch directory; cancelling a queued call does not start it. Model, read and search concurrency are separate
+The worker permits two Python children at once across all investigations. Queued calls consume no child process or scratch directory; cancelling a queued call does not start it. Model, read and search concurrency are separate
 
 | Per-call resource | Default |
 | --- | --- |
 | Elapsed execution time | 60 seconds |
 | CPU time | 30 seconds |
 | Process address space | 512 MiB |
-| Captured stdout or stderr | 8 MiB per stream |
+| Captured stdout or stderr | 4 MiB per stream |
 | Individual scratch file size | 16 MiB |
 | Monitored scratch storage | 64 MiB |
 | Monitored scratch entries | 2,048 |
@@ -281,12 +269,11 @@ Results include `stdout`, `stderr`, `exit_code`, `error` and `output_complete`. 
 This is a process boundary sharing the worker's Linux kernel. The checked-in smoke test verifies useful Python operations, filesystem and process restrictions, raw syscall attempts, resource failures, mapping accounting, cleanup and cancellation in the actual image. Run it on the deployment's native architecture and kernel:
 
 ```bash
-docker build --build-arg LITELLM_RELEASE_TAG=lens-python-test \
-  -f deploy/lens/Dockerfile -t lens-worker:python-test .
-docker run --rm --pull never --read-only --cap-drop ALL \
+docker build --target smoke --build-arg LITELLM_RELEASE_TAG=lens-python-test \
+  -f deploy/lens/Dockerfile -t lens-worker:smoke .
+docker run --rm --read-only --cap-drop ALL \
   --security-opt no-new-privileges --network none \
-  --tmpfs /tmp:rw,noexec,nosuid,size=1g --entrypoint python -i \
-  lens-worker:python-test - < tests/proxy_behavior/lens/worker_python_smoke.py
+  --tmpfs /tmp:rw,noexec,nosuid,size=1g lens-worker:smoke
 ```
 
-The same checks can run through pytest by setting `LENS_TEST_WORKER_IMAGE` to an already-built native image. The worker image CI runs the standalone smoke without adding pytest to the production image
+The smoke target runs the Rust sandbox integration tests. The production image contains neither Cargo nor the test executable

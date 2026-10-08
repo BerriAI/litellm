@@ -419,7 +419,7 @@ try {
 }`,
     existingModel: true,
     fileName: "openclaw.json",
-    note: 'Set LITELLM_API_KEY to your LiteLLM key, then run openclaw agent --local --session-id first-trace --message "What is an agent trace?". Select research_agent in Lens. Restart an existing gateway after changing the config.',
+    note: 'Set LITELLM_TRACING_KEY to your Lens tracing key, then run openclaw agent --local --session-id first-trace --message "What is an agent trace?". Select research_agent in Lens. Restart an existing gateway after changing the config.',
     plugin: {
       label: "diagnostics-otel plugin",
       url: "https://docs.openclaw.ai/plugins/reference/diagnostics-otel",
@@ -448,7 +448,7 @@ backends:
     plugin: {
       label: "community hermes-otel plugin",
       url: "https://github.com/briancaffey/hermes-otel#install",
-      instruction: "Set LITELLM_API_KEY to your LiteLLM key, then add this to ~/.hermes/hermes_otel.yaml.",
+      instruction: "Set LITELLM_TRACING_KEY to your Lens tracing key, then add this to ~/.hermes/hermes_otel.yaml.",
     },
   },
   {
@@ -485,17 +485,17 @@ with trace.get_tracer(__name__).start_as_current_span(AGENT_NAME) as span:
   },
 ];
 
-export function frameworkSnippet(guide: FrameworkGuide, proxyUrl: string, model: string, tracingKey = false): string {
+export function frameworkSnippet(guide: FrameworkGuide, proxyUrl: string, model: string, traceUrl: string): string {
   const values: Record<string, string> = {
     MODEL: JSON.stringify(model),
     OPENAI_MODEL: JSON.stringify(`openai/${model}`),
     BASE_URL: JSON.stringify(`${proxyUrl}/v1`),
     PROXY_URL: JSON.stringify(proxyUrl),
-    TRACE_URL: `${proxyUrl}/v1/traces`,
+    TRACE_URL: `${traceUrl}/v1/traces`,
   };
   const code = guide.quickstart.replace(
     /\{(MODEL|OPENAI_MODEL|BASE_URL|PROXY_URL|TRACE_URL)\}/g,
     (_, name: string) => values[name],
   );
-  return tracingKey && guide.existingModel ? code.replaceAll("${LITELLM_API_KEY}", "${LITELLM_TRACING_KEY}") : code;
+  return guide.existingModel ? code.replaceAll("${LITELLM_API_KEY}", "${LITELLM_TRACING_KEY}") : code;
 }

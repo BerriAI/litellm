@@ -1,0 +1,2003 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "Activity": {
+      "additionalProperties": false,
+      "properties": {
+        "execution_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "finished": {
+          "default": false,
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "operations": {
+          "default": [],
+          "items": {
+            "enum": [
+              "model",
+              "read",
+              "search",
+              "python",
+              "catalog",
+              "review_catalog",
+              "read_reviews",
+              "search_reviews",
+              "history",
+              "checkpoint"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "phase": {
+          "enum": [
+            "load",
+            "review",
+            "group",
+            "reconcile",
+            "investigate"
+          ],
+          "type": "string"
+        },
+        "started_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "tool_calls": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ToolCount"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "phase",
+        "label",
+        "started_at"
+      ],
+      "type": "object"
+    },
+    "AgentTestCase": {
+      "additionalProperties": false,
+      "properties": {
+        "expected": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "input": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "input",
+        "expected"
+      ],
+      "type": "object"
+    },
+    "Candidate": {
+      "additionalProperties": false,
+      "properties": {
+        "check_id": {
+          "type": "string"
+        },
+        "execution_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "existing_finding_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hypothesis": {
+          "type": "string"
+        },
+        "kind": {
+          "default": "issue",
+          "enum": [
+            "issue",
+            "pattern"
+          ],
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "check_id",
+        "title",
+        "hypothesis",
+        "execution_ids"
+      ],
+      "type": "object"
+    },
+    "CatalogEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "characters": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "execution": {
+          "$ref": "#/definitions/Execution"
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "spans": {
+          "items": {
+            "items": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "maxItems": 7,
+            "minItems": 7,
+            "type": "array"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "execution",
+        "spans",
+        "partial",
+        "characters"
+      ],
+      "type": "object"
+    },
+    "Check": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "instruction": {
+          "minLength": 3,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "instruction"
+      ],
+      "type": "object"
+    },
+    "Checkpoint": {
+      "additionalProperties": false,
+      "properties": {
+        "working_notes": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "working_notes"
+      ],
+      "type": "object"
+    },
+    "Claim": {
+      "additionalProperties": false,
+      "properties": {
+        "findings": {
+          "items": {
+            "$ref": "#/definitions/Finding"
+          },
+          "type": "array"
+        },
+        "job": {
+          "$ref": "#/definitions/Job"
+        },
+        "lens_id": {
+          "type": "string"
+        },
+        "reviews": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/definitions/Review"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "lens_id",
+        "job",
+        "findings"
+      ],
+      "type": "object"
+    },
+    "Clusters": {
+      "additionalProperties": false,
+      "properties": {
+        "candidates": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/Candidate"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Coverage": {
+      "additionalProperties": false,
+      "properties": {
+        "candidates": {
+          "default": 0,
+          "type": "integer"
+        },
+        "eligible": {
+          "default": 0,
+          "type": "integer"
+        },
+        "failed_tasks": {
+          "default": 0,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "grouped_batches": {
+          "default": 0,
+          "type": "integer"
+        },
+        "grouping_batches": {
+          "default": 0,
+          "type": "integer"
+        },
+        "inconclusive": {
+          "default": 0,
+          "type": "integer"
+        },
+        "investigated": {
+          "default": 0,
+          "type": "integer"
+        },
+        "partial": {
+          "default": 0,
+          "type": "integer"
+        },
+        "reusable": {
+          "default": 0,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reused": {
+          "default": 0,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "screened": {
+          "default": 0,
+          "type": "integer"
+        },
+        "selected": {
+          "default": 0,
+          "type": "integer"
+        },
+        "unassessable": {
+          "default": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "Evidence": {
+      "additionalProperties": false,
+      "properties": {
+        "execution_id": {
+          "type": "string"
+        },
+        "quote": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "role": {
+          "default": "support",
+          "enum": [
+            "support",
+            "counterexample"
+          ],
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "execution_id",
+        "span_id",
+        "quote"
+      ],
+      "type": "object"
+    },
+    "EvidenceReply": {
+      "additionalProperties": false,
+      "properties": {
+        "catalog": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/CatalogEntry"
+          },
+          "type": "array"
+        },
+        "error": {
+          "default": "",
+          "type": "string"
+        },
+        "parts": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/TracePart"
+          },
+          "type": "array"
+        },
+        "request": {
+          "$ref": "#/definitions/EvidenceRequest"
+        },
+        "review_catalog": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ReviewIndex"
+          },
+          "type": "array"
+        },
+        "reviews": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ReviewRecord"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "request"
+      ],
+      "type": "object"
+    },
+    "EvidenceRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "catalog",
+            "read",
+            "search",
+            "review_catalog",
+            "read_reviews",
+            "search_reviews",
+            "history"
+          ],
+          "type": "string"
+        },
+        "char_end": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "char_start": {
+          "default": 0,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "execution_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "include_initial": {
+          "default": false,
+          "type": "boolean"
+        },
+        "query": {
+          "default": "",
+          "type": "string"
+        },
+        "review_phase": {
+          "anyOf": [
+            {
+              "enum": [
+                "initial",
+                "revisited"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "span_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "turn_end": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "turn_start": {
+          "default": 0,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "type": "object"
+    },
+    "Execution": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "metadata": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MetadataFilter"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "root_seen": {
+          "default": false,
+          "type": "boolean"
+        },
+        "service": {
+          "default": "",
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "traces",
+            "requests"
+          ],
+          "type": "string"
+        },
+        "span_count": {
+          "type": "integer"
+        },
+        "start_time": {
+          "type": "string"
+        },
+        "team_id": {
+          "type": "string"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "trace_ref": {
+          "default": "",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "trace_id",
+        "team_id",
+        "name",
+        "start_time",
+        "span_count"
+      ],
+      "type": "object"
+    },
+    "ExecutionContent": {
+      "additionalProperties": false,
+      "properties": {
+        "execution": {
+          "$ref": "#/definitions/Execution"
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "partial": {
+          "default": false,
+          "type": "boolean"
+        },
+        "parts": {
+          "items": {
+            "$ref": "#/definitions/TracePart"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "execution",
+        "parts"
+      ],
+      "type": "object"
+    },
+    "Extraction": {
+      "additionalProperties": false,
+      "properties": {
+        "cannot_assess": {
+          "default": false,
+          "type": "boolean"
+        },
+        "observations": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/Observation"
+          },
+          "type": "array"
+        },
+        "reasoning": {
+          "default": "",
+          "maxLength": 800,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Finding": {
+      "additionalProperties": false,
+      "properties": {
+        "brief": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/IssueBrief"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "check_id": {
+          "type": "string"
+        },
+        "check_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "description": {
+          "minLength": 10,
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/definitions/Evidence"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "existing_finding_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "first_seen": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "investigation_runs": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "default": "issue",
+          "enum": [
+            "issue",
+            "pattern"
+          ],
+          "type": "string"
+        },
+        "last_seen": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "limitation": {
+          "default": "",
+          "type": "string"
+        },
+        "merged_finding_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "occurrences": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "priority": {
+          "default": "medium",
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ],
+          "type": "string"
+        },
+        "reason": {
+          "default": "",
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer"
+        },
+        "status": {
+          "default": "open",
+          "enum": [
+            "open",
+            "resolved",
+            "dismissed"
+          ],
+          "type": "string"
+        },
+        "suggestion": {
+          "default": "",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 3,
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "description",
+        "check_id",
+        "evidence",
+        "id",
+        "first_seen",
+        "last_seen",
+        "revision"
+      ],
+      "type": "object"
+    },
+    "FindingDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "brief": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/IssueBrief"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "check_id": {
+          "type": "string"
+        },
+        "check_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "description": {
+          "minLength": 10,
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/definitions/Evidence"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "existing_finding_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "default": "issue",
+          "enum": [
+            "issue",
+            "pattern"
+          ],
+          "type": "string"
+        },
+        "limitation": {
+          "default": "",
+          "type": "string"
+        },
+        "merged_finding_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "priority": {
+          "default": "medium",
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ],
+          "type": "string"
+        },
+        "suggestion": {
+          "default": "",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 3,
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "description",
+        "check_id",
+        "evidence"
+      ],
+      "type": "object"
+    },
+    "FindingGroup": {
+      "additionalProperties": false,
+      "properties": {
+        "members": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "representative": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "members",
+        "representative"
+      ],
+      "type": "object"
+    },
+    "FindingGroups": {
+      "additionalProperties": false,
+      "properties": {
+        "groups": {
+          "items": {
+            "$ref": "#/definitions/FindingGroup"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "groups"
+      ],
+      "type": "object"
+    },
+    "Findings": {
+      "additionalProperties": false,
+      "properties": {
+        "findings": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/FindingDraft"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "InFlight": {
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "type": "string"
+        },
+        "execution_id": {
+          "type": "string"
+        },
+        "started_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "trace_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "execution_id",
+        "trace_id",
+        "agent",
+        "started_at"
+      ],
+      "type": "object"
+    },
+    "IssueBrief": {
+      "additionalProperties": false,
+      "properties": {
+        "problem": {
+          "minLength": 10,
+          "type": "string"
+        },
+        "test_cases": {
+          "items": {
+            "$ref": "#/definitions/AgentTestCase"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "user_goal": {
+          "minLength": 3,
+          "type": "string"
+        },
+        "what_happened": {
+          "minLength": 3,
+          "type": "string"
+        }
+      },
+      "required": [
+        "problem",
+        "user_goal",
+        "what_happened",
+        "test_cases"
+      ],
+      "type": "object"
+    },
+    "Job": {
+      "additionalProperties": false,
+      "properties": {
+        "activities": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/Activity"
+          },
+          "type": "array"
+        },
+        "assessments": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/RunAssessment"
+          },
+          "type": "array"
+        },
+        "attempts": {
+          "default": 0,
+          "type": "integer"
+        },
+        "cost": {
+          "default": 0,
+          "type": "number"
+        },
+        "coverage": {
+          "$ref": "#/definitions/Coverage",
+          "default": {
+            "candidates": 0,
+            "eligible": 0,
+            "failed_tasks": 0,
+            "grouped_batches": 0,
+            "grouping_batches": 0,
+            "inconclusive": 0,
+            "investigated": 0,
+            "partial": 0,
+            "reusable": 0,
+            "reused": 0,
+            "screened": 0,
+            "selected": 0,
+            "unassessable": 0
+          }
+        },
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "end": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "error": {
+          "default": "",
+          "type": "string"
+        },
+        "findings": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/definitions/Finding"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "finished_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "lease_until": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reading": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/InFlight"
+          },
+          "type": "array"
+        },
+        "review_versions": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ReviewVersion"
+          },
+          "type": "array"
+        },
+        "reviewed": {
+          "default": 0,
+          "type": "integer"
+        },
+        "reviews": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/Review"
+          },
+          "type": "array"
+        },
+        "revision": {
+          "type": "integer"
+        },
+        "sample": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Sample"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "settings": {
+          "$ref": "#/definitions/LensSettings"
+        },
+        "stage": {
+          "default": "Queued",
+          "type": "string"
+        },
+        "start": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "status": {
+          "default": "queued",
+          "enum": [
+            "queued",
+            "running",
+            "completed",
+            "failed",
+            "cancelled"
+          ],
+          "type": "string"
+        },
+        "steps": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/Step"
+          },
+          "type": "array"
+        },
+        "trigger": {
+          "default": "schedule",
+          "enum": [
+            "schedule",
+            "manual"
+          ],
+          "type": "string"
+        },
+        "worker_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "created_at",
+        "start",
+        "end",
+        "settings",
+        "revision"
+      ],
+      "type": "object"
+    },
+    "LensSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_name": {
+          "default": "",
+          "type": "string"
+        },
+        "checks": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/Check"
+          },
+          "type": "array"
+        },
+        "concurrency": {
+          "default": 8,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "context": {
+          "default": "",
+          "type": "string"
+        },
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "execution_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "filters": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/MetadataFilter"
+          },
+          "type": "array"
+        },
+        "interval_minutes": {
+          "default": 15,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "lookback_hours": {
+          "default": 24,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "model": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "monthly_budget": {
+          "default": 100,
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "name": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "sample_percent": {
+          "default": 100,
+          "exclusiveMinimum": 0,
+          "maximum": 100,
+          "type": "number"
+        },
+        "sample_size": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "service": {
+          "default": "",
+          "type": "string"
+        },
+        "source": {
+          "default": "traces",
+          "enum": [
+            "traces",
+            "requests",
+            "both"
+          ],
+          "type": "string"
+        },
+        "team_id": {
+          "default": "",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "model"
+      ],
+      "type": "object"
+    },
+    "MetadataFilter": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "value": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "value"
+      ],
+      "type": "object"
+    },
+    "ModelMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "system",
+            "user",
+            "assistant"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "content"
+      ],
+      "type": "object"
+    },
+    "ModelRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "messages": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ModelMessage"
+          },
+          "type": "array"
+        },
+        "prompt": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "purpose": {
+          "enum": [
+            "extract",
+            "cluster",
+            "investigate"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "prompt",
+        "purpose"
+      ],
+      "type": "object"
+    },
+    "ModelResult": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "context_exceeded": {
+          "default": false,
+          "type": "boolean"
+        },
+        "cost": {
+          "type": "number"
+        },
+        "finish_reason": {
+          "anyOf": [
+            {
+              "enum": [
+                "length",
+                "content_filter"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "content",
+        "cost"
+      ],
+      "type": "object"
+    },
+    "Observation": {
+      "additionalProperties": false,
+      "properties": {
+        "check_id": {
+          "type": "string"
+        },
+        "evidence": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/Evidence"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "default": "issue",
+          "enum": [
+            "issue",
+            "pattern"
+          ],
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "check_id",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "Progress": {
+      "additionalProperties": false,
+      "properties": {
+        "activity": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Activity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "coverage": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Coverage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reading": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/definitions/InFlight"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "review": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Review"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stage": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "PythonAgentTurn[Extraction]": {
+      "additionalProperties": false,
+      "properties": {
+        "checkpoint": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Extraction"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tools": {
+          "default": [],
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/EvidenceRequest"
+              },
+              {
+                "$ref": "#/definitions/PythonRequest"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "PythonAgentTurn[Findings]": {
+      "additionalProperties": false,
+      "properties": {
+        "checkpoint": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Findings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tools": {
+          "default": [],
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/EvidenceRequest"
+              },
+              {
+                "$ref": "#/definitions/PythonRequest"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "PythonRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "const": "python",
+          "type": "string"
+        },
+        "code": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "execution_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "span_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "action",
+        "code"
+      ],
+      "type": "object"
+    },
+    "Result": {
+      "additionalProperties": false,
+      "properties": {
+        "assessments": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/RunAssessment"
+          },
+          "type": "array"
+        },
+        "coverage": {
+          "$ref": "#/definitions/Coverage"
+        },
+        "error": {
+          "default": "",
+          "type": "string"
+        },
+        "findings": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/FindingDraft"
+          },
+          "type": "array"
+        },
+        "review_versions": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ReviewVersion"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "coverage"
+      ],
+      "type": "object"
+    },
+    "Review": {
+      "additionalProperties": false,
+      "properties": {
+        "agent": {
+          "type": "string"
+        },
+        "at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "cannot_assess": {
+          "default": false,
+          "type": "boolean"
+        },
+        "consolidated": {
+          "default": false,
+          "type": "boolean"
+        },
+        "content_version": {
+          "default": "",
+          "type": "string"
+        },
+        "duration_ms": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "execution_id": {
+          "type": "string"
+        },
+        "extraction": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Extraction"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "partial": {
+          "default": false,
+          "type": "boolean"
+        },
+        "reasoning": {
+          "default": "",
+          "maxLength": 800,
+          "type": "string"
+        },
+        "reused": {
+          "default": false,
+          "type": "boolean"
+        },
+        "spans": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ReviewSpan"
+          },
+          "maxItems": 8,
+          "type": "array"
+        },
+        "tool_calls": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ToolCount"
+          },
+          "type": "array"
+        },
+        "trace_id": {
+          "type": "string"
+        },
+        "verdicts": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ReviewVerdict"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "execution_id",
+        "trace_id",
+        "agent",
+        "name",
+        "model",
+        "duration_ms",
+        "at"
+      ],
+      "type": "object"
+    },
+    "ReviewIndex": {
+      "additionalProperties": false,
+      "properties": {
+        "characters": {
+          "type": "integer"
+        },
+        "execution_id": {
+          "type": "string"
+        },
+        "phase": {
+          "enum": [
+            "initial",
+            "revisited"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "execution_id",
+        "phase",
+        "characters"
+      ],
+      "type": "object"
+    },
+    "ReviewRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "execution_id": {
+          "type": "string"
+        },
+        "phase": {
+          "enum": [
+            "initial",
+            "revisited"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "execution_id",
+        "phase",
+        "content"
+      ],
+      "type": "object"
+    },
+    "ReviewSpan": {
+      "additionalProperties": false,
+      "properties": {
+        "cited": {
+          "default": false,
+          "type": "boolean"
+        },
+        "kind": {
+          "maxLength": 40,
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 120,
+          "type": "string"
+        },
+        "preview": {
+          "maxLength": 240,
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "span_id",
+        "name",
+        "kind",
+        "preview"
+      ],
+      "type": "object"
+    },
+    "ReviewVerdict": {
+      "additionalProperties": false,
+      "properties": {
+        "check_id": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "issue",
+            "pattern"
+          ],
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 300,
+          "type": "string"
+        }
+      },
+      "required": [
+        "check_id",
+        "kind",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "ReviewVersion": {
+      "additionalProperties": false,
+      "properties": {
+        "content_version": {
+          "type": "string"
+        },
+        "execution_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "execution_id",
+        "content_version"
+      ],
+      "type": "object"
+    },
+    "RunAssessment": {
+      "additionalProperties": false,
+      "properties": {
+        "cannot_assess": {
+          "default": false,
+          "type": "boolean"
+        },
+        "execution_id": {
+          "type": "string"
+        },
+        "issue_checks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pattern_checks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "execution_id"
+      ],
+      "type": "object"
+    },
+    "Sample": {
+      "additionalProperties": false,
+      "properties": {
+        "eligible": {
+          "type": "integer"
+        },
+        "executions": {
+          "items": {
+            "$ref": "#/definitions/Execution"
+          },
+          "type": "array"
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "next_offset": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "selected": {
+          "default": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "executions",
+        "eligible"
+      ],
+      "type": "object"
+    },
+    "Step": {
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "completion_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "cost": {
+          "default": 0,
+          "type": "number"
+        },
+        "kind": {
+          "enum": [
+            "stage",
+            "model",
+            "error"
+          ],
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 200,
+          "type": "string"
+        },
+        "model": {
+          "default": "",
+          "maxLength": 200,
+          "type": "string"
+        },
+        "prompt_tokens": {
+          "default": 0,
+          "type": "integer"
+        },
+        "purpose": {
+          "default": "",
+          "maxLength": 40,
+          "type": "string"
+        }
+      },
+      "required": [
+        "at",
+        "kind",
+        "label"
+      ],
+      "type": "object"
+    },
+    "ToolCount": {
+      "additionalProperties": false,
+      "properties": {
+        "calls": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "enum": [
+            "model",
+            "read",
+            "search",
+            "python",
+            "catalog",
+            "review_catalog",
+            "read_reviews",
+            "search_reviews",
+            "history",
+            "checkpoint"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "calls"
+      ],
+      "type": "object"
+    },
+    "TracePart": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "end_time": {
+          "default": "",
+          "type": "string"
+        },
+        "execution_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "parent_span_id": {
+          "default": "",
+          "type": "string"
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "start_time": {
+          "default": "",
+          "type": "string"
+        },
+        "truncated": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "execution_id",
+        "span_id",
+        "name",
+        "kind",
+        "content"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "object",
+  "x-lens-protocol-version": 7
+}

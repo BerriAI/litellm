@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
@@ -35,6 +36,7 @@ from litellm.proxy.lens.endpoints import (
 from litellm.proxy.lens.models import (
     ActivitySelection,
     Coverage,
+    Execution,
     Lens,
     LensSettings,
     Result,
@@ -51,8 +53,15 @@ from litellm.proxy.lens.repository import DueLens, Row
 from litellm.proxy.lens.signals import SignalConfig, StoredTraceSignal
 from litellm.proxy.lens.state import claim_job, queue_job, replace_job
 from litellm.rust_bridge.trace.generated.models import ExecutionRow, LensSampleParams
-from tests.unit.proxy.lens.test_agent_workspace import execution
+from litellm.rust_bridge.trace.storage import ClickHouseStorage
+from litellm.tracing.remote import RemoteTraceStore
 from tests.unit.proxy.lens.test_state import NOW, lens, worker
+
+
+def execution(identity: str) -> Execution:
+    return Execution(
+        id=identity, source="traces", trace_id=identity, team_id="", name=identity, start_time="", span_count=1
+    )
 
 
 class ResultDatabase:
@@ -115,6 +124,54 @@ def signal_router() -> Router:
             },
         ]
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ("cancelled", "expired", "reclaimed", "reassigned"))
+async def test_result_cannot_commit_after_losing_ownership_during_evidence_validation(
+    monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    from litellm.proxy import proxy_server
+    from tests.unit.proxy.lens.test_state import finding
+
+    claimed: Final = claim_job(queue_job(lens(), NOW, "job"), worker(), NOW)
+    active: Final = claimed.jobs[0].model_copy(
+        update={
+            "lease_until": datetime.max.replace(tzinfo=timezone.utc),
+            "sample": Sample(executions=(execution("run"),), eligible=1),
+        }
+    )
+    competing: Final = active.model_copy(
+        update={
+            "status": "cancelled" if change == "cancelled" else "running",
+            "lease_until": NOW if change == "expired" else active.lease_until,
+            "attempts": 2 if change == "reclaimed" else 1,
+            "worker_id": "other-worker" if change == "reassigned" else active.worker_id,
+        }
+    )
+    db: Final = ResultDatabase(replace_job(claimed, active))
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+
+    async def evidence(request: httpx.Request) -> httpx.Response:
+        db.stored = replace_job(db.stored, competing)
+        return httpx.Response(200, json={"data": [{"count": 1}]})
+
+    async with httpx.AsyncClient(base_url="http://lens.test", transport=httpx.MockTransport(evidence)) as client:
+        saved: Final = await result(
+            "lens",
+            "job",
+            Result(
+                coverage=Coverage(screened=1, investigated=1),
+                findings=(finding("run"),),
+                assessments=(RunAssessment(execution_id="run"),),
+                review_versions=(ReviewVersion(execution_id="run", content_version="v1"),),
+            ),
+            worker(),
+            ClickHouseStorage(RemoteTraceStore(client)),
+        )
+    assert saved.jobs[0] == competing
+    assert saved.findings == ()
+    assert db.completed == ()
 
 
 @pytest.mark.asyncio
@@ -789,11 +846,9 @@ def test_run_now_with_a_lookback_scans_that_lookback_instead_of_since_last_run()
 
 @pytest.mark.parametrize("provider", (False, True))
 def test_model_errors_reach_worker_with_status_and_redacted_provider_message(provider: bool) -> None:
-    import httpx
 
     from litellm.proxy._types import ProxyException
     from litellm.proxy.lens.endpoints import model_failure
-    from litellm.proxy.lens.worker import failure_message
 
     message: Final = "Token rate limit exceeded. api_key=secret-example-value-123456 Retry in 60 seconds."
     error: Final = model_failure(
@@ -801,15 +856,10 @@ def test_model_errors_reach_worker_with_status_and_redacted_provider_message(pro
         if provider
         else HTTPException(429, message, headers={"retry-after": "60"})
     )
-    request: Final = httpx.Request("POST", "https://proxy.test/lens/worker/lens/run/model")
-    response: Final = httpx.Response(error.status_code, json={"detail": error.detail}, request=request)
-    with pytest.raises(httpx.HTTPStatusError) as caught:
-        response.raise_for_status()
-    diagnostic: Final = failure_message(caught.value)
-    assert diagnostic.startswith("Model request failed (HTTP 429):")
-    assert "Token rate limit exceeded." in diagnostic
-    assert "Retry in 60 seconds." in diagnostic
-    assert "secret-example" not in diagnostic
+    assert error.status_code == 429
+    assert "Token rate limit exceeded." in error.detail["lens_error"]
+    assert "Retry in 60 seconds." in error.detail["lens_error"]
+    assert "secret-example" not in error.detail["lens_error"]
     assert error.headers == {"retry-after": "60"}
 
 
@@ -933,3 +983,164 @@ async def test_claim_due_pages_through_more_than_a_thousand_full_pages() -> None
     assert claim is None
     assert len(repository.after_calls) == 1_201
     assert repository.after_calls == expected_after
+
+
+@pytest.mark.asyncio
+async def test_compatible_worker_without_an_analysis_key_waits_without_claiming_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.lens.endpoints import claim
+    from litellm.proxy.lens.release import PROTOCOL_VERSION
+
+    monkeypatch.setenv("LITELLM_RELEASE_TAG", "v1.2.3")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    unassigned: Final = worker().model_copy(update={"analysis_key_id": None})
+    assert await claim(unassigned, protocol_version=PROTOCOL_VERSION, worker_release="v1.2.3") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "configured,credential,expected", ((False, "x" * 32, 503), (True, "wrong", 401), (True, "x" * 32, None))
+)
+async def test_internal_service_authentication_is_separate_from_gateway_keys(
+    monkeypatch: pytest.MonkeyPatch, configured: bool, credential: str, expected: int | None
+) -> None:
+    from fastapi.security import HTTPAuthorizationCredentials
+
+    from litellm.proxy.lens.endpoints import service_auth
+
+    monkeypatch.setenv("LITELLM_LENS_URL", "http://lens" if configured else "")
+    monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "x" * 32)
+    credentials: Final = HTTPAuthorizationCredentials(scheme="Bearer", credentials=credential)
+    if expected is None:
+        assert await service_auth(credentials) is None
+    else:
+        with pytest.raises(HTTPException) as failure:
+            await service_auth(credentials)
+        assert failure.value.status_code == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status,content,connected",
+    (
+        (200, b'{"storage_ready":true,"credentials_ready":true,"release":"v1.2.3","protocol_version":2}', True),
+        (503, b"private storage details", False),
+        (200, b"invalid JSON", False),
+        (200, b"x" * 17000, False),
+    ),
+    ids=("ready", "unavailable", "invalid-json", "oversized-response"),
+)
+@pytest.mark.usefixtures("httpx_transport")
+async def test_service_status_uses_internal_auth_and_only_advertises_the_public_url(
+    monkeypatch: pytest.MonkeyPatch, status: int, content: bytes, connected: bool
+) -> None:
+    import respx
+
+    from litellm.proxy.lens.endpoints import service_connection, user_scope
+
+    monkeypatch.setenv("LITELLM_LENS_URL", "http://lens/private-prefix")
+    monkeypatch.setenv("LITELLM_LENS_PUBLIC_URL", "https://traces.example/lens-ingest/")
+    monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "x" * 32)
+    with respx.mock as network:
+        route: Final = network.get("http://lens/private-prefix/internal/status").respond(status, content=content)
+        result: Final = await service_connection(UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER))
+    assert result.url == "https://traces.example/lens-ingest"
+    assert result.connected is connected
+    assert result.status.storage_ready is connected
+    assert route.calls[0].request.headers["Authorization"] == "Bearer " + "x" * 32
+    assert "private storage details" not in result.model_dump_json()
+
+    with pytest.raises(HTTPException) as denied:
+        user_scope(UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER))
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_credential_snapshot_excludes_expired_keys_and_disables_caching(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import AsyncMock
+
+    from fastapi import Response
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.lens.endpoints import ingestion_credentials
+    from litellm.proxy.lens.ingestion import IngestionCredential, IngestionKeyCreated, IngestionKeyRequest, new_key
+
+    created: Final = new_key(IngestionKeyRequest(team_id="team"), "owner")
+    assert isinstance(created, IngestionKeyCreated)
+    current: Final = created.record
+    expired: Final = current.model_copy(update={"id": "expired", "expires_at": 1})
+    db: Final = SimpleNamespace(
+        query_raw=AsyncMock(return_value=tuple(Row(data=key.model_dump(mode="json")) for key in (current, expired)))
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+    response: Final = Response()
+    snapshot: Final = await ingestion_credentials(None, response)
+    assert snapshot.keys == (
+        IngestionCredential(token_hash=current.tenant.api_key_hash, tenant=current.tenant, expires_at=None),
+    )
+    assert response.headers["Cache-Control"] == "no-store"
+    assert snapshot.issued_at >= int(current.created_at.timestamp())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("accepted", (True, False))
+@pytest.mark.usefixtures("httpx_transport")
+async def test_created_ingestion_keys_report_activation_only_after_the_service_acknowledges(
+    monkeypatch: pytest.MonkeyPatch, accepted: bool
+) -> None:
+    import hashlib
+    import json
+    from unittest.mock import AsyncMock, MagicMock
+
+    import respx
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.lens.endpoints import create_ingestion_key, list_ingestion_keys, revoke_ingestion_key
+    from litellm.proxy.lens.ingestion import IngestionKey, IngestionKeyRequest
+
+    db: Final = SimpleNamespace(query_raw=AsyncMock(return_value=()), execute_raw=AsyncMock(return_value=1))
+    context: Final = AsyncMock()
+    context.__aenter__.return_value = db
+    db.tx = MagicMock(return_value=context)
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+    monkeypatch.setenv("LITELLM_LENS_URL", "http://lens")
+    monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "x" * 32)
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="owner")
+    with respx.mock as network:
+        route: Final = network.post("http://lens/internal/credentials").respond(204 if accepted else 503)
+        created: Final = await create_ingestion_key(IngestionKeyRequest(name="Agent", team_id="team"), auth)
+        assert created.active is accepted
+        persisted: Final = IngestionKey.model_validate_json(db.execute_raw.call_args.args[2])
+        assert persisted == created.record
+        assert persisted.tenant.api_key_hash == hashlib.sha256(created.key.encode()).hexdigest()
+        assert persisted.tenant.user_id == "owner"
+        assert persisted.tenant.team_id == "team"
+        assert created.key not in persisted.model_dump_json()
+        db.query_raw.return_value = (Row(data=persisted.model_dump(mode="json")),)
+        assert await list_ingestion_keys(auth) == (persisted,)
+        db.query_raw.return_value = ()
+        assert await revoke_ingestion_key(persisted.id, auth)
+        assert db.execute_raw.call_args.args == ('DELETE FROM "LiteLLM_LensIngestionKey" WHERE id=$1', persisted.id)
+        assert json.loads(route.calls[-1].request.content)["keys"] == []
+
+
+@pytest.mark.asyncio
+async def test_ingestion_keys_reject_expired_requests_and_read_only_admins(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.lens.endpoints import create_ingestion_key
+    from litellm.proxy.lens.ingestion import IngestionKeyRequest
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    with pytest.raises(HTTPException) as expired:
+        await create_ingestion_key(
+            IngestionKeyRequest(expires_at=datetime(2000, 1, 1, tzinfo=timezone.utc)),
+            UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    assert expired.value.status_code == 422
+    with pytest.raises(HTTPException) as forbidden:
+        await create_ingestion_key(
+            IngestionKeyRequest(), UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+        )
+    assert forbidden.value.status_code == 403

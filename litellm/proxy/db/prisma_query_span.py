@@ -76,6 +76,7 @@ _VERB_BY_KEYWORD: Final[Mapping[str, str]] = MappingProxyType(
         "REFRESH": "ddl",
         "TRUNCATE": "delete",
         "SET": "set",
+        "LOCK": "lock",
     }
 )
 
