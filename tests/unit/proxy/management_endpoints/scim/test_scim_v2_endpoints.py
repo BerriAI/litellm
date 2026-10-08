@@ -2814,15 +2814,23 @@ async def test_patch_user_grants_admin_by_team_display_name(mocker, monkeypatch)
     assert call_args[1]["data"]["user_role"] == LitellmUserRoles.PROXY_ADMIN
 
 
-def _scim_admin_prisma(mocker, *, user_teams):
-    """Prisma double whose user resolves to user_teams and whose teams expose an
-    alias equal to their id, used by the role-recompute helper tests."""
-    user = mocker.MagicMock()
-    user.user_id = "member-1"
-    user.teams = user_teams
+def _member_row(mocker, user_id: str, teams: Sequence[str]) -> MagicMock:
+    row = mocker.MagicMock()
+    row.user_id = user_id
+    row.teams = list(teams)
+    return row
+
+
+def _scim_admin_prisma(mocker, *, user_teams, teammates: Sequence[tuple[str, Sequence[str]]] = ()):
+    """Prisma double whose user resolves to user_teams, with ``teammates`` as further
+    (user_id, teams) rows, and whose teams expose an alias equal to their id, used by
+    the role-recompute helper tests."""
+    user = _member_row(mocker, "member-1", user_teams)
+    members = (user, *(_member_row(mocker, user_id, teams) for user_id, teams in teammates))
 
     def _team_find_unique(where):
         team = mocker.MagicMock()
+        team.team_id = where["team_id"]
         team.team_alias = where["team_id"]
         return team
 
@@ -2830,7 +2838,7 @@ def _scim_admin_prisma(mocker, *, user_teams):
         return tuple(_team_find_unique({"team_id": team_id}) for team_id in where["team_id"]["in"])
 
     def _users_find_many(where):
-        return (user,) if user.user_id in where["user_id"]["in"] else ()
+        return tuple(member for member in members if member.user_id in where["user_id"]["in"])
 
     prisma = mocker.MagicMock()
     prisma.db = mocker.MagicMock()
@@ -2883,8 +2891,42 @@ async def test_recompute_scim_member_roles_grants_when_in_admin_group(mocker, mo
     await _recompute_scim_member_roles(prisma, ["member-1"])
 
     prisma.db.litellm_usertable.update_many.assert_awaited_once_with(
-        where={"user_id": {"in": ["member-1"]}}, data={"user_role": LitellmUserRoles.PROXY_ADMIN}
+        where={"AND": ({"teams": {"hasSome": ["litellm-admins"]}}, {"user_id": {"in": ["member-1"]}})},
+        data={"user_role": LitellmUserRoles.PROXY_ADMIN},
     )
+
+
+@pytest.mark.asyncio
+async def test_recompute_scim_member_roles_writes_each_role_only_where_the_membership_still_backs_it(
+    mocker, monkeypatch
+):
+    """Every role write is conditional on the admin membership it was derived from, so a
+    recompute that read its rows before a concurrent group delete committed cannot grant
+    PROXY_ADMIN to a member that delete already removed from the admin group, and cannot
+    demote one a concurrent group write just added to it."""
+    from litellm.proxy.proxy_server import proxy_config
+
+    async def mock_get_config():
+        return {"litellm_settings": {"scim_admin_group": "litellm-admins"}}
+
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+    monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
+
+    prisma = _scim_admin_prisma(mocker, user_teams=["litellm-admins"], teammates=(("member-2", ["engineering"]),))
+
+    await _recompute_scim_member_roles(prisma, ["member-1", "member-2"])
+
+    in_the_admin_team: Final = {"teams": {"hasSome": ["litellm-admins"]}}
+    assert prisma.db.litellm_usertable.update_many.await_args_list == [
+        call(
+            where={"AND": (in_the_admin_team, {"user_id": {"in": ["member-1"]}})},
+            data={"user_role": LitellmUserRoles.PROXY_ADMIN},
+        ),
+        call(
+            where={"AND": ({"NOT": in_the_admin_team}, {"user_id": {"in": ["member-2"]}})},
+            data={"user_role": LitellmUserRoles.INTERNAL_USER_VIEW_ONLY},
+        ),
+    ]
 
 
 @pytest.mark.asyncio

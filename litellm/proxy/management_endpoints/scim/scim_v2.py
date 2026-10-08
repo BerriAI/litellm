@@ -490,7 +490,10 @@ async def _recompute_scim_member_roles(
     that drops a member from the admin group demotes them just like the user
     endpoints do, and the role is left untouched when the feature is off.
     ``without_team_id`` resolves the roles as if that team were already gone, so a
-    group delete demotes its members before the team row goes away.
+    group delete demotes its members before the team row goes away. Each role is
+    written only where the membership it was derived from still holds, so a write
+    that lost a race with another group write cannot land a role the rows no longer
+    support.
     """
     admin_group: Final = await _get_scim_admin_group()
     if admin_group is None:
@@ -519,14 +522,25 @@ async def _recompute_scim_member_roles(
         )
         for user_id, member_teams in memberships
     )
+    admin_team_ids: Final = tuple(
+        team_id for team_id in team_ids if team_id == admin_group or alias_of.get(team_id) == admin_group
+    )
     for role in dict.fromkeys(role for _, role in resolved):
         await update_many_in(
             users,
             "user_id",
             tuple(user_id for user_id, user_role in resolved if user_role == role),
+            where=_membership_backing(role, admin_team_ids),
             data={"user_role": role},
             atomicity="per_chunk_ok",
         )
+
+
+def _membership_backing(role: LitellmUserRoles | None, admin_team_ids: tuple[str, ...]) -> Mapping[str, object] | None:
+    if not admin_team_ids:
+        return None
+    in_an_admin_team: Final = {"teams": {"hasSome": list(admin_team_ids)}}
+    return in_an_admin_team if role == LitellmUserRoles.PROXY_ADMIN else {"NOT": in_an_admin_team}
 
 
 class _ResolvedUserMember(NamedTuple):
