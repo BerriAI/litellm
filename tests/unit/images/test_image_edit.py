@@ -37,7 +37,7 @@ _EDIT_RESPONSE: Final = {
 @pytest.mark.asyncio
 async def test_openai_image_edit_accepts_bytesio_images(respx_mock, monkeypatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    respx_mock.post(url__regex=r"https://api\.openai\.com/v1/images/edits.*").mock(
+    route: Final = respx_mock.post(url__regex=r"https://api\.openai\.com/v1/images/edits.*").mock(
         return_value=httpx.Response(200, json=_EDIT_RESPONSE)
     )
     result: Final = await litellm.aimage_edit(
@@ -48,12 +48,15 @@ async def test_openai_image_edit_accepts_bytesio_images(respx_mock, monkeypatch)
     )
     ImageResponse.model_validate(result)
     assert result.data
+    sent: Final = route.calls[0].request.read()
+    assert _ISHAAN_BYTES in sent
+    assert _LITELLM_SITE_BYTES in sent
 
 
 @pytest.mark.asyncio
 async def test_openai_image_edit_accepts_mixed_bytes_and_bytesio(respx_mock, monkeypatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    respx_mock.post(url__regex=r"https://api\.openai\.com/v1/images/edits.*").mock(
+    route: Final = respx_mock.post(url__regex=r"https://api\.openai\.com/v1/images/edits.*").mock(
         return_value=httpx.Response(200, json=_EDIT_RESPONSE)
     )
     result: Final = await litellm.aimage_edit(
@@ -66,6 +69,9 @@ async def test_openai_image_edit_accepts_mixed_bytes_and_bytesio(respx_mock, mon
     assert result is not None
     assert result.data is not None
     assert len(result.data) > 0
+    sent: Final = route.calls[0].request.read()
+    assert _ISHAAN_BYTES in sent
+    assert _LITELLM_SITE_BYTES in sent
 
 
 @pytest.mark.asyncio
