@@ -134,10 +134,11 @@ def test_internal_user_cannot_reassign_its_key_to_another_user(gateway: Gateway)
         first: Final = scenario.user(user_role="internal_user")
         second: Final = scenario.user(user_role="internal_user")
         key: Final = string_value(_owned_key(gateway, scenario, {"user_id": first})["key"])
-        _owned_key(gateway, scenario, {}, key=key)
-        update: Final = gateway.request("POST", "/key/update", {"key": key, "user_id": second}, key=key)
+        own_key: Final = string_value(_owned_key(gateway, scenario, {}, key=key)["key"])
+        assert _verification_row(own_key) == [{"user_id": first}]
+        update: Final = gateway.request("POST", "/key/update", {"key": own_key, "user_id": second}, key=key)
         assert update.status_code == 403, update.text
-        assert _verification_row(key) == [{"user_id": first}]
+        assert _verification_row(own_key) == [{"user_id": first}]
 
 
 def test_internal_user_cannot_delete_another_users_key(gateway: Gateway) -> None:

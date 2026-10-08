@@ -71,6 +71,14 @@ def test_admin_health_counts_every_deployment_and_reports_a_live_one_healthy(gat
         assert model_id in {object_value(endpoint).get("model_id") for endpoint in healthy}, report
 
 
+def test_routes_listing_is_served_without_credentials(gateway: Gateway) -> None:
+    response: Final = gateway.client.get("/routes")
+    assert response.status_code == 200, response.text
+    routes: Final = object_value(response.json())["routes"]
+    assert isinstance(routes, list)
+    assert {"/routes", "/key/generate"} <= {object_value(route)["path"] for route in routes}
+
+
 def test_unrestricted_key_lists_models_and_none_when_only_access_groups_are_requested(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         grouped: Final = scenario.model(model_info={"access_groups": [f"integration-{uuid.uuid4().hex}"]})

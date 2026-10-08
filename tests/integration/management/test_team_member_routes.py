@@ -120,9 +120,10 @@ def test_team_alias_update_keeps_every_other_team_field(gateway: Gateway) -> Non
         updated_members: Final = updated["members_with_roles"]
         assert isinstance(updated_members, list)
         assert len(updated_members) == len(members)
-        for field, value in created.items():
-            if field not in UNCHANGED_BY_ALIAS_UPDATE_SKIP:
-                assert updated[field] == value, field
+        compared: Final = (set(created) | set(updated)) - UNCHANGED_BY_ALIAS_UPDATE_SKIP
+        for field in compared:
+            assert updated.get(field) == created.get(field), field
+        assert compared
 
 
 def test_member_added_by_email_sees_the_team_in_user_info(gateway: Gateway) -> None:
@@ -161,9 +162,8 @@ def test_member_delete_removes_the_member_by_id_or_email(gateway: Gateway, dimen
     with gateway.scenario() as scenario:
         email: Final = f"integration-{uuid.uuid4().hex}@example.com"
         user: Final = scenario.user(user_email=email)
-        team: Final = scenario.team()
         selector: Final[dict[str, JsonValue]] = {"user_id": user} if dimension == "user_id" else {"user_email": email}
-        gateway.post("/team/member_add", {"team_id": team, "member": {"role": "user", **selector}})
+        team: Final = scenario.team(members_with_roles=[{"role": "user", **selector}])
         assert user in _member_ids(gateway, team)
         deleted: Final = gateway.request("POST", "/team/member_delete", {"team_id": team, **selector})
         assert deleted.status_code == 200, deleted.text

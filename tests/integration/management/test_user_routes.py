@@ -2,8 +2,6 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 
-from pydantic import JsonValue
-
 from tests.integration._support.client import Gateway, object_value
 from tests.integration._support.database import read_rows
 
@@ -15,11 +13,10 @@ def test_concurrent_user_creation_persists_models_and_aliases(gateway: Gateway) 
         with ThreadPoolExecutor(max_workers=10) as pool:
             users: Final = list(pool.map(lambda _: scenario.user(models=[model], aliases={alias: model}), range(10)))
         assert len(set(users)) == 10
-        for user in users:
-            rows: Final[list[dict[str, JsonValue]]] = read_rows(
-                'SELECT models FROM "LiteLLM_UserTable" WHERE user_id = %s', (user,)
-            )
-            assert rows == [{"models": [model]}]
+        rows: Final = [
+            read_rows('SELECT models FROM "LiteLLM_UserTable" WHERE user_id = %s', (user,)) for user in users
+        ]
+        assert rows == [[{"models": [model]}]] * len(users)
 
 
 def test_user_info_serves_admin_and_self_and_denies_other_users(gateway: Gateway) -> None:
