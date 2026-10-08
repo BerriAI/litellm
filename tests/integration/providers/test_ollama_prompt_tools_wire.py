@@ -1198,14 +1198,20 @@ def test_malformed_content_is_a_400_naming_the_message_and_field(
 
 
 @pytest.mark.parametrize(
-    "content",
+    ("content", "detail"),
     [
-        pytest.param(22, id="user-int-content"),
-        pytest.param({"text": _QUESTION}, id="user-dict-content"),
-        pytest.param(["just a string"], id="user-string-part"),
+        pytest.param(22, "has int content; content must be a string or a list of content parts", id="user-int-content"),
+        pytest.param(
+            {"text": _QUESTION},
+            "has dict content; content must be a string or a list of content parts",
+            id="user-dict-content",
+        ),
+        pytest.param(["just a string"], "has a str content part; content parts must be objects", id="user-string-part"),
     ],
 )
-def test_non_list_user_content_is_rejected_before_it_reaches_ollama(gateway: Gateway, content: JsonValue) -> None:
+def test_non_list_user_content_is_rejected_before_it_reaches_ollama(
+    gateway: Gateway, content: JsonValue, detail: str
+) -> None:
     with _ollama_server(lambda _: _generate_reply(_ANSWER)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"ollama/{_BACKEND}", api_base=wire.url, api_key=_API_KEY)
         code, text = _post(
@@ -1213,8 +1219,8 @@ def test_non_list_user_content_is_rejected_before_it_reaches_ollama(gateway: Gat
             "/v1/chat/completions",
             {"model": model, "messages": [{"role": "user", "content": content}], "tools": [_WEATHER_TOOL]},
         )
-        assert code >= 400, text
-        assert _error_message(text), text
+        assert code == 400, text
+        assert f"the user message at index 0 {detail}" in _error_message(text), text
         assert _generate_calls(wire) == ()
         payload: Final = _post_chat(gateway, model, _second_turn(), tools=[_WEATHER_TOOL])
         assert json.dumps(payload["choices"]).count(_ANSWER) == 1, payload
