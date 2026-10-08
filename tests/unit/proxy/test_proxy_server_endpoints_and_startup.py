@@ -96,14 +96,17 @@ def client_no_auth():
     return TestClient(app)
 
 
-def test_cors_exposes_cache_key_header_to_browser_js():
-    from fastapi.middleware.cors import CORSMiddleware
-
+def test_cors_exposes_cache_key_header_to_browser_js(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.constants import LITELLM_UI_ALLOW_HEADERS
 
-    cors_middleware = next(m for m in app.user_middleware if m.cls is CORSMiddleware)
-    assert cors_middleware.kwargs["expose_headers"] is LITELLM_UI_ALLOW_HEADERS
-    assert "x-litellm-cache-key" in cors_middleware.kwargs["expose_headers"]
+    monkeypatch.delenv("LITELLM_CORS_ORIGINS", raising=False)
+    monkeypatch.delenv("LITELLM_CORS_ALLOW_CREDENTIALS", raising=False)
+    monkeypatch.setattr(proxy_server_module, "general_settings", {})
+    response: Final = TestClient(app).get("/health/liveliness", headers={"Origin": "https://browser.example"})
+    assert response.status_code == 200, response.text
+    exposed_headers: Final = tuple(response.headers.get("access-control-expose-headers", "").split(", "))
+    assert frozenset(exposed_headers) == frozenset(LITELLM_UI_ALLOW_HEADERS), response.headers
+    assert "x-litellm-cache-key" in exposed_headers, response.headers
 
 
 def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
