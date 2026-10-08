@@ -7,6 +7,8 @@ export interface ProviderAuthType {
   readonly fieldKeys: readonly string[];
   readonly requiredFieldKeys: readonly string[];
   readonly fixedValues?: Readonly<Record<string, string>>;
+  /** The mode's fields are server-owned, so Add Model saves it as an LLM credential and attaches it. */
+  readonly credentialOnly?: boolean;
 }
 
 const EMPTY_PROVIDER_AUTH_TYPES: readonly ProviderAuthType[] = [];
@@ -38,6 +40,7 @@ export const PROVIDER_AUTH_TYPES: Partial<Record<keyof typeof Providers, readonl
     {
       id: "oauth_token_exchange",
       label: "OAuth token exchange (on-behalf-of)",
+      credentialOnly: true,
       description:
         "LiteLLM exchanges each caller's IdP-issued JWT at your IdP's token endpoint for a delegated token. Microsoft Graph only accepts Microsoft Entra tokens, so for Microsoft 365 Copilot the token endpoint must be Entra and callers must send an Entra-issued JWT for this app. Users can still sign in through any IdP federated with Entra.",
       fieldKeys: [
