@@ -92,6 +92,14 @@ def test_internal_hop_marker_stays_on_python_without_binding() -> None:
     assert result is expected
 
 
+def test_context_leaves_a_non_string_model_unnamed() -> None:
+    dispatch: Final = PublicDispatch(Route.OCR, bind=bind_model)
+    request: Final = dispatch.request((None,), {})
+
+    assert request is not None
+    assert dispatch.context(request) == RouteContext(Route.OCR, provider=None, model=None)
+
+
 def test_rejected_fields_stay_on_python() -> None:
     dispatch: Final = PublicDispatch(Route.CHAT_COMPLETIONS, bind=bind_model, accepts=lambda fields: False)
     expected: Final = object()

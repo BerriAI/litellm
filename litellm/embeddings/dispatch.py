@@ -3,7 +3,7 @@ from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding sele
 
 from litellm import main
 from litellm.rust_bridge.catalog import Route
-from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.dispatch import PublicDispatch, model_is_named
 from litellm.rust_bridge.embeddings.entrypoints import (
     NATIVE_AEMBEDDING,
     NATIVE_EMBEDDING,
@@ -24,8 +24,10 @@ _PYTHON_AEMBEDDING: Final = cast(  # cast-ok: [LIT006] preserve the legacy publi
 )
 
 
-_DISPATCH: Final = PublicDispatch(Route.EMBEDDINGS, bind=binder(_PYTHON_EMBEDDING), internal_hop="aembedding")
-_ADISPATCH: Final = PublicDispatch(Route.EMBEDDINGS, bind=binder(_PYTHON_EMBEDDING))
+_DISPATCH: Final = PublicDispatch(
+    Route.EMBEDDINGS, bind=binder(_PYTHON_EMBEDDING), internal_hop="aembedding", accepts=model_is_named
+)
+_ADISPATCH: Final = PublicDispatch(Route.EMBEDDINGS, bind=binder(_PYTHON_EMBEDDING), accepts=model_is_named)
 
 
 def embedding(

@@ -185,6 +185,26 @@ def test_non_required_decision_cannot_be_served_without_python() -> None:
         )
 
 
+@pytest.mark.parametrize("model", (None, 7, {"name": "mistral/mistral-ocr-latest"}))
+def test_non_string_model_reaches_native_validation(model: object) -> None:
+    seen: Final[list[NativeCall]] = []
+
+    def native(request: NativeCall) -> OCRResponse:
+        seen.append(request)
+        return response()
+
+    _DISPATCH.run(
+        (model, {"type": "file", "file": b"pdf"}),
+        {},
+        python=runtime.NO_PYTHON,
+        binding=ocr_binding(native),
+        native=lambda hook, request, call_args, call_kwargs: hook(request),
+        policy=REQUIRED,
+    )
+
+    assert [request.bound["model"] for request in seen] == [model]
+
+
 @pytest.mark.parametrize(
     ("args", "kwargs", "message"),
     (

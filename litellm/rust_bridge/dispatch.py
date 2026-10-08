@@ -24,6 +24,10 @@ def model_is_named(fields: Fields) -> bool:
     return isinstance(fields.get("model"), str)
 
 
+def accept(fields: Fields) -> bool:
+    return True
+
+
 @dataclass(frozen=True, slots=True)
 class PublicDispatch:
     """One public entrypoint whose calls may run natively.
@@ -32,13 +36,14 @@ class PublicDispatch:
     arguments, or ``None`` when they do not fit, so Python raises its own error.
     ``internal_hop`` names the kwarg Python's async entrypoint sets when it re-enters the sync
     one; that call has already been dispatched and never reaches the bridge again.
-    ``accepts`` keeps a bound call on Python when it lacks what the native route needs.
+    ``accepts`` keeps a bound call on Python when it lacks what the native route needs; a route
+    without a Python implementation accepts everything and lets native validation reject it.
     ``provider`` reads the provider the catalog decides on from the bound fields."""
 
     route: Route
     bind: Bind
     internal_hop: str | None = None
-    accepts: Callable[[Fields], bool] = model_is_named
+    accepts: Callable[[Fields], bool] = accept
     provider: Callable[[Fields], str | None] = provider_kwarg
 
     def request(self, args: tuple[object, ...], kwargs: Mapping[str, object]) -> NativeCall | None:
@@ -50,7 +55,9 @@ class PublicDispatch:
         return native_call(args, kwargs, fields)
 
     def context(self, request: NativeCall) -> RouteContext:
-        return RouteContext(self.route, provider=self.provider(request.bound), model=str(request.bound["model"]))
+        return RouteContext(
+            self.route, provider=self.provider(request.bound), model=optional_str(request.bound.get("model"))
+        )
 
     def _native_request(self, args: tuple[object, ...], kwargs: Mapping[str, object]) -> NativeCall:
         request: Final = self.request(args, kwargs)

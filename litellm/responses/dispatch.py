@@ -4,7 +4,7 @@ from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding sele
 from litellm.responses import main
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.rust_bridge.catalog import Route
-from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.dispatch import PublicDispatch, model_is_named
 from litellm.rust_bridge.public_call import binder, native_call_hook
 from litellm.rust_bridge.responses.entrypoints import (
     NATIVE_ARESPONSES,
@@ -37,8 +37,10 @@ _PYTHON_RESPONSES: Final = _python_responses()
 _PYTHON_ARESPONSES: Final = _python_aresponses()
 
 
-_DISPATCH: Final = PublicDispatch(Route.RESPONSES, bind=binder(_PYTHON_RESPONSES), internal_hop="aresponses")
-_ADISPATCH: Final = PublicDispatch(Route.RESPONSES, bind=binder(_PYTHON_ARESPONSES))
+_DISPATCH: Final = PublicDispatch(
+    Route.RESPONSES, bind=binder(_PYTHON_RESPONSES), internal_hop="aresponses", accepts=model_is_named
+)
+_ADISPATCH: Final = PublicDispatch(Route.RESPONSES, bind=binder(_PYTHON_ARESPONSES), accepts=model_is_named)
 
 
 def responses(

@@ -49,7 +49,7 @@ def _binder(name: str) -> Bind:
 
 
 def _provider_prefix(fields: Mapping[str, object]) -> str | None:
-    prefix, separator, _ = str(fields["model"]).partition("/")
+    prefix, separator, _ = (optional_str(fields.get("model")) or "").partition("/")
     return optional_str(fields.get("custom_llm_provider")) or (prefix if separator else None)
 
 
