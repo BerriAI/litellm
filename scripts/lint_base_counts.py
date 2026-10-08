@@ -81,41 +81,48 @@ def cache_key(base_point: str, fingerprints: Sequence[str]) -> str:
     return hashlib.sha256("|".join((base_point, *fingerprints)).encode()).hexdigest()[:16]
 
 
-def _git(args: Sequence[str], cwd: Path) -> str:
-    proc: Final = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
-    if proc.returncode not in (0, 1):
-        sys.stderr.write(proc.stderr)
-        raise SystemExit(f"git exited {proc.returncode}")
-    return proc.stdout
+Git: TypeAlias = Callable[[Sequence[str]], str]
 
 
-def head_sha(cwd: Path = REPO_ROOT) -> str:
-    return _git(["rev-parse", "HEAD"], cwd).strip()
+def git_in(cwd: Path) -> Git:
+    def run(args: Sequence[str]) -> str:
+        proc: Final = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+        if proc.returncode not in (0, 1):
+            sys.stderr.write(proc.stderr)
+            raise SystemExit(f"git exited {proc.returncode}")
+        return proc.stdout
+
+    return run
 
 
-def resolve_base_point(base_ref: str, cwd: Path = REPO_ROOT) -> str:
+REPO_GIT: Final = git_in(REPO_ROOT)
+
+
+def head_sha(git: Git = REPO_GIT) -> str:
+    return git(["rev-parse", "HEAD"]).strip()
+
+
+def resolve_base_point(base_ref: str, git: Git = REPO_GIT) -> str:
     """The snapshot commit base counts are measured at: merge-base(base_ref, HEAD),
     made aware of an in-progress merge. Mid-merge, HEAD is still the pre-merge tip,
     so its merge-base is the old branch point and every violation the base gained
     since then would be blamed on this change. While MERGE_HEAD exists, prefer
     merge-base(base_ref, MERGE_HEAD) whenever it is the newer of the two."""
-    head_point: Final = _git(["merge-base", base_ref, "HEAD"], cwd).strip()
+    head_point: Final = git(["merge-base", base_ref, "HEAD"]).strip()
     if not head_point:
         return base_ref
-    merge_head: Final = _git(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"], cwd).strip()
+    merge_head: Final = git(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]).strip()
     if not merge_head:
         return head_point
-    merge_point: Final = _git(["merge-base", base_ref, merge_head], cwd).strip()
+    merge_point: Final = git(["merge-base", base_ref, merge_head]).strip()
     if not merge_point:
         return head_point
-    older: Final = _git(["merge-base", head_point, merge_point], cwd).strip()
+    older: Final = git(["merge-base", head_point, merge_point]).strip()
     return merge_point if older == head_point else head_point
 
 
-def default_cache_dir(cwd: Path = REPO_ROOT) -> Path:
-    common: Final = Path(_git(["rev-parse", "--git-common-dir"], cwd).strip())
-    resolved: Final = common if common.is_absolute() else cwd / common
-    return resolved / CACHE_DIR_NAME
+def default_cache_dir(git: Git = REPO_GIT) -> Path:
+    return Path(git(["rev-parse", "--path-format=absolute", "--git-common-dir"]).strip()) / CACHE_DIR_NAME
 
 
 def validated_counts(data: object) -> Counts | None:

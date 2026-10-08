@@ -7,11 +7,10 @@ import fnmatch
 import io
 import json
 import os
-import subprocess
 import zipfile
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Final, NoReturn
+from typing import Final, NamedTuple, NoReturn
 
 import pytest
 
@@ -148,8 +147,7 @@ def test_store_evicts_only_the_oldest_entries_beyond_the_cap(tmp_path: Path) -> 
 
 def test_store_never_evicts_the_entry_it_just_wrote_even_on_mtime_ties(tmp_path: Path) -> None:
     for index in range(counts.CACHE_KEEP_ENTRIES + 2):
-        path = counts.store_counts(tmp_path, _CHECKER, f"base{index}", {"reportAny": 1})
-        os.utime(path, (9_999_999_999, 9_999_999_999))
+        os.utime(counts.store_counts(tmp_path, _CHECKER, f"base{index}", {"reportAny": 1}), (9_999_999_999,) * 2)
     mine: Final = counts.store_counts(tmp_path, _CHECKER, "mine", {"reportAny": 2})
     assert counts.load_cached_counts(mine) == {"reportAny": 2}
     assert len(list(tmp_path.glob(_CHECKER.cache_glob()))) == counts.CACHE_KEEP_ENTRIES
@@ -394,69 +392,63 @@ def test_emitted_file_is_the_one_the_fetcher_looks_up(tmp_path: Path) -> None:
     }
 
 
-def _git(cwd: Path, *args: str) -> str:
-    proc: Final = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
-    assert proc.returncode == 0, proc.stderr
-    return proc.stdout.strip()
+class _History(NamedTuple):
+    parents: Mapping[str, tuple[str, ...]]
+    refs: Mapping[str, str]
+
+    def ancestry(self, commit: str) -> frozenset[str]:
+        return frozenset((commit,)).union(*(self.ancestry(parent) for parent in self.parents[commit]))
+
+    def merge_base(self, left: str, right: str) -> str:
+        common: Final = self.ancestry(self.refs.get(left, left)) & self.ancestry(self.refs.get(right, right))
+        return next(c for c in common if not any(c != other and c in self.ancestry(other) for other in common))
 
 
-def _commit(cwd: Path, name: str) -> str:
-    (cwd / name).write_text(name)
-    _git(cwd, "add", "-A")
-    _git(cwd, "commit", "-q", "-m", name)
-    return _git(cwd, "rev-parse", "HEAD")
+def _git_over(history: _History) -> counts.Git:
+    def git(args: Sequence[str]) -> str:
+        match tuple(args):
+            case ("merge-base", left, right):
+                return f"{history.merge_base(left, right)}\n"
+            case ("rev-parse", "HEAD"):
+                return f"{history.refs['HEAD']}\n"
+            case ("rev-parse", "--verify", "--quiet", ref):
+                return f"{history.refs[ref]}\n" if ref in history.refs else ""
+            case ("rev-parse", "--path-format=absolute", "--git-common-dir"):
+                return "/repo/.git\n"
+            case ("rev-parse", "--path-format=absolute", "--git-dir"):
+                return "/repo/.git/worktrees/feature\n"
+            case _:
+                raise AssertionError(f"unexpected git call: {args}")
+
+    return git
 
 
-def _init_repo(tmp_path: Path) -> Path:
-    repo: Final = tmp_path / "repo"
-    repo.mkdir()
-    _git(repo, "init", "-q", "-b", "main")
-    _git(repo, "config", "user.email", "gate@example.com")
-    _git(repo, "config", "user.name", "gate")
-    _git(repo, "config", "commit.gpgsign", "false")
-    return repo
+_FEATURE_OFF_MAIN: Final = _History(
+    parents={"shared": (), "feature": ("shared",), "drift": ("shared",)},
+    refs={"main": "drift", "HEAD": "feature"},
+)
 
 
-def _branched_repo(tmp_path: Path) -> tuple[Path, str, str]:
-    repo: Final = _init_repo(tmp_path)
-    branch_point: Final = _commit(repo, "shared.txt")
-    _git(repo, "checkout", "-q", "-b", "feature")
-    _commit(repo, "feature.txt")
-    _git(repo, "checkout", "-q", "main")
-    base_tip: Final = _commit(repo, "drift.txt")
-    _git(repo, "checkout", "-q", "feature")
-    return repo, branch_point, base_tip
+def test_base_point_is_the_branch_point_when_no_merge_is_in_progress() -> None:
+    assert counts.resolve_base_point("main", _git_over(_FEATURE_OFF_MAIN)) == "shared"
 
 
-def test_base_point_is_the_branch_point_when_no_merge_is_in_progress(tmp_path: Path) -> None:
-    repo, branch_point, _ = _branched_repo(tmp_path)
-    assert counts.resolve_base_point("main", cwd=repo) == branch_point
+def test_base_point_mid_merge_advances_to_the_merged_in_base_tip() -> None:
+    merging_main: Final = _FEATURE_OFF_MAIN._replace(refs={**_FEATURE_OFF_MAIN.refs, "MERGE_HEAD": "drift"})
+    assert counts.resolve_base_point("main", _git_over(merging_main)) == "drift"
 
 
-def test_base_point_mid_merge_advances_to_the_merged_in_base_tip(tmp_path: Path) -> None:
-    repo, _, base_tip = _branched_repo(tmp_path)
-    _git(repo, "merge", "--no-commit", "--no-ff", "main")
-    assert counts.resolve_base_point("main", cwd=repo) == base_tip
+def test_base_point_mid_merge_of_an_older_side_branch_keeps_the_newer_branch_point() -> None:
+    merging_old_side: Final = _History(
+        parents={"shared": (), "old": ("shared",), "drift": ("shared",), "feature": ("drift",)},
+        refs={"main": "drift", "HEAD": "feature", "MERGE_HEAD": "old"},
+    )
+    assert counts.resolve_base_point("main", _git_over(merging_old_side)) == "drift"
 
 
-def test_base_point_mid_merge_of_an_older_side_branch_keeps_the_newer_branch_point(tmp_path: Path) -> None:
-    repo: Final = _init_repo(tmp_path)
-    _commit(repo, "shared.txt")
-    _git(repo, "checkout", "-q", "-b", "old-side")
-    _commit(repo, "old.txt")
-    _git(repo, "checkout", "-q", "main")
-    newer_point: Final = _commit(repo, "drift.txt")
-    _git(repo, "checkout", "-q", "-b", "feature")
-    _commit(repo, "feature.txt")
-    _git(repo, "merge", "--no-commit", "--no-ff", "old-side")
-    assert counts.resolve_base_point("main", cwd=repo) == newer_point
+def test_head_sha_is_the_checked_out_commit() -> None:
+    assert counts.head_sha(_git_over(_FEATURE_OFF_MAIN)) == "feature"
 
 
-def test_head_sha_is_the_checked_out_commit(tmp_path: Path) -> None:
-    repo, _, _ = _branched_repo(tmp_path)
-    assert counts.head_sha(cwd=repo) == _git(repo, "rev-parse", "HEAD")
-
-
-def test_default_cache_dir_lives_under_the_shared_git_dir(tmp_path: Path) -> None:
-    repo, _, _ = _branched_repo(tmp_path)
-    assert counts.default_cache_dir(cwd=repo) == repo / ".git" / counts.CACHE_DIR_NAME
+def test_default_cache_dir_is_shared_by_every_worktree() -> None:
+    assert counts.default_cache_dir(_git_over(_FEATURE_OFF_MAIN)) == Path("/repo/.git") / counts.CACHE_DIR_NAME
