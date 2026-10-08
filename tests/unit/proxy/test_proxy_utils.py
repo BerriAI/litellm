@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Final, List, Optional, Union
 from unittest.mock import Mock
 
 import pytest
@@ -3329,3 +3329,22 @@ def test_handle_exception_on_proxy_preserves_auth_error_status_code():
     result = handle_exception_on_proxy(auth_error)
 
     assert int(result.code) == 401, f"Expected 401, got {result.code}"
+
+
+class _RedisDown:
+    async def async_delete_cache(self, key: str) -> None:
+        raise ConnectionError("redis is down")
+
+
+async def test_evict_config_param_clears_the_local_layer_and_survives_a_redis_outage() -> None:
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import _config_cache_key, evict_config_param
+
+    cache: Final = DualCache(redis_cache=_RedisDown())
+    await cache.in_memory_cache.async_set_cache(
+        _config_cache_key("router_settings"), {"param_name": "router_settings", "param_value": {"fallbacks": []}}
+    )
+
+    await evict_config_param("router_settings", cache=cache)
+
+    assert await cache.in_memory_cache.async_get_cache(_config_cache_key("router_settings")) is None
