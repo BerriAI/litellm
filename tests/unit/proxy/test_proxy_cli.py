@@ -1259,7 +1259,7 @@ class TestProxyInitializationHelpers:
             save_worker_config=MagicMock(),
         )
         mock_proxy_module.ProxyConfig.return_value.get_config = AsyncMock(
-            return_value={"general_settings": general_settings}
+            return_value=ProxyRuntimeConfig.from_resolved({"general_settings": general_settings})
         )
 
         clean_env = {
@@ -1334,12 +1334,12 @@ class TestProxyInitializationHelpers:
             save_worker_config=MagicMock(),
         )
         mock_proxy_module.ProxyConfig.return_value.get_config = AsyncMock(
-            return_value={
+            return_value=ProxyRuntimeConfig.from_resolved({
                 "general_settings": {
                     "database_url": "postgresql://test:test@localhost:5432/test",
                     "database_disable_prepared_statements": True,
                 }
-            }
+            })
         )
 
         clean_env = {
