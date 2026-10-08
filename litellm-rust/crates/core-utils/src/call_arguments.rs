@@ -131,7 +131,7 @@ mod tests {
             body,
             json!({
                 "model":"resolved", "known":null, "future":{"new":[false,0,null]},
-                "null":null, "zero":0, "metadata":{"provider":true}
+                "null":null, "zero":0
             })
         );
         assert_eq!(serde_json::to_value(arguments).unwrap(), original);
