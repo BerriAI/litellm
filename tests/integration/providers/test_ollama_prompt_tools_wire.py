@@ -843,7 +843,7 @@ def _thinking_reply(thinking: str) -> Reply:
 
 def _completion_texts(chunks: Sequence[Completion]) -> Iterator[str]:
     for chunk in chunks:
-        yield from (choice.text or "" for choice in chunk.choices)
+        yield from (choice.text for choice in chunk.choices)
 
 
 def _raw_stream_frames(gateway: Gateway, path: str, body: dict[str, JsonValue]) -> tuple[str, ...]:
