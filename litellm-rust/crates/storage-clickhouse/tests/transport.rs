@@ -191,3 +191,150 @@ async fn insert_timeout_environment_child() {
         )),
     }
 }
+
+fn gzip(body: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(body).unwrap();
+    encoder.finish().unwrap()
+}
+
+struct SmallQuery;
+
+impl Query for SmallQuery {
+    type Params = BTreeMap<String, String>;
+    type Row = QueryRow;
+    const READ_LIMITS: litellm_storage_clickhouse::ReadLimits =
+        litellm_storage_clickhouse::ReadLimits {
+            response_bytes: 64,
+            ..litellm_storage_clickhouse::READ_LIMITS
+        };
+    const SQL: &'static str = "SELECT small";
+}
+
+async fn compressed_server(body: Vec<u8>, encoding: &str) -> wiremock::MockServer {
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{header, query_param},
+    };
+    let server = MockServer::start().await;
+    Mock::given(query_param("enable_http_compression", "1"))
+        .and(header("accept-encoding", "gzip"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-encoding", encoding)
+                .set_body_bytes(body),
+        )
+        .mount(&server)
+        .await;
+    server
+}
+
+#[rstest]
+#[tokio::test]
+async fn compressed_responses_decode_into_rows_and_envelope() {
+    use litellm_storage_clickhouse::{fetch, fetch_json};
+    let body = r#"{"meta":[],"data":[{"answer":"ok"},{"answer":"雪"}],"rows":2}"#;
+    let server = compressed_server(gzip(body.as_bytes()), "gzip").await;
+    let client = Client::no_redirect_for_test();
+    let connection = Connection::parse(&server.uri()).unwrap();
+    let params = QueryParams {
+        signed: 0,
+        unsigned: 0,
+        float: 0.0,
+        text: String::new(),
+        strings: Vec::new(),
+    };
+
+    let rows = fetch::<TypedQuery>(&client, &connection, &params).await;
+    let envelope = fetch_json::<TypedQuery>(&client, &connection, &params).await;
+    let raw = execute_read(&client, &connection, "SELECT 1", &BTreeMap::new()).await;
+
+    assert_eq!(
+        rows.unwrap(),
+        vec![
+            QueryRow {
+                answer: "ok".into()
+            },
+            QueryRow {
+                answer: "雪".into()
+            }
+        ]
+    );
+    assert_eq!(envelope.unwrap(), body);
+    assert_eq!(raw.unwrap(), body);
+}
+
+#[rstest]
+#[case::corrupt_gzip(b"not gzip at all".to_vec(), "gzip")]
+#[case::truncated_gzip(gzip(br#"{"data":[]}"#)[..12].to_vec(), "gzip")]
+#[case::unsupported_encoding(gzip(br#"{"data":[]}"#), "br")]
+#[case::exception(gzip(br#"{"data":[],"exception":"Code: 241"}"#), "gzip")]
+#[case::missing_data(gzip(br#"{"rows":0}"#), "gzip")]
+#[case::trailing_error(gzip(br#"{"data":[]} Code: 241. DB::Exception"#), "gzip")]
+#[case::not_json(gzip(b"Code: 241. DB::Exception"), "gzip")]
+#[tokio::test]
+async fn malformed_or_failed_compressed_responses_are_errors(
+    #[case] body: Vec<u8>,
+    #[case] encoding: &str,
+) {
+    let server = compressed_server(body, encoding).await;
+    let result = execute_read(
+        &Client::no_redirect_for_test(),
+        &Connection::parse(&server.uri()).unwrap(),
+        "SELECT 1",
+        &BTreeMap::new(),
+    )
+    .await;
+
+    assert!(matches!(result, Err(Error::InvalidResponse)), "{result:?}");
+}
+
+#[rstest]
+#[case::identity_over_limit(
+    format!(r#"{{"data":[{{"answer":"{}"}}]}}"#, "a".repeat(64)).into_bytes(),
+    None,
+    true
+)]
+#[case::gzip_inflates_over_limit(
+    gzip(format!(r#"{{"data":[{{"answer":"{}"}}]}}"#, "a".repeat(4096)).as_bytes()),
+    Some("gzip"),
+    true
+)]
+#[case::gzip_within_limit(gzip(br#"{"data":[{"answer":"ok"}]}"#), Some("gzip"), false)]
+#[case::identity_within_limit(br#"{"data":[{"answer":"ok"}]}"#.to_vec(), None, false)]
+#[tokio::test]
+async fn response_limit_applies_to_decompressed_bytes(
+    #[case] body: Vec<u8>,
+    #[case] encoding: Option<&str>,
+    #[case] too_large: bool,
+) {
+    use litellm_storage_clickhouse::fetch;
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+    let server = MockServer::start().await;
+    let template = ResponseTemplate::new(200).set_body_bytes(body);
+    Mock::given(method("POST"))
+        .respond_with(match encoding {
+            Some(encoding) => template.insert_header("content-encoding", encoding),
+            None => template,
+        })
+        .mount(&server)
+        .await;
+    let result = fetch::<SmallQuery>(
+        &Client::no_redirect_for_test(),
+        &Connection::parse(&server.uri()).unwrap(),
+        &BTreeMap::new(),
+    )
+    .await;
+
+    if too_large {
+        assert!(matches!(result, Err(Error::ResponseTooLarge)), "{result:?}");
+    } else {
+        assert_eq!(
+            result.unwrap(),
+            vec![QueryRow {
+                answer: "ok".into()
+            }]
+        );
+    }
+}
