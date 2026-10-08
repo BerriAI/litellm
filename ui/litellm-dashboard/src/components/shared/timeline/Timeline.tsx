@@ -5,7 +5,6 @@ import moment from "moment";
 import { useRef, useState, type RefObject } from "react";
 import { useResizeObserver } from "usehooks-ts";
 
-import { DotFieldCanvas, DotFieldRoot } from "@/components/shared/dotField/DotField";
 import type { DotBand, DotColumn } from "@/components/shared/dotField/dots";
 import { cn } from "@/lib/cva.config";
 
@@ -55,22 +54,27 @@ interface TimelineProps {
   noun: ItemNoun;
 }
 
-function BucketBar({ bucket }: { bucket: TimeBucket }) {
-  return <div className="pointer-events-none h-full flex-1" data-testid="timeline-bucket" data-total={bucket.total} />;
-}
-
-function NowEdge() {
+function BucketBar({ bucket, max, dimmed }: { bucket: TimeBucket; max: number; dimmed: boolean }) {
+  const ok = bucket.total - bucket.failed;
   return (
-    <>
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-y-0 w-24 bg-gradient-to-r from-transparent via-[#3b5bfd]/[0.08] to-transparent motion-safe:animate-[timeline-sweep_6s_linear_infinite] motion-reduce:hidden"
-      />
-      <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-0">
-        <span className="absolute inset-y-0 right-0 w-px bg-[#3b5bfd]/50" />
-        <span className="absolute -top-0.5 right-0 size-1.5 translate-x-1/2 rounded-full bg-[#3b5bfd] motion-safe:animate-pulse" />
-      </div>
-    </>
+    <div
+      className={cn(
+        "pointer-events-none flex h-full flex-1 flex-col justify-end px-[2px] transition-opacity",
+        dimmed && "opacity-25",
+      )}
+      data-testid="timeline-bucket"
+      data-total={bucket.total}
+    >
+      {bucket.failed > 0 && (
+        <div className="rounded-t-[2px] bg-[#ef4444]" style={{ height: pct(bucket.failed / max) }} />
+      )}
+      {ok > 0 && (
+        <div
+          className={cn("bg-[#2b3fd6]", bucket.failed === 0 && "rounded-t-[2px]")}
+          style={{ height: pct(ok / max) }}
+        />
+      )}
+    </div>
   );
 }
 
@@ -87,7 +91,7 @@ function BucketTooltip({
 }) {
   return (
     <div
-      className="pointer-events-none absolute top-full z-floating mt-1 rounded-md border border-border bg-popover px-2.5 py-1.5 font-mono text-xs text-popover-foreground shadow-md"
+      className="pointer-events-none absolute top-full z-floating mt-1 rounded-md border border-border bg-popover px-2.5 py-1.5 text-xs text-popover-foreground tabular-nums shadow-md"
       style={{ left: pct(Math.min(0.8, index / bucketCount)) }}
       role="tooltip"
     >
@@ -98,7 +102,7 @@ function BucketTooltip({
         {bucket.total} {bucket.total === 1 ? noun.singular : noun.plural}
         {bucket.failed > 0 && `, ${bucket.failed} failed`}
       </div>
-      <div className="text-info">drag to zoom</div>
+      <div className="text-muted-foreground">Drag to zoom</div>
     </div>
   );
 }
@@ -156,14 +160,14 @@ function SelectionBracket({
   const leftFrac = band.lo / bucketCount;
   const rightFrac = (band.hi + 1) / bucketCount;
   const widthPx = (rightFrac - leftFrac) * stripWidth;
-  const handle = "absolute inset-y-0 w-[2px] cursor-ew-resize bg-[#0011b3] dark:bg-[#8b9bff]";
+  const handle = "absolute inset-y-0 w-[2px] cursor-ew-resize bg-foreground";
   const tick =
     "before:absolute before:top-0 before:h-[2px] before:w-2 before:bg-inherit after:absolute after:bottom-0 after:h-[2px] after:w-2 after:bg-inherit";
-  const edgeLabel = "pointer-events-none absolute -bottom-5 font-mono text-xs whitespace-nowrap text-info tabular-nums";
+  const edgeLabel = "pointer-events-none absolute -bottom-5 text-xs whitespace-nowrap text-foreground tabular-nums";
   return (
     <>
       <div
-        className="absolute inset-y-0 cursor-grab bg-[#0011b3]/[0.05] active:cursor-grabbing dark:bg-[#8b9bff]/[0.08]"
+        className="absolute inset-y-0 cursor-grab bg-foreground/[0.04] active:cursor-grabbing"
         style={{ left: pct(leftFrac), width: pct(rightFrac - leftFrac) }}
         data-testid="timeline-selection"
         onPointerDown={onHandleDown("move")}
@@ -179,7 +183,7 @@ function SelectionBracket({
           onPointerDown={onHandleDown("resize-hi")}
         />
         {widthPx >= MIN_DURATION_LABEL_PX && (
-          <span className="pointer-events-none absolute inset-x-0 top-2 text-center font-mono text-xs font-semibold text-info">
+          <span className="pointer-events-none absolute inset-x-0 top-1 text-center text-xs font-medium text-foreground tabular-nums">
             {formatSpan(window.endMs - window.startMs)}
           </span>
         )}
@@ -217,7 +221,7 @@ function TickAxis({ range, width }: { range: TimeWindow; width: number }) {
           style={{ left: pct(t), transform: tickShift(t) }}
         >
           <span className="h-1 w-px bg-border" />
-          <span className="font-mono text-xs whitespace-nowrap text-muted-foreground tabular-nums">
+          <span className="text-xs whitespace-nowrap text-muted-foreground tabular-nums">
             {moment(range.startMs + (range.endMs - range.startMs) * t).format(format)}
           </span>
         </div>
@@ -284,23 +288,21 @@ export function Timeline({ buckets, selection, onSelect, noun }: TimelineProps) 
   if (bucketCount === 0) return null;
 
   const range: TimeWindow = { startMs: buckets[0].startMs, endMs: buckets[bucketCount - 1].endMs };
+  const max = Math.max(1, ...buckets.map((b) => b.total));
   const labelFormat = edgeFormat(range);
 
   return (
     <div
-      className="relative shrink-0 border-b border-border bg-card px-3 pt-2 pb-1 outline-none select-none"
+      className="relative shrink-0 border-b border-border px-4 pt-3 pb-1 outline-none select-none"
       data-testid="timeline"
       tabIndex={0}
       onKeyDown={onKeyDown}
     >
-      <DotFieldRoot
+      <div
         ref={areaRef}
-        columns={buckets}
-        band={band}
-        hover={hover}
         role="presentation"
         data-testid="timeline-area"
-        className="flex cursor-crosshair touch-none items-end"
+        className="relative flex h-12 cursor-crosshair touch-none items-end border-b border-border"
         onPointerDown={(e) => begin("select", e)}
         onPointerMove={onMove}
         onPointerUp={onUp}
@@ -309,15 +311,13 @@ export function Timeline({ buckets, selection, onSelect, noun }: TimelineProps) 
       >
         {hover !== null && !drag && (
           <div
-            className="pointer-events-none absolute inset-y-0 w-px bg-[#0011b3]/50 dark:bg-[#8b9bff]/50"
+            className="pointer-events-none absolute inset-y-0 w-px bg-foreground/30"
             style={{ left: pct((hover + 0.5) / bucketCount) }}
             data-testid="timeline-cursor"
           />
         )}
-        <DotFieldCanvas />
-        <NowEdge />
-        {buckets.map((b) => (
-          <BucketBar key={b.startMs} bucket={b} />
+        {buckets.map((b, i) => (
+          <BucketBar key={b.startMs} bucket={b} max={max} dimmed={band !== null && (i < band.lo || i > band.hi)} />
         ))}
         {band && (
           <SelectionBracket
@@ -329,7 +329,7 @@ export function Timeline({ buckets, selection, onSelect, noun }: TimelineProps) 
             onHandleDown={onHandleDown}
           />
         )}
-      </DotFieldRoot>
+      </div>
       <div className="mt-1">
         <TickAxis range={range} width={stripWidth} />
       </div>
