@@ -118,6 +118,74 @@ async fn agent_picker_query_preserves_scope_through_the_internal_read_route() {
 
 #[rstest]
 #[tokio::test]
+async fn feedback_summary_query_preserves_scope_through_the_internal_read_route() {
+    let store = MockServer::start().await;
+    let result = json!({"data": [{
+        "trace_id": "1234567890abcdef1234567890abcdef", "trace_ref": "REF",
+        "count": "2", "average": 5.5, "lowest": "2"
+    }]});
+    Mock::given(method("POST"))
+        .and(body_string_contains("FROM lens_feedback FINAL"))
+        .and(query_param("param_all_teams", "0"))
+        .and(query_param("param_team", "feedback-team"))
+        .and(query_param(
+            "param_trace_ids",
+            "['1234567890abcdef1234567890abcdef']",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&result))
+        .expect(1)
+        .mount(&store)
+        .await;
+    let server = serve(&store.uri(), true).await;
+    let response = http_client()
+        .unwrap()
+        .post(format!("{}/internal/read", server.url))
+        .bearer_auth(SERVICE_TOKEN)
+        .json(&json!({
+            "operation": "query", "name": "feedback_summary", "parameters": {
+                "all_teams": 0, "team": "feedback-team", "key_hash": "",
+                "trace_ids": ["1234567890abcdef1234567890abcdef"]
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.json::<serde_json::Value>().await.unwrap(), result);
+}
+
+#[rstest]
+#[tokio::test]
+async fn feedback_rows_are_written_to_the_feedback_table() {
+    let store = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(query_param(
+            "query",
+            "INSERT INTO `litellm`.lens_feedback FORMAT JSONEachRow",
+        ))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&store)
+        .await;
+    let server = serve(&store.uri(), true).await;
+    let response = http_client()
+        .unwrap()
+        .post(format!("{}/internal/feedback", server.url))
+        .bearer_auth(SERVICE_TOKEN)
+        .json(&json!([{
+            "TeamId": "team", "ApiKeyHash": "", "TraceId": "1234567890abcdef1234567890abcdef",
+            "Author": "customer-1042", "Score": 2, "Comment": "wrong command",
+            "CreatedAt": "2026-10-07T21:57:01.414Z", "UpdatedAt": "2026-10-07T21:57:01.414Z",
+            "IsDeleted": 0
+        }]))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 204);
+}
+
+#[rstest]
+#[tokio::test]
 async fn ingestion_confirms_storage_and_overwrites_exporter_tenant() {
     let store = MockServer::start().await;
     Mock::given(method("POST"))
@@ -297,7 +365,7 @@ async fn ingestion_key_cannot_read_or_export_gateway_records() {
     let store = MockServer::start().await;
     let server = serve(&store.uri(), true).await;
     let client = http_client().unwrap();
-    for path in ["/internal/read", "/internal/spend"] {
+    for path in ["/internal/read", "/internal/spend", "/internal/feedback"] {
         let response = client
             .post(format!("{}{path}", server.url))
             .bearer_auth(KEY)
