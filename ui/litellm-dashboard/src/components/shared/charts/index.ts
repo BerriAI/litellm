@@ -18,3 +18,10 @@ export {
 } from "./colors";
 export { DonutChart, type DonutChartProps } from "./donut_chart";
 export { LineChart, type LineChartCurveType, type LineChartProps } from "./line_chart";
+export {
+  STACKED_USAGE_PALETTE,
+  StackedUsageChart,
+  stackedUsageColor,
+  type StackedUsageChartProps,
+  type StackedUsageScale,
+} from "./StackedUsageChart";

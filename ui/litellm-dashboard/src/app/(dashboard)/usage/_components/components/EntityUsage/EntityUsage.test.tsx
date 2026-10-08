@@ -563,7 +563,8 @@ describe("EntityUsage", () => {
       expect(spendElements.length).toBeGreaterThan(0);
     });
 
-    expect(screen.getByText("1,000")).toBeInTheDocument(); // Total Requests
+    // Scoped to the active Cost tab: the keep-mounted Key Activity tab shows the same totals.
+    expect(within(screen.getByRole("tabpanel")).getByText("1,000")).toBeInTheDocument(); // Total Requests
   });
 
   it("should render with team entity type and call team API", async () => {
@@ -683,7 +684,7 @@ describe("EntityUsage", () => {
       fireEvent.click(keyActivityTab);
     });
 
-    expect(screen.getAllByText("Activity Metrics")[1]).toBeInTheDocument();
+    expect(within(screen.getByRole("tabpanel")).getByRole("heading", { name: "Overall Usage" })).toBeInTheDocument();
   });
 
   it("loads key pages separately from the aggregate using the current entity scope", async () => {
@@ -806,9 +807,10 @@ describe("EntityUsage", () => {
     });
 
     expect(await screen.findByText("Tag Spend Overview")).toBeInTheDocument();
-    expect(await screen.findByText("$0.00")).toBeInTheDocument();
-    expect(screen.getByText("Total Spend")).toBeInTheDocument();
-    expect(screen.getAllByText("0")[0]).toBeInTheDocument();
+    const costTab = screen.getByRole("tabpanel");
+    expect(await within(costTab).findByText("$0.00")).toBeInTheDocument();
+    expect(within(costTab).getByText("Total Spend")).toBeInTheDocument();
+    expect(within(costTab).getAllByText("0")[0]).toBeInTheDocument();
   });
 
   it("should display Model Activity tab for non-agent entity types", async () => {
@@ -1093,31 +1095,26 @@ describe("EntityUsage", () => {
     });
   });
 
-  it("renders daily spend bars, per-entity bars, and the provider donut with cyan fills and a $ center total", async () => {
+  it("renders the stacked daily spend chart, the per-entity table, and the provider share bar with a $ total", async () => {
     const { container } = render(<EntityUsage {...defaultProps} />);
 
     await waitFor(() => {
       expect(mockTagDailyActivityCall).toHaveBeenCalled();
     });
 
+    // The fixture carries no model breakdown, so the day's spend stacks as a single "Other" segment.
     await waitFor(() => {
-      expect(container.querySelectorAll("path.recharts-rectangle")).toHaveLength(2);
+      expect(container.querySelectorAll("path.recharts-rectangle")).toHaveLength(1);
     });
+    expect(container.querySelector("path.recharts-rectangle")).toHaveAttribute("fill", "#94a3b8");
 
-    const barFills = new Set(
-      Array.from(container.querySelectorAll("path.recharts-rectangle")).map((rect) => rect.getAttribute("fill")),
-    );
-    expect(barFills).toEqual(new Set(["var(--color-cyan-500, #06b6d4)"]));
+    expect(screen.getAllByText("Jan 1").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Tag 1").length).toBeGreaterThan(0);
 
-    expect(screen.getAllByText("2025-01-01").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Tag 1").length).toBeGreaterThan(1);
-
-    const sectors = container.querySelectorAll(".recharts-pie-sector path");
-    expect(sectors).toHaveLength(1);
-    expect(sectors[0]).toHaveAttribute("fill", "var(--color-cyan-500, #06b6d4)");
-
-    const centerLabels = Array.from(container.querySelectorAll("text.fill-foreground")).map((text) => text.textContent);
-    expect(centerLabels).toContain("$100.50");
+    const segments = screen.getAllByTestId("provider-share-segment");
+    expect(segments).toHaveLength(1);
+    expect(segments[0]).toHaveStyle({ backgroundColor: "rgb(236, 72, 153)" });
+    expect(screen.getByTestId("provider-spend-total")).toHaveTextContent("$100.50");
   });
 
   it("should label the chart with user_email metadata instead of the raw UUID (LIT-3889)", async () => {

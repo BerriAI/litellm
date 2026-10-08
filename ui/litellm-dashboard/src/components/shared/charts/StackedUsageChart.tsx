@@ -1,0 +1,116 @@
+"use client";
+
+import * as React from "react";
+import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
+import { type ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
+import { cn } from "@/lib/cva.config";
+
+/** The Model Leaderboard palette; shared so the usage page stacks in the same colors. */
+export const STACKED_USAGE_PALETTE = [
+  "#ec4899",
+  "#a855f7",
+  "#f59e0b",
+  "#3b82f6",
+  "#10b981",
+  "#ef4444",
+  "#14b8a6",
+  "#84cc16",
+  "#6366f1",
+  "#f97316",
+] as const;
+
+export const stackedUsageColor = (index: number) => STACKED_USAGE_PALETTE[index % STACKED_USAGE_PALETTE.length];
+
+export type StackedUsageScale = "linear" | "log";
+
+export interface StackedUsageChartProps {
+  data: readonly Record<string, unknown>[];
+  /** Series keys, bottom of the stack first. */
+  series: readonly string[];
+  /** Overrides the palette per series, e.g. to grey out an "Other" bucket. */
+  colors?: readonly string[];
+  xKey: string;
+  format: (value: number) => string;
+  /** Appended to the tooltip header as "· Total …" for the hovered bucket. */
+  totalFor?: (label: string) => number | undefined;
+  totalLabel?: string;
+  scale?: StackedUsageScale;
+  className?: string;
+}
+
+/**
+ * One tooltip row: the default swatch layout, but the value goes through `format` and is held apart
+ * from long series names. Zero rows render nothing, so a day lists only what it actually used.
+ */
+export function StackedUsageTooltipRow({
+  value,
+  name,
+  color,
+  format,
+}: {
+  value: number;
+  name: string;
+  color: string | undefined;
+  format: (value: number) => string;
+}) {
+  if (value === 0) return null;
+  return (
+    <div className="flex w-full items-center gap-2">
+      <span className="size-2.5 shrink-0 rounded-[2px]" style={{ backgroundColor: color }} />
+      <span className="min-w-0 flex-1 truncate text-muted-foreground">{name}</span>
+      <span className="ml-3 font-medium tabular-nums text-foreground">{format(value)}</span>
+    </div>
+  );
+}
+
+/** Daily usage stacked by series, with a tooltip listing each series and the bucket total. */
+export function StackedUsageChart({
+  data,
+  series,
+  colors,
+  xKey,
+  format,
+  totalFor,
+  totalLabel = "Total",
+  scale = "linear",
+  className,
+}: StackedUsageChartProps) {
+  const fill = (index: number) => colors?.[index] ?? stackedUsageColor(index);
+  const config = Object.fromEntries(
+    series.map((key, index) => [key, { label: key, color: fill(index) }]),
+  ) satisfies ChartConfig;
+
+  return (
+    <ChartContainer config={config} className={cn("aspect-auto h-[380px] w-full", className)}>
+      <BarChart data={[...data]} margin={{ left: 8, right: 8 }} barCategoryGap="15%" maxBarSize={64}>
+        <CartesianGrid vertical={false} />
+        <XAxis dataKey={xKey} tickLine={false} axisLine={false} minTickGap={48} />
+        <YAxis
+          scale={scale}
+          domain={scale === "log" ? [1, "auto"] : [0, "auto"]}
+          allowDataOverflow
+          tickLine={false}
+          axisLine={false}
+          tickFormatter={(value) => format(Number(value))}
+        />
+        <ChartTooltip
+          content={
+            <ChartTooltipContent
+              className="min-w-48"
+              labelFormatter={(label) => {
+                const total = totalFor?.(String(label));
+                return total === undefined ? String(label) : `${label} · ${totalLabel} ${format(total)}`;
+              }}
+              formatter={(value, name, item) => (
+                <StackedUsageTooltipRow value={Number(value)} name={String(name)} color={item.color} format={format} />
+              )}
+            />
+          }
+        />
+        {series.map((key, index) => (
+          <Bar key={key} dataKey={key} stackId="usage" fill={fill(index)} isAnimationActive={false} />
+        ))}
+      </BarChart>
+    </ChartContainer>
+  );
+}
