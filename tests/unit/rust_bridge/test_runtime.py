@@ -10,8 +10,7 @@ from litellm.exceptions import APIError
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.rust_bridge import bindings, configuration, runtime
-from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
-from litellm.rust_bridge.configuration import Rollout
+from litellm.rust_bridge.catalog import Decision, Python, Route, RouteContext, Rust
 from litellm.rust_bridge.lifecycle import Complete, Open, Yield
 from litellm.rust_bridge.streams import Stream, SyncStream
 
@@ -52,10 +51,6 @@ def binding(native: NativeFn | None) -> bindings.NativeBinding[NativeFn]:
     return bound
 
 
-def rules(rollout: Rollout) -> tuple[RouteRule, ...]:
-    return (RouteRule(Route.MESSAGES, rollout, providers=frozenset({"anthropic"})),)
-
-
 class Recorder:
     def __init__(self, native_effect: BaseException | None = None) -> None:
         self._native_effect: Final = native_effect
@@ -76,81 +71,60 @@ def recorder(native_effect: BaseException | None = None) -> Recorder:
     return Recorder(native_effect)
 
 
-def run(rollout: Rollout, calls: Recorder, *, native_missing: bool = False, context: RouteContext = CONTEXT) -> str:
+OPTIONAL: Final = Rust()
+REQUIRED: Final = Rust(required=True)
+STAY: Final = Python("test keeps the call on Python")
+
+
+def run(policy: Decision, calls: Recorder, *, native_missing: bool = False, context: RouteContext = CONTEXT) -> str:
     return runtime.run(
         context,
         binding=binding(None if native_missing else calls.rust),
         native=lambda fn: fn(),
         python=calls.python,
-        rules=rules(rollout),
+        policy=policy,
     )
 
 
 @pytest.mark.parametrize(
-    ("rollout", "switch", "expected"),
+    ("policy", "expected"),
     (
-        (Rollout.PYTHON_ONLY, None, (PYTHON,)),
-        (Rollout.PYTHON_ONLY, True, (PYTHON,)),
-        (Rollout.RUST_OPT_IN, None, (PYTHON,)),
-        (Rollout.RUST_OPT_IN, True, (RUST,)),
-        (Rollout.RUST_OPT_OUT, None, (RUST,)),
-        (Rollout.RUST_OPT_OUT, False, (PYTHON,)),
-        (Rollout.RUST_REQUIRED, None, (RUST,)),
-        (Rollout.RUST_REQUIRED, False, (RUST,)),
+        (STAY, (PYTHON,)),
+        (OPTIONAL, (RUST,)),
+        (REQUIRED, (RUST,)),
     ),
 )
-def test_rollout_and_switch_select_native_or_python(
-    rollout: Rollout, switch: bool | None, expected: tuple[str, ...]
-) -> None:
+def test_decision_selects_native_or_python(policy: Decision, expected: tuple[str, ...]) -> None:
+    calls: Final = recorder()
+
+    assert run(policy, calls) == expected[-1]
+    assert calls.calls == expected
+
+
+@pytest.mark.parametrize("switch", (None, "0", "1"))
+def test_shipped_policy_is_consulted_when_none_is_given(monkeypatch: pytest.MonkeyPatch, switch: str | None) -> None:
     calls: Final = recorder()
     if switch is not None:
-        configuration.rust(switch)
+        monkeypatch.setenv("LITELLM_RUST", switch)
 
-    assert run(rollout, calls) == expected[-1]
-    assert calls.calls == expected
+    result: Final = runtime.run(CONTEXT, binding=binding(calls.rust), native=lambda fn: fn(), python=calls.python)
+
+    assert result == (RUST if switch == "1" else PYTHON)
 
 
-def test_environment_switch_enables_opt_in_route(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_policy_callable_receives_the_context() -> None:
     calls: Final = recorder()
-    monkeypatch.setenv("LITELLM_RUST", "1")
+    seen: Final[list[RouteContext]] = []
 
-    assert run(Rollout.RUST_OPT_IN, calls) == "rust"
-    assert calls.calls == (RUST,)
+    def policy(context: RouteContext) -> Decision:
+        seen.append(context)
+        return REQUIRED
 
-
-@pytest.mark.parametrize(
-    ("rollout", "environment", "switch", "expected"),
-    (
-        (Rollout.RUST_OPT_IN, "0", True, (PYTHON,)),
-        (Rollout.RUST_OPT_OUT, "0", True, (PYTHON,)),
-        (Rollout.RUST_OPT_IN, "1", False, (RUST,)),
-        (Rollout.RUST_OPT_OUT, "1", False, (RUST,)),
-        (Rollout.RUST_REQUIRED, "0", False, (RUST,)),
-        (Rollout.PYTHON_ONLY, "1", True, (PYTHON,)),
-    ),
-)
-def test_environment_switch_wins_over_process_switch(
-    monkeypatch: pytest.MonkeyPatch,
-    rollout: Rollout,
-    environment: str,
-    switch: bool,
-    expected: tuple[str, ...],
-) -> None:
-    calls: Final = recorder()
-    monkeypatch.setenv("LITELLM_RUST", environment)
-    configuration.rust(switch)
-
-    assert run(rollout, calls) == expected[-1]
-    assert calls.calls == expected
-
-
-def test_context_outside_rule_stays_on_python() -> None:
-    calls: Final = recorder()
-    configuration.rust(True)
-
-    assert run(Rollout.RUST_REQUIRED, calls, context=RouteContext(Route.MESSAGES, provider="openai")) == "python"
-    assert run(Rollout.RUST_REQUIRED, calls, context=RouteContext(Route.RESPONSES, provider="anthropic")) == "python"
-    assert calls.calls == (PYTHON, PYTHON)
+    assert (
+        runtime.run(CONTEXT, binding=binding(calls.rust), native=lambda fn: fn(), python=calls.python, policy=policy)
+        == RUST
+    )
+    assert seen == [CONTEXT]
 
 
 @pytest.mark.asyncio
@@ -187,14 +161,14 @@ async def test_shipped_python_routes_never_load_native(monkeypatch: pytest.Monke
 def test_native_decline_falls_back_to_python_once() -> None:
     calls: Final = recorder(RustBridgeDeclined("unsupported"))
 
-    assert run(Rollout.RUST_OPT_OUT, calls) == "python"
+    assert run(OPTIONAL, calls) == "python"
     assert calls.calls == (RUST, PYTHON)
 
 
 def test_unavailable_native_falls_back_to_python() -> None:
     calls: Final = recorder()
 
-    assert run(Rollout.RUST_OPT_OUT, calls, native_missing=True) == "python"
+    assert run(OPTIONAL, calls, native_missing=True) == "python"
     assert calls.calls == (PYTHON,)
 
 
@@ -215,14 +189,8 @@ async def test_python_fallback_does_not_claim_rust_execution(missing: bool) -> N
     async def python() -> OCRResponse:
         return expected
 
-    assert (
-        runtime.run(CONTEXT, binding=bound, native=native, python=lambda: expected, rules=rules(Rollout.RUST_OPT_OUT))
-        is expected
-    )
-    assert (
-        await runtime.arun(CONTEXT, binding=bound, native=anative, python=python, rules=rules(Rollout.RUST_OPT_OUT))
-        is expected
-    )
+    assert runtime.run(CONTEXT, binding=bound, native=native, python=lambda: expected, policy=OPTIONAL) is expected
+    assert await runtime.arun(CONTEXT, binding=bound, native=anative, python=python, policy=OPTIONAL) is expected
     assert get_hidden_params_dict(expected) == {}
 
 
@@ -256,11 +224,9 @@ async def test_native_response_marker_reaches_caller_with_existing_metadata(
         return python()
 
     result: Final = (
-        await runtime.arun(CONTEXT, binding=bound, native=anative, python=apython, rules=rules(Rollout.RUST_REQUIRED))
+        await runtime.arun(CONTEXT, binding=bound, native=anative, python=apython, policy=REQUIRED)
         if asynchronous
-        else runtime.run(
-            CONTEXT, binding=bound, native=lambda fn: fn(), python=python, rules=rules(Rollout.RUST_REQUIRED)
-        )
+        else runtime.run(CONTEXT, binding=bound, native=lambda fn: fn(), python=python, policy=REQUIRED)
     )
     assert result is response
     assert get_hidden_params_dict(result) == {
@@ -315,11 +281,9 @@ async def test_native_stream_marker_reaches_caller_without_wrapping_or_consuming
         return python()
 
     result: Final = (
-        await runtime.arun(CONTEXT, binding=bound, native=anative, python=apython, rules=rules(Rollout.RUST_REQUIRED))
+        await runtime.arun(CONTEXT, binding=bound, native=anative, python=apython, policy=REQUIRED)
         if asynchronous
-        else runtime.run(
-            CONTEXT, binding=bound, native=lambda fn: fn(), python=python, rules=rules(Rollout.RUST_REQUIRED)
-        )
+        else runtime.run(CONTEXT, binding=bound, native=lambda fn: fn(), python=python, policy=REQUIRED)
     )
     assert result is stream
     assert get_hidden_params_dict(result) == {"additional_headers": {"x-litellm-rust": "true"}}
@@ -333,7 +297,7 @@ def test_upstream_error_maps_to_api_error_without_fallback() -> None:
     calls: Final = recorder(RustUpstreamError(429, "rate limited"))
 
     with pytest.raises(APIError, match="rate limited") as caught:
-        run(Rollout.RUST_OPT_OUT, calls)
+        run(OPTIONAL, calls)
 
     assert caught.value.status_code == 429
     assert calls.calls == (RUST,)
@@ -344,7 +308,7 @@ def test_other_native_errors_propagate_without_fallback() -> None:
     calls: Final = recorder(failure)
 
     with pytest.raises(ValueError, match="admitted") as caught:
-        run(Rollout.RUST_OPT_OUT, calls)
+        run(OPTIONAL, calls)
 
     assert caught.value is failure
     assert calls.calls == (RUST,)
@@ -354,7 +318,7 @@ def test_required_route_rejects_unavailable_bridge() -> None:
     calls: Final = recorder()
 
     with pytest.raises(RuntimeError, match="Rust messages bridge is unavailable"):
-        run(Rollout.RUST_REQUIRED, calls, native_missing=True)
+        run(REQUIRED, calls, native_missing=True)
 
     assert PYTHON not in calls.calls
 
@@ -363,7 +327,7 @@ def test_required_route_rejects_native_decline() -> None:
     calls: Final = recorder(RustBridgeDeclined("unsupported"))
 
     with pytest.raises(RuntimeError, match="declined the request: unsupported"):
-        run(Rollout.RUST_REQUIRED, calls)
+        run(REQUIRED, calls)
 
     assert PYTHON not in calls.calls
 
@@ -393,7 +357,7 @@ async def test_arun_mirrors_sync_fallback(
         binding=binding(None if native_missing else calls.rust),
         native=native,
         python=python,
-        rules=rules(Rollout.RUST_OPT_OUT),
+        policy=OPTIONAL,
     )
 
     assert result == expected[-1]
@@ -411,7 +375,7 @@ async def test_arun_required_route_rejects_unavailable_bridge() -> None:
             binding=binding(None),
             native=lambda fn: python(),
             python=python,
-            rules=rules(Rollout.RUST_REQUIRED),
+            policy=REQUIRED,
         )
 
 
@@ -431,7 +395,7 @@ async def test_arun_upstream_error_maps_to_api_error_without_fallback() -> None:
             binding=binding(calls.rust),
             native=native,
             python=python,
-            rules=rules(Rollout.RUST_OPT_OUT),
+            policy=OPTIONAL,
         )
 
     assert caught.value.status_code == 503
@@ -439,7 +403,7 @@ async def test_arun_upstream_error_maps_to_api_error_without_fallback() -> None:
 
 
 async def run_without_python(
-    rollout: Rollout,
+    policy: Decision,
     calls: Recorder,
     *,
     asynchronous: bool,
@@ -448,14 +412,12 @@ async def run_without_python(
 ) -> str:
     bound: Final = binding(None if native_missing else calls.rust)
     if not asynchronous:
-        return runtime.run(
-            context, binding=bound, native=lambda fn: fn(), python=runtime.NO_PYTHON, rules=rules(rollout)
-        )
+        return runtime.run(context, binding=bound, native=lambda fn: fn(), python=runtime.NO_PYTHON, policy=policy)
 
     async def native(fn: NativeFn) -> str:
         return fn()
 
-    return await runtime.arun(context, binding=bound, native=native, python=runtime.NO_PYTHON, rules=rules(rollout))
+    return await runtime.arun(context, binding=bound, native=native, python=runtime.NO_PYTHON, policy=policy)
 
 
 @pytest.mark.parametrize("asynchronous", (False, True))
@@ -467,7 +429,7 @@ async def test_route_without_python_runs_native_whatever_the_rust_switch(
     if switch is not None:
         configuration.rust(switch)
 
-    assert await run_without_python(Rollout.RUST_REQUIRED, calls, asynchronous=asynchronous) == RUST
+    assert await run_without_python(REQUIRED, calls, asynchronous=asynchronous) == RUST
     assert calls.calls == (RUST,)
 
 
@@ -485,31 +447,22 @@ async def test_route_without_python_raises_when_native_cannot_serve_the_call(
     calls: Final = recorder(effect)
 
     with pytest.raises(RuntimeError, match=message) as raised:
-        await run_without_python(Rollout.RUST_REQUIRED, calls, asynchronous=asynchronous, native_missing=native_missing)
+        await run_without_python(REQUIRED, calls, asynchronous=asynchronous, native_missing=native_missing)
 
     assert not isinstance(raised.value, runtime.NoPythonImplementationError)
 
 
 @pytest.mark.parametrize("asynchronous", (False, True))
 @pytest.mark.parametrize("switch", (None, False, True))
-@pytest.mark.parametrize(
-    ("rollout", "context"),
-    (
-        (Rollout.PYTHON_ONLY, CONTEXT),
-        (Rollout.RUST_OPT_IN, CONTEXT),
-        (Rollout.RUST_OPT_OUT, CONTEXT),
-        (Rollout.RUST_REQUIRED, RouteContext(Route.MESSAGES, provider="unmatched", model="model")),
-    ),
-    ids=("python-only", "opt-in", "opt-out", "no-matching-rule"),
-)
-async def test_route_without_python_rejects_rules_that_could_select_python(
-    asynchronous: bool, switch: bool | None, rollout: Rollout, context: RouteContext
+@pytest.mark.parametrize("policy", (STAY, OPTIONAL), ids=("python", "optional"))
+async def test_route_without_python_rejects_decisions_that_could_select_python(
+    asynchronous: bool, switch: bool | None, policy: Decision
 ) -> None:
     calls: Final = recorder()
     if switch is not None:
         configuration.rust(switch)
 
     with pytest.raises(runtime.NoPythonImplementationError, match="messages has no Python implementation"):
-        await run_without_python(rollout, calls, asynchronous=asynchronous, context=context)
+        await run_without_python(policy, calls, asynchronous=asynchronous)
 
     assert calls.calls == ()

@@ -93,9 +93,9 @@ GIL handling to `litellm-host-python`.
   raises when the bridge is unavailable, with no fallback.
   - Declare it by passing `python=NO_PYTHON` (`litellm.rust_bridge.runtime`)
     to `PublicDispatch.run`/`arun` or `runtime.run`/`arun`, never a stand-in
-    callable that raises, and give every context of it a `RUST_REQUIRED`
-    catalog rule
-  - Any other decision, an unprojectable call, or a bypass raises
+    callable that raises, and have `catalog.decide` return
+    `Rust(required=True)` for every context of it
+  - Any other decision, an unbindable call, or Python's internal async hop raises
     `NoPythonImplementationError` before native runs, so a misdeclared route
     fails in tests instead of reaching deleted code. When deleting a route's
     Python implementation, switch its dispatch to `NO_PYTHON` in the same change

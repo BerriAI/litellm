@@ -6,10 +6,10 @@ import httpx
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge import runtime
-from litellm.rust_bridge.catalog import Route, RouteContext
+from litellm.rust_bridge.catalog import Route
 from litellm.rust_bridge.dispatch import PublicDispatch
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR
-from litellm.rust_bridge.public_call import NativeCall, native_call, native_call_hook, optional_str
+from litellm.rust_bridge.public_call import Bind, native_call_hook, optional_str
 
 __all__ = ("aocr", "ocr")
 
@@ -38,32 +38,23 @@ def _bind_request(
     )
 
 
-def _public_request(name: str, args: tuple[object, ...], kwargs: Mapping[str, object]) -> NativeCall:
-    try:
-        fields: Final = _bind_request(*args, **kwargs)  # pyright: ignore[reportArgumentType]  # Python binds the public arguments before native validation
-        return native_call(args, kwargs, fields)
-    except TypeError as error:
-        raise TypeError(str(error).replace("_bind_request()", f"{name}()")) from None
+def _binder(name: str) -> Bind:
+    def bind(args: tuple[object, ...], kwargs: Mapping[str, object]) -> Mapping[str, object]:
+        try:
+            return _bind_request(*args, **kwargs)  # pyright: ignore[reportArgumentType]  # Python binds the public arguments before native validation
+        except TypeError as error:
+            raise TypeError(str(error).replace("_bind_request()", f"{name}()")) from None
+
+    return bind
 
 
-def _context(request: NativeCall) -> RouteContext:
-    prefix, separator, _ = str(request.bound["model"]).partition("/")
-    provider: Final = optional_str(request.bound.get("custom_llm_provider")) or (prefix if separator else None)
-    return RouteContext(Route.OCR, provider=provider, model=str(request.bound["model"]))
+def _provider_prefix(fields: Mapping[str, object]) -> str | None:
+    prefix, separator, _ = str(fields["model"]).partition("/")
+    return optional_str(fields.get("custom_llm_provider")) or (prefix if separator else None)
 
 
-_DISPATCH: Final = PublicDispatch(
-    route=Route.OCR,
-    request=lambda args, kwargs: _public_request("ocr", args, kwargs),
-    context=_context,
-    bypass=lambda request: request.kwargs.get("aocr") is True,
-)
-
-_ADISPATCH: Final = PublicDispatch(
-    route=Route.OCR,
-    request=lambda args, kwargs: _public_request("aocr", args, kwargs),
-    context=_context,
-)
+_DISPATCH: Final = PublicDispatch(Route.OCR, bind=_binder("ocr"), internal_hop="aocr", provider=_provider_prefix)
+_ADISPATCH: Final = PublicDispatch(Route.OCR, bind=_binder("aocr"), provider=_provider_prefix)
 
 
 def ocr(

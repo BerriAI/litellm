@@ -1,17 +1,20 @@
-"""Ordered rollout policy for routes and loggers.
+"""Which implementation serves a call.
 
-The first matching rule wins; unmatched contexts stay on Python. Native
-admission separately decides whether the selected implementation can execute.
+``decide`` is the whole rollout policy: one branch per route, each naming the gap
+that keeps a call on Python. A required Rust route has no Python implementation.
+An optional one follows the global switch in ``configuration``.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Final, TypeAlias
+from typing import TypeAlias
 
-from litellm.rust_bridge.configuration import Decision, Rollout
-from litellm.rust_bridge.configuration import decision as _decision
+from typing_extensions import assert_never
+
+from litellm.rust_bridge.configuration import rust_enabled
 
 
 class Route(str, Enum):
@@ -33,56 +36,40 @@ class RouteContext:
 
 
 @dataclass(frozen=True, slots=True)
-class RouteRule:
-    route: Route
-    rollout: Rollout
-    providers: frozenset[str] | None = None
-    models: frozenset[str] | None = None
-
-    def matches(self, context: Context) -> bool:
-        return (
-            isinstance(context, RouteContext)
-            and context.route is self.route
-            and (self.providers is None or context.provider in self.providers)
-            and (self.models is None or context.model in self.models)
-        )
+class Python:
+    reason: str
 
 
 @dataclass(frozen=True, slots=True)
-class LoggerContext:
-    pass
+class Rust:
+    required: bool = False
 
 
-@dataclass(frozen=True, slots=True)
-class LoggerRule:
-    rollout: Rollout
-
-    def matches(self, context: Context) -> bool:
-        return isinstance(context, LoggerContext)
+Decision: TypeAlias = Python | Rust
+Policy: TypeAlias = Callable[[RouteContext], Decision]
 
 
-Context: TypeAlias = RouteContext | LoggerContext
-Rule: TypeAlias = RouteRule | LoggerRule
-Rules: TypeAlias = tuple[Rule, ...]
-
-RULES: Final[Rules] = (
-    LoggerRule(Rollout.RUST_OPT_IN),
-    RouteRule(Route.CHAT_COMPLETIONS, Rollout.PYTHON_ONLY),
-    RouteRule(Route.EMBEDDINGS, Rollout.PYTHON_ONLY),
-    RouteRule(Route.OCR, Rollout.RUST_REQUIRED),
-    RouteRule(Route.MESSAGES, Rollout.RUST_OPT_IN, providers=frozenset({"anthropic"})),
-    RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),
-    RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY),
-    RouteRule(Route.TOKEN_COUNTER, Rollout.PYTHON_ONLY),
-    RouteRule(Route.TOKENIZER, Rollout.PYTHON_ONLY),
-    RouteRule(Route.TRANSCRIPTION, Rollout.RUST_REQUIRED, providers=frozenset({"bedrock"})),
-)
+def optional() -> Decision:
+    return Rust() if rust_enabled() else Python("Rust is switched off")
 
 
-def rollout(context: Context, rules: Rules | None = None) -> Rollout:
-    selected_rules: Final = RULES if rules is None else rules
-    return next((rule.rollout for rule in selected_rules if rule.matches(context)), Rollout.PYTHON_ONLY)
+def decide(context: RouteContext) -> Decision:
+    match context.route:
+        case Route.OCR:
+            return Rust(required=True)
+        case Route.TRANSCRIPTION:
+            if context.provider != "bedrock":
+                return Python("only Bedrock transcription is ported")
+            return Rust(required=True)
+        case Route.MESSAGES:
+            if context.provider != "anthropic":
+                return Python("only Anthropic Messages is ported")
+            return optional()
+        case Route.CHAT_COMPLETIONS | Route.EMBEDDINGS | Route.RESPONSES | Route.TOKEN_COUNTER | Route.TOKENIZER:
+            return Python(f"{context.route.value} is not ported")
+        case _:
+            assert_never(context.route)
 
 
-def decision(context: Context, rules: Rules | None = None) -> Decision:
-    return _decision(rollout(context, rules))
+def logger() -> Decision:
+    return optional()

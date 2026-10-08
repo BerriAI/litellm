@@ -1,25 +1,16 @@
-import inspect
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.anthropic.pass_through.messages import handler as main
-from litellm.rust_bridge.catalog import Route, RouteContext
-from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.catalog import Route
+from litellm.rust_bridge.dispatch import Fields, PublicDispatch, model_is_named
 from litellm.rust_bridge.messages.entrypoints import (
     NATIVE_AMESSAGES,
     NATIVE_MESSAGES,
 )
-from litellm.rust_bridge.public_call import (
-    NativeCall,
-    bind,
-    native_call,
-    native_call_hook,
-    optional_sequence,
-    optional_str,
-    signature,
-)
+from litellm.rust_bridge.public_call import binder, native_call_hook, optional_sequence, optional_str
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 
 __all__ = ("anthropic_messages", "anthropic_messages_handler")
@@ -44,51 +35,33 @@ def _python_amessages() -> PythonAmessages:
 
 
 _PYTHON_MESSAGES: Final = _python_messages()
-_MESSAGES: Final = signature(_PYTHON_MESSAGES)
 _PYTHON_AMESSAGES: Final = _python_amessages()
-_AMESSAGES: Final = signature(_PYTHON_AMESSAGES)
 
 
-def _public_request(
-    legacy: inspect.Signature, args: tuple[object, ...], kwargs: Mapping[str, object]
-) -> NativeCall | None:
-    fields: Final = bind(legacy, args, kwargs)
-    if fields is None:
-        return None
-    model: Final = fields.get("model")
-    messages: Final = optional_sequence(fields.get("messages"))
-    max_tokens: Final = fields.get("max_tokens")
-    if not isinstance(model, str) or messages is None or not isinstance(max_tokens, int):
-        return None
-    return native_call(args, kwargs, fields)
-
-
-def _resolved_provider(request: NativeCall) -> str | None:
-    try:
-        return get_llm_provider(str(request.bound["model"]), optional_str(request.bound.get("custom_llm_provider")))[1]
-    except BadRequestError:
-        return optional_str(request.bound.get("custom_llm_provider"))
-
-
-def _context(request: NativeCall) -> RouteContext:
-    return RouteContext(
-        Route.MESSAGES,
-        provider=_resolved_provider(request),
-        model=str(request.bound["model"]),
+def _messages_fields(fields: Fields) -> bool:
+    return (
+        model_is_named(fields)
+        and optional_sequence(fields.get("messages")) is not None
+        and isinstance(fields.get("max_tokens"), int)
     )
 
 
-_DISPATCH: Final = PublicDispatch(
-    route=Route.MESSAGES,
-    request=lambda args, kwargs: _public_request(_MESSAGES, args, kwargs),
-    context=_context,
-    bypass=lambda request: request.kwargs.get("is_async") is True,
-)
+def _resolved_provider(fields: Fields) -> str | None:
+    try:
+        return get_llm_provider(str(fields["model"]), optional_str(fields.get("custom_llm_provider")))[1]
+    except BadRequestError:
+        return optional_str(fields.get("custom_llm_provider"))
 
+
+_DISPATCH: Final = PublicDispatch(
+    Route.MESSAGES,
+    bind=binder(_PYTHON_MESSAGES),
+    internal_hop="is_async",
+    accepts=_messages_fields,
+    provider=_resolved_provider,
+)
 _ADISPATCH: Final = PublicDispatch(
-    route=Route.MESSAGES,
-    request=lambda args, kwargs: _public_request(_AMESSAGES, args, kwargs),
-    context=_context,
+    Route.MESSAGES, bind=binder(_PYTHON_AMESSAGES), accepts=_messages_fields, provider=_resolved_provider
 )
 
 

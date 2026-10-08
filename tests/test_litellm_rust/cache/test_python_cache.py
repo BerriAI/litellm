@@ -19,9 +19,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelReq
 from litellm.proxy.utils import InternalUsageCache
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.rust_bridge import runtime
-from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
-from litellm.rust_bridge.configuration import Rollout
-from litellm.rust_bridge.dispatch import call_hook
+from litellm.rust_bridge.catalog import Route, RouteContext, Rust
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.caching import CachingSupportedCallTypes
 from tests.test_litellm_rust.support.cache import cache_key, collect, invoke, payload
@@ -464,7 +462,7 @@ def test_sync_rust_messages_calls_python_cache(recording_server: RecordingServer
             binding=NATIVE_MESSAGES,
             native=lambda hook: hook(request),
             python=runtime.NO_PYTHON,
-            rules=(RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),),
+            policy=Rust(required=True),
         )
 
     first: Final = call()

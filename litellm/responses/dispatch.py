@@ -1,19 +1,11 @@
-import inspect
-from collections.abc import Awaitable, Callable, Coroutine, Mapping
+from collections.abc import Awaitable, Callable, Coroutine
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
 from litellm.responses import main
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
-from litellm.rust_bridge.catalog import Route, RouteContext
+from litellm.rust_bridge.catalog import Route
 from litellm.rust_bridge.dispatch import PublicDispatch
-from litellm.rust_bridge.public_call import (
-    NativeCall,
-    bind,
-    native_call,
-    native_call_hook,
-    optional_str,
-    signature,
-)
+from litellm.rust_bridge.public_call import binder, native_call_hook
 from litellm.rust_bridge.responses.entrypoints import (
     NATIVE_ARESPONSES,
     NATIVE_RESPONSES,
@@ -42,43 +34,11 @@ def _python_aresponses() -> PythonAresponses:
 
 
 _PYTHON_RESPONSES: Final = _python_responses()
-_RESPONSES: Final = signature(_PYTHON_RESPONSES)
 _PYTHON_ARESPONSES: Final = _python_aresponses()
-_ARESPONSES: Final = signature(_PYTHON_ARESPONSES)
 
 
-def _public_request(
-    legacy: inspect.Signature, args: tuple[object, ...], kwargs: Mapping[str, object]
-) -> NativeCall | None:
-    fields: Final = bind(legacy, args, kwargs)
-    if fields is None:
-        return None
-    model: Final = fields.get("model")
-    if not isinstance(model, str):
-        return None
-    return native_call(args, kwargs, fields)
-
-
-def _context(request: NativeCall) -> RouteContext:
-    return RouteContext(
-        Route.RESPONSES,
-        provider=optional_str(request.bound.get("custom_llm_provider")),
-        model=str(request.bound["model"]),
-    )
-
-
-_DISPATCH: Final = PublicDispatch(
-    route=Route.RESPONSES,
-    request=lambda args, kwargs: _public_request(_RESPONSES, args, kwargs),
-    context=_context,
-    bypass=lambda request: request.kwargs.get("aresponses") is True,
-)
-
-_ADISPATCH: Final = PublicDispatch(
-    route=Route.RESPONSES,
-    request=lambda args, kwargs: _public_request(_ARESPONSES, args, kwargs),
-    context=_context,
-)
+_DISPATCH: Final = PublicDispatch(Route.RESPONSES, bind=binder(_PYTHON_RESPONSES), internal_hop="aresponses")
+_ADISPATCH: Final = PublicDispatch(Route.RESPONSES, bind=binder(_PYTHON_ARESPONSES))
 
 
 def responses(

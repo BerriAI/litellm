@@ -11,20 +11,23 @@ from litellm.chat_completions.dispatch import (
 )
 from litellm.rust_bridge import catalog
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.catalog import Route, RouteRule, Rules
+from litellm.rust_bridge.catalog import Decision, Python, RouteContext, Rust
 from litellm.rust_bridge.chat_completions.entrypoints import (
     NATIVE_ACOMPLETION,
     NATIVE_COMPLETION,
     NativeAcompletion,
     NativeCompletion,
 )
-from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.public_call import NativeCall, native_call_hook
 from litellm.types.utils import ModelResponse
 
 MESSAGES: Final = [{"role": "user", "content": "hi"}]
-PYTHON_RULES: Final = ()
-RUST_RULES: Final = (RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_REQUIRED),)
+PYTHON: Final = Python("test keeps the call on Python")
+REQUIRED: Final = Rust(required=True)
+
+
+def required_everywhere(_context: RouteContext) -> Decision:
+    return REQUIRED
 
 
 def completion_binding(native: NativeCompletion | None) -> NativeBinding[NativeCompletion]:
@@ -60,7 +63,7 @@ def test_python_route_forwards_original_call_shape() -> None:
             python=python,
             binding=completion_binding(native),
             native=native_call_hook,
-            rules=PYTHON_RULES,
+            policy=PYTHON,
         )
         is response
     )
@@ -93,7 +96,7 @@ async def test_async_python_route_forwards_original_call_shape() -> None:
         python=python,
         binding=acompletion_binding(native),
         native=native_call_hook,
-        rules=PYTHON_RULES,
+        policy=PYTHON,
     )
     assert result is response
     call_args, call_kwargs = captured[0]
@@ -130,7 +133,7 @@ def test_native_receives_bound_request_and_original_call_shape() -> None:
         python=python,
         binding=completion_binding(native),
         native=native_call_hook,
-        rules=RUST_RULES,
+        policy=REQUIRED,
     )
 
     request, call_args, call_kwargs = captured[0]
@@ -164,7 +167,7 @@ def test_internal_async_marker_bypasses_native() -> None:
         python=python,
         binding=completion_binding(native),
         native=native_call_hook,
-        rules=RUST_RULES,
+        policy=REQUIRED,
     )
     assert result is response
     assert called == [True]
@@ -195,7 +198,7 @@ def test_binding_errors_delegate_to_python(args: tuple[object, ...], kwargs: Map
             python=python,
             binding=completion_binding(native),
             native=native_call_hook,
-            rules=RUST_RULES,
+            policy=REQUIRED,
         )
         is response
     )
@@ -211,7 +214,7 @@ def test_public_completion_routes_through_dispatch(monkeypatch: pytest.MonkeyPat
         return expected
 
     NATIVE_COMPLETION.override(native)
-    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
+    monkeypatch.setattr(catalog, "decide", required_everywhere)
     public_completion: Final = cast(Callable[..., ModelResponse], litellm.completion)
     try:
         result: Final = public_completion(model="gpt-4o", messages=MESSAGES)
@@ -231,7 +234,7 @@ async def test_public_acompletion_routes_through_dispatch(monkeypatch: pytest.Mo
         return expected
 
     NATIVE_ACOMPLETION.override(native)
-    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
+    monkeypatch.setattr(catalog, "decide", required_everywhere)
     public_acompletion: Final = cast(Callable[..., Awaitable[ModelResponse]], litellm.acompletion)
     try:
         result: Final = await public_acompletion(model="gpt-4o", messages=MESSAGES)
@@ -253,7 +256,7 @@ async def test_public_completion_calls_keep_the_python_result() -> None:
 
 
 def test_sync_completion_request_projects_public_arguments() -> None:
-    rules: Final[Rules] = (RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_REQUIRED),)
+    policy: Final = Rust(required=True)
     expected: Final = ModelResponse()
 
     def native(request: NativeCall) -> ModelResponse:
@@ -271,7 +274,7 @@ def test_sync_completion_request_projects_public_arguments() -> None:
         python=lambda *args, **kwargs: pytest.fail("required native route must handle this call"),
         binding=binding,
         native=native_call_hook,
-        rules=rules,
+        policy=policy,
     )
 
     assert response is expected
@@ -286,7 +289,7 @@ async def test_async_completion_falls_back_after_native_declines() -> None:
         pytest.skip("native bridge is unavailable")
     declined, _ = native_types
     expected: Final = ModelResponse()
-    rules: Final[Rules] = (RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_OPT_OUT),)
+    policy: Final = Rust()
 
     async def native(request: NativeCall) -> ModelResponse:
         raise declined("unsupported")
@@ -302,14 +305,14 @@ async def test_async_completion_falls_back_after_native_declines() -> None:
         python=python,
         binding=binding,
         native=native_call_hook,
-        rules=rules,
+        policy=policy,
     )
 
     assert response is expected
 
 
 def test_internal_acompletion_marker_bypasses_native() -> None:
-    rules: Final[Rules] = (RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_REQUIRED),)
+    policy: Final = Rust(required=True)
     expected: Final = ModelResponse()
 
     def python(*args: object, **kwargs: object) -> ModelResponse:
@@ -326,7 +329,7 @@ def test_internal_acompletion_marker_bypasses_native() -> None:
         python=python,
         binding=binding,
         native=native_call_hook,
-        rules=rules,
+        policy=policy,
     )
 
     assert response is expected

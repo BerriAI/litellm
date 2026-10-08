@@ -156,15 +156,13 @@ import os
 import litellm
 from litellm.proxy.spend_tracking.input_tokens import count_input_tokens
 from litellm.rust_bridge import _native, catalog
-from litellm.rust_bridge.catalog import Route, RouteRule
-from litellm.rust_bridge.configuration import Rollout
+from litellm.rust_bridge.catalog import Route
 from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer
 from litellm.utils import claude_json_str
 
-catalog.RULES = (
-    RouteRule(Route.TOKENIZER, Rollout.RUST_OPT_IN),
-    RouteRule(Route.TOKEN_COUNTER, Rollout.RUST_OPT_IN),
-    *catalog.RULES,
+shipped = catalog.decide
+catalog.decide = lambda context: (
+    catalog.optional() if context.route in {Route.TOKENIZER, Route.TOKEN_COUNTER} else shipped(context)
 )
 litellm.anthropic_models = {*litellm.anthropic_models, "tokenizer-fork-fixture"}
 _native.reserve_process_for_forking()

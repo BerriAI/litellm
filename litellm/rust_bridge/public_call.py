@@ -6,7 +6,12 @@ import inspect
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, TypeVar, cast  # noqa: TID251  # narrows caller-owned containers without copying them
+from typing import (  # noqa: TID251  # narrows caller-owned containers without copying them
+    Final,
+    TypeAlias,
+    TypeVar,
+    cast,
+)
 
 import litellm
 
@@ -36,19 +41,23 @@ _INFERENCE_CONTEXT: Final = frozenset(
 )
 
 
-def signature(legacy: Callable[..., object]) -> inspect.Signature:
-    return inspect.signature(legacy)
+Bind: TypeAlias = Callable[[tuple[object, ...], Mapping[str, object]], Mapping[str, object] | None]
 
 
-def bind(
-    legacy: inspect.Signature, args: tuple[object, ...], kwargs: Mapping[str, object]
-) -> Mapping[str, object] | None:
-    try:
-        bound: Final = legacy.bind(*args, **kwargs)
-    except TypeError:
-        return None
-    bound.apply_defaults()
-    return bound.arguments
+def binder(python: Callable[..., object]) -> Bind:
+    """Binds a public ``(*args, **kwargs)`` call onto ``python``'s named parameters, defaults
+    applied, or ``None`` when the call does not fit that signature."""
+    python_signature: Final = inspect.signature(python)
+
+    def bind(args: tuple[object, ...], kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
+        try:
+            bound: Final = python_signature.bind(*args, **kwargs)
+        except TypeError:
+            return None
+        bound.apply_defaults()
+        return bound.arguments
+
+    return bind
 
 
 def optional_str(value: object) -> str | None:

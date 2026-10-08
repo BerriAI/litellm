@@ -2,58 +2,61 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Final, Generic, TypeAlias, TypeVar
+from typing import Final, TypeAlias, TypeVar
 
-from litellm.rust_bridge import catalog, runtime
+from litellm.rust_bridge import runtime
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule, Rules
-from litellm.rust_bridge.configuration import Decision
-from litellm.rust_bridge.configuration import decision as rollout_decision
+from litellm.rust_bridge.catalog import Decision, Policy, Route, RouteContext
+from litellm.rust_bridge.public_call import Bind, NativeCall, native_call, optional_str
 
-RequestT: Final = TypeVar("RequestT")
 NativeT: Final = TypeVar("NativeT")
 ResultT: Final = TypeVar("ResultT")
 
-NativeHook: TypeAlias = Callable[[RequestT, tuple[object, ...], Mapping[str, object]], ResultT]
+Fields: TypeAlias = Mapping[str, object]
+NativeHook: TypeAlias = Callable[[NativeT, NativeCall, tuple[object, ...], Mapping[str, object]], ResultT]
 
 
-def call_hook(
-    hook: NativeHook[RequestT, ResultT],
-    request: RequestT,
-    args: tuple[object, ...],
-    kwargs: Mapping[str, object],
-) -> ResultT:
-    return hook(request, args, kwargs)
+def provider_kwarg(fields: Fields) -> str | None:
+    return optional_str(fields.get("custom_llm_provider"))
+
+
+def model_is_named(fields: Fields) -> bool:
+    return isinstance(fields.get("model"), str)
 
 
 @dataclass(frozen=True, slots=True)
-class PublicDispatch(Generic[RequestT]):
+class PublicDispatch:
+    """One public entrypoint whose calls may run natively.
+
+    ``bind`` maps the public ``(*args, **kwargs)`` onto the Python implementation's named
+    arguments, or ``None`` when they do not fit, so Python raises its own error.
+    ``internal_hop`` names the kwarg Python's async entrypoint sets when it re-enters the sync
+    one; that call has already been dispatched and never reaches the bridge again.
+    ``accepts`` keeps a bound call on Python when it lacks what the native route needs.
+    ``provider`` reads the provider the catalog decides on from the bound fields."""
+
     route: Route
-    request: Callable[[tuple[object, ...], Mapping[str, object]], RequestT | None]
-    context: Callable[[RequestT], RouteContext]
-    bypass: Callable[[RequestT], bool] | None = None
+    bind: Bind
+    internal_hop: str | None = None
+    accepts: Callable[[Fields], bool] = model_is_named
+    provider: Callable[[Fields], str | None] = provider_kwarg
 
-    def _requires_projection(self, rules: Rules) -> bool:
-        for rule in rules:
-            if not isinstance(rule, RouteRule) or rule.route is not self.route:
-                continue
-            if rule.providers is not None or rule.models is not None:
-                if rollout_decision(rule.rollout) is not Decision.PYTHON:
-                    return True
-                continue
-            return rollout_decision(rule.rollout) is not Decision.PYTHON
-        return False
+    def request(self, args: tuple[object, ...], kwargs: Mapping[str, object]) -> NativeCall | None:
+        if self.internal_hop is not None and kwargs.get(self.internal_hop) is True:
+            return None
+        fields: Final = self.bind(args, kwargs)
+        if fields is None or not self.accepts(fields):
+            return None
+        return native_call(args, kwargs, fields)
 
-    def _native_request(self, args: tuple[object, ...], kwargs: Mapping[str, object]) -> RequestT:
+    def context(self, request: NativeCall) -> RouteContext:
+        return RouteContext(self.route, provider=self.provider(request.bound), model=str(request.bound["model"]))
+
+    def _native_request(self, args: tuple[object, ...], kwargs: Mapping[str, object]) -> NativeCall:
         request: Final = self.request(args, kwargs)
         if request is None:
             raise runtime.NoPythonImplementationError(
                 f"{self.route.value} has no Python implementation, so every call must project to a native request"
-            )
-        if self.bypass is not None and self.bypass(request):
-            raise runtime.NoPythonImplementationError(
-                f"{self.route.value} has no Python implementation, so a call its bypass predicate matches cannot "
-                "be served"
             )
         return request
 
@@ -64,10 +67,9 @@ class PublicDispatch(Generic[RequestT]):
         *,
         python: Callable[..., ResultT] | runtime.NoPythonImplementation,
         binding: NativeBinding[NativeT],
-        native: Callable[[NativeT, RequestT, tuple[object, ...], Mapping[str, object]], ResultT],
-        rules: Rules | None = None,
+        native: NativeHook[NativeT, ResultT],
+        policy: Policy | Decision | None = None,
     ) -> ResultT:
-        selected_rules: Final = catalog.RULES if rules is None else rules
         if isinstance(python, runtime.NoPythonImplementation):
             native_request: Final = self._native_request(args, kwargs)
             return runtime.run(
@@ -75,19 +77,17 @@ class PublicDispatch(Generic[RequestT]):
                 binding=binding,
                 native=lambda hook: native(hook, native_request, args, kwargs),
                 python=python,
-                rules=selected_rules,
+                policy=policy,
             )
-        if not self._requires_projection(selected_rules):
-            return python(*args, **kwargs)
         request: Final = self.request(args, kwargs)
-        if request is None or (self.bypass is not None and self.bypass(request)):
+        if request is None:
             return python(*args, **kwargs)
         return runtime.run(
             self.context(request),
             binding=binding,
             native=lambda hook: native(hook, request, args, kwargs),
             python=lambda: python(*args, **kwargs),
-            rules=selected_rules,
+            policy=policy,
         )
 
     async def arun(
@@ -97,10 +97,9 @@ class PublicDispatch(Generic[RequestT]):
         *,
         python: Callable[..., Awaitable[ResultT]] | runtime.NoPythonImplementation,
         binding: NativeBinding[NativeT],
-        native: Callable[[NativeT, RequestT, tuple[object, ...], Mapping[str, object]], Awaitable[ResultT]],
-        rules: Rules | None = None,
+        native: NativeHook[NativeT, Awaitable[ResultT]],
+        policy: Policy | Decision | None = None,
     ) -> ResultT:
-        selected_rules: Final = catalog.RULES if rules is None else rules
         if isinstance(python, runtime.NoPythonImplementation):
             native_request: Final = self._native_request(args, kwargs)
             return await runtime.arun(
@@ -108,17 +107,15 @@ class PublicDispatch(Generic[RequestT]):
                 binding=binding,
                 native=lambda hook: native(hook, native_request, args, kwargs),
                 python=python,
-                rules=selected_rules,
+                policy=policy,
             )
-        if not self._requires_projection(selected_rules):
-            return await python(*args, **kwargs)
         request: Final = self.request(args, kwargs)
-        if request is None or (self.bypass is not None and self.bypass(request)):
+        if request is None:
             return await python(*args, **kwargs)
         return await runtime.arun(
             self.context(request),
             binding=binding,
             native=lambda hook: native(hook, request, args, kwargs),
             python=lambda: python(*args, **kwargs),
-            rules=selected_rules,
+            policy=policy,
         )

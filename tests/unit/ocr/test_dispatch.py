@@ -12,12 +12,15 @@ from litellm.ocr.dispatch import (
 )
 from litellm.rust_bridge import catalog, runtime
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.catalog import Route, RouteRule, Rules
-from litellm.rust_bridge.configuration import Rollout
+from litellm.rust_bridge.catalog import Decision, Python, RouteContext, Rust
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR, NativeAocr, NativeOcr
 from litellm.rust_bridge.public_call import NativeCall
 
-RUST_RULES: Final[Rules] = (RouteRule(Route.OCR, Rollout.RUST_REQUIRED),)
+REQUIRED: Final = Rust(required=True)
+
+
+def required_everywhere(_context: RouteContext) -> Decision:
+    return REQUIRED
 
 
 def ocr_binding(native: NativeOcr | None) -> NativeBinding[NativeOcr]:
@@ -67,7 +70,7 @@ def test_native_receives_normalized_positional_request_and_original_call_shape()
         python=runtime.NO_PYTHON,
         binding=ocr_binding(native),
         native=lambda hook, request, call_args, call_kwargs: hook(request),
-        rules=RUST_RULES,
+        policy=REQUIRED,
     )
 
     request, call_args, call_kwargs = captured[0]
@@ -114,7 +117,7 @@ def test_native_preserves_keyword_model_and_document_in_original_call_shape() ->
         python=runtime.NO_PYTHON,
         binding=ocr_binding(native),
         native=lambda hook, request, call_args, call_kwargs: hook(request),
-        rules=RUST_RULES,
+        policy=REQUIRED,
     )
 
     request, call_args, call_kwargs = captured[0]
@@ -138,14 +141,14 @@ def test_aocr_marker_cannot_be_served_without_python() -> None:
     ) -> OCRResponse:
         pytest.fail("the aocr bypass marker must not reach native")
 
-    with pytest.raises(runtime.NoPythonImplementationError, match="bypass"):
+    with pytest.raises(runtime.NoPythonImplementationError, match="must project to a native request"):
         _DISPATCH.run(
             args,
             kwargs,
             python=runtime.NO_PYTHON,
             binding=ocr_binding(native),
             native=lambda hook, request, call_args, call_kwargs: hook(request),
-            rules=RUST_RULES,
+            policy=REQUIRED,
         )
 
 
@@ -159,11 +162,11 @@ def test_missing_native_binding_is_a_required_rust_error() -> None:
             python=runtime.NO_PYTHON,
             binding=ocr_binding(None),
             native=lambda hook, request, call_args, call_kwargs: hook(request),
-            rules=RUST_RULES,
+            policy=REQUIRED,
         )
 
 
-def test_non_required_rule_cannot_be_served_without_python() -> None:
+def test_non_required_decision_cannot_be_served_without_python() -> None:
     args: Final[tuple[object, ...]] = ("mistral/mistral-ocr-latest", {"type": "file", "file": b"pdf"})
 
     def native(
@@ -171,14 +174,14 @@ def test_non_required_rule_cannot_be_served_without_python() -> None:
     ) -> OCRResponse:
         return response()
 
-    with pytest.raises(runtime.NoPythonImplementationError, match="RUST_REQUIRED"):
+    with pytest.raises(runtime.NoPythonImplementationError, match="must select required Rust"):
         _DISPATCH.run(
             args,
             {},
             python=runtime.NO_PYTHON,
             binding=ocr_binding(native),
             native=lambda hook, request, call_args, call_kwargs: hook(request),
-            rules=(RouteRule(Route.OCR, Rollout.PYTHON_ONLY),),
+            policy=Python("test keeps the call on Python"),
         )
 
 
@@ -210,7 +213,7 @@ def test_ocr_parser_errors_before_native(args: tuple[object, ...], kwargs: Mappi
             python=runtime.NO_PYTHON,
             binding=ocr_binding(native),
             native=lambda hook, request, call_args, call_kwargs: hook(request),
-            rules=RUST_RULES,
+            policy=REQUIRED,
         )
 
 
@@ -245,7 +248,7 @@ async def test_aocr_parser_errors_before_native(
             python=runtime.NO_PYTHON,
             binding=aocr_binding(native),
             native=lambda hook, request, call_args, call_kwargs: hook(request),
-            rules=RUST_RULES,
+            policy=REQUIRED,
         )
 
 
@@ -264,7 +267,7 @@ def test_public_ocr_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> 
         return expected
 
     NATIVE_OCR.override(native)
-    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
+    monkeypatch.setattr(catalog, "decide", required_everywhere)
     public_ocr: Final = cast(Callable[..., OCRResponse], litellm.ocr)
     try:
         result: Final = public_ocr(model="mistral/mistral-ocr-latest", document=document)
@@ -290,7 +293,7 @@ async def test_public_aocr_routes_through_dispatch(monkeypatch: pytest.MonkeyPat
         return expected
 
     NATIVE_AOCR.override(native)
-    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
+    monkeypatch.setattr(catalog, "decide", required_everywhere)
     public_aocr: Final = cast(Callable[..., Awaitable[OCRResponse]], litellm.aocr)
     try:
         result: Final = await public_aocr(model="mistral/mistral-ocr-latest", document=document)

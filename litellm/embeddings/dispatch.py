@@ -1,15 +1,14 @@
-import inspect
-from collections.abc import Awaitable, Callable, Coroutine, Mapping
+from collections.abc import Awaitable, Callable, Coroutine
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
 from litellm import main
-from litellm.rust_bridge.catalog import Route, RouteContext
+from litellm.rust_bridge.catalog import Route
 from litellm.rust_bridge.dispatch import PublicDispatch
 from litellm.rust_bridge.embeddings.entrypoints import (
     NATIVE_AEMBEDDING,
     NATIVE_EMBEDDING,
 )
-from litellm.rust_bridge.public_call import NativeCall, bind, native_call, native_call_hook, optional_str, signature
+from litellm.rust_bridge.public_call import binder, native_call_hook
 from litellm.types.utils import EmbeddingResponse
 
 __all__ = ("aembedding", "embedding")
@@ -23,41 +22,10 @@ _PYTHON_EMBEDDING: Final = cast(  # cast-ok: [LIT006] preserve the legacy public
 _PYTHON_AEMBEDDING: Final = cast(  # cast-ok: [LIT006] preserve the legacy public callable contract
     PythonAembedding, main.aembedding
 )
-_EMBEDDING_SIGNATURE: Final = signature(_PYTHON_EMBEDDING)
 
 
-def _public_request(
-    legacy: inspect.Signature, args: tuple[object, ...], kwargs: Mapping[str, object]
-) -> NativeCall | None:
-    fields: Final = bind(legacy, args, kwargs)
-    if fields is None:
-        return None
-    model: Final = fields.get("model")
-    if not isinstance(model, str):
-        return None
-    return native_call(args, kwargs, fields)
-
-
-def _context(request: NativeCall) -> RouteContext:
-    return RouteContext(
-        Route.EMBEDDINGS,
-        provider=optional_str(request.bound.get("custom_llm_provider")),
-        model=str(request.bound["model"]),
-    )
-
-
-_DISPATCH: Final = PublicDispatch(
-    route=Route.EMBEDDINGS,
-    request=lambda args, kwargs: _public_request(_EMBEDDING_SIGNATURE, args, kwargs),
-    context=_context,
-    bypass=lambda request: request.kwargs.get("aembedding") is True,
-)
-
-_ADISPATCH: Final = PublicDispatch(
-    route=Route.EMBEDDINGS,
-    request=lambda args, kwargs: _public_request(_EMBEDDING_SIGNATURE, args, kwargs),
-    context=_context,
-)
+_DISPATCH: Final = PublicDispatch(Route.EMBEDDINGS, bind=binder(_PYTHON_EMBEDDING), internal_hop="aembedding")
+_ADISPATCH: Final = PublicDispatch(Route.EMBEDDINGS, bind=binder(_PYTHON_EMBEDDING))
 
 
 def embedding(

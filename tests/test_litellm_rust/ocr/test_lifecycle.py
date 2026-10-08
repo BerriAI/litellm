@@ -282,7 +282,9 @@ def test_sync_pre_call_can_make_nested_native_request(ocr_server: RecordingServe
 
 
 def test_unstarted_native_coroutine_releases_input_without_reading_file(ocr_server: RecordingServer) -> None:
-    from litellm.ocr.dispatch import _public_request
+    from litellm.ocr.dispatch import (
+        _ADISPATCH as aocr_dispatch,  # pyright: ignore[reportPrivateUsage]  # exercise the request passed to the native boundary
+    )
     from litellm.rust_bridge import _native
 
     ocr_server.expected_requests = 0
@@ -296,7 +298,9 @@ def test_unstarted_native_coroutine_releases_input_without_reading_file(ocr_serv
     def create():
         file: Final = File()
         kwargs: Final = {"model": "mistral/mistral-ocr-latest", "document": {"type": "file", "file": file}}
-        coroutine: Final = _native.aocr(_public_request("aocr", (), kwargs))
+        request: Final = aocr_dispatch.request((), kwargs)
+        assert request is not None
+        coroutine: Final = _native.aocr(request)
         file.owner = coroutine
         coroutine.close()
         return weakref.ref(file)

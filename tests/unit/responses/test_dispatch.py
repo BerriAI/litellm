@@ -13,8 +13,7 @@ from litellm.responses.dispatch import (
 )
 from litellm.rust_bridge import catalog
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.catalog import Route, RouteRule
-from litellm.rust_bridge.configuration import Rollout
+from litellm.rust_bridge.catalog import Decision, Python, RouteContext, Rust
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.rust_bridge.responses.entrypoints import (
     NATIVE_ARESPONSES,
@@ -25,8 +24,12 @@ from litellm.rust_bridge.responses.entrypoints import (
 from litellm.types.llms.openai import ResponsesAPIResponse
 
 INPUT: Final = [{"role": "user", "content": "hi"}]
-PYTHON_RULES: Final = ()
-RUST_RULES: Final = (RouteRule(Route.RESPONSES, Rollout.RUST_REQUIRED),)
+PYTHON: Final = Python("test keeps the call on Python")
+REQUIRED: Final = Rust(required=True)
+
+
+def required_everywhere(_context: RouteContext) -> Decision:
+    return REQUIRED
 
 
 def _response(model: str = "gpt-4o") -> ResponsesAPIResponse:
@@ -79,7 +82,7 @@ def test_python_route_forwards_original_call_shape() -> None:
             python=python,
             binding=responses_binding(native),
             native=lambda hook, request, call_args, call_kwargs: hook(request),
-            rules=PYTHON_RULES,
+            policy=PYTHON,
         )
         is response
     )
@@ -117,7 +120,7 @@ async def test_async_python_route_forwards_original_call_shape() -> None:
         python=python,
         binding=aresponses_binding(native),
         native=lambda hook, request, call_args, call_kwargs: hook(request),
-        rules=PYTHON_RULES,
+        policy=PYTHON,
     )
     assert result is response
     call_args, call_kwargs = captured[0]
@@ -160,7 +163,7 @@ def test_native_receives_normalized_request_and_original_call_shape() -> None:
         python=python,
         binding=responses_binding(native),
         native=lambda hook, request, call_args, call_kwargs: hook(request),
-        rules=RUST_RULES,
+        policy=REQUIRED,
     )
 
     request, call_args, call_kwargs = captured[0]
@@ -203,7 +206,7 @@ def test_internal_async_marker_bypasses_native() -> None:
             python=python,
             binding=responses_binding(native),
             native=lambda hook, request, call_args, call_kwargs: hook(request),
-            rules=RUST_RULES,
+            policy=REQUIRED,
         )
         is response
     )
@@ -237,7 +240,7 @@ def test_binding_errors_delegate_unchanged_to_python(args: tuple[object, ...], k
             python=python,
             binding=responses_binding(native),
             native=lambda hook, request, call_args, call_kwargs: hook(request),
-            rules=RUST_RULES,
+            policy=REQUIRED,
         )
         is response
     )
@@ -255,7 +258,7 @@ def test_public_responses_routes_through_dispatch(monkeypatch: pytest.MonkeyPatc
         return expected
 
     NATIVE_RESPONSES.override(native)
-    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
+    monkeypatch.setattr(catalog, "decide", required_everywhere)
     public_responses: Final = cast(Callable[..., ResponsesAPIResponse], litellm.responses)
     try:
         result: Final = public_responses(input=INPUT, model="gpt-4o")
@@ -277,7 +280,7 @@ async def test_public_aresponses_routes_through_dispatch(monkeypatch: pytest.Mon
         return expected
 
     NATIVE_ARESPONSES.override(native)
-    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
+    monkeypatch.setattr(catalog, "decide", required_everywhere)
     public_aresponses: Final = cast(Callable[..., Awaitable[ResponsesAPIResponse]], litellm.aresponses)
     try:
         result: Final = await public_aresponses(input=INPUT, model="gpt-4o")

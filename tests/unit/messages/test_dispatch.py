@@ -14,15 +14,18 @@ from litellm.messages.dispatch import (
 )
 from litellm.rust_bridge import catalog
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.catalog import Route, RouteRule, Rules
-from litellm.rust_bridge.configuration import Rollout
+from litellm.rust_bridge.catalog import Decision, Python, RouteContext, Rust
 from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES, NATIVE_MESSAGES, NativeAmessages, NativeMessages
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 
 MESSAGES: Final = [{"role": "user", "content": "hi"}]
-PYTHON_RULES: Final[Rules] = ()
-RUST_RULES: Final[Rules] = (RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),)
+PYTHON: Final = Python("test keeps the call on Python")
+REQUIRED: Final = Rust(required=True)
+
+
+def required_everywhere(_context: RouteContext) -> Decision:
+    return REQUIRED
 
 
 def messages_binding(native: NativeMessages | None) -> NativeBinding[NativeMessages]:
@@ -72,7 +75,7 @@ def test_python_route_forwards_original_call_shape() -> None:
         python=python,
         binding=messages_binding(native),
         native=lambda hook, request, call_args, call_kwargs: hook(request),
-        rules=PYTHON_RULES,
+        policy=PYTHON,
     )
     assert result is expected
     call_args, call_kwargs = captured[0]
@@ -109,7 +112,7 @@ async def test_async_python_route_forwards_original_call_shape() -> None:
         python=python,
         binding=amessages_binding(native),
         native=lambda hook, request, call_args, call_kwargs: hook(request),
-        rules=PYTHON_RULES,
+        policy=PYTHON,
     )
     assert result is expected
     call_args, call_kwargs = captured[0]
@@ -150,7 +153,7 @@ def test_native_receives_normalized_request_and_original_call_shape() -> None:
         python=python,
         binding=messages_binding(native),
         native=lambda hook, request, call_args, call_kwargs: hook(request),
-        rules=RUST_RULES,
+        policy=REQUIRED,
     )
     assert result is expected
     request, call_args, call_kwargs = captured[0]
@@ -190,7 +193,7 @@ def test_internal_async_marker_bypasses_native() -> None:
         python=python,
         binding=messages_binding(native),
         native=lambda hook, request, call_args, call_kwargs: hook(request),
-        rules=RUST_RULES,
+        policy=REQUIRED,
     )
     assert result is expected
     assert captured == [(args, kwargs)]
@@ -222,7 +225,7 @@ def test_binding_errors_delegate_to_python(args: tuple[object, ...], kwargs: Map
         python=python,
         binding=messages_binding(native),
         native=lambda hook, request, call_args, call_kwargs: hook(request),
-        rules=RUST_RULES,
+        policy=REQUIRED,
     )
     assert result is expected
     assert captured == [(args, kwargs)]
@@ -239,7 +242,7 @@ def test_anthropic_create_routes_through_dispatch(monkeypatch: pytest.MonkeyPatc
         return expected
 
     NATIVE_MESSAGES.override(native)
-    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
+    monkeypatch.setattr(catalog, "decide", required_everywhere)
     public_create: Final = cast(Callable[..., AnthropicMessagesResponse], litellm.anthropic.create)
     try:
         result: Final = public_create(max_tokens=16, messages=MESSAGES, model="claude-sonnet-4-5")
@@ -261,7 +264,7 @@ async def test_anthropic_acreate_routes_through_dispatch(monkeypatch: pytest.Mon
         return expected
 
     NATIVE_AMESSAGES.override(native)
-    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
+    monkeypatch.setattr(catalog, "decide", required_everywhere)
     public_acreate: Final = cast(Callable[..., Awaitable[AnthropicMessagesResponse]], litellm.anthropic.acreate)
     try:
         result: Final = await public_acreate(max_tokens=16, messages=MESSAGES, model="claude-sonnet-4-5")
@@ -283,7 +286,7 @@ async def test_public_anthropic_messages_keeps_the_python_result() -> None:
 
 
 def test_sync_messages_request_projects_public_arguments() -> None:
-    rules: Final[Rules] = (RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),)
+    policy: Final = Rust(required=True)
     expected: Final = AnthropicMessagesResponse(model="claude-test")
 
     def native(request: NativeCall) -> AnthropicMessagesResponse:
@@ -306,14 +309,14 @@ def test_sync_messages_request_projects_public_arguments() -> None:
         python=lambda *args, **kwargs: pytest.fail("required native route must handle this call"),
         binding=binding,
         native=lambda hook, request, args, kwargs: hook(request),
-        rules=rules,
+        policy=policy,
     )
 
     assert response is expected
 
 
 def test_messages_binding_error_delegates_unchanged_to_python() -> None:
-    rules: Final[Rules] = (RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),)
+    policy: Final = Rust(required=True)
     expected: Final = AnthropicMessagesResponse(model="claude-test")
 
     def python(*args: object, **kwargs: object) -> AnthropicMessagesResponse:
@@ -330,7 +333,7 @@ def test_messages_binding_error_delegates_unchanged_to_python() -> None:
         python=python,
         binding=binding,
         native=lambda hook, request, args, kwargs: hook(request),
-        rules=rules,
+        policy=policy,
     )
 
     assert response is expected
@@ -345,7 +348,7 @@ async def test_async_messages_falls_back_after_native_declines() -> None:
         pytest.skip("native bridge is unavailable")
     declined, _ = native_types
     expected: Final = AnthropicMessagesResponse(model="claude-test")
-    rules: Final[Rules] = (RouteRule(Route.MESSAGES, Rollout.RUST_OPT_OUT),)
+    policy: Final = Rust()
 
     async def native(request: NativeCall) -> AnthropicMessagesResponse:
         raise declined("unsupported")
@@ -361,14 +364,14 @@ async def test_async_messages_falls_back_after_native_declines() -> None:
         python=python,
         binding=binding,
         native=lambda hook, request, args, kwargs: hook(request),
-        rules=rules,
+        policy=policy,
     )
 
     assert response is expected
 
 
 def test_internal_is_async_marker_bypasses_native() -> None:
-    rules: Final[Rules] = (RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),)
+    policy: Final = Rust(required=True)
     expected: Final = AnthropicMessagesResponse(model="claude-test")
 
     def python(*args: object, **kwargs: object) -> AnthropicMessagesResponse:
@@ -391,7 +394,7 @@ def test_internal_is_async_marker_bypasses_native() -> None:
         python=python,
         binding=binding,
         native=lambda hook, request, args, kwargs: hook(request),
-        rules=rules,
+        policy=policy,
     )
 
     assert response is expected
