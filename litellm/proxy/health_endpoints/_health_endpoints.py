@@ -8,7 +8,7 @@ import time
 import traceback
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
-from typing import Final, Literal, Protocol, TypedDict, cast
+from typing import Final, Literal, TypedDict
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -89,15 +89,6 @@ class _HealthBacklogResponse(TypedDict):
     admitted_requests: ReadOnly[int]
     queued_requests: ReadOnly[int]
     rejected_requests: ReadOnly[int]
-
-
-class _RequestHeadersGetter(Protocol):
-    def __call__(self, request: Request | None) -> object: ...
-
-
-_SAFE_GET_REQUEST_HEADERS: Final = cast(  # cast-ok: the returned headers are validated before use
-    _RequestHeadersGetter, http_parsing_utils.safe_get_request_headers
-)
 
 
 def _reject_os_environ_references(params: dict) -> None:
@@ -2283,7 +2274,7 @@ async def test_model_connection(
         )
 
         raw_headers: Final[dict[str, str]] = TypeAdapter(dict[str, str]).validate_python(
-            _SAFE_GET_REQUEST_HEADERS(request)
+            http_parsing_utils.safe_get_request_headers(request)
         )
         health_check_params: Final = {
             **_OBJECT_MAPPING.validate_python(litellm_params),
