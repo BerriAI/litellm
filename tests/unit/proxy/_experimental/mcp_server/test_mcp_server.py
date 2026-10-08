@@ -464,7 +464,7 @@ async def test_sse_mcp_handler_mock():
 
     mock_sse = MagicMock()
     mock_sse.connect_sse.side_effect = connect_sse
-    run = AsyncMock()
+    serve = AsyncMock()
 
     # Mock scope, receive, send with proper ASGI scope format
     mock_scope = {
@@ -489,7 +489,7 @@ async def test_sse_mcp_handler_mock():
     )
 
     with (
-        patch("litellm.proxy._experimental.mcp_server.server.serve_loop", run),
+        patch("litellm.proxy._experimental.mcp_server.server.serve_loop", serve),
         patch(
             "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
             True,
@@ -505,13 +505,21 @@ async def test_sse_mcp_handler_mock():
         patch(
             "litellm.proxy._experimental.mcp_server.server.set_auth_context",
         ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._raise_preemptive_401_for_unauthenticated_servers",
+            new=AsyncMock(),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._check_passthrough_upstream_auth",
+            new=AsyncMock(),
+        ),
     ):
         from litellm.proxy._experimental.mcp_server.server import handle_sse_mcp
 
         # Call the handler
         await handle_sse_mcp(mock_scope, mock_receive, mock_send)
 
-        assert run.await_args.args[1:3] == (read_stream, write_stream)
+        assert serve.await_args.args[1:3] == (read_stream, write_stream)
         assert mock_sse.connect_sse.call_args.args[0]["path"] == "/mcp/sse"
 
 

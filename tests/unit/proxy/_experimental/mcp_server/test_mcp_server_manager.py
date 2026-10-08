@@ -155,18 +155,26 @@ async def test_elicitation_callback_keeps_initiating_session():
     from litellm.proxy._experimental.mcp_server import server as legacy_server
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import _create_elicitation_callback
 
-    initiating = MagicMock()
-    replacement = MagicMock()
-    recorder = AsyncMock()
+    from types import SimpleNamespace
+    from mcp.types import ClientCapabilities, ElicitationCapability, FormElicitationCapability, ElicitRequestFormParams, ElicitResult
+    from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
+
+    capabilities = ClientCapabilities(elicitation=ElicitationCapability(form=FormElicitationCapability()))
+    accepted = ElicitResult(action="accept")
+    request = AsyncMock(return_value=accepted)
+    initiating = SimpleNamespace(client_params=SimpleNamespace(capabilities=capabilities), elicit_form=request)
     token = legacy_server.active_mcp_session_var.set(initiating)
+    request_token = active_mcp_request_ctx_var.set(SimpleNamespace(session=initiating, request_id="initiating-call"))
     try:
         callback = _create_elicitation_callback()
-        legacy_server.active_mcp_session_var.set(replacement)
-        with patch("litellm.proxy._experimental.mcp_server.elicitation_handler.handle_elicitation_request", recorder):
-            await callback(None, None)
-        assert recorder.await_args.kwargs["downstream_session"] is initiating
-        assert recorder.await_args.kwargs["downstream_capabilities"] is initiating.capabilities
+        legacy_server.active_mcp_session_var.set(SimpleNamespace())
+        active_mcp_request_ctx_var.set(None)
+        capabilities.elicitation = None
+        result = await callback(None, ElicitRequestFormParams(message="Confirm", requested_schema={"type":"object"}))
+        assert result is accepted
+        assert request.await_args.kwargs["related_request_id"] == "initiating-call"
     finally:
+        active_mcp_request_ctx_var.reset(request_token)
         legacy_server.active_mcp_session_var.reset(token)
 
 
