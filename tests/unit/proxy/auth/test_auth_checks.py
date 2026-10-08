@@ -1649,3 +1649,122 @@ def test_is_model_cost_zero_judges_an_alias_chain_by_the_deployment_its_entry_ro
 
     assert verdicts == expected
     assert {name: is_model_cost_zero(model=name, llm_router=router) for name in order} == expected
+
+
+MCP_DISCOVERY_REST_ROUTES = [
+    "/mcp-rest/tools/list",
+    "/v1/mcp/tools",
+]
+
+
+@pytest.mark.parametrize("route", MCP_DISCOVERY_REST_ROUTES)
+@pytest.mark.asyncio
+async def test_mcp_tool_discovery_route_bypasses_team_budget(route):
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    team_object = LiteLLM_TeamTable(team_id="test-team", spend=150.0, max_budget=100.0)
+
+    result = await common_checks(
+        request_body={},
+        team_object=team_object,
+        user_object=None,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings={},
+        route=route,
+        llm_router=None,
+        proxy_logging_obj=AsyncMock(),
+        valid_token=UserAPIKeyAuth(token="test-token", team_id="test-team"),
+        request=MagicMock(),
+    )
+
+    assert result is True
+
+
+@pytest.mark.parametrize("method", ["initialize", "notifications/initialized", "ping", "tools/list"])
+@pytest.mark.parametrize("route", ["/mcp", "/mcp/some-server"])
+@pytest.mark.asyncio
+async def test_mcp_jsonrpc_zero_spend_method_bypasses_team_budget(route, method):
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    team_object = LiteLLM_TeamTable(team_id="test-team", spend=150.0, max_budget=100.0)
+
+    result = await common_checks(
+        request_body={"jsonrpc": "2.0", "id": 1, "method": method, "params": {}},
+        team_object=team_object,
+        user_object=None,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings={},
+        route=route,
+        llm_router=None,
+        proxy_logging_obj=AsyncMock(),
+        valid_token=UserAPIKeyAuth(token="test-token", team_id="test-team"),
+        request=MagicMock(),
+    )
+
+    assert result is True
+
+
+@pytest.mark.parametrize(
+    "route,request_body",
+    [
+        ("/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "add"}}),
+        ("/mcp/some-server", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "add"}}),
+        ("/mcp-rest/tools/call", {"name": "add", "arguments": {}}),
+        ("/mcp/tools/call", {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
+        ("/mcp/tools", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "add"}}),
+        ("/mcp/tools/list", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "add"}}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_mcp_tool_call_route_still_enforces_team_budget(route, request_body):
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    team_object = LiteLLM_TeamTable(team_id="test-team", spend=150.0, max_budget=100.0)
+
+    with pytest.raises(litellm.BudgetExceededError):
+        await common_checks(
+            request_body=request_body,
+            team_object=team_object,
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route=route,
+            llm_router=None,
+            proxy_logging_obj=AsyncMock(),
+            valid_token=UserAPIKeyAuth(token="test-token", team_id="test-team"),
+            request=MagicMock(),
+        )
+
+
+@pytest.mark.parametrize(
+    "route,request_body,expected",
+    [
+        ("/mcp-rest/tools/list", {}, True),
+        ("/v1/mcp/tools", {}, True),
+        ("/mcp/tools", {}, False),
+        ("/mcp/tools/list", {}, False),
+        ("/mcp/tools", {"method": "tools/call"}, False),
+        ("/mcp/tools", {"method": "tools/list"}, True),
+        ("/mcp", {"method": "initialize"}, True),
+        ("/mcp", {"method": "notifications/initialized"}, True),
+        ("/mcp", {"method": "ping"}, True),
+        ("/mcp", {"method": "tools/list"}, True),
+        ("/mcp/some-server", {"method": "tools/list"}, True),
+        ("/mcp", {"method": "tools/call"}, False),
+        ("/mcp/some-server", {"method": "tools/call"}, False),
+        ("/mcp", {}, False),
+        ("/mcp", {"method": ["tools/list"]}, False),
+        ("/mcp", {"method": {"name": "ping"}}, False),
+        ("/mcp-rest/tools/call", {"method": "initialize"}, False),
+        ("/mcp/tools/call", {"method": "initialize"}, False),
+        ("/v1/chat/completions", {"method": "initialize"}, False),
+        ("/mcp-rest/other", {"method": "tools/list"}, False),
+    ],
+)
+def test_is_mcp_discovery_request(route, request_body, expected):
+    from litellm.proxy.auth.auth_checks import is_mcp_discovery_request
+
+    assert is_mcp_discovery_request(route=route, request_body=request_body) is expected

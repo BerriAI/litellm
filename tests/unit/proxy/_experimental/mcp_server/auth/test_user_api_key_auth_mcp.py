@@ -10773,3 +10773,28 @@ async def test_catalog_refresh_uses_current_virtual_key_policy_and_keeps_session
     assert caller.team_id == "old-team" and not caller.requires_fresh_policy
     assert refreshed.access_group_ids == current_groups
     assert caller.access_group_ids == ["original-group"]
+
+
+@pytest.mark.asyncio
+async def test_admission_request_body_serves_stashed_peek_callable():
+    from litellm.constants import MCP_PEEKED_BODY_SCOPE_KEY
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import _admission_request
+
+    jsonrpc_body = b'{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+
+    async def peek() -> bytes:
+        return jsonrpc_body
+
+    with_peek = _admission_request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp",
+            "headers": [],
+            MCP_PEEKED_BODY_SCOPE_KEY: peek,
+        }
+    )
+    assert await with_peek.body() == jsonrpc_body
+
+    without_peek = _admission_request({"type": "http", "method": "POST", "path": "/mcp", "headers": []})
+    assert await without_peek.body() == b"{}"
