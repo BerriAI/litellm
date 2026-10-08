@@ -945,14 +945,14 @@ async def test_pin_matches_when_the_success_event_truncated_an_image_payload(mon
     assert filtered == [deployments[1]]
 
 
-INLINE_IMAGE_PAGE = (
+INLINE_IMAGE_PAGE: Final = (
     '<html><body><img src="data:image/png;base64,'
     + base64.b64encode(bytes(range(256)) * 24).decode()
     + '"></body></html> What does this page render?'
 )
 
 
-def _success_event_kwargs(model: str, sent: list[AllMessageValues], model_id: str) -> dict:
+def _success_event_kwargs(model: str, sent: list[AllMessageValues], model_id: str) -> dict[str, object]:
     return {
         "messages": sent,
         "standard_logging_object": {
@@ -973,14 +973,14 @@ async def test_success_event_measures_the_prefix_on_the_request_not_on_its_trunc
     routing measured thousands: every follow-up looked a pin up, the success event never stored one,
     and the conversation spread across the group with a provider cache miss on each switch.
     """
-    sent = _turn({"role": "user", "content": [_marked(INLINE_IMAGE_PAGE)]})
-    logged = cast(list[AllMessageValues], truncate_base64_in_messages(sent))
+    sent: Final = _turn({"role": "user", "content": [_marked(INLINE_IMAGE_PAGE)]})
+    logged: Final = cast(list[AllMessageValues], truncate_base64_in_messages(sent))
     assert logged != sent
     assert is_prompt_caching_valid_prompt(model=AUTO_CACHING_MODEL, messages=logged) is False
     assert is_prompt_caching_valid_prompt(model=AUTO_CACHING_MODEL, messages=sent) is True
-    cache = DualCache()
-    check = PromptCachingDeploymentCheck(cache=cache)
-    deployments = _deployments(AUTO_CACHING_MODEL, AUTO_CACHING_MODEL)
+    cache: Final = DualCache()
+    check: Final = PromptCachingDeploymentCheck(cache=cache)
+    deployments: Final = _deployments(AUTO_CACHING_MODEL, AUTO_CACHING_MODEL)
 
     await check.async_log_success_event(
         kwargs=_success_event_kwargs(AUTO_CACHING_MODEL, sent, "dep-2"),
@@ -988,12 +988,12 @@ async def test_success_event_measures_the_prefix_on_the_request_not_on_its_trunc
         start_time=None,
         end_time=None,
     )
-    turn_two = _turn(
+    turn_two: Final = _turn(
         {"role": "user", "content": [_text(INLINE_IMAGE_PAGE)]},
         {"role": "assistant", "content": "One image."},
         {"role": "user", "content": [_marked("And its size?")]},
     )
-    filtered = await check.async_filter_deployments(
+    filtered: Final = await check.async_filter_deployments(
         model=MODEL_GROUP_ALIAS, healthy_deployments=deployments, messages=turn_two
     )
 
@@ -1002,9 +1002,9 @@ async def test_success_event_measures_the_prefix_on_the_request_not_on_its_trunc
 
 @pytest.mark.asyncio
 async def test_success_event_stores_no_pin_when_the_request_itself_is_under_the_minimum():
-    sent = _turn({"role": "user", "content": [_marked("What does this page render?")]})
+    sent: Final = _turn({"role": "user", "content": [_marked("What does this page render?")]})
     assert is_prompt_caching_valid_prompt(model=AUTO_CACHING_MODEL, messages=sent) is False
-    cache = DualCache()
+    cache: Final = DualCache()
 
     await PromptCachingDeploymentCheck(cache=cache).async_log_success_event(
         kwargs=_success_event_kwargs(AUTO_CACHING_MODEL, sent, "dep-1"),
