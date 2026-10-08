@@ -30,7 +30,6 @@ try:
         ElicitRequestURLParams,
         ElicitResult,
         ErrorData,
-        RequestId,
     )
 
     MCP_ELICITATION_AVAILABLE = True
