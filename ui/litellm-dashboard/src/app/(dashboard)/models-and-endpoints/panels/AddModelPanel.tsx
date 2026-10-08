@@ -23,7 +23,7 @@ export default function AddModelPanel() {
   const form = useForm<MountedFormValues>({ mode: "onChange", defaultValues: INITIAL_VALUES });
   const registry = useMountRegistry();
   const queryClient = useQueryClient();
-  const { data: modelCostMapData } = useModelCostMap();
+  const { data: modelCostMapData } = useModelCostMap(true, true);
   const { data: credentialsResponse } = useCredentials();
   const { data: teams } = useTeams();
   const [selectedProvider, setSelectedProvider] = useState<string | null>(Providers.Anthropic);

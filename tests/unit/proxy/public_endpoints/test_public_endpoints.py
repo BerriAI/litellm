@@ -76,6 +76,32 @@ def test_get_provider_create_fields():
     ), "Expected at least one provider to have detailed credential fields"
 
 
+def test_get_litellm_model_cost_map_catalog_only_excludes_runtime_registered_entries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    runtime_key: Final = "lit-9263-deployment-alias"
+    litellm.register_model({runtime_key: {"litellm_provider": "openai", "mode": "chat"}}, persist_across_reloads=False)
+    app: Final = FastAPI()
+    app.include_router(router)
+    client: Final = TestClient(app)
+
+    live_response: Final = client.get("/public/litellm_model_cost_map")
+    catalog_response: Final = client.get("/public/litellm_model_cost_map", params={"catalog_only": "true"})
+
+    assert live_response.status_code == 200
+    assert live_response.json()[runtime_key]["litellm_provider"] == "openai"
+    assert catalog_response.status_code == 200
+    catalog_payload: Final = catalog_response.json()
+    assert runtime_key not in catalog_payload
+    assert catalog_payload == json.loads(
+        json.dumps({key: dict(entry) for key, entry in GetModelCostMap.loaded_model_cost_map().items()})
+    )
+
+
 def test_get_litellm_model_cost_map_returns_cost_map():
     app = FastAPI()
     app.include_router(router)
