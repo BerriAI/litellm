@@ -15,8 +15,8 @@ from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
@@ -160,14 +160,12 @@ class RunwayMLVideoConfig(BaseVideoConfig):
             **self._prompt_image_param(video_create_optional_params),
             **self._ratio_param(video_create_optional_params),
             **self._duration_param(video_create_optional_params),
-            # Pass through other parameters that aren't OpenAI-specific
             **{key: value for key, value in video_create_optional_params.items() if key not in supported_openai_params},
         }
 
     @staticmethod
     def _prompt_image_param(video_create_optional_params: VideoCreateOptionalRequestParams) -> Mapping[str, object]:
         # Handle input_reference parameter - map to promptImage
-        # RunwayML supports URLs and data URIs directly
         if "input_reference" in video_create_optional_params:
             return {"promptImage": video_create_optional_params["input_reference"]}
         return {}
@@ -466,7 +464,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         video_url: Final = self._extract_video_url_from_response(response_data)
 
         # Download the video from the CloudFront URL synchronously
-        httpx_client: Final[HTTPHandler] = _get_httpx_client()
+        httpx_client: Final[HTTPHandler] = get_httpx_client()
         video_response: Final = httpx_client.get(video_url)
         video_response.raise_for_status()
 
@@ -618,6 +616,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
+        client: HTTPHandler | None = None,
     ) -> VideoObject:
         """
         Transform the RunwayML video status retrieve response.

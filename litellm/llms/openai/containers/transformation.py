@@ -1,10 +1,11 @@
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import httpx
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
+from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
@@ -155,10 +156,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> ContainerObject:
         """Transform the OpenAI container creation response."""
-        response_data: Final[OpenAIContainerPayload] = raw_response.json()
-
-        # Transform the response data
-        container_obj: Final = ContainerObject(**response_data)
+        container_obj: Final = ContainerObject.model_validate(raw_response.json())
 
         # Add cost for container creation (OpenAI containers are code interpreter sessions)
         # https://platform.openai.com/docs/pricing
@@ -168,11 +166,12 @@ class OpenAIContainerConfig(BaseContainerConfig):
             provider="openai",
         )
 
-        if not hasattr(container_obj, "_hidden_params") or container_obj._hidden_params is None:
-            container_obj._hidden_params = {}
-        if "additional_headers" not in container_obj._hidden_params:
-            container_obj._hidden_params["additional_headers"] = {}
-        container_obj._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = container_cost
+        container_hidden_params: Final = get_or_create_hidden_params(container_obj)
+        container_hidden_params.setdefault("additional_headers", {})
+        container_additional_headers: Final = cast(  # cast-ok: preserve mapping operations on response metadata
+            "dict[str, object]", container_hidden_params["additional_headers"]
+        )
+        container_additional_headers["llm_provider-x-litellm-response-cost"] = container_cost
 
         return container_obj
 
@@ -215,10 +214,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> ContainerListResponse:
         """Transform the OpenAI container list response."""
-        response_data: Final[OpenAIContainerListPayload] = raw_response.json()
-
-        # Transform the response data
-        container_list: Final = ContainerListResponse(**response_data)
+        container_list: Final = ContainerListResponse.model_validate(raw_response.json())
 
         return container_list
 
@@ -235,7 +231,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         url: Final = join_container_api_base_path(api_base, f"/{encoded_container_id}")
 
         # No additional data needed for GET request
-        data: Final[dict[str, object]] = {}
+        data: Final[dict[str, str]] = {}
 
         return url, data
 
@@ -245,9 +241,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> ContainerObject:
         """Transform the OpenAI container retrieve response."""
-        response_data: Final[OpenAIContainerPayload] = raw_response.json()
-        # Transform the response data
-        container_obj: Final = ContainerObject(**response_data)
+        container_obj: Final = ContainerObject.model_validate(raw_response.json())
 
         return container_obj
 
@@ -268,7 +262,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         url: Final = join_container_api_base_path(api_base, f"/{encoded_container_id}")
 
         # No data needed for DELETE request
-        data: Final[dict[str, object]] = {}
+        data: Final[dict[str, str]] = {}
 
         return url, data
 
@@ -278,10 +272,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> DeleteContainerResult:
         """Transform the OpenAI container delete response."""
-        response_data: Final[OpenAIContainerDeletedPayload] = raw_response.json()
-
-        # Transform the response data
-        delete_result: Final = DeleteContainerResult(**response_data)
+        delete_result: Final = DeleteContainerResult.model_validate(raw_response.json())
 
         return delete_result
 
@@ -326,10 +317,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> ContainerFileListResponse:
         """Transform the OpenAI container file list response."""
-        response_data: Final[OpenAIContainerFileListPayload] = raw_response.json()
-
-        # Transform the response data
-        file_list: Final = ContainerFileListResponse(**response_data)
+        file_list: Final = ContainerFileListResponse.model_validate(raw_response.json())
 
         return file_list
 
@@ -352,7 +340,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
         url: Final = join_container_api_base_path(api_base, f"/{encoded_container_id}/files/{encoded_file_id}/content")
 
         # No query parameters needed
-        params: Final[dict[str, object]] = {}
+        params: Final[dict[str, str]] = {}
 
         return url, params
 

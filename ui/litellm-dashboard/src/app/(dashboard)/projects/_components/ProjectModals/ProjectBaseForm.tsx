@@ -5,7 +5,7 @@ import { useFieldArray, useWatch, type UseFormReturn } from "react-hook-form";
 import { ChevronDown, CircleAlert, Minus, Plus } from "lucide-react";
 
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { ALL_TEAM_MODELS, type ProjectFormValues } from "./projectFormSchema";
+import { ALL_TEAM_MODELS, type ProjectFormValues, type ProjectSubmitValues } from "./projectFormSchema";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { Team } from "@/components/key_team_helpers/key_list";
 import { fetchTeamModels } from "@/components/organisms/create_key_button";
@@ -24,6 +24,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { teamsUserCanAssign } from "@/utils/roles";
 
 const toOptionalNumber = (raw: string): number | undefined => {
   if (raw.trim() === "") return undefined;
@@ -32,7 +33,7 @@ const toOptionalNumber = (raw: string): number | undefined => {
 };
 
 interface ProjectBaseFormProps {
-  form: UseFormReturn<ProjectFormValues>;
+  form: UseFormReturn<ProjectFormValues, unknown, ProjectSubmitValues>;
   advancedOpen: boolean;
   onAdvancedOpenChange: (open: boolean) => void;
 }
@@ -94,13 +95,13 @@ export function ProjectBaseForm({ form, advancedOpen, onAdvancedOpenChange }: Pr
     }
   }, [selectedTeam, accessToken, userId, userRole]);
 
-  const handleTeamChange = (teamId: string) => {
+  const handleTeamChange = (teamId: string | null) => {
     const team = teams?.find((t) => t.team_id === teamId) ?? null;
     setSelectedTeam(team);
     form.setValue("models", []);
   };
 
-  const teamOptions = (teams ?? []).map((team) => ({
+  const teamOptions = (teamsUserCanAssign(teams ?? null, userRole, userId) ?? []).map((team) => ({
     value: team.team_id,
     label: team.team_alias || team.team_id,
     sublabel: team.team_id,
@@ -205,8 +206,19 @@ export function ProjectBaseForm({ form, advancedOpen, onAdvancedOpenChange }: Pr
                   type="number"
                   min={0}
                   placeholder="0.00"
-                  value={value ?? ""}
-                  onChange={(event) => onChange(toOptionalNumber(event.target.value))}
+                  value={Number.isNaN(value) ? "" : value ?? ""}
+                  onInput={(event) => {
+                    if (event.currentTarget.validity.badInput || Number.isNaN(value)) {
+                      onChange(
+                        event.currentTarget.validity.badInput
+                          ? Number.NaN
+                          : toOptionalNumber(event.currentTarget.value) ?? null,
+                      );
+                    }
+                  }}
+                  onChange={(event) =>
+                    onChange(event.target.validity.badInput ? Number.NaN : toOptionalNumber(event.target.value) ?? null)
+                  }
                 />
               </InputGroup>
             )}

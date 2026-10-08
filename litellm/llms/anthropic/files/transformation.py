@@ -14,10 +14,12 @@ Anthropic Files API endpoints:
 
 import calendar
 import time
-from typing import Any, Final, cast
+from collections.abc import Mapping
+from typing import Final, cast
 
 import httpx
 from openai.types.file_deleted import FileDeleted
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
@@ -35,11 +37,18 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import LlmProviders
 
-from ..common_utils import AnthropicError, AnthropicModelInfo
+from ..common_utils import (
+    AnthropicError,
+    AnthropicModelInfo,
+    merge_anthropic_beta_headers,
+    without_caller_credential_headers,
+)
 
 ANTHROPIC_FILES_API_BASE: Final = "https://api.anthropic.com"
 ANTHROPIC_FILES_BETA_HEADER: Final = "files-api-2025-04-14"
 ANTHROPIC_MESSAGE_BATCH_ID_PREFIX: Final = "msgbatch_"
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class AnthropicFilesConfig(BaseFilesConfig):
@@ -94,21 +103,54 @@ class AnthropicFilesConfig(BaseFilesConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        if api_base is None and isinstance(litellm_params, dict):
-            api_base = litellm_params.get("api_base")
-        auth_header: Final = AnthropicModelInfo.get_auth_header(api_key, api_base)
+        params_mapping, resolved_api_base = self._resolve_params(litellm_params, api_base)
+        auth_header: Final = AnthropicModelInfo.get_auth_header(
+            api_key, resolved_api_base, litellm_params=params_mapping, allow_workload_identity=True
+        )
+        return self._finalize_headers(headers, auth_header)
+
+    async def avalidate_environment(
+        self,
+        headers: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        model: str,
+        messages: list,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        optional_params: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        litellm_params: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict:  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        """Async counterpart of validate_environment: the WIF tier can block on a token
+        exchange POST, so async callers await it off the event loop."""
+        params_mapping, resolved_api_base = self._resolve_params(litellm_params, api_base)
+        auth_header: Final = await AnthropicModelInfo.aget_auth_header(
+            api_key, resolved_api_base, litellm_params=params_mapping, allow_workload_identity=True
+        )
+        return self._finalize_headers(headers, auth_header)
+
+    @staticmethod
+    def _resolve_params(litellm_params: dict, api_base: str | None) -> tuple[Mapping[str, object] | None, str | None]:
+        params_mapping: Final = litellm_params if isinstance(litellm_params, dict) else None
+        resolved_api_base: Final = (
+            api_base if api_base is not None or params_mapping is None else params_mapping.get("api_base")
+        )
+        return params_mapping, resolved_api_base
+
+    @staticmethod
+    def _finalize_headers(headers: dict, auth_header: Mapping[str, str] | None) -> dict:  # mutable-ok: out-param
         if auth_header is None:
             raise ValueError(
                 "Anthropic API key is required. Set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN environment variable or pass api_key parameter."
             )
-        headers.update(
-            {
-                **auth_header,
-                "anthropic-version": "2023-06-01",
-                "anthropic-beta": ANTHROPIC_FILES_BETA_HEADER,
-            }
+        merged_beta: Final = merge_anthropic_beta_headers(
+            merge_anthropic_beta_headers(headers.get("anthropic-beta"), auth_header.get("anthropic-beta")),
+            ANTHROPIC_FILES_BETA_HEADER,
         )
-        return headers
+        return {
+            **without_caller_credential_headers(headers),
+            **auth_header,
+            "anthropic-version": "2023-06-01",
+            "anthropic-beta": merged_beta,
+        }
 
     def get_supported_openai_params(self, model: str) -> list[OpenAICreateFileRequestOptionalParams]:
         return ["purpose"]
@@ -172,7 +214,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
             "created_at": "2025-01-01T00:00:00Z"
         }
         """
-        response_json: Final = raw_response.json()
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
         return self._parse_anthropic_file(response_json)
 
     def transform_retrieve_file_request(
@@ -191,7 +233,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> OpenAIFileObject:
-        response_json: Final = raw_response.json()
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
         return self._parse_anthropic_file(response_json)
 
     def transform_delete_file_request(
@@ -210,13 +252,9 @@ class AnthropicFilesConfig(BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> FileDeleted:
-        response_json: Final = raw_response.json()
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
         file_id: Final = response_json.get("id", "")
-        return FileDeleted(
-            id=file_id,
-            deleted=True,
-            object="file",
-        )
+        return FileDeleted.model_validate({"id": file_id, "deleted": True, "object": "file"})
 
     def transform_list_files_request(
         self,
@@ -226,7 +264,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
     ) -> tuple[str, dict]:
         api_base: Final = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or ANTHROPIC_FILES_API_BASE
         url: Final = f"{api_base.rstrip('/')}/v1/files"
-        params: Final[dict[str, Any]] = {}
+        params: Final[dict[str, str]] = {}
         if purpose:
             params["purpose"] = purpose
         return url, params

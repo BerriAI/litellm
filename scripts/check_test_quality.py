@@ -48,10 +48,6 @@ TQ006   A `pytest.skip` reached only when a credential-shaped environment variab
         deliberate branch. The gate follows one local or module-level binding, which is
         the `key = os.getenv(...)` then `if not key: pytest.skip(...)` shape most of
         these use.
-TQ008   A `patch(...)` whose target is a `litellm.` internal. Patching the SDK's own
-        functions pins the test to the current wiring instead of the behaviour, and it
-        is the idiom the suite reaches for instead of faking the HTTP boundary. Mocking
-        a third-party client, a transport, or anything outside `litellm.` is untouched.
 TQ007   A module global that a conftest saves before every test and restores after it.
         The save/restore list is a hand-maintained inventory of the leaks the suite
         already knows about, so it is allowed to shrink and never to grow: a new entry
@@ -60,6 +56,13 @@ TQ007   A module global that a conftest saves before every test and restores aft
         names are read from the keys the conftest assigns directly and from whatever the
         save loop iterates, including a module-level tuple or dict it names rather than
         spells out.
+TQ009   A child interpreter spawned as `subprocess.run([sys.executable, ...])` without
+        `-I`/`-P` as its first flag. Without isolation the child's sys.path leads with
+        the working directory, so a source checkout shadows the installed package and
+        the child tests a different `litellm` than the parent imported -- TQ003 is the
+        same working-directory hazard seen from the child's side. Use
+        tests.test_litellm_rust.support.child_interpreter.run_child_interpreter, which
+        also asserts the child resolved the same `litellm.__file__` as the parent.
 
 Every rule is suppressible with `# test-quality-ok: <reason>` on the reported
 line, following the repo's `*-ok: <reason>` convention. A suppression without a
@@ -139,6 +142,13 @@ ENVIRON_MAPPINGS: Final = frozenset(("os.environ", "environ"))
 SKIP_CALLS: Final = frozenset(("pytest.skip", "skip"))
 CONFTEST_NAME: Final = "conftest.py"
 SDK_MODULE: Final = "litellm"
+
+SUBPROCESS_SPAWNS: Final = frozenset(("run", "Popen", "check_output", "check_call", "call"))
+INTERPRETER_ISOLATION_FLAGS: Final = frozenset(("-I", "-P"))
+
+RULE_CODES: Final = frozenset((
+    "TQ000", "TQ001", "TQ002", "TQ003", "TQ004", "TQ005", "TQ006", "TQ007", "TQ009",
+))
 
 CREDENTIAL_NAME_RE: Final = re.compile(
     r"(?:API_KEY|_KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|DATABASE_URL|ACCESS_KEY_ID)$"
@@ -473,67 +483,6 @@ def iter_global_mutation_violations(path: Path, tree: ast.Module) -> Iterator[Vi
                 )
 
 
-def _is_sdk_internal(dotted: str) -> bool:
-    return dotted == SDK_MODULE or dotted.startswith(f"{SDK_MODULE}.")
-
-
-def _sdk_import_bindings(tree: ast.Module) -> Iterator[tuple[str, str]]:
-    """(local name, dotted path) for every import that binds something under `litellm`."""
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            yield from (
-                (alias.asname, alias.name) if alias.asname else (root, root)
-                for alias in node.names
-                if _is_sdk_internal(alias.name)
-                for root in (alias.name.partition(".")[0],)
-            )
-        elif isinstance(node, ast.ImportFrom) and node.module and _is_sdk_internal(node.module):
-            yield from ((alias.asname or alias.name, f"{node.module}.{alias.name}") for alias in node.names)
-
-
-def _sdk_aliases(tree: ast.Module) -> Mapping[str, str]:
-    """Local names bound to something under `litellm`, mapped to the path they stand for.
-
-    `from litellm.llms.openai.chat import handler` then `patch.object(handler.X, ...)`
-    reaches the same internal as the dotted string form and has to read the same way.
-    """
-    return MappingProxyType({name: dotted for name, dotted in _sdk_import_bindings(tree)})
-
-
-def _resolved(dotted: str, aliases: Mapping[str, str]) -> str:
-    root, _, rest = dotted.partition(".")
-    base: Final = aliases.get(root, root)
-    return f"{base}.{rest}" if rest else base
-
-
-def _patch_targets(call: ast.Call, aliases: Mapping[str, str]) -> Iterator[str]:
-    """What a patch installer is replacing: the dotted string it names, or the
-    attribute chain handed to `patch.object` / `patch.dict`, resolved through the
-    module's imports so a locally bound SDK object reads as its full path."""
-    for first in call.args[:1]:
-        if isinstance(first, ast.Constant) and isinstance(first.value, str):
-            yield first.value
-        elif dotted := _dotted_name(first):
-            yield _resolved(dotted, aliases)
-
-
-def iter_internal_patch_violations(path: Path, tree: ast.Module) -> Iterator[Violation]:
-    aliases: Final = _sdk_aliases(tree)
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call) and _is_patch_installer(_dotted_name(node.func))):
-            continue
-        for target in _patch_targets(node, aliases):
-            if _is_sdk_internal(target):
-                yield Violation(
-                    path,
-                    node.lineno,
-                    "TQ008",
-                    f"patches `{target}`, an SDK internal, so the test is pinned to how the code is "
-                    "wired rather than what it does; fake the HTTP boundary (respx / MockTransport) "
-                    f"or inject the collaborator (suppress: `# {SUPPRESSION_TOKEN}: <reason>`)",
-                )
-
-
 def _environ_keys(node: ast.AST) -> Iterator[str]:
     for inner in ast.walk(node):
         if isinstance(inner, ast.Call) and _dotted_name(inner.func) in ENVIRON_READERS:
@@ -709,6 +658,35 @@ def _snapshotted_names(tree: ast.Module) -> Iterator[tuple[str, int]]:
                 yield from _string_members(iterable)
 
 
+def iter_child_interpreter_violations(path: Path, tree: ast.Module) -> Iterator[Violation]:
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and node.args):
+            continue
+        if _dotted_name(node.func).rsplit(".", 1)[-1] not in SUBPROCESS_SPAWNS:
+            continue
+        argv: Final = node.args[0]
+        if not isinstance(argv, (ast.List, ast.Tuple)) or not argv.elts:
+            continue
+        if _dotted_name(argv.elts[0]) != "sys.executable":
+            continue
+        isolated: Final = (
+            len(argv.elts) > 1
+            and isinstance(argv.elts[1], ast.Constant)
+            and argv.elts[1].value in INTERPRETER_ISOLATION_FLAGS
+        )
+        if isolated:
+            continue
+        yield Violation(
+            path,
+            node.lineno,
+            "TQ009",
+            "child interpreter spawned without -I/-P; the working directory lands on sys.path "
+            "and a source checkout can shadow the installed package, use "
+            "tests.test_litellm_rust.support.child_interpreter.run_child_interpreter or pass -I "
+            f"(suppress: `# {SUPPRESSION_TOKEN}: <reason>`)",
+        )
+
+
 def iter_conftest_inventory_violations(path: Path, tree: ast.Module) -> Iterator[Violation]:
     if path.name != CONFTEST_NAME:
         return
@@ -745,7 +723,7 @@ def check_file(path: Path) -> tuple[Violation, ...]:
             *iter_global_mutation_violations(path, tree),
             *iter_credential_skip_violations(path, tree),
             *iter_conftest_inventory_violations(path, tree),
-            *iter_internal_patch_violations(path, tree),
+            *iter_child_interpreter_violations(path, tree),
         )
         if violation.line not in skip
     )

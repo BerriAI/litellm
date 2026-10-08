@@ -6,6 +6,7 @@ from collections.abc import Coroutine, Mapping
 from typing import Final
 
 import litellm
+from litellm.responses.additional_tools import hoist_additional_tools
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
 )
@@ -37,11 +38,16 @@ class LiteLLMCompletionTransformationHandler:
         | BaseResponsesAPIStreamingIterator
         | Coroutine[object, object, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]
     ):
+        hoisted: Final = hoist_additional_tools(input, responses_api_request.get("tools"))
+        bridged_input: Final = hoisted.input
+        bridged_request: Final[ResponsesAPIOptionalRequestParams] = (
+            {**responses_api_request, "tools": list(hoisted.tools)} if hoisted.hoisted else responses_api_request
+        )
         litellm_completion_request: Final[dict] = (
             LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
                 model=model,
-                input=input,
-                responses_api_request=responses_api_request,
+                input=bridged_input,
+                responses_api_request=bridged_request,
                 custom_llm_provider=custom_llm_provider,
                 stream=stream,
                 extra_headers=extra_headers,
@@ -52,8 +58,8 @@ class LiteLLMCompletionTransformationHandler:
         if _is_async:
             return self.async_response_api_handler(
                 litellm_completion_request=litellm_completion_request,
-                request_input=input,
-                responses_api_request=responses_api_request,
+                request_input=bridged_input,
+                responses_api_request=bridged_request,
                 **kwargs,
             )
 
@@ -70,8 +76,8 @@ class LiteLLMCompletionTransformationHandler:
             responses_api_response: Final[ResponsesAPIResponse] = (
                 LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
                     chat_completion_response=litellm_completion_response,
-                    request_input=input,
-                    responses_api_request=responses_api_request,
+                    request_input=bridged_input,
+                    responses_api_request=bridged_request,
                 )
             )
 
@@ -81,8 +87,8 @@ class LiteLLMCompletionTransformationHandler:
             return LiteLLMCompletionStreamingIterator(
                 model=model,
                 litellm_custom_stream_wrapper=litellm_completion_response,
-                request_input=input,
-                responses_api_request=responses_api_request,
+                request_input=bridged_input,
+                responses_api_request=bridged_request,
                 custom_llm_provider=custom_llm_provider,
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
             )

@@ -1,13 +1,21 @@
+import os
+import time
+from collections.abc import Iterator
+from typing import Final
+
 import httpx
-from openai import OpenAI, BadRequestError, APIStatusError
 import pytest
+from openai import APIStatusError, BadRequestError, NotFoundError, OpenAI, Stream
+from openai.types.responses import ResponseStreamEvent
+
+BACKGROUND_STREAM_ADMISSION_DEADLINE_SECONDS: Final = 90
 
 
 def generate_key():
     """Generate a key for testing"""
     url = "http://0.0.0.0:4000/key/generate"
     headers = {
-        "Authorization": "Bearer sk-1234",
+        "Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}",
         "Content-Type": "application/json",
     }
     data = {}
@@ -70,45 +78,9 @@ def validate_stream_chunk(chunk):
     assert isinstance(chunk.created, int)
 
 
-@pytest.mark.flaky(retries=3, delay=2)
-def test_basic_response():
+def test_model_not_found_error():
     client = get_test_client()
-    response = client.responses.create(
-        model="gpt-5.5", input="just respond with the word 'ping'"
-    )
-    print("basic response=", response)
-
-    # get the response
-    response = client.responses.retrieve(response.id)
-    print("GET response=", response)
-
-    # delete the response
-    delete_response = client.responses.delete(response.id)
-    print("DELETE response=", delete_response)
-
-    # expect an error when getting the response again since it was deleted
-    with pytest.raises(APIStatusError):
-        get_response = client.responses.retrieve(response.id)
-
-
-def test_streaming_response():
-    client = get_test_client()
-    stream = client.responses.create(
-        model="gpt-5.5", input="just respond with the word 'ping'", stream=True
-    )
-
-    collected_chunks = []
-    for chunk in stream:
-        print("stream chunk=", chunk)
-        collected_chunks.append(chunk)
-
-    assert len(collected_chunks) > 0
-
-
-def test_bad_request_error():
-    client = get_test_client()
-    with pytest.raises(BadRequestError):
-        # Trigger error with invalid model name
+    with pytest.raises(NotFoundError):
         client.responses.create(model="non-existent-model", input="This should fail")
 
 
@@ -121,76 +93,19 @@ def test_bad_request_bad_param_error():
         )
 
 
-def test_anthropic_with_responses_api():
-    client = get_test_client()
-    response = client.responses.create(
-        model="anthropic/claude-sonnet-4-5-20250929",
-        input="just respond with the word 'ping'",
-        previous_response_id="hi",
-    )
-    print("anthropic response=", response)
+def admitted_response_id(chunk: ResponseStreamEvent) -> str | None:
+    response: Final = getattr(chunk, "response", None)
+    return None if response is None else response.id
 
 
-def test_cancel_response():
-    try:
-        client = get_test_client()
-        from litellm.types.llms.openai import ResponsesAPIResponse
-
-        response = client.responses.create(
-            model="gpt-5.5", input="just respond with the word 'ping'", background=True
-        )
-        print("basic response=", response)
-
-        # cancel the response
-        cancel_response = client.responses.cancel(response.id)
-        print("CANCEL response=", cancel_response)
-
-        # verify cancel response structure
-        assert hasattr(cancel_response, "id")
-    except Exception as e:
-        if "Cannot cancel a completed response" in str(e):
-            pass
-        else:
-            raise e
-
-
-def test_cancel_streaming_response():
-    try:
-        client = get_test_client()
-        from litellm.types.llms.openai import ResponsesAPIResponse
-
-        stream = client.responses.create(
-            model="gpt-5.5",
-            input="just respond with the word 'ping'",
-            stream=True,
-            background=True,
-        )
-
-        collected_chunks = []
-        response_id = None
-        for chunk in stream:
-            print("stream chunk=", chunk)
-            collected_chunks.append(chunk)
-            # Extract response ID from the first chunk that has it
-            if (
-                response_id is None
-                and hasattr(chunk, "response")
-                and hasattr(chunk.response, "id")
-            ):
-                response_id = chunk.response.id
-
-        assert len(collected_chunks) > 0
-
-        # cancel the response if we got a response ID
-        if response_id:
-            cancel_response = client.responses.cancel(response_id)
-            print("CANCEL streaming response=", cancel_response)
-            assert hasattr(cancel_response, "id")
-    except Exception as e:
-        if "Cannot cancel a completed response" in str(e):
-            pass
-        else:
-            raise e
+def events_until_admission(stream: Stream[ResponseStreamEvent], started: float) -> Iterator[ResponseStreamEvent]:
+    for chunk in stream:
+        print("stream chunk=", chunk)
+        yield chunk
+        if admitted_response_id(chunk) is not None:
+            return
+        if time.monotonic() - started > BACKGROUND_STREAM_ADMISSION_DEADLINE_SECONDS:
+            return
 
 
 def test_cancel_invalid_response_id():

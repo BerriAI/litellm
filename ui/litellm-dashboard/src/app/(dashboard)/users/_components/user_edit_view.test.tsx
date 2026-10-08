@@ -1,8 +1,11 @@
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders } from "../../../../../tests/test-utils";
+import { renderWithProviders, testQueryClient } from "../../../../../tests/test-utils";
 import { UserEditView } from "./user_edit_view";
+import * as networking from "@/components/networking";
+
+vi.mock("@/components/networking");
 
 vi.mock("@/components/key_team_helpers/fetch_available_models_team_key", () => ({
   getModelDisplayName: vi.fn((model: string) => model),
@@ -59,6 +62,10 @@ describe("UserEditView", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    testQueryClient.clear();
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+    vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -450,6 +457,151 @@ describe("UserEditView", () => {
       expect(checkbox).toBeChecked();
     });
   });
+
+  describe("user rate limits", () => {
+    const userDataWithRateLimits = () => ({
+      ...MOCK_USER_DATA,
+      user_info: {
+        ...MOCK_USER_DATA.user_info,
+        tpm_limit: 100000,
+        rpm_limit: 50,
+      },
+    });
+
+    it("seeds the TPM and RPM inputs from the selected user", async () => {
+      renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithRateLimits()} />);
+
+      expect(await screen.findByRole("spinbutton", { name: /tpm limit/i })).toHaveValue(100000);
+      expect(await screen.findByRole("spinbutton", { name: /rpm limit/i })).toHaveValue(50);
+    });
+
+    it("keeps unset rate limits empty and omits them from an untouched save", async () => {
+      const onSubmit = vi.fn();
+      const userDataWithNullRateLimits = {
+        ...MOCK_USER_DATA,
+        user_info: {
+          ...MOCK_USER_DATA.user_info,
+          tpm_limit: null,
+          rpm_limit: null,
+        },
+      };
+      renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithNullRateLimits} onSubmit={onSubmit} />);
+
+      expect(await screen.findByRole("spinbutton", { name: /tpm limit/i })).toHaveValue(null);
+      expect(await screen.findByRole("spinbutton", { name: /rpm limit/i })).toHaveValue(null);
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("tpm_limit");
+      expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("rpm_limit");
+    });
+
+    it("omits unchanged rate limits from the submit payload", async () => {
+      const onSubmit = vi.fn();
+      renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithRateLimits()} onSubmit={onSubmit} />);
+
+      await userEvent.click(await screen.findByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("tpm_limit");
+      expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("rpm_limit");
+    });
+
+    it("submits zero when the stored TPM limit changes to zero", async () => {
+      const onSubmit = vi.fn();
+      renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithRateLimits()} onSubmit={onSubmit} />);
+
+      fireEvent.change(await screen.findByRole("spinbutton", { name: /tpm limit/i }), {
+        target: { value: "0" },
+      });
+      await userEvent.click(await screen.findByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0].tpm_limit).toBe(0);
+    });
+
+    it("omits the TPM limit when the stored value is re-entered", async () => {
+      const onSubmit = vi.fn();
+      renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithRateLimits()} onSubmit={onSubmit} />);
+
+      fireEvent.change(await screen.findByRole("spinbutton", { name: /tpm limit/i }), {
+        target: { value: "100000" },
+      });
+      await userEvent.click(await screen.findByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("tpm_limit");
+    });
+
+    it("sends null only for a deliberately cleared TPM limit", async () => {
+      const onSubmit = vi.fn();
+      renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithRateLimits()} onSubmit={onSubmit} />);
+
+      fireEvent.change(await screen.findByRole("spinbutton", { name: /tpm limit/i }), {
+        target: { value: "" },
+      });
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0].tpm_limit).toBeNull();
+      expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("rpm_limit");
+    });
+
+    it("submits a new RPM limit as a number", async () => {
+      const onSubmit = vi.fn();
+      renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithRateLimits()} onSubmit={onSubmit} />);
+
+      fireEvent.change(await screen.findByRole("spinbutton", { name: /rpm limit/i }), {
+        target: { value: "1" },
+      });
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0].rpm_limit).toBe(1);
+      expect(typeof onSubmit.mock.calls[0][0].rpm_limit).toBe("number");
+    });
+
+    it.each(["-1", "1.5"])("rejects an invalid TPM limit of %s", async (value) => {
+      const onSubmit = vi.fn();
+      renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithRateLimits()} onSubmit={onSubmit} />);
+
+      fireEvent.change(await screen.findByRole("spinbutton", { name: /tpm limit/i }), {
+        target: { value },
+      });
+      const submitButton = screen.getByRole("button", { name: /save changes/i }) as HTMLButtonElement;
+      const form = submitButton.form;
+      if (!form) {
+        throw new Error("User edit form was not rendered");
+      }
+      fireEvent.submit(form);
+
+      expect(
+        await screen.findByText("Enter a non-negative whole number, or leave empty for unlimited"),
+      ).toBeInTheDocument();
+      expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it("hides both rate-limit inputs in bulk edit mode", async () => {
+      renderWithProviders(<UserEditView {...defaultProps} userData={userDataWithRateLimits()} isBulkEdit={true} />);
+
+      await screen.findByRole("button", { name: /save changes/i });
+      expect(screen.queryByRole("spinbutton", { name: /tpm limit/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("spinbutton", { name: /rpm limit/i })).not.toBeInTheDocument();
+    });
+  });
+
   describe("submit payload parity", () => {
     const submittedPayload = async (props: Partial<Parameters<typeof UserEditView>[0]> = {}) => {
       const onSubmit = vi.fn();
@@ -476,7 +628,7 @@ describe("UserEditView", () => {
         "user_id",
         "user_role",
       ]);
-      expect(payload).toStrictEqual({
+      const expectedPayload = {
         user_id: "user-123",
         user_email: "test@example.com",
         user_alias: "Test User",
@@ -487,7 +639,8 @@ describe("UserEditView", () => {
         metadata: { key1: "value1", key2: "value2" },
         mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
         mcp_tool_permissions: {},
-      });
+      };
+      expect(payload).toStrictEqual(expectedPayload);
       expect(typeof payload.max_budget).toBe("number");
     });
 
@@ -560,23 +713,67 @@ describe("UserEditView", () => {
       await waitFor(() => {
         expect(onSubmit).toHaveBeenCalled();
       });
-      expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      const expectedPayload = {
         user_id: "user-null",
         user_email: "null@example.com",
         user_alias: null,
         user_role: null,
         budget_duration: null,
         max_budget: null,
-      });
+      };
+      expect(onSubmit.mock.calls[0][0]).toMatchObject(expectedPayload);
     });
 
     it("should keep the budget input's native step constraint armed", async () => {
       renderWithProviders(<UserEditView {...defaultProps} />);
 
       const budgetInput = await screen.findByRole("spinbutton", { name: /max budget/i });
+      const submitButton = screen.getByRole("button", { name: /save changes/i }) as HTMLButtonElement;
+      const form = submitButton.form;
+      if (!form) {
+        throw new Error("User edit form was not rendered");
+      }
       expect(budgetInput).toHaveAttribute("step", "0.01");
       expect(budgetInput).not.toHaveAttribute("min");
-      expect(budgetInput.closest("form")).not.toHaveAttribute("novalidate");
+      expect(form).not.toHaveAttribute("novalidate");
+    });
+
+    it("shows the tool matrix for servers the user reaches only through an access group or toolset", async () => {
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+        { server_id: "srv-group", server_name: "Group Server", alias: "Group Server", mcp_access_groups: ["group-a"] },
+        { server_id: "srv-toolset", server_name: "Toolset Server", alias: "Toolset Server" },
+      ]);
+      vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue(["group-a"]);
+      vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([
+        {
+          toolset_id: "toolset-a",
+          toolset_name: "Toolset A",
+          tools: [{ server_id: "srv-toolset", tool_name: "list_issues" }],
+        } as never,
+      ]);
+      vi.mocked(networking.listMCPTools).mockResolvedValue({
+        tools: [{ name: "list_issues", description: "List issues" }],
+        error: false,
+      });
+
+      renderWithProviders(
+        <UserEditView
+          {...defaultProps}
+          objectPermission={
+            {
+              mcp_servers: [],
+              mcp_access_groups: ["group-a"],
+              mcp_toolsets: ["toolset-a"],
+              mcp_tool_permissions: {},
+            } as never
+          }
+        />,
+      );
+
+      expect(await screen.findByText("Via access group: group-a")).toBeInTheDocument();
+      expect(await screen.findByText("Via toolset: Toolset A")).toBeInTheDocument();
+      expect(networking.listMCPTools).toHaveBeenCalledWith("test-token", "srv-group");
+      expect(networking.listMCPTools).toHaveBeenCalledWith("test-token", "srv-toolset");
     });
 
     it("should send objects for the mcp keys seeded from objectPermission", async () => {

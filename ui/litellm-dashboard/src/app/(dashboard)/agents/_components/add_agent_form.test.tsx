@@ -24,6 +24,38 @@ vi.mock("./agent_form_fields", () => ({
   default: () => <div data-testid="agent-form-fields" />,
 }));
 
+vi.mock("@/components/mcp_server_management/MCPServerSelector", () => ({
+  default: ({
+    onChange,
+  }: {
+    onChange: (selection: { servers: string[]; accessGroups: string[]; toolsets: string[] }) => void;
+  }) => (
+    <button
+      type="button"
+      data-testid="select-mcp-toolset"
+      onClick={() => onChange({ servers: [], accessGroups: [], toolsets: ["ts-1"] })}
+    >
+      Select MCP toolset
+    </button>
+  ),
+}));
+
+vi.mock("@/components/mcp_server_management/MCPToolPermissions", () => ({
+  default: () => null,
+}));
+
+vi.mock("@/components/common_components/AccessGroupSelector", () => ({
+  default: ({ onChange }: { onChange: (value: string[]) => void }) => (
+    <button type="button" data-testid="select-access-group" onClick={() => onChange(["ag-1", "ag-2"])}>
+      Select access group
+    </button>
+  ),
+}));
+
+vi.mock("@/components/common_components/team_dropdown", () => ({
+  default: () => null,
+}));
+
 const a2aInfo: AgentCreateInfo = {
   agent_type: "a2a",
   agent_type_display_name: "A2A Agent",
@@ -51,7 +83,9 @@ describe("AddAgentForm logos", () => {
     expect(titleLogo).toBeInstanceOf(HTMLImageElement);
     expect(titleLogo).toHaveAttribute("src", expect.stringContaining("assets/logos/a2a_agent.png"));
 
-    const selectionLogo = within(await screen.findByRole("combobox")).getByAltText("A2A Agent logo");
+    const selectionLogo = within(await screen.findByRole("combobox", { name: "Agent Type" })).getByAltText(
+      "A2A Agent logo",
+    );
     expect(selectionLogo).toBeInstanceOf(HTMLImageElement);
     expect(selectionLogo).toHaveAttribute("src", expect.stringContaining("assets/logos/a2a_agent.png"));
   });
@@ -61,14 +95,14 @@ describe("AddAgentForm logos", () => {
 
     await screen.findByAltText("A2A Agent logo");
 
-    expect(screen.getByLabelText("Agent Type")).toBe(screen.getByRole("combobox"));
+    expect(screen.getByLabelText("Agent Type")).toBe(screen.getByRole("combobox", { name: "Agent Type" }));
   });
 
   it("renders the option logo when the agent type dropdown is opened", async () => {
     const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
     renderForm();
 
-    const trigger = await screen.findByRole("combobox");
+    const trigger = await screen.findByRole("combobox", { name: "Agent Type" });
     await within(trigger).findByAltText("A2A Agent logo");
     await user.click(trigger);
 
@@ -91,10 +125,55 @@ describe("AddAgentForm logos", () => {
     expect(screen.queryByAltText("Agent logo")).not.toBeInTheDocument();
     expect(within(header).getByText("A")).toBeInTheDocument();
 
-    const trigger = screen.getByRole("combobox");
+    const trigger = screen.getByRole("combobox", { name: "Agent Type" });
     fireEvent.error(within(trigger).getByAltText("A2A Agent logo"));
     expect(within(trigger).queryByAltText("A2A Agent logo")).not.toBeInTheDocument();
     expect(warnSpy).toHaveBeenCalledTimes(2);
     warnSpy.mockRestore();
+  });
+
+  it("includes selected MCP toolsets in the create payload", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    vi.mocked(networking.createAgentCall).mockResolvedValue({
+      agent_id: "agent-1",
+      agent_name: "Test Agent",
+    } as never);
+    vi.mocked(networking.keyListCall).mockResolvedValue({ keys: [] });
+
+    renderForm();
+    await user.click(screen.getByRole("button", { name: "Next →" }));
+    await user.click(screen.getByTestId("select-mcp-toolset"));
+    await user.click(screen.getByRole("button", { name: "Next →" }));
+    await user.click(screen.getByRole("button", { name: "Next →" }));
+    await user.click(screen.getByText(/Skip for now/));
+    await user.click(screen.getByRole("button", { name: "Create Agent →" }));
+
+    await vi.waitFor(() => expect(networking.createAgentCall).toHaveBeenCalled());
+    const [, payload] = vi.mocked(networking.createAgentCall).mock.calls[0];
+    expect(payload.object_permission).toEqual({ mcp_toolsets: ["ts-1"] });
+    expect(payload).not.toHaveProperty("access_group_ids");
+  });
+
+  it("includes selected access groups in the create payload", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    vi.mocked(networking.createAgentCall)
+      .mockReset()
+      .mockResolvedValue({
+        agent_id: "agent-1",
+        agent_name: "Test Agent",
+      } as never);
+    vi.mocked(networking.keyListCall).mockResolvedValue({ keys: [] });
+
+    renderForm();
+    await user.click(screen.getByRole("button", { name: "Next →" }));
+    await user.click(screen.getByTestId("select-access-group"));
+    await user.click(screen.getByRole("button", { name: "Next →" }));
+    await user.click(screen.getByRole("button", { name: "Next →" }));
+    await user.click(screen.getByText(/Skip for now/));
+    await user.click(screen.getByRole("button", { name: "Create Agent →" }));
+
+    await vi.waitFor(() => expect(networking.createAgentCall).toHaveBeenCalled());
+    const [, payload] = vi.mocked(networking.createAgentCall).mock.calls[0];
+    expect(payload.access_group_ids).toEqual(["ag-1", "ag-2"]);
   });
 });
