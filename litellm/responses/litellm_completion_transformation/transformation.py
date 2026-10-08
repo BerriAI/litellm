@@ -590,7 +590,8 @@ class LiteLLMCompletionResponsesConfig:
         if previous_response_id:
             chat_completion_session = (
                 await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
-                    previous_response_id=previous_response_id
+                    previous_response_id=previous_response_id,
+                    carry_over_instructions=not instructions,
                 )
             )
         _messages: Final = litellm_completion_request.get("messages") or []

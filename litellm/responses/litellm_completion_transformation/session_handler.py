@@ -45,6 +45,8 @@ class ResponsesSessionHandler:
     @staticmethod
     async def get_chat_completion_message_history_for_previous_response_id(
         previous_response_id: str,
+        *,
+        carry_over_instructions: bool = True,
     ) -> ChatCompletionSession:
         """
         Return the chat completion message history for a previous response id
@@ -75,6 +77,7 @@ class ResponsesSessionHandler:
                 await ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
                     spend_log=spend_log,
                     chat_completion_message_history=chat_completion_message_history,
+                    carry_over_instructions=carry_over_instructions,
                 )
             )
 
@@ -97,6 +100,7 @@ class ResponsesSessionHandler:
             | ChatCompletionResponseMessage
             | Message
         ],
+        carry_over_instructions: bool,
     ):
         """
         Extend the chat completion message history with the spend log payload
@@ -129,7 +133,7 @@ class ResponsesSessionHandler:
             chat_completion_message_history.extend(
                 LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                     input=response_input_param,
-                    responses_api_request={},
+                    responses_api_request=(proxy_server_request_dict or {}) if carry_over_instructions else {},
                     replay_reasoning=True,
                 )
             )

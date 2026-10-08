@@ -155,54 +155,56 @@ class _RecordingAnthropicMessages:
         )
 
 
-@pytest.mark.asyncio
-async def test_previous_response_id_tool_output_with_new_instructions_builds_valid_anthropic_request() -> None:
-    """
-    A continuation that resends `instructions` must not land a system message between the replayed
-    tool_use and its tool_result, and the previous turn's instructions do not carry over (OpenAI semantics)
-    """
-    model: Final = "anthropic/claude-sonnet-5-5"
-    first_turn: Final = {
-        "request_id": "chatcmpl-first-turn",
-        "call_type": "aresponses",
-        "session_id": "session-1",
-        "proxy_server_request": {
-            "model": model,
-            "input": "What is the weather in Tokyo?",
-            "instructions": "Be terse.",
-        },
-        "response": {
-            "id": "chatcmpl-first-turn",
-            "object": "chat.completion",
-            "created": 0,
-            "model": model,
-            "choices": [
-                {
-                    "index": 0,
-                    "finish_reason": "tool_calls",
-                    "message": {
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [
-                            {
-                                "id": "toolu_weather",
-                                "type": "function",
-                                "function": {"name": "get_weather", "arguments": '{"city": "Tokyo"}'},
-                            }
-                        ],
-                    },
-                }
-            ],
-        },
-    }
-    anthropic: Final = _RecordingAnthropicMessages()
+_MODEL: Final = "anthropic/claude-sonnet-5-5"
+_FIRST_TURN_INSTRUCTIONS: Final = "Be terse."
+_FIRST_TURN: Final = {
+    "request_id": "chatcmpl-first-turn",
+    "call_type": "aresponses",
+    "session_id": "session-1",
+    "proxy_server_request": {
+        "model": _MODEL,
+        "input": "What is the weather in Tokyo?",
+        "instructions": _FIRST_TURN_INSTRUCTIONS,
+    },
+    "response": {
+        "id": "chatcmpl-first-turn",
+        "object": "chat.completion",
+        "created": 0,
+        "model": _MODEL,
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "toolu_weather",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"city": "Tokyo"}'},
+                        }
+                    ],
+                },
+            }
+        ],
+    },
+}
+_EXPECTED_MESSAGES: Final = [
+    ("user", [("text", "What is the weather in Tokyo?")]),
+    ("assistant", [("tool_use", "toolu_weather")]),
+    ("user", [("tool_result", "toolu_weather")]),
+]
 
-    with patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([first_turn])):
+
+async def _continue_first_turn_with_tool_output(instructions: str | None) -> _AnthropicRequest:
+    anthropic: Final = _RecordingAnthropicMessages()
+    with patch("litellm.proxy.proxy_server.prisma_client", _FakePrismaClient([_FIRST_TURN])):
         await litellm.aresponses(
-            model=model,
+            model=_MODEL,
             previous_response_id="chatcmpl-first-turn",
             input=[{"type": "function_call_output", "call_id": "toolu_weather", "output": "47C"}],
-            instructions="Answer in French.",
+            instructions=instructions,
             tools=[
                 {
                     "type": "function",
@@ -213,14 +215,35 @@ async def test_previous_response_id_tool_output_with_new_instructions_builds_val
             api_key="sk-ant-fake",
             client=AsyncHTTPHandler(transport=httpx.MockTransport(anthropic)),
         )
-
     assert anthropic.request is not None
-    assert [
+    return anthropic.request
+
+
+def _message_shapes(request: _AnthropicRequest) -> list[tuple[str, list[tuple[str, str | None]]]]:
+    return [
         (message.role, [(block.type, block.id or block.tool_use_id or block.text) for block in message.content])
-        for message in anthropic.request.messages
-    ] == [
-        ("user", [("text", "What is the weather in Tokyo?")]),
-        ("assistant", [("tool_use", "toolu_weather")]),
-        ("user", [("tool_result", "toolu_weather")]),
+        for message in request.messages
     ]
-    assert [block.text for block in anthropic.request.system] == ["Answer in French."]
+
+
+@pytest.mark.asyncio
+async def test_previous_response_id_tool_output_with_new_instructions_builds_valid_anthropic_request() -> None:
+    """
+    A continuation that resends `instructions` must not land a system message between the replayed
+    tool_use and its tool_result, and the previous turn's instructions do not carry over (OpenAI semantics)
+    """
+    request: Final = await _continue_first_turn_with_tool_output(instructions="Answer in French.")
+
+    assert _message_shapes(request) == _EXPECTED_MESSAGES
+    assert [block.text for block in request.system] == ["Answer in French."]
+
+
+@pytest.mark.asyncio
+async def test_previous_response_id_tool_output_without_instructions_keeps_the_previous_turns() -> None:
+    """
+    A continuation that sends no `instructions` keeps the previous turn's instructions as the system prompt
+    """
+    request: Final = await _continue_first_turn_with_tool_output(instructions=None)
+
+    assert _message_shapes(request) == _EXPECTED_MESSAGES
+    assert [block.text for block in request.system] == [_FIRST_TURN_INSTRUCTIONS]
