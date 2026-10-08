@@ -2733,6 +2733,39 @@ def team_call_validation_checks(
         raise HTTPException(status_code=400, detail={"error": str(e)})
 
 
+def _requested_members(data: TeamMemberAddRequest) -> tuple[Member, ...]:
+    return tuple(data.member) if isinstance(data.member, list) else (data.member,)
+
+
+def _first_repeated(values: Sequence[str | None]) -> str | None:
+    return next((value for index, value in enumerate(values) if value is not None and value in values[:index]), None)
+
+
+def _validate_no_repeated_user_id(members: Sequence[Member]) -> None:
+    repeated_user_id: Final = _first_repeated(tuple(member.user_id for member in members))
+    if repeated_user_id is not None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"{repeated_user_id} appears more than once in this request."},
+        )
+
+
+def _validate_member_request_shape(members: Sequence[Member]) -> None:
+    if len(members) == 0:
+        raise HTTPException(status_code=400, detail={"error": "At least one member is required."})
+    _validate_no_repeated_user_id(members)
+
+
+def _validate_resolved_members_are_distinct(members: Sequence[Member]) -> None:
+    _validate_no_repeated_user_id(members)
+    repeated_email: Final = _first_repeated(tuple(member.user_email for member in members))
+    if repeated_email is not None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"Several requested users share the email {repeated_email}. Add only one of them."},
+        )
+
+
 def team_member_add_duplication_check(
     data: TeamMemberAddRequest,
     existing_team_row: LiteLLM_TeamTable,
@@ -2740,12 +2773,12 @@ def team_member_add_duplication_check(
     """
     Check if a member already exists in the team.
     """
-    members: Final = data.member if isinstance(data.member, list) else [data.member]
+    members: Final = _requested_members(data)
     invalid_team_members: Final = tuple(
         member for member in members if _member_already_in_team(member, existing_team_row)
     )
 
-    if isinstance(data.member, list) and len(invalid_team_members) == len(data.member):
+    if isinstance(data.member, list) and members and len(invalid_team_members) == len(members):
         raise ProxyException(
             message="All requested users are already members of this team.",
             type=ProxyErrorTypes.team_member_already_in_team,
@@ -2817,7 +2850,7 @@ async def _validate_team_member_add_permissions(
     # Available-team self-join: caller may add only themselves, only as a
     # standard user.  Enforce that here so the bypass cannot be used as a
     # privilege-escalation or cross-user-injection primitive.
-    members: Final = data.member if isinstance(data.member, list) else [data.member]
+    members: Final = _requested_members(data)
     caller_user_id: Final = getattr(user_api_key_dict, "user_id", None)
     for member in members:
         if getattr(member, "role", "user") != "user":
@@ -2869,9 +2902,7 @@ async def _process_team_members(
     if member_allowed_models is None and team_default_member_models:
         member_allowed_models = team_default_member_models
 
-    requested_members: Final[Sequence[Member]] = (
-        (data.member,) if isinstance(data.member, Member) else tuple(data.member)
-    )
+    requested_members: Final = _requested_members(data)
     for m in requested_members:
         if _member_already_in_team(m, complete_team_data):
             continue
@@ -2933,13 +2964,14 @@ def _resolve_member_identity(member: Member, updated_users: Sequence[LiteLLM_Use
 
 
 def _matching_team_member(member: Member, complete_team_data: LiteLLM_TeamTable) -> Member | None:
+    roster: Final = complete_team_data.members_with_roles
+    same_user: Final = next(
+        (existing for existing in roster if member.user_id is not None and existing.user_id == member.user_id), None
+    )
+    if same_user is not None:
+        return same_user
     return next(
-        (
-            existing_member
-            for existing_member in complete_team_data.members_with_roles
-            if (member.user_id is not None and existing_member.user_id == member.user_id)
-            or (member.user_email is not None and existing_member.user_email == member.user_email)
-        ),
+        (existing for existing in roster if member.user_email is not None and existing.user_email == member.user_email),
         None,
     )
 
@@ -2949,9 +2981,9 @@ def _member_already_in_team(member: Member, complete_team_data: LiteLLM_TeamTabl
 
 
 def _already_in_team_message(member: Member, existing_member: Member) -> str:
-    if existing_member.user_id is None or existing_member.user_id == member.user_id:
-        return f"{member.user_id or member.user_email} is already a member of this team."
-    return f"{member.user_email} is already used by team member {existing_member.user_id}."
+    if member.user_id is not None and existing_member.user_id == member.user_id:
+        return f"{member.user_id} is already a member of this team."
+    return f"A member of this team already uses {member.user_email}."
 
 
 async def _update_team_members_list(
@@ -2960,9 +2992,7 @@ async def _update_team_members_list(
     updated_users: list[LiteLLM_UserTable],
 ) -> None:
     """Update the team's members_with_roles list."""
-    requested_members: Final[Sequence[Member]] = (
-        (data.member,) if isinstance(data.member, Member) else tuple(data.member)
-    )
+    requested_members: Final = _requested_members(data)
     resolved_members: Final = tuple(_resolve_member_identity(m, updated_users) for m in requested_members)
 
     # extend() consumes the generator as it appends, so a member already added by this
@@ -3251,7 +3281,8 @@ async def _validate_and_populate_member_user_info(
     Validate and populate user_email/user_id for a member.
 
     Logic:
-    1. If both user_email and user_id are provided, verify they belong to the same user (use user_email as source of truth)
+    1. If both user_email and user_id are provided, the user_id decides: an existing user with an email on record
+       must have that email, and a new user_id must not take an email another user already has
     2. If only user_email is provided, populate user_id from DB
     3. If only user_id is provided, populate user_email from DB (if user exists)
     4. If only user_id is provided and doesn't exist, allow it to pass with user_email as None (will be upserted later)
@@ -3265,43 +3296,23 @@ async def _validate_and_populate_member_user_info(
             detail={"error": "Either user_id or user_email must be provided"},
         )
 
-    # Case 1: Both user_email and user_id provided - verify they match
     if member.user_email is not None and member.user_id is not None:
-        # Use user_email as source of truth
-        # Check for multiple users with same email first
-        users_by_email = await prisma_client.get_data(
-            key_val={"user_email": member.user_email},
-            table_name="user",
-            query_type="find_all",
+        mismatch_error: Final = HTTPException(
+            status_code=400,
+            detail={
+                "error": (
+                    f"user_email '{member.user_email}' and user_id '{member.user_id}' do not belong to the same user."
+                )
+            },
         )
-
-        if users_by_email is None or (isinstance(users_by_email, list) and len(users_by_email) == 0):
-            # User doesn't exist yet - this is fine, will be created later
+        existing_user: Final = await _user_db(prisma_client).find_unique(where={"user_id": member.user_id})
+        if existing_user is not None:
+            if existing_user.user_email is not None and existing_user.user_email != member.user_email:
+                raise mismatch_error
             return member
 
-        if isinstance(users_by_email, list) and len(users_by_email) > 1:
-            if any(user.user_id == member.user_id for user in users_by_email):
-                return member
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": f"Multiple users found with email '{member.user_email}'. Please use 'user_id' instead."
-                },
-            )
-
-        # Get the single user
-        user_by_email = users_by_email[0]
-
-        # Verify the user_id matches
-        if user_by_email.user_id != member.user_id:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": f"user_email '{member.user_email}' and user_id '{member.user_id}' do not belong to the same user."
-                },
-            )
-
-        # Both match, return as is
+        if await _user_db(prisma_client).find_first(where={"user_email": member.user_email}) is not None:
+            raise mismatch_error
         return member
 
     # Case 2: Only user_email provided - populate user_id from DB
@@ -3420,12 +3431,14 @@ async def team_member_add(
         data=data,
     )
 
-    team_member_add_duplication_check(
-        data=data,
-        existing_team_row=complete_team_data,
-    )
+    requested_members: Final = _requested_members(data)
+    _validate_member_request_shape(requested_members)
+    if isinstance(data.member, Member):
+        team_member_add_duplication_check(
+            data=data,
+            existing_team_row=complete_team_data,
+        )
 
-    requested_members: Final = tuple(data.member) if isinstance(data.member, list) else (data.member,)
     caller_supplied_user_ids = frozenset(member.user_id for member in requested_members if member.user_id is not None)
     existing_user_ids: Final = await _resolve_existing_member_user_ids(
         members=requested_members,
@@ -3450,6 +3463,12 @@ async def team_member_add(
                 member=m,
                 prisma_client=prisma_client,
             )
+
+    _validate_resolved_members_are_distinct(requested_members)
+    team_member_add_duplication_check(
+        data=data,
+        existing_team_row=complete_team_data,
+    )
 
     pre_existing_user_ids: Final = _pre_existing_user_ids(
         members=requested_members,
