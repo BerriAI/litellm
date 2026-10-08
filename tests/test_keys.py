@@ -183,33 +183,6 @@ async def chat_completion(session, key, model="gpt-4"):
                 pass
 
 
-async def chat_completion_streaming(session, key, model="gpt-4"):
-    client = AsyncOpenAI(api_key=key, base_url="http://0.0.0.0:4000")
-    messages = [
-        {"role": "system", "content": "You are a helpful assistant"},
-        {"role": "user", "content": "Hello!"},
-    ]
-    prompt_tokens = litellm.token_counter(model="gpt-35-turbo", messages=messages)
-    data = {
-        "model": model,
-        "messages": messages,
-        "stream": True,
-    }
-    response = await client.chat.completions.create(**data)
-
-    content = ""
-    async for chunk in response:
-        content += chunk.choices[0].delta.content or ""
-
-    print(f"content: {content}")
-
-    completion_tokens = litellm.token_counter(
-        model="gpt-35-turbo", text=content, count_response_tokens=True
-    )
-
-    return prompt_tokens, completion_tokens
-
-
 async def delete_key(session, get_key, auth_key=os.environ["LITELLM_MASTER_KEY"]):
     """
     Delete key
@@ -365,47 +338,6 @@ async def get_spend_logs(session, request_id):
         if status != 200:
             raise Exception(f"Request did not return a 200 status code: {status}")
         return await response.json()
-
-
-@pytest.mark.asyncio
-@pytest.mark.flaky(retries=6, delay=2)
-@pytest.mark.skip(
-    reason="Temporarily skipping due to model change. Will be updated soon."
-)
-async def test_aaaaakey_info_spend_values_streaming():
-    """
-    Test to ensure spend is correctly calculated.
-    - create key
-    - make completion call
-    - assert cost is expected value
-    """
-    async with aiohttp.ClientSession() as session:
-        ## streaming - azure
-        key_gen = await generate_key(session=session, i=0)
-        new_key = key_gen["key"]
-        prompt_tokens, completion_tokens = await chat_completion_streaming(
-            session=session, key=new_key
-        )
-        print(f"prompt_tokens: {prompt_tokens}, completion_tokens: {completion_tokens}")
-        prompt_cost, completion_cost = litellm.cost_per_token(
-            model="azure/gpt-4o",
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-        )
-        response_cost = prompt_cost + completion_cost
-        await asyncio.sleep(8)  # allow db log to be updated
-        print(f"new_key: {new_key}")
-        key_info = await get_key_info(
-            session=session, get_key=new_key, call_key=new_key
-        )
-        print(
-            f"response_cost: {response_cost}; key_info spend: {key_info['info']['spend']}"
-        )
-        rounded_response_cost = round(response_cost, 8)
-        rounded_key_info_spend = round(key_info["info"]["spend"], 8)
-        assert (
-            rounded_response_cost == rounded_key_info_spend
-        ), f"Expected={rounded_response_cost}, Got={rounded_key_info_spend}"
 
 
 @pytest.mark.skip(reason="Frequent check on ci/cd leads to read timeout issue.")

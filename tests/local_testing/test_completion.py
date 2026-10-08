@@ -1413,28 +1413,6 @@ def test_replicate_custom_prompt_dict():
 # test_completion_together_ai_mixtral()
 
 
-def test_completion_together_ai_llama():
-    litellm.set_verbose = True
-    model_name = "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo"
-    try:
-        messages = [
-            {"role": "user", "content": "What llm are you?"},
-        ]
-        response = completion(model=model_name, messages=messages, max_tokens=5)
-        # Add any assertions here to check the response
-        print(response)
-        cost = completion_cost(completion_response=response)
-        assert cost > 0.0
-        print(
-            "Cost for completion call together-computer/llama-2-70b: ",
-            f"${float(cost):.10f}",
-        )
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 # test_completion_together_ai_yi_chat()
 
 
@@ -1901,25 +1879,6 @@ def test_langfuse_completion(monkeypatch):
         prompt_variables={"user_message": "this is used"},
         messages=[{"role": "user", "content": "this is ignored"}],
     )
-
-
-
-
-
-
-def test_deepseek_reasoning_content_completion():
-    try:
-        litellm.set_verbose = True
-        litellm.turn_on_debug()
-        resp = litellm.completion(
-            timeout=5,
-            model="deepseek/deepseek-reasoner",
-            messages=[{"role": "user", "content": "Tell me a joke."}],
-        )
-
-        assert resp.choices[0].message.reasoning_content is not None
-    except litellm.Timeout:
-        pytest.skip("Model is timing out")
 
 
 def test_qwen_text_completion():

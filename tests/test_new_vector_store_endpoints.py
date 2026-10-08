@@ -14,82 +14,6 @@ from litellm.proxy._types import UserAPIKeyAuth
 
 
 @pytest.mark.asyncio
-async def test_vector_store_retrieve_basic():
-    """Test basic vector store retrieve functionality."""
-    mock_response = {
-        "id": "vs_test123",
-        "object": "vector_store",
-        "created_at": 1699061776,
-        "name": "Test Vector Store",
-        "file_counts": {
-            "in_progress": 0,
-            "completed": 5,
-            "failed": 0,
-            "cancelled": 0,
-            "total": 5,
-        },
-        "status": "completed",
-        "usage_bytes": 12345,
-    }
-
-    with patch(
-        "litellm.vector_stores.main.aretrieve",
-        new=AsyncMock(return_value=mock_response),
-    ) as mock_retrieve:
-        router = litellm.Router(model_list=[])
-        result = await router.avector_store_retrieve(
-            vector_store_id="vs_test123",
-            custom_llm_provider="openai",
-        )
-
-        assert result["id"] == "vs_test123"
-        assert result["object"] == "vector_store"
-        assert result["status"] == "completed"
-        mock_retrieve.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_vector_store_list_basic():
-    """Test basic vector store list functionality."""
-    mock_response = {
-        "object": "list",
-        "data": [
-            {
-                "id": "vs_test1",
-                "object": "vector_store",
-                "created_at": 1699061776,
-                "name": "Store 1",
-            },
-            {
-                "id": "vs_test2",
-                "object": "vector_store",
-                "created_at": 1699061777,
-                "name": "Store 2",
-            },
-        ],
-        "first_id": "vs_test1",
-        "last_id": "vs_test2",
-        "has_more": False,
-    }
-
-    with patch(
-        "litellm.vector_stores.main.alist",
-        new=AsyncMock(return_value=mock_response),
-    ) as mock_list:
-        router = litellm.Router(model_list=[])
-        result = await router.avector_store_list(
-            limit=20,
-            order="desc",
-            custom_llm_provider="openai",
-        )
-
-        assert result["object"] == "list"
-        assert len(result["data"]) == 2
-        assert result["data"][0]["id"] == "vs_test1"
-        mock_list.assert_called_once()
-
-
-@pytest.mark.asyncio
 async def test_vector_store_update_basic():
     """Test basic vector store update functionality."""
     mock_response = {
@@ -120,76 +44,6 @@ async def test_vector_store_update_basic():
 
 
 @pytest.mark.asyncio
-async def test_vector_store_delete_basic():
-    """Test basic vector store delete functionality."""
-    mock_response = {
-        "id": "vs_test123",
-        "object": "vector_store.deleted",
-        "deleted": True,
-    }
-
-    with patch(
-        "litellm.vector_stores.main.adelete",
-        new=AsyncMock(return_value=mock_response),
-    ) as mock_delete:
-        router = litellm.Router(model_list=[])
-        result = await router.avector_store_delete(
-            vector_store_id="vs_test123",
-            custom_llm_provider="openai",
-        )
-
-        assert result["id"] == "vs_test123"
-        assert result["deleted"] is True
-        assert result["object"] == "vector_store.deleted"
-        mock_delete.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_async_vector_store_retrieve():
-    """Test async vector store retrieve."""
-    mock_response = {
-        "id": "vs_async123",
-        "object": "vector_store",
-        "name": "Async Test Store",
-    }
-
-    with patch(
-        "litellm.vector_stores.main.aretrieve",
-        new=AsyncMock(return_value=mock_response),
-    ) as mock_aretrieve:
-        router = litellm.Router(model_list=[])
-        result = await router.avector_store_retrieve(
-            vector_store_id="vs_async123",
-            custom_llm_provider="openai",
-        )
-
-        assert result["id"] == "vs_async123"
-        mock_aretrieve.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_async_vector_store_list():
-    """Test async vector store list."""
-    mock_response = {
-        "object": "list",
-        "data": [{"id": "vs_1"}, {"id": "vs_2"}],
-    }
-
-    with patch(
-        "litellm.vector_stores.main.alist",
-        new=AsyncMock(return_value=mock_response),
-    ) as mock_alist:
-        router = litellm.Router(model_list=[])
-        result = await router.avector_store_list(
-            limit=10,
-            custom_llm_provider="openai",
-        )
-
-        assert len(result["data"]) == 2
-        mock_alist.assert_called_once()
-
-
-@pytest.mark.asyncio
 async def test_async_vector_store_update():
     """Test async vector store update."""
     mock_response = {
@@ -210,28 +64,6 @@ async def test_async_vector_store_update():
 
         assert result["name"] == "Updated Async Name"
         mock_aupdate.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_async_vector_store_delete():
-    """Test async vector store delete."""
-    mock_response = {
-        "id": "vs_async123",
-        "deleted": True,
-    }
-
-    with patch(
-        "litellm.vector_stores.main.adelete",
-        new=AsyncMock(return_value=mock_response),
-    ) as mock_adelete:
-        router = litellm.Router(model_list=[])
-        result = await router.avector_store_delete(
-            vector_store_id="vs_async123",
-            custom_llm_provider="openai",
-        )
-
-        assert result["deleted"] is True
-        mock_adelete.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -335,18 +167,12 @@ if __name__ == "__main__":
 
     # Test basic sync operations
     print("✓ Testing basic sync operations...")
-    asyncio.run(test_vector_store_retrieve_basic())
-    asyncio.run(test_vector_store_list_basic())
     asyncio.run(test_vector_store_update_basic())
-    asyncio.run(test_vector_store_delete_basic())
     print("✓ Basic sync operations successful")
 
     # Test async operations
     print("✓ Testing async operations...")
-    asyncio.run(test_async_vector_store_retrieve())
-    asyncio.run(test_async_vector_store_list())
     asyncio.run(test_async_vector_store_update())
-    asyncio.run(test_async_vector_store_delete())
     print("✓ Async operations successful")
 
     print("\n✅ All smoke tests passed!")

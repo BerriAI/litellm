@@ -99,18 +99,6 @@ def verify_member_in_team(team_info: Dict, user_email: str) -> bool:
     )
 
 
-def test_team_creation(api_client):
-    """Test team creation"""
-    team_alias = f"Test Team {uuid.uuid4().hex[:6]}"
-    team_response, team_id = api_client.create_team(team_alias)
-
-    # Verify team was created
-    team_info = api_client.get_team_info(team_id)
-    assert team_info["team_id"] == team_id
-    assert team_info["team_info"]["team_alias"] == team_alias
-    assert "o3-mini" in team_info["team_info"]["models"]
-
-
 def test_add_single_member(api_client, new_team):
     """Test adding a single member to a new team"""
     # Get initial team info

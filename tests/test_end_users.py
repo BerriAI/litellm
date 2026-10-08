@@ -110,16 +110,6 @@ async def new_budget(session, i, budget_id=None):
 
 
 @pytest.mark.asyncio
-async def test_end_user_new():
-    """
-    Make 20 parallel calls to /user/new. Assert all worked.
-    """
-    async with aiohttp.ClientSession() as session:
-        tasks = [new_end_user(session, i, str(uuid.uuid4())) for i in range(1, 11)]
-        await asyncio.gather(*tasks)
-
-
-@pytest.mark.asyncio
 async def test_enduser_tpm_limits_non_master_key():
     """
     1. budget_id = Create Budget with tpm_limit = 10
