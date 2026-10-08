@@ -53,7 +53,9 @@ RELOAD_INTERVAL_SECONDS: Final = 3
 WORKER_SYNC_SECONDS: Final = RELOAD_INTERVAL_SECONDS + 7
 CAP_SECONDS: Final = 60
 RESTORED_IDLE_SECONDS: Final = 75
-CAPPED_SOCKETS: Final = ("/v1/responses",) * 4 + ("/responses",) * 4
+CAPPED_PATHS: Final = ("/v1/responses", "/responses")
+CAPPED_SOCKETS_MINIMUM: Final = 8
+CAPPED_SOCKETS_MAXIMUM: Final = 40
 KILLED_POOL_SIZE: Final = 8
 SUBPROTOCOLS: Final = (Subprotocol("litellm-responses-first"), Subprotocol("litellm-responses-second"))
 STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
@@ -197,6 +199,14 @@ class CappedSocket:
     path: str
     worker_pid: int | None
     close: CloseResult
+
+
+@dataclass(frozen=True, slots=True)
+class OpenedSocket:
+    path: str
+    worker_pid: int | None
+    connection: websockets.ClientConnection
+    started: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -877,21 +887,35 @@ async def _update_sequence(candidate: Gateway, values: tuple[int, ...]) -> tuple
     return (first, *await _update_sequence(candidate, values[1:]))
 
 
-async def _capped_socket(proxy: str, key: str, path: str, workers: frozenset[int]) -> CappedSocket:
+async def _open_capped_socket(proxy: str, key: str, path: str, workers: frozenset[int]) -> OpenedSocket:
     started: Final = time.monotonic()
+    connection: Final = await websockets.connect(
+        f"{proxy}{path}",
+        additional_headers={"Authorization": f"Bearer {key}"},
+        open_timeout=10,
+    )
+    holder: Final = await asyncio.to_thread(_holding_worker, workers, _client_port(connection))
+    return OpenedSocket(path, holder, connection, started)
+
+
+async def _sockets_on_every_worker(
+    proxy: str, key: str, workers: frozenset[int], opened: tuple[OpenedSocket, ...] = ()
+) -> tuple[OpenedSocket, ...]:
+    holders: Final = frozenset(socket.worker_pid for socket in opened)
+    enough: Final = len(opened) >= CAPPED_SOCKETS_MINIMUM
+    if enough and (holders >= workers or len(opened) >= CAPPED_SOCKETS_MAXIMUM):
+        return opened
+    path: Final = CAPPED_PATHS[len(opened) % len(CAPPED_PATHS)]
+    next_socket: Final = await _open_capped_socket(proxy, key, path, workers)
+    return await _sockets_on_every_worker(proxy, key, workers, (*opened, next_socket))
+
+
+async def _capped_close(socket: OpenedSocket) -> CappedSocket:
     try:
-        async with websockets.connect(
-            f"{proxy}{path}",
-            additional_headers={"Authorization": f"Bearer {key}"},
-            open_timeout=10,
-        ) as connection:
-            holder: Final = await asyncio.to_thread(_holding_worker, workers, _client_port(connection))
-            outcome: Final = await _wait_for_close(connection, CAP_SECONDS + 15)
-            return CappedSocket(path, holder, CloseResult(outcome, time.monotonic() - started))
-    except (ConnectionClosed, asyncio.TimeoutError, InvalidStatus) as error:
-        code, reason = _auth_close(error) if isinstance(error, ConnectionClosed) else (None, None)
-        failed: Final = ReceiveResult(False, True, None, code, reason)
-        return CappedSocket(path, None, CloseResult(failed, time.monotonic() - started))
+        outcome: Final = await _wait_for_close(socket.connection, CAP_SECONDS + 15)
+        return CappedSocket(socket.path, socket.worker_pid, CloseResult(outcome, time.monotonic() - socket.started))
+    finally:
+        await socket.connection.close()
 
 
 async def _held_turn(connection: websockets.ClientConnection, model: str, accepted_at: float) -> HeldResult:
@@ -913,9 +937,8 @@ async def _override_workload(owned: OwnedProxy, key: str, model: str, database_u
         written_at: Final = time.monotonic()
         stored_after_updates: Final = await asyncio.to_thread(_stored_limit, database_url)
         await asyncio.to_thread(_settled_on_every_worker, written_at)
-        capped: Final = await asyncio.gather(
-            *tuple(_capped_socket(proxy, key, path, workers) for path in CAPPED_SOCKETS)
-        )
+        opened: Final = await _sockets_on_every_worker(proxy, key, workers)
+        capped: Final = await asyncio.gather(*tuple(_capped_close(socket) for socket in opened))
         earlier_result: Final = await _held_turn(earlier, model, accepted_at)
     delete: Final = await asyncio.to_thread(_delete_limit, candidate)
     deleted_at: Final = time.monotonic()
@@ -1391,7 +1414,10 @@ def test_requested_subprotocol_is_accepted_and_the_turn_completes(default_result
 def test_db_override_caps_new_sessions_on_every_worker_without_restart(override_results: OverrideResults) -> None:
     assert len(override_results.workers) == 2, override_results.workers
     capped: Final = override_results.capped
-    assert tuple(socket.path for socket in capped) == CAPPED_SOCKETS
+    assert CAPPED_SOCKETS_MINIMUM <= len(capped) <= CAPPED_SOCKETS_MAXIMUM, capped
+    assert tuple(socket.path for socket in capped) == tuple(
+        CAPPED_PATHS[i % len(CAPPED_PATHS)] for i in range(len(capped))
+    )
     assert all(socket.close.outcome.closed and socket.close.outcome.close_code == 1000 for socket in capped), capped
     assert all(socket.close.outcome.close_reason == LIMIT_CLOSE_REASON for socket in capped), capped
     assert all(CAP_SECONDS - 1 <= socket.close.elapsed <= CAP_SECONDS + 15 for socket in capped), capped
