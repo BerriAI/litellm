@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import date, datetime
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -10,6 +10,7 @@ from fastapi import HTTPException
 import litellm.proxy.management_endpoints.common_daily_activity as common_daily_activity_module
 from litellm.constants import USAGE_TOP_API_KEYS_DEFAULT
 from litellm.proxy.management_endpoints.common_daily_activity import (
+    CanonicalDateRange,
     InvalidDateRange,
     _is_user_agent_tag,
     _ProxyDailyActivityReads,
@@ -19,6 +20,8 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     daily_activity_scope,
     get_api_key_metadata,
     get_daily_activity,
+    parse_canonical_date,
+    parse_canonical_date_range,
     raise_public,
     update_metrics,
 )
@@ -282,6 +285,36 @@ async def test_get_daily_activity_order_has_id_tiebreaker():
     assert order == ({"date": "desc"}, {"id": "asc"}), (
         f"order must include the id tiebreaker after date for stable offset pagination (see #30164); got {order!r}"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("page, page_size", [(0, 10), (-1, 10), (1, 0), (1, -5)])
+async def test_get_daily_activity_rejects_non_positive_pagination_with_400(page, page_size):
+    from fastapi import HTTPException
+
+    mock_prisma = MagicMock()
+    mock_table = MagicMock()
+    mock_table.count = AsyncMock(return_value=0)
+    mock_table.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_dailyteamspend = mock_table
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_daily_activity(
+            prisma_client=mock_prisma,
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id=None,
+            entity_metadata_field=None,
+            start_date="2026-09-18",
+            end_date="2026-09-25",
+            model=None,
+            api_key=None,
+            page=page,
+            page_size=page_size,
+        )
+
+    assert exc_info.value.status_code == 400, exc_info.value.detail
+    mock_table.find_many.assert_not_called()
 
 
 def test_is_user_agent_tag():
@@ -2456,3 +2489,56 @@ def test_raise_public_maps_invalid_date_range_to_400() -> None:
         raise_public(InvalidDateRange(reason="Date range must be at most 400 days"))
     assert excinfo.value.status_code == 400
     assert excinfo.value.detail == {"error": "Date range must be at most 400 days"}
+
+
+@pytest.mark.parametrize("value", ("2026-9-24", "２０２６-09-24", "2026-09-4", "2026-02-30", "20260924", ""))
+def test_parse_canonical_date_rejects_spellings_that_do_not_round_trip(value: str) -> None:
+    assert parse_canonical_date(value) is None
+
+
+def test_parse_canonical_date_accepts_the_exact_yyyy_mm_dd_spelling() -> None:
+    assert parse_canonical_date("2026-09-24") == date(2026, 9, 24)
+    assert parse_canonical_date("0001-01-01") == date(1, 1, 1)
+
+
+def test_parse_canonical_date_range_reports_missing_then_malformed_dates() -> None:
+    assert parse_canonical_date_range(None, "2026-09-24") == InvalidDateRange(
+        reason="Please provide start_date and end_date"
+    )
+    assert parse_canonical_date_range("2026-09-24", "2026-9-26") == InvalidDateRange(
+        reason="start_date and end_date must be valid YYYY-MM-DD dates"
+    )
+    assert parse_canonical_date_range("2026-09-24", "2026-09-26") == CanonicalDateRange(
+        start=date(2026, 9, 24), end=date(2026, 9, 26)
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("start_date", ("2026-9-24", "２０２６-09-24", "2026-09-4"))
+async def test_get_daily_activity_rejects_non_canonical_dates_before_querying(start_date: str) -> None:
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_table = MagicMock()
+    mock_table.count = AsyncMock(return_value=0)
+    mock_table.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_dailyteamspend = mock_table
+
+    with pytest.raises(HTTPException) as error:
+        await get_daily_activity(
+            prisma_client=mock_prisma,
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id="team-a",
+            entity_metadata_field=None,
+            start_date=start_date,
+            end_date="2026-09-26",
+            model=None,
+            api_key=None,
+            page=1,
+            page_size=10,
+        )
+
+    assert error.value.status_code == 400
+    assert error.value.detail == {"error": "start_date and end_date must be valid YYYY-MM-DD dates"}
+    mock_table.count.assert_not_awaited()
+    mock_table.find_many.assert_not_awaited()

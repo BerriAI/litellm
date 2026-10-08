@@ -26,6 +26,7 @@ from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     MAX_LITELLM_CALL_ID_LENGTH,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
+    STREAM_SSE_KEEPALIVE_PING_BYTES,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
@@ -43,14 +44,14 @@ from litellm.proxy.common_request_processing import (
     CostBreakdownHeaderValues,
     _has_attribute_error_in_chain,
     include_guardrail_response_requested,
-    _is_azure_model_router_request,
+    is_azure_model_router_request,
     open_sse_before_first_byte,
     resolve_litellm_call_id,
     ttft_keepalive_interval,
     _override_openai_response_model,
     _parse_event_data_for_error,
     _resolve_per_request_model_group_alias,
-    _should_return_raw_model_name,
+    should_return_raw_model_name,
     _sse_error_frames,
     _UpstreamClosingStreamingResponse,
     create_response,
@@ -3019,7 +3020,7 @@ class TestOverrideOpenAIResponseModel:
         ],
     )
     def test_raw_model_name_toggle_metadata(self, request_data, expected):
-        assert _should_return_raw_model_name(request_data) is expected
+        assert should_return_raw_model_name(request_data) is expected
 
     def test_override_model_preserves_fallback_model_when_fallback_occurred_object(
         self,
@@ -3470,17 +3471,17 @@ class TestIsAzureModelRouterRequest:
     """Tests for _is_azure_model_router_request helper"""
 
     def test_detects_model_router_with_underscore(self):
-        assert _is_azure_model_router_request("azure_ai/model_router") is True
-        assert _is_azure_model_router_request("azure_ai/model_router/my-deployment") is True
+        assert is_azure_model_router_request("azure_ai/model_router") is True
+        assert is_azure_model_router_request("azure_ai/model_router/my-deployment") is True
 
     def test_detects_model_router_with_hyphen(self):
-        assert _is_azure_model_router_request("azure_ai/model-router") is True
-        assert _is_azure_model_router_request("model-router") is True
+        assert is_azure_model_router_request("azure_ai/model-router") is True
+        assert is_azure_model_router_request("model-router") is True
 
     def test_rejects_regular_models(self):
-        assert _is_azure_model_router_request("azure_ai/gpt-4") is False
-        assert _is_azure_model_router_request("gpt-4") is False
-        assert _is_azure_model_router_request("openai/gpt-3.5-turbo") is False
+        assert is_azure_model_router_request("azure_ai/gpt-4") is False
+        assert is_azure_model_router_request("gpt-4") is False
+        assert is_azure_model_router_request("openai/gpt-3.5-turbo") is False
 
 
 class TestStreamingOverheadHeader:
@@ -3720,7 +3721,7 @@ class TestStreamingOverheadHeader:
         mock_logging_obj.caching_details = None
         mock_logging_obj.callback_duration_ms = None
         mock_logging_obj.litellm_call_id = "test-call-id"
-        mock_logging_obj._response_cost_calculator = MagicMock(return_value=0.001)
+        mock_logging_obj.response_cost_calculator = MagicMock(return_value=0.001)
 
         # Simulate a streaming result object with _hidden_params (like CustomStreamWrapper)
         stream_result = MagicMock()
@@ -4256,6 +4257,72 @@ class TestStreamCloseOnDisconnect:
 
         assert upstream.aclosed
 
+    async def test_async_streaming_data_generator_closes_the_guardrail_chain_on_client_disconnect(
+        self,
+    ):
+        cleanup_ran = []
+
+        async def guarded_chain(**_kwargs):
+            try:
+                yield {"type": "chunk"}
+                yield {"type": "chunk"}
+            finally:
+                cleanup_ran.append(True)
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
+        proxy_logging_obj.async_post_call_streaming_iterator_hook = guarded_chain
+        gen = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+            response=MagicMock(),
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            request_data={"model": "mock-model"},
+            proxy_logging_obj=proxy_logging_obj,
+            serialize_chunk=lambda c: "data: x\n\n",
+            serialize_error=lambda e: "data: error\n\n",
+        )
+
+        await gen.__anext__()
+        await gen.aclose()
+
+        assert cleanup_ran == [True]
+
+    async def test_async_streaming_data_generator_refunds_the_budget_when_closing_the_guardrail_chain_raises(
+        self,
+    ):
+        async def guarded_chain(**_kwargs):
+            try:
+                yield STREAM_SSE_KEEPALIVE_PING_BYTES
+                yield {"type": "chunk"}
+            finally:
+                raise RuntimeError("cleanup failed")
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
+        proxy_logging_obj.async_post_call_streaming_iterator_hook = guarded_chain
+        reservation = object()
+        user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        user_api_key_dict.budget_reservation = reservation
+        gen = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+            response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+            request_data={"model": "mock-model"},
+            proxy_logging_obj=proxy_logging_obj,
+            serialize_chunk=lambda c: "data: x\n\n",
+            serialize_error=lambda e: "data: error\n\n",
+        )
+
+        released: list[object] = []
+
+        async def record_release(budget_reservation: object) -> None:
+            released.append(budget_reservation)
+
+        with patch(
+            "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation_on_cancel",
+            new=record_release,
+        ):
+            await gen.__anext__()
+            await gen.aclose()
+
+        assert released == [reservation]
+
     async def test_async_streaming_data_generator_redacts_internal_details_on_error(
         self,
     ):
@@ -4790,7 +4857,7 @@ class TestDisconnectGatherCleanup:
 
         mock_logging_obj = MagicMock()
         mock_logging_obj.litellm_call_id = "test-call-id"
-        mock_logging_obj._defer_async_logging = False
+        mock_logging_obj.defer_async_logging = False
 
         mock_proxy_logging = MagicMock(spec=ProxyLogging)
         mock_proxy_logging.during_call_hook = AsyncMock(return_value=None)
@@ -4837,7 +4904,7 @@ class TestDisconnectGatherCleanup:
 
         mock_logging_obj = MagicMock()
         mock_logging_obj.litellm_call_id = "test-call-id"
-        mock_logging_obj._defer_async_logging = False
+        mock_logging_obj.defer_async_logging = False
 
         mock_proxy_logging = MagicMock(spec=ProxyLogging)
         mock_proxy_logging.during_call_hook = AsyncMock(return_value=None)
@@ -4900,7 +4967,7 @@ class TestDisconnectGatherCleanup:
 
         mock_logging_obj = MagicMock()
         mock_logging_obj.litellm_call_id = "test-call-id"
-        mock_logging_obj._defer_async_logging = False
+        mock_logging_obj.defer_async_logging = False
 
         mock_proxy_logging = MagicMock(spec=ProxyLogging)
         mock_proxy_logging.during_call_hook = slow_during_call_hook
@@ -4984,7 +5051,7 @@ class TestDisconnectGatherCleanup:
 
         mock_logging_obj = MagicMock()
         mock_logging_obj.litellm_call_id = "test-call-id"
-        mock_logging_obj._defer_async_logging = False
+        mock_logging_obj.defer_async_logging = False
 
         mock_proxy_logging = MagicMock(spec=ProxyLogging)
         mock_proxy_logging.during_call_hook = successful_hook
@@ -5036,7 +5103,7 @@ async def test_response_model_echoes_the_name_the_client_sent_before_auth_rewrot
     async def fake_route_request(**_kwargs):
         return llm()
 
-    logging_obj = MagicMock(litellm_call_id="call-id", _defer_async_logging=False)
+    logging_obj = MagicMock(litellm_call_id="call-id", defer_async_logging=False)
     proxy_logging = MagicMock(spec=ProxyLogging)
     proxy_logging.during_call_hook = AsyncMock(return_value=None)
     proxy_logging.post_call_success_hook = AsyncMock(side_effect=lambda data, user_api_key_dict, response: response)
@@ -5196,7 +5263,7 @@ class TestStreamingClientDisconnectLogging:
 
         fire_spy = MagicMock()
         monkeypatch.setattr(
-            "litellm.proxy.utils.ProxyLogging._fire_deferred_stream_logging",
+            "litellm.proxy.utils.ProxyLogging.fire_deferred_stream_logging",
             fire_spy,
         )
 
@@ -5230,7 +5297,7 @@ class TestStreamingClientDisconnectLogging:
 
         fire_spy = MagicMock()
         monkeypatch.setattr(
-            "litellm.proxy.utils.ProxyLogging._fire_deferred_stream_logging",
+            "litellm.proxy.utils.ProxyLogging.fire_deferred_stream_logging",
             fire_spy,
         )
 
@@ -5261,7 +5328,7 @@ class TestStreamingClientDisconnectLogging:
         )
 
         monkeypatch.setattr(
-            "litellm.proxy.utils.ProxyLogging._fire_deferred_stream_logging",
+            "litellm.proxy.utils.ProxyLogging.fire_deferred_stream_logging",
             MagicMock(),
         )
 
@@ -5389,7 +5456,7 @@ class TestCancelOnDisconnect:
 
         logging_obj = MagicMock()
         logging_obj.litellm_call_id = "test-cancel-on-disconnect"
-        logging_obj._defer_async_logging = False
+        logging_obj.defer_async_logging = False
         logging_obj._on_deferred_stream_complete = None
         logging_obj.cost_breakdown = None
 
@@ -6058,8 +6125,8 @@ class TestResponseCostHeaderForTypedDictResponses:
         logging_obj.litellm_call_id = "call-lit4076"
         logging_obj.cost_breakdown = None
         logging_obj.model_call_details = model_call_details
-        logging_obj._response_cost_calculator = response_cost_calculator
-        logging_obj._enqueue_deferred_logging = None
+        logging_obj.response_cost_calculator = response_cost_calculator
+        logging_obj.enqueue_deferred_logging = None
         logging_obj._on_deferred_stream_complete = None
         return logging_obj
 
@@ -6247,7 +6314,7 @@ class TestResponseCostHeaderForTypedDictResponses:
 
         logging_obj = self._build_logging_obj(
             model_call_details={},
-            response_cost_calculator=real_logging._response_cost_calculator,
+            response_cost_calculator=real_logging.response_cost_calculator,
         )
 
         fastapi_response = await self._drive_non_streaming(
@@ -6451,8 +6518,8 @@ class TestCostHeadersForCallsPricedAtZero:
         logging_obj.litellm_params = {}
         logging_obj.cost_breakdown = None
         logging_obj.model_call_details = {"response_cost": recovered_cost}
-        logging_obj._response_cost_calculator = MagicMock(return_value=recovered_cost)
-        logging_obj._enqueue_deferred_logging = None
+        logging_obj.response_cost_calculator = MagicMock(return_value=recovered_cost)
+        logging_obj.enqueue_deferred_logging = None
         logging_obj._on_deferred_stream_complete = None
         return logging_obj
 
@@ -6877,7 +6944,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             ProxyRateLimitError,
         )
         from litellm.proxy.hooks.parallel_request_limiter import (
-            _PROXY_MaxParallelRequestsHandler,
+            PROXY_MaxParallelRequestsHandler,
         )
         from litellm.proxy.utils import InternalUsageCache
 
@@ -6895,7 +6962,7 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
         # Real per-key per-model TPM limiter + a key carrying the customer's
         # `model_tpm_limit` metadata (only the primary is capped).
-        limiter = _PROXY_MaxParallelRequestsHandler(
+        limiter = PROXY_MaxParallelRequestsHandler(
             internal_usage_cache=InternalUsageCache(DualCache())
         )
         user_api_key_dict = UserAPIKeyAuth(
@@ -6997,11 +7064,11 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         ``add_litellm_data_to_request`` with a live OTel span, ``function_setup``, then the limiter."""
         from litellm.caching.caching import DualCache
         from litellm.proxy import proxy_server
-        from litellm.proxy.hooks.parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
         from litellm.proxy.utils import InternalUsageCache
 
         monkeypatch.setattr(proxy_server, "prisma_client", None)
-        limiter = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+        limiter = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
         limiter_models: list[str] = []
 
         async def run_limiter(
@@ -7494,7 +7561,7 @@ class TestStreamingClientDisconnectBilling:
         try:
             response = await self._start_partial_stream()
             proxy_logging_obj = types.SimpleNamespace(
-                _arelease_max_parallel_requests_on_disconnect=AsyncMock(),
+                arelease_max_parallel_requests_on_disconnect=AsyncMock(),
             )
 
             billed = await _bill_partial_streamed_spend_on_disconnect(
@@ -7514,7 +7581,7 @@ class TestStreamingClientDisconnectBilling:
         finally:
             litellm.callbacks = original_callbacks
 
-        proxy_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_not_called()
+        proxy_logging_obj.arelease_max_parallel_requests_on_disconnect.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_disconnect_without_billable_chunks_releases_slot(self):
@@ -7529,7 +7596,7 @@ class TestStreamingClientDisconnectBilling:
         # No chunks to assemble -> billing dispatches no success event.
         empty_response = types.SimpleNamespace(chunks=[], messages=None)
         proxy_logging_obj = types.SimpleNamespace(
-            _arelease_max_parallel_requests_on_disconnect=AsyncMock(),
+            arelease_max_parallel_requests_on_disconnect=AsyncMock(),
         )
 
         await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
@@ -7542,7 +7609,7 @@ class TestStreamingClientDisconnectBilling:
             proxy_logging_obj=proxy_logging_obj,
         )
 
-        proxy_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
+        proxy_logging_obj.arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
 
     async def _bill_and_collect_success_event(self, prepare=None, request_data=None):
         recorder = _RecordingSuccessLogger()
@@ -8220,7 +8287,7 @@ class TestPerRequestModelGroupAlias:
 
         monkeypatch.setattr(
             litellm.proxy.common_request_processing,
-            "_check_and_merge_model_level_guardrails",
+            "check_and_merge_model_level_guardrails",
             recording_merge,
         )
 
@@ -8399,7 +8466,7 @@ class TestInjectCostIntoUsageDict:
                 self._cost = cost
                 self.captured_result = None
 
-            def _response_cost_calculator(self, result):
+            def response_cost_calculator(self, result):
                 self.captured_result = result
                 return self._cost
 
@@ -8431,7 +8498,7 @@ class TestInjectCostIntoUsageDict:
 
     def test_message_delta_falls_back_to_model_pricing_when_the_logging_obj_returns_no_cost(self):
         class _StubLoggingObj:
-            def _response_cost_calculator(self, result):
+            def response_cost_calculator(self, result):
                 return None
 
         model = "claude-haiku-4-5"
@@ -8456,7 +8523,7 @@ class TestInjectCostIntoUsageDict:
         model-name pricing rather than propagating into the response body."""
 
         class _StubLoggingObj:
-            def _response_cost_calculator(self, result):
+            def response_cost_calculator(self, result):
                 raise ValueError("no pricing for this deployment")
 
         model = "claude-haiku-4-5"
@@ -8545,7 +8612,7 @@ class TestInjectCostIntoUsageDict:
                 self._cost = cost
                 self.captured_result = None
 
-            def _response_cost_calculator(self, result):
+            def response_cost_calculator(self, result):
                 self.captured_result = result
                 return self._cost
 
@@ -8569,7 +8636,7 @@ class TestInjectCostIntoUsageDict:
 
     def test_openai_chunk_falls_back_to_model_pricing_when_the_logging_obj_returns_no_cost(self):
         class _StubLoggingObj:
-            def _response_cost_calculator(self, result):
+            def response_cost_calculator(self, result):
                 return None
 
         event = {
@@ -8624,7 +8691,7 @@ class TestProcessChunkWithCostInjection:
         monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
 
         class _StubLoggingObj:
-            def _response_cost_calculator(self, result):
+            def response_cost_calculator(self, result):
                 return 0.00042
 
         chunk = (
@@ -9236,9 +9303,9 @@ class TestDetachedStreamFailureHook:
         logging_obj = MagicMock()
         logging_obj.litellm_call_id = "call-lit3798"
         logging_obj.model_call_details = {}
-        logging_obj._enqueue_deferred_logging = None
+        logging_obj.enqueue_deferred_logging = None
         logging_obj._on_deferred_stream_complete = None
-        logging_obj._on_detached_stream_failure = None
+        logging_obj.on_detached_stream_failure = None
         return logging_obj
 
     @staticmethod
@@ -9287,7 +9354,7 @@ class TestDetachedStreamFailureHook:
         )
 
         failure = RuntimeError("upstream died after the client left")
-        await logging_obj._on_detached_stream_failure(failure)
+        await logging_obj.on_detached_stream_failure(failure)
 
         assert recorder.calls == [
             {
@@ -9311,7 +9378,7 @@ class TestDetachedStreamFailureHook:
         )
         failure = RuntimeError("upstream died after the client left")
 
-        await logging_obj._on_detached_stream_failure(failure)
+        await logging_obj.on_detached_stream_failure(failure)
 
         assert [call["original_exception"] for call in recorder.calls] == [failure]
 
@@ -9324,12 +9391,12 @@ class TestPostCallMaskedOutputReachesDeferredLogging:
 
         logging_obj = MagicMock()
         logging_obj.litellm_call_id = "lit-8325-call"
-        logging_obj._defer_async_logging = False
+        logging_obj.defer_async_logging = False
         logging_obj._on_deferred_stream_complete = None
         logging_obj.cost_breakdown = None
         logging_obj.model_call_details = {}
         recorded_at_enqueue: dict[str, object] = {}
-        logging_obj._enqueue_deferred_logging = lambda: recorded_at_enqueue.update(logging_obj.model_call_details)
+        logging_obj.enqueue_deferred_logging = lambda: recorded_at_enqueue.update(logging_obj.model_call_details)
 
         processor = ProxyBaseLLMRequestProcessing(data={"model": "oa", "litellm_logging_obj": logging_obj})
 
@@ -9411,7 +9478,7 @@ class TestStreamingResponseHeadersFollowFallback:
 
         logging_obj = MagicMock()
         logging_obj.litellm_call_id = "lit-6767-call"
-        logging_obj._defer_async_logging = False
+        logging_obj.defer_async_logging = False
         logging_obj._on_deferred_stream_complete = None
         logging_obj.cost_breakdown = None
 
@@ -9474,7 +9541,7 @@ class TestStreamingResponseHeadersFollowFallback:
 
         logging_obj = MagicMock()
         logging_obj.litellm_call_id = "lit-7144-call"
-        logging_obj._defer_async_logging = False
+        logging_obj.defer_async_logging = False
         logging_obj._on_deferred_stream_complete = None
         logging_obj.cost_breakdown = None
         processor_data["litellm_logging_obj"] = logging_obj
@@ -9528,7 +9595,7 @@ class TestStreamingResponseHeadersFollowFallback:
 
         logging_obj = MagicMock()
         logging_obj.litellm_call_id = "lit-8302-call"
-        logging_obj._defer_async_logging = False
+        logging_obj.defer_async_logging = False
         logging_obj._on_deferred_stream_complete = None
         logging_obj.cost_breakdown = None
         processor = ProxyBaseLLMRequestProcessing(
@@ -9610,7 +9677,7 @@ async def test_messages_http_headers_refresh_after_lazy_fallback(monkeypatch: py
     stream = _MessagesFallbackStream()
     logging_obj = MagicMock()
     logging_obj.litellm_call_id = "messages-fallback-headers"
-    logging_obj._defer_async_logging = False
+    logging_obj.defer_async_logging = False
     logging_obj._on_deferred_stream_complete = None
     logging_obj.cost_breakdown = None
     logging_obj.litellm_params = {}

@@ -26,7 +26,9 @@ AZURE_CONTENT_SAFETY_TEXT_RECORD_LENGTH: Final = 1000
 AZURE_CONTENT_SAFETY_DEFAULT_API_VERSION: Final = "2024-09-01"
 JAVELIN_API_VERSION_STORED_BY_OLDER_RELEASES: Final = "v1"
 
-_RESPONSES_API_CALL_TYPES: Final = frozenset({CallTypes.responses, CallTypes.aresponses})
+RESPONSES_API_CALL_TYPES: Final = frozenset({CallTypes.responses, CallTypes.aresponses})
+
+_RESPONSES_API_CALL_TYPES: Final = RESPONSES_API_CALL_TYPES
 
 
 def resolve_content_safety_api_version(configured: str | None) -> str:
@@ -60,7 +62,9 @@ class AzureGuardrailBase:
         self.api_base = api_base
         self.api_version: str | None = kwargs.get("api_version")
 
-    async def _post_to_content_safety(self, endpoint_path: str, request_body: dict[str, object]) -> dict[str, Any]:
+    async def _post_to_content_safety(
+        self, endpoint_path: str, request_body: dict[str, object]
+    ) -> Mapping[str, object]:
         """POST to an Azure Content Safety endpoint with standard auth headers.
 
         Args:
@@ -85,7 +89,7 @@ class AzureGuardrailBase:
             json=request_body,
             timeout=self.timeout,
         )
-        response_json: Final[dict[str, Any]] = response.json()
+        response_json: Final[dict[str, object]] = response.json()
         verbose_proxy_logger.debug("Azure Content Safety response [%s]: %s", endpoint_path, response_json)
         return response_json
 
@@ -138,8 +142,22 @@ class AzureGuardrailBase:
 
         return chunks
 
+    def get_user_prompt(self, messages: list[AllMessageValues]) -> str | None:
+        """
+        Get the last consecutive block of messages from the user.
+
+        Example:
+        messages = [
+            {"role": "user", "content": "Hello, how are you?"},
+            {"role": "assistant", "content": "I'm good, thank you!"},
+            {"role": "user", "content": "What is the weather in Tokyo?"},
+        ]
+        get_user_prompt(messages) -> "What is the weather in Tokyo?"
+        """
+        return get_last_user_message(messages)
+
     def get_user_prompt_from_request(self, data: Mapping[str, object], call_type: CallTypesLiteral) -> str | None:
-        if call_type in _RESPONSES_API_CALL_TYPES:
+        if call_type in RESPONSES_API_CALL_TYPES:
             responses_input: Final = data.get("input")
             if not isinstance(responses_input, (str, list)):
                 return None
@@ -147,6 +165,6 @@ class AzureGuardrailBase:
             return get_last_user_message(ResponsesAPIRequestUtils.responses_input_to_chat_messages(validated_input))
 
         messages: Final = data.get("messages")
-        if not isinstance(messages, list):
+        if messages is None:
             return None
-        return get_last_user_message(cast(list[AllMessageValues], messages))  # cast-ok: narrowed to list
+        return self.get_user_prompt(cast(list[AllMessageValues], messages))  # cast-ok: sequence of request messages

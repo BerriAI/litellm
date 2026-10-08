@@ -121,6 +121,137 @@ def test_arize_sampling_rate_rejected_on_non_arize_callback():
     assert callback_config_error("arize", {"arize_success_sampling_rate": "0.5"}) is None
 
 
+class TestArizeOtlpProtocol:
+    def test_protocol_on_a_non_arize_callback_is_rejected(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+        is_otel_v2_enabled.cache_clear()
+        try:
+            for callback_name in ["langfuse", "langfuse_otel", "datadog", None]:
+                error = callback_config_error(callback_name, {"arize_otlp_protocol": "grpc"})
+                assert error is not None and "applies to the arize callback only" in error
+        finally:
+            is_otel_v2_enabled.cache_clear()
+
+    def test_unknown_protocols_are_rejected(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+        is_otel_v2_enabled.cache_clear()
+        try:
+            for bad in ["otlp_http", "HTTP/PROTOBUF", "http_json", "", "None"]:
+                error = callback_config_error("arize", {"arize_otlp_protocol": bad})
+                assert error is not None and "arize_otlp_protocol" in error and "http/protobuf" in error
+        finally:
+            is_otel_v2_enabled.cache_clear()
+
+    def test_protocol_is_rejected_while_otel_v2_is_off(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+        is_otel_v2_enabled.cache_clear()
+        try:
+            error = callback_config_error("arize", {"arize_otlp_protocol": "http/protobuf"})
+            assert error is not None and "LITELLM_OTEL_V2" in error
+        finally:
+            is_otel_v2_enabled.cache_clear()
+
+    def test_both_protocols_are_accepted_with_otel_v2_on(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+        is_otel_v2_enabled.cache_clear()
+        try:
+            assert callback_config_error("arize", {"arize_otlp_protocol": "grpc"}) is None
+            assert callback_config_error("arize", {"arize_otlp_protocol": "http/protobuf"}) is None
+        finally:
+            is_otel_v2_enabled.cache_clear()
+
+    def test_protocol_is_not_a_family_credential(self):
+        stored = [{"arize_api_key": "k1"}]
+        assert cross_entry_family_error({"arize_otlp_protocol": "grpc"}, stored) is None
+        assert cross_entry_family_error({"arize_otlp_protocol": "http/protobuf"}, stored) is None
+
+    def test_protocol_on_a_key_logging_entry_is_validated(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+        is_otel_v2_enabled.cache_clear()
+        try:
+            invalid_metadata = {
+                "logging": [
+                    {
+                        "callback_name": "arize",
+                        "callback_type": "success",
+                        "callback_vars": {"arize_otlp_protocol": "carrier-pigeon"},
+                    }
+                ]
+            }
+            error = logging_metadata_config_error(invalid_metadata)
+            assert error is not None and "arize_otlp_protocol" in error
+
+            valid_metadata = {
+                "logging": [
+                    {
+                        "callback_name": "arize",
+                        "callback_type": "success",
+                        "callback_vars": {"arize_otlp_protocol": "http/protobuf"},
+                    }
+                ]
+            }
+            assert logging_metadata_config_error(valid_metadata) is None
+        finally:
+            is_otel_v2_enabled.cache_clear()
+
+    def test_failure_only_arize_callbacks_reject_the_protocol(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+        is_otel_v2_enabled.cache_clear()
+        try:
+            error = callback_config_error("arize", {"arize_otlp_protocol": "http/protobuf"}, "failure")
+            assert error is not None and "arize_otlp_protocol" in error and "failure" in error
+            assert callback_config_error("arize", {"arize_otlp_protocol": "http/protobuf"}, "success") is None
+            assert (
+                callback_config_error("arize", {"arize_otlp_protocol": "http/protobuf"}, "success_and_failure") is None
+            )
+            assert callback_config_error("arize", {"arize_otlp_protocol": "http/protobuf"}) is None
+        finally:
+            is_otel_v2_enabled.cache_clear()
+
+    def test_failure_only_key_logging_entry_rejects_the_protocol(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+        is_otel_v2_enabled.cache_clear()
+        try:
+            failure_metadata = {
+                "logging": [
+                    {
+                        "callback_name": "arize",
+                        "callback_type": "failure",
+                        "callback_vars": {"arize_otlp_protocol": "http/protobuf"},
+                    }
+                ]
+            }
+            error = logging_metadata_config_error(failure_metadata)
+            assert error is not None and "arize_otlp_protocol" in error
+
+            success_metadata = {
+                "logging": [
+                    {
+                        "callback_name": "arize",
+                        "callback_type": "success",
+                        "callback_vars": {"arize_otlp_protocol": "http/protobuf"},
+                    }
+                ]
+            }
+            assert logging_metadata_config_error(success_metadata) is None
+        finally:
+            is_otel_v2_enabled.cache_clear()
+
+
 def test_arize_sampling_rates_are_not_family_credentials():
     """The rates choose what the Arize family exports, not where it sends, so an
     entry that repeats or adds a rate next to a stored Arize entry is not the
