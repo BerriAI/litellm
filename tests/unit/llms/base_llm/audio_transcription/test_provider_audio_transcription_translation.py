@@ -1,11 +1,10 @@
 import io
 import json
-from typing import Final, Mapping, cast
+from typing import Final, Mapping, Sequence, cast
 
 import httpx
 import pytest
 import respx
-from pydantic import JsonValue
 from respx import MockRouter
 from typing_extensions import ReadOnly, TypedDict
 
@@ -26,6 +25,7 @@ class _Kwargs(TypedDict, total=False):
     model: ReadOnly[str]
     api_key: ReadOnly[str]
     api_base: ReadOnly[str]
+    timestamp_granularities: ReadOnly[Sequence[str]]
 
 
 class _Case(TypedDict):
@@ -35,9 +35,9 @@ class _Case(TypedDict):
     url: ReadOnly[str]
     prefix_match: ReadOnly[bool]
     base_model: ReadOnly[str]
-    request_marker: ReadOnly[bytes]
+    request_markers: ReadOnly[tuple[bytes, ...]]
     marker_in_url: ReadOnly[bool]
-    config_class: ReadOnly[type]
+    config_class: ReadOnly[type[BaseAudioTranscriptionConfig]]
 
 
 _AUDIO_BYTES: Final = b"RIFFFAKEWAVDATA-gettysburg"
@@ -46,11 +46,15 @@ _CASES: Final[tuple[_Case, ...]] = (
     {
         "id": "openai_gpt4o",
         "provider": "openai",
-        "kwargs": {"model": "openai/gpt-4o-transcribe", "api_key": "sk-offline", "timestamp_granularities": None},
+        "kwargs": {
+            "model": "openai/gpt-4o-transcribe",
+            "api_key": "sk-offline",
+            "timestamp_granularities": ["word"],
+        },
         "url": "https://api.openai.com/v1/audio/transcriptions",
         "prefix_match": False,
         "base_model": "gpt-4o-transcribe",
-        "request_marker": b"gpt-4o-transcribe",
+        "request_markers": (b"gpt-4o-transcribe", b'name="timestamp_granularities[]"\r\n\r\nword\r\n'),
         "marker_in_url": False,
         "config_class": litellm.OpenAIGPTAudioTranscriptionConfig,
     },
@@ -61,7 +65,7 @@ _CASES: Final[tuple[_Case, ...]] = (
         "url": "https://api.elevenlabs.io/v1/speech-to-text",
         "prefix_match": False,
         "base_model": "scribe_v1",
-        "request_marker": b"scribe_v1",
+        "request_markers": (b"scribe_v1",),
         "marker_in_url": False,
         "config_class": ElevenLabsAudioTranscriptionConfig,
     },
@@ -72,7 +76,7 @@ _CASES: Final[tuple[_Case, ...]] = (
         "url": "https://api.deepgram.com/v1/listen",
         "prefix_match": True,
         "base_model": "nova-2",
-        "request_marker": b"model=nova-2",
+        "request_markers": (b"model=nova-2",),
         "marker_in_url": True,
         "config_class": litellm.DeepgramAudioTranscriptionConfig,
     },
@@ -83,7 +87,7 @@ _CASES: Final[tuple[_Case, ...]] = (
         "url": "https://api.mistral.ai/v1/audio/transcriptions",
         "prefix_match": False,
         "base_model": "voxtral-mini-latest",
-        "request_marker": b"voxtral-mini-latest",
+        "request_markers": (b"voxtral-mini-latest",),
         "marker_in_url": False,
         "config_class": MistralAudioTranscriptionConfig,
     },
@@ -94,7 +98,7 @@ _CASES: Final[tuple[_Case, ...]] = (
         "url": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/audio/transcriptions",
         "prefix_match": False,
         "base_model": "whisper-large-v3-turbo",
-        "request_marker": b"whisper-large-v3-turbo",
+        "request_markers": (b"whisper-large-v3-turbo",),
         "marker_in_url": False,
         "config_class": OVHCloudAudioTranscriptionConfig,
     },
@@ -108,7 +112,9 @@ def _canned_response(case: _Case) -> httpx.Response:
             json={
                 "metadata": {"transaction_key": "offline", "duration": 1.5},
                 "results": {
-                    "channels": [{"alternatives": [{"transcript": "four score and seven years ago", "confidence": 0.99}]}]
+                    "channels": [
+                        {"alternatives": [{"transcript": "four score and seven years ago", "confidence": 0.99}]}
+                    ]
                 },
             },
         )
@@ -120,31 +126,23 @@ def _httpx_only_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
 
 
-def _kwargs(case: _Case) -> Mapping[str, JsonValue]:
-    out: Final = {k: v for k, v in dict(case["kwargs"]).items() if v is not None}
-    return out
-
-
 def _register(case: _Case, respx_mock: MockRouter) -> respx.Route:
     if case["prefix_match"]:
-        return respx_mock.post(url__startswith=case["url"]).mock(
-            return_value=_canned_response(case)
-        )
+        return respx_mock.post(url__startswith=case["url"]).mock(return_value=_canned_response(case))
     return respx_mock.post(case["url"]).mock(return_value=_canned_response(case))
 
 
 def _assert_translated_request(case: _Case, request: httpx.Request) -> None:
-    if case["marker_in_url"]:
-        assert case["request_marker"] in request.url.query
-    else:
-        assert case["request_marker"] in request.content
+    searched: Final = request.url.query if case["marker_in_url"] else request.content
+    for marker in case["request_markers"]:
+        assert marker in searched
     assert _AUDIO_BYTES in request.content
 
 
 @pytest.mark.parametrize("case", _CASES, ids=lambda c: c["id"])
 def test_audio_transcription(case: _Case, respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock)
-    transcript: Final = transcription(**_kwargs(case), file=io.BytesIO(_AUDIO_BYTES))
+    transcript: Final = transcription(**dict(case["kwargs"]), file=io.BytesIO(_AUDIO_BYTES))
     _assert_translated_request(case, route.calls.last.request)
     assert transcript.text == "four score and seven years ago"
 
@@ -153,7 +151,7 @@ def test_audio_transcription(case: _Case, respx_mock: MockRouter) -> None:
 @pytest.mark.asyncio
 async def test_audio_transcription_async(case: _Case, respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock)
-    transcript: Final = await litellm.atranscription(**_kwargs(case), file=io.BytesIO(_AUDIO_BYTES))
+    transcript: Final = await litellm.atranscription(**dict(case["kwargs"]), file=io.BytesIO(_AUDIO_BYTES))
     _assert_translated_request(case, route.calls.last.request)
     assert transcript.text == "four score and seven years ago"
 

@@ -1,15 +1,12 @@
 import base64
 import json
-from typing import Final, Mapping, cast
+from typing import Final, cast
 
 import httpx
 import pytest
-import respx
-from pydantic import JsonValue
 from respx import MockRouter
 from typing_extensions import ReadOnly, TypedDict
 
-import litellm
 from litellm import embedding
 from litellm.utils import get_optional_params_embeddings
 
@@ -32,9 +29,7 @@ class _Case(TypedDict):
 
 
 _AZURE_BASE: Final = "https://offline-embed.openai.azure.com"
-_AZURE_URL: Final = (
-    f"{_AZURE_BASE}/openai/deployments/text-embedding-ada-002/embeddings?api-version=2024-02-15-preview"
-)
+_AZURE_URL: Final = f"{_AZURE_BASE}/openai/deployments/text-embedding-ada-002/embeddings?api-version=2024-02-15-preview"
 _TITAN_URL: Final = "https://bedrock-runtime.us-west-2.amazonaws.com/model/amazon.titan-embed-image-v1/invoke"
 
 _CASES: Final[tuple[_Case, ...]] = (
@@ -66,6 +61,13 @@ _CASES: Final[tuple[_Case, ...]] = (
 )
 
 
+_MAX_RETRIES_KWARGS: Final[tuple[_Kwargs, ...]] = (
+    *(case["kwargs"] for case in _CASES),
+    {"model": "volcengine/doubao-embedding-text-240715"},
+    {"model": "voyage/voyage-3-lite"},
+)
+
+
 def _canned_response(case: _Case) -> httpx.Response:
     vector: Final = [0.11, 0.22, 0.33]
     if case["provider"] == "azure":
@@ -86,9 +88,9 @@ def _httpx_only_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
 
 
-@pytest.mark.parametrize("case", _CASES, ids=lambda c: c["id"])
-def test_embedding_optional_params_max_retries(case: _Case) -> None:
-    optional_params: Final = get_optional_params_embeddings(**dict(case["kwargs"]), max_retries=20)
+@pytest.mark.parametrize("kwargs", _MAX_RETRIES_KWARGS, ids=lambda k: k["model"])
+def test_embedding_optional_params_max_retries(kwargs: _Kwargs) -> None:
+    optional_params: Final = get_optional_params_embeddings(**dict(kwargs), max_retries=20)
     assert optional_params["max_retries"] == 20
 
 

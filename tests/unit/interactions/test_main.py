@@ -26,12 +26,11 @@ class TestGoogleInteractionsCreate:
             )
 
 
-@pytest.fixture(autouse=True)
-def _httpx_only_transport(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
-
-
 class TestInteractionsAcreateOffline:
+    @pytest.fixture(autouse=True)
+    def _httpx_only_transport(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+
     @pytest.mark.usefixtures("fake_provider_credentials")
     @pytest.mark.asyncio
     async def test_acreate_simple_gemini(self, respx_mock: MockRouter) -> None:

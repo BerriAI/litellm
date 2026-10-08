@@ -25,6 +25,8 @@ class _Case(TypedDict):
     kwargs: ReadOnly[_Kwargs]
     url: ReadOnly[str]
     expected_cost_zero: ReadOnly[bool]
+    billed_units: ReadOnly[Mapping[str, int]]
+    response_id: ReadOnly[str | None]
 
 
 _AWS: Final[Mapping[str, str]] = {
@@ -45,6 +47,8 @@ _CASES: Final[tuple[_Case, ...]] = (
         "kwargs": {"model": "jina_ai/jina-reranker-v2-base-multilingual", "api_key": "jina-offline"},
         "url": "https://api.jina.ai/v1/rerank",
         "expected_cost_zero": False,
+        "billed_units": {"total_tokens": 4},
+        "response_id": "rerank-offline",
     },
     {
         "id": "bedrock_amazon_rerank",
@@ -52,6 +56,8 @@ _CASES: Final[tuple[_Case, ...]] = (
         "kwargs": cast(_Kwargs, {"model": _bedrock_arn("amazon.rerank-v1:0"), **dict(_AWS)}),
         "url": "https://bedrock-agent-runtime.us-west-2.amazonaws.com/rerank",
         "expected_cost_zero": False,
+        "billed_units": {"search_units": 1},
+        "response_id": "rerank-offline",
     },
     {
         "id": "bedrock_cohere_rerank",
@@ -59,6 +65,8 @@ _CASES: Final[tuple[_Case, ...]] = (
         "kwargs": cast(_Kwargs, {"model": _bedrock_arn("cohere.rerank-v3-5:0"), **dict(_AWS)}),
         "url": "https://bedrock-agent-runtime.us-west-2.amazonaws.com/rerank",
         "expected_cost_zero": False,
+        "billed_units": {"search_units": 1},
+        "response_id": "rerank-offline",
     },
     {
         "id": "nvidia_nim_rerank",
@@ -66,6 +74,8 @@ _CASES: Final[tuple[_Case, ...]] = (
         "kwargs": {"model": "nvidia_nim/nvidia/llama-3_2-nv-rerankqa-1b-v2", "api_key": "nvapi-offline"},
         "url": "https://ai.api.nvidia.com/v1/retrieval/nvidia/llama-3_2-nv-rerankqa-1b-v2/reranking",
         "expected_cost_zero": True,
+        "billed_units": {"total_tokens": 4},
+        "response_id": None,
     },
 )
 
@@ -157,14 +167,21 @@ async def test_basic_rerank(case: _Case, sync_mode: bool, respx_mock: MockRouter
         )
     body: Final = _request_body(route)
     _assert_translated_request(case, body)
+    assert route.call_count == 1
+    assert isinstance(response.id, str)
+    if case["response_id"] is not None:
+        assert response.id == case["response_id"]
+    assert response.meta["billed_units"] == case["billed_units"]
     assert len(response.results) == 2
     assert response.results[0]["index"] == 0
     assert response.results[0]["relevance_score"] == 0.95
     assert response.results[1]["index"] == 1
     assert response.results[1]["relevance_score"] == 0.4
-    if sync_mode:
-        cost: Final = response._hidden_params["response_cost"]
-        if case["expected_cost_zero"]:
-            assert cost == 0.0
-        else:
-            assert cost > 0
+    if case["provider"] == "nvidia_nim":
+        assert response.results[0]["document"] == {"text": "hello"}
+        assert response.results[1]["document"] == {"text": "world"}
+    cost: Final = response._hidden_params["response_cost"]
+    if case["expected_cost_zero"]:
+        assert cost == 0.0
+    else:
+        assert cost > 0
