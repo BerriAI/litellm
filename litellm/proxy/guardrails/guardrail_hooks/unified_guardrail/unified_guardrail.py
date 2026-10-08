@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, cast
 
 import anyio
 from fastapi import HTTPException
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -113,6 +114,10 @@ def resolve_endpoint_translation(
 def _chunk_choices(item: object) -> Sequence[object]:
     choices: Final[Sequence[object]] = getattr(item, "choices", None) or []
     return choices
+
+
+class _EndOfStreamScanOptions(TypedDict, total=False):
+    deliver_ended_stream_rewrites: ReadOnly[bool]
 
 
 def _held_choices(held_chars_per_choice: Mapping[int, int]) -> frozenset[int]:
@@ -1077,11 +1082,16 @@ class UnifiedLLMGuardrails(CustomLogger):
         request_data: dict,
         guardrail_to_apply: CustomGuardrail | None = None,
         buffer_until_moderated_default: bool = False,
+        hold_and_deliver_rewrites: bool = False,
     ) -> AsyncGenerator[Any, None]:
         """
         Passes the entire stream to the guardrail
 
         This is useful for guardrails that need to see the entire response, such as PII masking.
+
+        ``hold_and_deliver_rewrites`` withholds the whole stream until the end-of-stream scan, whatever
+        the streaming flags say, and on a translation that declares ``delivers_ended_stream_rewrites``
+        writes that scan's text and tool-call rewrites into the withheld chunks before releasing them.
 
         See Aim guardrail implementation for an example - https://github.com/BerriAI/litellm/blob/d0e022cfacb8e9ebc5409bb652059b6fd97b45c0/litellm/proxy/guardrails/guardrail_hooks/aim.py#L168
 
@@ -1104,7 +1114,7 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         sampling_rate: Final[int] = _streaming_flag("streaming_sampling_rate", 5)
         # Only apply the guardrail at end of stream (not per chunk).
-        end_of_stream_only: bool = _streaming_flag("streaming_end_of_stream_only", False)
+        end_of_stream_only: bool = hold_and_deliver_rewrites or _streaming_flag("streaming_end_of_stream_only", False)
         # "block_only" (default) drops guardrail text rewrites on the streaming
         # path; "incremental_diff" emits them as synthetic deltas (see
         # _run_incremental_transform_stream).
@@ -1116,13 +1126,14 @@ class UnifiedLLMGuardrails(CustomLogger):
         # release the original chunks are replayed as-is, so a
         # content-rewriting guardrail (e.g. PII masking) would leak
         # unredacted content. Guarded below via mask_response_content.
-        buffer_until_moderated: bool = _streaming_flag(
+        buffer_until_moderated: bool = hold_and_deliver_rewrites or _streaming_flag(
             "streaming_buffer_until_moderated", buffer_until_moderated_default
         )
         release_on_scan: Final[bool] = _streaming_flag("streaming_buffer_release_on_scan", False)
 
         if (
-            buffer_until_moderated
+            not hold_and_deliver_rewrites
+            and buffer_until_moderated
             and guardrail_to_apply is not None
             and getattr(guardrail_to_apply, "mask_response_content", False)
         ):
@@ -1363,6 +1374,11 @@ class UnifiedLLMGuardrails(CustomLogger):
                     if buffer_until_moderated
                     else None
                 )
+                delivery: Final[_EndOfStreamScanOptions] = (
+                    {"deliver_ended_stream_rewrites": True}
+                    if hold_and_deliver_rewrites and type(endpoint_translation).delivers_ended_stream_rewrites
+                    else {}
+                )
                 end_scan_key: Final = endpoint_translation.get_streaming_scan_key(responses_so_far)
                 verdict_settled = True
                 if _is_redundant_scan(end_scan_key, last_scan_key):
@@ -1385,8 +1401,9 @@ class UnifiedLLMGuardrails(CustomLogger):
                             litellm_logging_obj=request_data.get("litellm_logging_obj"),
                             user_api_key_dict=user_api_key_dict,
                             request_data=request_data,
+                            **delivery,
                         )
-                    # Moderation passed: release the withheld original chunks.
+                    # Moderation passed: release the withheld chunks, rewritten in place when delivered.
                     if buffered_items is not None:
                         for buffered_item in buffered_items:
                             yield buffered_item
