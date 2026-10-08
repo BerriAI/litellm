@@ -1937,6 +1937,7 @@ def client(original_function):
                         or isinstance(e, openai.APIConnectionError)
                     ):
                         kwargs["num_retries"] = num_retries
+                        kwargs["_initial_retry_exception"] = e
                         return litellm.completion_with_retries(*args, **kwargs)
                 elif (
                     isinstance(e, litellm.exceptions.ContextWindowExceededError)

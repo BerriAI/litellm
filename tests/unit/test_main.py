@@ -2623,6 +2623,36 @@ def test_completion_retries_respect_provider_wait(
     sleep.assert_called_once_with(expected_wait)
 
 
+def test_completion_first_retry_respects_provider_wait() -> None:
+    from litellm.utils import client
+
+    response = httpx.Response(
+        status_code=429,
+        headers={"retry-after": "2"},
+        request=httpx.Request("POST", "https://example.com/v1/chat/completions"),
+    )
+    error = litellm.RateLimitError(
+        message="rate limited", llm_provider="openai", model="gpt-4o-mini", response=response
+    )
+    attempts: list[int] = []
+
+    def completion(**kwargs: object) -> None:
+        attempts.append(1)
+        raise error
+
+    with patch("tenacity.nap.time.sleep") as sleep, pytest.raises(litellm.RateLimitError):
+        client(completion)(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            num_retries=1,
+            original_function=completion,
+            litellm_logging_obj=_completion_logging_obj("first-retry"),
+        )
+
+    assert len(attempts) == 2
+    sleep.assert_called_once_with(2.0)
+
+
 @pytest.mark.asyncio
 async def test_retrying() -> None:
     litellm.num_retries = 10

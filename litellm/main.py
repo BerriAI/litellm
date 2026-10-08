@@ -6111,6 +6111,18 @@ def completion(
         )
 
 
+def _completion_retry_after(error: Exception) -> float | None:
+    headers: Final = (
+        getattr(getattr(error, "response", None), "headers", None)
+        or getattr(error, "litellm_response_headers", None)
+        or getattr(error, "headers", None)
+    )
+    if headers is None:
+        return None
+    retry_after: Final = _get_retry_after_from_exception_header(headers)
+    return retry_after if 0 < retry_after <= 60 else None
+
+
 def _completion_retry_wait(
     retry_state: "tenacity.RetryCallState",
     fallback_wait: Callable[["tenacity.RetryCallState"], float],
@@ -6118,15 +6130,9 @@ def _completion_retry_wait(
     outcome: Final = retry_state.outcome
     error: Final = outcome.exception() if outcome is not None else None
     if isinstance(error, Exception):
-        headers: Final = (
-            getattr(getattr(error, "response", None), "headers", None)
-            or getattr(error, "litellm_response_headers", None)
-            or getattr(error, "headers", None)
-        )
-        if headers is not None:
-            retry_after: Final = _get_retry_after_from_exception_header(headers)
-            if 0 < retry_after <= 60:
-                return retry_after
+        retry_after: Final = _completion_retry_after(error)
+        if retry_after is not None:
+            return retry_after
     return fallback_wait(retry_state)
 
 
@@ -6140,6 +6146,7 @@ def completion_with_retries(*args, **kwargs):
         raise Exception(f"tenacity import failed please run `pip install tenacity`. Error{e}")
 
     num_retries: Final = kwargs.pop("num_retries", 3)
+    initial_exception: Final = kwargs.pop("_initial_retry_exception", None)
     # reset retries in .completion()
     kwargs["max_retries"] = 0
     kwargs["num_retries"] = 0
@@ -6155,6 +6162,10 @@ def completion_with_retries(*args, **kwargs):
         stop=tenacity.stop_after_attempt(num_retries),
         reraise=True,
     )
+    if isinstance(initial_exception, Exception):
+        initial_retry_after: Final = _completion_retry_after(initial_exception)
+        if initial_retry_after is not None:
+            retryer.sleep(initial_retry_after)
     return retryer(original_function, *args, **kwargs)
 
 
