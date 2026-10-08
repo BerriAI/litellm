@@ -5249,6 +5249,7 @@ def test_function_setup_failure_log_line_shows_outer_not_doomed_ids(monkeypatch)
 WEBSEARCH_INTERNAL_CONTROL_FIELDS = (
     "_websearch_interception_emit_native_blocks",
     "_websearch_interception_converted_stream",
+    "_websearch_interception_stream_options",
 )
 
 

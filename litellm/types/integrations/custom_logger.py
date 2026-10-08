@@ -10,10 +10,13 @@ CHAT_COMPLETION_AGENTIC_SURFACE: Final[AgenticSurface] = "chat_completions"
 RESPONSES_AGENTIC_SURFACE: Final[AgenticSurface] = "responses"
 CODE_INTERPRETER_INTERCEPTION_PREFIX: Final = "_code_interpreter_interception"
 HEADROOM_INTERCEPTION_PREFIX: Final = "_headroom_interception"
+WEBSEARCH_INTERCEPTION_PREFIX: Final = "_websearch_interception"
 HEADROOM_CONVERTED_STREAM_KEY: Final = f"{HEADROOM_INTERCEPTION_PREFIX}_converted_stream"
+WEBSEARCH_CONVERTED_STREAM_KEY: Final = f"{WEBSEARCH_INTERCEPTION_PREFIX}_converted_stream"
+WEBSEARCH_STREAM_OPTIONS_KEY: Final = f"{WEBSEARCH_INTERCEPTION_PREFIX}_stream_options"
 NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES: Final = frozenset(
     (
-        "_websearch_interception",
+        WEBSEARCH_INTERCEPTION_PREFIX,
         "_compression_interception",
         HEADROOM_INTERCEPTION_PREFIX,
     )

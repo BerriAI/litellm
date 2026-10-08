@@ -20,7 +20,7 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import CallTypes, LlmProviders
 
 
 def test_initialize_from_proxy_config():
@@ -808,6 +808,62 @@ async def test_deployment_hook_converts_stream_and_logging_obj_syncs():
         logging_obj.stream = _hook_stream
 
     assert logging_obj.stream is False
+
+
+_STREAM_USAGE_OPTIONS = {"include_usage": True}
+
+
+async def _convert_via_deployment_hook_chat(logger, kwargs):
+    return await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=CallTypes.acompletion)
+
+
+async def _convert_via_deployment_hook_responses(logger, kwargs):
+    return await logger.async_pre_call_deployment_hook(
+        kwargs={**kwargs, "tools": [{"type": "web_search"}]}, call_type=CallTypes.aresponses
+    )
+
+
+async def _convert_via_pre_request_hook(logger, kwargs):
+    return await logger.async_pre_request_hook(model=kwargs["model"], messages=kwargs["messages"], kwargs=kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "convert",
+    (_convert_via_deployment_hook_chat, _convert_via_deployment_hook_responses, _convert_via_pre_request_hook),
+    ids=("deployment_hook_chat", "deployment_hook_responses", "pre_request_hook"),
+)
+async def test_converted_stream_moves_stream_options_out_of_the_provider_request(convert):
+    """Every site that flips a streamed web search request to stream=False must take
+    stream_options with it: a provider that validates its body (Azure chat completions)
+    rejects stream_options on a non-streaming request, so the converted kwargs carry no
+    stream_options and stash the client's value for the replayed stream instead."""
+    logger = WebSearchInterceptionLogger(enabled_providers=["azure"])
+    kwargs = {
+        "model": "azure/gpt-4o",
+        "messages": [{"role": "user", "content": "Search for LiteLLM"}],
+        "custom_llm_provider": "azure",
+        "litellm_params": {"custom_llm_provider": "azure"},
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": LITELLM_WEB_SEARCH_TOOL_NAME, "parameters": {"type": "object"}},
+            }
+        ],
+        "stream": True,
+        "stream_options": dict(_STREAM_USAGE_OPTIONS),
+    }
+
+    result = await convert(logger, kwargs)
+
+    assert result is not None
+    assert (
+        result["stream"],
+        "stream_options" in result,
+        result["_websearch_interception_converted_stream"],
+        result["_websearch_interception_stream_options"],
+    ) == (False, False, True, _STREAM_USAGE_OPTIONS)
+
 
 
 def test_sync_forced_tool_choice_repoints_converted_web_search():

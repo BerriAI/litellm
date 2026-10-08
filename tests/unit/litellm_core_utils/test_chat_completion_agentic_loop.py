@@ -20,6 +20,7 @@ removed, so `test_internal_control_fields_never_leak_into_provider_body` proves
 they stay out of the body even without it.
 """
 
+import time
 from typing import Any, Dict, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -34,6 +35,8 @@ from litellm.integrations.code_interpreter_interception.handler import (
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     maybe_run_chat_completion_agentic_loop,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.integrations.custom_logger import (
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
@@ -44,6 +47,7 @@ from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Message,
     ModelResponse,
+    Usage,
 )
 
 # The internal control fields that must never reach a provider request body.
@@ -443,3 +447,52 @@ async def test_dispatcher_raises_on_repeated_tool_call_fingerprint(restore_callb
             )
 
     acompletion_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("include_usage", (True, False), ids=("usage_requested", "usage_not_requested"))
+async def test_websearch_converted_stream_replays_the_final_answer_with_the_requested_usage_chunk(
+    include_usage: bool,
+):
+    """A streamed web search request runs non-streaming and is replayed as a fake
+    stream at depth 0. The stream_options the interception moved out of the provider
+    request decide whether the replay ends with the usage-only chunk the client asked for."""
+    followup = _plain_model_response("done")
+    followup.usage = Usage(prompt_tokens=11, completion_tokens=5, total_tokens=16)
+    plan = AgenticLoopPlan(
+        run_agentic_loop=True,
+        request_patch=AgenticLoopRequestPatch(messages=_patched_messages()),
+    )
+    logging_obj = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "what is 6*7?"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="call-websearch",
+        function_id="fn-websearch",
+        dynamic_success_callbacks=[_GateOnlyLogger(plan=plan, tool_calls={"tool_calls": [{"id": "call_abc"}]})],
+    )
+    stash = {"_websearch_interception_stream_options": {"include_usage": True}} if include_usage else {}
+
+    with patch.object(litellm, "acompletion", AsyncMock(return_value=followup)):
+        result = await maybe_run_chat_completion_agentic_loop(
+            response=_tool_call_model_response(),
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "what is 6*7?"}],
+            optional_params={},
+            kwargs={"_websearch_interception_converted_stream": True, **stash},
+            logging_obj=logging_obj,
+            custom_llm_provider="azure",
+            stream=False,
+        )
+
+    assert isinstance(result, CustomStreamWrapper)
+    chunks = [chunk async for chunk in result]
+    content = "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices)
+    usages = [chunk.usage for chunk in chunks if getattr(chunk, "usage", None) is not None]
+
+    assert content == "done"
+    assert [(usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) for usage in usages] == (
+        [(11, 5, 16)] if include_usage else []
+    )

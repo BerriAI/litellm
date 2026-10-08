@@ -354,6 +354,9 @@ class AgenticLoopState:
     websearch_converted_stream: bool | None = field(
         default=None, metadata=wire("_websearch_interception_converted_stream")
     )
+    websearch_stream_options: Mapping[str, object] | None = field(
+        default=None, metadata=wire("_websearch_interception_stream_options")
+    )
     headroom_converted_stream: bool | None = field(
         default=None, metadata=wire("_headroom_interception_converted_stream")
     )

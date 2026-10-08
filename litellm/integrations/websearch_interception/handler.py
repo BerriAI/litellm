@@ -40,6 +40,8 @@ from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
     RESPONSES_AGENTIC_SURFACE,
+    WEBSEARCH_CONVERTED_STREAM_KEY,
+    WEBSEARCH_STREAM_OPTIONS_KEY,
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
 )
@@ -85,6 +87,20 @@ if TYPE_CHECKING:
 # should include ``web_search_tool_result`` content blocks so the client
 # (e.g. Claude Desktop's citations panel) can render sources.
 WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: Final = "_websearch_interception_emit_native_blocks"
+
+
+def _as_converted_stream(
+    kwargs: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: the hook contract hands back the kwargs dict its caller keeps editing
+    stream_options: Final = kwargs.get("stream_options")
+    stash: Final = {} if stream_options is None else {WEBSEARCH_STREAM_OPTIONS_KEY: stream_options}
+    return {
+        **{key: value for key, value in kwargs.items() if key != "stream_options"},
+        "stream": False,
+        WEBSEARCH_CONVERTED_STREAM_KEY: True,
+        **stash,
+    }
+
 
 # Key on ``AgenticLoopPlan.metadata`` carrying the list of pre-built
 # ``web_search_tool_result`` blocks to inject into the final response.
@@ -489,8 +505,7 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         if kwargs.get("stream"):
             verbose_logger.debug("WebSearchInterception: deployment hook converting stream=True to stream=False")
-            kwargs["stream"] = False
-            kwargs["_websearch_interception_converted_stream"] = True
+            return _as_converted_stream(kwargs)
 
         return kwargs
 
@@ -511,8 +526,7 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         if kwargs.get("stream"):
             verbose_logger.debug("WebSearchInterception: deployment hook converting stream=True to stream=False")
-            converted_kwargs["stream"] = False
-            converted_kwargs["_websearch_interception_converted_stream"] = True
+            return _as_converted_stream(converted_kwargs)
 
         return converted_kwargs
 
@@ -670,7 +684,10 @@ class WebSearchInterceptionLogger(CustomLogger):
         if kwargs.get("stream"):
             verbose_logger.debug("WebSearchInterception: Converting stream=True to stream=False")
             kwargs["stream"] = False
-            kwargs["_websearch_interception_converted_stream"] = True
+            kwargs[WEBSEARCH_CONVERTED_STREAM_KEY] = True
+            if "stream_options" in kwargs:
+                kwargs[WEBSEARCH_STREAM_OPTIONS_KEY] = kwargs["stream_options"]
+                del kwargs["stream_options"]
 
         return kwargs
 
