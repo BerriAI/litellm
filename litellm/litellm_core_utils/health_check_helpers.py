@@ -96,7 +96,7 @@ class HealthCheckHelpers:
         return {}
 
     @staticmethod
-    def _update_model_params_with_health_check_tracking_information(
+    def update_model_params_with_health_check_tracking_information(
         model_params: dict,
     ) -> dict:
         """
@@ -119,6 +119,10 @@ class HealthCheckHelpers:
             _metadata_variable_name=_metadata_variable_name,
         )
         return model_params
+
+    _update_model_params_with_health_check_tracking_information = (
+        update_model_params_with_health_check_tracking_information
+    )
 
     @staticmethod
     def _get_metadata_for_health_check_call():
@@ -219,7 +223,7 @@ class HealthCheckHelpers:
             get_audio_file_for_health_check,
         )
         from litellm.litellm_core_utils.health_check_utils import DECISIONS_CALL_PARAMS, _filter_model_params
-        from litellm.realtime_api.main import _realtime_health_check
+        from litellm.realtime_api.main import realtime_health_check
 
         return {
             "chat": lambda: litellm.acompletion(
@@ -264,7 +268,7 @@ class HealthCheckHelpers:
                 query=prompt or "",
                 documents=["my sample text"],
             ),
-            "realtime": lambda: _realtime_health_check(
+            "realtime": lambda: realtime_health_check(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 api_base=model_params.get("api_base", None),

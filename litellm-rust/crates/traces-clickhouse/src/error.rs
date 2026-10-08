@@ -16,10 +16,6 @@ pub enum Error {
     InvalidResponse,
     #[error("ClickHouse insert exceeds the encoded size limit")]
     InsertTooLarge,
-    #[error("ClickHouse schema setup failed with HTTP status {0}")]
-    SchemaFailed(u16),
-    #[error("ClickHouse schema setup transport failed")]
-    SchemaTransport,
     #[error("trace SQL queries require a configured proxy master key")]
     MissingSecret,
     #[error("invalid trace query scope")]
@@ -38,6 +34,8 @@ pub enum Error {
     Task,
     #[error(transparent)]
     Storage(#[from] litellm_storage_clickhouse::Error),
+    #[error(transparent)]
+    Migration(#[from] sqlx::migrate::MigrateError),
     #[error(transparent)]
     Cached(#[from] std::sync::Arc<Error>),
 }

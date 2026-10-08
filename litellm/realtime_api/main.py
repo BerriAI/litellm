@@ -315,7 +315,7 @@ async def vertex_access_token_resolver(
     project_id: str | None,
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
 ) -> tuple[str, str]:
-    return await vertex_llm_base._ensure_access_token_async(
+    return await vertex_llm_base.ensure_access_token_async(
         credentials=credentials,
         project_id=project_id,
         custom_llm_provider=custom_llm_provider,
@@ -357,9 +357,9 @@ async def _arealtime(
     timeout: float | None = None,
     query_params: RealtimeQueryParams | None = None,
     **kwargs,
-):
+) -> None:
     """
-    Private function to handle the realtime API call.
+    Handle the realtime API call.
 
     For PROXY use only.
     """
@@ -628,15 +628,15 @@ def _realtime_health_check_auth_headers(
     return MappingProxyType({"Authorization": f"Bearer {api_key}"})
 
 
-async def _realtime_health_check(
+async def realtime_health_check(
     model: str,
     custom_llm_provider: str,
     api_key: str | None,
     api_base: str | None = None,
     api_version: str | None = None,
     realtime_protocol: str | None = None,
-    model_params: dict | None = None,
-):
+    model_params: Mapping[str, object] | None = None,
+) -> bool:
     """
     Health check for realtime API - tries connection to the realtime API websocket
 
@@ -679,7 +679,7 @@ async def _realtime_health_check(
             realtime_protocol=realtime_protocol,
             model_params=resolved_params,
         )
-        url = azure_realtime._construct_url(
+        url = azure_realtime.construct_url(
             api_base=resolved_api_base or "",
             model=model,
             api_version=resolved_api_version or "2024-10-01-preview",
@@ -687,12 +687,12 @@ async def _realtime_health_check(
             query_params=azure_query_params,
         )
     elif custom_llm_provider == "openai":
-        url = openai_realtime._construct_url(
+        url = openai_realtime.construct_url(
             api_base=resolved_api_base or "https://api.openai.com/",
             query_params={"model": model},
         )
     elif custom_llm_provider == "xai":
-        url = xai_realtime._construct_url(
+        url = xai_realtime.construct_url(
             api_base=resolved_api_base or "https://api.x.ai/v1", query_params={"model": model}
         )
     elif custom_llm_provider == "vertex_ai":
@@ -740,3 +740,6 @@ async def _realtime_health_check(
         ssl=ssl_context,
     ):
         return True
+
+
+_realtime_health_check = realtime_health_check

@@ -21,7 +21,7 @@ docker build --build-arg LITELLM_RELEASE_TAG="$LITELLM_RELEASE_TAG" \
 docker compose -f docker/docker-compose.tracing.yml up -d --build
 ```
 
-Open `http://localhost:4002/ui/` and sign in as `admin` with password `sk-1234`. Go to **Lens > Investigations > Connect worker**, choose a model and monthly budget, then **Get install command**. Expand **Using Docker Compose or Helm?** and copy the worker token. In the same terminal, run:
+Open `http://localhost:4002/ui/` and sign in as `admin` with the key saved in `.lens-dev/master_key`. Go to **Lens > Investigations > Connect worker**, choose a model and monthly budget, then **Get install command**. Expand **Using Docker Compose or Helm?** and copy the worker token. In the same terminal, run:
 
 ```bash
 export LITELLM_URL=http://litellm:4000
@@ -100,13 +100,13 @@ docker compose --env-file /path/to/lens.env -f compose.yaml up -d
 
 To work on Lens itself, `make lens-dev` runs the proxy, a worker from source and the hot-reload dashboard together; set `LENS_DEV_PROXY_PORT` / `LENS_DEV_UI_PORT` to move them off 4000/3000. For a local container build, set `LENS_WORKER_IMAGE=litellm-lens-worker:local` and `LITELLM_RELEASE_TAG` to the gateway's release tag, then use `docker compose -f deploy/lens/compose.yaml -f deploy/lens/compose.build.yaml up -d --build`
 
-The generated command gives the worker 1 GiB of temporary memory-backed storage, shared across parallel reviews. Change `size=1g` in the Docker command or set `LENS_WORKER_TMP_SIZE` with Compose to fit your server and workload. A storage failure marks the scan as failed, cleans up temporary traces, and leaves the worker available for other scans; it does not silently truncate the review. Existing workers must be recreated with the new image and mount options
+The generated command gives the worker 1 GiB of temporary memory-backed storage, shared across parallel reviews. Change `size=1g` in the Docker command or set `LENS_WORKER_TMP_SIZE` with Compose to fit your server and workload. Python reports storage failures to the reviewer and cleans up temporary files, so the reviewer can retry a smaller computation or report insufficient evidence. The worker remains available for other scans. Existing workers must be recreated with the new image and mount options
 
-The worker needs outbound HTTPS access to LiteLLM. It needs no inbound ports, provider keys, direct database access, or GPU. The proxy calls your selected model through its normal virtual-key authorization and inference pipeline; trace content reaches that model provider. Use a model with JSON output support and known token prices. One worker handles one scan at a time and can serve multiple lenses. For more throughput, start another worker with a separate credential
+The worker needs outbound HTTPS access to LiteLLM. It needs no inbound ports, provider keys, direct database access, or GPU. The proxy calls your selected model through its normal virtual-key authorization and inference pipeline; trace content reaches that model provider. Use a model with JSON output support and known token prices. One worker handles up to three investigations concurrently and can serve multiple lenses. For more throughput, start another worker with a separate credential
 
 If your deployment restricts `allowed_ips`, allow the worker's address. For workers behind a reverse proxy with `use_x_forwarded_for: true`, also configure `mcp_trusted_proxy_ranges` with that proxy's CIDRs and, when needed, `mcp_xff_num_trusted_hops`. Lens reuses these existing trusted-proxy settings. Forwarded addresses without an established trust boundary are rejected by the allowlist; accepting them would let a worker impersonate an allowed address
 
-V1 setup, manual runs, feedback, and worker credentials are restricted to proxy administrators. Proxy-admin viewers can inspect results. Regular user and team keys cannot access the Lens API. Worker credentials can serve the administrator’s lenses. Revoke it in the connection dialog when retiring a worker. Redeploy the worker alongside proxy upgrades so their API versions match
+Setup, manual runs, feedback, and worker credentials are restricted to proxy administrators. Proxy-admin viewers can inspect results. Regular user and team keys cannot access the Lens API. Worker credentials can serve the administrator’s lenses. Revoke it in the connection dialog when retiring a worker. Redeploy the worker alongside proxy upgrades so their API versions match
 
 ## Configure a lens
 
@@ -114,17 +114,17 @@ Choose agent runs, individual LLM requests, or both. The matching-activity previ
 
 Describe how the agent should behave and optionally add specific checks. Select the lookback window, team and metadata, then choose the percentage to review and an optional maximum. **100% with no maximum selects every matching run**. The preview pages through all matching activity and lets you select particular runs. Percentage sampling uses a stable hash order, rounds up, and applies the optional maximum after the percentage
 
-Choose your analysis model, parallelism and monthly budget. Parallelism controls simultaneous model calls, not the number of runs selected. New lenses run once by default. Turn on monitoring to repeat the same setup at a custom interval. **Run now** uses the same saved settings immediately, including the same lookback window and sampling. Every scan recalculates the window, so overlapping windows can review the same activity again. Duplicate a lens when you want a separate investigation without changing an existing monitor
+Choose your analysis model, parallelism and monthly budget. Parallelism controls simultaneous model calls, not the number of runs selected. New lenses run once by default. Turn on monitoring to repeat the same setup at a custom interval. **Run now** uses the same saved settings immediately, including the same lookback window and sampling. Each scan recalculates the window and reuses completed reviews when the selected trace content, expected behavior, enabled checks and analysis model are unchanged. Budget, name and schedule edits preserve reuse. Duplicate a lens when you want a separate investigation without changing an existing monitor
 
-Pausing stops future scheduled scans; cancel the active scan separately if needed. The worker polls every 10 seconds; creating a lens or clicking Run now queues a scan, and due schedules are queued when the worker polls. Scans for the same lens never overlap, and its next interval starts after completion. Closing the browser does not stop the worker. Configuration edits apply to the next scan. A running scan retains its settings and selected execution IDs across retries
+Pausing stops future scheduled scans; cancel the active scan separately if needed. The worker polls every two seconds; creating a lens or clicking Run now queues a scan, and due schedules are queued when the worker polls. Scans for the same lens never overlap, and its next interval starts after completion. Closing the browser does not stop the worker. A running scan retains its analysis settings and selected execution IDs across retries. Budget edits apply to subsequent model calls, including those in an active scan
 
 ## Read the results
 
 Needs attention shows issues, highest priority first. Patterns contains useful trends and successful behavior that may not need a fix. Each finding starts with a short explanation and a next step when useful. Expand the limitations for uncertainty and counterexamples. Evidence is grouped by run and collapsed until you need it; each quote opens the original step
 
-Use the batch selector or Scans tab to reopen previous results. Each batch keeps its own findings, settings, selected runs, coverage and cost. Older batches created before snapshot support remain available through accumulated findings. The Runs tab lists the selected batch's sample and can filter per-run observations, including runs without an observed issue and runs with insufficient evidence. These observations precede the final evidence investigation. Linked-run counts on findings include cited counterexamples, so they are not failure counts
+Use the **Investigation run** selector or **History** to reopen previous results. Each run keeps its new or updated findings, settings, selected traces, coverage and cost. An unchanged rerun adds no findings; choose **All accumulated findings** to see saved findings across runs. The **Agent traces** tab lists the selected sample, including traces without an observed issue and traces with insufficient evidence. The tab is called **LLM requests** or **Traces and requests** for those activity types. Findings distinguish distinct affected traces from contributing investigation runs. Counterexamples remain visible as evidence without increasing the affected count. Merged finding links continue to resolve to the retained finding
 
-Choose **This is expected** and explain why to teach later scans about acceptable behavior. Feedback is kept with the lens and included in subsequent reviews. It does not alter historical evidence or exempt different problems
+Enter an explanation under **What should Lens remember?** and choose **This is expected** to dismiss expected behavior, **Mark resolved** after fixing an issue, or **Reopen** to reopen a resolved issue. These actions save the feedback together with the status; typing feedback alone neither saves it nor resolves the finding. Feedback informs later analysis and reconciliation without invalidating completed reviews. It stays with the finding when evidence recurs, does not alter historical evidence, and does not exempt different problems
 
 ## What a scan does
 
@@ -132,11 +132,15 @@ The proxy selects executions received or updated within the configured lookback 
 
 A trace is spans sharing a trace ID within one team, not an automatically reconstructed conversation session. Requests are individual LLM calls. When both sources are enabled, requests correlated to a recorded span by response ID are excluded to reduce double counting
 
-The worker reviews the selected executions in parallel. It pages through their recorded spans and gives the first reviewer a catalog, task and outcome excerpts. The reviewer can read more original content to resolve uncertainties. Large catalogs and groups of observations are processed in bounded context windows, with every page available. Grouping retains supporting run IDs in code, so a pattern occurring thousands of times does not require a model to repeat thousands of IDs. Candidate investigators can page through supporting observations, other runs and original evidence
+The worker reads complete selected trace content to compute fingerprints before making paid model calls. Completed review checkpoints are reused only within the same lens when both the complete content and investigation criteria match. Criteria are the expected behavior, enabled check IDs and instructions, and analysis model. Lens fingerprints these values rather than using the time of an unrelated settings edit. Scope and sampling changes preserve matching reviews for traces selected again; duplicating a lens starts an independent set of reviews. Initial reviews are confined to their assigned trace and retain observations, cited excerpts and metadata. Reviewers use catalog, read, search and optional Python tools; Python receives selected evidence as streamed input. Pending observation batches are grouped in parallel and investigated against the original evidence, then reconciled with saved findings. A recurring cause extends its existing finding, preserving feedback, earlier evidence and contributing run history
 
-There is no fixed total run, span, candidate or investigation-turn cutoff. Repeated or empty evidence requests stop a stalled investigation. Context windows, the configured budget, available model capacity and recorded evidence still bound practical work. The dashboard reports completed work and gaps. The investigator has no shell, browsing, code-editing or production-action tools
+If every selected review is already incorporated into findings, the run completes with a reuse count, zero model calls and zero analysis cost, including when the monthly budget is exhausted. The run remains in history. A partially failed run preserves completed review checkpoints; pending grouping or investigation can still need paid model calls even when all selected trace reviews are reused. A trace without a complete matching checkpoint needs a review. Live progress distinguishes reviews eligible for reuse from reviews actually recorded; failed or cancelled runs report only the reuse they completed
 
-Each model response must match a bounded JSON schema. A malformed response gets one repair attempt through the same budget controls; repeated invalid output fails the scan. Both the worker and proxy validate quoted evidence. Findings retain exact quotes and open the source trace or request. Resolve a finding after a fix, or dismiss it with a reason. A resolved finding reopens when new execution IDs support the same pattern; dismissed findings remain dismissed
+There is no fixed total run, span, candidate or investigation-turn cutoff. Agents can replace their active conversation with working notes. If a request exceeds the configured model's context window, the worker compacts the conversation automatically and resumes with references to its archived tool history. Original evidence remains accessible through the gateway while it is available and retained. Tool results and working notes remain accessible during the investigation; character ranges make even a single oversized result readable in pieces. A review reports an error if the task or its replacement notes cannot fit. Context windows, the configured budget, worker resources and recorded evidence still bound practical work. The investigator has no browsing, code-editing or production-action tools
+
+The live review drawer shows loading, trace review, parallel grouping, reconciliation and candidate investigation. It reports current model and tool operations, including context compaction, and retains tool-call counts on completed trace reviews. These counts describe attempted calls, not successful executions. This progress channel contains operation metadata, not Python code or tool output. Preliminary observations remain separate from final findings and their validated evidence
+
+Each model response must match its JSON schema. A malformed response gets one repair attempt through the same budget controls. A session review that remains invalid or cannot fit marks that execution unassessable while other reviews continue. Broken evidence pagination or missing content pages return tool errors so the agent can inspect narrower spans or other evidence. Unreadable citations receive repair feedback. Verified excerpts remain available without fetching their source again. The affected source counts as partial, including failures discovered during later investigations, while the reviewer owns its assessment. Findings are published only after comparison with each other and saved findings finishes. If analysis stops before that comparison completes, completed trace reviews and their evidence remain saved for reuse, and the run retains its assessments and error. A later run can retry grouping and investigation. Runs with useful completed assessments or reconciled findings show partial results; total failures are marked failed. Transport errors, cancellation and budget exhaustion stop further analysis. Both the worker and proxy validate quoted evidence against original content. Per-run issue assessments follow supporting citations, including evidence found by another run's reviewer; counterexamples do not mark a run affected. Findings retain exact quotes and open the source trace or request. Resolve a finding after a fix, or dismiss it with a reason. A resolved finding reopens when new execution IDs support the same pattern; dismissed findings remain dismissed
 
 Coverage distinguishes eligible, sampled, reviewed, partial, and unassessable executions. Findings describe observations in the sample, not population-wide success rates or proven causes. A root span does not prove that a trace contains every expected span. Long, missing, redacted, or expired content limits the conclusions
 
@@ -144,9 +148,15 @@ Coverage distinguishes eligible, sampled, reviewed, partial, and unassessable ex
 
 PostgreSQL stores configurations, findings and all scan history, returned in pages of 50 jobs. Workers claim jobs with optimistic concurrency and a five-minute lease, renewed every 30 seconds. A disconnected job can be reclaimed up to three times. Cancellation stops subsequent work; a model call already in flight may finish and incur cost
 
-Before every model call, Lens reserves a conservative amount against the monthly lens budget. Successful calls reconcile to reported cost where pricing is available. Interrupted calls retain their reservation because the provider may have charged. A scan stops when the next reservation would exceed the limit, so it can stop with some budget remaining. Both the Lens budget and the selected virtual key’s budgets, model permissions, and rate limits apply. Analysis spend appears under that key in Virtual Keys and normal request logs, with Lens, scan, and worker IDs in request metadata. Analysis prompts and responses are redacted from spend logs; source traces and findings remain available through the administrator-only Lens API. Existing workers need a billing key assigned in **Set up analysis** before they can resume
+Lens checks which selected traces have reusable reviews before requesting model budget. Reuse needs no model call or reservation. New trace reviews and unfinished grouping or investigation can incur cost
 
-V1 requires ClickHouse for both sources. It does not reconstruct sessions from unrelated trace IDs, guarantee exhaustive reviews, cache all per-execution observations across scans, or automatically fix agent code. Trace contents can change as late spans arrive, even though a job's selected IDs are fixed. Findings should be reviewed by a person before acting on them
+Before each model call, Lens reserves a conservative allowance based on the input and permitted output. The summary separates settled monthly spend, unexpired reservations and available budget. With a $100 limit, $45 spent and $10 reserved, $45 is available for additional calls. Successful calls settle to recorded cost and release unused capacity. Failed or timed-out requests release their hold; abandoned holds expire after the proxy request timeout plus a grace period
+
+Calls wait when concurrent reservations temporarily hold the remaining capacity. Waiting and model execution share the proxy's request timeout. If one request's allowance exceeds the unspent monthly budget, the error reports what the request needs and what remains. Reduce the deployment's output allowance or increase the limit. Paid analysis stops when the monthly limit is spent; completed reviews can still be reused. The monthly budget renews on the UTC calendar month
+
+The assigned virtual key has independent budgets, model permissions and rate limits. Several investigations can share that key, so its limit can stop analysis even when one lens has budget left. Every worker needs a billing key assigned through worker setup or **Settings**. Analysis spend appears under that key in **Virtual Keys** and normal request logs, with Lens, run and worker IDs in request metadata. Analysis prompts and responses are redacted from spend logs; source traces and findings remain available through the administrator-only Lens API. Terminal budget, authentication or transport failures stop the scan after applicable retries and preserve completed checkpoints
+
+Lens requires ClickHouse for both sources. It does not reconstruct sessions from unrelated trace IDs, guarantee exhaustive reviews, or automatically fix agent code. Trace contents can change as late spans arrive, even though a job's selected IDs are fixed. Changed content requires a matching review before reuse. Findings should be reviewed by a person before acting on them
 
 
 ## API access
@@ -215,22 +225,21 @@ python -m tests.proxy_behavior.lens.evaluate --api-base "$LITELLM_URL" \
 
 Set `LITELLM_API_KEY` privately. This makes paid model calls. Inspect missed and unexpected per-run labels, final findings and coverage; do not equate a passing dataset with guaranteed detection on arbitrary traces
 
-The worker uses temporary disk space for trace content while reviewing it, and removes those files after each review. The Docker command supplies a writable temporary mount while keeping the application filesystem read-only
+The default workspace retrieves trace content on demand. Python calls have temporary scratch space that is removed after execution. The Docker command supplies a writable temporary mount while keeping the application filesystem read-only
 
 To check that accepted behavior stays accepted without hiding new problems, run the evaluator with `--dataset tests/proxy_behavior/lens/feedback_cases.json`. Reports include elapsed time, model call count, reported cost when the proxy provides it, missed checks, unexpected checks, and inconclusive candidates
 
-## Upgrading from the original Lens API
-
-The Lens API now uses `/lens` instead of `/engine`, list responses use `lenses`, and worker claims use `lens_id`. Upgrade the proxy and recreate every worker with the image shown by the upgraded dashboard before starting new scans. Update API clients to the new paths and response fields. Old worker images cannot poll the renamed API
-
-Stop workers and let active scans finish before upgrading. Deploy proxy instances together: older proxies cannot use the renamed database tables. The schema migration renames the three Lens tables and the run-history identifier column in place, preserving saved investigations, findings, history, worker credentials, and billing assignments. Existing migration files retain their original names and checksums
-
-Upgrades using `--use_prisma_db_push` stop before schema changes if any legacy Lens table exists, preventing Prisma from dropping saved data. Apply `litellm-proxy-extras/litellm_proxy_extras/migrations/20261001100000_rename_lens/migration.sql` to the configured database schema before retrying. Deployments already using migration history can instead start without `--use_prisma_db_push` to apply the shipped migration normally. Fresh databases and databases already using the renamed tables can continue using database push
-
-
 ## Release compatibility
 
-Gateway and worker builds carry the same `LITELLM_RELEASE_TAG`. A worker announces its release and protocol before claiming an investigation. A mismatch returns HTTP 409 with the required image, leaving queued investigations untouched. During a rolling upgrade, workers wait for a gateway from their release
+Gateway and worker builds carry the same `LITELLM_RELEASE_TAG`. A worker announces its release and protocol before claiming an investigation. A mismatch returns HTTP 409 with the required image, leaving queued investigations untouched
+
+PostgreSQL stores complete review checkpoints in `LiteLLM_LensReview`, alongside Lens records and run history. Schema migrations preserve saved investigations, findings, history, worker credentials and billing assignments without rewriting stored Lens records
+
+Drain active scans, stop workers, back up the database, and deploy all gateway replicas as a coordinated replacement or traffic cutover. Keep traffic paused until every gateway replica uses the selected build and its migrations have completed. Mixed gateway versions sharing Lens data are not supported because every replica must understand the stored records. Pausing workers alone does not prevent dashboard or API writes. Recreate workers with the matching image and their existing tokens, then resume traffic and schedules. Scanning waits until a compatible worker connects
+
+Use the shipped migration history for databases containing Lens data. The schema guard stops `--use_prisma_db_push` before changes if it detects Lens tables that require renaming; run the shipped rename migration against the configured schema before retrying. Fresh databases and databases with the current table names can use database push
+
+A rollback to a gateway that cannot read saved Lens records requires restoring a compatible database backup. Database push from such a build can also remove the review table. Test recovery on a separate database and account for all gateway data written after the backup
 
 The dashboard reads its image from the running gateway. `LENS_WORKER_IMAGE` overrides the registry/image for private deployments. Set an explicit `LENS_WORKER_IMAGE` for worker-only Compose. Verify that the image exists and matches the gateway before deploying it
 
@@ -242,3 +251,42 @@ The hourly development pipeline pins all component images to the same selected c
 ## Worker dependencies
 
 The worker uses the same digest-pinned Wolfi base and Python version as the component images. Python dependencies and their hashes are locked in `deploy/lens/requirements.lock`. To update them, edit `deploy/lens/requirements.in`, then run `uv pip compile --universal --python-version 3.13 --generate-hashes --no-emit-index-url deploy/lens/requirements.in -o deploy/lens/requirements.lock`. The image installs only the locked wheels with hash verification. CI builds and scans both native architectures
+
+## Python analysis boundary
+
+The `python` tool runs ordinary CPython with the standard library in a fresh child process inside the existing worker container. It receives the selected evidence as `data` over stdin and has its own temporary working directory. It creates no additional container or service. Read and search tools remain available independently of Python
+
+The native worker image builds a syscall policy with libseccomp and includes the full `setpriv` launcher. Each child starts with no inherited worker secrets or open worker files, isolated Python startup, Landlock filesystem restrictions and a default-deny seccomp filter. It can read the Python runtime and its own scratch files. Worker source, installed worker packages, other jobs' files and `/proc` contents are unavailable. Network sockets, child processes, cross-process memory operations, signals to other processes and filesystem metadata mutation are denied, including calls made through `ctypes`. Some metadata inspection, such as `stat`, `access` and `readlink` of known paths, remains possible
+
+Python execution requires a native Linux worker with Landlock ABI 3 or later and seccomp filtering. Build the image for the host architecture. Missing policy files, an incompatible kernel, or an unsupported host such as a macOS source worker returns a clear tool error. There is no unrestricted execution fallback. Keep the container's non-root user, dropped capabilities, no-new-privileges setting, read-only root and writable temporary mount
+
+The worker permits two Python children at once across all investigations. Set `LENS_PYTHON_CONCURRENCY` to a positive integer to change this worker-wide pool. Queued calls consume no child process or scratch directory; cancelling a queued call does not start it. Model, read and search concurrency are separate
+
+| Per-call resource | Default |
+| --- | --- |
+| Elapsed execution time | 60 seconds |
+| CPU time | 30 seconds |
+| Process address space | 512 MiB |
+| Captured stdout or stderr | 8 MiB per stream |
+| Individual scratch file size | 16 MiB |
+| Monitored scratch storage | 64 MiB |
+| Monitored scratch entries | 2,048 |
+| Scratch directory depth | 128 |
+| Open file descriptors | 64 |
+
+Evidence is streamed from gateway pages into the confined child without building another complete selection in worker memory. The child decodes the selected data under its memory limit before running the code. The execution wall clock starts after input delivery; gateway fetches keep their HTTP timeouts and remain cancellable. CPU, address-space and file-size limits apply during input decoding as well as computation. Scratch usage is monitored every 50 milliseconds, so a call can temporarily overshoot its scratch allowance. The worker's shared temporary mount supplies the hard aggregate storage ceiling, 1 GiB by default. Accounting includes unlinked open files and files retained only by memory mappings. A mapped scratch inode without an open descriptor or directory entry is conservatively charged at the individual file-size limit, which may overcount small files. Cancellation and limit failures kill and reap the child before removing its scratch directory
+
+Results include `stdout`, `stderr`, `exit_code`, `error` and `output_complete`. Nonzero interpreter exits, confinement failures and resource failures set `error` and `output_complete=false`. Available traceback output is retained. An output-size failure delivers no partial stdout/stderr; the agent can narrow its computation and retry. A successful result retains all captured output without truncation
+
+This is a process boundary sharing the worker's Linux kernel. The checked-in smoke test verifies useful Python operations, filesystem and process restrictions, raw syscall attempts, resource failures, mapping accounting, cleanup and cancellation in the actual image. Run it on the deployment's native architecture and kernel:
+
+```bash
+docker build --build-arg LITELLM_RELEASE_TAG=lens-python-test \
+  -f deploy/lens/Dockerfile -t lens-worker:python-test .
+docker run --rm --pull never --read-only --cap-drop ALL \
+  --security-opt no-new-privileges --network none \
+  --tmpfs /tmp:rw,noexec,nosuid,size=1g --entrypoint python -i \
+  lens-worker:python-test - < tests/proxy_behavior/lens/worker_python_smoke.py
+```
+
+The same checks can run through pytest by setting `LENS_TEST_WORKER_IMAGE` to an already-built native image. The worker image CI runs the standalone smoke without adding pytest to the production image

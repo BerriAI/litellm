@@ -12,7 +12,7 @@ import litellm
 from litellm import utils
 from litellm.litellm_core_utils import litellm_logging, thread_pool_executor
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.rust_bridge.configuration import (  # pyright: ignore[reportPrivateUsage]  # preserve raw configuration state in test isolation
+from litellm.rust_bridge.configuration import (
     _CONFIGURATION,
     _parse_env_bool,
 )

@@ -18,10 +18,9 @@ export interface LensGettingStartedProps {
   readonly state: LensReadiness;
   readonly onStart: () => void;
   readonly onExit: (to: "traces" | "investigations") => void;
-  readonly onDemo?: () => void;
 }
 
-export function LensGettingStarted({ state, onStart, onExit, onDemo }: LensGettingStartedProps) {
+export function LensGettingStarted({ state, onStart, onExit }: LensGettingStartedProps) {
   const setupRef = useRef<HTMLElement>(null);
   const exitTo = state.tracesReady ? "traces" : "investigations";
   const start = () => {
@@ -30,8 +29,8 @@ export function LensGettingStarted({ state, onStart, onExit, onDemo }: LensGetti
     setupRef.current?.focus({ preventScroll: true });
   };
   return (
-    <div className="@container w-full space-y-6">
-      <LensIntroduction onStart={start} onDemo={onDemo} />
+    <section aria-label="Get started with Lens" className="@container mx-auto w-full max-w-7xl space-y-6">
+      <LensIntroduction onStart={start} />
       <div className="grid items-start gap-6 @3xl:grid-cols-[minmax(0,1fr)_280px] @3xl:gap-8">
         <OnboardingSetup
           ref={setupRef}
@@ -48,7 +47,7 @@ export function LensGettingStarted({ state, onStart, onExit, onDemo }: LensGetti
         />
         <Prerequisites />
       </div>
-    </div>
+    </section>
   );
 }
 
