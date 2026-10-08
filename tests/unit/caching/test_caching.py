@@ -953,6 +953,7 @@ def test_redis_caching_multiple_namespaces():
 
 
 _TOOL_TURN_ITEM: Final = {"role": "user", "content": "hi"}
+_FILE_BLOCK_ITEM: Final = {"type": "file", "file": {"file_data": "data:video/mp4;base64,AAAA", "format": "video/mp4"}}
 
 
 @pytest.mark.parametrize(
@@ -964,6 +965,7 @@ _TOOL_TURN_ITEM: Final = {"role": "user", "content": "hi"}
         pytest.param({"input": [_TOOL_TURN_ITEM] * 5}, False, id="five-responses-items-skip-the-cache"),
         pytest.param({"input": "one prompt"}, True, id="string-input-is-one-message"),
         pytest.param({"input": ["a", "b", "c", "d", "e"]}, True, id="embedding-strings-are-not-messages"),
+        pytest.param({"input": [_FILE_BLOCK_ITEM] * 5}, True, id="embedding-file-blocks-are-not-messages"),
     ],
 )
 def test_should_use_cache_stops_past_the_default_max_messages(kwargs: dict[str, object], expected: bool) -> None:
