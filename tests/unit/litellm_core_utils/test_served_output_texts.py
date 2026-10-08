@@ -88,6 +88,25 @@ def test_blanked_output_is_served_as_empty_text_and_overlaid():
     assert _choice_texts(overlay_served_output_texts(_chat_dict(RAW), ("",))) == ("",)
 
 
+def test_tool_only_stream_served_as_empty_text_keeps_the_rebuilt_null_content():
+    rebuilt = {
+        "id": "x",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+                },
+            }
+        ],
+    }
+    served = served_stream_output_texts([_stream_chunk("")])
+    assert overlay_served_output_texts(rebuilt, served) == rebuilt
+
+
 def test_overlay_replaces_logged_choice_text_with_served_text():
     logged = _chat_dict(RAW, RAW)
     overlaid = overlay_served_output_texts(logged, (MASKED,))
