@@ -104,6 +104,12 @@ GIL handling to `litellm-host-python`.
   not put provider dispatch in `litellm/main.py`; it lives in a thin dispatch
   class under `litellm/llms/<provider>/<route>/`.
 
+## Provider parameters
+
+Use `routes::parameters::provider_parameters` to collect JSON-compatible provider fields from bound and prepared arguments. LiteLLM controls are the union of `litellm_core_utils::params::is_control_param` (Rust-only names such as `base_url`, `callbacks`, `drop_params`) and Python's `is_litellm_owned_kwarg`; add a new control to whichever side already owns its siblings, never both. Route inputs are extracted separately. Unknown fields, including explicit nulls, remain in `CallArguments`; provider field lists must never filter them out. A `None` that came from a signature default is absence; a `None` the caller passed is an explicit null. Route-specific ownership resolves ambiguous names such as `metadata`
+
+Inference routes resolve `extra_body` at projection, before typed decoding and provider policy, so provider code never sees the original fields. OCR routes still compose overrides at the end through `compose_body`. Extensible payload objects retain unknown fields with `serde(flatten)`; use `Recognized<T>` only for provider values whose contract permits opaque passthrough. Provider/model adaptation belongs in provider crates
+
 ## Data Handling
 
 - OCR payloads can contain personal data and large base64 images. Do not log

@@ -12,15 +12,16 @@ use super::inference::InferenceHost;
 
 fn run_chat_completions(
     py: Python<'_>,
-    request: Bound<'_, PyAny>,
+    request: Bound<'_, PyDict>,
     args: Bound<'_, PyTuple>,
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
     let host = InferenceHost::new(
-        request.clone().unbind(),
+        request.clone(),
         "litellm.rust_bridge.chat_completions.route_host",
-    );
+        &kwargs,
+    )?;
     let cache_call_type = if asynchronous {
         "acompletion"
     } else {
@@ -30,7 +31,7 @@ fn run_chat_completions(
     let (arguments, hooks) = crate::routes::call_hooks(
         py,
         LoggingOperation::Completion,
-        &request,
+        request.as_any(),
         &args,
         &kwargs,
         asynchronous,
@@ -65,11 +66,11 @@ fn run_chat_completions(
 #[pyfunction]
 pub(crate) fn completion(py: Python<'_>, call: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     let call = super::NativeCall::extract(&call)?;
-    run_chat_completions(py, call.bound.into_any(), call.args, call.kwargs, false)
+    run_chat_completions(py, call.bound, call.args, call.kwargs, false)
 }
 
 #[pyfunction]
 pub(crate) fn acompletion(py: Python<'_>, call: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     let call = super::NativeCall::extract(&call)?;
-    run_chat_completions(py, call.bound.into_any(), call.args, call.kwargs, true)
+    run_chat_completions(py, call.bound, call.args, call.kwargs, true)
 }

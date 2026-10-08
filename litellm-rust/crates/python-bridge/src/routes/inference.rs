@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
 use litellm_host_python::{from_py, lookup};
 use litellm_http::transport::Error as TransportError;
@@ -8,15 +10,13 @@ use serde_json::{Map, Value};
 
 use crate::{
     errors::{RustUpstreamError, route_error_to_pyerr},
-    marshal::{
-        RouteOptions, optional_timeout, project_optional_fields, public_response,
-        python_timeout_seconds,
-    },
+    marshal::{RouteOptions, optional_timeout, public_response, python_timeout_seconds},
 };
 
 pub(super) struct InferenceHost {
-    pub request: Py<PyAny>,
+    pub request: Py<PyDict>,
     module: &'static str,
+    defaulted: BTreeSet<String>,
 }
 
 pub(super) struct ProjectedCall {
@@ -26,8 +26,16 @@ pub(super) struct ProjectedCall {
 }
 
 impl InferenceHost {
-    pub fn new(request: Py<PyAny>, module: &'static str) -> Self {
-        Self { request, module }
+    pub fn new(
+        request: Bound<'_, PyDict>,
+        module: &'static str,
+        kwargs: &Bound<'_, PyDict>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            defaulted: super::parameters::defaulted_keys(&request, kwargs)?,
+            request: request.unbind(),
+            module,
+        })
     }
 
     pub fn project(
@@ -40,7 +48,7 @@ impl InferenceHost {
         let string = |name: &str| -> PyResult<Option<String>> {
             argument(name)?.map(|value| value.extract()).transpose()
         };
-        let params = self.parameters(py, arguments)?;
+        let params = self.parameters(py, arguments, input)?;
         let timeout = argument("timeout")?
             .or(argument("request_timeout")?)
             .map(|value| python_timeout_seconds(py, value.unbind()))
@@ -85,32 +93,25 @@ impl InferenceHost {
         arguments: &Bound<'py, PyDict>,
         name: &str,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
-        let request = self.request.bind(py);
-        if let Some(value) = lookup(arguments, request, name)? {
-            return Ok((!value.is_none()).then_some(value));
-        }
-        if request.is_instance_of::<PyDict>() {
-            return Ok(None);
-        }
-        let parameter = request
-            .getattr("parameters")?
-            .call_method1("get", (name,))?;
-        if !parameter.is_none() {
-            return Ok(Some(parameter));
-        }
-        let extra = request.getattr("kwargs")?.call_method1("get", (name,))?;
-        Ok((!extra.is_none()).then_some(extra))
+        Ok(lookup(arguments, self.request.bind(py).as_any(), name)?
+            .filter(|value| !value.is_none()))
     }
 
     pub fn parameters(
         &self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
+        input: &str,
     ) -> PyResult<Map<String, Value>> {
-        let names: Vec<String> = py.import(self.module)?.getattr("PARAMETERS")?.extract()?;
-        project_optional_fields(names.iter().map(String::as_str), |name| {
-            self.argument(py, arguments, name)
-        })
+        super::parameters::provider_parameters(
+            py,
+            arguments,
+            self.request.bind(py),
+            &self.defaulted,
+            &[input],
+            &["metadata"],
+        )
+        .map(Into::into)
     }
 
     pub fn response(&self, py: Python<'_>, response: &impl Serialize) -> PyResult<Py<PyAny>> {
