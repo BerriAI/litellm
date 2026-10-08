@@ -13,7 +13,6 @@ from typing import IO, Final, Protocol, TypeAlias
 from urllib.parse import quote
 
 import httpx
-import soundfile
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
@@ -511,6 +510,17 @@ async def write_media_within_limit(response: httpx.Response, media_file: IO[byte
 
 
 def media_file_seconds(path: Path) -> float | None:
+    try:
+        # soundfile is only needed to measure media duration and is declared in
+        # extras that are not installed on the default `/v1/messages` streaming
+        # path; import lazily so module import never fails without it.
+        import soundfile
+    except ModuleNotFoundError:
+        verbose_proxy_logger.warning(
+            "soundfile not installed; Transcribe media duration measurement is skipped (install the 'proxy' or 'stt-nvidia-riva' extra to enable it)"
+        )
+        return None
+
     try:
         with soundfile.SoundFile(str(path)) as audio:
             return len(audio) / audio.samplerate
