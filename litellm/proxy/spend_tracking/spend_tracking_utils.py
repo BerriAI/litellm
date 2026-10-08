@@ -173,6 +173,7 @@ _STAMPED_METADATA_KEYS: Final = frozenset(
 
 def _get_spend_logs_metadata(
     metadata: dict | None,
+    request_litellm_params: Mapping[str, object] | None = None,
     applied_guardrails: list[str] | None = None,
     batch_models: list[str] | None = None,
     batch_successful_requests: int | None = None,
@@ -275,7 +276,9 @@ def _get_spend_logs_metadata(
     clean_metadata["vector_store_request_metadata"] = _get_vector_store_request_for_spend_logs_payload(
         vector_store_request_metadata
     )
-    clean_metadata["guardrail_information"] = _sanitize_guardrail_information_for_spend_logs(guardrail_information)
+    clean_metadata["guardrail_information"] = _sanitize_guardrail_information_for_spend_logs(
+        guardrail_information, request_litellm_params
+    )
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
@@ -659,6 +662,7 @@ def get_logging_payload(
     # clean up litellm metadata
     clean_metadata = _get_spend_logs_metadata(
         persisted_metadata,
+        request_litellm_params=litellm_params,
         applied_guardrails=(
             standard_logging_payload["metadata"].get("applied_guardrails", None)
             if standard_logging_payload is not None
@@ -820,9 +824,13 @@ def get_logging_payload(
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             custom_llm_provider=custom_llm_provider or "",
             messages=_get_messages_for_spend_logs_payload(
-                standard_logging_payload=standard_logging_payload, metadata=metadata
+                standard_logging_payload=standard_logging_payload,
+                metadata=metadata,
+                request_litellm_params=litellm_params,
             ),
-            response=_get_response_for_spend_logs_payload(payload=standard_logging_payload, kwargs=kwargs),
+            response=_get_response_for_spend_logs_payload(
+                payload=standard_logging_payload, kwargs=kwargs, request_litellm_params=litellm_params
+            ),
             proxy_server_request=_get_proxy_server_request_for_spend_logs_payload(
                 metadata=metadata,
                 litellm_params=(
@@ -1090,8 +1098,9 @@ async def get_spend_by_team_and_customer(
 def _get_messages_for_spend_logs_payload(
     standard_logging_payload: StandardLoggingPayload | None,
     metadata: dict | None = None,
+    request_litellm_params: Mapping[str, object] | None = None,
 ) -> str:
-    if should_store_prompts_and_responses_in_spend_logs():
+    if should_store_prompts_and_responses_in_spend_logs(request_litellm_params):
         if standard_logging_payload is not None:
             call_type: Final = standard_logging_payload.get("call_type", "")
             if call_type == "_arealtime":
@@ -1352,6 +1361,7 @@ def _redact_prompt_leaks_in_error_string(text: str) -> str:
 
 def _sanitize_guardrail_information_for_spend_logs(
     guardrail_information: list[StandardLoggingGuardrailInformation] | None,
+    request_litellm_params: Mapping[str, object] | None = None,
 ) -> list[StandardLoggingGuardrailInformation] | None:
     """
     When ``store_prompts_in_spend_logs`` is False, redact prompt-carrying fields
@@ -1372,7 +1382,7 @@ def _sanitize_guardrail_information_for_spend_logs(
     here to match OTEL's defensive read pattern; otherwise iteration would
     yield the dict's keys and crash the whole spend-log write.
     """
-    if guardrail_information is None or should_store_prompts_and_responses_in_spend_logs():
+    if guardrail_information is None or should_store_prompts_and_responses_in_spend_logs(request_litellm_params):
         return guardrail_information
     entries: Final = [guardrail_information] if isinstance(guardrail_information, dict) else guardrail_information
     return [_redact_prompt_fields_in_guardrail_entry(entry) for entry in entries if isinstance(entry, dict)]
@@ -1590,7 +1600,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
 
     If turn_off_message_logging is enabled, redact messages in the request body.
     """
-    if should_store_prompts_and_responses_in_spend_logs():
+    if should_store_prompts_and_responses_in_spend_logs(litellm_params):
         _proxy_server_request: Final = cast(dict | None, litellm_params.get("proxy_server_request", EMPTY_MAPPING))
         if _proxy_server_request is not None:
             _request_body = _proxy_server_request.get("body", EMPTY_MAPPING) or EMPTY_MAPPING
@@ -1661,10 +1671,11 @@ def _get_vector_store_request_for_spend_logs_payload(
 def _get_response_for_spend_logs_payload(
     payload: StandardLoggingPayload | None,
     kwargs: dict | None = None,
+    request_litellm_params: Mapping[str, object] | None = None,
 ) -> str:
     if payload is None:
         return "{}"
-    if should_store_prompts_and_responses_in_spend_logs():
+    if should_store_prompts_and_responses_in_spend_logs(request_litellm_params):
         response_obj: object = payload.get("response")
         if response_obj is None:
             return "{}"
@@ -1712,7 +1723,28 @@ def _get_response_for_spend_logs_payload(
     return "{}"
 
 
-def should_store_prompts_and_responses_in_spend_logs() -> bool:
+def _request_is_no_log(request_litellm_params: Mapping[str, object] | None) -> bool:
+    """`no-log: true` asks for this request's content not to be logged.
+
+    The proxy still bills such a request -- that is why the spend writer is let through the
+    no-log filter in `should_run_callback` -- so this suppresses the content-bearing fields
+    only, never the cost fields.
+    """
+    return isinstance(request_litellm_params, Mapping) and request_litellm_params.get("no-log") is True
+
+
+def should_store_prompts_and_responses_in_spend_logs(
+    request_litellm_params: Mapping[str, object] | None = None,
+) -> bool:
+    """Whether prompt/response content may be stored, for this request when one is given.
+
+    A request that asked for `no-log: true` never has its content stored, whatever the
+    proxy-wide `store_prompts_in_spend_logs` setting says. Callers that have no per-request
+    context omit the argument and get the proxy-wide answer.
+    """
+    if _request_is_no_log(request_litellm_params):
+        return False
+
     from litellm.proxy.proxy_server import general_settings
     from litellm.secret_managers.main import get_secret_bool
 
