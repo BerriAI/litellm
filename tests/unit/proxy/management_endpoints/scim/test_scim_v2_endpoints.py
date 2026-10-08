@@ -3054,7 +3054,9 @@ def _admin_group_team() -> LiteLLM_TeamTable:
 
 
 @pytest.mark.asyncio
-async def test_delete_group_deletes_the_whole_team_in_one_request_and_demotes_its_members(mocker, monkeypatch):
+async def test_delete_group_deletes_the_whole_team_in_one_request_and_demotes_its_members(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+):
     """DELETE /Groups hands the team to /team/delete's bulk path as one request, never a
     per-member pass, acting as a proxy admin with the SCIM caller's key and user as the
     audit actor, and writes the non-admin role for a member who was admin only through
@@ -3070,11 +3072,35 @@ async def test_delete_group_deletes_the_whole_team_in_one_request_and_demotes_it
     assert acting_as.user_role == LitellmUserRoles.PROXY_ADMIN
     assert (acting_as.api_key, acting_as.user_id) == (_SCIM_CALLER.api_key, _SCIM_CALLER.user_id)
     assert delete_team_mock.call_args.kwargs["litellm_changed_by"] is None
-    prisma.db.litellm_usertable.update_many.assert_awaited_once_with(**_DEMOTED)
+    assert prisma.db.litellm_usertable.update_many.await_args_list == [call(**_DEMOTED), call(**_DEMOTED)]
 
 
 @pytest.mark.asyncio
-async def test_delete_group_demotes_members_before_the_team_delete_so_a_failed_delete_retries(mocker, monkeypatch):
+async def test_delete_group_demotes_again_after_the_team_delete_so_a_concurrent_group_write_cannot_regrant(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+):
+    """A PUT on the same group that lands between the demotion and the team delete
+    recomputes the retained members' roles and grants PROXY_ADMIN back; the second
+    recompute after the delete leaves them demoted whatever happened in between."""
+    prisma, delete_team_mock = _group_delete_mocks(mocker, monkeypatch, _admin_group_team())
+
+    async def regrant_like_a_concurrent_put(**_: object) -> None:
+        await prisma.db.litellm_usertable.update_many(
+            where={"user_id": {"in": ["member-1"]}}, data={"user_role": LitellmUserRoles.PROXY_ADMIN}
+        )
+
+    delete_team_mock.side_effect = regrant_like_a_concurrent_put
+
+    response: Final = await delete_group(group_id=_ADMIN_GROUP, user_api_key_dict=_SCIM_CALLER)
+
+    assert response.status_code == 204
+    assert prisma.db.litellm_usertable.update_many.await_args_list[-1] == call(**_DEMOTED)
+
+
+@pytest.mark.asyncio
+async def test_delete_group_demotes_members_before_the_team_delete_so_a_failed_delete_retries(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+):
     """A team delete that fails leaves the members already demoted and the group still
     there, so the IdP's retry finds it instead of a 404 and nobody keeps PROXY_ADMIN
     through a group that is on its way out."""
@@ -3089,7 +3115,9 @@ async def test_delete_group_demotes_members_before_the_team_delete_so_a_failed_d
 
 
 @pytest.mark.asyncio
-async def test_delete_group_keeps_the_team_when_the_role_writes_fail(mocker, monkeypatch):
+async def test_delete_group_keeps_the_team_when_the_role_writes_fail(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+):
     """When the role writes fail the team is not deleted, so the retry runs the whole
     delete again instead of answering 404 with the roles never recomputed."""
     prisma, delete_team_mock = _group_delete_mocks(mocker, monkeypatch, _admin_group_team())
@@ -3103,7 +3131,9 @@ async def test_delete_group_keeps_the_team_when_the_role_writes_fail(mocker, mon
 
 
 @pytest.mark.asyncio
-async def test_delete_group_answers_404_when_the_team_vanished_before_the_delete(mocker, monkeypatch):
+async def test_delete_group_answers_404_when_the_team_vanished_before_the_delete(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+):
     """A group deleted by a concurrent request between the lookup and the team delete
     answers 404, the same as a group that never existed."""
     _, delete_team_mock = _group_delete_mocks(mocker, monkeypatch, _admin_group_team())
@@ -3116,7 +3146,9 @@ async def test_delete_group_answers_404_when_the_team_vanished_before_the_delete
 
 
 @pytest.mark.asyncio
-async def test_delete_group_of_an_unknown_group_answers_404_without_deleting_or_touching_roles(mocker, monkeypatch):
+async def test_delete_group_of_an_unknown_group_answers_404_without_deleting_or_touching_roles(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+):
     prisma, delete_team_mock = _group_delete_mocks(mocker, monkeypatch, None)
 
     with pytest.raises(ProxyException) as raised:

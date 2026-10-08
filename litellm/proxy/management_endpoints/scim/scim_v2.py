@@ -2781,6 +2781,7 @@ async def delete_group(
             ),
             litellm_changed_by=None,
         )
+        await _recompute_scim_member_roles(prisma_client, member_ids, without_team_id=group_id)
 
         return Response(status_code=204)
 
