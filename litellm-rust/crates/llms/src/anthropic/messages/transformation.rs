@@ -457,16 +457,21 @@ mod tests {
 
     const BILLING_HEADER: &str = "x-anthropic-billing-header: cc_version=1";
 
-    fn transform_with(fields: Value, policy: RequestPolicy) -> Value {
-        let context = MessagesTransformContext::with_lookup(
-            MessagesModelCapabilities {
-                supports_reasoning: true,
-                thinking_always_on: true,
-                ..Default::default()
-            },
-            false,
-            &no_env,
-        );
+    #[fixture]
+    fn always_thinking() -> MessagesModelCapabilities {
+        MessagesModelCapabilities {
+            supports_reasoning: true,
+            thinking_always_on: true,
+            ..Default::default()
+        }
+    }
+
+    fn transform_with(
+        fields: Value,
+        capabilities: MessagesModelCapabilities,
+        policy: RequestPolicy,
+    ) -> Value {
+        let context = MessagesTransformContext::with_lookup(capabilities, false, &no_env);
         serde_json::to_value(
             transform_messages_request_with(request(fields), &context, policy).unwrap(),
         )
@@ -480,12 +485,17 @@ mod tests {
     ]))]
     #[case::partner_host(PARTNER_HOST_REQUEST_POLICY, json!([{"type": "text", "text": "keep"}]))]
     #[case::compatible_host(COMPATIBLE_HOST_REQUEST_POLICY, json!([{"type": "text", "text": "keep"}]))]
-    fn billing_metadata_follows_the_policy(#[case] policy: RequestPolicy, #[case] system: Value) {
+    fn billing_metadata_follows_the_policy(
+        #[case] policy: RequestPolicy,
+        #[case] system: Value,
+        always_thinking: MessagesModelCapabilities,
+    ) {
         let transformed = transform_with(
             json!({"system": [
                 {"type": "text", "text": BILLING_HEADER},
                 {"type": "text", "text": "keep"}
             ]}),
+            always_thinking,
             policy,
         );
         assert_eq!(transformed, body(json!({"system": system})));
@@ -516,8 +526,9 @@ mod tests {
         #[case] policy: RequestPolicy,
         #[case] fields: Value,
         #[case] expected: Value,
+        always_thinking: MessagesModelCapabilities,
     ) {
-        assert_eq!(transform_with(fields, policy), expected);
+        assert_eq!(transform_with(fields, always_thinking, policy), expected);
     }
 
     #[rstest]
@@ -529,9 +540,14 @@ mod tests {
     fn disabled_thinking_follows_the_thinking_semantics(
         #[case] policy: RequestPolicy,
         #[case] expected: Value,
+        always_thinking: MessagesModelCapabilities,
     ) {
         assert_eq!(
-            transform_with(json!({"thinking": {"type": "disabled"}}), policy),
+            transform_with(
+                json!({"thinking": {"type": "disabled"}}),
+                always_thinking,
+                policy
+            ),
             expected
         );
     }
@@ -540,10 +556,14 @@ mod tests {
     #[case::first_party(FIRST_PARTY_REQUEST_POLICY)]
     #[case::partner_host(PARTNER_HOST_REQUEST_POLICY)]
     #[case::compatible_host(COMPATIBLE_HOST_REQUEST_POLICY)]
-    fn every_policy_maps_reasoning_effort(#[case] policy: RequestPolicy) {
+    fn every_policy_maps_reasoning_effort(
+        #[case] policy: RequestPolicy,
+        always_thinking: MessagesModelCapabilities,
+    ) {
         assert_eq!(
             transform_with(
                 json!({"max_tokens": 4096, "reasoning_effort": "low"}),
+                always_thinking,
                 policy
             ),
             body(json!({
@@ -553,8 +573,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn transform_messages_request_uses_the_first_party_policy() {
+    #[rstest]
+    fn transform_messages_request_uses_the_first_party_policy(
+        always_thinking: MessagesModelCapabilities,
+    ) {
         let fields = json!({
             "system": [
                 {"type": "text", "text": BILLING_HEADER},
@@ -566,15 +588,7 @@ mod tests {
             "reasoning_effort": "low",
             "context_management": [{"type": "compaction", "compact_threshold": 1000}]
         });
-        let context = MessagesTransformContext::with_lookup(
-            MessagesModelCapabilities {
-                supports_reasoning: true,
-                thinking_always_on: true,
-                ..Default::default()
-            },
-            false,
-            &no_env,
-        );
+        let context = MessagesTransformContext::with_lookup(always_thinking, false, &no_env);
         assert_eq!(
             transform_messages_request(request(fields.clone()), &context),
             transform_messages_request_with(request(fields), &context, FIRST_PARTY_REQUEST_POLICY)
