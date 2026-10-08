@@ -141,6 +141,16 @@ jobs:
             dist: loadscope
             timeout: 15
 
+          - test-group: mcp-oauth
+            test-path: >-
+              tests/unit/proxy/_experimental/mcp_server/test_discoverable_endpoints.py
+              tests/unit/proxy/_experimental/mcp_server/test_mcp_server_manager.py
+              tests/unit/proxy/_experimental/mcp_server/test_db_credentials.py
+              tests/unit/proxy/_experimental/mcp_server/outbound_credentials
+            workers: 4
+            dist: loadscope
+            timeout: 15
+
           # ---- logging: split into 2 shards ----
           - test-group: custom-logging
             test-path: >-

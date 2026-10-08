@@ -13959,6 +13959,7 @@ export interface paths {
          * Get Litellm Model Cost Map
          * @description Public endpoint to get the LiteLLM model cost map.
          *     Returns pricing information for all supported models.
+         *     With catalog_only=true, returns the catalog as loaded, without entries registered at runtime for proxy deployments.
          */
         get: operations["get_litellm_model_cost_map_public_litellm_model_cost_map_get"];
         put?: never;
@@ -30314,6 +30315,11 @@ export interface components {
              * @description Custom CIDR ranges that define internal/private networks for MCP access control. When set, only these ranges are treated as internal. Defaults to RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).
              */
             mcp_internal_ip_ranges?: string[] | null;
+            /**
+             * Mcp Prefer Client Id Metadata Document
+             * @description When true, a gateway-managed OAuth2 MCP server whose authorization server advertises Client ID Metadata Document support identifies itself with the gateway's public metadata document URL even when that authorization server also offers dynamic client registration. Requires a public HTTPS PROXY_BASE_URL the authorization server can fetch. Default false: dynamic client registration is used whenever the authorization server offers it, and the metadata document only when it does not.
+             */
+            mcp_prefer_client_id_metadata_document?: boolean | null;
             /**
              * Mcp Required Fields
              * @description List of MCP server fields that must be filled in for a submission to pass standards checks (e.g. ['description', 'source_url', 'alias']).
@@ -70657,7 +70663,9 @@ export interface operations {
     };
     get_litellm_model_cost_map_public_litellm_model_cost_map_get: {
         parameters: {
-            query?: never;
+            query?: {
+                catalog_only?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -70671,6 +70679,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
