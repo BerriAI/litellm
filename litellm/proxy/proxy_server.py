@@ -887,7 +887,7 @@ from litellm.proxy.utils import (  # noqa: F401, RUF100  # legacy module exports
     hash_password,
     hash_token,
     invalidate_config_param,
-    is_projected_spend_over_limit,
+    is_projected_spend_over_limit,  # pyright: ignore[reportUnusedImport]  # backwards-compatible package export
     is_valid_team_configs,
     litellm_config_cache,
     migrate_passwords_to_scrypt_async,
@@ -4165,21 +4165,18 @@ async def update_cache(
         new_spend: Final = existing_spend + response_cost
 
         ## CHECK IF USER PROJECTED SPEND > SOFT LIMIT
-        if (
-            existing_spend_obj.soft_budget_cooldown is False
-            and existing_spend_obj.soft_budget is not None
-            and (
-                is_projected_spend_over_limit(
-                    current_spend=new_spend,
-                    soft_budget_limit=existing_spend_obj.soft_budget,
-                )
-                is True
-            )
-        ):
-            projected_spend, projected_exceeded_date = get_projected_spend_over_limit(
+        projection: Final = (
+            get_projected_spend_over_limit(
                 current_spend=new_spend,
                 soft_budget_limit=existing_spend_obj.soft_budget,
+                budget_duration=existing_spend_obj.budget_duration,
+                budget_reset_at=existing_spend_obj.budget_reset_at,
             )
+            if existing_spend_obj.soft_budget_cooldown is False and existing_spend_obj.soft_budget is not None
+            else None
+        )
+        if projection is not None:
+            projected_spend, projected_exceeded_date = projection
             soft_limit: Final = existing_spend_obj.soft_budget
             call_info: Final = CallInfo(
                 token=existing_spend_obj.token or "",
