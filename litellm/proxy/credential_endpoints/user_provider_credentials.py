@@ -38,7 +38,7 @@ _NOT_CONNECTED: Final = USER_PROVIDER_CREDENTIAL_NOT_CONNECTED
 
 
 class GithubCopilotUserConnectionPayload(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     access_token: str = Field(repr=False)
     github_login: str
@@ -171,8 +171,8 @@ async def aget_user_provider_tokens(
     names: Final = tuple(dict.fromkeys(credential_names))
     if not names:
         return {}
-    cached: dict[str, str] = {}  # mutable-ok: accumulates hits and DB reads
-    misses: list[str] = []  # mutable-ok: accumulates cache misses
+    cached: Final[dict[str, str]] = {}  # mutable-ok: accumulates hits and DB reads
+    misses: Final[list[str]] = []  # mutable-ok: accumulates cache misses
     for name in names:
         value = await cache.async_get_cache(_cache_key(user_id, name))
         if value == _NOT_CONNECTED:
@@ -198,9 +198,7 @@ async def aget_user_provider_tokens(
     except Exception:  # noqa: BLE001  # a DB outage reads as not connected so the caller gets a 401, never a 500
         verbose_proxy_logger.exception("aget_user_provider_tokens: DB read failed for user_id=%s", user_id)
         return {}
-    found: dict[str, str] = {}  # mutable-ok: accumulates rows
-    for row in rows:
-        found[row.credential_name] = row.credential_b64
+    found: Final = {row.credential_name: row.credential_b64 for row in rows}
     for name in misses:
         await cache.async_set_cache(
             _cache_key(user_id, name),
