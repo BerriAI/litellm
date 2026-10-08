@@ -381,17 +381,17 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             return hosted_flag
         if not supports_openai_prompt_cache_breakpoint(model):
             return False
-        if (custom_llm_provider or AnthropicCacheControlHook._resolve_provider(model)) != "openai":
+        if (custom_llm_provider or AnthropicCacheControlHook._resolve_provider(model, api_base)) != "openai":
             return False
         return prompt_cache_options is not None or targets_openai_api(api_base)
 
     @staticmethod
-    def _resolve_provider(model: str) -> str | None:
+    def _resolve_provider(model: str, api_base: object = None) -> str | None:
         from litellm.exceptions import BadRequestError
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
         try:
-            _, provider, _, _ = get_llm_provider(model=model)
+            _, provider, _, _ = get_llm_provider(model=model, api_base=api_base if isinstance(api_base, str) else None)
         except BadRequestError:
             return None
         return provider
