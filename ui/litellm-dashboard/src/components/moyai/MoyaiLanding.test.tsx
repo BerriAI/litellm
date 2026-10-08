@@ -37,12 +37,6 @@ describe("MoyaiLanding", () => {
     expect(screen.queryByRole("button", { name: "Quick connect" })).not.toBeInTheDocument();
   });
 
-  it("renders a quick-connect error when provided", () => {
-    render(<MoyaiLanding canQuickConnect onQuickConnect={vi.fn()} quickConnectError="Gateway refused" />);
-
-    expect(screen.getByRole("alert")).toHaveTextContent("Gateway refused");
-  });
-
   it("links the GitHub, demo, and launch post CTAs to the exported URLs", () => {
     render(<MoyaiLanding />);
 

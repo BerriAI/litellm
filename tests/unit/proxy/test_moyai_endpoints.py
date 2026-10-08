@@ -98,7 +98,10 @@ async def _exchange_env(monkeypatch: pytest.MonkeyPatch):
     prisma.db.litellm_uisettings.upsert = AsyncMock(side_effect=_upsert)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
 
+    mint_calls: list = []
+
     async def _mint(request_type, **kwargs):
+        mint_calls.append(kwargs)
         return {"key": "sk-new-virtual-key", **kwargs}
 
     import litellm.proxy.moyai_endpoints as m
@@ -107,7 +110,7 @@ async def _exchange_env(monkeypatch: pytest.MonkeyPatch):
         "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
         AsyncMock(side_effect=_mint),
     )
-    return persisted
+    return persisted, mint_calls
 
 
 async def _exchange_call(code: str, moyai_url: str):
@@ -120,7 +123,7 @@ async def _exchange_call(code: str, moyai_url: str):
 async def test_exchange_happy_path_mints_key_and_saves_setting(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy.moyai_endpoints import _sign_connect_code
 
-    persisted = await _exchange_env(monkeypatch)
+    persisted, mint_calls = await _exchange_env(monkeypatch)
     code = _sign_connect_code("sk-master", "https://moyai.example.com", "admin-user")
 
     response = await _exchange_call(code, "https://moyai.example.com")
@@ -129,6 +132,32 @@ async def test_exchange_happy_path_mints_key_and_saves_setting(monkeypatch: pyte
     assert response.key_alias == "moyai-moyai.example.com"
     assert response.api_base == "http://localhost:4000"
     assert persisted["moyai_url"] == "https://moyai.example.com"
+    mint = mint_calls[0]
+    assert "user_id" not in mint
+    assert mint["allowed_routes"] == ["openai_routes", "anthropic_routes", "/model/info"]
+    assert mint["metadata"] == {
+        "created_via": "moyai_quick_connect",
+        "moyai_url": "https://moyai.example.com",
+        "connected_by": "admin-user",
+    }
+
+
+@pytest.mark.asyncio
+async def test_exchange_without_database_fails_before_nonce(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import HTTPException
+    from litellm.proxy import proxy_server
+    from litellm.proxy.moyai_endpoints import _sign_connect_code
+
+    await _exchange_env(monkeypatch)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    set_cache = proxy_server.user_api_key_cache.async_set_cache
+    code = _sign_connect_code("sk-master", "https://moyai.example.com", "admin-user")
+
+    with pytest.raises(HTTPException) as exc:
+        await _exchange_call(code, "https://moyai.example.com")
+    assert exc.value.status_code == 400
+    assert "database" in exc.value.detail
+    set_cache.assert_not_called()
 
 
 @pytest.mark.asyncio

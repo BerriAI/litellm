@@ -300,11 +300,9 @@ const STATS = [
 export default function MoyaiLanding({
   canQuickConnect = false,
   onQuickConnect,
-  quickConnectError,
 }: {
   canQuickConnect?: boolean;
   onQuickConnect?: (url: string) => Promise<void> | void;
-  quickConnectError?: string;
 }) {
   const heroRef = useRef<HTMLElement>(null);
   const anchorRef = useRef<HTMLDivElement>(null);
@@ -358,11 +356,6 @@ export default function MoyaiLanding({
               </span>
             ) : (
               <span>Already have Moyai deployed? Ask a proxy admin to connect it</span>
-            )}
-            {quickConnectError && (
-              <span role="alert" className="mt-1 block text-xs text-[#ff9d9d]">
-                {quickConnectError}
-              </span>
             )}
           </div>
         </div>

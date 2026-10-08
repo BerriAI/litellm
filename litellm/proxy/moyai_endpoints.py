@@ -74,6 +74,15 @@ def _master_key_hmac_key(master_key: str) -> bytes:
     return hashlib.sha256(master_key.encode()).digest()
 
 
+def _gateway_url(request: Request) -> str:
+    if os.environ.get("PROXY_BASE_URL"):
+        return os.environ["PROXY_BASE_URL"].rstrip("/")
+    return str(request.base_url).rstrip("/")
+
+
+_MOYAI_KEY_ALLOWED_ROUTES: Final = ["openai_routes", "anthropic_routes", "/model/info"]
+
+
 def _sign_connect_code(master_key: str, moyai_url: str, user_id: str | None) -> str:
     payload: Final = json.dumps(
         {
@@ -143,12 +152,9 @@ async def moyai_connect_start(
             detail="Moyai quick connect needs LITELLM_MASTER_KEY set on the proxy",
         )
 
-    gateway_url: Final = (
-        os.environ["PROXY_BASE_URL"].rstrip("/") if os.environ.get("PROXY_BASE_URL") else str(request.base_url).rstrip("/")
-    )
     code: Final = _sign_connect_code(master_key, moyai_url, user_api_key_dict.user_id)
     connect_url: Final = f"{moyai_url}/connect/litellm?" + urlencode(
-        {"gateway_url": gateway_url, "code": code, "return_to": body.return_to}
+        {"gateway_url": _gateway_url(request), "code": code, "return_to": body.return_to}
     )
     return MoyaiConnectStartResponse(connect_url=connect_url)
 
@@ -205,6 +211,9 @@ async def moyai_connect_exchange(request: Request, body: MoyaiConnectExchangeReq
     if moyai_url is None or _origin(moyai_url) != payload["moyai_origin"]:
         raise HTTPException(status_code=400, detail="Invalid Moyai connect code")
 
+    if prisma_client is None:
+        raise HTTPException(status_code=400, detail="Moyai quick connect needs a database connected to the proxy")
+
     nonce_key: Final = f"{_MOYAI_NONCE_CACHE_PREFIX}{payload['nonce']}"
     if await user_api_key_cache.async_get_cache(key=nonce_key) is not None:
         raise HTTPException(status_code=400, detail="Invalid Moyai connect code")
@@ -215,20 +224,21 @@ async def moyai_connect_exchange(request: Request, body: MoyaiConnectExchangeReq
     alias: Final = await _moyai_key_alias(prisma_client, moyai_url)
     key_response: Final = await generate_key_helper_fn(
         request_type="key",
-        user_id=payload.get("user_id"),
         key_alias=alias,
-        metadata={"created_via": "moyai_quick_connect", "moyai_url": moyai_url},
+        allowed_routes=_MOYAI_KEY_ALLOWED_ROUTES,
+        metadata={
+            "created_via": "moyai_quick_connect",
+            "moyai_url": moyai_url,
+            "connected_by": payload.get("user_id"),
+        },
         table_name="key",
         llm_router=llm_router,
     )
 
     await _persist_moyai_url(prisma_client, moyai_url)
 
-    gateway_url: Final = (
-        os.environ["PROXY_BASE_URL"].rstrip("/") if os.environ.get("PROXY_BASE_URL") else str(request.base_url).rstrip("/")
-    )
     return MoyaiConnectExchangeResponse(
         api_key=key_response["key"],
         key_alias=alias,
-        api_base=gateway_url,
+        api_base=_gateway_url(request),
     )

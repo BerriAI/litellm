@@ -14,7 +14,6 @@ import { uiHref } from "@/utils/uiHref";
 function MoyaiPageContent() {
   const { accessToken, userRole } = useAuthorized();
   const { data: uiSettings, isLoading, refetch } = useUISettings();
-  const [quickConnectError, setQuickConnectError] = useState<string | undefined>();
 
   const [connectedParams] = useState(() => {
     const params = new URLSearchParams(window.location.search);
@@ -41,13 +40,8 @@ function MoyaiPageContent() {
   }, [connectedParams, isLoading, moyaiUrl]);
 
   const onQuickConnect = async (url: string) => {
-    try {
-      const response = await startMoyaiQuickConnect(accessToken ?? "", url, window.location.origin + uiHref("moyai"));
-      window.location.assign(response.connect_url);
-    } catch (error) {
-      setQuickConnectError(error instanceof Error ? error.message : "Could not start Moyai quick connect");
-      throw error;
-    }
+    const response = await startMoyaiQuickConnect(accessToken ?? "", url, window.location.origin + uiHref("moyai"));
+    window.location.assign(response.connect_url);
   };
 
   let content: React.ReactNode = null;
@@ -66,13 +60,7 @@ function MoyaiPageContent() {
         </div>
       );
     } else {
-      content = (
-        <MoyaiLanding
-          canQuickConnect={isProxyAdminRole(userRole ?? "")}
-          onQuickConnect={onQuickConnect}
-          quickConnectError={quickConnectError}
-        />
-      );
+      content = <MoyaiLanding canQuickConnect={isProxyAdminRole(userRole ?? "")} onQuickConnect={onQuickConnect} />;
     }
   }
 
