@@ -157,6 +157,31 @@ def test_is_chunk_non_empty(initialized_custom_stream_wrapper: CustomStreamWrapp
     )
 
 
+def test_is_chunk_non_empty_with_refusal(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """Unit test if non-empty when the delta carries only a refusal"""
+    chunk: Final = {
+        "id": "chatcmpl-abc",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "m",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"refusal": "I can't help"},
+                "logprobs": None,
+                "finish_reason": None,
+            }
+        ],
+    }
+    assert initialized_custom_stream_wrapper.is_chunk_non_empty(
+        completion_obj=MagicMock(),
+        model_response=ModelResponseStream(**chunk),
+        response_obj=MagicMock(),
+    )
+
+
 def test_is_chunk_non_empty_with_annotations(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):
