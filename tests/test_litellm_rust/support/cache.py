@@ -9,9 +9,8 @@ from pydantic import BaseModel, TypeAdapter
 import litellm
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.rust_bridge import runtime
-from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
+from litellm.rust_bridge.catalog import Route, RouteContext, Rust
 from litellm.rust_bridge.chat_completions.entrypoints import NATIVE_ACOMPLETION
-from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.rust_bridge.responses.entrypoints import NATIVE_ARESPONSES
@@ -62,12 +61,11 @@ async def invoke(
                 **arguments,
             },
         )
-        return await runtime.arun(
+        return await runtime.arun_native(
             RouteContext(Route.RESPONSES),
             binding=NATIVE_ARESPONSES,
             native=lambda hook: hook(request),
-            python=runtime.NO_PYTHON,
-            rules=(RouteRule(Route.RESPONSES, Rollout.RUST_REQUIRED),),
+            policy=Rust(required=True),
         )
     server.default_response = (
         ResponseSpec(body=None, events=MESSAGES_EVENTS)
@@ -79,12 +77,11 @@ async def invoke(
         if not native:
             return await litellm.acompletion(**parameters)
         chat: Final = NativeCall(args=(), kwargs=parameters, bound=parameters)
-        return await runtime.arun(
+        return await runtime.arun_native(
             RouteContext(Route.CHAT_COMPLETIONS),
             binding=NATIVE_ACOMPLETION,
             native=lambda hook: hook(chat),
-            python=runtime.NO_PYTHON,
-            rules=(RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_REQUIRED),),
+            policy=Rust(required=True),
         )
     if not native:
         return await litellm.anthropic_messages(**parameters)
@@ -102,12 +99,11 @@ async def invoke(
             **parameters,
         },
     )
-    return await runtime.arun(
+    return await runtime.arun_native(
         RouteContext(Route.MESSAGES),
         binding=NATIVE_AMESSAGES,
         native=lambda hook: hook(messages),
-        python=runtime.NO_PYTHON,
-        rules=(RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),),
+        policy=Rust(required=True),
     )
 
 

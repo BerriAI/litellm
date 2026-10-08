@@ -1,23 +1,14 @@
-import inspect
-from collections.abc import Awaitable, Callable, Coroutine, Mapping
+from collections.abc import Awaitable, Callable, Coroutine
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
 from litellm import main
-from litellm.rust_bridge.catalog import Route, RouteContext
+from litellm.rust_bridge.catalog import Route
 from litellm.rust_bridge.chat_completions.entrypoints import (
     NATIVE_ACOMPLETION,
     NATIVE_COMPLETION,
 )
-from litellm.rust_bridge.dispatch import PublicDispatch
-from litellm.rust_bridge.public_call import (
-    NativeCall,
-    bind,
-    native_call,
-    native_call_hook,
-    optional_sequence,
-    optional_str,
-    signature,
-)
+from litellm.rust_bridge.dispatch import Fields, PublicDispatch, model_is_named
+from litellm.rust_bridge.public_call import binder, native_call_hook, optional_sequence
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
@@ -43,44 +34,17 @@ def _python_acompletion() -> PythonAcompletion:
 
 
 _PYTHON_COMPLETION: Final = _python_completion()
-_COMPLETION: Final = signature(_PYTHON_COMPLETION)
 _PYTHON_ACOMPLETION: Final = _python_acompletion()
-_ACOMPLETION: Final = signature(_PYTHON_ACOMPLETION)
 
 
-def _public_request(
-    legacy: inspect.Signature, args: tuple[object, ...], kwargs: Mapping[str, object]
-) -> NativeCall | None:
-    fields: Final = bind(legacy, args, kwargs)
-    if fields is None:
-        return None
-    model: Final = fields.get("model")
-    messages: Final = optional_sequence(fields.get("messages"))
-    if not isinstance(model, str) or messages is None:
-        return None
-    return native_call(args, kwargs, fields)
-
-
-def _context(request: NativeCall) -> RouteContext:
-    return RouteContext(
-        Route.CHAT_COMPLETIONS,
-        provider=optional_str(request.bound.get("custom_llm_provider")),
-        model=str(request.bound["model"]),
-    )
+def _chat_fields(fields: Fields) -> bool:
+    return model_is_named(fields) and optional_sequence(fields.get("messages")) is not None
 
 
 _DISPATCH: Final = PublicDispatch(
-    route=Route.CHAT_COMPLETIONS,
-    request=lambda args, kwargs: _public_request(_COMPLETION, args, kwargs),
-    context=_context,
-    bypass=lambda request: request.kwargs.get("acompletion") is True,
+    Route.CHAT_COMPLETIONS, bind=binder(_PYTHON_COMPLETION), internal_hop="acompletion", accepts=_chat_fields
 )
-
-_ADISPATCH: Final = PublicDispatch(
-    route=Route.CHAT_COMPLETIONS,
-    request=lambda args, kwargs: _public_request(_ACOMPLETION, args, kwargs),
-    context=_context,
-)
+_ADISPATCH: Final = PublicDispatch(Route.CHAT_COMPLETIONS, bind=binder(_PYTHON_ACOMPLETION), accepts=_chat_fields)
 
 
 def completion(

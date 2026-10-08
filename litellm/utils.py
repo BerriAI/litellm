@@ -92,8 +92,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace, strip_special_tokens
 from litellm.rust_bridge import tokenizer as tokenizer_dispatch
-from litellm.rust_bridge.catalog import decision
-from litellm.rust_bridge.configuration import Decision
+from litellm.rust_bridge.catalog import Decision, decide
 
 _CachingHandlerResponse = None
 _LLMCachingHandler = None
@@ -2399,7 +2398,7 @@ def _huggingface_tokenizer_backend() -> Decision:
 
     Cached HuggingFace tokenizers are keyed on it, so flipping `LITELLM_RUST` or
     `litellm.rust(...)` reaches a fresh object instead of the other backend's."""
-    return decision(tokenizer_dispatch.HUGGINGFACE_CONTEXT)
+    return decide(tokenizer_dispatch.HUGGINGFACE_CONTEXT)
 
 
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)

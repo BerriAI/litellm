@@ -608,8 +608,7 @@ def test_native_projection_errors_never_select_python(
     import ssl
 
     from litellm.rust_bridge import runtime, settings
-    from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
-    from litellm.rust_bridge.configuration import Rollout
+    from litellm.rust_bridge.catalog import Route, RouteContext, Rust
     from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR
     from litellm.rust_bridge.public_call import NativeCall
 
@@ -644,7 +643,7 @@ def test_native_projection_errors_never_select_python(
             binding=NATIVE_OCR,
             native=lambda native: native(request),
             python=python_fallback,
-            rules=(RouteRule(Route.OCR, Rollout.RUST_REQUIRED if required else Rollout.RUST_OPT_OUT),),
+            policy=Rust(required=required),
         )
     assert ocr_server.requests == []
 

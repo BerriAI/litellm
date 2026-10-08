@@ -2,14 +2,15 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final, Generic, NoReturn, TypeAlias, TypeVar
 
 from typing_extensions import assert_never
 
 from litellm.exceptions import APIError
+from litellm.rust_bridge import catalog
 from litellm.rust_bridge.bindings import NativeBinding, native_exception_types
-from litellm.rust_bridge.catalog import RouteContext, Rules, decision
-from litellm.rust_bridge.configuration import Decision
+from litellm.rust_bridge.catalog import Decision, Policy, Python, RouteContext, Rust
 from litellm.rust_bridge.response_metadata import mark_rust_response
 
 NativeT = TypeVar("NativeT")
@@ -41,14 +42,6 @@ class BridgeErrorContext:
     model: str
 
 
-@dataclass(frozen=True, slots=True)
-class NoPythonImplementation:
-    pass
-
-
-NO_PYTHON: Final = NoPythonImplementation()
-
-
 class NoPythonImplementationError(RuntimeError):
     pass
 
@@ -58,19 +51,16 @@ def run(
     *,
     binding: NativeBinding[NativeT],
     native: Callable[[NativeT], ResultT],
-    python: Callable[[], ResultT] | NoPythonImplementation,
-    rules: Rules | None = None,
+    python: Callable[[], ResultT],
+    policy: Policy | Decision | None = None,
 ) -> ResultT:
-    selected: Final = decision(context, rules)
-    if isinstance(python, NoPythonImplementation):
-        _require_rust(context, selected)
-        return _required(_attempt_native(context, binding, native), context)
+    selected: Final = _select(context, policy)
     match selected:
-        case Decision.PYTHON:
+        case Python():
             return python()
-        case Decision.RUST_WITH_FALLBACK | Decision.RUST_REQUIRED:
+        case Rust(required=required):
             result: Final = _attempt_native(context, binding, native)
-            if isinstance(result, RustHandled) or selected is Decision.RUST_REQUIRED:
+            if isinstance(result, RustHandled) or required:
                 return _required(result, context)
             return python()
         case _:
@@ -82,30 +72,60 @@ async def arun(
     *,
     binding: NativeBinding[NativeT],
     native: Callable[[NativeT], Awaitable[ResultT]],
-    python: Callable[[], Awaitable[ResultT]] | NoPythonImplementation,
-    rules: Rules | None = None,
+    python: Callable[[], Awaitable[ResultT]],
+    policy: Policy | Decision | None = None,
 ) -> ResultT:
-    selected: Final = decision(context, rules)
-    if isinstance(python, NoPythonImplementation):
-        _require_rust(context, selected)
-        return _required(await _aattempt_native(context, binding, native), context)
+    selected: Final = _select(context, policy)
     match selected:
-        case Decision.PYTHON:
+        case Python():
             return await python()
-        case Decision.RUST_WITH_FALLBACK | Decision.RUST_REQUIRED:
+        case Rust(required=required):
             result: Final = await _aattempt_native(context, binding, native)
-            if isinstance(result, RustHandled) or selected is Decision.RUST_REQUIRED:
+            if isinstance(result, RustHandled) or required:
                 return _required(result, context)
             return await python()
         case _:
             assert_never(selected)
 
 
+def run_native(
+    context: RouteContext,
+    *,
+    binding: NativeBinding[NativeT],
+    native: Callable[[NativeT], ResultT],
+    policy: Policy | Decision | None = None,
+) -> ResultT:
+    """A route with no Python implementation: the catalog must require Rust, and every failure is raised."""
+    _require_rust(context, _select(context, policy))
+    return _required(_attempt_native(context, binding, native), context)
+
+
+async def arun_native(
+    context: RouteContext,
+    *,
+    binding: NativeBinding[NativeT],
+    native: Callable[[NativeT], Awaitable[ResultT]],
+    policy: Policy | Decision | None = None,
+) -> ResultT:
+    _require_rust(context, _select(context, policy))
+    return _required(await _aattempt_native(context, binding, native), context)
+
+
+def _select(context: RouteContext, policy: Policy | Decision | None) -> Decision:
+    match policy:
+        case None:
+            return catalog.decide(context)
+        case Python() | Rust():
+            return policy
+        case _:
+            return catalog.decide(context, MappingProxyType({context.route: policy}))
+
+
 def _require_rust(context: RouteContext, selected: Decision) -> None:
-    if selected is not Decision.RUST_REQUIRED:
+    if selected != Rust(required=True):
         raise NoPythonImplementationError(
-            f"{context.route.value} has no Python implementation, so its catalog rules must resolve to "
-            f"RUST_REQUIRED, but provider={context.provider!r} model={context.model!r} resolved to {selected.name}"
+            f"{context.route.value} has no Python implementation, so its catalog policy must select required Rust, "
+            f"but provider={context.provider!r} model={context.model!r} selected {selected}"
         )
 
 

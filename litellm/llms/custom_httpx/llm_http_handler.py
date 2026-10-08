@@ -192,11 +192,9 @@ from litellm.utils import (
 def _rust_responses_websocket_enabled(
     custom_llm_provider: str | None,
 ) -> bool:
-    from litellm.rust_bridge.catalog import Route, RouteContext, decision
-    from litellm.rust_bridge.configuration import Decision
+    from litellm.rust_bridge.catalog import Route, RouteContext, Rust, decide
 
-    context: Final = RouteContext(Route.RESPONSES, provider=custom_llm_provider)
-    return decision(context) is not Decision.PYTHON
+    return isinstance(decide(RouteContext(Route.RESPONSES, provider=custom_llm_provider)), Rust)
 
 
 from .http_handler import get_shared_realtime_ssl_context, realtime_ssl_for_url

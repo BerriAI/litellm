@@ -6,14 +6,14 @@ adaptive-thinking model without sampling params; Claude Haiku 4.5 is a legacy-th
 """
 
 from collections.abc import Iterator
+from types import MappingProxyType
 from typing import Final
 
 import pytest
 
 import litellm
 from litellm.rust_bridge import catalog
-from litellm.rust_bridge.catalog import Route, RouteRule
-from litellm.rust_bridge.configuration import Rollout
+from litellm.rust_bridge.catalog import Decision, Route, RouteContext
 from tests.test_litellm_rust.support.isolation import rebound
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.requests import MESSAGES, MESSAGES_RESPONSE
@@ -26,7 +26,13 @@ LEGACY_THINKING_MODEL: Final = "anthropic/claude-haiku-4-5"
 
 @pytest.fixture(autouse=True)
 def opt_messages_into_rust() -> Iterator[None]:
-    with rebound(catalog, "RULES", (RouteRule(Route.MESSAGES, Rollout.RUST_OPT_IN), *catalog.RULES)):
+    shipped: Final = catalog.decide
+    policies: Final = MappingProxyType({**catalog.POLICIES, Route.MESSAGES: catalog.opt_in})
+
+    def every_provider(context: RouteContext) -> Decision:
+        return shipped(context, policies)
+
+    with rebound(catalog, "decide", every_provider):
         yield
 
 
@@ -298,7 +304,9 @@ async def test_native_messages_observes_runtime_capabilities_and_separate_caller
 
 @pytest.mark.asyncio
 async def test_native_messages_reads_optional_positional_body_parameters(messages_server: RecordingServer) -> None:
-    from litellm.messages.dispatch import _MESSAGES, _public_request
+    from litellm.messages.dispatch import (
+        _DISPATCH as messages_dispatch,  # pyright: ignore[reportPrivateUsage]  # exercise the request passed to the native boundary
+    )
     from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES
 
     native: Final = NATIVE_AMESSAGES.load()
@@ -306,7 +314,7 @@ async def test_native_messages_reads_optional_positional_body_parameters(message
     metadata: Final = {"user_id": "caller"}
     args: Final = (16, MESSAGES, "anthropic/claude-test", metadata, None, False, "Be brief", 0.25)
     kwargs: Final = {"api_key": "test-key", "api_base": messages_server.base_url}
-    call: Final = _public_request(_MESSAGES, args, kwargs)
+    call: Final = messages_dispatch.request(args, kwargs)
     assert call is not None
 
     await native(call)

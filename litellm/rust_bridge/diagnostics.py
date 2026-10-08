@@ -44,11 +44,9 @@ def _construct(factory: NativeDiagnosticFactory, minimum_custom_key_length: int)
 
 def run(native: Callable[[NativeDiagnosticProcessor], ResultT], python: Callable[[], ResultT]) -> ResultT:
     from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH
-    from litellm.rust_bridge.catalog import LoggerContext, decision
-    from litellm.rust_bridge.configuration import Decision
+    from litellm.rust_bridge import catalog
 
-    selected: Final = decision(LoggerContext())
-    if selected is Decision.PYTHON:
+    if isinstance(catalog.logger(), catalog.Python):
         return python()
     factory: Final = PROCESSOR.load()
     if factory is None:

@@ -3,7 +3,7 @@ from typing import Final
 
 import pytest
 
-from litellm.rust_bridge.public_call import bind, native_call, signature
+from litellm.rust_bridge.public_call import binder, native_call
 
 
 def _messages(
@@ -21,7 +21,7 @@ def _messages(
 def test_native_call_preserves_omission_separately_from_bound_defaults(supplied: Mapping[str, object]) -> None:
     messages: Final[Sequence[object]] = [{"role": "user", "content": "hello"}]
     args: Final = (128, messages, "model", 0.25)
-    fields: Final = bind(signature(_messages), args, supplied)
+    fields: Final = binder(_messages)(args, supplied)
     assert fields is not None
 
     call: Final = native_call(args, supplied, fields)
@@ -44,7 +44,7 @@ def test_native_call_keeps_extra_option_objects_without_nested_kwargs() -> None:
     metadata: Final = {"trace": "caller"}
     supplied: Final = {"metadata": metadata}
     args: Final = (128, messages, "model")
-    fields: Final = bind(signature(_messages), args, supplied)
+    fields: Final = binder(_messages)(args, supplied)
     assert fields is not None
 
     call: Final = native_call(args, supplied, fields)
@@ -59,3 +59,17 @@ def test_native_call_keeps_extra_option_objects_without_nested_kwargs() -> None:
     }
     assert call.bound["metadata"] is metadata
     assert supplied == {"metadata": metadata}
+
+
+@pytest.mark.parametrize(
+    ("args", "kwargs"),
+    (
+        ((128, (), "model"), {"model": "duplicate"}),
+        ((128,), {}),
+        ((), {"unknown": True}),
+    ),
+)
+def test_binder_returns_none_when_the_call_does_not_fit_the_signature(
+    args: tuple[object, ...], kwargs: Mapping[str, object]
+) -> None:
+    assert binder(_messages)(args, kwargs) is None

@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator, Iterator
+from types import MappingProxyType
 from typing import Final
 
 import pytest
@@ -7,8 +8,7 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.rust_bridge import catalog
-from litellm.rust_bridge.catalog import Route, RouteRule
-from litellm.rust_bridge.configuration import Rollout
+from litellm.rust_bridge.catalog import Decision, Route, RouteContext
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
 from tests.test_litellm_rust.support.isolation import rebound
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
@@ -27,7 +27,13 @@ STREAM: Final = ResponseSpec(body=None, events=MESSAGES_EVENTS)
 
 @pytest.fixture(autouse=True)
 def opt_messages_into_rust() -> Iterator[None]:
-    with rebound(catalog, "RULES", (RouteRule(Route.MESSAGES, Rollout.RUST_OPT_IN), *catalog.RULES)):
+    shipped: Final = catalog.decide
+    policies: Final = MappingProxyType({**catalog.POLICIES, Route.MESSAGES: catalog.opt_in})
+
+    def every_provider(context: RouteContext) -> Decision:
+        return shipped(context, policies)
+
+    with rebound(catalog, "decide", every_provider):
         yield
 
 
