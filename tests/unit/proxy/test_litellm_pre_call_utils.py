@@ -7046,6 +7046,23 @@ async def test_add_litellm_data_to_request_scopes_forwarded_x_api_key_to_request
     assert updated["litellm_metadata"].get(FORWARDED_API_KEY_SCOPE_METADATA_KEY) == expected_scope
 
 
+def test_forwarded_api_key_scope_for_includes_the_api_base_in_the_request_body() -> None:
+    from litellm.proxy.litellm_pre_call_utils import _forwarded_api_key_scope_for
+
+    router: Final = litellm.Router(
+        model_list=[{"model_name": "claude", "litellm_params": {"model": "anthropic/claude-haiku-4-5"}}]
+    )
+
+    scope: Final = _forwarded_api_key_scope_for(
+        router, _FORWARDED_CLIENT_KEY, {"model": "claude", "api_base": "https://client-gateway.example"}, None
+    )
+
+    assert scope == ForwardedApiKeyScope(
+        audiences=(("anthropic", "https://client-gateway.example"),),
+        key_sha256=hashlib.sha256(_FORWARDED_CLIENT_KEY.encode()).hexdigest(),
+    )
+
+
 @pytest.mark.parametrize(
     "header, expected_redacted",
     [

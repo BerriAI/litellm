@@ -7,6 +7,7 @@ from litellm.router_utils.clientside_credential_handler import (
     FORWARDED_API_KEY_SCOPE_METADATA_KEY,
     ForwardedApiKeyScope,
     deployment_audience,
+    dispatched_audiences,
     forwarded_api_key_scope,
     headers_without_forwarded_api_key,
     is_forwarded_api_key,
@@ -47,6 +48,36 @@ def test_forwarded_api_key_scope_names_provider_and_normalized_api_base_with_the
     assert scope == ForwardedApiKeyScope(
         audiences=(("anthropic", "https://gateway.example/anthropic"), ("bedrock", "")),
         key_sha256=_ANTHROPIC_SCOPE.key_sha256,
+    )
+
+
+@pytest.mark.parametrize(
+    "request_kwargs, expected_audiences",
+    [
+        ({}, {("anthropic", "")}),
+        ({"api_key": _CLIENT_KEY}, {("anthropic", "")}),
+        ({"api_base": "https://other-gateway.example/"}, {("anthropic", "https://other-gateway.example")}),
+        (
+            {"api_base": "https://other-gateway.example/", "api_key": _CLIENT_KEY},
+            {("anthropic", "https://other-gateway.example")},
+        ),
+        (
+            {"base_url": "https://other-gateway.example"},
+            {("anthropic", ""), ("anthropic", "https://other-gateway.example")},
+        ),
+    ],
+)
+def test_dispatched_audiences_apply_the_request_api_base_and_base_url_to_the_deployment(
+    request_kwargs: dict[str, object], expected_audiences: set[tuple[str, str]]
+) -> None:
+    assert dispatched_audiences(_ANTHROPIC, request_kwargs) == expected_audiences
+
+
+def test_forwarded_api_key_scope_includes_the_api_base_the_client_chose() -> None:
+    scope: Final = forwarded_api_key_scope(_CLIENT_KEY, (_ANTHROPIC,), {"api_base": "https://client-gateway.example"})
+
+    assert scope == ForwardedApiKeyScope(
+        audiences=(("anthropic", "https://client-gateway.example"),), key_sha256=_ANTHROPIC_SCOPE.key_sha256
     )
 
 

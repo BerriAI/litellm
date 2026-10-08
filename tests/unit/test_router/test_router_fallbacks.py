@@ -781,3 +781,77 @@ async def test_admin_api_key_on_a_dict_fallback_target_survives_the_forwarded_ke
     bedrock_headers: Final = bedrock_route.calls.last.request.headers
     assert bedrock_headers["authorization"] == "Bearer bedrock-admin-bearer"
     assert _CLIENT_KEY not in str(bedrock_headers.raw)
+
+
+@pytest.mark.asyncio
+async def test_forwarded_api_key_does_not_reach_a_dict_fallback_that_overrides_api_base(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=_overloaded())
+    gateway_route: Final = respx_mock.post("https://other-gateway.example/anthropic/v1/messages").mock(
+        return_value=_message()
+    )
+    router: Final = Router(
+        num_retries=0,
+        fallbacks=[{"claude": [{"model": "claude-fallback", "api_base": "https://other-gateway.example/anthropic"}]}],
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "sk-ant-deployment-key"},
+            },
+            {
+                "model_name": "claude-fallback",
+                "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "gateway-deployment-key"},
+            },
+        ],
+    )
+
+    await _send_forwarded_client_key(router)
+
+    gateway_headers: Final = gateway_route.calls.last.request.headers
+    assert gateway_headers["x-api-key"] == "gateway-deployment-key"
+    assert _CLIENT_KEY not in str(gateway_headers.raw)
+
+
+@pytest.mark.asyncio
+async def test_forwarded_api_key_still_reaches_an_in_scope_hop_after_an_out_of_scope_fallback(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    anthropic_route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=[_overloaded(), _message()]
+    )
+    bedrock_route: Final = respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com").mock(
+        return_value=httpx.Response(500, json={"message": "boom"})
+    )
+    router: Final = Router(
+        num_retries=0,
+        fallbacks=[{"claude": ["claude-bedrock", "claude-backup"]}],
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "sk-ant-deployment-key"},
+            },
+            {
+                "model_name": "claude-bedrock",
+                "litellm_params": {
+                    "model": "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "aws_region_name": "us-east-1",
+                    "aws_access_key_id": "AKIAEXAMPLEEXAMPLE00",
+                    "aws_secret_access_key": "example-secret",
+                },
+            },
+            {
+                "model_name": "claude-backup",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-ant-other-deployment-key"},
+            },
+        ],
+    )
+
+    await _send_forwarded_client_key(router)
+
+    assert [call.request.headers["x-api-key"] for call in anthropic_route.calls] == [_CLIENT_KEY, _CLIENT_KEY]
+    bedrock_headers: Final = bedrock_route.calls.last.request.headers
+    assert "x-api-key" not in bedrock_headers
+    assert _CLIENT_KEY not in str(bedrock_headers.raw)

@@ -12,6 +12,7 @@ Ensures cooldowns are applied correctly.
 """
 
 from collections.abc import Iterable, Mapping
+from types import MappingProxyType
 from typing import Annotated, Final, NamedTuple
 
 from pydantic import Field, TypeAdapter
@@ -31,6 +32,7 @@ DEPLOYMENT_LITELLM_PARAMS: Final[TypeAdapter[Mapping[str, object] | LiteLLM_Para
 _FORWARDED_API_KEY_HEADER: Final = "x-api-key"
 _FORWARDED_HEADER_KWARGS: Final = ("headers", "extra_headers")
 _METADATA_KWARGS: Final = ("litellm_metadata", "metadata")
+_NO_REQUEST_OVERRIDES: Final[Mapping[str, object]] = MappingProxyType({})
 
 # Set on a deployment whose api_base was client-redirected, so the Anthropic auth path refuses to
 # mint a federation token there even when WIF is configured only through ANTHROPIC_* env vars (which
@@ -149,25 +151,41 @@ class ForwardedApiKeyScope(NamedTuple):
     key_sha256: str
 
 
+def _as_mapping(litellm_params: Mapping[str, object] | LiteLLM_Params) -> Mapping[str, object]:
+    if isinstance(litellm_params, Mapping):
+        return litellm_params
+    return {
+        "model": litellm_params.model,
+        "custom_llm_provider": litellm_params.custom_llm_provider,
+        "api_base": litellm_params.api_base,
+    }
+
+
 def deployment_audience(litellm_params: Mapping[str, object] | LiteLLM_Params) -> tuple[str, str] | None:
     """The (provider, api_base) a deployment sends credentials to, or None if the provider can't be resolved.
 
     A trailing slash on api_base is dropped and an unset api_base is "", so the same endpoint compares equal.
     """
-    params: Final = (
-        litellm_params
-        if isinstance(litellm_params, Mapping)
-        else {
-            "model": litellm_params.model,
-            "custom_llm_provider": litellm_params.custom_llm_provider,
-            "api_base": litellm_params.api_base,
-        }
-    )
+    params: Final = _as_mapping(litellm_params)
     provider: Final = provider_for_generic_call(params)
     if provider is None:
         return None
     api_base: Final = params.get("api_base")
     return (provider, api_base.rstrip("/") if isinstance(api_base, str) else "")
+
+
+def dispatched_audiences(
+    litellm_params: Mapping[str, object] | LiteLLM_Params, request_kwargs: Mapping[str, object]
+) -> frozenset[tuple[str, str] | None]:
+    """Every (provider, api_base) a call can reach once the request's api_base/base_url override the deployment's.
+
+    base_url counts alongside api_base because litellm.completion lets it win, while other entry points prefer api_base.
+    """
+    overrides: Final = {key: request_kwargs[key] for key in clientside_credential_keys if key in request_kwargs}
+    effective: Final = {**_as_mapping(litellm_params), **overrides}
+    base_url: Final = effective.get("base_url")
+    via_base_url: Final = () if base_url is None else (deployment_audience({**effective, "api_base": base_url}),)
+    return frozenset((deployment_audience(effective), *via_base_url))
 
 
 def _is_strategy_router(litellm_params: Mapping[str, object]) -> bool:
@@ -177,9 +195,13 @@ def _is_strategy_router(litellm_params: Mapping[str, object]) -> bool:
 
 
 def forwarded_api_key_scope(
-    api_key: str, deployment_params: Iterable[Mapping[str, object]]
+    api_key: str,
+    deployment_params: Iterable[Mapping[str, object]],
+    request_kwargs: Mapping[str, object] = _NO_REQUEST_OVERRIDES,
 ) -> ForwardedApiKeyScope | None:
     """Build the scope for a client api_key forwarded to the model group whose deployments are given.
+
+    An api_base/base_url in `request_kwargs` is applied to each deployment, so the endpoint the client chose is in scope.
 
     Returns None when the audiences can't be known up front (no deployments, a strategy router, or a
     deployment whose provider can't be resolved). The request is then left unscoped, as before this check.
@@ -187,7 +209,9 @@ def forwarded_api_key_scope(
     params: Final = tuple(deployment_params)
     if not params or any(_is_strategy_router(litellm_params) for litellm_params in params):
         return None
-    audiences: Final = tuple(deployment_audience(litellm_params) for litellm_params in params)
+    audiences: Final = frozenset[tuple[str, str] | None]().union(
+        *(dispatched_audiences(litellm_params, request_kwargs) for litellm_params in params)
+    )
     if None in audiences:
         return None
     from litellm.proxy._types import hash_token

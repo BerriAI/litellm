@@ -2643,7 +2643,7 @@ async def add_litellm_data_to_request(
         _forwarded_api_key_scope_for(
             llm_router,
             _headers["x-api-key"],
-            STR_KEYED_MAPPING.validate_python(data).get("model"),
+            STR_KEYED_MAPPING.validate_python(data),
             user_api_key_dict.team_id,
         )
         if _forwarded_client_api_key
@@ -2699,12 +2699,13 @@ async def add_litellm_data_to_request(
 
 
 def _forwarded_api_key_scope_for(
-    llm_router: Router | None, api_key: str, model: object, team_id: str | None
+    llm_router: Router | None, api_key: str, request_data: Mapping[str, object], team_id: str | None
 ) -> ForwardedApiKeyScope | None:
     """Scope a forwarded client api_key to the deployments of the model group the client requested.
 
     The router later drops the key on any deployment outside that scope, such as a fallback to another provider.
     """
+    model: Final = request_data.get("model")
     if llm_router is None or not isinstance(model, str):
         return None
     return forwarded_api_key_scope(
@@ -2713,6 +2714,7 @@ def _forwarded_api_key_scope_for(
             deployment["litellm_params"]
             for deployment in llm_router.get_model_list(model_name=model, team_id=team_id) or ()
         ),
+        request_data,
     )
 
 

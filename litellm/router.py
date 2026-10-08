@@ -187,7 +187,7 @@ from litellm.router_utils.client_initalization_utils import InitalizeCachedClien
 from litellm.router_utils.clientside_credential_handler import (
     DEPLOYMENT_LITELLM_PARAMS,
     STR_KEYED_MAPPING,
-    deployment_audience,
+    dispatched_audiences,
     get_dynamic_litellm_params,
     headers_without_forwarded_api_key,
     is_clientside_credential,
@@ -4162,15 +4162,17 @@ class Router:
         deployment_model_name: Final = deployment["model_name"]
         request_view: Final = STR_KEYED_MAPPING.validate_python(kwargs)
         forwarded_scope: Final = stamped_forwarded_api_key_scope(request_view)
-        dispatched_audience: Final = (
-            None
+        dispatched: Final = (
+            frozenset[tuple[str, str] | None]()
             if forwarded_scope is None
-            else deployment_audience(DEPLOYMENT_LITELLM_PARAMS.validate_python(deployment["litellm_params"]))
+            else dispatched_audiences(
+                DEPLOYMENT_LITELLM_PARAMS.validate_python(deployment["litellm_params"]), request_view
+            )
         )
-        if forwarded_scope is not None and dispatched_audience not in forwarded_scope.audiences:
+        if forwarded_scope is not None and not dispatched.issubset(forwarded_scope.audiences):
             verbose_router_logger.debug(
-                "dropping forwarded api_key: deployment audience %s outside %s",
-                dispatched_audience,
+                "dropping forwarded api_key: dispatched audiences %s outside %s",
+                dispatched,
                 forwarded_scope.audiences,
             )
             if is_forwarded_api_key(request_view.get("api_key"), forwarded_scope):
