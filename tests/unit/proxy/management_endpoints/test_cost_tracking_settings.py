@@ -14,7 +14,7 @@ from pydantic import ValidationError
 
 import litellm
 from litellm._internal_context import pinned_billing_time
-from litellm.proxy._types import CostEstimateRequest
+from litellm.proxy._types import CostEstimateRequest, ProxyRuntimeConfig
 from litellm.proxy.management_endpoints.cost_tracking_settings import router
 from litellm.proxy.proxy_server import app
 
@@ -32,7 +32,7 @@ class TestCostTrackingSettings:
         # Mock the proxy_config to return a config with cost_discount_config
         mock_proxy_config = AsyncMock()
         mock_proxy_config.get_config = AsyncMock(
-            return_value={
+            return_value=ProxyRuntimeConfig.from_resolved({
                 "litellm_settings": {
                     "cost_discount_config": {
                         "vertex_ai": 0.05,
@@ -40,7 +40,7 @@ class TestCostTrackingSettings:
                         "openai": 0.01,
                     }
                 }
-            }
+            })
         )
 
         mock_prisma_client = MagicMock()
@@ -80,7 +80,7 @@ class TestCostTrackingSettings:
         """
         # Mock the proxy_config to return a config without cost_discount_config
         mock_proxy_config = AsyncMock()
-        mock_proxy_config.get_config = AsyncMock(return_value={"litellm_settings": {}})
+        mock_proxy_config.get_config = AsyncMock(return_value=ProxyRuntimeConfig.from_resolved({"litellm_settings": {}}))
 
         mock_prisma_client = MagicMock()
 
@@ -114,7 +114,7 @@ class TestCostTrackingSettings:
         """
         # Mock the proxy_config
         mock_proxy_config = AsyncMock()
-        mock_proxy_config.get_config = AsyncMock(return_value={"litellm_settings": {}})
+        mock_proxy_config.get_config = AsyncMock(return_value=ProxyRuntimeConfig.from_resolved({"litellm_settings": {}}))
         mock_proxy_config.save_config = AsyncMock()
 
         mock_prisma_client = MagicMock()
@@ -705,7 +705,7 @@ class TestBlockRequestsForModelsWithoutPricing:
     @pytest.mark.asyncio
     async def test_patch_persists_and_updates_flag(self):
         mock_proxy_config = AsyncMock()
-        mock_proxy_config.get_config = AsyncMock(return_value={"litellm_settings": {}})
+        mock_proxy_config.get_config = AsyncMock(return_value=ProxyRuntimeConfig.from_resolved({"litellm_settings": {}}))
         mock_proxy_config.save_config = AsyncMock()
 
         with (
@@ -725,7 +725,7 @@ class TestBlockRequestsForModelsWithoutPricing:
             assert litellm.block_requests_for_models_without_pricing is True
 
         saved_config = mock_proxy_config.save_config.call_args.kwargs["new_config"]
-        assert saved_config["litellm_settings"]["block_requests_for_models_without_pricing"] is True
+        assert saved_config.litellm_settings["block_requests_for_models_without_pricing"] is True
 
     def test_peer_workers_pick_up_persisted_flag_on_config_reload(self):
         """A PATCH only mutates the flag on the worker that served it; peer workers must pick the

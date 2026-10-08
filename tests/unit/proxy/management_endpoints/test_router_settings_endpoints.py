@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from litellm.proxy import proxy_server
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, ProxyRuntimeConfig, UserAPIKeyAuth
 from litellm.proxy.config_resolvers import SettingsStore
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     RouterFieldsResponse,
@@ -31,9 +31,9 @@ class _StubProxyConfig:
         self.router_settings: Final = router_settings
         self._config_router_settings: Final = dict(config_router_settings)
 
-    async def get_config(self, config_file_path: str | None = None) -> dict[str, Any]:
+    async def get_config(self, config_file_path: str | None = None) -> ProxyRuntimeConfig:
         del config_file_path
-        return {"router_settings": dict(self._config_router_settings)}
+        return ProxyRuntimeConfig.from_resolved({"router_settings": dict(self._config_router_settings)})
 
 
 class TestRouterSettingsEndpoints:

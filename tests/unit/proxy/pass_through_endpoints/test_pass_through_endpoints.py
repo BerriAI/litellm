@@ -8178,7 +8178,9 @@ async def test_a_settings_write_keeps_the_config_file_pass_throughs(tmp_path, mo
     config: Final = await proxy.proxy_config.get_config(config_file_path=proxy.config_path)
 
     await proxy.proxy_config.save_config(
-        new_config={**config, "general_settings": {**config["general_settings"], "max_parallel_requests": 7}}
+        new_config=config.with_section(
+            "general_settings", {**config.general_settings, "max_parallel_requests": 7}
+        )
     )
 
     saved_general_settings: Final = yaml.safe_load(open(proxy.config_path))["general_settings"]

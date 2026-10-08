@@ -15,6 +15,7 @@ from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TeamTable,
     LitellmUserRoles,
+    ProxyRuntimeConfig,
     UserAPIKeyAuth,
 )
 
@@ -52,7 +53,7 @@ async def test_list_search_tools_db_only(monkeypatch):
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
             # Mock proxy_config
             mock_proxy_config = MagicMock()
-            mock_proxy_config.get_config = AsyncMock(return_value={})
+            mock_proxy_config.get_config = AsyncMock(return_value=ProxyRuntimeConfig.from_resolved({}))
             mock_proxy_config.parse_search_tools = MagicMock(return_value=None)
             with patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config):
                 # Mock auth
@@ -115,7 +116,9 @@ async def test_list_search_tools_config_only(monkeypatch):
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
             # Mock proxy_config
             mock_proxy_config = MagicMock()
-            mock_proxy_config.get_config = AsyncMock(return_value={"search_tools": config_tools})
+            mock_proxy_config.get_config = AsyncMock(
+                return_value=ProxyRuntimeConfig.from_resolved({"search_tools": config_tools})
+            )
             mock_proxy_config.parse_search_tools = MagicMock(return_value=config_tools)
             with patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config):
                 # Mock auth
@@ -189,7 +192,9 @@ async def test_list_search_tools_filters_duplicate_config_tools(monkeypatch):
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
             # Mock proxy_config
             mock_proxy_config = MagicMock()
-            mock_proxy_config.get_config = AsyncMock(return_value={"search_tools": config_tools})
+            mock_proxy_config.get_config = AsyncMock(
+                return_value=ProxyRuntimeConfig.from_resolved({"search_tools": config_tools})
+            )
             mock_proxy_config.parse_search_tools = MagicMock(return_value=config_tools)
             with patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config):
                 # Mock auth
@@ -289,7 +294,7 @@ async def test_list_search_tools_datetime_conversion(monkeypatch):
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
             # Mock proxy_config
             mock_proxy_config = MagicMock()
-            mock_proxy_config.get_config = AsyncMock(return_value={})
+            mock_proxy_config.get_config = AsyncMock(return_value=ProxyRuntimeConfig.from_resolved({}))
             mock_proxy_config.parse_search_tools = MagicMock(return_value=None)
             with patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config):
                 # Mock auth
@@ -490,7 +495,7 @@ async def test_list_search_tools_db_masking_sensitive_values(monkeypatch):
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
             # Mock proxy_config
             mock_proxy_config = MagicMock()
-            mock_proxy_config.get_config = AsyncMock(return_value={})
+            mock_proxy_config.get_config = AsyncMock(return_value=ProxyRuntimeConfig.from_resolved({}))
             mock_proxy_config.parse_search_tools = MagicMock(return_value=None)
             with patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config):
                 # Mock auth
@@ -593,7 +598,7 @@ def _mock_search_tool_backend(db_tools):
     mock_registry = MagicMock()
     mock_registry.get_all_search_tools_from_db = AsyncMock(return_value=db_tools)
     mock_proxy_config = MagicMock()
-    mock_proxy_config.get_config = AsyncMock(return_value={})
+    mock_proxy_config.get_config = AsyncMock(return_value=ProxyRuntimeConfig.from_resolved({}))
     mock_proxy_config.parse_search_tools = MagicMock(return_value=None)
     with (
         patch(
@@ -989,7 +994,7 @@ def _live_router_and_db(db_rows: list):
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
-    proxy_config.update_config_state({})
+    proxy_config.update_config_state(ProxyRuntimeConfig())
     fake_router = MagicMock()
     fake_router.search_tools = list(db_rows)
 

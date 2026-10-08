@@ -19,6 +19,7 @@ from litellm.proxy.management_endpoints.fallback_management_endpoints import (
     delete_fallback,
     get_fallback,
 )
+from litellm.proxy._types import ProxyRuntimeConfig
 
 
 class TestFallbackCreateRequest:
@@ -130,7 +131,7 @@ class TestCreateFallback:
     def mock_proxy_config(self):
         """Create a mock proxy config"""
         config = MagicMock()
-        config.get_config = AsyncMock(return_value={"router_settings": {}})
+        config.get_config = AsyncMock(return_value=ProxyRuntimeConfig.from_resolved({"router_settings": {}}))
         return config
 
     @pytest.fixture
@@ -438,11 +439,11 @@ class TestDeleteFallback:
         """Create a mock proxy config"""
         config = MagicMock()
         config.get_config = AsyncMock(
-            return_value={
+            return_value=ProxyRuntimeConfig.from_resolved({
                 "router_settings": {
                     "fallbacks": [{"gpt-3.5-turbo": ["gpt-4", "claude-3-haiku"]}]
                 }
-            }
+            })
         )
         return config
 

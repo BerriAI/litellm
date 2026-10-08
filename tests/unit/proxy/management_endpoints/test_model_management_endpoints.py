@@ -22,6 +22,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     Member,
     ProxyException,
+    ProxyRuntimeConfig,
     ReconcileOutcome,
     UserAPIKeyAuth,
 )
@@ -1534,7 +1535,7 @@ class TestUpdatePublicModelGroups:
         async def mock_get_config(*args, **kwargs):
             # This simulates _update_config_from_db calling setattr(litellm, "public_model_groups", old_value)
             litellm.public_model_groups = old_db_models
-            return {"litellm_settings": {"public_model_groups": old_db_models}}
+            return ProxyRuntimeConfig.from_resolved({"litellm_settings": {"public_model_groups": old_db_models}})
 
         mock_proxy_config = MagicMock()
         mock_proxy_config.get_config = mock_get_config
@@ -1590,7 +1591,7 @@ class TestUpdatePublicModelGroups:
 
         async def mock_get_config(*args, **kwargs):
             litellm.public_model_groups_links = old_links
-            return {"litellm_settings": {"public_model_groups_links": old_links}}
+            return ProxyRuntimeConfig.from_resolved({"litellm_settings": {"public_model_groups_links": old_links}})
 
         mock_proxy_config = MagicMock()
         mock_proxy_config.get_config = mock_get_config

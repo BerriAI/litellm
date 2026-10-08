@@ -5,6 +5,7 @@ from collections.abc import Iterator, Mapping
 import pytest
 
 from litellm.proxy import proxy_server
+from litellm.proxy._types import ProxyRuntimeConfig
 from litellm.proxy.bug_report_config import build_proxy_bug_report, build_proxy_environment_report, safe_config_lines
 
 CUSTOMER_STRINGS = (
@@ -183,7 +184,7 @@ def test_malformed_sections_produce_no_lines():
 @pytest.fixture
 def loaded_proxy_config(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     previous_config = proxy_server.proxy_config.get_config_state()
-    proxy_server.proxy_config.update_config_state(config=CUSTOMER_CONFIG)
+    proxy_server.proxy_config.update_config_state(config=ProxyRuntimeConfig.from_resolved(CUSTOMER_CONFIG))
     monkeypatch.setattr(proxy_server, "general_settings", dict(CUSTOMER_GENERAL_SETTINGS))
     yield
     proxy_server.proxy_config.update_config_state(config=previous_config)

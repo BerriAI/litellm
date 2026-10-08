@@ -44,6 +44,7 @@ from litellm.proxy._types import (
     MCPTransport,
     MCPUserCredentialResponse,
     NewMCPServerRequest,
+    ProxyRuntimeConfig,
     UpdateMCPServerRequest,
     UserAPIKeyAuth,
 )
@@ -280,17 +281,15 @@ async def test_mcp_publication_updates_runtime_only_after_successful_save(
     manager: Final = MCPServerManager()
     server: Final = generate_mock_mcp_server_config_record(server_id="new-server")
     manager.config_mcp_servers = {server.server_id: server}
-    expected_config: Final = {"litellm_settings": {"drop_params": True, "public_mcp_servers": selected_ids}}
-
-    async def save_config(new_config: Mapping[str, object]) -> None:
+    async def save_config(new_config: ProxyRuntimeConfig) -> None:
         assert litellm.public_mcp_servers is previous_ids
-        assert new_config == expected_config
+        assert new_config.litellm_settings == {"drop_params": True, "public_mcp_servers": selected_ids}
         if save_error is not None:
             raise save_error
 
     save: Final = AsyncMock(side_effect=save_config)
     proxy_config: Final = SimpleNamespace(
-        get_config=AsyncMock(return_value={"litellm_settings": {"drop_params": True}}),
+        get_config=AsyncMock(return_value=ProxyRuntimeConfig.from_resolved({"litellm_settings": {"drop_params": True}})),
         save_config=save,
     )
     request: Final = MakeMCPServersPublicRequest(mcp_server_ids=selected_ids)
@@ -316,7 +315,7 @@ async def test_mcp_publication_updates_runtime_only_after_successful_save(
     if error_status in (403, 404):
         save.assert_not_awaited()
     else:
-        save.assert_awaited_once_with(new_config=expected_config)
+        save.assert_awaited_once()
 
 
 class TestMCPCredentialsTokenExchangeProfile:

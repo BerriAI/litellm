@@ -21,6 +21,7 @@ from litellm.proxy._types import (
     NewUserResponse,
     ProxyErrorTypes,
     ProxyException,
+    ProxyRuntimeConfig,
     UserAPIKeyAuth,
 )
 from litellm.proxy.management_endpoints.scim.scim_v2 import (
@@ -417,7 +418,7 @@ async def test_scim_create_user_respects_default_role_set_via_ui(mocker, monkeyp
     # Step 2: Simulate the UI saving "Internal User (Create/Delete/View)" as default role
     # Mock the proxy_config and store_model_in_db that _update_litellm_setting needs
     mock_proxy_config = mocker.MagicMock()
-    mock_proxy_config.get_config = AsyncMock(return_value={"litellm_settings": {}})
+    mock_proxy_config.get_config = AsyncMock(return_value=ProxyRuntimeConfig.from_resolved({"litellm_settings": {}}))
     mock_proxy_config.save_config = AsyncMock()
 
     mocker.patch(
@@ -1380,7 +1381,7 @@ async def test_update_user_without_groups_preserves_memberships_and_role(mocker,
     from litellm.proxy.proxy_server import proxy_config
 
     async def mock_get_config():
-        return {"litellm_settings": {"scim_admin_group": "litellm-admins"}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {"scim_admin_group": "litellm-admins"}})
 
     monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
     monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
@@ -1939,7 +1940,7 @@ async def test_create_group_with_nonexistent_users_rejects(mocker, monkeypatch):
 
     # Mock the feature flag to False (SCIM 2.0 strict mode)
     async def mock_get_config():
-        return {"litellm_settings": {"scim_upsert_user": False}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {"scim_upsert_user": False}})
 
     from litellm.proxy.proxy_server import proxy_config
 
@@ -2008,7 +2009,7 @@ async def test_update_group_with_nonexistent_users_rejects(mocker, monkeypatch):
 
     # Mock the feature flag to False (SCIM 2.0 strict mode)
     async def mock_get_config():
-        return {"litellm_settings": {"scim_upsert_user": False}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {"scim_upsert_user": False}})
 
     from litellm.proxy.proxy_server import proxy_config
 
@@ -2098,7 +2099,7 @@ async def test_create_group_with_nonexistent_users_creates_when_flag_true(mocker
 
     # Mock the feature flag to True (backward compatible mode)
     async def mock_get_config():
-        return {"litellm_settings": {"scim_upsert_user": True}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {"scim_upsert_user": True}})
 
     from litellm.proxy.proxy_server import proxy_config
 
@@ -2192,7 +2193,7 @@ async def test_extract_group_member_ids_with_flag_true_creates_users(mocker, mon
 
     # Mock the feature flag to True (backward compatible mode)
     async def mock_get_config():
-        return {"litellm_settings": {"scim_upsert_user": True}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {"scim_upsert_user": True}})
 
     from litellm.proxy.proxy_server import proxy_config
 
@@ -2261,7 +2262,7 @@ async def test_extract_group_member_ids_with_flag_false_rejects(mocker, monkeypa
 
     # Mock the feature flag to False (SCIM 2.0 strict mode)
     async def mock_get_config():
-        return {"litellm_settings": {"scim_upsert_user": False}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {"scim_upsert_user": False}})
 
     from litellm.proxy.proxy_server import proxy_config
 
@@ -2320,7 +2321,7 @@ async def test_process_group_patch_operations_with_flag_true_creates_users(mocke
 
     # Mock the feature flag to True (backward compatible mode)
     async def mock_get_config():
-        return {"litellm_settings": {"scim_upsert_user": True}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {"scim_upsert_user": True}})
 
     from litellm.proxy.proxy_server import proxy_config
 
@@ -2377,7 +2378,7 @@ async def test_process_group_patch_operations_with_flag_false_rejects(mocker, mo
 
     # Mock the feature flag to False (SCIM 2.0 strict mode)
     async def mock_get_config():
-        return {"litellm_settings": {"scim_upsert_user": False}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {"scim_upsert_user": False}})
 
     from litellm.proxy.proxy_server import proxy_config
 
@@ -2426,7 +2427,7 @@ async def test_create_user_grants_admin_when_in_scim_admin_group(mocker, monkeyp
     from litellm.proxy.proxy_server import proxy_config
 
     async def mock_get_config():
-        return {"litellm_settings": {"scim_admin_group": "litellm-admins"}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {"scim_admin_group": "litellm-admins"}})
 
     monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
     monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
@@ -2471,7 +2472,7 @@ async def test_create_user_keeps_default_when_not_in_scim_admin_group(mocker, mo
     from litellm.proxy.proxy_server import proxy_config
 
     async def mock_get_config():
-        return {"litellm_settings": {"scim_admin_group": "litellm-admins"}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {"scim_admin_group": "litellm-admins"}})
 
     monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
     monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
@@ -2517,7 +2518,7 @@ async def test_update_user_demotes_admin_when_removed_from_scim_admin_group(mock
     from litellm.proxy.proxy_server import proxy_config
 
     async def mock_get_config():
-        return {"litellm_settings": {"scim_admin_group": "litellm-admins"}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {"scim_admin_group": "litellm-admins"}})
 
     monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
     monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
@@ -2576,7 +2577,7 @@ async def test_update_user_does_not_force_role_when_scim_admin_group_unset(mocke
     from litellm.proxy.proxy_server import proxy_config
 
     async def mock_get_config():
-        return {"litellm_settings": {}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {}})
 
     monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
     monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
@@ -2636,7 +2637,7 @@ async def test_update_user_demotes_when_default_params_lack_user_role(mocker, mo
     from litellm.proxy.proxy_server import proxy_config
 
     async def mock_get_config():
-        return {"litellm_settings": {"scim_admin_group": "litellm-admins"}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {"scim_admin_group": "litellm-admins"}})
 
     monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
     monkeypatch.setattr("litellm.default_internal_user_params", {"max_budget": 10}, raising=False)
@@ -2695,7 +2696,7 @@ async def test_patch_user_demotes_admin_when_removed_from_scim_admin_group(mocke
     from litellm.proxy.proxy_server import proxy_config
 
     async def mock_get_config():
-        return {"litellm_settings": {"scim_admin_group": "litellm-admins"}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {"scim_admin_group": "litellm-admins"}})
 
     monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
     monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
@@ -2762,7 +2763,7 @@ async def test_patch_user_grants_admin_by_team_display_name(mocker, monkeypatch)
     from litellm.proxy.proxy_server import proxy_config
 
     async def mock_get_config():
-        return {"litellm_settings": {"scim_admin_group": "LiteLLM Admins"}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {"scim_admin_group": "LiteLLM Admins"}})
 
     monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
     monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
@@ -2851,7 +2852,7 @@ async def test_recompute_scim_member_roles_demotes_when_not_in_admin_group(mocke
     from litellm.proxy.proxy_server import proxy_config
 
     async def mock_get_config():
-        return {"litellm_settings": {"scim_admin_group": "litellm-admins"}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {"scim_admin_group": "litellm-admins"}})
 
     monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
     monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
@@ -2871,7 +2872,7 @@ async def test_recompute_scim_member_roles_grants_when_in_admin_group(mocker, mo
     from litellm.proxy.proxy_server import proxy_config
 
     async def mock_get_config():
-        return {"litellm_settings": {"scim_admin_group": "litellm-admins"}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {"scim_admin_group": "litellm-admins"}})
 
     monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
     monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
@@ -2891,7 +2892,7 @@ async def test_recompute_scim_member_roles_noop_when_admin_group_unset(mocker, m
     from litellm.proxy.proxy_server import proxy_config
 
     async def mock_get_config():
-        return {"litellm_settings": {}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {}})
 
     monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
 
@@ -3153,7 +3154,7 @@ async def test_create_user_existing_email_upsert_demotes_when_admin_group_set(mo
     from litellm.proxy.proxy_server import proxy_config
 
     async def mock_get_config():
-        return {"litellm_settings": {"scim_admin_group": "litellm-admins"}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {"scim_admin_group": "litellm-admins"}})
 
     monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
     monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
@@ -3379,7 +3380,7 @@ async def test_process_group_patch_operations_add_retains_existing_members(mocke
     """
 
     async def mock_get_config():
-        return {"litellm_settings": {"scim_upsert_user": True}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {"scim_upsert_user": True}})
 
     from litellm.proxy.proxy_server import proxy_config
 
@@ -3417,7 +3418,7 @@ async def test_process_group_patch_operations_remove_uses_members_with_roles(moc
     member leaves the rest of the team intact rather than emptying it."""
 
     async def mock_get_config():
-        return {"litellm_settings": {"scim_upsert_user": True}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {"scim_upsert_user": True}})
 
     from litellm.proxy.proxy_server import proxy_config
 
@@ -4072,7 +4073,7 @@ def scim_upsert_user_enabled(monkeypatch):
     from litellm.proxy.proxy_server import proxy_config
 
     async def mock_get_config():
-        return {"litellm_settings": {"scim_upsert_user": True}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {"scim_upsert_user": True}})
 
     monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
 
@@ -4082,7 +4083,7 @@ def scim_upsert_user_disabled(monkeypatch):
     from litellm.proxy.proxy_server import proxy_config
 
     async def mock_get_config():
-        return {"litellm_settings": {"scim_upsert_user": False}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {"scim_upsert_user": False}})
 
     monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
 

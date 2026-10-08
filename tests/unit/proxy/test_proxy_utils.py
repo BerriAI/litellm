@@ -16,7 +16,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, ProxyRuntimeConfig, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     check_complete_credentials,
     is_request_body_safe,
@@ -1287,18 +1287,20 @@ def test_proxy_config_state_post_init_callback_call(monkeypatch):
     pc = ProxyConfig()
 
     pc.update_config_state(
-        config={
-            "litellm_settings": {
-                "default_team_settings": [
-                    {
-                        "team_id": "test",
-                        "success_callback": ["langfuse"],
-                        "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY",
-                        "langfuse_secret": "os.environ/LANGFUSE_SECRET_KEY",
-                    }
-                ]
+        config=ProxyRuntimeConfig.from_resolved(
+            {
+                "litellm_settings": {
+                    "default_team_settings": [
+                        {
+                            "team_id": "test",
+                            "success_callback": ["langfuse"],
+                            "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY",
+                            "langfuse_secret": "os.environ/LANGFUSE_SECRET_KEY",
+                        }
+                    ]
+                }
             }
-        }
+        )
     )
 
     callback_metadata = LiteLLMProxyRequestSetup.add_team_based_callbacks_from_config(
@@ -1312,7 +1314,7 @@ def test_proxy_config_state_post_init_callback_call(monkeypatch):
     assert callback_metadata.callback_vars["langfuse_secret"] == "test_secret_key"
 
     config = pc.get_config_state()
-    assert config["litellm_settings"]["default_team_settings"][0]["team_id"] == "test"
+    assert config.litellm_settings["default_team_settings"][0]["team_id"] == "test"
 
 
 @pytest.mark.asyncio
@@ -1330,18 +1332,20 @@ async def test_default_team_settings_newrelic_resolves_traces_and_metrics():
     from litellm.proxy.proxy_server import ProxyConfig
 
     pc = ProxyConfig()
-    pc.config = {
-        "litellm_settings": {
-            "default_team_settings": [
-                {
-                    "team_id": "team-a",
-                    "success_callback": ["newrelic"],
-                    "newrelic_api_key": "team-a-ingest-key",
-                    "newrelic_region": "eu",
-                }
-            ]
+    pc.config = ProxyRuntimeConfig.from_resolved(
+        {
+            "litellm_settings": {
+                "default_team_settings": [
+                    {
+                        "team_id": "team-a",
+                        "success_callback": ["newrelic"],
+                        "newrelic_api_key": "team-a-ingest-key",
+                        "newrelic_region": "eu",
+                    }
+                ]
+            }
         }
-    }
+    )
 
     callback_metadata = LiteLLMProxyRequestSetup.add_team_based_callbacks_from_config(
         team_id="team-a",
@@ -1371,28 +1375,16 @@ async def test_default_team_settings_newrelic_resolves_traces_and_metrics():
     assert resolved_names == {"NewRelicMetricsLogger", "NewRelicLogger"}
 
 
-def test_proxy_config_state_get_config_state_error():
+def test_proxy_config_state_get_config_state_returns_stored_model():
     """
-    Ensures that get_config_state does not raise an error when the config is not a valid dictionary
+    get_config_state returns the stored ProxyRuntimeConfig as is (frozen, no copy needed).
     """
-    import threading
-
     from litellm.proxy.proxy_server import ProxyConfig
 
-    test_config = {
-        "callback_list": [
-            {
-                "lock": threading.RLock(),  # This will cause the deep copy to fail
-                "name": "test_callback",
-            }
-        ],
-        "model_list": ["gpt-4", "claude-3"],
-    }
-
     pc = ProxyConfig()
-    pc.config = test_config
-    config = pc.get_config_state()
-    assert config == {}
+    cfg = ProxyRuntimeConfig.from_resolved({"model_list": [{"model_name": "gpt-4"}]})
+    pc.config = cfg
+    assert pc.get_config_state() is cfg
 
 
 @pytest.mark.parametrize(

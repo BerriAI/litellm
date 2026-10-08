@@ -13,10 +13,11 @@ import litellm
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
     LiteLLM_OrganizationTable,
+    LitellmUserRoles,
     NewTeamRequest,
     ProxyException,
+    ProxyRuntimeConfig,
     UserAPIKeyAuth,
-    LitellmUserRoles,
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
     _get_default_team_param,
@@ -543,11 +544,11 @@ class TestUpdateLitellmSettingOrdering:
         async def mock_get_config():
             # Simulate what _update_config_from_db does for safe overrides
             litellm.default_team_params = stale_value
-            return {
+            return ProxyRuntimeConfig.from_resolved({
                 "litellm_settings": {
                     "default_team_params": stale_value,
                 }
-            }
+            })
 
         saved_configs = []
 
@@ -580,7 +581,7 @@ class TestUpdateLitellmSettingOrdering:
 
         # Saved config should contain the new value
         assert len(saved_configs) == 1
-        saved_settings = saved_configs[0]["litellm_settings"]["default_team_params"]
+        saved_settings = saved_configs[0].litellm_settings["default_team_params"]
         assert saved_settings == expected
 
         # Return value should reflect the new settings

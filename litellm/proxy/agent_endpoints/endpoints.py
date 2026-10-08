@@ -1201,12 +1201,15 @@ async def make_agent_public(
             )
         updated_public_agent_groups: Final = [*current_public_agent_groups, agent.agent_id]
 
-        if "litellm_settings" not in config or config["litellm_settings"] is None:
-            config["litellm_settings"] = {}
-
-        config["litellm_settings"]["public_agent_groups"] = updated_public_agent_groups
-
-        await proxy_config.save_config(new_config=config)
+        await proxy_config.save_config(
+            new_config=config.with_section(
+                "litellm_settings",
+                {
+                    **config.litellm_settings,
+                    "public_agent_groups": updated_public_agent_groups,
+                },
+            )
+        )
 
         litellm.public_agent_groups = updated_public_agent_groups
 
@@ -1305,14 +1308,16 @@ async def make_agents_public(
 
         litellm.public_agent_groups = request.agent_ids
 
-        # Update config with new settings
-        if "litellm_settings" not in config or config["litellm_settings"] is None:
-            config["litellm_settings"] = {}
-
-        config["litellm_settings"]["public_agent_groups"] = litellm.public_agent_groups
-
         # Save the updated config
-        await proxy_config.save_config(new_config=config)
+        await proxy_config.save_config(
+            new_config=config.with_section(
+                "litellm_settings",
+                {
+                    **config.litellm_settings,
+                    "public_agent_groups": litellm.public_agent_groups,
+                },
+            )
+        )
 
         verbose_proxy_logger.debug(
             "Updated public agent groups to: %s by user: %s", litellm.public_agent_groups, user_api_key_dict.user_id

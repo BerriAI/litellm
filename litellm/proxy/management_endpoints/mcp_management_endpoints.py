@@ -3263,14 +3263,16 @@ if MCP_AVAILABLE:
                         detail=f"MCP Server with ID {server_id} not found",
                     )
 
-            # Update config with new settings
-            if "litellm_settings" not in config or config["litellm_settings"] is None:
-                config["litellm_settings"] = {}
-
-            config["litellm_settings"]["public_mcp_servers"] = request.mcp_server_ids
-
             # Save the updated config
-            await proxy_config.save_config(new_config=config)
+            await proxy_config.save_config(
+                new_config=config.with_section(
+                    "litellm_settings",
+                    {
+                        **config.litellm_settings,
+                        "public_mcp_servers": request.mcp_server_ids,
+                    },
+                )
+            )
             litellm.public_mcp_servers = request.mcp_server_ids
 
             verbose_proxy_logger.debug(
