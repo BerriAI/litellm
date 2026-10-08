@@ -1809,13 +1809,6 @@ export interface paths {
          *     ```
          *     curl http://localhost:4000/v1/batches?limit=2     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -H "Content-Type: application/json"
          *     ```
-         *
-         *     When no provider or model is specified, LiteLLM lists batches from the
-         *     database and never asks the provider for file details, so no detail retries
-         *     or 10-second limit apply. If an output or error file has no saved row, it
-         *     saves a basic entry so it appears in
-         *     ``GET /v1/files``; existing file rows are unchanged. If the batch list comes
-         *     directly from a provider, provider list errors are returned to the caller.
          */
         get: operations["list_batches_batches_get"];
         put?: never;
@@ -1858,14 +1851,6 @@ export interface paths {
          *     ```
          *     curl http://localhost:4000/v1/batches/batch_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -H "Content-Type: application/json"
          *     ```
-         *
-         *     A terminal batch saved in the database is returned without a provider read;
-         *     otherwise, LiteLLM reads current batch data from the provider. Missing output
-         *     or error file rows are saved with provider details when available, and saved
-         *     basic entries older than 60 seconds are refreshed by changing only their file
-         *     details. File detail reads retry temporary failures up to three times within
-         *     10 seconds total; if a read fails, the basic row is kept or saved and the
-         *     batch still returns. If reading the batch fails, the caller gets an error.
          */
         get: operations["retrieve_batch_batches__batch_id__get"];
         put?: never;
@@ -1897,14 +1882,6 @@ export interface paths {
          *     curl http://localhost:4000/v1/batches/batch_abc123/cancel         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -X POST
          *
          *     ```
-         *
-         *     LiteLLM sends cancellation to the provider or its internal batch runner and,
-         *     for saved batches, stores the updated state. Missing output or error file rows
-         *     are saved with provider details when available, and saved basic entries older
-         *     than 60 seconds are refreshed by changing only their file details. File detail
-         *     reads retry temporary failures up to three times within 10 seconds total; if a
-         *     read fails, the basic row is kept or saved and the cancel result still
-         *     returns. If cancellation fails, the caller gets an error.
          */
         post: operations["cancel_batch_batches__batch_id__cancel_post"];
         delete?: never;
@@ -5400,12 +5377,6 @@ export interface paths {
          *     curl http://localhost:4000/v1/files        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     ```
-         *
-         *     When no provider or model is specified, LiteLLM reads saved file rows from the
-         *     database and does not ask for file details or change the rows. If a provider
-         *     or model is specified, it gets the list from that provider instead, and
-         *     provider list errors are returned to the caller. This endpoint never fetches
-         *     file details, so the three retries and 10-second limit do not apply.
          */
         get: operations["list_files_files_get"];
         put?: never;
@@ -5448,14 +5419,6 @@ export interface paths {
          *     curl http://localhost:4000/v1/files/file-abc123         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     ```
-         *
-         *     LiteLLM returns saved file details unless they are basic details and the
-         *     saved row points to a provider file, or no details are saved. Those provider
-         *     reads retry temporary failures up to three times, with a 10-second total
-         *     limit. A successful refresh changes only the saved file details; a live read
-         *     for a row with no details is not saved. If refresh fails, LiteLLM returns the
-         *     basic details; if a live or direct provider read fails, the caller gets an
-         *     error, and direct provider reads do not use these retries or change the row.
          */
         get: operations["get_file_files__file_id__get"];
         put?: never;
@@ -5472,12 +5435,6 @@ export interface paths {
          *     curl http://localhost:4000/v1/files/file-abc123     -X DELETE     -H "Authorization: Bearer $OPENAI_API_KEY"
          *
          *     ```
-         *
-         *     For a managed file, LiteLLM removes content from configured storage or the
-         *     provider before deleting the file row. For other file IDs, it asks the
-         *     provider to delete the file and does not change a managed row. It does not
-         *     fetch file details or use the 10-second limit; if the provider or storage
-         *     delete fails, the caller gets an error and the managed row remains.
          */
         delete: operations["delete_file_files__file_id__delete"];
         options?: never;
@@ -5504,12 +5461,6 @@ export interface paths {
          *     curl http://localhost:4000/v1/files/file-abc123/content         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     ```
-         *
-         *     LiteLLM reads content from configured storage when available; otherwise, it
-         *     reads from the provider recorded for the file or named in the request. It does
-         *     not fetch file details or change the saved file row, so the three retries and
-         *     10-second limit do not apply. If storage or the provider cannot return the
-         *     content, the caller gets an error.
          */
         get: operations["get_file_content_files__file_id__content_get"];
         put?: never;
@@ -19793,13 +19744,6 @@ export interface paths {
          *     ```
          *     curl http://localhost:4000/v1/batches?limit=2     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -H "Content-Type: application/json"
          *     ```
-         *
-         *     When no provider or model is specified, LiteLLM lists batches from the
-         *     database and never asks the provider for file details, so no detail retries
-         *     or 10-second limit apply. If an output or error file has no saved row, it
-         *     saves a basic entry so it appears in
-         *     ``GET /v1/files``; existing file rows are unchanged. If the batch list comes
-         *     directly from a provider, provider list errors are returned to the caller.
          */
         get: operations["list_batches_v1_batches_get"];
         put?: never;
@@ -19842,14 +19786,6 @@ export interface paths {
          *     ```
          *     curl http://localhost:4000/v1/batches/batch_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -H "Content-Type: application/json"
          *     ```
-         *
-         *     A terminal batch saved in the database is returned without a provider read;
-         *     otherwise, LiteLLM reads current batch data from the provider. Missing output
-         *     or error file rows are saved with provider details when available, and saved
-         *     basic entries older than 60 seconds are refreshed by changing only their file
-         *     details. File detail reads retry temporary failures up to three times within
-         *     10 seconds total; if a read fails, the basic row is kept or saved and the
-         *     batch still returns. If reading the batch fails, the caller gets an error.
          */
         get: operations["retrieve_batch_v1_batches__batch_id__get"];
         put?: never;
@@ -19881,14 +19817,6 @@ export interface paths {
          *     curl http://localhost:4000/v1/batches/batch_abc123/cancel         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -X POST
          *
          *     ```
-         *
-         *     LiteLLM sends cancellation to the provider or its internal batch runner and,
-         *     for saved batches, stores the updated state. Missing output or error file rows
-         *     are saved with provider details when available, and saved basic entries older
-         *     than 60 seconds are refreshed by changing only their file details. File detail
-         *     reads retry temporary failures up to three times within 10 seconds total; if a
-         *     read fails, the basic row is kept or saved and the cancel result still
-         *     returns. If cancellation fails, the caller gets an error.
          */
         post: operations["cancel_batch_v1_batches__batch_id__cancel_post"];
         delete?: never;
@@ -20451,12 +20379,6 @@ export interface paths {
          *     curl http://localhost:4000/v1/files        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     ```
-         *
-         *     When no provider or model is specified, LiteLLM reads saved file rows from the
-         *     database and does not ask for file details or change the rows. If a provider
-         *     or model is specified, it gets the list from that provider instead, and
-         *     provider list errors are returned to the caller. This endpoint never fetches
-         *     file details, so the three retries and 10-second limit do not apply.
          */
         get: operations["list_files_v1_files_get"];
         put?: never;
@@ -20499,14 +20421,6 @@ export interface paths {
          *     curl http://localhost:4000/v1/files/file-abc123         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     ```
-         *
-         *     LiteLLM returns saved file details unless they are basic details and the
-         *     saved row points to a provider file, or no details are saved. Those provider
-         *     reads retry temporary failures up to three times, with a 10-second total
-         *     limit. A successful refresh changes only the saved file details; a live read
-         *     for a row with no details is not saved. If refresh fails, LiteLLM returns the
-         *     basic details; if a live or direct provider read fails, the caller gets an
-         *     error, and direct provider reads do not use these retries or change the row.
          */
         get: operations["get_file_v1_files__file_id__get"];
         put?: never;
@@ -20523,12 +20437,6 @@ export interface paths {
          *     curl http://localhost:4000/v1/files/file-abc123     -X DELETE     -H "Authorization: Bearer $OPENAI_API_KEY"
          *
          *     ```
-         *
-         *     For a managed file, LiteLLM removes content from configured storage or the
-         *     provider before deleting the file row. For other file IDs, it asks the
-         *     provider to delete the file and does not change a managed row. It does not
-         *     fetch file details or use the 10-second limit; if the provider or storage
-         *     delete fails, the caller gets an error and the managed row remains.
          */
         delete: operations["delete_file_v1_files__file_id__delete"];
         options?: never;
@@ -20555,12 +20463,6 @@ export interface paths {
          *     curl http://localhost:4000/v1/files/file-abc123/content         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     ```
-         *
-         *     LiteLLM reads content from configured storage when available; otherwise, it
-         *     reads from the provider recorded for the file or named in the request. It does
-         *     not fetch file details or change the saved file row, so the three retries and
-         *     10-second limit do not apply. If storage or the provider cannot return the
-         *     content, the caller gets an error.
          */
         get: operations["get_file_content_v1_files__file_id__content_get"];
         put?: never;
@@ -25087,13 +24989,6 @@ export interface paths {
          *     ```
          *     curl http://localhost:4000/v1/batches?limit=2     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -H "Content-Type: application/json"
          *     ```
-         *
-         *     When no provider or model is specified, LiteLLM lists batches from the
-         *     database and never asks the provider for file details, so no detail retries
-         *     or 10-second limit apply. If an output or error file has no saved row, it
-         *     saves a basic entry so it appears in
-         *     ``GET /v1/files``; existing file rows are unchanged. If the batch list comes
-         *     directly from a provider, provider list errors are returned to the caller.
          */
         get: operations["list_batches__provider__v1_batches_get"];
         put?: never;
@@ -25136,14 +25031,6 @@ export interface paths {
          *     ```
          *     curl http://localhost:4000/v1/batches/batch_abc123     -H "Authorization: Bearer $LITELLM_MASTER_KEY"     -H "Content-Type: application/json"
          *     ```
-         *
-         *     A terminal batch saved in the database is returned without a provider read;
-         *     otherwise, LiteLLM reads current batch data from the provider. Missing output
-         *     or error file rows are saved with provider details when available, and saved
-         *     basic entries older than 60 seconds are refreshed by changing only their file
-         *     details. File detail reads retry temporary failures up to three times within
-         *     10 seconds total; if a read fails, the basic row is kept or saved and the
-         *     batch still returns. If reading the batch fails, the caller gets an error.
          */
         get: operations["retrieve_batch__provider__v1_batches__batch_id__get"];
         put?: never;
@@ -25175,14 +25062,6 @@ export interface paths {
          *     curl http://localhost:4000/v1/batches/batch_abc123/cancel         -H "Authorization: Bearer $LITELLM_MASTER_KEY"         -H "Content-Type: application/json"         -X POST
          *
          *     ```
-         *
-         *     LiteLLM sends cancellation to the provider or its internal batch runner and,
-         *     for saved batches, stores the updated state. Missing output or error file rows
-         *     are saved with provider details when available, and saved basic entries older
-         *     than 60 seconds are refreshed by changing only their file details. File detail
-         *     reads retry temporary failures up to three times within 10 seconds total; if a
-         *     read fails, the basic row is kept or saved and the cancel result still
-         *     returns. If cancellation fails, the caller gets an error.
          */
         post: operations["cancel_batch__provider__v1_batches__batch_id__cancel_post"];
         delete?: never;
@@ -25210,12 +25089,6 @@ export interface paths {
          *     curl http://localhost:4000/v1/files        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     ```
-         *
-         *     When no provider or model is specified, LiteLLM reads saved file rows from the
-         *     database and does not ask for file details or change the rows. If a provider
-         *     or model is specified, it gets the list from that provider instead, and
-         *     provider list errors are returned to the caller. This endpoint never fetches
-         *     file details, so the three retries and 10-second limit do not apply.
          */
         get: operations["list_files__provider__v1_files_get"];
         put?: never;
@@ -25258,14 +25131,6 @@ export interface paths {
          *     curl http://localhost:4000/v1/files/file-abc123         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     ```
-         *
-         *     LiteLLM returns saved file details unless they are basic details and the
-         *     saved row points to a provider file, or no details are saved. Those provider
-         *     reads retry temporary failures up to three times, with a 10-second total
-         *     limit. A successful refresh changes only the saved file details; a live read
-         *     for a row with no details is not saved. If refresh fails, LiteLLM returns the
-         *     basic details; if a live or direct provider read fails, the caller gets an
-         *     error, and direct provider reads do not use these retries or change the row.
          */
         get: operations["get_file__provider__v1_files__file_id__get"];
         put?: never;
@@ -25282,12 +25147,6 @@ export interface paths {
          *     curl http://localhost:4000/v1/files/file-abc123     -X DELETE     -H "Authorization: Bearer $OPENAI_API_KEY"
          *
          *     ```
-         *
-         *     For a managed file, LiteLLM removes content from configured storage or the
-         *     provider before deleting the file row. For other file IDs, it asks the
-         *     provider to delete the file and does not change a managed row. It does not
-         *     fetch file details or use the 10-second limit; if the provider or storage
-         *     delete fails, the caller gets an error and the managed row remains.
          */
         delete: operations["delete_file__provider__v1_files__file_id__delete"];
         options?: never;
@@ -25314,12 +25173,6 @@ export interface paths {
          *     curl http://localhost:4000/v1/files/file-abc123/content         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *
          *     ```
-         *
-         *     LiteLLM reads content from configured storage when available; otherwise, it
-         *     reads from the provider recorded for the file or named in the request. It does
-         *     not fetch file details or change the saved file row, so the three retries and
-         *     10-second limit do not apply. If storage or the provider cannot return the
-         *     content, the caller gets an error.
          */
         get: operations["get_file_content__provider__v1_files__file_id__content_get"];
         put?: never;

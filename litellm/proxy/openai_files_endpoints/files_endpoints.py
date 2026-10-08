@@ -975,12 +975,6 @@ async def get_file_content(
         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
 
     ```
-
-    LiteLLM reads content from configured storage when available; otherwise, it
-    reads from the provider recorded for the file or named in the request. It does
-    not fetch file details or change the saved file row, so the three retries and
-    10-second limit do not apply. If storage or the provider cannot return the
-    content, the caller gets an error.
     """
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -1293,14 +1287,6 @@ async def get_file(
         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
 
     ```
-
-    LiteLLM returns saved file details unless they are basic details and the
-    saved row points to a provider file, or no details are saved. Those provider
-    reads retry temporary failures up to three times, with a 10-second total
-    limit. A successful refresh changes only the saved file details; a live read
-    for a row with no details is not saved. If refresh fails, LiteLLM returns the
-    basic details; if a live or direct provider read fails, the caller gets an
-    error, and direct provider reads do not use these retries or change the row.
     """
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -1500,12 +1486,6 @@ async def delete_file(
     -H "Authorization: Bearer $OPENAI_API_KEY"
 
     ```
-
-    For a managed file, LiteLLM removes content from configured storage or the
-    provider before deleting the file row. For other file IDs, it asks the
-    provider to delete the file and does not change a managed row. It does not
-    fetch file details or use the 10-second limit; if the provider or storage
-    delete fails, the caller gets an error and the managed row remains.
     """
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
@@ -1733,12 +1713,6 @@ async def list_files(
         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
 
     ```
-
-    When no provider or model is specified, LiteLLM reads saved file rows from the
-    database and does not ask for file details or change the rows. If a provider
-    or model is specified, it gets the list from that provider instead, and
-    provider list errors are returned to the caller. This endpoint never fetches
-    file details, so the three retries and 10-second limit do not apply.
     """
     from litellm.proxy.proxy_server import (
         general_settings,

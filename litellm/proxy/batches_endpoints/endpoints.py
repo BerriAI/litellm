@@ -570,14 +570,6 @@ async def retrieve_batch(
     -H "Content-Type: application/json" \
 
     ```
-
-    A terminal batch saved in the database is returned without a provider read;
-    otherwise, LiteLLM reads current batch data from the provider. Missing output
-    or error file rows are saved with provider details when available, and saved
-    basic entries older than 60 seconds are refreshed by changing only their file
-    details. File detail reads retry temporary failures up to three times within
-    10 seconds total; if a read fails, the basic row is kept or saved and the
-    batch still returns. If reading the batch fails, the caller gets an error.
     """
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -885,13 +877,6 @@ async def list_batches(
     -H "Content-Type: application/json" \
 
     ```
-
-    When no provider or model is specified, LiteLLM lists batches from the
-    database and never asks the provider for file details, so no detail retries
-    or 10-second limit apply. If an output or error file has no saved row, it
-    saves a basic entry so it appears in
-    ``GET /v1/files``; existing file rows are unchanged. If the batch list comes
-    directly from a provider, provider list errors are returned to the caller.
     """
     validate_batch_list_limit(limit)
     from litellm.proxy.proxy_server import (
@@ -1077,14 +1062,6 @@ async def cancel_batch(
         -X POST
 
     ```
-
-    LiteLLM sends cancellation to the provider or its internal batch runner and,
-    for saved batches, stores the updated state. Missing output or error file rows
-    are saved with provider details when available, and saved basic entries older
-    than 60 seconds are refreshed by changing only their file details. File detail
-    reads retry temporary failures up to three times within 10 seconds total; if a
-    read fails, the basic row is kept or saved and the cancel result still
-    returns. If cancellation fails, the caller gets an error.
     """
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
