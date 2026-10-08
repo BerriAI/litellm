@@ -125,12 +125,10 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         resolution only if it was not provided.
         """
         user_session: Final = require_github_copilot_user_session(litellm_params)
-        resolved = (
+        resolved: Final = (
             (user_session.api_base if user_session is not None else None)
             or api_base
             or self.authenticator.get_api_base()
             or DEFAULT_GITHUB_COPILOT_API_BASE
         ).rstrip("/")
-        if not resolved.endswith("/v1/messages"):
-            resolved = f"{resolved}/v1/messages"
-        return resolved
+        return resolved if resolved.endswith("/v1/messages") else f"{resolved}/v1/messages"

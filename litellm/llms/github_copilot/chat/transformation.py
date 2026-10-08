@@ -1,6 +1,6 @@
 import json
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -94,6 +94,14 @@ class GithubCopilotConfig(OpenAIConfig):
 
         return transformed_messages
 
+    def _copilot_headers(self, session_token: str | None) -> Mapping[str, str]:
+        if session_token is not None:
+            return get_copilot_default_headers(session_token)
+        try:
+            return get_copilot_default_headers(self.authenticator.get_api_key())
+        except GetAPIKeyError:
+            return {}
+
     def validate_environment(
         self,
         headers: dict,
@@ -104,25 +112,16 @@ class GithubCopilotConfig(OpenAIConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        # Get base headers from parent
-        validated_headers = super().validate_environment(
+        parent_headers: Final = super().validate_environment(
             headers, model, messages, optional_params, litellm_params, api_key, api_base
         )
-
-        # Add Copilot-specific headers (editor-version, user-agent, etc.)
         user_session: Final = require_github_copilot_user_session(litellm_params)  # pyright: ignore[reportUnknownArgumentType]  # litellm_params arrives as an untyped request dict
-        if user_session is not None:
-            validated_headers = {**get_copilot_default_headers(user_session.token), **validated_headers}
+        session_token: Final = user_session.token if user_session is not None else None
+        validated_headers: Final = {**self._copilot_headers(session_token), **parent_headers}
+        if session_token is not None:
             # the caller's stored session token wins unconditionally, even over a
             # caller-supplied api_key or the parent's placeholder Authorization
-            validated_headers["Authorization"] = f"Bearer {user_session.token}"
-        else:
-            try:
-                copilot_api_key: Final = self.authenticator.get_api_key()
-                copilot_headers: Final = get_copilot_default_headers(copilot_api_key)
-                validated_headers = {**copilot_headers, **validated_headers}
-            except GetAPIKeyError:
-                pass  # Will be handled later in the request flow
+            validated_headers["Authorization"] = f"Bearer {session_token}"
 
         # Add X-Initiator header based on message roles
         initiator: Final = self._determine_initiator(messages)

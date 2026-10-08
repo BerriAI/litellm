@@ -6,9 +6,9 @@ layer; ``litellm.types.utils`` re-exports them for backwards compatibility.
 """
 
 from collections.abc import Mapping
-from typing import Literal
+from typing import Literal, TypeAlias
 
-from pydantic import Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -47,6 +47,8 @@ class UpdateCredentialItem(LiteLLMBaseModel):
 
 
 class UserProviderConnection(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     credential_name: str
     provider: str
     connected: bool
@@ -55,24 +57,34 @@ class UserProviderConnection(LiteLLMBaseModel):
 
 
 class UserProviderConnectionsResponse(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     connections: list[UserProviderConnection]  # mutable-ok: pydantic response model field
 
 
 class UserConnectionStartResponse(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     user_code: str
     verification_uri: str
     expires_in: int
     interval: int
 
 
-UserConnectionPollStatus = Literal["pending", "slow_down", "expired", "denied", "connected", "no_copilot_seat"]
+UserConnectionPollStatus: TypeAlias = Literal[
+    "pending", "slow_down", "expired", "denied", "connected", "no_copilot_seat"
+]
 
 
 class UserConnectionPollResponse(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     status: UserConnectionPollStatus
     interval: int | None = None
     github_login: str | None = None
 
 
 class UserConnectionDeleteResponse(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     status: str

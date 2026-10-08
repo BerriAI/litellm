@@ -803,18 +803,18 @@ def _get_openai_compatible_provider_info(
 
         user_session: Final = github_copilot_user_session_from(litellm_params)  # pyright: ignore[reportUnknownArgumentType]  # litellm_params arrives as an untyped request dict
         if user_session is not None:
-            api_base = user_session.api_base
-            dynamic_api_key = user_session.token
+            api_base = user_session.api_base  # rebind-ok: resolves provider args in place
+            dynamic_api_key = user_session.token  # rebind-ok: resolves provider args in place
         elif github_copilot_per_user_credential_name(litellm_params) is not None:  # pyright: ignore[reportUnknownArgumentType]  # litellm_params arrives as an untyped request dict
             # per-user deployments resolve no token at provider-info time; the
             # caller's session supplies base + key per request
-            api_base = api_base or DEFAULT_GITHUB_COPILOT_API_BASE
-            dynamic_api_key = None
+            api_base = api_base or DEFAULT_GITHUB_COPILOT_API_BASE  # rebind-ok: resolves provider args in place
+            dynamic_api_key = None  # rebind-ok: resolves provider args in place
         else:
             (
-                api_base,
-                dynamic_api_key,
-                custom_llm_provider,
+                api_base,  # rebind-ok: resolves provider args in place
+                dynamic_api_key,  # rebind-ok: resolves provider args in place
+                custom_llm_provider,  # rebind-ok: resolves provider args in place
             ) = litellm.GithubCopilotConfig().get_openai_compatible_provider_info(
                 model, api_base, api_key, custom_llm_provider
             )
