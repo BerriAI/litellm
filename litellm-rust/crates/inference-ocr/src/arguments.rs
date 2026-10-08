@@ -1,4 +1,4 @@
-use litellm_core_utils::call_arguments::ArgumentSpec;
+use litellm_core_utils::{call_arguments::ArgumentSpec, params::is_secret_param};
 use litellm_llms::base_llm::ocr::error::Error;
 
 use super::provider_config::{OcrConfigKind, resolve_provider_config};
@@ -60,20 +60,6 @@ pub fn consumed_optional_param_names(
         .chain(auth_fields)
         .copied()
         .collect())
-}
-
-pub(crate) fn is_secret_param(name: &str) -> bool {
-    matches!(
-        name,
-        "azure_ad_token"
-            | "client_secret"
-            | "azure_federated_token_file"
-            | "vertex_credentials"
-            | "vertex_ai_credentials"
-            | "aws_secret_access_key"
-            | "aws_session_token"
-            | "aws_web_identity_token"
-    )
 }
 
 pub fn consumed_optional_params(

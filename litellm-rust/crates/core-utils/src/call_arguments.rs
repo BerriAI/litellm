@@ -61,7 +61,7 @@ pub fn compose_body<B: Serialize>(
             .chain(
                 extensions
                     .chain(overrides.into_iter().flatten())
-                    .filter(|(name, _)| !crate::params::is_control_param(name))
+                    .filter(|(name, _)| !crate::params::is_litellm_owned(name))
                     .map(|(name, value)| (name.clone(), value.clone())),
             )
             .collect(),

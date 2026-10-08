@@ -50,7 +50,7 @@ impl RouteCodec {
                 &field(&request, input)?
                     .ok_or_else(|| PyValueError::new_err(format!("{input} is required")))?,
             )?,
-            params: provider_parameters(py, &request, input)?.into(),
+            params: provider_parameters(&request, input, &[])?.into(),
         })
     }
 
