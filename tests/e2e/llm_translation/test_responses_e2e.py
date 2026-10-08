@@ -244,15 +244,8 @@ class TestResponses:
         usage_cost: Final = TypeAdapter(ResponseUsageCost).validate_python(
             cast(object, usage.model_extra if usage.model_extra is not None else {})
         )
-        if usage_cost.cost is not None:
-            assert usage_cost.cost > 0, f"response.completed cost was not positive: {usage_cost.cost}"
-        else:
-            rows: Final = proxy.poll_logs_for_request_id(
-                completed.response.id,
-                predicate=lambda logged_rows: any((row.spend or 0) > 0 for row in logged_rows),
-            )
-            spend_row: Final = next((row for row in rows if (row.spend or 0) > 0), None)
-            assert spend_row is not None, f"no costed spend row for streamed response {completed.response.id}"
+        assert usage_cost.cost is not None, f"response.completed usage had no cost: {usage.model_extra!r}"
+        assert usage_cost.cost > 0, f"response.completed cost was not positive: {usage_cost.cost}"
 
     @meta(
         Subject(
@@ -512,9 +505,42 @@ class TestResponses:
         )
         _assert_weather_call(response)
 
+    @pytest.mark.covers("llm.responses.anthropic.tool_use.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.RESPONSES,
+            providers=(Provider.ANTHROPIC,),
+            models=(ANTHROPIC_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_responses_anthropic_strict_array_schema_tool_call(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model: Final = _register(proxy, resources, _anthropic_params())
+        client: Final = sdk.openai(resources.key())
+
+        response: Final = client.responses.create(
+            model=model,
+            input="Find the weather locations for Tokyo and Paris using get_locations.",
+            instructions=INSTRUCTIONS,
+            tools=[LOCATIONS_TOOL],
+            tool_choice="required",
+            extra_body=NO_PROXY_CACHE,
+        )
+        function_call: Final = next(
+            (call for call in _function_calls(response) if call.name == "get_locations"),
+            None,
+        )
+        assert function_call is not None, f"response had no get_locations call: {response.output!r}"
+        arguments: Final = LocationsArguments.model_validate_json(function_call.arguments)
+        assert arguments.locations, f"get_locations returned no locations: {function_call.arguments}"
+
     @pytest.mark.covers("llm.responses.anthropic.multi_turn.nonstream.works")
     @pytest.mark.skip(
-        reason="stage red: product gap, Anthropic previous_response_id continuation omits the original user message"
+        reason="stage red: product gap, Anthropic previous_response_id continuation sends invalid unmatched tool_use history"
     )
     @meta(
         Subject(
