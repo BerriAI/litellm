@@ -18,7 +18,7 @@ Moderation and realtime endpoints are unsupported and rejected before dispatch.
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Final, NoReturn
+from typing import TYPE_CHECKING, Final, NoReturn
 
 import httpx
 
@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
-    LiteLLMLoggingObj = Any
+    LiteLLMLoggingObj = object
 
 CLINEPASS_API_BASE: Final = "https://api.cline.bot/api/v1"
 
