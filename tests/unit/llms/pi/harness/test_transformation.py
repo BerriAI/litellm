@@ -30,9 +30,11 @@ from litellm.llms.base_llm.harness.transformation import (
 from litellm.llms.pi.harness.transformation import (
     INSTRUCTIONS_FILENAME,
     MANAGED_CONFIG_KEYS,
+    MANAGED_ENV_KEYS,
     MCP_FILENAME,
     MODELS_FILENAME,
     SETTINGS_FILENAME,
+    PI_CONFIG_DIR_ENV,
     PI_ISOLATION_ENV,
     PI_TOKEN_ENV,
     PiHarnessConfig,
@@ -489,6 +491,14 @@ def test_validate_environment_rejects_wrong_options_managed_config_and_ask_mode(
         CONFIG.validate_environment(make_ctx(permissions="ask"))
 
 
+@pytest.mark.parametrize("key", sorted(MANAGED_ENV_KEYS))
+def test_managed_env_keys_rejected_instead_of_silently_ignored(key):
+    assert key in {PI_CONFIG_DIR_ENV, PI_TOKEN_ENV}
+    with pytest.raises(OptionsMismatch, match=key):
+        CONFIG.validate_environment(make_ctx(options=PiOptions(env={key: "/tmp/evil"})))
+    CONFIG.validate_environment(make_ctx(options=PiOptions(env={f"{key}_SUFFIX": "ok"})))
+
+
 def test_session_setup_token_only_in_env():
     setup = setup_for(make_ctx())
     assert set(setup.files) == {MODELS_FILENAME}
@@ -500,12 +510,13 @@ def test_session_setup_token_only_in_env():
 
 
 def test_session_setup_env_and_persisted_sessions():
-    options = PiOptions(env={"FOO": "1", PI_TOKEN_ENV: "evil", "PI_CODING_AGENT_DIR": "/home/u/.pi/agent"})
+    """Managed keys win over PiOptions.env even here, behind validate_environment's rejection."""
+    options = PiOptions(env={"FOO": "1", PI_TOKEN_ENV: "evil", PI_CONFIG_DIR_ENV: "/home/u/.pi/agent"})
     setup = setup_for(make_ctx(options=options))
     assert list(setup.persisted_dirs) == [("sessions", "pi/sessions")]
     assert setup.skills_dir == "skills"
     env = setup.env
-    assert env["PI_CODING_AGENT_DIR"] == f"{PRIVATE}/agent"
+    assert env[PI_CONFIG_DIR_ENV] == f"{PRIVATE}/agent"
     assert env[PI_TOKEN_ENV] == TOKEN
     for key, value in PI_ISOLATION_ENV.items():
         assert env[key] == value
@@ -525,6 +536,12 @@ def test_session_setup_errors():
         setup_for(make_ctx(endpoint=None))
     with pytest.raises(ValueError, match="needs model="):
         setup_for(make_ctx(model=None, endpoint=FakeEndpoint(model=None)))
+
+
+def test_turn_request_without_a_model_raises_instead_of_passing_none():
+    ctx = make_ctx(model=None, endpoint=FakeEndpoint(model=None))
+    with pytest.raises(ValueError, match="needs model="):
+        CONFIG.transform_turn_request(ctx, HarnessSessionSetup(), PRIVATE, "hi", None)
 
 
 def test_session_setup_instructions_and_skills():

@@ -57,6 +57,7 @@ if TYPE_CHECKING:
 PI_BINARY: Final = "pi"
 PI_PROVIDER_ID: Final = "litellm"
 PI_TOKEN_ENV: Final = "LITELLM_HARNESS_TOKEN"
+PI_CONFIG_DIR_ENV: Final = "PI_CODING_AGENT_DIR"
 AGENT_DIRNAME: Final = "agent"
 SESSIONS_DIRNAME: Final = "sessions"
 SKILLS_DIRNAME: Final = "skills"
@@ -85,6 +86,9 @@ MANAGED_CONFIG_KEYS: Final = frozenset(
         "skills",
     }
 )
+
+# Env this config owns; PiOptions.env may not override these.
+MANAGED_ENV_KEYS: Final = frozenset({PI_CONFIG_DIR_ENV, PI_TOKEN_ENV})
 
 PI_ISOLATION_ENV: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -279,6 +283,14 @@ def mcp_tool_entries(config: Mapping[str, object]) -> tuple[str, ...]:
     return (MCP_TOOL_PATTERN, *reach)
 
 
+def session_model(ctx: SessionContext) -> str:
+    """The model pi is pointed at, from agent(model=) or the session endpoint."""
+    model: Final = ctx.model or (ctx.endpoint.model if ctx.endpoint else None)
+    if not model:
+        raise ValueError("Harness.PI needs model= (a gateway model group or litellm model)")
+    return model
+
+
 def build_models_json(model: str, base_url: str) -> str:
     provider: Final = MappingProxyType(
         {
@@ -344,15 +356,16 @@ class PiHarnessConfig(BaseCLIHarnessConfig[PiOptions, PiStreamState]):
 
     def validate_environment(self, ctx: SessionContext) -> None:
         options: Final = self.get_options(ctx)
+        clashing: Final = sorted(MANAGED_ENV_KEYS.intersection(options.env))
+        if clashing:
+            raise OptionsMismatch(f"PiOptions.env may not set {', '.join(clashing)}; LiteLLM manages it")
         validate_user_config(options.config)
         tool_args(ctx.permissions, ctx.disable_tools, mcp_tool_entries(options.config))
 
     def transform_session_setup(self, ctx: SessionContext, private_dir: str) -> HarnessSessionSetup:
         if ctx.endpoint is None:
             raise HarnessError("pi needs the session model endpoint")
-        model: Final = ctx.model or ctx.endpoint.model
-        if not model:
-            raise ValueError("Harness.PI needs model= (a gateway model group or litellm model)")
+        model: Final = session_model(ctx)
         options: Final = self.get_options(ctx)
         base_url: Final = ctx.sandbox.host_url(ctx.endpoint.port).rstrip("/") + "/v1"
         models_file: Final = (MODELS_FILENAME, build_models_json(model, base_url).encode("utf-8"))
@@ -368,7 +381,7 @@ class PiHarnessConfig(BaseCLIHarnessConfig[PiOptions, PiStreamState]):
                 {
                     **PI_ISOLATION_ENV,
                     **options.env,
-                    "PI_CODING_AGENT_DIR": f"{private_dir}/{AGENT_DIRNAME}",
+                    PI_CONFIG_DIR_ENV: f"{private_dir}/{AGENT_DIRNAME}",
                     PI_TOKEN_ENV: ctx.endpoint.token,
                 }
             ),
@@ -383,7 +396,6 @@ class PiHarnessConfig(BaseCLIHarnessConfig[PiOptions, PiStreamState]):
         native_session_id: str | None,
     ) -> HarnessTurnRequest:
         options: Final = self.get_options(ctx)
-        model: Final = ctx.model or (ctx.endpoint.model if ctx.endpoint else None)
         # --no-approve: a repo's .pi/extensions would otherwise run as the host user at startup.
         # --no-skills: ~/.agents/skills is discovered outside PI_CODING_AGENT_DIR.
         argv: Final = (
@@ -395,7 +407,7 @@ class PiHarnessConfig(BaseCLIHarnessConfig[PiOptions, PiStreamState]):
             "--provider",
             PI_PROVIDER_ID,
             "--model",
-            str(model),
+            session_model(ctx),
             "--session-dir",
             f"{private_dir}/{SESSIONS_DIRNAME}",
             *(("--session", native_session_id) if native_session_id else ()),
