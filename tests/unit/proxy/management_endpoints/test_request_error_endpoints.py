@@ -61,7 +61,6 @@ def test_fold_entities_attaches_top_status_and_keeps_kinds_apart() -> None:
     )
     status_rows: Final = (
         _EntityStatusRow(kind="key", id="hash-1", status_code=429, failed_requests=6),
-        _EntityStatusRow(kind="key", id="hash-1", status_code=500, failed_requests=4),
         _EntityStatusRow(kind="team", id="hash-1", status_code=401, failed_requests=99),
     )
     by_key: Final = fold_entities("key", rows, status_rows)

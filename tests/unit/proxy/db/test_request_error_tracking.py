@@ -4,10 +4,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from litellm.constants import REQUEST_ERRORS_MAX_ROWS_PER_UPSERT
 from litellm.proxy.db.request_error_tracking import (
     RequestErrorAccumulator,
     RequestErrorRedisBuffer,
     build_request_errors_upsert,
+    commit_request_errors_to_db,
     flush_request_errors,
     fold_counts,
     status_code_from_metadata,
@@ -65,7 +67,9 @@ def test_record_counts_failures_by_caller_and_status() -> None:
 
 def test_record_skips_successes_and_internal_sub_calls() -> None:
     accumulator: Final = RequestErrorAccumulator()
-    accumulator.record(payload=_payload(status="success"), request_status="success", date="2026-10-08", is_internal_call=False)
+    accumulator.record(
+        payload=_payload(status="success"), request_status="success", date="2026-10-08", is_internal_call=False
+    )
     accumulator.record(payload=_payload(), request_status="failure", date="2026-10-08", is_internal_call=True)
     assert accumulator.drain() == {}
 
@@ -151,6 +155,20 @@ async def test_flush_restores_counts_when_commit_fails() -> None:
 
 
 @pytest.mark.asyncio
+async def test_commit_splits_a_large_backlog_into_bounded_statements() -> None:
+    prisma_client: Final = MagicMock()
+    prisma_client.db.execute_raw = AsyncMock()
+    snapshot: Final = {_key(api_key=f"hash-{index:05d}"): 1 for index in range(REQUEST_ERRORS_MAX_ROWS_PER_UPSERT + 1)}
+
+    await commit_request_errors_to_db(prisma_client=prisma_client, snapshot=snapshot)
+
+    assert prisma_client.db.execute_raw.await_count == 2
+    first, second = prisma_client.db.execute_raw.await_args_list
+    assert len(first.args) - 1 == REQUEST_ERRORS_MAX_ROWS_PER_UPSERT * 7
+    assert len(second.args) - 1 == 7
+
+
+@pytest.mark.asyncio
 async def test_flush_skips_the_database_when_nothing_failed() -> None:
     prisma_client: Final = MagicMock()
     prisma_client.db.execute_raw = AsyncMock()
@@ -161,7 +179,7 @@ async def test_flush_skips_the_database_when_nothing_failed() -> None:
 @pytest.mark.asyncio
 async def test_redis_buffer_round_trips_and_leader_commits() -> None:
     redis_cache: Final = MagicMock()
-    stored: Final[list[str]] = []
+    stored: Final[list[str]] = []  # mutable-ok: stands in for the Redis list
 
     async def rpush(key: str, values: tuple[str, ...]) -> int:
         stored.extend(values)

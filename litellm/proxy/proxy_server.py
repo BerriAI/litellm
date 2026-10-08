@@ -1199,6 +1199,7 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
         # ClientNotConnectedError rather than persisting anything. Ordering this
         # inside the same guard is what keeps the two from drifting apart.
         await flush_gateway_requests(prisma_client, gateway_request_accumulator)
+        await flush_request_errors(prisma_client, request_error_accumulator)
         verbose_proxy_logger.debug("Disconnecting from Prisma")
         await prisma_client.disconnect()
 

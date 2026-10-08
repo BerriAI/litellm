@@ -11,7 +11,7 @@ volume and LiteLLM_DailyRequestErrors for the status each caller failed with.
 Deployment-wide, so admin-only.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Final, Literal, TypeAlias
 
@@ -92,18 +92,29 @@ _ENTITY_SQL: Final = f"""
 """
 
 _ENTITY_STATUS_SQL: Final = """
-    SELECT 'key' AS kind, api_key AS id, status_code, SUM(failed_requests)::bigint AS failed_requests
-    FROM "LiteLLM_DailyRequestErrors" WHERE date >= $1 AND date <= $2 GROUP BY api_key, status_code
+    SELECT * FROM (
+        SELECT DISTINCT ON (api_key) 'key' AS kind, api_key AS id, status_code, SUM(failed_requests)::bigint AS failed_requests
+        FROM "LiteLLM_DailyRequestErrors" WHERE date >= $1 AND date <= $2
+        GROUP BY api_key, status_code ORDER BY api_key, failed_requests DESC, status_code
+    ) key_status
     UNION ALL
-    SELECT 'team', team_id, status_code, SUM(failed_requests)::bigint
-    FROM "LiteLLM_DailyRequestErrors" WHERE date >= $1 AND date <= $2 AND team_id <> '' GROUP BY team_id, status_code
+    SELECT * FROM (
+        SELECT DISTINCT ON (team_id) 'team' AS kind, team_id AS id, status_code, SUM(failed_requests)::bigint AS failed_requests
+        FROM "LiteLLM_DailyRequestErrors" WHERE date >= $1 AND date <= $2 AND team_id <> ''
+        GROUP BY team_id, status_code ORDER BY team_id, failed_requests DESC, status_code
+    ) team_status
     UNION ALL
-    SELECT 'user', user_id, status_code, SUM(failed_requests)::bigint
-    FROM "LiteLLM_DailyRequestErrors" WHERE date >= $1 AND date <= $2 AND user_id <> '' GROUP BY user_id, status_code
+    SELECT * FROM (
+        SELECT DISTINCT ON (user_id) 'user' AS kind, user_id AS id, status_code, SUM(failed_requests)::bigint AS failed_requests
+        FROM "LiteLLM_DailyRequestErrors" WHERE date >= $1 AND date <= $2 AND user_id <> ''
+        GROUP BY user_id, status_code ORDER BY user_id, failed_requests DESC, status_code
+    ) user_status
     UNION ALL
-    SELECT 'model', model_group, status_code, SUM(failed_requests)::bigint
-    FROM "LiteLLM_DailyRequestErrors"
-    WHERE date >= $1 AND date <= $2 AND model_group <> '' GROUP BY model_group, status_code
+    SELECT * FROM (
+        SELECT DISTINCT ON (model_group) 'model' AS kind, model_group AS id, status_code, SUM(failed_requests)::bigint AS failed_requests
+        FROM "LiteLLM_DailyRequestErrors" WHERE date >= $1 AND date <= $2 AND model_group <> ''
+        GROUP BY model_group, status_code ORDER BY model_group, failed_requests DESC, status_code
+    ) model_status
 """
 
 
@@ -183,12 +194,8 @@ def fold_by_status_code(rows: Sequence[_DateRow]) -> tuple[RequestErrorStatusCod
     return tuple(sorted(entries, key=lambda entry: (-entry.failed_requests, entry.status_code)))
 
 
-def _entity_entry(row: _EntityRow, status_rows: Sequence[_EntityStatusRow]) -> RequestErrorEntityEntry:
-    statuses: Final = sorted(
-        (status for status in status_rows if status.kind == row.kind and status.id == row.id),
-        key=lambda status: (-status.failed_requests, status.status_code),
-    )
-    top: Final = statuses[0] if statuses else None
+def _entity_entry(row: _EntityRow, top_statuses: Mapping[tuple[str, str], _EntityStatusRow]) -> RequestErrorEntityEntry:
+    top: Final = top_statuses.get((row.kind, row.id))
     return RequestErrorEntityEntry(
         id=row.id,
         label=row.label,
@@ -202,8 +209,9 @@ def _entity_entry(row: _EntityRow, status_rows: Sequence[_EntityStatusRow]) -> R
 def fold_entities(
     kind: EntityKind, rows: Sequence[_EntityRow], status_rows: Sequence[_EntityStatusRow]
 ) -> tuple[RequestErrorEntityEntry, ...]:
-    """Callers of one kind ranked by failures, each with the status they failed with most."""
-    entries: Final = tuple(_entity_entry(row, status_rows) for row in filter(lambda row: row.kind == kind, rows))
+    """Callers of one kind ranked by failures, each with the status they failed with most (one row per caller)."""
+    top_statuses: Final = {(status.kind, status.id): status for status in status_rows}
+    entries: Final = tuple(_entity_entry(row, top_statuses) for row in filter(lambda row: row.kind == kind, rows))
     return tuple(sorted(entries, key=lambda entry: (-entry.failed_requests, entry.id)))
 
 

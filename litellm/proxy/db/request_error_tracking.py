@@ -26,7 +26,12 @@ from pydantic import TypeAdapter
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
-from litellm.constants import MAX_REDIS_BUFFER_DEQUEUE_COUNT, REDIS_REQUEST_ERRORS_BUFFER_KEY
+from litellm.constants import (
+    MAX_REDIS_BUFFER_DEQUEUE_COUNT,
+    REDIS_REQUEST_ERRORS_BUFFER_KEY,
+    REQUEST_ERRORS_MAX_ROWS_PER_UPSERT,
+    REQUEST_ERRORS_UNKNOWN_STATUS_CODE,
+)
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.types.proxy.request_errors import RequestErrorKey, RequestErrorSnapshot
@@ -39,7 +44,6 @@ _TABLE: Final = '"LiteLLM_DailyRequestErrors"'
 _COLUMNS_PER_ROW: Final = 7
 _UTC_NOW: Final = "(NOW() AT TIME ZONE 'UTC')"
 REQUEST_ERRORS_JOB_NAME: Final = "update_request_errors_job"
-UNKNOWN_STATUS_CODE: Final = 0
 
 _BufferedRow: TypeAlias = tuple[str, str, str, str, str, int, int]
 _BUFFERED_ROWS: Final = TypeAdapter(tuple[_BufferedRow, ...])
@@ -54,13 +58,13 @@ def status_code_from_metadata(metadata: Mapping[str, object]) -> int:
     """The HTTP status the logging callbacks recorded, or 0 when none was."""
     error_information: Final = metadata.get("error_information")
     if not isinstance(error_information, Mapping):
-        return UNKNOWN_STATUS_CODE
+        return REQUEST_ERRORS_UNKNOWN_STATUS_CODE
     raw_code: Final = _METADATA.validate_python(error_information).get("error_code")
     try:
         code: Final = int(str(raw_code))
     except (TypeError, ValueError):
-        return UNKNOWN_STATUS_CODE
-    return code if 100 <= code <= 599 else UNKNOWN_STATUS_CODE
+        return REQUEST_ERRORS_UNKNOWN_STATUS_CODE
+    return code if 100 <= code <= 599 else REQUEST_ERRORS_UNKNOWN_STATUS_CODE
 
 
 def _text(value: object) -> str:
@@ -176,13 +180,19 @@ def build_request_errors_upsert(snapshot: RequestErrorSnapshot) -> tuple[str, tu
     return sql, params
 
 
+def _statement_chunks(snapshot: RequestErrorSnapshot) -> Iterator[RequestErrorSnapshot]:
+    """Bounded statements: a backlog of many callers must not exceed the bind-parameter limit."""
+    items: Final = tuple((key, count) for key, count in snapshot.items() if count > 0)
+    for start in range(0, len(items), REQUEST_ERRORS_MAX_ROWS_PER_UPSERT):
+        yield dict(items[start : start + REQUEST_ERRORS_MAX_ROWS_PER_UPSERT])
+
+
 async def commit_request_errors_to_db(*, prisma_client: "PrismaClient", snapshot: RequestErrorSnapshot) -> None:
-    if not any(count > 0 for count in snapshot.values()):
-        return
-    sql, params = build_request_errors_upsert(snapshot)
-    async with db_span("commit_request_errors", "LiteLLM_DailyRequestErrors"):
-        await prisma_client.db.execute_raw(sql, *params)  # pyright: ignore[reportAny]  # untyped prisma client
-    verbose_proxy_logger.debug("Request error tracking - committed %d aggregated rows in one statement", len(snapshot))
+    for chunk in _statement_chunks(snapshot):
+        sql, params = build_request_errors_upsert(chunk)
+        async with db_span("commit_request_errors", "LiteLLM_DailyRequestErrors"):
+            await prisma_client.db.execute_raw(sql, *params)  # pyright: ignore[reportAny]  # untyped prisma client
+        verbose_proxy_logger.debug("Request error tracking - committed %d aggregated rows in one statement", len(chunk))
 
 
 class RequestErrorRedisBuffer:
