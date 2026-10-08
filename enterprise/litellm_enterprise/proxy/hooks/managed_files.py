@@ -32,7 +32,7 @@ from litellm import Router, verbose_logger
 from litellm._internal_context import with_service_target
 from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
-from litellm.constants import MAX_FILE_LIST_LIMIT
+from litellm.constants import BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS, MAX_FILE_LIST_LIMIT
 from litellm.files.types import FileRetrieveCallOptions, FileRetrieveProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
@@ -725,26 +725,34 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     Mapping[str, object],
                     route_llm_router.get_deployment_credentials_with_provider(model_id) or {},
                 )
-                provider_file_object: Final = await self._afile_retrieve_with_retries(
-                    provider_file_id=provider_file_id,
-                    call_options=credentials,
-                    internal_model_credentials=credentials,
+                provider_file_object: Final = await asyncio.wait_for(
+                    self._afile_retrieve_with_retries(
+                        provider_file_id=provider_file_id,
+                        call_options=credentials,
+                        internal_model_credentials=credentials,
+                    ),
+                    timeout=BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS,
                 )
                 return provider_file_object.model_copy(update={"id": unified_file_id})
             if model_name is not None and "/" in model_name:
                 custom_llm_provider: Final = cast(
                     FileRetrieveProvider, model_name.split("/", 1)[0]
                 )
-                provider_file_object_by_model_name: Final = await self._afile_retrieve_with_retries(
-                    provider_file_id=provider_file_id,
-                    call_options={"custom_llm_provider": custom_llm_provider},
+                provider_file_object_by_model_name: Final = await asyncio.wait_for(
+                    self._afile_retrieve_with_retries(
+                        provider_file_id=provider_file_id,
+                        call_options={"custom_llm_provider": custom_llm_provider},
+                    ),
+                    timeout=BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS,
                 )
                 return provider_file_object_by_model_name.model_copy(
                     update={"id": unified_file_id}
                 )
             return None
         except Exception as e:
-            verbose_logger.warning(f"Failed to retrieve batch file object for provider_file_id={provider_file_id}: {e}")
+            verbose_logger.warning(
+                f"Failed to retrieve batch file object for provider_file_id={provider_file_id}: {type(e).__name__} {e}"
+            )
             return None
 
     async def _save_refreshed_file_object(

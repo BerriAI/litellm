@@ -1932,6 +1932,75 @@ async def test_store_batch_output_file_falls_back_when_provider_retrieve_raises(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_id", "model_name"),
+    [("model-123", None), (None, "openai/gpt-4o-mini")],
+    ids=["deployment-credentials", "provider-from-model-name"],
+)
+async def test_store_batch_output_file_falls_back_when_provider_retrieve_hangs(
+    model_id: str | None, model_name: str | None
+):
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    async def never_answers(**_: object) -> None:
+        await asyncio.Event().wait()
+
+    router = MagicMock()
+    router.get_deployment_credentials_with_provider.return_value = {"api_key": "key"}
+    proxy_managed_files, managed_file_table = _managed_files_with_fake_prisma()
+
+    with (
+        patch.object(proxy_server_module, "llm_router", router),
+        patch("litellm.afile_retrieve", side_effect=never_answers),
+        patch("litellm_enterprise.proxy.hooks.managed_files.BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS", 0.01),
+    ):
+        await asyncio.wait_for(
+            proxy_managed_files.store_batch_output_file(
+                unified_file_id="unified-output",
+                provider_file_id="s3://bucket/output.jsonl",
+                model_id=model_id,
+                model_name=model_name,
+                owner=UserAPIKeyAuth(user_id="user-123"),
+                litellm_parent_otel_span=None,
+                size_bytes=321,
+            ),
+            timeout=5,
+        )
+
+    stored_object = managed_file_table.rows["unified-output"].file_object
+    assert stored_object is not None
+    assert (stored_object.id, stored_object.bytes, stored_object.purpose) == ("unified-output", 321, "batch_output")
+    assert stored_object.litellm_details_fallback is True
+
+
+@pytest.mark.asyncio
+async def test_afile_retrieve_returns_marked_fallback_when_refresh_hangs():
+    async def never_answers(**_: object) -> None:
+        await asyncio.Event().wait()
+
+    router = MagicMock()
+    router.get_deployment_credentials_with_provider.return_value = {"api_key": "key"}
+    proxy_managed_files, managed_file_table = _managed_files_with_fake_prisma(_marked_fallback_file_row())
+
+    with (
+        patch("litellm.afile_retrieve", side_effect=never_answers),
+        patch("litellm_enterprise.proxy.hooks.managed_files.BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS", 0.01),
+    ):
+        response = await asyncio.wait_for(
+            proxy_managed_files.afile_retrieve(
+                file_id="unified-output",
+                litellm_parent_otel_span=None,
+                llm_router=router,
+            ),
+            timeout=5,
+        )
+
+    assert (response.id, response.bytes) == ("unified-output", 0)
+    assert managed_file_table.upsert_calls == []
+
+
+@pytest.mark.asyncio
 async def test_store_batch_output_file_falls_back_without_model_id():
     from litellm.proxy._types import UserAPIKeyAuth
 
