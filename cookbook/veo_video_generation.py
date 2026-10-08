@@ -24,8 +24,8 @@ class VeoVideoGenerator:
 
     def __init__(
         self,
+        api_key: str,
         base_url: str = "http://localhost:4000/gemini/v1beta",
-        api_key: str = "sk-1234",
     ):
         """
         Initialize the Veo video generator.
@@ -274,12 +274,12 @@ def main():
 
     Configure these environment variables:
     - LITELLM_BASE_URL: Your LiteLLM proxy URL (default: http://localhost:4000/gemini/v1beta)
-    - LITELLM_API_KEY: Your LiteLLM API key (default: sk-1234)
+    - LITELLM_API_KEY: API key for LiteLLM proxy authentication
     """
 
     # Configuration from environment or defaults
     base_url = os.getenv("LITELLM_BASE_URL", "http://localhost:4000/gemini/v1beta")
-    api_key = os.getenv("LITELLM_API_KEY", "sk-1234")
+    api_key = os.environ["LITELLM_API_KEY"]
 
     print("🚀 Starting Veo Video Generation Example")
     print(f"📡 Using LiteLLM proxy at: {base_url}")

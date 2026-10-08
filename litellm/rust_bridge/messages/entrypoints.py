@@ -1,41 +1,25 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Awaitable, Iterator
 from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamically loaded native callables
 
 from litellm.rust_bridge.bindings import NativeBinding
+from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
-
-
-@dataclass(frozen=True, slots=True)
-class LiteLLMMessagesRequest:
-    model: str
-    messages: Sequence[object]
-    max_tokens: int
-    stream: bool | None
-    api_key: str | None
-    api_base: str | None
-    custom_llm_provider: str | None
-    kwargs: Mapping[str, object]
 
 
 class NativeMessages(Protocol):
     def __call__(
         self,
-        request: LiteLLMMessagesRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
-    ) -> AnthropicMessagesResponse: ...
+        request: NativeCall,
+    ) -> AnthropicMessagesResponse | Iterator[bytes]: ...
 
 
 class NativeAmessages(Protocol):
     def __call__(
         self,
-        request: LiteLLMMessagesRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
-    ) -> Awaitable[AnthropicMessagesResponse]: ...
+        request: NativeCall,
+    ) -> Awaitable[AnthropicMessagesResponse | AsyncIterator[bytes]]: ...
 
 
 def _messages_binding(value: object) -> NativeMessages | None:
@@ -50,5 +34,5 @@ def _amessages_binding(value: object) -> NativeAmessages | None:
     return cast("NativeAmessages", value)  # cast-ok: callable validated at the native binding boundary
 
 
-NATIVE_MESSAGES: Final = NativeBinding("anthropic_messages_handler", validate=_messages_binding)
-NATIVE_AMESSAGES: Final = NativeBinding("anthropic_messages", validate=_amessages_binding)
+NATIVE_MESSAGES: Final = NativeBinding("messages", validate=_messages_binding)
+NATIVE_AMESSAGES: Final = NativeBinding("amessages", validate=_amessages_binding)

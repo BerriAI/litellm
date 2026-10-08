@@ -85,7 +85,7 @@ def _filter_reserved_headers(
 
 
 def _request_scoped_runtime_session_id(
-    params: Mapping[str, Any],
+    params: Mapping[str, object],
     litellm_params: Mapping[str, Any],
 ) -> str | None:
     context_id: Final = get_session_id_from_a2a_params(params)
@@ -186,11 +186,11 @@ class BedrockAgentCoreA2ATransformation:
         headers: Final[dict] = {}
         session_id: Final = _validate_runtime_session_id(
             _request_scoped_runtime_session_id(params, litellm_params)
-            or agentcore_config._get_runtime_session_id(optional_params),
+            or agentcore_config.get_runtime_session_id(optional_params),
             model=model,
         )
         headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"] = session_id
-        runtime_user_id: Final = agentcore_config._get_runtime_user_id(optional_params)
+        runtime_user_id: Final = agentcore_config.get_runtime_user_id(optional_params)
         if runtime_user_id:
             headers["X-Amzn-Bedrock-AgentCore-Runtime-User-Id"] = runtime_user_id
 
@@ -219,7 +219,7 @@ class BedrockAgentCoreA2ATransformation:
         return url, signed_headers, signed_body
 
     @staticmethod
-    async def parse_sse_events(response: _SSELineSource) -> AsyncIterator[dict[str, Any]]:
+    async def parse_sse_events(response: _SSELineSource) -> AsyncIterator[dict[str, object]]:
         """
         Parse SSE events from an httpx streaming response.
 

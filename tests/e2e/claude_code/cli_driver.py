@@ -25,6 +25,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
+from e2e_metadata import step
+
 from claude_code.rate_limiter import (
     RateLimiter,
     get_default_limiter,
@@ -211,6 +213,7 @@ class DriverResult:
     duration_ms: Optional[int] = None
 
 
+@step("Run Claude Code headless against {model} through the proxy")
 def run_claude(
     *,
     prompt: Optional[str],
@@ -297,6 +300,7 @@ def run_claude(
     }
     env["ANTHROPIC_BASE_URL"] = base_url
     env["ANTHROPIC_AUTH_TOKEN"] = api_key
+    env["DISABLE_AUTOUPDATER"] = "1"
     # Hand the CLI a fresh empty HOME so a compromised claude package
     # or a model-directed Read tool call can't see the runtime user's
     # real dotfiles. Created here, removed in the `finally` below
@@ -394,6 +398,7 @@ def _matches_failure_shape(outcome: ModelResult, pattern: "re.Pattern[str]") -> 
     return bool(pattern.search(failure_diagnostic(outcome)))
 
 
+@step("Run Claude Code headless against {models} in parallel through the proxy")
 def run_claude_models_parallel(
     *,
     models: Sequence[str],

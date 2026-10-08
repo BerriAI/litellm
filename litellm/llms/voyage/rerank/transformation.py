@@ -4,10 +4,11 @@ Transformation logic for Voyage AI's /v1/rerank endpoint.
 Docs - https://docs.voyageai.com/docs/reranker
 """
 
-from collections.abc import Mapping
-from typing import Any, Final
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._uuid import uuid
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
@@ -23,6 +24,11 @@ from litellm.types.utils import ModelInfo
 
 from ..embedding.transformation import VoyageError
 
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_OPTIONAL_INT: Final[TypeAdapter[int | None]] = TypeAdapter(int | None)
+_STR: Final = TypeAdapter(str)
+
 
 class VoyageRerankConfig(BaseRerankConfig):
     def get_supported_cohere_rerank_params(self, model: str) -> list:
@@ -34,7 +40,7 @@ class VoyageRerankConfig(BaseRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: list[str | dict[str, Any]],
+        documents: Sequence[str | Mapping[str, object]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
         rank_fields: list[str] | None = None,
@@ -103,13 +109,14 @@ class VoyageRerankConfig(BaseRerankConfig):
             )
 
         # Voyage AI returns results in "data" key, not "results"
-        _results: Final[list[dict] | None] = _json_response.get("data")
+        payload: Final = _JSON_OBJECT.validate_python(_json_response)
+        _results: Final = payload.get("data")
         if _results is None:
             raise ValueError(f"No results found in the response={_json_response}")
 
         # Transform to LiteLLM format
         transformed_results: Final = []
-        for result in _results:
+        for result in _JSON_OBJECTS.validate_python(_results):
             transformed_result: dict[str, object] = {
                 "index": result["index"],
                 "relevance_score": result["relevance_score"],
@@ -121,14 +128,14 @@ class VoyageRerankConfig(BaseRerankConfig):
                     transformed_result["document"] = result["document"]
             transformed_results.append(transformed_result)
 
-        usage: Final = _json_response.get("usage", {})
-        total_tokens: Final = usage.get("total_tokens", 0)
+        usage: Final = _JSON_OBJECT.validate_python(payload.get("usage", {}))
+        total_tokens: Final = _OPTIONAL_INT.validate_python(usage.get("total_tokens", 0))
         _billed_units: Final = RerankBilledUnits(total_tokens=total_tokens)
         _tokens: Final = RerankTokens(input_tokens=total_tokens, output_tokens=0)
         rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
         return RerankResponse(
-            id=_json_response.get("id") or str(uuid.uuid4()),
+            id=_STR.validate_python(payload.get("id") or str(uuid.uuid4())),
             results=transformed_results,
             meta=rerank_meta,
         )

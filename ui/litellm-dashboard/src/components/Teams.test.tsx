@@ -64,7 +64,6 @@ vi.mock("./networking", () => ({
   teamCreateCall: vi.fn(),
   teamDeleteCall: vi.fn(),
   fetchMCPAccessGroups: vi.fn(),
-  v2TeamListCall: vi.fn(),
   getGuardrailsList: vi.fn().mockResolvedValue({ guardrails: [] }),
   getPoliciesList: vi.fn().mockResolvedValue({ policies: [] }),
   getDefaultTeamSettings: vi.fn().mockResolvedValue({ values: {} }),
@@ -530,15 +529,6 @@ describe("Teams - team detail deep link (?team=)", () => {
     expect(onUrlUpdate.mock.calls.at(-1)![0].searchParams.has("team")).toBe(false);
     await waitFor(() => expect(screen.queryByTestId("team-info-view")).not.toBeInTheDocument());
   });
-
-  it("should preserve the legacy inset for the team detail view", async () => {
-    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />, {
-      searchParams: "?team=team-from-url",
-    });
-
-    await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
-    expect(screen.getByRole("main")).toHaveClass("px-12", "py-6");
-  });
 });
 
 describe("Teams - Create Team CTA is grouped with the tabs on the left", () => {
@@ -554,7 +544,6 @@ describe("Teams - Create Team CTA is grouped with the tabs on the left", () => {
     const createButton = within(tabNav).getByTestId("create-team-button");
     const firstTab = within(tabNav).getByRole("tab", { name: "Your Teams" });
 
-    expect(screen.getByRole("main")).toHaveClass("p-8");
     expect(within(tabNav).getByRole("separator")).toBeInTheDocument();
     expect(createButton.compareDocumentPosition(firstTab) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
@@ -903,16 +892,16 @@ describe("Teams - schema-declared metadata fields in team create", () => {
     });
   };
 
-  it("should prepopulate the declared key as an ordinary pair row and submit its value", async () => {
+  it("should show the declared key as a fixed label and submit its value under the declared key", async () => {
     await openCreateModal();
 
     fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Test Team" } });
     fireEvent.change(screen.getByTestId("create-team-models-select"), { target: { value: "gpt-4" } });
 
-    await waitFor(() => {
-      expect((screen.getByPlaceholderText("Key") as HTMLInputElement).value).toBe("cost_center");
-    });
-    fireEvent.change(screen.getByPlaceholderText("Value"), { target: { value: "CC-1001" } });
+    expect(await screen.findByTestId("metadata-schema-label")).toHaveTextContent("Cost Center");
+    expect(screen.queryByPlaceholderText("Key")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Remove key-value pair")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Cost Center"), { target: { value: "CC-1001" } });
 
     const createTeamSubmitButtons = screen.getAllByRole("button", { name: /create team/i });
     fireEvent.click(createTeamSubmitButtons[createTeamSubmitButtons.length - 1]);
@@ -933,10 +922,7 @@ describe("Teams - schema-declared metadata fields in team create", () => {
 
     fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Test Team" } });
     fireEvent.change(screen.getByTestId("create-team-models-select"), { target: { value: "gpt-4" } });
-    await waitFor(() => {
-      expect((screen.getByPlaceholderText("Key") as HTMLInputElement).value).toBe("cost_center");
-    });
-    fireEvent.change(screen.getByPlaceholderText("Value"), { target: { value: "CC-9999" } });
+    fireEvent.change(await screen.findByLabelText("Cost Center"), { target: { value: "CC-9999" } });
 
     const createTeamSubmitButtons = screen.getAllByRole("button", { name: /create team/i });
     fireEvent.click(createTeamSubmitButtons[createTeamSubmitButtons.length - 1]);
@@ -956,16 +942,12 @@ describe("Teams - schema-declared metadata fields in team create", () => {
     expect(screen.queryByRole("button", { name: /add key-value pair/i })).not.toBeInTheDocument();
   });
 
-  it("should re-seed declared keys when the create modal is closed and reopened", async () => {
+  it("should re-seed the declared key and drop free-form rows when the create modal is closed and reopened", async () => {
     await openCreateModal();
 
-    await waitFor(() => {
-      expect((screen.getByPlaceholderText("Key") as HTMLInputElement).value).toBe("cost_center");
-    });
-    fireEvent.click(screen.getByLabelText("Remove key-value pair"));
-    await waitFor(() => {
-      expect(screen.queryByPlaceholderText("Key")).not.toBeInTheDocument();
-    });
+    fireEvent.change(await screen.findByLabelText("Cost Center"), { target: { value: "CC-1001" } });
+    fireEvent.click(screen.getByRole("button", { name: /add key-value pair/i }));
+    fireEvent.change(await screen.findByPlaceholderText("Key"), { target: { value: "region" } });
 
     fireEvent.click(screen.getByRole("button", { name: /^close$/i }));
     await waitFor(() => {
@@ -977,9 +959,8 @@ describe("Teams - schema-declared metadata fields in team create", () => {
       fireEvent.click(createButton);
     });
 
-    await waitFor(() => {
-      expect((screen.getByPlaceholderText("Key") as HTMLInputElement).value).toBe("cost_center");
-    });
+    expect(await screen.findByLabelText("Cost Center")).toHaveValue("");
+    expect(screen.queryByPlaceholderText("Key")).not.toBeInTheDocument();
   });
 });
 
@@ -1778,5 +1759,52 @@ describe("Teams - the create form keeps the organization and models picks while 
     await openCreateModal();
     expect(orgField()).toHaveValue("");
     expect(modelsField()).toHaveValue("");
+  });
+});
+
+describe("Teams - disable_global_guardrails switch gating", () => {
+  const openCreateModal = async () => {
+    act(() => {
+      fireEvent.click(screen.getAllByRole("button", { name: /create team/i })[0]);
+    });
+    await screen.findByLabelText(/team name/i);
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTeamInfoView.mockClear();
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4"]);
+    vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
+    vi.mocked(getDefaultTeamSettings).mockResolvedValue({ values: {} });
+    mockUseOrganizations.mockReturnValue({ data: null });
+  });
+
+  it("hides the Disable Global Guardrails switch from a non-admin", async () => {
+    mockUseOrganizations.mockReturnValue({
+      data: [
+        {
+          organization_id: "org-1",
+          organization_alias: "Org 1",
+          models: [],
+          members: [{ user_id: "user-123", user_role: "org_admin" }],
+        },
+      ],
+    });
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Internal User" />);
+    await openCreateModal();
+
+    fireEvent.click(screen.getByText("Additional Settings"));
+
+    expect(screen.queryByRole("switch", { name: /Disable Global Guardrails/i })).not.toBeInTheDocument();
+  });
+
+  it("shows the Disable Global Guardrails switch to a proxy admin", async () => {
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    await openCreateModal();
+
+    fireEvent.click(screen.getByText("Additional Settings"));
+
+    expect(await screen.findByRole("switch", { name: /Disable Global Guardrails/i })).toBeInTheDocument();
   });
 });

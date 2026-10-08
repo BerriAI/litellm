@@ -2,24 +2,12 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Final, TypeVar, cast  # noqa: TID251  # a rebuilt chat row has no typed constructor
+from typing import Final, TypeVar, cast  # noqa: TID251  # a rebuilt chat row has no typed constructor across roles
 
 from pydantic import BaseModel
 
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
-from litellm.types.llms.openai import (
-    AllMessageValues,
-    ChatCompletionAssistantMessage,
-    ChatCompletionAssistantToolCall,
-    ChatCompletionTextObject,
-    ChatCompletionToolCallChunk,
-    ChatCompletionToolCallFunctionChunk,
-    ChatCompletionToolParam,
-    ResponseAPIUsage,
-)
-
-if TYPE_CHECKING:
-    from litellm.types.utils import ChatCompletionMessageToolCall
+from litellm.types.llms.openai import AllMessageValues, ResponseAPIUsage
 
 
 def _anthropic_stream_chunk_events(item: object) -> list[dict]:
@@ -204,7 +192,7 @@ def blocked_responses_stream_usage(original_response: object) -> ResponseAPIUsag
 
 
 def effective_skip_system_message_for_guardrail(guardrail_to_apply: object) -> bool:
-    per: Final = getattr(guardrail_to_apply, "skip_system_message_in_guardrail", None)
+    per: Final[object] = getattr(guardrail_to_apply, "skip_system_message_in_guardrail", None)
     if per is not None:
         return bool(per)
     import litellm
@@ -213,7 +201,7 @@ def effective_skip_system_message_for_guardrail(guardrail_to_apply: object) -> b
 
 
 def effective_skip_tool_message_for_guardrail(guardrail_to_apply: object) -> bool:
-    per: Final = getattr(guardrail_to_apply, "skip_tool_message_in_guardrail", None)
+    per: Final[object] = getattr(guardrail_to_apply, "skip_tool_message_in_guardrail", None)
     if per is not None:
         return bool(per)
     import litellm
@@ -290,55 +278,7 @@ def scoped_structured_message_indices(
     )
 
 
-def _assistant_tool_call(
-    tool_call: ChatCompletionToolCallChunk | ChatCompletionMessageToolCall,
-) -> ChatCompletionAssistantToolCall:
-    function: Final = stream_item_field(tool_call, "function")
-    tool_call_id: Final = stream_item_field(tool_call, "id")
-    name: Final = stream_item_field(function, "name")
-    arguments: Final = stream_item_field(function, "arguments")
-    return ChatCompletionAssistantToolCall(
-        id=tool_call_id if isinstance(tool_call_id, str) else None,
-        type="function",
-        function=ChatCompletionToolCallFunctionChunk(
-            name=name if isinstance(name, str) else None,
-            arguments=arguments if isinstance(arguments, str) else "",
-        ),
-    )
-
-
-def response_assistant_turn(
-    texts: Sequence[str],
-    tool_calls: Sequence[ChatCompletionToolCallChunk] | Sequence[ChatCompletionMessageToolCall],
-) -> ChatCompletionAssistantMessage | None:
-    """The scanned reply as the assistant turn closing the request conversation."""
-    assistant_tool_calls: Final = tuple(_assistant_tool_call(tool_call) for tool_call in tool_calls)
-    if not texts and not assistant_tool_calls:
-        return None
-    content: Final = (
-        texts[0]
-        if len(texts) == 1
-        else tuple(ChatCompletionTextObject(type="text", text=text) for text in texts) or None
-    )
-    if not assistant_tool_calls:
-        return ChatCompletionAssistantMessage(role="assistant", content=content)
-    return ChatCompletionAssistantMessage(
-        role="assistant",
-        content=content,
-        tool_calls=list(assistant_tool_calls),  # mutable-ok: the assistant message type takes a list
-    )
-
-
 ToolT = TypeVar("ToolT")
-
-
-def request_tools(raw_tools: object) -> tuple[ChatCompletionToolParam, ...]:
-    """The request's ``tools`` list, as the chat completion request model already validated it upstream."""
-    if not isinstance(raw_tools, list):
-        return ()
-    return tuple(
-        cast(Sequence[ChatCompletionToolParam], raw_tools)  # cast-ok: the request model validated tools upstream
-    )
 
 
 def openai_tool_name(tool: object) -> str | None:
@@ -449,12 +389,12 @@ def message_text_slot_count(message: AllMessageValues) -> int:
 def _part_with_text(part: object, text: str) -> object:
     if not isinstance(part, Mapping):
         return part
-    return {**part, "text": text}  # mutable-ok: content parts stay JSON-plain dicts
+    return {**part, "text": text}
 
 
 def _content_with_slot_texts(content: Sequence[object], texts: Sequence[str]) -> Sequence[object]:
     remaining_texts: Final = iter(texts)
-    return [  # mutable-ok: message content stays a JSON list
+    return [
         _part_with_text(part, next(remaining_texts)) if _content_part_text(part) is not None else part
         for part in content
     ]
@@ -473,7 +413,7 @@ def message_with_slot_texts(message: AllMessageValues, texts: Sequence[str]) -> 
     if not isinstance(content, (str, list)):
         return message
     rewritten_content: Final = texts[0] if isinstance(content, str) else _content_with_slot_texts(content, texts)
-    rewritten: Final = {**message, "content": rewritten_content}  # mutable-ok: chat rows stay JSON-plain dicts
+    rewritten: Final = {**message, "content": rewritten_content}
     return cast("AllMessageValues", rewritten)  # cast-ok: the same row with only its text slots swapped
 
 
