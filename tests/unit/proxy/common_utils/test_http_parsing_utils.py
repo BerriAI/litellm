@@ -1583,6 +1583,7 @@ async def _never_send(message: Message) -> None:
         ({"type": "http", "method": "POST", "path": "/v1/logs"}, True),
         ({"type": "http", "method": "GET", "path": "/v1/traces"}, False),
         ({"type": "http", "method": "POST", "path": "/v1/responses"}, False),
+        ({"type": "http", "path": "/v1/traces"}, False),
         ({"type": "websocket", "path": "/v1/traces"}, False),
         ({"type": "websocket", "path": "/v1/responses"}, False),
     ],

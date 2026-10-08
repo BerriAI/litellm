@@ -184,9 +184,9 @@ def _mark_body_received(byte_count: int | None) -> None:
 
 
 def is_otlp_trace_request(request: HTTPConnection) -> bool:
-    if request.scope["type"] != "http":
+    if request.scope.get("type") != "http":
         return False
-    return request.scope["method"] == "POST" and get_route_path(request.scope) in {"/v1/traces", "/v1/logs"}
+    return request.scope.get("method") == "POST" and get_route_path(request.scope) in {"/v1/traces", "/v1/logs"}
 
 
 async def _read_request_body(request: Request | None) -> dict:

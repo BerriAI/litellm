@@ -525,11 +525,6 @@ async def test_otlp_auth_errors_hide_internal_details_and_survive_missing_native
     assert message == (expected if native_available or media_type == "application/json" else "")
 
 
-# ---------------------------------------------------------------------------
-# otlp_http_exception_handler on websocket connections
-# ---------------------------------------------------------------------------
-
-
 def _websocket(sent: list[Message]) -> WebSocket:
     async def receive() -> Message:
         return {"type": "websocket.connect"}
