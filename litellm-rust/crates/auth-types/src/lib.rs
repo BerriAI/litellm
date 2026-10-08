@@ -5,6 +5,7 @@ mod error;
 pub mod http;
 mod policy;
 mod secret;
+mod setting;
 mod token;
 
 use serde::{Deserialize, Serialize};
@@ -54,4 +55,5 @@ pub use error::{Error, ErrorDetail, ErrorSource};
 pub use http::CredentialPlacement;
 pub use policy::{CredentialPlanKind, CredentialRule, ExistingHeaderBehavior, ProviderAuthPolicy};
 pub use secret::SecretValue;
+pub use setting::{Setting, env_names, kwarg_names, secret, setting};
 pub use token::{ResolvedCredential, TokenFuture, TokenProvider, TokenProviderHandle};

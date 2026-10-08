@@ -1,6 +1,7 @@
 mod aws;
 pub mod constants;
 mod error;
+pub mod settings;
 mod signer;
 
 pub use aws::*;

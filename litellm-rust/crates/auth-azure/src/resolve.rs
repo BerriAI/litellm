@@ -10,25 +10,10 @@ use std::sync::Arc;
 use super::native::{NativeAzureRequest, NativeAzureTokenAcquirer, ValidatedAzureRequest};
 use super::types::{AzureAuthInputs, AzureCredentialType, ConfigValue, DEFAULT_AZURE_SCOPE};
 
-const AZURE_AD_TOKEN_ENV: &str = "AZURE_AD_TOKEN";
-const AZURE_TENANT_ID_ENV: &str = "AZURE_TENANT_ID";
-const AZURE_CLIENT_ID_ENV: &str = "AZURE_CLIENT_ID";
-const AZURE_CLIENT_SECRET_ENV: &str = "AZURE_CLIENT_SECRET";
-const AZURE_SCOPE_ENV: &str = "AZURE_SCOPE";
-const AZURE_AUTHORITY_HOST_ENV: &str = "AZURE_AUTHORITY_HOST";
-const AZURE_CREDENTIAL_ENV: &str = "AZURE_CREDENTIAL";
-const AZURE_FEDERATED_TOKEN_FILE_ENV: &str = "AZURE_FEDERATED_TOKEN_FILE";
-
-pub const SECRET_NAMES: &[&str] = &[
-    AZURE_AD_TOKEN_ENV,
-    AZURE_TENANT_ID_ENV,
-    AZURE_CLIENT_ID_ENV,
-    AZURE_CLIENT_SECRET_ENV,
-    AZURE_SCOPE_ENV,
-    AZURE_AUTHORITY_HOST_ENV,
-    AZURE_CREDENTIAL_ENV,
-    AZURE_FEDERATED_TOKEN_FILE_ENV,
-];
+use super::settings::{
+    AZURE_AD_TOKEN_ENV, AZURE_AUTHORITY_HOST_ENV, AZURE_CLIENT_ID_ENV, AZURE_CLIENT_SECRET_ENV,
+    AZURE_CREDENTIAL_ENV, AZURE_FEDERATED_TOKEN_FILE_ENV, AZURE_SCOPE_ENV, AZURE_TENANT_ID_ENV,
+};
 
 #[derive(Clone, Debug)]
 pub(crate) enum AzureCredentialPlan {
@@ -483,7 +468,7 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        AzureAuthService, AzureCredentialPlan, AzureTokenAcquirer, SECRET_NAMES, oidc_reference,
+        AzureAuthService, AzureCredentialPlan, AzureTokenAcquirer, oidc_reference,
         resolve_reference, select_auth_plan,
     };
     use crate::native::ValidatedAzureRequest;
@@ -568,7 +553,7 @@ mod tests {
             seen.lock()
                 .unwrap()
                 .iter()
-                .all(|name| SECRET_NAMES.contains(&name.as_str()))
+                .all(|name| crate::settings::secret_names().contains(&name.as_str()))
         );
     }
 

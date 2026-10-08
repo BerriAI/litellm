@@ -10,7 +10,12 @@ base64.workspace = true
 bytes.workspace = true
 futures-util.workspace = true
 litellm-auth = { workspace = true, features = ["aws", "azure", "gcp"] }
+litellm-auth-aws.workspace = true
+litellm-auth-azure.workspace = true
+litellm-auth-gcp.workspace = true
+litellm-auth-types.workspace = true
 litellm-core-utils.workspace = true
+litellm-owned-params.workspace = true
 litellm-host.workspace = true
 litellm-http.workspace = true
 litellm-inference.workspace = true
@@ -25,8 +30,6 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-litellm-auth-aws.workspace = true
-litellm-auth-gcp.workspace = true
 litellm-host-native.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
 litellm-inference-testing.workspace = true

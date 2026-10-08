@@ -79,7 +79,7 @@ mod tests {
     use std::time::Duration;
 
     use futures_util::future::BoxFuture;
-    use litellm_core_utils::call_arguments::{CallArguments, compose_body, parse_options};
+    use litellm_core_utils::call_arguments::{CallArguments, parse_options};
     use litellm_host::interceptors::WireRequest;
     use litellm_llms::{
         base_llm::ocr::{
@@ -92,6 +92,7 @@ mod tests {
         vertex_ai::ocr::transformation::VertexAiOcrConfig,
     };
     use litellm_llms_types::formats::ocr::OcrResponseFormat;
+    use litellm_owned_params::compose_body;
     use serde_json::{Value, json};
 
     use super::*;

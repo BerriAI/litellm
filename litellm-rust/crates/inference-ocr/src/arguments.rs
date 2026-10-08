@@ -1,40 +1,11 @@
+use litellm_auth_types::{Setting, kwarg_names};
 use litellm_core_utils::call_arguments::ArgumentSpec;
 use litellm_llms::base_llm::ocr::error::Error;
+use litellm_owned_params::is_secret;
 
 use super::provider_config::{OcrConfigKind, resolve_provider_config};
 
 const COMMON_OPTION_FIELDS: &[&str] = &["req_format", "extra_body", "max_response_bytes"];
-const AZURE_AUTH_OPTION_FIELDS: &[&str] = &[
-    "azure_ad_token",
-    "tenant_id",
-    "client_id",
-    "client_secret",
-    "azure_scope",
-    "azure_authority_host",
-    "azure_credential",
-    "azure_federated_token_file",
-    "enable_azure_ad_token_refresh",
-];
-const AWS_AUTH_OPTION_FIELDS: &[&str] = &[
-    "aws_access_key_id",
-    "aws_secret_access_key",
-    "aws_session_token",
-    "aws_region_name",
-    "aws_session_name",
-    "aws_profile_name",
-    "aws_role_name",
-    "aws_web_identity_token",
-    "aws_sts_endpoint",
-    "aws_external_id",
-];
-const VERTEX_AUTH_OPTION_FIELDS: &[&str] = &[
-    "vertex_credentials",
-    "vertex_ai_credentials",
-    "vertex_project",
-    "vertex_ai_project",
-    "vertex_location",
-    "vertex_ai_location",
-];
 
 pub fn is_supported_request(model: &str, custom_llm_provider: Option<&str>) -> bool {
     resolve_provider_config(model, custom_llm_provider).is_ok()
@@ -46,34 +17,24 @@ pub fn consumed_optional_param_names(
 ) -> Result<Vec<&'static str>, Error> {
     let (model, config) = resolve_provider_config(model, custom_llm_provider)?;
     let provider_fields = config.get_supported_ocr_params(&model);
-    let auth_fields: &[&str] = match config {
-        OcrConfigKind::AwsTextract | OcrConfigKind::AwsTextractAnalyze => AWS_AUTH_OPTION_FIELDS,
+    let auth_settings: &'static [Setting] = match config {
+        OcrConfigKind::AwsTextract | OcrConfigKind::AwsTextractAnalyze => {
+            litellm_auth_aws::settings::SETTINGS
+        }
         OcrConfigKind::AzureAi
         | OcrConfigKind::AzureDocumentIntelligence
-        | OcrConfigKind::AzureCohere => AZURE_AUTH_OPTION_FIELDS,
-        OcrConfigKind::VertexAi | OcrConfigKind::VertexDeepSeek => VERTEX_AUTH_OPTION_FIELDS,
+        | OcrConfigKind::AzureCohere => litellm_auth_azure::settings::SETTINGS,
+        OcrConfigKind::VertexAi | OcrConfigKind::VertexDeepSeek => {
+            litellm_auth_gcp::settings::SETTINGS
+        }
         _ => &[],
     };
     Ok(COMMON_OPTION_FIELDS
         .iter()
         .chain(provider_fields)
-        .chain(auth_fields)
         .copied()
+        .chain(kwarg_names(auth_settings))
         .collect())
-}
-
-pub(crate) fn is_secret_param(name: &str) -> bool {
-    matches!(
-        name,
-        "azure_ad_token"
-            | "client_secret"
-            | "azure_federated_token_file"
-            | "vertex_credentials"
-            | "vertex_ai_credentials"
-            | "aws_secret_access_key"
-            | "aws_session_token"
-            | "aws_web_identity_token"
-    )
 }
 
 pub fn consumed_optional_params(
@@ -85,7 +46,7 @@ pub fn consumed_optional_params(
             .into_iter()
             .map(|name| ArgumentSpec {
                 name,
-                secret: is_secret_param(name),
+                secret: is_secret(name),
             })
             .collect()
     })
@@ -93,30 +54,48 @@ pub fn consumed_optional_params(
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
-    fn consumed_params_include_provider_options_and_mark_credentials() {
-        let mistral = consumed_optional_param_names("mistral/model", None).unwrap();
-        assert!(mistral.contains(&"pages"));
-        assert!(mistral.contains(&"req_format"));
-        assert!(!mistral.contains(&"vertex_project"));
+    #[rstest]
+    #[case::mistral_keeps_provider_and_common_options("mistral/model", None, "pages", true)]
+    #[case::mistral_keeps_req_format("mistral/model", None, "req_format", true)]
+    #[case::mistral_has_no_vertex_credentials("mistral/model", None, "vertex_project", false)]
+    #[case::vertex_takes_its_credentials(
+        "vertex_ai/deepseek-ocr",
+        None,
+        "vertex_credentials",
+        true
+    )]
+    #[case::vertex_takes_the_alias("vertex_ai/deepseek-ocr", None, "vertex_ai_project", true)]
+    #[case::vertex_has_no_mistral_option("vertex_ai/deepseek-ocr", None, "pages", false)]
+    #[case::vertex_has_no_aws_credentials("vertex_ai/deepseek-ocr", None, "aws_region_name", false)]
+    #[case::textract_takes_aws_credentials(
+        "detect-document-text",
+        Some("aws_textract"),
+        "aws_session_token",
+        true
+    )]
+    #[case::azure_takes_entra_fields("model", Some("azure_ai"), "azure_federated_token_file", true)]
+    fn consumed_names_follow_the_provider_family(
+        #[case] model: &str,
+        #[case] provider: Option<&str>,
+        #[case] name: &str,
+        #[case] consumed: bool,
+    ) {
+        let names = consumed_optional_param_names(model, provider).unwrap();
+        assert_eq!(names.contains(&name), consumed);
+    }
 
-        let vertex = consumed_optional_param_names("vertex_ai/deepseek-ocr", None).unwrap();
-        assert!(!vertex.contains(&"temperature"));
-        assert!(vertex.contains(&"vertex_credentials"));
-        assert!(!vertex.contains(&"pages"));
-
-        let azure = consumed_optional_params("model", Some("azure_ai")).unwrap();
-        assert!(
-            azure
-                .iter()
-                .any(|spec| spec.name == "client_secret" && spec.secret)
-        );
-        assert!(
-            azure
-                .iter()
-                .any(|spec| spec.name == "tenant_id" && !spec.secret)
-        );
+    #[rstest]
+    #[case::client_secret("client_secret", true)]
+    #[case::azure_ad_token("azure_ad_token", true)]
+    #[case::tenant_id("tenant_id", false)]
+    #[case::req_format("req_format", false)]
+    fn consumed_specs_carry_the_secret_flag(#[case] name: &str, #[case] secret: bool) {
+        let specs = consumed_optional_params("model", Some("azure_ai")).unwrap();
+        let spec = specs.iter().find(|spec| spec.name == name).unwrap();
+        assert_eq!(spec.secret, secret);
     }
 }

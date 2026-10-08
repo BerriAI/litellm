@@ -1,11 +1,8 @@
 use std::collections::BTreeMap;
 
-use litellm_core_utils::{
-    call_arguments::{CallArguments, compose_body},
-    params::OpaqueParams,
-    url_utils::ApiUrl,
-};
+use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, url_utils::ApiUrl};
 use litellm_http::outbound::OutboundRequest;
+use litellm_owned_params::compose_body;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value, json};
 
