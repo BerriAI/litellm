@@ -11,7 +11,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.utils import CustomStreamWrapper
 
 # test_example.py
-from abc import ABC, abstractmethod
+from abc import ABC
 
 
 class BaseLoggingCallbackTest(ABC):

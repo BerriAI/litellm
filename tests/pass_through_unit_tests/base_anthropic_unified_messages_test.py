@@ -15,7 +15,6 @@ from litellm.llms.anthropic.pass_through.messages.handler import (
 from typing import Optional
 from litellm.types.utils import StandardLoggingPayload
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.router import Router
 import importlib
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM

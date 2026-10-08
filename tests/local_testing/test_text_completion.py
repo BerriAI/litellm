@@ -1,4 +1,3 @@
-import asyncio
 import json
 import os
 from types import MappingProxyType

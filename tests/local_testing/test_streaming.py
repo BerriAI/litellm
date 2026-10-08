@@ -22,7 +22,6 @@ load_dotenv()
 import litellm
 from litellm import (
     AuthenticationError,
-    BadRequestError,
     ModelResponse,
     RateLimitError,
     acompletion,
@@ -909,14 +908,6 @@ def test_openai_stream_options_call_text_completion() -> None:
     assert chunks[-1].usage.completion_tokens > 0
     assert all(chunk.usage is None for chunk in chunks[:-1])
     assert any(chunk.choices[0].text for chunk in chunks)
-
-
-
-
-# # test on together ai completion call - starcoder
-
-
-# # test on together ai completion call - starcoder
 
 
 

@@ -9,7 +9,6 @@ from typing import Optional, List, Union
 from test_openai_files_endpoints import upload_file, delete_file
 import sys
 import time
-from unittest.mock import patch
 
 
 BASE_URL = "http://localhost:4000"  # Replace with your actual base URL

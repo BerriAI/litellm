@@ -2,7 +2,6 @@ import io
 
 
 import litellm
-from litellm import completion
 
 litellm.failure_callback = ["lunary"]
 litellm.success_callback = ["lunary"]
