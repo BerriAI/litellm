@@ -650,7 +650,7 @@ class updateLiteLLMParams(GenericLiteLLMParams):
     # only differece is model is optional
     if TYPE_CHECKING:
 
-        def __init__(self, *, model: str | None = None, **data: object) -> None: ...  # kwargs-ok: updates vary by provider
+        def __init__(self, *, model: str | None = None, **data: object) -> None: ...  # kwargs-ok: per-provider
 
     model: str | None = None
 

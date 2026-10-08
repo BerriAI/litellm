@@ -11,7 +11,6 @@ import anyio
 import anyio.lowlevel
 import httpx
 import tiktoken
-from pydantic import BaseModel
 from typing_extensions import ParamSpec, TypeVar
 
 import litellm
@@ -403,7 +402,7 @@ def token_counter(
     model="",
     custom_tokenizer: dict | SelectTokenizerResponse | None = None,
     text: str | list[str] | None = None,
-    messages: Sequence[AllMessageValues | BaseModel | Mapping[str, object]] | None = None,
+    messages: Sequence[AllMessageValues | Message] | None = None,
     count_response_tokens: bool | None = False,
     tools: list[ChatCompletionToolParam] | None = None,
     tool_choice: ChatCompletionNamedToolChoiceParam | None = None,

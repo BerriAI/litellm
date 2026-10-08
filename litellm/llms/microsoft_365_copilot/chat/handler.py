@@ -96,11 +96,25 @@ class _AsyncGraphClient(Protocol):
     ) -> httpx.Response: ...
 
 
+class _HTTPClientFactory(Protocol):
+    def get_httpx_client(self, params: Mapping[str, object] | None = None) -> HTTPHandler: ...
+
+    def get_async_httpx_client(
+        self,
+        llm_provider: LlmProviders | str,
+        params: Mapping[str, object] | None = None,
+        shared_session: ClientSession | None = None,
+    ) -> AsyncHTTPHandler: ...
+
+
 _JSON_VALUE_ADAPTER: Final = TypeAdapter(object)
+_HTTP_CLIENT_FACTORY: Final = cast(  # cast-ok: shared cached-client methods have partially typed signatures
+    _HTTPClientFactory, http_handler
+)
 
 
 def _get_sync_http_client(params: Mapping[str, object] | None) -> HTTPHandler:
-    return http_handler.get_httpx_client(params)
+    return _HTTP_CLIENT_FACTORY.get_httpx_client(dict(params) if params is not None else None)
 
 
 def _get_async_http_client(
@@ -108,9 +122,9 @@ def _get_async_http_client(
     params: Mapping[str, object] | None,
     shared_session: ClientSession | None,
 ) -> AsyncHTTPHandler:
-    return http_handler.get_async_httpx_client(
+    return _HTTP_CLIENT_FACTORY.get_async_httpx_client(
         provider,
-        params,
+        dict(params) if params is not None else None,
         shared_session,
     )
 

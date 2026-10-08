@@ -2564,10 +2564,10 @@ def create_tokenizer(json: str):
 
 
 def token_counter(
-    model: str = "",
-    custom_tokenizer: Mapping[str, object] | SelectTokenizerResponse | None = None,
+    model="",
+    custom_tokenizer: dict | SelectTokenizerResponse | None = None,
     text: str | list[str] | None = None,
-    messages: Sequence[AllMessageValues | BaseModel | Mapping[str, object]] | None = None,
+    messages: Sequence | None = None,
     count_response_tokens: bool | None = False,
     tools: list[ChatCompletionToolParam] | None = None,
     tool_choice: ChatCompletionNamedToolChoiceParam | None = None,
@@ -8275,24 +8275,27 @@ from litellm.types.llms.openai import (
 )
 
 
-def convert_to_dict(message: BaseModel | Mapping[str, object]) -> dict[str, object]:
+def convert_to_dict(message: BaseModel | dict) -> dict:
     """
-    Converts a Pydantic model or mapping into a dictionary.
+    Converts a message to a dictionary if it's a Pydantic model.
 
     Args:
-        message: The message, which may be a Pydantic model or mapping.
+        message: The message, which may be a Pydantic model or a dictionary.
 
     Returns:
         dict: The converted message.
     """
     if isinstance(message, BaseModel):
         return message.model_dump(exclude_none=True)
-    return dict(message)
+    elif isinstance(message, dict):
+        return message
+    else:
+        raise TypeError(f"Invalid message type: {type(message)}. Expected dict or Pydantic model.")
 
 
 def convert_list_message_to_dict(
     messages: Sequence[BaseModel | Mapping[str, object]],
-) -> list[dict[str, object]]:
+) -> list[dict[str, object]]:  # mutable-ok: callers mutate the returned message dicts
     def _as_message_value(message: BaseModel | Mapping[str, object]) -> AllMessageValues:
         return cast(AllMessageValues, convert_to_dict(message))  # cast-ok: message dicts satisfy the TypedDict shape
 

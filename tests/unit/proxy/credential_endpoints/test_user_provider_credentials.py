@@ -33,6 +33,18 @@ def _row(user_id="user-a", credential_name="copilot-cred", credential_b64="ciphe
     )
 
 
+def _fake_redis(monkeypatch):
+    """A RedisCache backed by a fakeredis client; two DualCaches can share it."""
+    import fakeredis
+
+    from litellm.caching.redis_cache import RedisCache
+
+    fake = fakeredis.FakeAsyncRedis()
+    redis = RedisCache(host="localhost", port=6379)
+    monkeypatch.setattr(redis, "init_async_client", lambda: fake)
+    return redis
+
+
 @pytest.fixture(autouse=True)
 def _master_key(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-master")
@@ -94,7 +106,7 @@ async def test_delete_for_credential_returns_affected_user_ids():
 
 
 @pytest.mark.asyncio
-async def test_aget_tokens_returns_plaintext_and_caches_ciphertext():
+async def test_aget_tokens_returns_plaintext_and_caches_ciphertext(monkeypatch):
     payload = GithubCopilotUserConnectionPayload(access_token="gho_secret", github_login="octo")
     from litellm.proxy.credential_endpoints import user_provider_credentials as upc
 
@@ -102,7 +114,8 @@ async def test_aget_tokens_returns_plaintext_and_caches_ciphertext():
     table = MagicMock()
     table.find_many = AsyncMock(return_value=[_row(credential_b64=ciphertext)])
     prisma_client = _prisma(table)
-    cache = DualCache()
+    redis = _fake_redis(monkeypatch)
+    cache = DualCache(redis_cache=redis)
 
     tokens = await aget_user_provider_tokens(prisma_client, cache, "user-a", ["copilot-cred"])
     assert tokens == {"copilot-cred": "gho_secret"}
@@ -111,17 +124,18 @@ async def test_aget_tokens_returns_plaintext_and_caches_ciphertext():
     tokens2 = await aget_user_provider_tokens(prisma_client, cache, "user-a", ["copilot-cred"])
     assert tokens2 == {"copilot-cred": "gho_secret"}
     assert table.find_many.await_count == 1
-    cached = await cache.async_get_cache(upc._cache_key("user-a", "copilot-cred"))
+    cached = await redis.async_get_cache(upc._cache_key("user-a", "copilot-cred"))
     assert cached == ciphertext
     assert "gho_secret" not in cached
+    assert await cache.in_memory_cache.async_get_cache(upc._cache_key("user-a", "copilot-cred")) is None
 
 
 @pytest.mark.asyncio
-async def test_aget_tokens_negative_caches_missing_connection():
+async def test_aget_tokens_negative_caches_missing_connection(monkeypatch):
     table = MagicMock()
     table.find_many = AsyncMock(return_value=[])
     prisma_client = _prisma(table)
-    cache = DualCache()
+    cache = DualCache(redis_cache=_fake_redis(monkeypatch))
 
     assert await aget_user_provider_tokens(prisma_client, cache, "user-a", ["copilot-cred"]) == {}
     assert await aget_user_provider_tokens(prisma_client, cache, "user-a", ["copilot-cred"]) == {}
@@ -129,14 +143,14 @@ async def test_aget_tokens_negative_caches_missing_connection():
 
 
 @pytest.mark.asyncio
-async def test_invalidate_cache_forces_db_refetch():
+async def test_invalidate_cache_forces_db_refetch(monkeypatch):
     payload = GithubCopilotUserConnectionPayload(access_token="gho_new", github_login="octo")
     from litellm.proxy.credential_endpoints import user_provider_credentials as upc
 
     table = MagicMock()
     table.find_many = AsyncMock(return_value=[_row(credential_b64=upc._encode(payload))])
     prisma_client = _prisma(table)
-    cache = DualCache()
+    cache = DualCache(redis_cache=_fake_redis(monkeypatch))
 
     await aget_user_provider_tokens(prisma_client, cache, "user-a", ["copilot-cred"])
     await invalidate_user_provider_credential_cache(cache, "user-a", "copilot-cred")
@@ -153,14 +167,9 @@ def test_decode_rejects_garbage():
 async def test_disconnect_on_one_worker_invalidates_other_workers_via_redis(monkeypatch):
     """Two DualCache instances (two workers) sharing one Redis: a disconnect on A must
     be visible on B, not just in A's in-memory layer."""
-    import fakeredis
-
-    from litellm.caching.redis_cache import RedisCache
     from litellm.proxy.credential_endpoints import user_provider_credentials as upc
 
-    fake = fakeredis.FakeAsyncRedis()
-    redis = RedisCache(host="localhost", port=6379)
-    monkeypatch.setattr(redis, "init_async_client", lambda: fake)
+    redis = _fake_redis(monkeypatch)
     cache_a = DualCache(redis_cache=redis)
     cache_b = DualCache(redis_cache=redis)
 
@@ -188,14 +197,64 @@ async def test_disconnect_on_one_worker_invalidates_other_workers_via_redis(monk
 
 
 @pytest.mark.asyncio
-async def test_token_cache_uses_redis_only_when_attached():
-    """Backend selection is pinned: Redis attached -> Redis only; no Redis -> the DualCache."""
-    from litellm.caching.redis_cache import RedisCache
+async def test_redis_read_failure_falls_back_to_the_database(monkeypatch):
+    """A broken Redis must not 401 a connected user: reads degrade to a cache miss."""
     from litellm.proxy.credential_endpoints import user_provider_credentials as upc
 
-    bare = DualCache()
-    assert upc._token_cache(bare) is bare
+    redis = _fake_redis(monkeypatch)
+    monkeypatch.setattr(redis, "async_get_cache", AsyncMock(side_effect=RuntimeError("redis down")))
+    cache = DualCache(redis_cache=redis)
 
-    redis = RedisCache(host="localhost", port=6379)
-    with_redis = DualCache(redis_cache=redis)
-    assert upc._token_cache(with_redis) is redis
+    payload = GithubCopilotUserConnectionPayload(access_token="gho_secret", github_login="octo")
+    table = MagicMock()
+    table.find_many = AsyncMock(return_value=[_row(credential_b64=upc._encode(payload))])
+    prisma_client = _prisma(table)
+
+    assert await aget_user_provider_tokens(prisma_client, cache, "user-a", ["copilot-cred"]) == {
+        "copilot-cred": "gho_secret"
+    }
+
+
+@pytest.mark.asyncio
+async def test_redis_write_and_delete_failures_do_not_fail_the_request(monkeypatch):
+    redis = _fake_redis(monkeypatch)
+    monkeypatch.setattr(redis, "async_set_cache", AsyncMock(side_effect=RuntimeError("redis down")))
+    monkeypatch.setattr(redis, "async_delete_cache", AsyncMock(side_effect=RuntimeError("redis down")))
+    cache = DualCache(redis_cache=redis)
+
+    payload = GithubCopilotUserConnectionPayload(access_token="gho_secret", github_login="octo")
+    from litellm.proxy.credential_endpoints import user_provider_credentials as upc
+
+    table = MagicMock()
+    table.find_many = AsyncMock(return_value=[_row(credential_b64=upc._encode(payload))])
+    prisma_client = _prisma(table)
+
+    assert await aget_user_provider_tokens(prisma_client, cache, "user-a", ["copilot-cred"]) == {
+        "copilot-cred": "gho_secret"
+    }
+    await invalidate_user_provider_credential_cache(cache, "user-a", "copilot-cred")
+
+
+@pytest.mark.asyncio
+async def test_without_redis_no_worker_local_entries_are_kept():
+    """No Redis -> no cache at all: a disconnect on another worker cannot leave a
+    stale local entry, because none was ever written."""
+    from litellm.proxy.credential_endpoints import user_provider_credentials as upc
+
+    payload = GithubCopilotUserConnectionPayload(access_token="gho_secret", github_login="octo")
+    ciphertext = upc._encode(payload)
+    table = MagicMock()
+    table.find_many = AsyncMock(side_effect=[[_row(credential_b64=ciphertext)], [_row(credential_b64=ciphertext)], []])
+    prisma_client = _prisma(table)
+    cache_a = DualCache()
+    cache_b = DualCache()
+
+    assert await aget_user_provider_tokens(prisma_client, cache_a, "user-a", ["copilot-cred"]) == {
+        "copilot-cred": "gho_secret"
+    }
+    assert await aget_user_provider_tokens(prisma_client, cache_b, "user-a", ["copilot-cred"]) == {
+        "copilot-cred": "gho_secret"
+    }
+    await invalidate_user_provider_credential_cache(cache_b, "user-a", "copilot-cred")
+    assert await aget_user_provider_tokens(prisma_client, cache_a, "user-a", ["copilot-cred"]) == {}
+    assert table.find_many.await_count == 3

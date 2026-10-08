@@ -2271,9 +2271,18 @@ async def test_model_connection(
             or resolve_health_check_mode(probe_model_info, _OBJECT_MAPPING.validate_python(litellm_params))
         )
 
+        from litellm.proxy.common_utils.http_parsing_utils import safe_get_request_headers
+        from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
+
+        raw_headers: Final = TypeAdapter(dict[str, str]).validate_python(safe_get_request_headers(request))
+        health_check_params: Final = {
+            **_OBJECT_MAPPING.validate_python(litellm_params),
+            "secret_fields": SecretFields(raw_headers=RedactedDict(raw_headers)),
+        }
+
         result: Final = await run_with_timeout(
             litellm.ahealth_check(
-                model_params=litellm_params,
+                model_params=health_check_params,
                 mode=probe_mode,
                 prompt="test from litellm",
                 input=["test from litellm"],
@@ -2282,7 +2291,7 @@ async def test_model_connection(
         )
 
         # Clean the result for display
-        cleaned_result: Final = clean_endpoint_data({**litellm_params, **result}, details=True)
+        cleaned_result: Final = clean_endpoint_data({**health_check_params, **result}, details=True)
 
         return {
             "status": "error" if "error" in result else "success",

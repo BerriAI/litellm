@@ -9,18 +9,16 @@ negative marker so an unconnected user does not hit the DB per request.
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import (
-    TYPE_CHECKING,
-    Final,
-    Protocol,
-    cast,  # noqa: TID251  # casts pin the untyped DualCache to the local _TokenCache Protocol
-)
+from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
+
+if TYPE_CHECKING:
+    from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
     GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS,
     USER_PROVIDER_CREDENTIAL_CACHE_PREFIX,
@@ -40,16 +38,6 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 _NOT_CONNECTED: Final = USER_PROVIDER_CREDENTIAL_NOT_CONNECTED
-
-
-class _TokenCache(Protocol):
-    async def async_get_cache(self, key: str) -> object: ...
-
-    async def async_set_cache(
-        self, key: str, value: object, local_only: bool = False, ttl: float | None = None
-    ) -> object: ...
-
-    async def async_delete_cache(self, key: str) -> object: ...
 
 
 class GithubCopilotUserConnectionPayload(BaseModel):
@@ -163,12 +151,20 @@ async def list_user_provider_credentials_for_credential(
     return await _table(prisma_client).find_many(where={"credential_name": credential_name})
 
 
-def _token_cache(cache: DualCache) -> "_TokenCache":
-    """Cross-worker consistency matters here: with Redis attached, use it alone
-    so a connect or disconnect invalidates on every worker, not just this one."""
-    return cast(  # cast-ok: DualCache and RedisCache both satisfy the used signatures
-        _TokenCache, cache.redis_cache if cache.redis_cache is not None else cache
-    )
+async def _try_cache_get(token_cache: "RedisCache", key: str) -> object:
+    """Redis errors must read as a plain miss: the DB is the source of truth."""
+    try:
+        return await token_cache.async_get_cache(key)
+    except Exception:  # noqa: BLE001  # a Redis outage must fall back to the database, never reject a connected user
+        verbose_proxy_logger.warning("aget_user_provider_tokens: Redis get failed; falling back to the database")
+        return None
+
+
+async def _try_cache_set(token_cache: "RedisCache", key: str, value: str) -> None:
+    try:
+        await token_cache.async_set_cache(key, value, ttl=GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS)
+    except Exception:  # noqa: BLE001  # caching is best-effort; a Redis outage is not worth failing the request
+        verbose_proxy_logger.warning("aget_user_provider_tokens: Redis set failed; skipping the cache write")
 
 
 @with_service_target("user_provider_connections")
@@ -177,8 +173,13 @@ async def invalidate_user_provider_credential_cache(
     user_id: str,
     credential_name: str,
 ) -> None:
-    token_cache: Final = _token_cache(cache)
-    await token_cache.async_delete_cache(_cache_key(user_id, credential_name))
+    token_cache: Final = cache.redis_cache
+    if token_cache is None:
+        return
+    try:
+        await token_cache.async_delete_cache(_cache_key(user_id, credential_name))
+    except Exception:  # noqa: BLE001  # a Redis outage must not fail a disconnect
+        verbose_proxy_logger.warning("invalidate_user_provider_credential_cache: Redis delete failed")
 
 
 @with_service_target("user_provider_connections")
@@ -191,15 +192,17 @@ async def aget_user_provider_tokens(
     """Map each per-user credential name to the caller's stored GitHub token.
 
     Cached values are the stored ciphertext or the ``_NOT_CONNECTED`` marker;
-    plaintext tokens only ever live in the returned dict."""
-    token_cache: Final = _token_cache(cache)
+    plaintext tokens only ever live in the returned dict. Redis is the only
+    cache layer used: without it there is no shared invalidation, so a worker
+    serving a stale local entry after a disconnect is worse than a DB read."""
+    token_cache: Final = cache.redis_cache
     names: Final = tuple(dict.fromkeys(credential_names))
     if not names:
         return {}
     cached: Final[dict[str, str]] = {}  # mutable-ok: accumulates hits and DB reads
     misses: Final[list[str]] = []  # mutable-ok: accumulates cache misses
     for name in names:
-        value = await token_cache.async_get_cache(_cache_key(user_id, name))
+        value = await _try_cache_get(token_cache, _cache_key(user_id, name)) if token_cache is not None else None
         if value == _NOT_CONNECTED:
             continue
         if isinstance(value, str) and value:
@@ -225,11 +228,8 @@ async def aget_user_provider_tokens(
         return {}
     found: Final = {row.credential_name: row.credential_b64 for row in rows}
     for name in misses:
-        await token_cache.async_set_cache(
-            _cache_key(user_id, name),
-            found.get(name, _NOT_CONNECTED),
-            ttl=GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS,
-        )
+        if token_cache is not None:
+            await _try_cache_set(token_cache, _cache_key(user_id, name), found.get(name, _NOT_CONNECTED))
         if name in found:
             cached[name] = found[name]
     return {
