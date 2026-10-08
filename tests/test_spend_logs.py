@@ -116,7 +116,7 @@ async def generate_team(session: aiohttp.ClientSession, org_id: str) -> dict:
 
 
 @pytest.mark.skip(
-    reason="Flaky in CI: /spend/logs?request_id=... returns 500 even after a 20s wait for the spend log to be written. Spend-log accuracy is covered by tests/unit/proxy/spend_tracking/ and the proxy_spend_accuracy_tests CircleCI job."
+    reason="Flaky in CI: /spend/logs?request_id=... returns 500 even after a 20s wait for the spend log to be written. Spend-log accuracy is covered by tests/unit/proxy/spend_tracking/ and tests/integration/spend/."
 )
 @pytest.mark.asyncio
 async def test_spend_logs_with_org_id():
