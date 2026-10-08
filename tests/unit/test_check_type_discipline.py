@@ -760,6 +760,17 @@ def test_settings_config_dict_frozen_true_is_clean(tmp_path):
     assert "LIT015" not in _codes(tmp_path, src)
 
 
+def test_openai_object_base_is_flagged_and_can_be_frozen(tmp_path):
+    assert "LIT015" in _codes(tmp_path, "class Foo(OpenAIObject):\n    x: int\n")
+    assert "LIT015" not in _codes(
+        tmp_path,
+        "from pydantic import ConfigDict\n"
+        "class Foo(OpenAIObject):\n"
+        "    model_config = ConfigDict(frozen=True)\n"
+        "    x: int\n",
+    )
+
+
 def test_same_named_models_use_each_classes_own_override(tmp_path):
     src = (
         "from pydantic import BaseModel\n"

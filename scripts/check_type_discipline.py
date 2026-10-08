@@ -97,7 +97,7 @@ LIT015  Pydantic model class that is not frozen. Set `frozen=True` in
         inherit the frozen setting from in-module model bases, unless their own
         configuration overrides it. Detection is name-based: `BaseModel`,
         `pydantic.BaseModel`, `LiteLLMBaseModel`, `BaseLiteLLMOpenAIResponseObject`,
-        `LiteLLMPydanticObjectBase`, `RootModel`, and `BaseSettings` identify
+        `LiteLLMPydanticObjectBase`, `OpenAIObject`, `RootModel`, and `BaseSettings` identify
         models, while `TypedDict` classes are exempt. Replace in-place field writes
         with `model_copy(update=...)`. Suppress with `# frozen-ok: <reason>` on the
         `class` line.
@@ -166,6 +166,7 @@ PYDANTIC_BASES: Final = frozenset(
         "LiteLLMBaseModel",
         "BaseLiteLLMOpenAIResponseObject",
         "LiteLLMPydanticObjectBase",
+        "OpenAIObject",
         "RootModel",
         "BaseSettings",
     )
