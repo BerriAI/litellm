@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from httpx import Response
 from pydantic import BaseModel
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
 import litellm._logging
@@ -71,13 +71,13 @@ from litellm.llms.lemonade.cost_calculator import (
     cost_per_token as lemonade_cost_per_token,
 )
 from litellm.llms.openai.cost_calculation import (
-    _video_output_cost_per_second,
-)
-from litellm.llms.openai.cost_calculation import (
     cost_per_second as openai_cost_per_second,
 )
 from litellm.llms.openai.cost_calculation import (
     cost_per_token as openai_cost_per_token,
+)
+from litellm.llms.openai.cost_calculation import (
+    video_output_cost_per_second,
 )
 from litellm.llms.perplexity.cost_calculator import (
     cost_per_token as perplexity_cost_per_token,
@@ -100,7 +100,7 @@ from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_ro
 from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
-from litellm.types.decisions import DecisionsResponse, DecisionsUsage
+from litellm.types.decisions import DecisionsResponse, DecisionsUsage, OpenAIDecisionResponse, OpenAIDecisionUsage
 from litellm.types.llms.base import CachedTokensDetails, LiteLLMBaseModel
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
@@ -1034,6 +1034,8 @@ def get_usage_object(
         ),
     )
 
+    if isinstance(completion_response, (DecisionsResponse, OpenAIDecisionResponse)):
+        return None if completion_response.usage is None else _decisions_usage(completion_response.usage)
     if usage_obj is None:
         return None
     if isinstance(usage_obj, Usage):
@@ -1064,12 +1066,37 @@ def get_usage_object(
         return None
 
 
+def _decisions_prompt_tokens_details(usage: DecisionsUsage | OpenAIDecisionUsage) -> PromptTokensDetailsWrapper:
+    match usage:
+        case DecisionsUsage():
+            return PromptTokensDetailsWrapper(
+                cached_tokens=usage.cached_tokens, cache_write_tokens=usage.cache_write_tokens
+            )
+        case OpenAIDecisionUsage():
+            return PromptTokensDetailsWrapper(
+                cached_tokens=usage.input_tokens_details.cached_tokens,
+                cache_write_tokens=usage.input_tokens_details.cache_write_tokens,
+            )
+        case _:
+            assert_never(usage)
+
+
+def _decisions_usage(usage: DecisionsUsage | OpenAIDecisionUsage) -> Usage:
+    return Usage(
+        prompt_tokens=usage.input_tokens,
+        completion_tokens=usage.output_tokens,
+        total_tokens=usage.input_tokens + usage.output_tokens,
+        prompt_tokens_details=_decisions_prompt_tokens_details(usage),
+    )
+
+
 def _is_known_usage_objects(usage_obj):
     """Returns True if the usage obj is a known Usage type"""
     return (
         isinstance(usage_obj, litellm.Usage)
         or isinstance(usage_obj, ResponseAPIUsage)
         or isinstance(usage_obj, DecisionsUsage)
+        or isinstance(usage_obj, OpenAIDecisionUsage)
         or TranscriptionUsageObjectTransformation.is_transcription_usage_object(usage_obj)
     )
 
@@ -1481,11 +1508,8 @@ def completion_cost(
                             "usage",
                             litellm.Usage(**_usage_for_dump.model_dump()),
                         )
-                    if isinstance(usage_obj, DecisionsUsage):
-                        _usage = {
-                            "prompt_tokens": usage_obj.input_tokens,
-                            "completion_tokens": usage_obj.output_tokens,
-                        }
+                    if isinstance(usage_obj, (DecisionsUsage, OpenAIDecisionUsage)):
+                        _usage = _decisions_usage(usage_obj).model_dump()
                     elif usage_obj is None:
                         _usage = {}
                     elif isinstance(usage_obj, BaseModel):
@@ -1977,7 +2001,8 @@ def response_cost_calculator(
     | OpenAIModerationResponse
     | Response
     | SearchResponse
-    | DecisionsResponse,
+    | DecisionsResponse
+    | OpenAIDecisionResponse,
     model: str,
     custom_llm_provider: str | None,
     call_type: Literal[
@@ -2552,7 +2577,7 @@ def default_video_cost_calculator(
     if video_cost_per_second is not None:
         return video_cost_per_second * duration_seconds
 
-    output_cost_per_second: Final = _video_output_cost_per_second(cost_info, video_resolution)
+    output_cost_per_second: Final = video_output_cost_per_second(cost_info, video_resolution)
     if output_cost_per_second is not None:
         return output_cost_per_second * duration_seconds
 

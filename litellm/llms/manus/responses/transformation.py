@@ -2,6 +2,7 @@ import uuid
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -29,6 +30,7 @@ else:
     LiteLLMLoggingObj = Any
 
 MANUS_API_BASE: Final = "https://api.manus.im"
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -177,7 +179,7 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 original_response=raw_response.text,
                 additional_args={"complete_input_dict": {}},
             )
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
             # Manus uses camelCase "createdAt" instead of snake_case "created_at"
             if "createdAt" in raw_response_json and "created_at" not in raw_response_json:
@@ -269,7 +271,7 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 original_response=raw_response.text,
                 additional_args={"complete_input_dict": {}},
             )
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
             # Manus uses camelCase "createdAt" instead of snake_case "created_at"
             if "createdAt" in raw_response_json and "created_at" not in raw_response_json:

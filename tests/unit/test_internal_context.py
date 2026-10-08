@@ -59,6 +59,7 @@ _IN_MEMORY_ONLY_CALLERS: Final = frozenset(
         "litellm/llms/vertex_ai/vertex_ai_non_gemini.py",
         "litellm/llms/watsonx/common_utils.py",
         "litellm/proxy/_experimental/mcp_server/byok_credential_cache.py",
+        "litellm/proxy/_experimental/mcp_server/catalog.py",
         "litellm/proxy/_experimental/mcp_server/discoverable_endpoints.py",
         "litellm/proxy/_experimental/mcp_server/oauth_identity_binding.py",
         "litellm/proxy/_experimental/mcp_server/operations.py",

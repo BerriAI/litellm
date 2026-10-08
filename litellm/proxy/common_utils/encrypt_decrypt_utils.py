@@ -12,18 +12,24 @@ from litellm._logging import verbose_proxy_logger
 # Legacy XSalsa20-Poly1305 (nacl) values carry no marker; the colon in the
 # prefix can never appear in base64url(nacl output), so the prefix check is an
 # unambiguous discriminator between the two formats on read.
-_V2_GCM_PREFIX: Final = "v2:gcm:"
+V2_GCM_PREFIX: Final = "v2:gcm:"
+
+_V2_GCM_PREFIX: Final = V2_GCM_PREFIX
 
 # general_settings key selecting the at-rest encryption algorithm for new writes.
 # Default preserves the legacy algorithm so existing deployments are byte-for-byte
 # unchanged until they explicitly opt in. Decrypt is always format-detecting, so
 # flipping this flag forward (or back) never strands previously-written data.
-_ENCRYPTION_ALGORITHM_SETTING: Final = "encryption_algorithm"
-_ALGO_AES_GCM: Final = "aes-256-gcm"
+ENCRYPTION_ALGORITHM_SETTING: Final = "encryption_algorithm"
+
+_ENCRYPTION_ALGORITHM_SETTING: Final = ENCRYPTION_ALGORITHM_SETTING
+ALGO_AES_GCM: Final = "aes-256-gcm"
+
+_ALGO_AES_GCM: Final = ALGO_AES_GCM
 _ALGO_XSALSA20: Final = "xsalsa20-poly1305"
 
 
-def _get_salt_key():
+def get_salt_key() -> str | None:
     from litellm.proxy.proxy_server import master_key
 
     salt_key = os.getenv("LITELLM_SALT_KEY", None)
@@ -32,6 +38,9 @@ def _get_salt_key():
         salt_key = master_key
 
     return salt_key
+
+
+_get_salt_key: Final = get_salt_key
 
 
 def _get_encryption_algorithm() -> str:
@@ -45,14 +54,14 @@ def _get_encryption_algorithm() -> str:
     try:
         from litellm.proxy.proxy_server import general_settings
 
-        algo: Final = general_settings.get(_ENCRYPTION_ALGORITHM_SETTING, _ALGO_XSALSA20)
+        algo: Final = general_settings.get(ENCRYPTION_ALGORITHM_SETTING, _ALGO_XSALSA20)
     except Exception:
         # general_settings may not be importable in some contexts (e.g. SDK-only
         # use of these helpers). Fall back to the legacy algorithm.
         return _ALGO_XSALSA20
 
-    if isinstance(algo, str) and algo.lower() == _ALGO_AES_GCM:
-        return _ALGO_AES_GCM
+    if isinstance(algo, str) and algo.lower() == ALGO_AES_GCM:
+        return ALGO_AES_GCM
     return _ALGO_XSALSA20
 
 
@@ -92,18 +101,18 @@ def _open_aes_gcm(sealed: bytes, signing_key: str, aad: bytes | None) -> str:
 def _encrypt_aes_gcm(value: str, signing_key: str) -> str:
     """Encrypt under AES-256-GCM and return the versioned ``v2:gcm:`` string."""
     sealed: Final = _seal_aes_gcm(value=value, signing_key=signing_key, aad=None)
-    return _V2_GCM_PREFIX + base64.urlsafe_b64encode(sealed).decode("utf-8")
+    return V2_GCM_PREFIX + base64.urlsafe_b64encode(sealed).decode("utf-8")
 
 
 def _decrypt_aes_gcm(value: str, signing_key: str) -> str:
     """Decrypt a versioned ``v2:gcm:`` string produced by :func:`_encrypt_aes_gcm`."""
-    sealed: Final = base64.urlsafe_b64decode(value[len(_V2_GCM_PREFIX) :])
+    sealed: Final = base64.urlsafe_b64decode(value[len(V2_GCM_PREFIX) :])
     return _open_aes_gcm(sealed=sealed, signing_key=signing_key, aad=None)
 
 
 def encrypt_bearer_token(value: str, prefix: str) -> str:
     """AES-256-GCM as unpadded base64url behind ``prefix``, which is also the AAD so a token can't change kind."""
-    salt_key: Final = _get_salt_key()
+    salt_key: Final = get_salt_key()
     if not isinstance(salt_key, str):
         raise ValueError("Set LITELLM_SALT_KEY or a master key to mint bearer tokens")
     sealed: Final = _seal_aes_gcm(value=value, signing_key=salt_key, aad=prefix.encode("utf-8"))
@@ -112,7 +121,7 @@ def encrypt_bearer_token(value: str, prefix: str) -> str:
 
 def decrypt_bearer_token(token: str, prefix: str) -> str | None:
     """None unless ``token`` came from :func:`encrypt_bearer_token` with the same ``prefix``."""
-    salt_key: Final = _get_salt_key()
+    salt_key: Final = get_salt_key()
     if not isinstance(salt_key, str) or not token.startswith(prefix):
         return None
     encoded: Final = token.removeprefix(prefix)
@@ -124,11 +133,11 @@ def decrypt_bearer_token(token: str, prefix: str) -> str | None:
 
 
 def encrypt_value_helper(value: str, new_encryption_key: str | None = None):
-    signing_key: Final = new_encryption_key or _get_salt_key()
+    signing_key: Final = new_encryption_key or get_salt_key()
 
     try:
         if isinstance(value, str):
-            if _get_encryption_algorithm() == _ALGO_AES_GCM:
+            if _get_encryption_algorithm() == ALGO_AES_GCM:
                 # AES path: the v2:gcm: output is already a base64url string, so it
                 # is returned directly with no extra base64 wrapper.
                 return _encrypt_aes_gcm(value=value, signing_key=cast(str, signing_key))
@@ -160,7 +169,7 @@ def _legacy_ciphertext_bytes(value: str) -> bytes:
 def _decrypt_with_signing_key(value: str, signing_key: str) -> str:
     # Versioned AES-256-GCM values are detected before any base64 decode.
     # The prefix is the algorithm tag the legacy nacl format never carried.
-    if value.startswith(_V2_GCM_PREFIX):
+    if value.startswith(V2_GCM_PREFIX):
         return _decrypt_aes_gcm(value=value, signing_key=signing_key)
 
     return decrypt_value(value=_legacy_ciphertext_bytes(value), signing_key=signing_key)
@@ -171,7 +180,7 @@ def decrypt_if_encrypted_with(value: str, signing_key: str) -> str | None:
     try:
         # base64 decoding skips characters outside its alphabet, so "" and "*" decode to no bytes,
         # which decrypt_value reads as an empty plaintext under any key.
-        decodes_to_nothing: Final = not value.startswith(_V2_GCM_PREFIX) and not _legacy_ciphertext_bytes(value)
+        decodes_to_nothing: Final = not value.startswith(V2_GCM_PREFIX) and not _legacy_ciphertext_bytes(value)
         return None if decodes_to_nothing else _decrypt_with_signing_key(value=value, signing_key=signing_key)
     except Exception:  # noqa: BLE001  # base64, nacl and AES-GCM each raise their own "not a ciphertext" type
         return None
@@ -183,7 +192,7 @@ def decrypt_value_helper(
     exception_type: Literal["debug", "error"] = "error",
     return_original_value: bool = False,
 ) -> str | None:
-    signing_key: Final = _get_salt_key()
+    signing_key: Final = get_salt_key()
 
     try:
         if isinstance(value, str):

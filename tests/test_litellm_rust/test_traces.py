@@ -533,9 +533,14 @@ def _fixture_trace_api(
     with TestClient(app) as client:
         assert client.portal is not None
         client.portal.call(storage.ensure_schema)
-        ingested: Final = tuple(client.post("/v1/traces", json=replay.export) for replay in replays)
-        for result in ingested:
-            assert result.status_code == 200, result.text
+        for replay in replays:
+            client.portal.call(
+                TraceReceiver(storage).ingest,
+                json.dumps(replay.export).encode(),
+                "application/json",
+                None,
+                Tenant(team_id="team-a", api_key_hash="fixture-key", user_id="fixture-user"),
+            )
         client.portal.call(storage.insert_rows, "spend_logs", stamped)
         response: Final = client.get("/v1/traces/query/help")
         assert response.status_code == 200, response.text

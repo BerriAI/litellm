@@ -1,13 +1,16 @@
-import asyncio, importlib, json
+import asyncio
+import importlib
+import json
+from typing import Final, Optional, cast
 from unittest.mock import Mock, patch
 
+import httpx
 import pytest
 
 import litellm
 from litellm import completion, embedding
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from typing import Optional
 
 
 @pytest.mark.parametrize("tokenizer_config_cached", [False, True], ids=["tokenizer_config", "cached_config_jinja"])
@@ -41,8 +44,10 @@ async def test_watsonx_text_gpt_oss_async_completion_fetches_hf_template_off_the
             return httpx.Response(200, content=chat_template.encode())
         return httpx.Response(200, json={"chat_template": chat_template, "bos_token": None, "eos_token": None})
 
-    monkeypatch.setattr(huggingface_template_handler, "_get_httpx_client", forbid_sync_client)
-    monkeypatch.setattr(huggingface_template_handler, "get_async_httpx_client", lambda **kwargs: Mock(get=serve_hf_file))
+    monkeypatch.setattr(huggingface_template_handler, "get_httpx_client", forbid_sync_client)
+    monkeypatch.setattr(
+        huggingface_template_handler, "get_async_httpx_client", lambda **kwargs: Mock(get=serve_hf_file)
+    )
 
     def handle(request):
         captured["body"] = json.loads(request.content)
@@ -301,6 +306,69 @@ def test_watsonx_chat_completions_endpoint(watsonx_chat_completion_call):
 
     assert mock_post.call_count == 1
     assert "deployment" not in mock_post.call_args.kwargs["url"]
+
+
+@pytest.mark.parametrize("sync_mode", [True])
+def test_watsonx_tool_choice(sync_mode: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WATSONX_API_KEY", "mock-api-key")
+    monkeypatch.setenv("WATSONX_TOKEN", "mock-watsonx-token")
+    monkeypatch.setenv("WATSONX_API_BASE", "https://us-south.ml.cloud.ibm.com")
+    monkeypatch.setenv("WATSONX_PROJECT_ID", "mock-project-id")
+    model: Final = "watsonx/meta-llama/llama-3-1-8b-instruct"
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    messages: Final = [{"role": "user", "content": "What is the weather in San Francisco?"}]
+
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        request_body: Final = cast(dict[str, object], json.loads(request.content))
+        assert request_body["tool_choice_option"] == "auto"
+        return httpx.Response(
+            200,
+            json={
+                "model_id": "meta-llama/llama-3-1-8b-instruct",
+                "results": [
+                    {
+                        "generated_text": "The weather is sunny.",
+                        "generated_token_count": 1,
+                        "input_token_count": 1,
+                        "stop_reason": "eos_token",
+                    }
+                ],
+            },
+            request=request,
+        )
+
+    transport: Final = httpx.MockTransport(handle_request)
+    with httpx.Client(transport=transport) as http_client:
+        client: Final = HTTPHandler(client=http_client)
+        response: Final = completion(
+            model=model,
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+            client=client,
+        )
+
+    assert len(response.choices) == 1
+
 
 @pytest.mark.usefixtures("watsonx_env_vars", "_vcr_outcome_gate", "setup_and_teardown")
 def test_watsonx_chat_completions_endpoint_space_id(monkeypatch, watsonx_chat_completion_call):

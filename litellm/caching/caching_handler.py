@@ -315,7 +315,7 @@ class LLMCachingHandler:
             args = args or ()
             final_embedding_cached_response: EmbeddingResponse | None = None
             embedding_all_elements_cache_hit: bool = False
-            cached_result: Any | None = None
+            cached_result: object | None = None
             kwargs = kwargs.copy()
             #########################################################
             # Init cache timing metrics
@@ -849,7 +849,7 @@ class LLMCachingHandler:
         if new_kwargs.get("stream") is True and "cache_key" not in new_kwargs:
             new_kwargs["cache_key"] = litellm.cache.get_cache_key(**new_kwargs)
         self.request_kwargs = _drop_logging_obj_from_kwargs(new_kwargs)
-        cached_result: Any | None = None
+        cached_result: object | None = None
         if call_type == CallTypes.aembedding.value:
             if isinstance(new_kwargs["input"], str):
                 new_kwargs["input"] = [new_kwargs["input"]]

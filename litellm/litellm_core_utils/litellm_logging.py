@@ -120,7 +120,7 @@ from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.containers.main import ContainerObject
-from litellm.types.decisions import DecisionsResponse
+from litellm.types.decisions import DecisionsResponse, OpenAIDecisionResponse
 from litellm.types.integrations.s3_v2 import S3PartitionGranularity
 from litellm.types.interactions import (
     InteractionsAPIResponse,
@@ -291,7 +291,7 @@ else:
     _GENERIC_API_LOGGER_CLS: Final = GenericAPILogger
 _in_memory_loggers: Final[list[CustomLogger]] = []
 
-_STANDARD_LOGGING_METADATA_RESOLVED_KEYS: Final[frozenset[str]] = frozenset(("used_client_oauth_token",))
+_STANDARD_LOGGING_METADATA_RESOLVED_KEYS: Final[frozenset[str]] = frozenset(("used_client_oauth_token", "usage_object"))
 _STANDARD_LOGGING_METADATA_KEYS: Final[frozenset[str]] = (
     frozenset(StandardLoggingMetadata.__annotations__.keys()) - _STANDARD_LOGGING_METADATA_RESOLVED_KEYS
 )
@@ -2116,7 +2116,7 @@ class Logging(LiteLLMLoggingBaseClass):
             import httpx
 
             completion_response = result.model_dump(by_alias=True) if isinstance(result, BaseModel) else dict(result)
-            return litellm.VertexGeminiConfig()._transform_google_generate_content_to_openai_model_response(
+            return litellm.VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
                 completion_response=completion_response,
                 model_response=ModelResponse(),
                 model=self.model or "",
@@ -2650,6 +2650,7 @@ class Logging(LiteLLMLoggingBaseClass):
             or isinstance(logging_result, OCRResponse)  # OCR
             or isinstance(logging_result, SearchResponse)  # Search API
             or isinstance(logging_result, DecisionsResponse)
+            or isinstance(logging_result, OpenAIDecisionResponse)
             or (
                 isinstance(logging_result, InteractionsAPIResponse)
                 and logging_result.usage is not None
@@ -4361,7 +4362,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if httpx_response is None:
             raise ValueError("Google GenAI Generate Content: httpx_response is None")
         dict_result: Final = httpx_response.json()
-        result = litellm.VertexGeminiConfig()._transform_google_generate_content_to_openai_model_response(
+        result = litellm.VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
             completion_response=dict_result,
             model_response=litellm.ModelResponse(),
             model=self.model,
@@ -4969,17 +4970,17 @@ def _init_custom_logger_compatible_class(
             return _otel_logger
         elif logging_integration == "dynamic_rate_limiter":
             from litellm.proxy.hooks.dynamic_rate_limiter import (
-                _PROXY_DynamicRateLimitHandler,
+                PROXY_DynamicRateLimitHandler,
             )
 
             for callback in _in_memory_loggers:
-                if isinstance(callback, _PROXY_DynamicRateLimitHandler):
+                if isinstance(callback, PROXY_DynamicRateLimitHandler):
                     return callback
 
             if internal_usage_cache is None:
                 raise Exception(f"Internal Error: Cache cannot be empty - internal_usage_cache={internal_usage_cache}")
 
-            dynamic_rate_limiter_obj: Final = _PROXY_DynamicRateLimitHandler(internal_usage_cache=internal_usage_cache)
+            dynamic_rate_limiter_obj: Final = PROXY_DynamicRateLimitHandler(internal_usage_cache=internal_usage_cache)
 
             if llm_router is not None and isinstance(llm_router, litellm.Router):
                 dynamic_rate_limiter_obj.update_variables(llm_router=llm_router)
@@ -4987,17 +4988,19 @@ def _init_custom_logger_compatible_class(
             return dynamic_rate_limiter_obj
         elif logging_integration == "dynamic_rate_limiter_v3":
             from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
-                _PROXY_DynamicRateLimitHandlerV3,
+                PROXY_DynamicRateLimitHandlerV3,
             )
 
             for callback in _in_memory_loggers:
-                if isinstance(callback, _PROXY_DynamicRateLimitHandlerV3):
+                if isinstance(callback, PROXY_DynamicRateLimitHandlerV3):
                     return callback
 
             if internal_usage_cache is None:
                 raise Exception(f"Internal Error: Cache cannot be empty - internal_usage_cache={internal_usage_cache}")
 
-            dynamic_rate_limiter_obj_v3 = _PROXY_DynamicRateLimitHandlerV3(internal_usage_cache=internal_usage_cache)
+            dynamic_rate_limiter_obj_v3: Final = PROXY_DynamicRateLimitHandlerV3(
+                internal_usage_cache=internal_usage_cache
+            )
 
             if llm_router is not None and isinstance(llm_router, litellm.Router):
                 dynamic_rate_limiter_obj_v3.update_variables(llm_router=llm_router)
@@ -5546,19 +5549,19 @@ def get_custom_logger_compatible_class(
 
         elif logging_integration == "dynamic_rate_limiter":
             from litellm.proxy.hooks.dynamic_rate_limiter import (
-                _PROXY_DynamicRateLimitHandler,
+                PROXY_DynamicRateLimitHandler,
             )
 
             for callback in _in_memory_loggers:
-                if isinstance(callback, _PROXY_DynamicRateLimitHandler):
+                if isinstance(callback, PROXY_DynamicRateLimitHandler):
                     return callback
         elif logging_integration == "dynamic_rate_limiter_v3":
             from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
-                _PROXY_DynamicRateLimitHandlerV3,
+                PROXY_DynamicRateLimitHandlerV3,
             )
 
             for callback in _in_memory_loggers:
-                if isinstance(callback, _PROXY_DynamicRateLimitHandlerV3):
+                if isinstance(callback, PROXY_DynamicRateLimitHandlerV3):
                     return callback
 
         elif logging_integration == "langtrace":
@@ -5993,7 +5996,7 @@ class StandardLoggingPayloadSetup:
         Like get_usage_from_response_obj but returns a plain dict, skipping
         the Pydantic Usage construction on the hot path.
         """
-        _empty: Final[dict] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        _empty: Final[dict[str, object]] = {}
         if combined_usage_object is not None:
             return combined_usage_object.model_dump()
         if not response_obj:

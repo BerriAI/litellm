@@ -245,17 +245,45 @@ def _find_missing_required_body_param(
     if not missing_present_params:
         return None
     candidate_litellm_params: Final = _candidate_deployment_litellm_params(data, llm_router)
+    router_default_litellm_params: Final = _router_default_litellm_params(route_type, data, llm_router)
     missing_param: Final = next(
         (
             param
             for param in missing_present_params
-            if not any(deployment_params.get(param) is not None for deployment_params in candidate_litellm_params)
+            if router_default_litellm_params.get(param) is None
+            and not any(deployment_params.get(param) is not None for deployment_params in candidate_litellm_params)
         ),
         None,
     )
     if missing_param is None:
         return None
     return MissingBodyParam(name=missing_param, model_deployments_loaded=bool(candidate_litellm_params))
+
+
+_ROUTE_TYPES_WITHOUT_ROUTER_DEFAULTS_MERGE: Final[frozenset[str]] = frozenset(
+    {"asearch", "acreate_agent", "acreate_eval", "acreate_run"}
+)
+
+
+def _router_default_litellm_params(
+    route_type: str,
+    data: Mapping[str, object],
+    llm_router: LitellmRouter | None,
+) -> Mapping[str, object]:
+    # Mirror exactly the defaults the dispatching router will merge at dispatch time:
+    # user_config requests dispatch on their own throwaway Router, and the listed route
+    # types (plus model-less direct dispatch) never pass through the router's merge.
+    user_config: Final[Mapping[str, object] | None] = (
+        data.get("user_config") if isinstance(data.get("user_config"), Mapping) else None
+    )
+    if user_config is not None:
+        defaults: Final[Mapping[str, object] | None] = user_config.get("default_litellm_params")
+        return defaults if isinstance(defaults, Mapping) else {}
+    model_name: Final = data.get("model")
+    if route_type in _ROUTE_TYPES_WITHOUT_ROUTER_DEFAULTS_MERGE or not isinstance(model_name, str) or not model_name:
+        return {}
+    router_defaults: Final[Mapping[str, object] | None] = getattr(llm_router, "default_litellm_params", None)
+    return router_defaults if isinstance(router_defaults, Mapping) else {}
 
 
 def _candidate_deployment_litellm_params(
@@ -412,7 +440,9 @@ async def add_shared_session_to_data(data: dict) -> None:
                         "SESSION REUSE: Shared aiohttp session is None after re-check, recreating..."
                     )
                 try:
-                    new_session = await proxy_server._initialize_shared_aiohttp_session()
+                    new_session = (  # rebind-ok: pre-existing rebinding on a rename-only line
+                        await proxy_server.initialize_shared_aiohttp_session()
+                    )
                 except Exception:
                     verbose_proxy_logger.exception("SESSION REUSE: Exception during shared session recreation")
                     new_session = None
@@ -648,9 +678,8 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             "enable_tag_filtering",
         ]
 
-        # Merge override settings into data (only if not already set in request)
         for key in per_request_settings:
-            if key in override_settings and key not in data:
+            if override_settings.get(key) is not None and key not in data:
                 data[key] = override_settings[key]
 
         # Use main router with overridden kwargs

@@ -499,7 +499,7 @@ def test_google_ai_studio_provider_fields_expose_api_base():
     assert api_base_field["field_type"] == "text"
     # default_value MUST be null (not the canonical URL): saving it as the
     # default would persist v1beta into every credential record and bypass
-    # `_get_gemini_url`'s automatic v1alpha routing for Gemini 3+ models. The
+    # `get_gemini_url`'s automatic v1alpha routing for Gemini 3+ models. The
     # placeholder shows the canonical URL so users still get the visual hint.
     # (See greptileai threads on PR #30419.)
     assert api_base_field["default_value"] is None
@@ -548,11 +548,11 @@ def test_public_model_hub_with_healthy_model():
 
     with (
         patch("litellm.public_model_groups", ["gpt-3.5-turbo"]),
-        patch("litellm.proxy.proxy_server._get_model_group_info") as mock_get_info,
+        patch("litellm.proxy.proxy_server.get_model_group_info") as mock_get_info,
         patch("litellm.proxy.proxy_server.llm_router", mock_llm_router),
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
         patch(
-            "litellm.proxy.health_endpoints._health_endpoints._convert_health_check_to_dict"
+            "litellm.proxy.health_endpoints._health_endpoints.convert_health_check_to_dict"
         ) as mock_convert,
     ):
 
@@ -606,11 +606,11 @@ def test_public_model_hub_with_unhealthy_model():
 
     with (
         patch("litellm.public_model_groups", ["gpt-4"]),
-        patch("litellm.proxy.proxy_server._get_model_group_info") as mock_get_info,
+        patch("litellm.proxy.proxy_server.get_model_group_info") as mock_get_info,
         patch("litellm.proxy.proxy_server.llm_router", mock_llm_router),
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
         patch(
-            "litellm.proxy.health_endpoints._health_endpoints._convert_health_check_to_dict"
+            "litellm.proxy.health_endpoints._health_endpoints.convert_health_check_to_dict"
         ) as mock_convert,
     ):
 
@@ -655,7 +655,7 @@ def test_public_model_hub_without_health_check():
 
     with (
         patch("litellm.public_model_groups", ["claude-3"]),
-        patch("litellm.proxy.proxy_server._get_model_group_info") as mock_get_info,
+        patch("litellm.proxy.proxy_server.get_model_group_info") as mock_get_info,
         patch("litellm.proxy.proxy_server.llm_router", mock_llm_router),
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
     ):
@@ -737,11 +737,11 @@ def test_public_model_hub_mixed_health_statuses():
 
     with (
         patch("litellm.public_model_groups", ["gpt-3.5-turbo", "gpt-4", "claude-3"]),
-        patch("litellm.proxy.proxy_server._get_model_group_info") as mock_get_info,
+        patch("litellm.proxy.proxy_server.get_model_group_info") as mock_get_info,
         patch("litellm.proxy.proxy_server.llm_router", mock_llm_router),
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
         patch(
-            "litellm.proxy.health_endpoints._health_endpoints._convert_health_check_to_dict"
+            "litellm.proxy.health_endpoints._health_endpoints.convert_health_check_to_dict"
         ) as mock_convert,
     ):
 

@@ -229,6 +229,13 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         """
         return _supports_nova_canvas_image_edit_from_model_cost(model or "")
 
+    @classmethod
+    def is_nova_canvas_image_edit_model(
+        cls,
+        model: str | None = None,
+    ) -> bool:
+        return cls._is_nova_canvas_image_edit_model(model)
+
     def get_error_class(
         self,
         error_message: str,
@@ -509,9 +516,9 @@ def get_bedrock_image_edit_config_for_model(
         BedrockStabilityImageEditConfig,
     )
 
-    if BedrockStabilityImageEditConfig._is_stability_edit_model(model):
+    if BedrockStabilityImageEditConfig.is_stability_edit_model(model):
         return BedrockStabilityImageEditConfig()
-    if BedrockAmazonNovaCanvasImageEditConfig._is_nova_canvas_image_edit_model(model):
+    if BedrockAmazonNovaCanvasImageEditConfig.is_nova_canvas_image_edit_model(model):
         return BedrockAmazonNovaCanvasImageEditConfig()
     raise ValueError(
         f"Unsupported Bedrock image-edit model: {model!r}. "

@@ -6,6 +6,9 @@ metadata:
   name: {{ include "litellm.fullname" . }}-migrations
   labels:
     {{- include "litellm.labels" . | nindent 4 }}
+    {{- with .Values.migrationJob.jobLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
   annotations:
     {{- if .Values.migrationJob.hooks.argocd.enabled }}
     argocd.argoproj.io/hook: PreSync
@@ -17,12 +20,18 @@ metadata:
     helm.sh/hook-weight: {{ .Values.migrationJob.hooks.helm.weight | default "1" | quote }}
     {{- end }}
     checksum/config: {{ toYaml .Values | sha256sum }}
+    {{- with .Values.migrationJob.jobAnnotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   template:
     metadata:
       labels:
         {{- include "litellm.labels" . | nindent 8 }}
         {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.migrationJob.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
       annotations:
@@ -47,7 +56,16 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
+          {{- if .Values.migrationJob.command }}
+          command: {{ toYaml .Values.migrationJob.command | nindent 12 }}
+          {{- else }}
           command: ["python", "litellm/proxy/prisma_migration.py"]
+          {{- end }}
+          {{- if .Values.migrationJob.args }}
+          args: {{ toYaml .Values.migrationJob.args | nindent 12 }}
+          {{- else if .Values.migrationJob.command }}
+          args: []
+          {{- end }}
           workingDir: "/app"
           env:
             {{- if .Values.db.useExisting }}

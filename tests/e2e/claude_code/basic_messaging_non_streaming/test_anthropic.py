@@ -21,6 +21,7 @@ the matrix builder still sees three rows for this (feature, provider).
 from __future__ import annotations
 
 import pytest
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from claude_code._basic_messaging import run_basic_messaging_cell
 
 # Per the PRD: each cell is exercised against three Claude tiers via the
@@ -34,6 +35,15 @@ ANTHROPIC_MODELS = [
 
 
 @pytest.mark.covers("llm.messages.anthropic.basic.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.ANTHROPIC,),
+        models=tuple(ANTHROPIC_MODELS),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_basic_messaging_non_streaming_anthropic(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert a reply.
 

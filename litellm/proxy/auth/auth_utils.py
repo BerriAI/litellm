@@ -60,6 +60,12 @@ def is_invalid_virtual_key_error(exception: BaseException | None) -> bool:
     return getattr(exception, INVALID_VIRTUAL_KEY_ERROR_MARKER, False) is True
 
 
+def log_model_access_denial(exc: BaseException) -> None:
+    if not isinstance(exc, ModelAccessDeniedProxyException):
+        return
+    verbose_proxy_logger.warning(exc.sanitized_internal_message())
+
+
 def mark_invalid_virtual_key_error(exception: ProxyException, is_invalid_virtual_key: bool) -> ProxyException:
     """Return an independently marked malformed-key exception after callback transformations."""
     if not is_invalid_virtual_key or str(exception.code) != str(status.HTTP_401_UNAUTHORIZED):
@@ -77,7 +83,7 @@ def mark_invalid_virtual_key_error(exception: ProxyException, is_invalid_virtual
     return marked_exception
 
 
-def _get_request_ip_address(request: Request, use_x_forwarded_for: bool | None = False) -> str | None:
+def get_request_ip_address(request: Request, use_x_forwarded_for: bool | None = False) -> str | None:
     client_ip = None
     if use_x_forwarded_for is True and "x-forwarded-for" in request.headers:
         client_ip = request.headers["x-forwarded-for"]
@@ -87,6 +93,9 @@ def _get_request_ip_address(request: Request, use_x_forwarded_for: bool | None =
         client_ip = ""
 
     return client_ip
+
+
+_get_request_ip_address: Final = get_request_ip_address
 
 
 def _check_valid_ip(
@@ -101,7 +110,7 @@ def _check_valid_ip(
         return True, None
 
     # if general_settings.get("use_x_forwarded_for") is True then use x-forwarded-for
-    client_ip: Final = _get_request_ip_address(request=request, use_x_forwarded_for=use_x_forwarded_for)
+    client_ip: Final = get_request_ip_address(request=request, use_x_forwarded_for=use_x_forwarded_for)
 
     # Check if IP address is allowed
     if client_ip not in allowed_ips:
@@ -1884,14 +1893,14 @@ def _extract_models_from_managed_resource_id(
 
     try:
         from litellm.proxy.openai_files_endpoints.common_utils import (
-            _is_base64_encoded_unified_file_id,
             decode_model_from_file_id,
             get_model_id_from_unified_batch_id,
             get_models_from_unified_file_id,
+            is_base64_encoded_unified_file_id,
         )
 
         _append_model_candidates(candidates=candidates, value=decode_model_from_file_id(resource_id))
-        unified_file_id: Final = _is_base64_encoded_unified_file_id(resource_id)
+        unified_file_id: Final = is_base64_encoded_unified_file_id(resource_id)
         if unified_file_id:
             _append_model_candidates(
                 candidates=candidates,
@@ -2180,7 +2189,7 @@ def _router_model_from_azure_route(route: str, llm_router: Router | None) -> str
 
 def _model_from_bedrock_route(route: str) -> str | None:
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-        _extract_model_from_bedrock_endpoint,
+        extract_model_from_bedrock_endpoint,
         is_bedrock_count_tokens_endpoint,
     )
 
@@ -2188,7 +2197,7 @@ def _model_from_bedrock_route(route: str) -> str | None:
     if is_bedrock_count_tokens_endpoint(bedrock_endpoint):
         return None
     try:
-        return _extract_model_from_bedrock_endpoint(bedrock_endpoint)
+        return extract_model_from_bedrock_endpoint(bedrock_endpoint)
     except ValueError:
         return None
 
