@@ -1795,6 +1795,101 @@ async def test_store_batch_output_file_stores_provider_object_with_unified_id():
 
 
 @pytest.mark.asyncio
+async def test_store_batch_output_file_retries_model_name_provider_fetch():
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.llms.openai import OpenAIFileObject
+
+    provider_file_object = OpenAIFileObject(
+        id="provider-output",
+        object="file",
+        bytes=123,
+        created_at=456,
+        filename="output.jsonl",
+        purpose="batch_output",
+    )
+    sleep_calls: list[float] = []
+
+    async def record_sleep(delay: float) -> None:
+        sleep_calls.append(delay)
+
+    proxy_managed_files, managed_file_table = _managed_files_with_fake_prisma(
+        sleep=record_sleep
+    )
+    with patch(
+        "litellm.afile_retrieve",
+        new_callable=AsyncMock,
+        side_effect=[
+            HTTPException(status_code=500),
+            HTTPException(status_code=500),
+            provider_file_object,
+        ],
+    ) as retrieve:
+        await proxy_managed_files.store_batch_output_file(
+            unified_file_id="unified-output",
+            provider_file_id="provider-output",
+            model_id=None,
+            model_name="bedrock/model-x",
+            owner=UserAPIKeyAuth(user_id="user-123"),
+            litellm_parent_otel_span=None,
+        )
+
+    assert retrieve.await_count == 3
+    assert all(
+        call.kwargs["custom_llm_provider"] == "bedrock"
+        and call.kwargs["max_retries"] == 0
+        and "_litellm_internal_model_credentials" not in call.kwargs
+        for call in retrieve.call_args_list
+    )
+    assert sleep_calls == [0.5, 1.0]
+    stored_object = managed_file_table.rows["unified-output"].file_object
+    assert stored_object is not None
+    assert stored_object.id == "unified-output"
+    assert stored_object.bytes == 123
+    assert stored_object.litellm_details_fallback is None
+
+
+@pytest.mark.asyncio
+async def test_store_batch_output_file_marks_model_name_fallback_after_four_transient_failures():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    sleep_calls: list[float] = []
+
+    async def record_sleep(delay: float) -> None:
+        sleep_calls.append(delay)
+
+    proxy_managed_files, managed_file_table = _managed_files_with_fake_prisma(
+        sleep=record_sleep
+    )
+    with patch(
+        "litellm.afile_retrieve",
+        new_callable=AsyncMock,
+        side_effect=[HTTPException(status_code=500) for _ in range(4)],
+    ) as retrieve:
+        await proxy_managed_files.store_batch_output_file(
+            unified_file_id="unified-output",
+            provider_file_id="provider-output",
+            model_id=None,
+            model_name="bedrock/model-x",
+            owner=UserAPIKeyAuth(user_id="user-123"),
+            litellm_parent_otel_span=None,
+            size_bytes=836,
+        )
+
+    assert retrieve.await_count == 4
+    assert all(
+        call.kwargs["custom_llm_provider"] == "bedrock"
+        and call.kwargs["max_retries"] == 0
+        and "_litellm_internal_model_credentials" not in call.kwargs
+        for call in retrieve.call_args_list
+    )
+    assert sleep_calls == [0.5, 1.0, 2.0]
+    stored_object = managed_file_table.rows["unified-output"].file_object
+    assert stored_object is not None
+    assert stored_object.bytes == 836
+    assert stored_object.litellm_details_fallback is True
+
+
+@pytest.mark.asyncio
 async def test_store_batch_output_file_falls_back_when_provider_retrieve_raises():
     import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy._types import UserAPIKeyAuth

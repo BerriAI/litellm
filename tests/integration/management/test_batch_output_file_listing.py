@@ -495,13 +495,13 @@ class _BedrockControlPlane:
             )
             return Reply(body=json.dumps({"jobArn": self.job_arn}).encode())
         if request.method == "GET" and request.target.endswith(self.job_id):
-            input_uri, output_uri, job_name = self.job_locations.get()
-            self.job_locations.put((input_uri, output_uri, job_name))
+            input_uri, output_uri, retrieved_job_name = self.job_locations.get()
+            self.job_locations.put((input_uri, output_uri, retrieved_job_name))
             return Reply(
                 body=json.dumps(
                     {
                         "jobArn": self.job_arn,
-                        "jobName": job_name,
+                        "jobName": retrieved_job_name,
                         "modelId": BEDROCK_MODEL_ID,
                         "status": "Completed",
                         "submitTime": 1700000000,

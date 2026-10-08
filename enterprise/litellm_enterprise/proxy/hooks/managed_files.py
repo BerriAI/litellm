@@ -709,34 +709,40 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         provider_file_id: str,
         model_id: str | None,
         model_name: str | None,
+        llm_router: Router | None = None,
     ) -> OpenAIFileObject | None:
-        llm_router: Final = _proxy_llm_router()
+        route_llm_router: Final = llm_router if llm_router is not None else _proxy_llm_router()
         if not _has_provider_file_retrieve_route(
-            llm_router=llm_router,
+            llm_router=route_llm_router,
             model_id=model_id,
             model_name=model_name,
         ):
             return None
 
         try:
-            if llm_router is not None and model_id is not None:
+            if route_llm_router is not None and model_id is not None:
                 credentials: Final = cast(
-                    Mapping[str, object], llm_router.get_deployment_credentials_with_provider(model_id) or {}
+                    Mapping[str, object],
+                    route_llm_router.get_deployment_credentials_with_provider(model_id) or {},
                 )
                 provider_file_object: Final = await self._afile_retrieve_with_retries(
                     provider_file_id=provider_file_id,
                     call_options=credentials,
                     internal_model_credentials=credentials,
                 )
-            elif model_name is not None and "/" in model_name:
-                custom_llm_provider: Final = cast(FileRetrieveProvider, model_name.split("/", 1)[0])
-                provider_file_object: Final = await self._afile_retrieve_with_retries(
+                return provider_file_object.model_copy(update={"id": unified_file_id})
+            if model_name is not None and "/" in model_name:
+                custom_llm_provider: Final = cast(
+                    FileRetrieveProvider, model_name.split("/", 1)[0]
+                )
+                provider_file_object_by_model_name: Final = await self._afile_retrieve_with_retries(
                     provider_file_id=provider_file_id,
                     call_options={"custom_llm_provider": custom_llm_provider},
                 )
-            else:
-                return None
-            return provider_file_object.model_copy(update={"id": unified_file_id})
+                return provider_file_object_by_model_name.model_copy(
+                    update={"id": unified_file_id}
+                )
+            return None
         except Exception as e:
             verbose_logger.warning(f"Failed to retrieve batch file object for provider_file_id={provider_file_id}: {e}")
             return None
@@ -1822,6 +1828,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         provider_file_id=provider_file_id,
                         model_id=model_id,
                         model_name=None,
+                        llm_router=llm_router,
                     )
                     if refreshed_file_object is None:
                         return _public_file_object(file_object, file_id)
@@ -1846,6 +1853,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 provider_file_id=model_file_id,
                 model_id=model_id,
                 model_name=None,
+                llm_router=llm_router,
             )
             if response is None:
                 raise ValueError("Provider file details could not be retrieved")
