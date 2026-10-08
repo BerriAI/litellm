@@ -242,6 +242,8 @@ _TOOL_CALL_PAYLOAD_EVENT_TYPES: Final = _TOOL_CALL_PAYLOAD_DELTA_EVENT_TYPES | f
 )
 _OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "response.output_item.done"})
 _OUTPUT_TEXT_EVENT_TYPES: Final = frozenset({"response.output_text.delta", "response.output_text.done"})
+_CONTENT_PART_EVENT_TYPES: Final = frozenset({"response.content_part.added", "response.content_part.done"})
+_ADDED_EVENT_TYPES: Final = frozenset({"response.output_item.added", "response.content_part.added"})
 _PATCHABLE_ITEM_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {"function_call_output": "output", "custom_tool_call_output": "output", "message": "content"}
 )
@@ -945,8 +947,8 @@ class OpenAIResponsesHandler(BaseTranslation):
         approach as ``process_output_response`` so that unmasking / blocking
         works correctly for every output item. With
         ``deliver_ended_stream_rewrites`` the earlier text-carrying events
-        (``response.output_text.delta`` / ``.done``,
-        ``response.content_part.done``, ``response.output_item.done``) are synced
+        (``response.output_text.delta`` / ``.done``, ``response.content_part``
+        and ``response.output_item`` ``.added`` / ``.done``) are synced
         to the rewritten envelope too, so a client reading deltas sees the
         rewrite instead of the raw model output; a stream with no envelope
         gets its rewrite spread over the buffered text events, and a rewrite
@@ -1163,9 +1165,10 @@ class OpenAIResponsesHandler(BaseTranslation):
         response, keyed by ``(output_index, content_index)``: the first
         ``output_text.delta`` for a rewritten item carries the full rewritten
         text and the rest are blanked, while ``output_text.done``,
-        ``content_part.done``, and ``output_item.done`` events carry the full
-        rewritten text, so every event a client may read agrees with the
-        rewritten ``response.completed`` payload."""
+        ``content_part.done``, and ``output_item.done`` events, and any
+        ``content_part.added`` / ``output_item.added`` event that already
+        carries text, carry the full rewritten text, so every event a client
+        may read agrees with the rewritten ``response.completed`` payload."""
         delta_replacements: Final = MappingProxyType(
             {position: chain((rewritten,), repeat("")) for position, rewritten in rewrites_by_position.items()}
         )
@@ -1175,8 +1178,13 @@ class OpenAIResponsesHandler(BaseTranslation):
             event_type = event.get("type")
             output_index = event.get("output_index")
             content_index = event.get("content_index")
-            if event_type == "response.output_item.done" and isinstance(output_index, int):
-                self._sync_output_item_done_event(event.get("item"), output_index, rewrites_by_position)
+            if event_type in _OUTPUT_ITEM_EVENT_TYPES and isinstance(output_index, int):
+                self._sync_output_item_event(
+                    event.get("item"),
+                    output_index,
+                    rewrites_by_position,
+                    keep_empty_text=event_type in _ADDED_EVENT_TYPES,
+                )
                 continue
             if not isinstance(output_index, int) or not isinstance(content_index, int):
                 continue
@@ -1185,16 +1193,21 @@ class OpenAIResponsesHandler(BaseTranslation):
                 self._write_event_field(event, "delta", next(delta_replacements[position]))
             elif event_type == "response.output_text.done" and position in rewrites_by_position:
                 self._write_event_field(event, "text", rewrites_by_position[position])
-            elif event_type == "response.content_part.done" and position in rewrites_by_position:
+            elif event_type in _CONTENT_PART_EVENT_TYPES and position in rewrites_by_position:
                 part = event.get("part")
                 if isinstance(part, dict) or hasattr(part, "text"):
-                    self._write_event_field(part, "text", rewrites_by_position[position])
+                    self._write_part_text(
+                        part,
+                        rewrites_by_position[position],
+                        keep_empty_text=event_type in _ADDED_EVENT_TYPES,
+                    )
 
     @staticmethod
-    def _sync_output_item_done_event(
+    def _sync_output_item_event(
         item: object,
         output_index: int,
         rewrites_by_position: Mapping[tuple[int, int], str],
+        keep_empty_text: bool = False,
     ) -> None:
         content: Final = item.get("content") if isinstance(item, dict) else getattr(item, "content", None)
         if not isinstance(content, list):
@@ -1202,7 +1215,13 @@ class OpenAIResponsesHandler(BaseTranslation):
         for (item_idx, content_idx), rewritten in rewrites_by_position.items():
             if item_idx != output_index or content_idx >= len(content):
                 continue
-            OpenAIResponsesHandler._write_event_field(content[content_idx], "text", rewritten)
+            OpenAIResponsesHandler._write_part_text(content[content_idx], rewritten, keep_empty_text=keep_empty_text)
+
+    @staticmethod
+    def _write_part_text(part: object, text: str, keep_empty_text: bool = False) -> None:
+        if keep_empty_text and not stream_item_field(part, "text"):
+            return
+        OpenAIResponsesHandler._write_event_field(part, "text", text)
 
     def _deliver_ended_stream_tool_call_rewrites(
         self,

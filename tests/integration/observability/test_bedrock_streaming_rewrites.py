@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Final
 
 import yaml
-from integration._support.client import Gateway
+from integration._support.client import Gateway, eventually
 from integration._support.process import owned_proxy
 from integration._support.responses_stream import frame, response_object
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -283,3 +283,23 @@ def test_bedrock_windowed_stream_never_releases_text_bedrock_anonymized(gateway:
             assert _SSN not in responses.text, responses.text
             assert "Violated guardrail policy" in responses.text, responses.text
             assert policy.drain(), "the guardrail never scanned the stream"
+
+
+def test_bedrock_held_responses_stream_served_from_cache_masks_every_event(gateway: Gateway, tmp_path: Path) -> None:
+    guardrail_id: Final = "synthetic" + uuid.uuid4().hex[:8]
+    with wire_server(_bedrock_policy(guardrail_id)) as policy, wire_server(_provider(_PIECES)) as upstream:
+        path: Final = _config(tmp_path, guardrail_id, policy)
+        with owned_proxy(gateway, tmp_path, {}, config=path, workers=2) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model(
+                model="openai/gpt-4.1-mini", api_base=upstream.url + "/v1", api_key="synthetic-key"
+            )
+
+            def stream_and_count_upstream_calls() -> tuple[str, int]:
+                body: Final = _stream_responses(candidate, model)
+                return body, len([seen for seen in upstream.drain() if seen.method == "POST"])
+
+            cached, _ = eventually(stream_and_count_upstream_calls, lambda observed: observed[1] == 0, seconds=30)
+            event_types: Final = {str(event["type"]) for event in _events(cached)}
+            assert {"response.content_part.added", "response.output_item.added"} <= event_types, cached
+            assert _SSN not in cached, cached
+            _assert_responses_stream_delivers(cached, "".join(_PIECES).replace(_SSN, _MASKED_SSN))

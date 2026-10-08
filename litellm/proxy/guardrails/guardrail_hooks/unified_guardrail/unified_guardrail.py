@@ -1403,7 +1403,6 @@ class UnifiedLLMGuardrails(CustomLogger):
                             request_data=request_data,
                             **delivery,
                         )
-                    # Moderation passed: release the withheld chunks, rewritten in place when delivered.
                     if buffered_items is not None:
                         for buffered_item in buffered_items:
                             yield buffered_item
