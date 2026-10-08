@@ -312,7 +312,7 @@ def test_azure_ai_mistral_optional_params():
     assert "user" not in optional_params
 
 
-def test_vertex_ai_llama_3_optional_params(monkeypatch):
+def test_vertex_ai_llama_3_optional_params(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "vertex_llama3_models", {"meta/llama3-405b-instruct-maas"})
     litellm.drop_params = True
     optional_params = get_optional_params(
@@ -325,7 +325,7 @@ def test_vertex_ai_llama_3_optional_params(monkeypatch):
     assert "user" not in optional_params
 
 
-def test_vertex_ai_mistral_optional_params(monkeypatch):
+def test_vertex_ai_mistral_optional_params(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "vertex_mistral_models", {"mistral-large@2407"})
     litellm.drop_params = True
     optional_params = get_optional_params(
