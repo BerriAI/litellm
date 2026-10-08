@@ -913,6 +913,9 @@ HOSTILE_OPTIONS: Final[dict[str, JsonValue]] = {
 MALFORMED_POINTS: Final[dict[str, JsonValue]] = {
     "null": None,
     "string": "system",
+    "int": 5,
+    "dict": {"location": "message", "role": "system"},
+    "string-list": ["system"],
     "no-location": [{"role": "system"}],
 }
 
