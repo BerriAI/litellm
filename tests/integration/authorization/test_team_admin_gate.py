@@ -116,7 +116,7 @@ class Route:
     outsider: int | None = None
     org_admin: int | None = None
     other_org_admin: int | None = None
-    permission: str = ""
+    permission: tuple[str, ...] = ()
     cleanup: Callable[[TeamScenario, dict[str, JsonValue]], None] | None = None
 
     def expected(self, caller: Caller) -> int | None:
@@ -258,7 +258,7 @@ ROUTES: Final[tuple[Route, ...]] = (
           team_admin=403, others=403),
     Route("key_update_member_key_permitted",
           lambda s: Call("POST", "/key/update", {"key": s.member_key(), "max_budget": 5}),
-          team_admin=200, others=403, permission="member_key_budgets"),
+          team_admin=200, others=403, permission=("member_key_budgets",)),
     Route("team_key_bulk_update",
           lambda s: Call("POST", "/team/key/bulk_update",
                          {"team_id": s.team_id, "all_keys_in_team": True, "update_fields": {"max_budget": 5}}),
@@ -325,13 +325,19 @@ ROUTES: Final[tuple[Route, ...]] = (
           team_admin=403, others=403, org_admin=200),
     Route("team_update_budget_permitted",
           lambda s: Call("POST", "/team/update", {"team_id": s.team_id, "max_budget": 4}),
-          team_admin=200, others=403, org_admin=200, permission="max_budget"),
+          team_admin=200, others=403, org_admin=200, permission=("max_budget",)),
+    Route("team_update_budget_raise",
+          lambda s: Call("POST", "/team/update", {"team_id": s.team_id, "max_budget": 6}),
+          team_admin=403, others=403, org_admin=200, permission=("max_budget",)),
+    Route("team_update_budget_raise_permitted",
+          lambda s: Call("POST", "/team/update", {"team_id": s.team_id, "max_budget": 6}),
+          team_admin=200, others=403, org_admin=200, permission=("max_budget", "raise_max_budget")),
     Route("project_new",
           lambda s: Call("POST", "/project/new", {"team_id": s.team_id, "project_alias": f"matrix-{uuid.uuid4().hex}"}),
           team_admin=403, others=403, cleanup=_delete_project),
     Route("project_new_permitted",
           lambda s: Call("POST", "/project/new", {"team_id": s.team_id, "project_alias": f"matrix-{uuid.uuid4().hex}"}),
-          team_admin=200, others=403, permission="projects", cleanup=_delete_project),
+          team_admin=200, others=403, permission=("projects",), cleanup=_delete_project),
     Route("team_delete",
           lambda s: Call("POST", "/team/delete", {"team_ids": [s.team_id]}),
           team_admin=401, others=401, proxy_admin=None),
@@ -409,23 +415,33 @@ def org_team() -> Iterator[TeamScenario]:
         yield _team_scenario(scenario, team_id, keys)
 
 
+_BUDGET_BEFORE: Final = 5.0
+_BUDGET_ROUTES: Final[Mapping[str, float]] = MappingProxyType(
+    {
+        "team_update_budget_permitted": 4.0,
+        "team_update_budget_raise": 6.0,
+        "team_update_budget_raise_permitted": 6.0,
+    }
+)
+
+
 @pytest.mark.parametrize(("route", "caller"), CASES, ids=tuple(f"{route.name}[{caller}]" for route, caller in CASES))
 def test_status_code(shared: TeamScenario, org_team: TeamScenario, route: Route, caller: Caller) -> None:
     team: Final = org_team if caller in ORG_CALLERS else shared
     with team.gateway.scenario() as scenario:
         s: Final = replace(team, scenario=scenario)
-        if route.name == "team_update_budget_permitted":
-            s.gateway.post("/team/update", {"team_id": s.team_id, "max_budget": 5})
+        if route.name in _BUDGET_ROUTES:
+            s.gateway.post("/team/update", {"team_id": s.team_id, "max_budget": _BUDGET_BEFORE})
         if route.permission:
-            scenario.cleanups.enter_context(team_admin_permissions(s.gateway, (route.permission,)))
+            scenario.cleanups.enter_context(team_admin_permissions(s.gateway, route.permission))
         call: Final = route.call(s)
         response: Final = s.gateway.request(call.method, call.path, call.body, key=s.keys[caller])
         assert response.status_code == route.expected(caller), (
             f"{caller} {call.method} {call.path}: {response.status_code} {response.text}"
         )
-        if route.name == "team_update_budget_permitted":
+        if route.name in _BUDGET_ROUTES:
             assert read_rows(
                 'SELECT max_budget FROM "LiteLLM_TeamTable" WHERE team_id = %s', (s.team_id,)
-            ) == [{"max_budget": 4.0 if response.status_code == 200 else 5.0}]
+            ) == [{"max_budget": _BUDGET_ROUTES[route.name] if response.status_code == 200 else _BUDGET_BEFORE}]
         if response.status_code == 200 and route.cleanup is not None:
             route.cleanup(s, object_value(response.json()))

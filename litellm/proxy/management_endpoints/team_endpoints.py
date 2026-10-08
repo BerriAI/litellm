@@ -160,6 +160,7 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS,
     resolve_team_admin_editable_fields,
     team_admin_edit_verdict,
+    team_admin_may_raise_max_budget,
     team_admin_request_or_raise,
 )
 from litellm.proxy.management_helpers.access_group_team_sync import (
@@ -513,7 +514,10 @@ def _caller_edit_access(role: TeamRole | None, general_settings: Mapping[str, ob
             )
             if not permitted:
                 return TeamEditAsTeamAdminDisabled()
-            return TeamEditAsTeamAdmin(editable_fields=tuple(sorted(permitted)))
+            return TeamEditAsTeamAdmin(
+                editable_fields=tuple(sorted(permitted)),
+                may_raise_max_budget=team_admin_may_raise_max_budget(general_settings),
+            )
         case None:
             return TeamEditNone()
         case _:
@@ -1206,14 +1210,17 @@ def _check_team_budget_update_authority(
     data: UpdateTeamRequest,
     user_api_key_dict: UserAPIKeyAuth,
     existing_team_max_budget: float | None,
+    may_raise: bool,
 ) -> _MaxBudgetGuard | None:
     """
     Restrict who can grow a team's spend ceiling on /team/update.
 
-    A team admin may keep or lower the team budget, but only a proxy admin may
-    grow it - by raising max_budget above the team's current value or by
-    removing the cap (setting it to None). Setting a finite budget on a team
-    that has no cap is a restriction and is allowed. Org admins editing
+    A team admin may keep or lower the team budget. Raising max_budget above the
+    team's current value also needs `may_raise`, which a proxy admin grants via
+    the `raise_max_budget` entry of team_admin_editable_team_fields; the org cap
+    _check_org_team_limits() enforces before this still applies. Removing the cap
+    (setting it to None) stays with the proxy admin. Setting a finite budget on a
+    team that has no cap is a restriction and is allowed. Org admins editing
     org-scoped teams are governed by _check_org_team_limits() instead.
 
     The verdict holds only for the budget it was checked against, so a restricted
@@ -1236,7 +1243,7 @@ def _check_team_budget_update_authority(
             },
         )
 
-    if data.max_budget is not None and data.max_budget > existing_team_max_budget:
+    if data.max_budget is not None and data.max_budget > existing_team_max_budget and not may_raise:
         raise HTTPException(
             status_code=403,
             detail={
@@ -2401,13 +2408,14 @@ async def update_team(
                     prisma_client=prisma_client,
                 )
 
-        # A team admin never grows its own team's spend ceiling. Org admins grow org-scoped teams
-        # within the org limits _check_org_team_limits() enforced above.
+        # A team admin grows its own team's spend ceiling only when granted raise_max_budget, and then
+        # within the org limits _check_org_team_limits() enforced above. Org admins are governed by those alone.
         max_budget_guard: Final = (
             _check_team_budget_update_authority(
                 data=data,
                 user_api_key_dict=user_api_key_dict,
                 existing_team_max_budget=existing_team_row.max_budget,
+                may_raise=access_role == "team_admin" and team_admin_may_raise_max_budget(_general_settings()),
             )
             if org_id_to_check is None or access_role == "team_admin"
             else None

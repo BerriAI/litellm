@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 
 import { fireEvent, renderWithProviders, screen, waitFor } from "@/../tests/test-utils";
 import { toast } from "@/lib/toast";
@@ -22,6 +23,10 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/useUpdateUISettings", () => ({
 
 const TPM_LABEL = "Tokens per minute Limit (TPM)";
 const MAX_BUDGET_LABEL = "Max Budget (USD)";
+const RAISE_MAX_BUDGET_LABEL = "Raise the team's max budget";
+const RAISE_MAX_BUDGET_HELP_LABEL = "About raising the team's max budget";
+const RAISE_MAX_BUDGET_TOOLTIP =
+  "With Max Budget alone, team admins can keep or lower the team budget. This also lets them raise it, up to the organization's budget when the team belongs to one. Teams outside an organization, or in an organization without a budget, have no ceiling. Only proxy admins can remove a team's budget.";
 
 const mockSettings = (supported: readonly string[], enabled: readonly string[]) =>
   mockUseUISettings.mockReturnValue({
@@ -54,6 +59,8 @@ const mockSave = ({
 };
 
 const saveButton = () => screen.getByRole("button", { name: "Save" });
+const maxBudgetCheckbox = () => screen.getByRole("checkbox", { name: MAX_BUDGET_LABEL });
+const raiseMaxBudgetCheckbox = () => screen.getByRole("checkbox", { name: RAISE_MAX_BUDGET_LABEL });
 
 describe("TeamAdminEditableFieldsSettings", () => {
   beforeEach(() => {
@@ -172,5 +179,91 @@ describe("TeamAdminEditableFieldsSettings", () => {
     expect(screen.getByRole("checkbox", { name: TPM_LABEL })).not.toBeChecked();
     expect(screen.getByRole("button", { name: "Saving..." })).toBeDisabled();
     expect(mutate).not.toHaveBeenCalled();
+  });
+
+  describe("raise_max_budget nested under max_budget", () => {
+    const supported = ["tpm_limit", "rpm_limit", "max_budget", "raise_max_budget"];
+
+    it("keeps the Raise checkbox disabled, and unticked when clicked, until Max Budget is ticked", () => {
+      mockSettings(supported, []);
+      mockSave({});
+
+      renderWithProviders(<TeamAdminEditableFieldsSettings />);
+
+      expect(raiseMaxBudgetCheckbox()).toHaveAttribute("aria-disabled", "true");
+      fireEvent.click(raiseMaxBudgetCheckbox());
+      expect(raiseMaxBudgetCheckbox()).not.toBeChecked();
+      expect(saveButton()).toBeDisabled();
+
+      fireEvent.click(maxBudgetCheckbox());
+
+      expect(raiseMaxBudgetCheckbox()).not.toHaveAttribute("aria-disabled", "true");
+      fireEvent.click(raiseMaxBudgetCheckbox());
+      expect(raiseMaxBudgetCheckbox()).toBeChecked();
+    });
+
+    it("saves Max Budget together with Raise in the proxy's field order", async () => {
+      mockSettings(supported, []);
+      const mutate = mockSave({});
+
+      renderWithProviders(<TeamAdminEditableFieldsSettings />);
+      fireEvent.click(maxBudgetCheckbox());
+      fireEvent.click(raiseMaxBudgetCheckbox());
+
+      expect(raiseMaxBudgetCheckbox()).toBeChecked();
+
+      fireEvent.click(saveButton());
+
+      await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
+      expect(mutate).toHaveBeenCalledWith(
+        { team_admin_editable_team_fields: ["max_budget", "raise_max_budget"] },
+        expect.anything(),
+      );
+    });
+
+    it("drops Raise from the saved list when Max Budget is unticked", async () => {
+      mockSettings(supported, ["tpm_limit", "max_budget", "raise_max_budget"]);
+      const mutate = mockSave({});
+
+      renderWithProviders(<TeamAdminEditableFieldsSettings />);
+
+      expect(screen.getByText("3 fields enabled")).toBeInTheDocument();
+      expect(raiseMaxBudgetCheckbox()).toBeChecked();
+
+      fireEvent.click(maxBudgetCheckbox());
+
+      expect(raiseMaxBudgetCheckbox()).not.toBeChecked();
+      expect(raiseMaxBudgetCheckbox()).toHaveAttribute("aria-disabled", "true");
+
+      fireEvent.click(saveButton());
+
+      await waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
+      expect(mutate).toHaveBeenCalledWith({ team_admin_editable_team_fields: ["tpm_limit"] }, expect.anything());
+    });
+
+    it("explains what Raise allows in a tooltip on its help icon", async () => {
+      const user = userEvent.setup();
+      mockSettings(supported, []);
+      mockSave({});
+
+      renderWithProviders(<TeamAdminEditableFieldsSettings />);
+
+      expect(screen.queryByText(RAISE_MAX_BUDGET_TOOLTIP)).not.toBeInTheDocument();
+
+      await user.hover(screen.getByRole("button", { name: RAISE_MAX_BUDGET_HELP_LABEL }));
+
+      expect(await screen.findByText(RAISE_MAX_BUDGET_TOOLTIP)).toBeInTheDocument();
+    });
+
+    it("renders nothing nested when the proxy does not support Raise", () => {
+      mockSettings(["max_budget", "tpm_limit"], ["max_budget"]);
+      mockSave({});
+
+      renderWithProviders(<TeamAdminEditableFieldsSettings />);
+
+      expect(screen.queryByRole("checkbox", { name: RAISE_MAX_BUDGET_LABEL })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: RAISE_MAX_BUDGET_HELP_LABEL })).not.toBeInTheDocument();
+      expect(screen.getAllByRole("checkbox")).toHaveLength(2);
+    });
   });
 });
