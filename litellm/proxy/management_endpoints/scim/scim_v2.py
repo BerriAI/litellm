@@ -45,10 +45,17 @@ from litellm.proxy._types import (
     TeamMemberDeleteRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import _delete_cache_key_object, delete_cache_team_object
+from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
+    _delete_cache_key_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    delete_cache_key_object,
+    delete_cache_team_object,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
-from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
+    _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    safe_get_request_headers,
+)
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
@@ -67,10 +74,11 @@ from litellm.proxy.management_helpers.team_roster_sync import (
     TeamGone,
     sync_team_roster,
 )
-from litellm.proxy.utils import (
+from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     PrismaClient,
-    _premium_user_check,
+    _premium_user_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     handle_exception_on_proxy,
+    premium_user_check,
 )
 from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE, find_many_in, update_many_in
 from litellm.repositories.table_repositories import (
@@ -276,7 +284,7 @@ class GroupMemberExtractionResult(LiteLLMBaseModel):
 scim_router: Final = APIRouter(
     prefix="/scim/v2",
     tags=["✨ SCIM v2 (Enterprise Only)"],
-    dependencies=[Depends(_premium_user_check)],
+    dependencies=[Depends(premium_user_check)],
 )
 
 SCIM_MAX_PAGE_SIZE: Final = 100
@@ -1129,7 +1137,7 @@ async def _set_user_keys_blocked(user_id: str, blocked: bool) -> int:
         )
 
     for key_row in affected_keys:
-        await _delete_cache_key_object(
+        await delete_cache_key_object(
             hashed_token=key_row.token,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
@@ -1630,7 +1638,7 @@ async def get_service_provider_config(request: Request):
         "SCIM ServiceProviderConfig request: method=%s url=%s headers=%s",
         request.method,
         request.url,
-        _safe_get_request_headers(request),
+        safe_get_request_headers(request),
     )
     meta: Final = {
         "resourceType": "ServiceProviderConfig",

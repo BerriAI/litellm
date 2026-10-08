@@ -22,9 +22,9 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     _apply_credential_overrides_from_model_config,
     _extract_credential_from_entry,
-    _get_dynamic_logging_metadata,
+    get_dynamic_logging_metadata,
     _get_enforced_params,
-    _get_metadata_variable_name,
+    get_metadata_variable_name,
     _match_and_track_policies,
     _promoted_trace_control_fields,
     _resolve_credential_from_model_config,
@@ -84,45 +84,45 @@ class TestGetMetadataVariableName:
 
     def test_returns_litellm_metadata_for_thread_routes(self):
         request = self._make_request("/v1/threads/thread_123/messages")
-        assert _get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request) == "litellm_metadata"
 
     def test_returns_litellm_metadata_for_assistant_routes(self):
         request = self._make_request("/v1/assistants/asst_123")
-        assert _get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request) == "litellm_metadata"
 
     def test_returns_litellm_metadata_for_batches_route(self):
         request = self._make_request("/v1/batches")
-        assert _get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request) == "litellm_metadata"
 
     def test_returns_litellm_metadata_for_messages_route(self):
         request = self._make_request("/v1/messages")
-        assert _get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request) == "litellm_metadata"
 
     def test_returns_litellm_metadata_for_files_route(self):
         request = self._make_request("/v1/files")
-        assert _get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request) == "litellm_metadata"
 
     def test_returns_metadata_for_chat_completions(self):
         request = self._make_request("/chat/completions")
-        assert _get_metadata_variable_name(request) == "metadata"
+        assert get_metadata_variable_name(request) == "metadata"
 
     def test_returns_metadata_for_completions(self):
         request = self._make_request("/v1/completions")
-        assert _get_metadata_variable_name(request) == "metadata"
+        assert get_metadata_variable_name(request) == "metadata"
 
     def test_returns_metadata_for_embeddings(self):
         request = self._make_request("/v1/embeddings")
-        assert _get_metadata_variable_name(request) == "metadata"
+        assert get_metadata_variable_name(request) == "metadata"
 
     def test_returns_litellm_metadata_for_bedrock_invoke(self):
         # GH#30629: bedrock passthrough must use litellm_metadata
         # to prevent key-level tags from leaking into provider body
         request = self._make_request("/bedrock/model/us.anthropic.claude-sonnet-4-6/invoke")
-        assert _get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request) == "litellm_metadata"
 
     def test_returns_litellm_metadata_for_bedrock_converse(self):
         request = self._make_request("/bedrock/model/us.anthropic.claude-sonnet-4-6/converse")
-        assert _get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request) == "litellm_metadata"
 
 
 def test_get_enforced_params_for_service_account_settings():
@@ -902,7 +902,7 @@ async def test_post_guardrail_snapshot_preserves_logging_only_masking_in_spend_l
     monkeypatch: pytest.MonkeyPatch, pre_call_ran: bool
 ) -> None:
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.proxy.guardrails.guardrail_hooks.presidio import _OPTIONAL_PresidioPIIMasking
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import OPTIONAL_PresidioPIIMasking
     from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
     from litellm.proxy.spend_tracking.spend_tracking_utils import _get_proxy_server_request_for_spend_logs_payload
 
@@ -921,7 +921,7 @@ async def test_post_guardrail_snapshot_preserves_logging_only_masking_in_spend_l
     logging_obj.update_messages(messages)
     snapshot: Final = logging_obj.shadow_eval_request_snapshot
     assert (snapshot is not None) is pre_call_ran
-    guardrail: Final = _OPTIONAL_PresidioPIIMasking(
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
         mock_testing=True, logging_only=True, mock_redacted_text={"text": "email [EMAIL]", "items": []}
     )
 
@@ -2419,7 +2419,7 @@ def test_get_dynamic_logging_metadata_with_arize_team_logging():
     mock_proxy_config = MagicMock()
 
     # Call the function
-    result = _get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict, proxy_config=mock_proxy_config)
+    result = get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict, proxy_config=mock_proxy_config)
 
     # Verify the result
     assert result is not None
@@ -2466,7 +2466,7 @@ def test_get_dynamic_logging_metadata_ignores_env_reference_from_key_metadata(
         team_metadata={},
     )
 
-    result = _get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict, proxy_config=MagicMock())
+    result = get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict, proxy_config=MagicMock())
 
     assert result is None
 
@@ -4008,7 +4008,7 @@ async def test_team_guardrails_append_to_key_guardrails():
         team_metadata={"guardrails": ["team-guardrail-1", "key-guardrail-1"]},
     )
 
-    with patch("litellm.proxy.utils._premium_user_check"):
+    with patch("litellm.proxy.utils.premium_user_check"):
         updated_data = await add_litellm_data_to_request(
             data=data,
             request=request_mock,
@@ -4057,7 +4057,7 @@ async def test_request_guardrails_do_not_override_key_guardrails():
         "guardrails": [],
     }
 
-    with patch("litellm.proxy.utils._premium_user_check"):
+    with patch("litellm.proxy.utils.premium_user_check"):
         updated_data_empty = await add_litellm_data_to_request(
             data=data_with_empty,
             request=request_mock,
@@ -4103,7 +4103,7 @@ async def test_project_guardrails_merge_with_key_and_team():
         project_metadata={"guardrails": ["project-guardrail-1", "team-guardrail-1"]},
     )
 
-    with patch("litellm.proxy.utils._premium_user_check"):
+    with patch("litellm.proxy.utils.premium_user_check"):
         updated_data = await add_litellm_data_to_request(
             data=data,
             request=request_mock,
@@ -4152,7 +4152,7 @@ async def test_project_guardrails_only():
         project_metadata={"guardrails": ["project-guardrail-1", "project-guardrail-2"]},
     )
 
-    with patch("litellm.proxy.utils._premium_user_check"):
+    with patch("litellm.proxy.utils.premium_user_check"):
         updated_data = await add_litellm_data_to_request(
             data=data,
             request=request_mock,
@@ -5459,7 +5459,7 @@ async def test_team_guardrail_merges_with_global_policy():
     attachment_registry._initialized = True
 
     try:
-        with patch("litellm.proxy.utils._premium_user_check"):
+        with patch("litellm.proxy.utils.premium_user_check"):
             await move_guardrails_to_metadata(
                 data=data,
                 _metadata_variable_name="metadata",
@@ -7127,7 +7127,7 @@ class TestPromotedTraceControlFields:
         )
 
     def test_returns_litellm_metadata_for_responses_route(self):
-        assert _get_metadata_variable_name(self._make_request("/v1/responses")) == "litellm_metadata"
+        assert get_metadata_variable_name(self._make_request("/v1/responses")) == "litellm_metadata"
 
     def test_promotes_trace_prefixed_and_allow_listed_fields(self):
         requester_metadata = {

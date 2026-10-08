@@ -1238,7 +1238,7 @@ async def test_team_update_redis():
     """
     from litellm.caching.caching import DualCache, RedisCache
     from litellm.proxy._types import LiteLLM_TeamTableCachedObj
-    from litellm.proxy.auth.auth_checks import _cache_team_object
+    from litellm.proxy.auth.auth_checks import cache_team_object
 
     proxy_logging_obj: ProxyLogging = getattr(
         litellm.proxy.proxy_server, "proxy_logging_obj"
@@ -1251,7 +1251,7 @@ async def test_team_update_redis():
         "async_set_cache",
         new=AsyncMock(),
     ) as mock_client:
-        await _cache_team_object(
+        await cache_team_object(
             team_id="1234",
             team_table=LiteLLM_TeamTableCachedObj(team_id="1234"),
             user_api_key_cache=DualCache(redis_cache=redis_cache),

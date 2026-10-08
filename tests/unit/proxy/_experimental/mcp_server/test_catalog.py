@@ -1,11 +1,37 @@
 import asyncio
 from collections.abc import Sequence
+from types import SimpleNamespace
+from typing import Final, Literal
+from unittest.mock import AsyncMock
 
 import pytest
 from mcp.shared.exceptions import MCPError
-from mcp.types import ListToolsResult, Tool
+from mcp.types import (
+    ListPromptsRequest,
+    ListPromptsResult,
+    ListResourcesRequest,
+    ListResourcesResult,
+    ListResourceTemplatesRequest,
+    ListResourceTemplatesResult,
+    ListToolsResult,
+    PaginatedRequestParams,
+    Tool,
+)
 
 from litellm.proxy._experimental.mcp_server import catalog
+from litellm.proxy._experimental.mcp_server.contracts import OperationContext
+from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
+    SERVER_OUTCOMES_META_KEY,
+    AggregateToolListing,
+    ServerListOk,
+)
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.types.mcp import MCPTransport
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+CatalogKind = Literal["tools", "prompts", "resources", "templates"]
+OptionalCatalogResult = ListPromptsResult | ListResourcesResult | ListResourceTemplatesResult
 
 
 def page(name: str, cursor: str | None = None, revision: str = "stable") -> ListToolsResult:
@@ -14,6 +40,77 @@ def page(name: str, cursor: str | None = None, revision: str = "stable") -> List
         next_cursor=cursor,
         meta={"revision": revision},
     )
+
+
+def rate_limit_catalog_setup(
+    monkeypatch: pytest.MonkeyPatch, rejected_server_ids: frozenset[str]
+) -> tuple[tuple[MCPServer, MCPServer], OperationContext, AsyncMock]:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import operations
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "catalog-rate-limit-test-key")
+    servers: Final = (
+        MCPServer(server_id="catalog-a", name="catalog-a", transport=MCPTransport.http),
+        MCPServer(server_id="catalog-b", name="catalog-b", transport=MCPTransport.http),
+    )
+    caller: Final = UserAPIKeyAuth(api_key="catalog-rate-limit-key", user_id="catalog-rate-limit-user")
+
+    async def enforce_rate_limit(_user: UserAPIKeyAuth | None, server: MCPServer) -> None:
+        if server.server_id in rejected_server_ids:
+            raise ProxyRateLimitError(detail=f"{server.server_id} RPM exceeded")
+
+    limiter: Final = AsyncMock(side_effect=enforce_rate_limit)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", SimpleNamespace(enforce_mcp_server_rate_limits=limiter))
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(operations.global_mcp_server_manager, "registry", {server.server_id: server for server in servers})
+    monkeypatch.setattr(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=list(servers)))
+    context: Final = operations.prepare_context(
+        user_api_key_auth=caller,
+        mcp_servers=[server.server_id for server in servers],
+    )
+    return servers, context, limiter
+
+
+def optional_catalog_page(
+    kind: CatalogKind, server_id: str, next_cursor: str | None = None
+) -> OptionalCatalogResult:
+    from mcp import types
+
+    if kind == "prompts":
+        return types.ListPromptsResult(
+            prompts=[types.Prompt(name=f"{server_id}-item")], next_cursor=next_cursor
+        )
+    if kind == "resources":
+        return types.ListResourcesResult(
+            resources=[types.Resource(name=f"{server_id}-item", uri=f"https://example.com/{server_id}")],
+            next_cursor=next_cursor,
+        )
+    return types.ListResourceTemplatesResult(
+        resource_templates=[
+            types.ResourceTemplate(name=f"{server_id}-item", uri_template=f"https://example.com/{server_id}/{{name}}")
+        ],
+        next_cursor=next_cursor,
+    )
+
+
+async def run_catalog_listing(
+    kind: CatalogKind,
+    context: OperationContext,
+    servers: Sequence[MCPServer],
+    cursor: str | None = None,
+) -> AggregateToolListing | OptionalCatalogResult:
+    from mcp import types
+
+    if kind == "tools":
+        return await catalog.aggregate_gateway_tools(
+            context, PaginatedRequestParams(cursor=cursor), servers, {}
+        )
+    request: Final = {
+        "prompts": types.ListPromptsRequest,
+        "resources": types.ListResourcesRequest,
+        "templates": types.ListResourceTemplatesRequest,
+    }[kind](params=PaginatedRequestParams(cursor=cursor))
+    return await catalog.list_gateway_catalog(context, request)
 
 
 async def listing(
@@ -133,14 +230,16 @@ async def test_failed_upstream_remains_visible_when_other_sources_continue(monke
     async def fetch(server_id: str, cursor: str | None) -> ListToolsResult:
         if server_id == "a":
             return ListToolsResult(tools=[], meta={SERVER_OUTCOMES_META_KEY: {"a": {"tag": "timeout"}}})
-        return page("b2" if cursor else "b1", None if cursor else "next")
+        return page("b2" if cursor else "b1", None if cursor else "next").model_copy(update={"ttl_ms": 9000})
 
     first = await listing(fetch)
     assert [tool.name for tool in first.tools] == ["b1"]
     assert first.meta[SERVER_OUTCOMES_META_KEY]["a"] == {"tag": "timeout"}
+    assert first.ttl_ms == 0
     second = await listing(fetch, first.next_cursor)
     assert [tool.name for tool in second.tools] == ["b2"]
     assert second.meta[SERVER_OUTCOMES_META_KEY]["a"] == {"tag": "timeout"}
+    assert second.ttl_ms == 0
 
 
 @pytest.mark.asyncio
@@ -374,3 +473,201 @@ async def test_optional_gateway_catalog_reports_initial_failure_and_rejects_fail
     assert "upstream secret" not in str(denied.value)
     assert fetch.await_count == 3
     assert fetch.await_args.args[-1] == "next"
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["tools", "prompts", "resources", "templates"])
+async def test_first_catalog_page_keeps_admitted_items_and_reports_rate_limited_servers(
+    monkeypatch: pytest.MonkeyPatch, kind: CatalogKind
+) -> None:
+    from mcp import types
+
+    servers, context, limiter = rate_limit_catalog_setup(monkeypatch, frozenset({"catalog-a"}))
+
+    async def fetch_tools(server: MCPServer, **_kwargs: object) -> tuple[ListToolsResult, ServerListOk]:
+        return ListToolsResult(
+            tools=[types.Tool(name=f"{server.server_id}-item", inputSchema={"type": "object"})]
+        ), ServerListOk(tool_count=1)
+
+    async def fetch_optional(
+        _context: OperationContext,
+        _request: ListPromptsRequest | ListResourcesRequest | ListResourceTemplatesRequest,
+        server: MCPServer,
+        _allowed: Sequence[MCPServer],
+        _cursor: str | None,
+    ) -> OptionalCatalogResult:
+        return optional_catalog_page(kind, server.server_id)
+
+    if kind == "tools":
+        monkeypatch.setattr(catalog, "get_filtered_server_tools", fetch_tools)
+    else:
+        monkeypatch.setattr(catalog, "fetch_optional_catalog_page", fetch_optional)
+
+    result: Final = await run_catalog_listing(kind, context, servers)
+    if isinstance(result, AggregateToolListing):
+        assert [tool.name for tool in result.tools] == ["catalog-b-item"]
+        assert result.outcomes["catalog-a"].tag == "rate_limited"
+    else:
+        field: Final = {
+            "prompts": "prompts",
+            "resources": "resources",
+            "templates": "resource_templates",
+        }[kind]
+        assert [item.name for item in getattr(result, field)] == ["catalog-b-item"]
+        assert result.meta[SERVER_OUTCOMES_META_KEY]["catalog-a"]["status"] == "rate_limited"
+    assert {call.args[1].server_id for call in limiter.await_args_list} == {"catalog-a", "catalog-b"}
+    assert len(limiter.await_args_list) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["tools", "prompts", "resources", "templates"])
+async def test_first_catalog_page_raises_when_every_server_is_rate_limited(
+    monkeypatch: pytest.MonkeyPatch, kind: CatalogKind
+) -> None:
+    servers, context, limiter = rate_limit_catalog_setup(monkeypatch, frozenset({"catalog-a", "catalog-b"}))
+    fetch_tools: Final = AsyncMock(return_value=(ListToolsResult(tools=[]), ServerListOk(tool_count=0)))
+    fetch_optional: Final = AsyncMock(return_value=optional_catalog_page(kind, "catalog-a"))
+    if kind == "tools":
+        monkeypatch.setattr(catalog, "get_filtered_server_tools", fetch_tools)
+    else:
+        monkeypatch.setattr(catalog, "fetch_optional_catalog_page", fetch_optional)
+
+    with pytest.raises(ProxyRateLimitError, match="RPM exceeded"):
+        await run_catalog_listing(kind, context, servers)
+
+    if kind == "tools":
+        fetch_tools.assert_not_awaited()
+    else:
+        fetch_optional.assert_not_awaited()
+    assert len(limiter.await_args_list) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["tools", "prompts", "resources", "templates"])
+async def test_continuation_rate_limit_raises_without_refetching_completed_servers(
+    monkeypatch: pytest.MonkeyPatch, kind: CatalogKind
+) -> None:
+    from mcp import types
+
+    servers, context, limiter = rate_limit_catalog_setup(monkeypatch, frozenset())
+
+    async def fetch_tools(server: MCPServer, **kwargs: object) -> tuple[ListToolsResult, ServerListOk]:
+        params: Final = PaginatedRequestParams.model_validate(kwargs["params"])
+        next_cursor: Final = "next" if server.server_id == "catalog-a" and params.cursor is None else None
+        return (
+            ListToolsResult(
+                tools=[types.Tool(name=f"{server.server_id}-item", inputSchema={"type": "object"})],
+                next_cursor=next_cursor,
+            ),
+            ServerListOk(tool_count=1),
+        )
+
+    async def fetch_optional(
+        _context: OperationContext,
+        _request: ListPromptsRequest | ListResourcesRequest | ListResourceTemplatesRequest,
+        server: MCPServer,
+        _allowed: Sequence[MCPServer],
+        cursor: str | None,
+    ) -> OptionalCatalogResult:
+        return optional_catalog_page(
+            kind,
+            server.server_id,
+            "next" if server.server_id == "catalog-a" and cursor is None else None,
+        )
+
+    if kind == "tools":
+        monkeypatch.setattr(catalog, "get_filtered_server_tools", fetch_tools)
+    else:
+        monkeypatch.setattr(catalog, "fetch_optional_catalog_page", fetch_optional)
+
+    first_page: Final = await run_catalog_listing(kind, context, servers)
+    assert first_page.next_cursor is not None
+    limiter.side_effect = ProxyRateLimitError(detail="catalog-a RPM exceeded")
+    with pytest.raises(ProxyRateLimitError, match="catalog-a RPM exceeded"):
+        await run_catalog_listing(kind, context, servers, first_page.next_cursor)
+
+    charged_server_ids: Final = [call.args[1].server_id for call in limiter.await_args_list]
+    assert charged_server_ids.count("catalog-a") == 2
+    assert charged_server_ids.count("catalog-b") == 1
+
+@pytest.mark.parametrize("kind", ("prompts", "resources", "templates"))
+@pytest.mark.parametrize("ttls,expected", (((9000, 4000), 4000), ((9000, 0), 0)))
+def test_optional_catalog_preserves_conservative_freshness(kind: str, ttls: tuple[int, int], expected: int) -> None:
+    from mcp.types import (
+        ListPromptsRequest,
+        ListPromptsResult,
+        ListResourcesRequest,
+        ListResourcesResult,
+        ListResourceTemplatesRequest,
+        ListResourceTemplatesResult,
+    )
+
+    request, result_type, field = {
+        "prompts": (ListPromptsRequest(), ListPromptsResult, "prompts"),
+        "resources": (ListResourcesRequest(), ListResourcesResult, "resources"),
+        "templates": (ListResourceTemplatesRequest(), ListResourceTemplatesResult, "resource_templates"),
+    }[kind]
+    pages: Final = tuple(result_type(**{field: []}, ttl_ms=ttl, cache_scope="public") for ttl in ttls)
+    result: Final = catalog.combine_optional_catalog(request, pages, None, None)
+    assert result.ttl_ms == expected
+    assert result.cache_scope == "private"
+
+
+@pytest.mark.asyncio
+async def test_tool_catalog_preserves_upstream_freshness() -> None:
+    async def fetch(server_id: str, cursor: str | None) -> ListToolsResult:
+        return page(server_id).model_copy(update={"ttl_ms": 9000, "cache_scope": "public"})
+
+    result: Final = await listing(fetch)
+    assert 0 < result.ttl_ms <= 9000
+    assert result.cache_scope == "private"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("upstream_ttl,limit,expected_ttl", [(1000, 60, 1000), (90000, 1, 1000), (0, 60, 0)])
+async def test_discovery_cache_uses_upstream_freshness_and_configured_cap(
+    upstream_ttl: int, limit: float, expected_ttl: int
+) -> None:
+    from unittest.mock import AsyncMock
+    from mcp.types import ListPromptsResult, Prompt
+    from pydantic import TypeAdapter
+
+    class Clock:
+        now: float = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock: Final = Clock()
+    cache: Final = catalog._DiscoveryCache(limit, clock, TypeAdapter(ListPromptsResult))
+    fetch: Final = AsyncMock(return_value=ListPromptsResult(prompts=[Prompt(name="fresh")], ttl_ms=upstream_ttl))
+    first: Final = await cache.get(("server", "caller"), fetch)
+    assert first.prompts[0].name == "fresh"
+    clock.now = 0.5  # rebind-ok: advance the injected test clock without sleeping
+    second: Final = await cache.get(("server", "caller"), fetch)
+    assert second.prompts[0].name == "fresh"
+    if expected_ttl:
+        assert fetch.await_count == 1
+        assert second.ttl_ms == 500
+        second.prompts[0].name = "caller edit"  # rebind-ok: prove caller mutation cannot alter retained results
+    else:
+        assert fetch.await_count == 2
+    clock.now = 1.0  # rebind-ok: reach the exact expiry boundary without sleeping
+    assert (await cache.get(("server", "caller"), fetch)).prompts[0].name == "fresh"
+    assert fetch.await_count == (2 if expected_ttl else 3)
+
+
+def test_partial_optional_catalog_never_advertises_freshness() -> None:
+    from mcp.types import ListPromptsRequest, ListPromptsResult
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import SERVER_OUTCOMES_META_KEY
+
+    result: Final = catalog.combine_optional_catalog(
+        ListPromptsRequest(),
+        [ListPromptsResult(prompts=[], ttl_ms=9000)],
+        None,
+        {SERVER_OUTCOMES_META_KEY: {"failed-earlier": {"tag": "timeout"}}},
+    )
+    assert result.ttl_ms == 0
+    assert result.cache_scope == "private"
+

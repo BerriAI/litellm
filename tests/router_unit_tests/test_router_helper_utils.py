@@ -365,40 +365,6 @@ async def test_callback_observing_stamp_before_pre_header_increment_fails_leaves
     assert await router.get_model_group_usage("gpt-5-mini") == (None, None)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def test_track_deployment_metrics(model_list):
     """Test if the 'track_deployment_metrics' function is working correctly"""
     from litellm.types.utils import ModelResponse
@@ -414,18 +380,6 @@ def test_track_deployment_metrics(model_list):
         ),
         parent_otel_span=None,
     )
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_pass_through_assistants_endpoint_factory(model_list):
