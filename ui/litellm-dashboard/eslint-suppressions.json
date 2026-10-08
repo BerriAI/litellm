@@ -1116,11 +1116,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/usage/_components/components/EntityUsage/EntityUsage.tsx": {
-    "local/no-complex-jsx-arrow": {
-      "count": 2
-    }
-  },
   "src/app/(dashboard)/usage/_components/components/UsageAIChatPanel.tsx": {
     "no-nested-ternary": {
       "count": 1
@@ -1130,17 +1125,11 @@
     }
   },
   "src/app/(dashboard)/usage/_components/components/UsagePageView.tsx": {
-    "local/no-complex-jsx-arrow": {
-      "count": 2
-    },
-    "max-lines": {
-      "count": 1
-    },
     "react-hooks/purity": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 2
+      "count": 1
     }
   },
   "src/app/(dashboard)/users/_components/BulkEditUsers.tsx": {

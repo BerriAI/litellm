@@ -77,13 +77,20 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
-  - it: requires a shared service secret when enabled
+  - it: uses the managed service secret when none is supplied
     template: lens/deployment.yaml
     set:
       lensWorker.enabled: true
+      lensWorker.publicUrl: https://traces.example
     asserts:
-      - failedTemplate:
-          errorMessage: lensWorker.serviceTokenSecret.name is required
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_SERVICE_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: RELEASE-NAME-litellm-lens-service
+                key: service-token
   - it: uses the chart release and a secret without granting Kubernetes access
     template: lens/deployment.yaml
     chart:

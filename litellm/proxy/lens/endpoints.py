@@ -194,16 +194,37 @@ async def service_connection(auth: Auth) -> ServiceConnection:
     public_url: Final = os.environ.get("LITELLM_LENS_PUBLIC_URL", "").rstrip("/")
     try:
         connection: Final = LensConnection.from_env()
+    except ValueError:
+        return ServiceConnection(
+            url=public_url,
+            connected=False,
+            status=ServiceStatus(),
+            configured=bool(os.environ.get("LITELLM_LENS_URL")),
+            release=release_tag(),
+        )
+    try:
         client: Final = connection.control_client()
         async with client.stream(
             "GET", connection.endpoint("/internal/status"), headers=connection.headers, timeout=2
         ) as response:
             if response.status_code == 200:
                 status: Final = ServiceStatus.model_validate_json(await bounded_response(response, 16 * 1024))
-                return ServiceConnection(url=public_url, connected=True, status=status)
+                return ServiceConnection(
+                    url=public_url,
+                    connected=True,
+                    status=status,
+                    configured=True,
+                    release=release_tag(),
+                )
     except (ValueError, RuntimeError, httpx.HTTPError):
         pass
-    return ServiceConnection(url=public_url, connected=False, status=ServiceStatus())
+    return ServiceConnection(
+        url=public_url,
+        connected=False,
+        status=ServiceStatus(),
+        configured=True,
+        release=release_tag(),
+    )
 
 
 async def credential_snapshot() -> IngestionSnapshot:
