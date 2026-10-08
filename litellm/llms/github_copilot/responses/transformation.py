@@ -344,15 +344,19 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
             return "user"
 
         # If input is a list, analyze items
-        for item in input_param:
-            # Check if item has no role (agent-initiated)
-            if "role" not in item or not item.get("role"):
-                return "agent"
+        if isinstance(input_param, list):  # pyright: ignore[reportUnnecessaryIsInstance]  # items arrive from untyped request params
+            for item in input_param:
+                if not isinstance(item, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # items arrive from untyped request params
+                    continue
 
-            # Check if role is assistant (agent-initiated)
-            role = item.get("role")
-            if role.lower() == "assistant":
-                return "agent"
+                # Check if item has no role (agent-initiated)
+                if "role" not in item or not item.get("role"):
+                    return "agent"
+
+                # Check if role is assistant (agent-initiated)
+                role = item.get("role")
+                if isinstance(role, str) and role.lower() == "assistant":  # pyright: ignore[reportUnnecessaryIsInstance]  # role arrives from untyped request params
+                    return "agent"
 
         # Default to user-initiated
         return "user"
