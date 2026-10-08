@@ -1,10 +1,13 @@
 import json
 import time
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from litellm._internal_context import current_service_target
+from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
 
@@ -272,33 +275,36 @@ async def test_exchange_concurrent_replay_claims_nonce_once(monkeypatch: pytest.
     assert len(mint_calls) == 1
 
 
+class _TargetRecordingCache(DualCache):
+    def __init__(self) -> None:
+        super().__init__()
+        self.target_at_write: str | None = None
+
+    async def async_set_cache(self, key: str, value: object, local_only: bool = False, **kwargs: object) -> None:
+        self.target_at_write = current_service_target()
+        return await super().async_set_cache(key, value, local_only=local_only, **kwargs)
+
+
 @pytest.mark.asyncio
 async def test_persist_moyai_url_writes_ui_settings_cache_under_config_params_target(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from litellm._internal_context import current_service_target
     from litellm.proxy import proxy_server
     from litellm.proxy.moyai_endpoints import _persist_moyai_url
+    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import UI_SETTINGS_CACHE_KEY
     from litellm.proxy.utils import CONFIG_PARAMS_TARGET
 
-    seen_targets: list[str | None] = []
+    cache: Final = _TargetRecordingCache()
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
 
-    async def _set(key: str, value: dict, ttl: int | None = None) -> None:
-        seen_targets.append(current_service_target())
-
-    monkeypatch.setattr(
-        proxy_server,
-        "user_api_key_cache",
-        SimpleNamespace(async_set_cache=AsyncMock(side_effect=_set)),
-    )
-
-    prisma = MagicMock()
+    prisma: Final = MagicMock()
     prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
     prisma.db.litellm_uisettings.upsert = AsyncMock()
 
     await _persist_moyai_url(prisma, "https://moyai.example.com")
 
-    assert seen_targets == [CONFIG_PARAMS_TARGET]
+    assert cache.target_at_write == CONFIG_PARAMS_TARGET
+    assert await cache.async_get_cache(key=UI_SETTINGS_CACHE_KEY) == {"moyai_url": "https://moyai.example.com"}
     assert current_service_target() is None
 
 
