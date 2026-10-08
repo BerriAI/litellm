@@ -5115,3 +5115,39 @@ async def test_daily_spend_rows_survive_a_lock_timeout_for_the_next_flush():
 
     assert len(prisma_client.db.statements) == 1
     assert list(daily_spend_transactions) == ["key"]
+
+
+@pytest.mark.asyncio
+async def test_daily_tag_queue_preserves_teams_tools_and_duplicate_tag_accounting():
+    from litellm.proxy.utils import PrismaClient
+
+    writer = DBSpendUpdateWriter()
+    client = SimpleNamespace(get_request_status=lambda payload: PrismaClient.get_request_status(None, payload))
+    payload = {
+        "request_id": "attribution",
+        "request_tags": '["shared", "shared", "other"]',
+        "startTime": "2026-01-01T00:00:00",
+        "api_key": "same-key",
+        "model": None,
+        "model_group": None,
+        "custom_llm_provider": None,
+        "prompt_tokens": 100,
+        "completion_tokens": 20,
+        "spend": 0.25,
+        "metadata": '{"status": "success"}',
+    }
+    for team, tool in (("team-a", "tool-a"), ("team-b", "tool-a"), ("team-a", "tool-b"), (None, None)):
+        await writer.add_spend_log_transaction_to_daily_tag_transaction(
+            payload={**payload, "team_id": team, "mcp_namespaced_tool_name": tool},
+            prisma_client=client,
+        )
+    rows = await writer.daily_tag_spend_update_queue.flush_and_get_aggregated_daily_spend_update_transactions()
+    assert len(rows) == 8
+    assert sum(row["spend"] for row in rows.values()) == 2.0
+    assert {(row["team_id"], row["mcp_namespaced_tool_name"]) for row in rows.values()} == {
+        ("team-a", "tool-a"),
+        ("team-b", "tool-a"),
+        ("team-a", "tool-b"),
+        ("", None),
+    }
+    assert all(row["api_requests"] == 1 and row["prompt_tokens"] == 100 for row in rows.values())

@@ -56,6 +56,7 @@ from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, p
 from litellm.proxy.db.daily_spend_bulk_upsert import (
     DAILY_SPEND_TABLES,
     build_bulk_upsert,
+    conflict_key,
     daily_spend_entity_ids,
     merge_by_conflict_key,
 )
@@ -3013,10 +3014,14 @@ class DBSpendUpdateWriter:
         for tag in request_tags:
             if tag is None:
                 continue
-            endpoint_str = base_daily_transaction.get("endpoint") or ""
-            daily_transaction_key = f"{tag}_{base_daily_transaction['date']}_{payload['api_key']}_{payload['model']}_{payload['custom_llm_provider']}_{endpoint_str}"
-            daily_transaction = DailyTagSpendTransaction(
-                tag=tag, **base_daily_transaction, request_id=payload["request_id"]
+            daily_transaction: Final = DailyTagSpendTransaction(
+                tag=tag,
+                team_id=payload.get("team_id") or "",
+                **base_daily_transaction,
+                request_id=payload["request_id"],
+            )
+            daily_transaction_key: Final = json.dumps(
+                conflict_key(DAILY_SPEND_TABLES["tag"], daily_transaction), separators=(",", ":")
             )
 
             await self.daily_tag_spend_update_queue.add_update(update={daily_transaction_key: daily_transaction})

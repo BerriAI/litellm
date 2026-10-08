@@ -5764,6 +5764,7 @@ class DailyEndUserSpendTransaction(BaseDailySpendTransaction):
 
 
 class DailyTagSpendTransaction(BaseDailySpendTransaction):
+    team_id: ReadOnly[NotRequired[str]]
     request_id: str | None
     tag: str
 

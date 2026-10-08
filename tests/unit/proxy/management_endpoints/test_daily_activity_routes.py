@@ -1330,3 +1330,68 @@ def test_export_content_disposition_is_ascii_and_built_from_canonical_dates(
     disposition: Final = response.headers["content-disposition"]
     assert disposition == 'attachment; filename="team-usage-2025-01-01-2025-01-02-daily.csv"'
     assert disposition.isascii()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("grouping", ("tag", "team"))
+async def test_team_tag_api_resolvers_preserve_same_authorized_intersection(grouping: str) -> None:
+    from litellm.proxy.management_endpoints.daily_activity_scopes import (
+        ResolvedScope,
+        _resolve_tag,
+        _resolve_team,
+        _tag_query,
+        _team_query,
+    )
+
+    auth: Final = UserAPIKeyAuth(user_id="user-a", user_role=LitellmUserRoles.INTERNAL_USER)
+    prisma: Final = _prisma_client()
+    tag_scope: Final = await _resolve_tag(
+        auth, _tag_query(tags="shared", team_ids="team-a", group_by=grouping, **_DATE_PARAMS), prisma
+    )
+    team_scope: Final = await _resolve_team(
+        auth, _team_query(tags="shared", team_ids="team-a", group_by=grouping, **_DATE_PARAMS), prisma
+    )
+    assert isinstance(tag_scope, ResolvedScope)
+    assert isinstance(team_scope, ResolvedScope)
+    assert tag_scope == team_scope
+    assert tag_scope.scope.table is DailyActivityTable.TAG
+    assert tag_scope.scope.team_ids == ("team-a",)
+    assert tag_scope.scope.tags == ("shared",)
+    assert tag_scope.scope.api_keys == ("key-alpha",)
+    assert tag_scope.scope.entity_id_field == ("tag" if grouping == "tag" else "team_id")
+
+
+@pytest.mark.parametrize("prefix", ("/tag", "/team"))
+@pytest.mark.parametrize(
+    "suffix", ("/aggregated", "/aggregated/keys", "/aggregated/search", "/aggregated/model_top_keys", "/export")
+)
+def test_cross_team_reporting_is_denied_on_every_shared_route(
+    daily_activity_client: tuple[TestClient, _FakeRepository], prefix: str, suffix: str
+) -> None:
+    client, _ = daily_activity_client
+    response: Final = client.get(
+        prefix + "/daily/activity" + suffix,
+        params={
+            **_DATE_PARAMS,
+            "team_ids": "team-b",
+            "tags": "shared",
+            "group_by": "team",
+            "search": "key",
+            "model_group": "model",
+            "export_type": "daily",
+            "format": "json",
+        },
+        headers={"x-user-role": "internal_user", "x-user-id": "user-a"},
+    )
+    assert response.status_code == 404, response.text
+
+
+@pytest.mark.asyncio
+async def test_unfiltered_team_reporting_keeps_untagged_totals_source() -> None:
+    from litellm.proxy.management_endpoints.daily_activity_scopes import ResolvedScope, _resolve_team, _team_query
+
+    result: Final = await _resolve_team(
+        UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN), _team_query(**_DATE_PARAMS), _prisma_client()
+    )
+    assert isinstance(result, ResolvedScope)
+    assert result.scope.table is DailyActivityTable.TEAM

@@ -19,7 +19,7 @@ _ENTITY_FIELDS: Mapping[DailyActivityTable, frozenset[str]] = MappingProxyType(
     {
         DailyActivityTable.USER: frozenset(("user_id",)),
         DailyActivityTable.TEAM: frozenset(("team_id",)),
-        DailyActivityTable.TAG: frozenset(("tag",)),
+        DailyActivityTable.TAG: frozenset(("tag", "team_id")),
         DailyActivityTable.ORGANIZATION: frozenset(("organization_id",)),
         DailyActivityTable.CUSTOMER: frozenset(("end_user_id",)),
         DailyActivityTable.AGENT: frozenset(("agent_id",)),
@@ -39,8 +39,23 @@ class DailyActivityScope:
     model: str | None
     timezone_offset_minutes: int | None
     include_current_utc_day: bool = False
+    team_ids: tuple[str, ...] | None = None
+    exclude_team_ids: tuple[str, ...] = ()
+    tags: tuple[str, ...] | None = None
+    exclude_tags: tuple[str, ...] = ()
+
+    @property
+    def dimension_filters(self) -> tuple[tuple[str, tuple[str, ...] | None, tuple[str, ...]], ...]:
+        return (
+            ("team_id", self.team_ids, self.exclude_team_ids),
+            ("tag", self.tags, self.exclude_tags),
+        )
 
     def __post_init__(self) -> None:
+        if self.table is not DailyActivityTable.TAG and any(
+            included is not None or excluded for _, included, excluded in self.dimension_filters
+        ):
+            raise ValueError("Team/tag dimension filters require the daily tag spend table")
         if self.entity_id_field not in _ENTITY_FIELDS[self.table]:
             raise ValueError(f"Invalid entity_id_field {self.entity_id_field!r} for {self.table.value}")
 

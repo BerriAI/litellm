@@ -661,3 +661,149 @@ async def test_team_exclusion_keeps_null_and_empty_entity_rows() -> None:
         daily: Final = await repository.daily_rows(scope, page=1, page_size=10)
         assert daily.total_count == 3
         assert {row.api_key for row in daily.rows} == {"key-excluded-null", "key-excluded-empty", "key-excluded-normal"}
+
+
+@pytest.mark.asyncio
+async def test_team_tag_intersections_across_real_repository_reads() -> None:
+    from dataclasses import replace
+
+    from litellm.repositories.daily_activity_sql import ExportCursor, build_export_sql
+
+    async with _daily_activity_database(include_tag_activity=True) as database:
+        await database.execute_raw(
+            "ALTER TABLE \"LiteLLM_DailyTagSpend\" ADD COLUMN IF NOT EXISTS team_id TEXT NOT NULL DEFAULT ''"
+        )
+        await database.execute_raw('DELETE FROM "LiteLLM_DailyTagSpend"')
+        await database.execute_raw("""
+            INSERT INTO "LiteLLM_DailyTagSpend"
+                (id,tag,team_id,date,api_key,model,spend,api_requests,prompt_tokens,updated_at)
+            VALUES
+                ('a','shared','team-a','2026-06-01','key-a','model',1,1,10,NOW()),
+                ('b','shared','team-b','2026-06-01','key-a','model',8,1,80,NOW()),
+                ('c','other','team-a','2026-06-01','key-a','model',1,1,10,NOW()),
+                ('d','shared','','2026-06-01','deleted-key','model',16,1,160,NOW()),
+                ('e','shared','team-a','2026-06-02','deleted-key','model',2,1,20,NOW()),
+                ('f','shared','team-a','2026-06-01','key-b','other-model',4,1,40,NOW()),
+                ('g',NULL,'team-a','2026-06-01','deleted-key','model',32,1,320,NOW())
+        """)
+        await database.execute_raw(
+            """INSERT INTO "LiteLLM_TeamTable" (team_id,team_alias) VALUES ('team-a','Team A')"""
+        )
+        repository: Final = _repository(database)
+        base: Final = replace(
+            _scope(DailyActivityTable.TAG, "tag", "shared"),
+            entity_ids=None,
+            end_date="2026-06-02",
+            tags=("shared",),
+            team_ids=("team-a",),
+        )
+        from types import SimpleNamespace
+
+        import httpx
+        from fastapi import FastAPI
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.management_endpoints.daily_activity_routes import (
+            get_daily_activity_prisma_client,
+            get_daily_activity_repository,
+            router,
+        )
+
+        app: Final = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+        app.dependency_overrides[get_daily_activity_prisma_client] = lambda: SimpleNamespace(
+            db=database, writer_db=database
+        )
+        app.dependency_overrides[get_daily_activity_repository] = lambda: repository
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            for grouping in ("tag", "team"):
+                params: Final = {
+                    "team_ids": "team-a",
+                    "tags": "shared",
+                    "group_by": grouping,
+                    "start_date": "2026-06-01",
+                    "end_date": "2026-06-02",
+                    "format": "json",
+                    "search": "key",
+                    "model_group": "model",
+                    "by_model_group": "false",
+                }
+                for suffix in (
+                    "/aggregated",
+                    "/aggregated/keys",
+                    "/aggregated/search",
+                    "/aggregated/model_top_keys",
+                    "/export",
+                ):
+                    tag_response: Final = await client.get("/tag/daily/activity" + suffix, params=params)
+                    team_response: Final = await client.get("/team/daily/activity" + suffix, params=params)
+                    assert tag_response.status_code == 200, tag_response.text
+                    assert team_response.status_code == 200, team_response.text
+                    assert tag_response.json() == team_response.json()
+                    if suffix == "/aggregated":
+                        assert tag_response.json()["metadata"]["total_spend"] == 7
+                    if suffix == "/export":
+                        assert sum(row["spend"] for row in tag_response.json()) == 7
+
+        for grouping in ("tag", "team_id"):
+            scope: Final = replace(base, entity_id_field=grouping)
+            result: Final = await repository.aggregated(scope, include_entity_breakdown=True, api_key_limit=10)
+            assert sum(row.spend or 0 for row in result.grouping_rows if row.group_level == 127) == 7
+            assert result.entity_rows is not None
+            assert sum(row.spend or 0 for row in result.entity_rows if row.api_key_rolled == 1) == 7
+            assert {row.entity_id for row in result.entity_rows} == ({"shared"} if grouping == "tag" else {"team-a"})
+            page: Final = await repository.key_page(scope, offset=0, limit=1)
+            assert page.total_api_keys == 3
+            assert [(row.api_key, row.spend) for row in page.rows] == [("key-b", 4)]
+            assert (await repository.key_page(scope, offset=3, limit=1)).rows == ()
+            assert set(await repository.search_keys(scope, search="key", limit=10)) == {"key-a", "key-b", "deleted-key"}
+            models: Final = await repository.model_top_keys(scope, model_group="model", by_model_group=False, limit=10)
+            assert sum(row.spend for row in models) == 3
+            daily: Final = await repository.daily_rows(scope, page=1, page_size=10)
+            assert daily.total_count == 3
+            assert sum(row.spend for row in daily.rows) == 7
+            for export_type in ExportType:
+                exported: Final = tuple([row async for row in repository.export_rows(scope, export_type=export_type)])
+                assert sum(row.spend for row in exported) == 7
+                assert {row.entity_alias for row in exported} == ({"Team A"} if grouping == "team_id" else {None})
+            first: Final = build_export_sql(scope, export_type=ExportType.DAILY, after=None, batch_size=1)
+            first_rows: Final = await database.query_raw(first.sql, *first.params)
+            assert first_rows[0]["spend"] == 5
+            second: Final = build_export_sql(
+                scope,
+                export_type=ExportType.DAILY,
+                after=ExportCursor("2026-06-01", "shared" if grouping == "tag" else "team-a", ""),
+                batch_size=1,
+            )
+            second_rows: Final = await database.query_raw(second.sql, *second.params)
+            assert second_rows[0]["spend"] == 2
+
+        for restricted in (
+            replace(base, team_ids=()),
+            replace(base, tags=()),
+            replace(base, api_keys=()),
+            replace(base, exclude_team_ids=("team-a",)),
+            replace(base, exclude_tags=("shared",)),
+            replace(base, entity_ids=("other",)),
+            replace(base, entity_id_field="team_id", exclude_entity_ids=("team-a",)),
+            replace(base, entity_id_field="team_id", entity_ids=("team-b",)),
+        ):
+            denied: Final = await repository.aggregated(restricted, include_entity_breakdown=True, api_key_limit=10)
+            assert all(not row.spend for row in denied.grouping_rows)
+            assert denied.entity_rows == ()
+            assert (
+                await repository.model_top_keys(restricted, model_group="model", by_model_group=False, limit=10) == ()
+            )
+            assert (await repository.daily_rows(restricted, page=1, page_size=10)).total_count == 0
+            assert (await repository.key_page(restricted, offset=0, limit=10)).total_api_keys == 0
+            assert await repository.search_keys(restricted, search="key", limit=10) == ()
+            assert [row async for row in repository.export_rows(restricted, export_type=ExportType.DAILY)] == []
+
+        narrowed: Final = replace(base, api_keys=("key-a",), model="model", end_date="2026-06-01")
+        assert (await repository.key_page(narrowed, offset=0, limit=10)).rows[0].spend == 1
+        history: Final = replace(base, team_ids=("",))
+        assert (await repository.key_page(history, offset=0, limit=10)).rows[0].spend == 16
+        overlapping: Final = replace(base, tags=None, exclude_tags=("shared",))
+        assert sum(row.spend for row in (await repository.key_page(overlapping, offset=0, limit=10)).rows) == 33

@@ -418,3 +418,38 @@ def test_export_without_cursor_omits_cursor_predicate_and_parameters(export_type
         *((PTU_SENTINEL_API_KEY,) if export_type is not ExportType.DAILY else ()),
         2,
     )
+
+
+@pytest.mark.parametrize("table", tuple(table for table in DailyActivityTable if table is not DailyActivityTable.TAG))
+def test_cross_dimension_filters_reject_tables_without_tag_attribution(table: DailyActivityTable) -> None:
+    from dataclasses import replace
+
+    with pytest.raises(ValueError, match="dimension filters"):
+        replace(_scope(table=table), tags=())
+
+
+def test_dimension_filters_bind_after_existing_filters_with_nondefault_offset() -> None:
+    from dataclasses import replace
+
+    scope: Final = replace(
+        _scope(table=DailyActivityTable.TAG, entity_ids=("shared",), api_keys=("key",), model="model"),
+        team_ids=("team-a", "team-b"),
+        exclude_team_ids=("team-b",),
+        tags=("shared", "x'); DROP TABLE tags; --"),
+        exclude_tags=("private",),
+    )
+    clause, params = build_where_clause(scope, start_index=4)
+    assert params == (
+        "2026-01-01",
+        "2026-01-31",
+        ["shared"],
+        "model",
+        ["key"],
+        ["team-a", "team-b"],
+        ["team-b"],
+        ["shared", "x'); DROP TABLE tags; --"],
+        ["private"],
+    )
+    assert '"team_id" = ANY($9::text[])' in clause
+    assert '"tag" = ANY($11::text[])' in clause
+    assert "DROP TABLE" not in clause

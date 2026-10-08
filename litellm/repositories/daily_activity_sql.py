@@ -1,7 +1,7 @@
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from itertools import count, islice
+from itertools import chain, count, islice
 from types import MappingProxyType
 from typing import Final
 
@@ -103,7 +103,30 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
         *((scope.model,) if scope.model else ()),
         *((list(scope.api_keys),) if scope.api_keys else ()),
     )
-    return " AND ".join(conditions), params
+    dimension_indexes: Final = count(start_index + len(params))
+    dimension_parts: Final = tuple(
+        _dimension_where(column, included, excluded, dimension_indexes)
+        for column, included, excluded in scope.dimension_filters
+    )
+    return (
+        " AND ".join((*conditions, *(condition for condition, _ in dimension_parts if condition))),
+        (*params, *chain.from_iterable(values for _, values in dimension_parts)),
+    )
+
+
+def _dimension_where(
+    column: str, included: tuple[str, ...] | None, excluded: tuple[str, ...], indexes: Iterator[int]
+) -> tuple[str, tuple[object, ...]]:
+    include_clause: Final = (
+        "FALSE" if included == () else f'"{column}" = ANY(${next(indexes)}::text[])' if included else ""
+    )
+    exclude_clause: Final = (
+        f'("{column}" IS NULL OR NOT ("{column}" = ANY(${next(indexes)}::text[])))' if excluded else ""
+    )
+    return (
+        " AND ".join(clause for clause in (include_clause, exclude_clause) if clause),
+        (*((list(included),) if included else ()), *((list(excluded),) if excluded else ())),
+    )
 
 
 def _ptu_flat_cost_select(table: DailyActivityTable, *, aggregate: bool = True) -> str:
@@ -392,7 +415,7 @@ def build_export_sql(
     )
     entity_joins: Final = (
         ('LEFT JOIN "LiteLLM_TeamTable" tt ON tt.team_id = scoped.team_id',)
-        if scope.table is DailyActivityTable.TEAM
+        if scope.entity_id_field == "team_id"
         else ('LEFT JOIN "LiteLLM_OrganizationTable" ot ON ot.organization_id = scoped.organization_id',)
         if scope.table is DailyActivityTable.ORGANIZATION
         else ()
@@ -400,7 +423,7 @@ def build_export_sql(
     joins: Final = (*type_joins, *entity_joins)
     alias_expression: Final = (
         "MAX(tt.team_alias)"
-        if scope.table is DailyActivityTable.TEAM
+        if scope.entity_id_field == "team_id"
         else "MAX(ot.organization_alias)"
         if scope.table is DailyActivityTable.ORGANIZATION
         else "NULL::text"

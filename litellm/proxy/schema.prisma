@@ -1070,6 +1070,7 @@ model LiteLLM_DailyTeamSpend {
 // Track daily team spend metrics per model and key
 model LiteLLM_DailyTagSpend {
   id                  String   @id @default(uuid())
+  team_id             String   @default("")
   request_id          String?
   tag                 String?   
   date                String
@@ -1097,9 +1098,10 @@ model LiteLLM_DailyTagSpend {
   created_at          DateTime @default(now())
   updated_at          DateTime @updatedAt
 
-  @@unique([tag, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint])
+  @@unique([tag, team_id, date, api_key, model, custom_llm_provider, mcp_namespaced_tool_name, endpoint], map: "LiteLLM_DailyTagSpend_tag_team_dimensions_key")
   @@index([date])
   @@index([tag, date])
+  @@index([team_id, date, tag])
   @@index([api_key])
   @@index([model])
   @@index([mcp_namespaced_tool_name])

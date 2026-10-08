@@ -290,14 +290,24 @@ class DailyActivityRepository:
         exclusion_filter: Final = (
             {
                 "OR": [
-                    {scope.entity_id_field: None},
+                    *(
+                        ({scope.entity_id_field: None},)
+                        if scope.table is not DailyActivityTable.TAG or scope.entity_id_field != "team_id"
+                        else ()
+                    ),
                     {scope.entity_id_field: {"not": {"in": list(scope.exclude_entity_ids)}}},
                 ]
             }
             if scope.exclude_entity_ids
             else {}
         )
+        dimension_conditions: Final = tuple(
+            _dimension_prisma_filter(column, included, excluded)
+            for column, included, excluded in scope.dimension_filters
+            if included is not None or excluded
+        )
         conditions: Final = {
+            **({"AND": list(dimension_conditions)} if dimension_conditions else {}),
             "date": {"gte": adjusted_start, "lte": adjusted_end},
             **({scope.entity_id_field: {"in": list(scope.entity_ids)}} if scope.entity_ids is not None else {}),
             **exclusion_filter,
@@ -314,3 +324,21 @@ class DailyActivityRepository:
             ),
         )
         return DailyRowsPage(total_count=count, rows=tuple(rows))
+
+
+def _dimension_prisma_filter(
+    column: str, included: tuple[str, ...] | None, excluded: tuple[str, ...]
+) -> dict[str, object]:
+    return {
+        **({column: {"in": list(included)}} if included is not None else {}),
+        **(
+            {
+                "OR": [
+                    *(({column: None},) if column != "team_id" else ()),
+                    {column: {"not": {"in": list(excluded)}}},
+                ]
+            }
+            if excluded
+            else {}
+        ),
+    }

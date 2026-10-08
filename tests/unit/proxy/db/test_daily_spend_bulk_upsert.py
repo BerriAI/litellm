@@ -88,10 +88,10 @@ def test_one_statement_carries_every_row_in_the_batch():
 
     assert sql.count("INSERT INTO") == 1
     assert len(re.findall(r"ON CONFLICT", sql)) == 1
-    # 25 bound columns per row plus the inlined updated_at, so the row count is what
+    # 26 bound columns per row plus the inlined updated_at, so the row count is what
     # separates one multi-row statement from a hundred single-row ones.
-    assert len(params) == 100 * 25
-    assert "$2500::text" in sql
+    assert len(params) == 100 * 26
+    assert "$2600::text" in sql
     assert sql.count("(NOW() AT TIME ZONE 'UTC')") == 100 + 1
 
 
@@ -101,7 +101,7 @@ def test_conflict_target_is_the_full_unique_constraint():
     conflict_target = re.search(r"ON CONFLICT \(([^)]*)\)", sql)
     assert conflict_target is not None
     assert conflict_target.group(1) == (
-        '"tag", "date", "api_key", "model", "custom_llm_provider", "mcp_namespaced_tool_name", "endpoint"'
+        '"tag", "team_id", "date", "api_key", "model", "custom_llm_provider", "mcp_namespaced_tool_name", "endpoint"'
     )
 
 
@@ -208,3 +208,25 @@ async def test_writer_survives_a_transaction_whose_key_columns_are_null():
     _, params = prisma_client.db.statements[0]
     assert None not in params[:9]
     assert transactions == {}
+
+
+def test_team_attribution_separates_same_key_after_reassignment():
+    merged = merge_by_conflict_key(
+        TAG_TABLE,
+        (
+            tag_txn(team_id="team-a"),
+            tag_txn(team_id="team-b"),
+            tag_txn(team_id="team-a"),
+        ),
+    )
+    assert {row["team_id"]: row["api_requests"] for _, row in merged} == {"team-a": 2, "team-b": 1}
+    assert conflict_key(USER_TABLE, {**tag_txn(), "user_id": "u"}) == conflict_key(
+        USER_TABLE, {**tag_txn(team_id="team-a"), "user_id": "u"}
+    )
+
+
+def test_legacy_buffer_and_teamless_transactions_share_unattributed_bucket():
+    merged = merge_by_conflict_key(TAG_TABLE, (tag_txn(), tag_txn(team_id=""), tag_txn(team_id=None)))
+    assert len(merged) == 1
+    assert merged[0][1]["api_requests"] == 3
+    assert merged[0][1]["spend"] == pytest.approx(0.75)

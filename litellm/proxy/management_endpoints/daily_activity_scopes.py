@@ -1,5 +1,5 @@
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Final, Literal
 
@@ -30,6 +30,11 @@ class EntityQuery:
     model: str | None
     timezone_offset_minutes: int | None
     include_current_utc_day: bool
+    team_ids: tuple[str, ...] | None = None
+    exclude_team_ids: tuple[str, ...] = ()
+    tags: tuple[str, ...] | None = None
+    exclude_tags: tuple[str, ...] = ()
+    group_by: Literal["tag", "team"] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,7 +138,7 @@ async def _resolve_team(
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
-    return _build_scope(
+    resolved: Final = _build_scope(
         TEAM_RESOLVER,
         query,
         team_scope.team_ids,
@@ -141,11 +146,52 @@ async def _resolve_team(
         team_scope.api_key_filter,
         team_scope.team_alias_metadata,
     )
+    if query.tags is None and not query.exclude_tags and query.group_by != "tag":
+        return resolved
+    return ResolvedScope(
+        scope=replace(
+            resolved.scope,
+            table=DailyActivityTable.TAG,
+            entity_id_field="tag" if query.group_by == "tag" else "team_id",
+            entity_ids=None,
+            exclude_entity_ids=(),
+            team_ids=resolved.scope.entity_ids,
+            exclude_team_ids=resolved.scope.exclude_entity_ids,
+            tags=query.tags,
+            exclude_tags=query.exclude_tags,
+        ),
+        entity_metadata=None if query.group_by == "tag" else resolved.entity_metadata,
+    )
 
 
 async def _resolve_tag(
     user_api_key_dict: UserAPIKeyAuth, query: EntityQuery, prisma_client: PrismaClient
 ) -> EntityScopeResolution:
+    if query.team_ids is not None or query.exclude_team_ids or query.group_by == "team":
+        team_query: Final = replace(
+            query,
+            entity_ids=query.team_ids,
+            exclude_entity_ids=query.exclude_team_ids,
+            group_by=None,
+        )
+        resolved: Final = await _resolve_team(user_api_key_dict, team_query, prisma_client)
+        if isinstance(resolved, ScopeDenied):
+            return resolved
+        return replace(
+            resolved,
+            scope=replace(
+                resolved.scope,
+                table=DailyActivityTable.TAG,
+                entity_id_field="team_id" if query.group_by == "team" else "tag",
+                entity_ids=None,
+                exclude_entity_ids=(),
+                team_ids=resolved.scope.entity_ids,
+                exclude_team_ids=resolved.scope.exclude_entity_ids,
+                tags=query.entity_ids,
+                exclude_tags=query.exclude_entity_ids,
+            ),
+            entity_metadata=resolved.entity_metadata if query.group_by == "team" else None,
+        )
     api_key_filter: Final = await get_tag_daily_activity_api_key_filter(
         prisma_client=prisma_client,
         user_api_key_dict=user_api_key_dict,
@@ -259,6 +305,9 @@ def _team_query(
     api_key: str | None = None,
     exclude_team_ids: str | None = None,
     timezone: int | None = None,
+    tags: str | None = None,
+    exclude_tags: str | None = None,
+    group_by: Literal["team", "tag"] | None = None,
 ) -> EntityQuery:
     return EntityQuery(
         entity_ids=_query_ids(team_ids),
@@ -269,6 +318,9 @@ def _team_query(
         model=model,
         timezone_offset_minutes=timezone,
         include_current_utc_day=False,
+        tags=_query_ids(tags),
+        exclude_tags=_query_excluded_ids(exclude_tags),
+        group_by=group_by,
     )
 
 
@@ -279,16 +331,23 @@ def _tag_query(
     api_key: str | None = None,
     tags: str | None = None,
     timezone: int | None = None,
+    team_ids: str | None = None,
+    exclude_team_ids: str | None = None,
+    exclude_tags: str | None = None,
+    group_by: Literal["tag", "team"] | None = None,
 ) -> EntityQuery:
     return EntityQuery(
         entity_ids=_query_ids(tags),
-        exclude_entity_ids=(),
+        exclude_entity_ids=_query_excluded_ids(exclude_tags),
         api_key=api_key,
         start_date=start_date,
         end_date=end_date,
         model=model,
         timezone_offset_minutes=timezone,
         include_current_utc_day=False,
+        team_ids=_query_ids(team_ids),
+        exclude_team_ids=_query_excluded_ids(exclude_team_ids),
+        group_by=group_by,
     )
 
 

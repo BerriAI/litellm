@@ -32,6 +32,7 @@ class DailySpendTable:
     name: str
     entity_id_column: str
     carries_request_id: bool = False
+    extra_key_columns: tuple[str, ...] = ()
 
 
 DAILY_SPEND_TABLES: Final[Mapping[DailySpendEntity, DailySpendTable]] = MappingProxyType(
@@ -41,7 +42,12 @@ DAILY_SPEND_TABLES: Final[Mapping[DailySpendEntity, DailySpendTable]] = MappingP
         "org": DailySpendTable(name="LiteLLM_DailyOrganizationSpend", entity_id_column="organization_id"),
         "end_user": DailySpendTable(name="LiteLLM_DailyEndUserSpend", entity_id_column="end_user_id"),
         "agent": DailySpendTable(name="LiteLLM_DailyAgentSpend", entity_id_column="agent_id"),
-        "tag": DailySpendTable(name="LiteLLM_DailyTagSpend", entity_id_column="tag", carries_request_id=True),
+        "tag": DailySpendTable(
+            name="LiteLLM_DailyTagSpend",
+            entity_id_column="tag",
+            carries_request_id=True,
+            extra_key_columns=("team_id",),
+        ),
     }
 )
 
@@ -126,7 +132,10 @@ def _as_float(value: object) -> float:
 
 def conflict_key(table: DailySpendTable, transaction: SpendRow) -> tuple[str, ...]:
     """The tuple the database arbitrates the upsert on, normalized free of NULLs."""
-    return tuple(_as_text(transaction.get(column)) for column in (table.entity_id_column, *_KEY_COLUMNS))
+    return tuple(
+        _as_text(transaction.get(column))
+        for column in (table.entity_id_column, *table.extra_key_columns, *_KEY_COLUMNS)
+    )
 
 
 def _merge(group: Sequence[SpendRow]) -> SpendRow:
@@ -175,6 +184,7 @@ def _insert_columns(table: DailySpendTable) -> tuple[str, ...]:
     return (
         "id",
         table.entity_id_column,
+        *table.extra_key_columns,
         *_KEY_COLUMNS,
         "model_group",
         *_COUNTER_COLUMNS,
@@ -213,7 +223,7 @@ def build_bulk_upsert(
     sql: Final = (
         f'INSERT INTO {quoted_table} ({_quoted(columns)}, "updated_at")\n'
         f"VALUES {rows}\n"
-        f"ON CONFLICT ({_quoted((table.entity_id_column, *_KEY_COLUMNS))}) DO UPDATE SET\n"
+        f"ON CONFLICT ({_quoted((table.entity_id_column, *table.extra_key_columns, *_KEY_COLUMNS))}) DO UPDATE SET\n"
         f"  {increments}{request_id_update},\n"
         f"  \"updated_at\" = (NOW() AT TIME ZONE 'UTC')"
     )
