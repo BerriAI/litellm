@@ -98,6 +98,7 @@ mod tests {
         prelude::*,
         types::{PyDict, PyList},
     };
+    use rstest::rstest;
 
     fn value_call<'py>(
         py: Python<'py>,
@@ -125,8 +126,10 @@ mod tests {
             .unwrap()
     }
 
-    #[test]
-    fn route_arguments_that_fail_to_convert_raise_value_error() {
+    #[rstest]
+    #[case::sync("transcription")]
+    #[case::asynchronous("atranscription")]
+    fn route_arguments_that_fail_to_convert_raise_value_error(#[case] name: &str) {
         Python::initialize();
         Python::attach(|py| {
             let module = crate::native_module(py);
@@ -150,21 +153,19 @@ value = Broken()
                 .expect("locals should be readable")
                 .expect("helper value should exist");
 
-            for name in ["transcription", "atranscription"] {
-                let error = module
-                    .getattr(name)
-                    .and_then(|function| function.call1((value_call(py, "audio", &broken, None),)))
-                    .expect_err("route should reject a value it cannot convert");
+            let error = module
+                .getattr(name)
+                .and_then(|function| function.call1((value_call(py, "audio", &broken, None),)))
+                .expect_err("route should reject a value it cannot convert");
 
-                assert!(
-                    error.is_instance_of::<pyo3::exceptions::PyValueError>(py),
-                    "{name} surfaced {error} instead of ValueError"
-                );
-            }
+            assert!(
+                error.is_instance_of::<pyo3::exceptions::PyValueError>(py),
+                "{name} surfaced {error} instead of ValueError"
+            );
         });
     }
 
-    #[test]
+    #[rstest]
     fn sync_and_async_routes_apply_the_same_input_validation() {
         Python::initialize();
         Python::attach(|py| {
@@ -198,7 +199,7 @@ value = Broken()
         });
     }
 
-    #[test]
+    #[rstest]
     fn missing_and_explicit_none_optional_params_share_the_next_error() {
         Python::initialize();
         Python::attach(|py| {
@@ -228,7 +229,7 @@ value = Broken()
         });
     }
 
-    #[test]
+    #[rstest]
     fn route_input_validation_preserves_left_to_right_order() {
         Python::initialize();
         Python::attach(|py| {

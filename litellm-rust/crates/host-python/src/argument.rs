@@ -82,7 +82,7 @@ mod tests {
         });
     }
 
-    #[test]
+    #[rstest]
     fn lookup_returns_the_callers_object() {
         crate::initialize_python();
         Python::attach(|py| {

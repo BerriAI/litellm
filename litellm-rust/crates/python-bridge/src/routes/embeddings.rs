@@ -4,7 +4,8 @@ use super::NativeCall;
 use crate::errors::RustBridgeDeclined;
 
 #[pyfunction]
-pub(crate) fn embedding(_call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
+pub(crate) fn embedding(call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
+    drop(call);
     Err(RustBridgeDeclined::new_err(
         "native embeddings route is not implemented",
     ))
