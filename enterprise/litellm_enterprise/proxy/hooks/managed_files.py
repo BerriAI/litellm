@@ -726,10 +726,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         call_options: Mapping[str, object],
         internal_model_credentials: Mapping[str, object] | None = None,
     ) -> OpenAIFileObject:
-        """Retrieve provider file details with SDK retries disabled and transient retries enabled.
-
-        Transient failures are retried up to three times after 0.5, 1, and 2 seconds.
-        """
+        """Retrieve provider file details with transient retries and SDK retries disabled."""
         retrieve_file: Final = cast(_ManagedFileRetrieve, litellm.afile_retrieve)
         retrieve_options: Final = cast(
             FileRetrieveCallOptions,
@@ -767,13 +764,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         raise_on_failure: bool = False,
         allow_default_provider: bool = False,
     ) -> tuple[OpenAIFileObject | None, bool]:
-        """Fetch file details through router credentials, a supported model-name provider, or the optional default route.
-
-        Each provider call, including its retries, is capped by
-        ``BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS``. Without a route, returns
-        ``(None, False)``; lookup failures return ``(None, True)`` unless
-        ``raise_on_failure`` is set, in which case the provider error is raised.
-        """
+        """Fetch provider file details through the configured route under a total timeout."""
         route_llm_router: Final = llm_router if llm_router is not None else _proxy_llm_router()
         router_credentials: Final = _provider_file_retrieve_credentials(
             llm_router=route_llm_router,
@@ -870,16 +861,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         size_bytes: int | None = None,
         fetch_provider_details: bool = True,
     ) -> None:
-        """Register a batch output or error file, optionally retrieving provider details.
-
-        With ``fetch_provider_details=False``, skips provider reads, leaves existing
-        rows unchanged, and creates a basic row only when missing, marked as fallback
-        only when a provider route exists. Otherwise, unmarked rows are left alone,
-        marked fallback rows younger than 60 seconds skip lookup, and other missing
-        or marked rows use the retrying lookup under the configured timeout. Failed
-        lookups retain basic fallback metadata; existing rows update only
-        ``file_object``, including size-only changes.
-        """
+        """Register batch output or error file metadata, optionally fetching provider details."""
         stored_file: Final = await self.get_unified_file_id(unified_file_id, litellm_parent_otel_span)
         stored_object: Final = stored_file.file_object if stored_file is not None else None
         if not fetch_provider_details:
@@ -1939,14 +1921,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     async def afile_retrieve(
         self, file_id: str, litellm_parent_otel_span: Optional[Span], llm_router: Optional[Router] = None
     ) -> OpenAIFileObject:
-        """Return public metadata for a managed file ID.
-
-        Missing rows raise. Saved objects are returned without provider reads unless
-        marked as fallback with a stored provider mapping; successful refreshes update
-        only ``file_object``, and failed refreshes return the saved fallback. Rows
-        without ``file_object`` are fetched live when a provider route is available,
-        without persistence; provider errors are raised.
-        """
+        """Return public details for a managed file ID, refreshing a basic entry when possible."""
         stored_file_object = await self.get_unified_file_id(file_id, litellm_parent_otel_span)
 
         # Case 1 : This is not a managed file
@@ -2033,8 +2008,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         that many rows instead of one per page. That bound is per query, not
         per request: the work is still linear in the rows the caller owns, and
         a filter matching nothing reads every one of them, with no index
-        covering either the owner filter or the sort. Listing reads saved rows
-        only and never refetches provider details.
+        covering either the owner filter or the sort.
         """
         validate_file_list_limit(limit)
         validate_file_list_purpose(purpose)

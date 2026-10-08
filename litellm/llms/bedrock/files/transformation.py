@@ -1337,7 +1337,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         optional_params: Mapping[str, object],
         litellm_params: MutableMapping[str, object],
     ) -> tuple[str, dict[str, str]]:
-        """Prepare an S3 GET with ``Range: bytes=0-0`` and retain its response context."""
+        """Prepare a ranged S3 GET for file retrieval."""
         _, object_key = _resolve_managed_s3_object(file_id=file_id, litellm_params=litellm_params)
         url, params = self._transform_s3_file_request(
             file_id=file_id,
@@ -1360,11 +1360,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: Mapping[str, object],
     ) -> OpenAIFileObject:
-        """Convert the ranged S3 response into file metadata.
-
-        A 416 returns ``bytes=0`` only when S3 reports ``bytes */0`` or an XML
-        ``ActualObjectSize`` of zero.
-        """
+        """Build file metadata, accepting 416 only when S3 proves the object is empty."""
         file_id: Final = litellm_params.get(S3_RETRIEVE_FILE_ID_PARAM)
         object_key: Final = litellm_params.get(S3_RETRIEVE_FILE_KEY_PARAM)
         if not isinstance(file_id, str) or not isinstance(object_key, str):

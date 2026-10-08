@@ -976,11 +976,11 @@ async def get_file_content(
 
     ```
 
-    For managed IDs, content is read from configured storage when present or from
-    a mapped provider otherwise. Model-routed and raw provider IDs read from the
-    selected provider. This route does not fetch file metadata or write the
-    managed-file row. The 10-second retry cap applies to metadata lookups, not
-    content downloads; provider or storage failures are returned as endpoint errors.
+    LiteLLM reads content from configured storage when available; otherwise, it
+    reads from the provider recorded for the file or named in the request. It does
+    not fetch file details or change the saved file row, so the three retries and
+    10-second limit do not apply. If storage or the provider cannot return the
+    content, the caller gets an error.
     """
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -1294,16 +1294,13 @@ async def get_file(
 
     ```
 
-    Provider-routed and raw provider IDs read metadata from the provider without
-    updating a managed-file row. When the managed-files hook handles a managed
-    ID, saved details are returned unless marked as fallback with a stored
-    provider mapping. That detail lookup retries transient failures up to three
-    times and is capped at 10 seconds; a successful refresh updates only
-    ``file_object``. On refresh failure, the saved fallback is returned. Rows
-    without file details are fetched live when a provider route is available and
-    are not persisted. Direct provider errors and live-fetch errors are returned
-    as endpoint errors. Direct provider-routed lookups do not use the managed
-    refresh retry cap.
+    LiteLLM returns saved file details unless they are basic details and the
+    saved row points to a provider file, or no details are saved. Those provider
+    reads retry temporary failures up to three times, with a 10-second total
+    limit. A successful refresh changes only the saved file details; a live read
+    for a row with no details is not saved. If refresh fails, LiteLLM returns the
+    basic details; if a live or direct provider read fails, the caller gets an
+    error, and direct provider reads do not use these retries or change the row.
     """
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -1504,13 +1501,11 @@ async def delete_file(
 
     ```
 
-    For managed IDs handled by the managed-files hook, configured storage content
-    or mapped provider files are deleted when present before the managed-file row
-    is removed.
-    Provider-routed and raw provider IDs are deleted directly without changing a
-    managed row. This route does not fetch file metadata or use the 10-second
-    provider-detail lookup retry cap. A provider or storage deletion failure is
-    returned as an endpoint error; the hook-managed row remains.
+    For a managed file, LiteLLM removes content from configured storage or the
+    provider before deleting the file row. For other file IDs, it asks the
+    provider to delete the file and does not change a managed row. It does not
+    fetch file details or use the 10-second limit; if the provider or storage
+    delete fails, the caller gets an error and the managed row remains.
     """
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
@@ -1739,12 +1734,11 @@ async def list_files(
 
     ```
 
-    When the managed-files hook is available and no provider or model route is
-    selected, it lists saved rows only without calling the provider or writing
-    managed-file rows. Otherwise, the selected provider supplies the list and
-    managed-file rows are not written. Provider-list failures are returned as
-    endpoint errors. This route does not fetch provider file details, so the
-    10-second detail lookup retry cap does not apply.
+    When no provider or model is specified, LiteLLM reads saved file rows from the
+    database and does not ask for file details or change the rows. If a provider
+    or model is specified, it gets the list from that provider instead, and
+    provider list errors are returned to the caller. This endpoint never fetches
+    file details, so the three retries and 10-second limit do not apply.
     """
     from litellm.proxy.proxy_server import (
         general_settings,

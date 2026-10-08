@@ -127,12 +127,7 @@ class ManagedBatchOutputFileWriter(Protocol):
         size_bytes: int | None = None,
         fetch_provider_details: bool = True,
     ) -> None:
-        """Register file metadata.
-
-        By default, eligible missing or fallback rows may fetch provider details.
-        Setting ``fetch_provider_details=False`` skips provider reads, leaves
-        existing rows unchanged, and creates basic metadata only for missing rows.
-        """
+        """Register file metadata, optionally fetching provider details."""
         ...
 
 
@@ -1324,13 +1319,7 @@ async def ensure_batch_response_managed_file_ids(
     *,
     fetch_provider_details: bool = True,
 ) -> None:
-    """Normalize batch file IDs and register output and error files as managed IDs.
-
-    With the default ``fetch_provider_details=True``, eligible missing or
-    fallback rows may fetch provider details. Setting it to ``False`` suppresses
-    provider reads, leaves existing rows unchanged, and allows basic rows only
-    for missing files.
-    """
+    """Normalize batch file IDs and register output and error file metadata."""
     await resolve_input_file_id_to_unified(response, prisma_client)
     await resolve_output_file_ids_to_unified(response, prisma_client)
 

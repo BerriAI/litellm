@@ -571,17 +571,13 @@ async def retrieve_batch(
 
     ```
 
-    For provider-backed managed IDs, terminal saved batch state is returned
-    without a provider batch read; nonterminal or unavailable saved state triggers
-    provider retrieval. Raw output and error file IDs are registered as managed
-    files. Detail lookup is skipped for existing unmarked rows and marked fallback
-    rows younger than 60 seconds.
-    Other eligible lookups retry transient failures up to three times within a
-    10-second cap. Missing rows are created with provider details or basic
-    fallback metadata, marked as fallback only when a route exists; successful
-    refreshes of existing rows update only ``file_object``. On lookup failure,
-    fallback metadata is retained and the batch response is returned. Batch-read
-    failures are returned as endpoint errors.
+    A terminal batch saved in the database is returned without a provider read;
+    otherwise, LiteLLM reads current batch data from the provider. Missing output
+    or error file rows are saved with provider details when available, and saved
+    basic entries older than 60 seconds are refreshed by changing only their file
+    details. File detail reads retry temporary failures up to three times within
+    10 seconds total; if a read fails, the basic row is kept or saved and the
+    batch still returns. If reading the batch fails, the caller gets an error.
     """
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -890,13 +886,12 @@ async def list_batches(
 
     ```
 
-    When the managed-files hook serves the list, batches are read from saved
-    rows and output or error IDs are normalized without a provider call. Missing
-    file rows are created with basic metadata, marked as fallback only when a
-    provider route exists; existing rows are unchanged. This path does not fetch
-    provider file details or use the 10-second lookup retry cap. If the request
-    is routed to a provider instead, provider-list failures are returned as
-    endpoint errors and no managed-file rows are registered.
+    When no provider or model is specified, LiteLLM lists batches from the
+    database and never asks the provider for file details, so no detail retries
+    or 10-second limit apply. If an output or error file has no saved row, it
+    saves a basic entry so it appears in
+    ``GET /v1/files``; existing file rows are unchanged. If the batch list comes
+    directly from a provider, provider list errors are returned to the caller.
     """
     validate_batch_list_limit(limit)
     from litellm.proxy.proxy_server import (
@@ -1083,16 +1078,13 @@ async def cancel_batch(
 
     ```
 
-    For managed batch IDs, cancellation is sent to the provider or managed batch
-    runner, then the response updates managed batch state and registers raw output
-    or error file IDs. Detail lookup is skipped for existing unmarked rows and
-    marked fallback rows younger than 60 seconds. Other eligible lookups retry
-    transient failures up to three times within a 10-second cap. Missing rows
-    are created with provider details or basic fallback metadata, marked as
-    fallback only when a route exists; successful refreshes update only
-    ``file_object``. On lookup failure, fallback metadata is retained and the
-    cancel response is returned. Provider cancellation failures are returned
-    as endpoint errors.
+    LiteLLM sends cancellation to the provider or its internal batch runner and,
+    for saved batches, stores the updated state. Missing output or error file rows
+    are saved with provider details when available, and saved basic entries older
+    than 60 seconds are refreshed by changing only their file details. File detail
+    reads retry temporary failures up to three times within 10 seconds total; if a
+    read fails, the basic row is kept or saved and the cancel result still
+    returns. If cancellation fails, the caller gets an error.
     """
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
