@@ -401,9 +401,9 @@ def _typed_request_body(request_body: dict) -> Mapping[str, object]:
 typed_general_settings: Final = _typed_request_body
 
 
-_TRACE_ID_METADATA_ADAPTER: Final = TypeAdapter(dict[str, object])
-_TRACE_ID_OPTIONAL_METADATA_ADAPTER: Final[TypeAdapter[dict[str, object] | None]] = TypeAdapter(
-    dict[str, object] | None
+_TRACE_ID_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_TRACE_ID_OPTIONAL_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(
+    Mapping[str, object] | None
 )
 
 
@@ -1189,7 +1189,7 @@ async def common_checks(
         )
         or pass_through_route
     )
-    team_metadata: Final[dict[str, object] | None] = (
+    team_metadata: Final[Mapping[str, object] | None] = (
         _TRACE_ID_OPTIONAL_METADATA_ADAPTER.validate_python(
             team_object.metadata  # pyright: ignore[reportUnknownMemberType]  # validate the untyped model field
         )
