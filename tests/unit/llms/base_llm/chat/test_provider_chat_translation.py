@@ -1,8 +1,10 @@
 import base64
+import copy
+import itertools
 import json
 import struct
 import zlib
-from typing import Final, Iterable, Literal, Mapping, cast
+from typing import Callable, Final, Iterable, Literal, Mapping, cast
 
 import httpx
 import pytest
@@ -12,12 +14,23 @@ from respx import MockRouter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
-from litellm.constants import DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET, DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
+from litellm.constants import (
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+)
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.types.utils import CallTypes
 from litellm.utils import ProviderConfigManager, return_raw_request
 
-_Shape = Literal["openai", "anthropic", "gemini", "bedrock_converse", "bedrock_invoke", "bedrock_invoke_nova", "bedrock_invoke_openai"]
+_Shape = Literal[
+    "openai",
+    "anthropic",
+    "gemini",
+    "bedrock_converse",
+    "bedrock_invoke",
+    "bedrock_invoke_nova",
+    "bedrock_invoke_openai",
+]
 
 _AWS_KWARGS: Final[Mapping[str, str]] = {
     "aws_access_key_id": "AKIAFAKE",
@@ -43,7 +56,6 @@ class _Case(TypedDict):
     url: ReadOnly[str]
     stream_url: ReadOnly[str]
     router: ReadOnly[bool]
-    developer_kept: ReadOnly[bool]
 
 
 def _converse_url(model_id: str, region: str = "us-east-1") -> str:
@@ -73,15 +85,9 @@ def _bedrock_case(
     if region != "us-east-1":
         kwargs = {"model": model, **cast(_Kwargs, dict(_AWS_KWARGS)), "aws_region_name": region}
     is_invoke = "invoke" in model
-    url: Final = (
-        _invoke_url(invoke_model_id)
-        if is_invoke
-        else _converse_url(invoke_model_id, region)
-    )
+    url: Final = _invoke_url(invoke_model_id) if is_invoke else _converse_url(invoke_model_id, region)
     stream_url: Final = (
-        _invoke_stream_url(invoke_model_id)
-        if is_invoke
-        else _converse_stream_url(invoke_model_id, region)
+        _invoke_stream_url(invoke_model_id) if is_invoke else _converse_stream_url(invoke_model_id, region)
     )
     return {
         "id": case_id,
@@ -90,7 +96,6 @@ def _bedrock_case(
         "url": url,
         "stream_url": stream_url,
         "router": False,
-        "developer_kept": False,
     }
 
 
@@ -100,7 +105,6 @@ def _openai_case(
     url: str,
     *,
     router: bool = False,
-    developer_kept: bool = False,
     extra: _Kwargs | None = None,
 ) -> _Case:
     kwargs: _Kwargs = {"model": model, "api_key": "sk-offline"}
@@ -113,20 +117,18 @@ def _openai_case(
         "url": url,
         "stream_url": url,
         "router": router,
-        "developer_kept": developer_kept,
     }
 
 
 _CASES: Final[tuple[_Case, ...]] = (
     _openai_case("openai_gpt4omini", "gpt-4o-mini", "https://api.openai.com/v1/chat/completions"),
     _openai_case("router_gpt4omini", "gpt-4o-mini", "https://api.openai.com/v1/chat/completions", router=True),
-    _openai_case("openai_o1", "o1", "https://api.openai.com/v1/chat/completions", developer_kept=True),
-    _openai_case("openai_o3mini", "o3-mini", "https://api.openai.com/v1/chat/completions", developer_kept=True),
+    _openai_case("openai_o1", "o1", "https://api.openai.com/v1/chat/completions"),
+    _openai_case("openai_o3mini", "o3-mini", "https://api.openai.com/v1/chat/completions"),
     _openai_case(
         "azure_o3mini",
         "azure/o3-mini",
         "https://openai-gpt-4-test-v-1.openai.azure.com/openai/deployments/o3-mini/chat/completions?api-version=2024-02-15-preview",
-        developer_kept=True,
         extra={
             "api_key": "k",
             "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com",
@@ -137,7 +139,6 @@ _CASES: Final[tuple[_Case, ...]] = (
         "azure_o3mini_live",
         "azure/o3-mini",
         "https://openai-prod-test.openai.azure.com/openai/deployments/o3-mini/chat/completions?api-version=2024-12-01-preview",
-        developer_kept=True,
         extra={
             "api_key": "k",
             "api_base": "https://openai-prod-test.openai.azure.com",
@@ -151,7 +152,6 @@ _CASES: Final[tuple[_Case, ...]] = (
         "url": "https://api.anthropic.com/v1/messages",
         "stream_url": "https://api.anthropic.com/v1/messages",
         "router": False,
-        "developer_kept": False,
     },
     {
         "id": "gemini_25flash",
@@ -160,7 +160,6 @@ _CASES: Final[tuple[_Case, ...]] = (
         "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
         "stream_url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent",
         "router": False,
-        "developer_kept": False,
     },
     _openai_case("mistral_medium", "mistral/mistral-medium-latest", "https://api.mistral.ai/v1/chat/completions"),
     _openai_case("together_glm", "together_ai/zai-org/GLM-5.3-Flash", "https://api.together.ai/v1/chat/completions"),
@@ -172,19 +171,71 @@ _CASES: Final[tuple[_Case, ...]] = (
         "https://router.huggingface.co/together/v1/chat/completions",
         extra={"api_base": "https://router.huggingface.co/together/v1"},
     ),
-    _bedrock_case("bedrock_converse_haiku", "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", "us.anthropic.claude-haiku-4-5-20251001-v1:0", "bedrock_converse"),
-    _bedrock_case("bedrock_converse_haiku_xregion", "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", "us.anthropic.claude-haiku-4-5-20251001-v1:0", "bedrock_converse", region="us-west-2"),
-    _bedrock_case("bedrock_converse_novalite", "bedrock/us.amazon.nova-lite-v1:0", "us.amazon.nova-lite-v1:0", "bedrock_converse"),
-    _bedrock_case("bedrock_converse_novamicro", "bedrock/converse/us.amazon.nova-micro-v1:0", "us.amazon.nova-micro-v1:0", "bedrock_converse"),
-    _bedrock_case("bedrock_converse_llama33", "bedrock/converse/us.meta.llama3-3-70b-instruct-v1:0", "us.meta.llama3-3-70b-instruct-v1:0", "bedrock_converse"),
-    _bedrock_case("bedrock_converse_gptoss", "bedrock/converse/openai.gpt-oss-20b-1:0", "openai.gpt-oss-20b-1:0", "bedrock_converse"),
-    _bedrock_case("bedrock_converse_anthropic_thinking", "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0", "us.anthropic.claude-sonnet-4-5-20250929-v1:0", "bedrock_converse"),
-    _bedrock_case("bedrock_invoke_haiku", "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0", "us.anthropic.claude-haiku-4-5-20251001-v1:0", "bedrock_invoke"),
-    _bedrock_case("bedrock_invoke_novamicro", "bedrock/invoke/us.amazon.nova-micro-v1:0", "us.amazon.nova-micro-v1:0", "bedrock_invoke_nova"),
-    _bedrock_case("bedrock_invoke_kimi", "bedrock/invoke/moonshot.kimi-k2-thinking", "moonshot.kimi-k2-thinking", "bedrock_invoke_openai"),
+    _bedrock_case(
+        "bedrock_converse_haiku",
+        "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "bedrock_converse",
+    ),
+    _bedrock_case(
+        "bedrock_converse_haiku_xregion",
+        "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "bedrock_converse",
+        region="us-west-2",
+    ),
+    _bedrock_case(
+        "bedrock_converse_novalite", "bedrock/us.amazon.nova-lite-v1:0", "us.amazon.nova-lite-v1:0", "bedrock_converse"
+    ),
+    _bedrock_case(
+        "bedrock_converse_novamicro",
+        "bedrock/converse/us.amazon.nova-micro-v1:0",
+        "us.amazon.nova-micro-v1:0",
+        "bedrock_converse",
+    ),
+    _bedrock_case(
+        "bedrock_converse_llama33",
+        "bedrock/converse/us.meta.llama3-3-70b-instruct-v1:0",
+        "us.meta.llama3-3-70b-instruct-v1:0",
+        "bedrock_converse",
+    ),
+    _bedrock_case(
+        "bedrock_converse_gptoss",
+        "bedrock/converse/openai.gpt-oss-20b-1:0",
+        "openai.gpt-oss-20b-1:0",
+        "bedrock_converse",
+    ),
+    _bedrock_case(
+        "bedrock_converse_anthropic_thinking",
+        "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "bedrock_converse",
+    ),
+    _bedrock_case(
+        "bedrock_invoke_haiku",
+        "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "bedrock_invoke",
+    ),
+    _bedrock_case(
+        "bedrock_invoke_novamicro",
+        "bedrock/invoke/us.amazon.nova-micro-v1:0",
+        "us.amazon.nova-micro-v1:0",
+        "bedrock_invoke_nova",
+    ),
+    _bedrock_case(
+        "bedrock_invoke_kimi",
+        "bedrock/invoke/moonshot.kimi-k2-thinking",
+        "moonshot.kimi-k2-thinking",
+        "bedrock_invoke_openai",
+    ),
 )
 
 _BY_ID: Final[Mapping[str, _Case]] = {c["id"]: c for c in _CASES}
+
+
+def _case_id(case: _Case) -> str:
+    return case["id"]
 
 
 def _pick(*ids: str) -> tuple[_Case, ...]:
@@ -192,6 +243,7 @@ def _pick(*ids: str) -> tuple[_Case, ...]:
 
 
 _JSON: Final = TypeAdapter(dict[str, JsonValue])
+_ITEMS: Final = TypeAdapter(list[JsonValue])
 
 
 def _openai_response(text: str) -> httpx.Response:
@@ -202,9 +254,7 @@ def _openai_response(text: str) -> httpx.Response:
             "object": "chat.completion",
             "created": 1,
             "model": "m",
-            "choices": [
-                {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": text}}
-            ],
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": text}}],
             "service_tier": "default",
             "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
         },
@@ -269,6 +319,7 @@ def _canned_response(case: _Case, text: str) -> httpx.Response:
 _PNG_BYTES: Final = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 )
+_PNG_B64: Final = base64.b64encode(_PNG_BYTES).decode()
 _PNG_URLS: Final = (
     "https://cdn.jsdelivr.net/gh/BerriAI/litellm@d769e81c90d453240c61fc572cdb27fae06a89d0/ui/litellm-dashboard/public/assets/logos/litellm_logo.jpg",
     "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png",
@@ -325,11 +376,34 @@ def _openai_sse(text: str) -> str:
 
 def _anthropic_sse(text: str) -> str:
     events: Final = (
-        ("message_start", {"type": "message_start", "message": {"id": "msg_offline", "type": "message", "role": "assistant", "content": [], "model": "m", "stop_reason": None, "usage": {"input_tokens": 10, "output_tokens": 1}}}),
-        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
-        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}}),
+        (
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_offline",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [],
+                    "model": "m",
+                    "stop_reason": None,
+                    "usage": {"input_tokens": 10, "output_tokens": 1},
+                },
+            },
+        ),
+        (
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        (
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+        ),
         ("content_block_stop", {"type": "content_block_stop", "index": 0}),
-        ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 5}}),
+        (
+            "message_delta",
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 5}},
+        ),
         ("message_stop", {"type": "message_stop"}),
     )
     return "".join(f"event: {name}\ndata: {json.dumps(payload)}\n\n" for name, payload in events)
@@ -337,9 +411,7 @@ def _anthropic_sse(text: str) -> str:
 
 def _gemini_sse(text: str) -> str:
     event: Final = {
-        "candidates": [
-            {"content": {"parts": [{"text": text}], "role": "model"}, "finishReason": "STOP", "index": 0}
-        ],
+        "candidates": [{"content": {"parts": [{"text": text}], "role": "model"}, "finishReason": "STOP", "index": 0}],
         "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5, "totalTokenCount": 15},
     }
     return f"data: {json.dumps(event)}\n\n"
@@ -358,17 +430,25 @@ def _converse_stream_bytes(text: str) -> bytes:
 
 def _invoke_stream_bytes(text: str) -> bytes:
     events: Final = (
-        {"type": "message_start", "message": {"id": "msg_invoke", "type": "message", "role": "assistant", "content": [], "model": "m", "stop_reason": None, "usage": {"input_tokens": 10, "output_tokens": 1}}},
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_invoke",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "model": "m",
+                "stop_reason": None,
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            },
+        },
         {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
         {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
         {"type": "content_block_stop", "index": 0},
         {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 5}},
         {"type": "message_stop"},
     )
-    return b"".join(
-        _aws_frame("chunk", {"bytes": base64.b64encode(json.dumps(e).encode()).decode()})
-        for e in events
-    )
+    return b"".join(_aws_frame("chunk", {"bytes": base64.b64encode(json.dumps(e).encode()).decode()}) for e in events)
 
 
 def _invoke_nova_stream_bytes(text: str) -> bytes:
@@ -379,10 +459,7 @@ def _invoke_nova_stream_bytes(text: str) -> bytes:
         {"messageStop": {"stopReason": "end_turn"}},
         {"metadata": {"usage": {"inputTokens": 10, "outputTokens": 5, "totalTokens": 15}}},
     )
-    return b"".join(
-        _aws_frame("chunk", {"bytes": base64.b64encode(json.dumps(e).encode()).decode()})
-        for e in events
-    )
+    return b"".join(_aws_frame("chunk", {"bytes": base64.b64encode(json.dumps(e).encode()).decode()}) for e in events)
 
 
 def _stream_canned(case: _Case, text: str) -> httpx.Response:
@@ -418,10 +495,73 @@ def _httpx_only_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
 
 
-def _register(case: _Case, respx_mock: MockRouter, text: str, *, stream: bool = False) -> respx.Route:
+def _tool_use_response(case: _Case, payload: str) -> httpx.Response:
+    arguments: Final = json.loads(payload)
+    match case["shape"]:
+        case "anthropic" | "bedrock_invoke":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "msg_offline",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "m",
+                    "content": [
+                        {"type": "tool_use", "id": "toolu_offline", "name": "json_tool_call", "input": arguments}
+                    ],
+                    "stop_reason": "tool_use",
+                    "usage": {"input_tokens": 10, "output_tokens": 5},
+                },
+            )
+        case "bedrock_converse" | "bedrock_invoke_nova":
+            return httpx.Response(
+                200,
+                json={
+                    "output": {
+                        "message": {
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "toolUse": {
+                                        "toolUseId": "tooluse_offline",
+                                        "name": "json_tool_call",
+                                        "input": arguments,
+                                    }
+                                }
+                            ],
+                        }
+                    },
+                    "stopReason": "tool_use",
+                    "usage": {"inputTokens": 10, "outputTokens": 5, "totalTokens": 15},
+                    "metrics": {"latencyMs": 1},
+                },
+            )
+        case _:
+            return _canned_response(case, payload)
+
+
+def _json_responder(case: _Case, payload: str) -> Callable[[httpx.Request], httpx.Response]:
+    def respond(request: httpx.Request) -> httpx.Response:
+        if b"json_tool_call" in request.content:
+            return _tool_use_response(case, payload)
+        return _canned_response(case, payload)
+
+    return respond
+
+
+def _register(
+    case: _Case,
+    respx_mock: MockRouter,
+    text: str,
+    *,
+    stream: bool = False,
+    json_via_tool: bool = False,
+) -> respx.Route:
     for url in _PNG_URLS:
         respx_mock.get(url).mock(return_value=httpx.Response(200, content=_PNG_BYTES))
     target: Final = case["stream_url"] if stream else case["url"]
+    if json_via_tool:
+        return respx_mock.post(target).mock(side_effect=_json_responder(case, text))
     if case["shape"] == "gemini" and stream:
         return respx_mock.post(url__startswith=target).mock(return_value=_stream_canned(case, text))
     if stream and case["id"].startswith("groq"):
@@ -431,32 +571,43 @@ def _register(case: _Case, respx_mock: MockRouter, text: str, *, stream: bool = 
     )
 
 
-def _complete(case: _Case, extra: Mapping[str, JsonValue]) -> object:
+_ROUTER_MODEL_LIST: Final = [
+    {
+        "model_name": "offline-router-model",
+        "litellm_params": {"model": "gpt-4o-mini", "api_key": "sk-offline"},
+    }
+]
+
+
+def _call(case: _Case, params: Mapping[str, JsonValue]) -> litellm.ModelResponse | litellm.CustomStreamWrapper:
+    extra: Final = copy.deepcopy(params)
     if case["router"]:
-        router: Final = litellm.Router(
-            model_list=[
-                {
-                    "model_name": "offline-router-model",
-                    "litellm_params": {"model": "gpt-4o-mini", "api_key": "sk-offline"},
-                }
-            ]
-        )
+        router: Final = litellm.Router(model_list=copy.deepcopy(_ROUTER_MODEL_LIST))
         return router.completion(model="offline-router-model", **extra)
     return litellm.completion(**case["kwargs"], **extra)
 
 
-async def _acomplete(case: _Case, extra: Mapping[str, JsonValue]) -> object:
+def _complete(case: _Case, params: Mapping[str, JsonValue]) -> litellm.ModelResponse:
+    response: Final = _call(case, params)
+    assert isinstance(response, litellm.ModelResponse)
+    return response
+
+
+def _stream(case: _Case, params: Mapping[str, JsonValue]) -> litellm.CustomStreamWrapper:
+    response: Final = _call(case, {**params, "stream": True})
+    assert isinstance(response, litellm.CustomStreamWrapper)
+    return response
+
+
+async def _acomplete(case: _Case, params: Mapping[str, JsonValue]) -> litellm.ModelResponse:
+    extra: Final = copy.deepcopy(params)
     if case["router"]:
-        router: Final = litellm.Router(
-            model_list=[
-                {
-                    "model_name": "offline-router-model",
-                    "litellm_params": {"model": "gpt-4o-mini", "api_key": "sk-offline"},
-                }
-            ]
-        )
-        return await router.acompletion(model="offline-router-model", **extra)
-    return await litellm.acompletion(**case["kwargs"], **extra)
+        router: Final = litellm.Router(model_list=copy.deepcopy(_ROUTER_MODEL_LIST))
+        response: Final = await router.acompletion(model="offline-router-model", **extra)
+    else:
+        response = await litellm.acompletion(**case["kwargs"], **extra)
+    assert isinstance(response, litellm.ModelResponse)
+    return response
 
 
 def _request_body(route: respx.Route) -> Mapping[str, JsonValue]:
@@ -464,132 +615,101 @@ def _request_body(route: respx.Route) -> Mapping[str, JsonValue]:
     return _JSON.validate_python(json.loads(route.calls.last.request.content))
 
 
-def _raw_body(route: respx.Route) -> str:
-    assert route.calls, "provider route was never called"
-    return route.calls.last.request.content.decode()
+def _mapping(value: JsonValue) -> Mapping[str, JsonValue]:
+    return _JSON.validate_python(value)
+
+
+def _items(value: JsonValue) -> tuple[JsonValue, ...]:
+    return tuple(_ITEMS.validate_python(value))
+
+
+def _mappings(value: JsonValue) -> tuple[Mapping[str, JsonValue], ...]:
+    return tuple(_mapping(item) for item in _items(value))
+
+
+def _flatten(groups: Iterable[Iterable[str]]) -> tuple[str, ...]:
+    return tuple(itertools.chain.from_iterable(groups))
+
+
+def _typed_text_parts(content: JsonValue) -> tuple[str, ...]:
+    if isinstance(content, str):
+        return (content,)
+    return tuple(str(p["text"]) for p in _mappings(content) if p.get("type") == "text")
+
+
+def _keyed_text_parts(content: JsonValue) -> tuple[str, ...]:
+    return tuple(str(p["text"]) for p in _mappings(content) if "text" in p)
 
 
 def _user_texts(case: _Case, body: Mapping[str, JsonValue]) -> tuple[str, ...]:
     match case["shape"]:
         case "openai" | "bedrock_invoke_openai":
-            messages: Final = cast(list[JsonValue], body["messages"])
-            texts: Final = []
-            for m in messages:
-                msg = cast(Mapping[str, JsonValue], m)
-                if msg["role"] != "user":
-                    continue
-                content = msg["content"]
-                if isinstance(content, str):
-                    texts.append(content)
-                else:
-                    for part in cast(list[JsonValue], content):
-                        p = cast(Mapping[str, JsonValue], part)
-                        if p.get("type") == "text":
-                            texts.append(cast(str, p["text"]))
-            return tuple(texts)
+            return _flatten(_typed_text_parts(m["content"]) for m in _mappings(body["messages"]) if m["role"] == "user")
         case "anthropic" | "bedrock_invoke":
-            out: list[str] = []
-            for m in cast(list[JsonValue], body["messages"]):
-                msg = cast(Mapping[str, JsonValue], m)
-                if msg["role"] != "user":
-                    continue
-                for part in cast(list[JsonValue], msg["content"]):
-                    p = cast(Mapping[str, JsonValue], part)
-                    if p.get("type") == "text":
-                        out.append(cast(str, p["text"]))
-            return tuple(out)
+            return _flatten(_typed_text_parts(m["content"]) for m in _mappings(body["messages"]) if m["role"] == "user")
         case "bedrock_converse" | "bedrock_invoke_nova":
-            out2: list[str] = []
-            for m in cast(list[JsonValue], body["messages"]):
-                msg = cast(Mapping[str, JsonValue], m)
-                if msg["role"] != "user":
-                    continue
-                for part in cast(list[JsonValue], msg["content"]):
-                    p = cast(Mapping[str, JsonValue], part)
-                    if "text" in p:
-                        out2.append(cast(str, p["text"]))
-            return tuple(out2)
+            return _flatten(_keyed_text_parts(m["content"]) for m in _mappings(body["messages"]) if m["role"] == "user")
         case "gemini":
-            out3: list[str] = []
-            for m in cast(list[JsonValue], body["contents"]):
-                msg = cast(Mapping[str, JsonValue], m)
-                if msg.get("role") == "model":
-                    continue
-                for part in cast(list[JsonValue], msg["parts"]):
-                    p = cast(Mapping[str, JsonValue], part)
-                    if "text" in p:
-                        out3.append(cast(str, p["text"]))
-            return tuple(out3)
+            return _flatten(
+                _keyed_text_parts(m["parts"]) for m in _mappings(body["contents"]) if m.get("role") != "model"
+            )
 
 
 def _system_texts(case: _Case, body: Mapping[str, JsonValue]) -> tuple[str, ...]:
     match case["shape"]:
         case "openai" | "bedrock_invoke_openai":
-            return tuple(
-                cast(str, cast(Mapping[str, JsonValue], m)["content"])
-                for m in cast(list[JsonValue], body["messages"])
-                if cast(Mapping[str, JsonValue], m)["role"] in ("system", "developer")
-            )
+            return tuple(str(m["content"]) for m in _mappings(body["messages"]) if m["role"] == "system")
         case "anthropic" | "bedrock_invoke" | "bedrock_converse" | "bedrock_invoke_nova":
-            return tuple(
-                cast(str, cast(Mapping[str, JsonValue], s)["text"])
-                for s in cast(list[JsonValue], body.get("system", ()))
-            )
+            return tuple(str(s["text"]) for s in _mappings(body.get("system", [])))
         case "gemini":
-            sys_inst: Final = cast(Mapping[str, JsonValue], body.get("system_instruction", {}))
             return tuple(
-                cast(str, cast(Mapping[str, JsonValue], p)["text"])
-                for p in cast(list[JsonValue], sys_inst.get("parts", ()))
+                str(p["text"]) for p in _mappings(_mapping(body.get("system_instruction", {})).get("parts", []))
             )
 
 
 def _message_roles(case: _Case, body: Mapping[str, JsonValue]) -> tuple[str, ...]:
     match case["shape"]:
-        case "openai" | "bedrock_invoke_openai" | "anthropic" | "bedrock_invoke" | "bedrock_converse" | "bedrock_invoke_nova":
-            return tuple(
-                cast(str, cast(Mapping[str, JsonValue], m)["role"])
-                for m in cast(list[JsonValue], body["messages"])
-            )
         case "gemini":
-            return tuple(
-                cast(str, cast(Mapping[str, JsonValue], m).get("role", "user"))
-                for m in cast(list[JsonValue], body["contents"])
-            )
+            return tuple(str(m.get("role", "user")) for m in _mappings(body["contents"]))
+        case _:
+            return tuple(str(m["role"]) for m in _mappings(body["messages"]))
 
 
 def _tools_payload(case: _Case, body: Mapping[str, JsonValue]) -> JsonValue:
     match case["shape"]:
-        case "openai" | "bedrock_invoke_openai":
-            return body.get("tools")
-        case "anthropic" | "bedrock_invoke":
+        case "openai" | "bedrock_invoke_openai" | "anthropic" | "bedrock_invoke":
             return body.get("tools")
         case "bedrock_converse" | "bedrock_invoke_nova":
-            tool_config: Final = cast(Mapping[str, JsonValue], body.get("toolConfig", {}))
-            return tool_config.get("tools")
+            return _mapping(body.get("toolConfig", {})).get("tools")
         case "gemini":
-            tools: Final = cast(list[JsonValue], body.get("tools", ()))
-            if not tools:
+            declared: Final = _mappings(body.get("tools", []))
+            if not declared:
                 return None
-            return cast(Mapping[str, JsonValue], tools[0]).get("function_declarations")
+            return declared[0].get("function_declarations")
+
+
+def _tool_names(case: _Case, body: Mapping[str, JsonValue]) -> tuple[str, ...]:
+    entries: Final = _mappings(_tools_payload(case, body) or [])
+    match case["shape"]:
+        case "openai" | "bedrock_invoke_openai":
+            return tuple(str(_mapping(e["function"])["name"]) for e in entries)
+        case "bedrock_converse" | "bedrock_invoke_nova":
+            return tuple(str(_mapping(e["toolSpec"])["name"]) for e in entries)
+        case "anthropic" | "bedrock_invoke" | "gemini":
+            return tuple(str(e["name"]) for e in entries)
 
 
 def _tool_input_schema(case: _Case, body: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    first: Final = _mappings(_tools_payload(case, body) or [])[0]
     match case["shape"]:
         case "openai" | "bedrock_invoke_openai":
-            tools: Final = cast(list[JsonValue], body["tools"])
-            fn: Final = cast(Mapping[str, JsonValue], cast(Mapping[str, JsonValue], tools[0])["function"])
-            return cast(Mapping[str, JsonValue], fn["parameters"])
+            return _mapping(_mapping(first["function"])["parameters"])
         case "anthropic" | "bedrock_invoke":
-            tools = cast(list[JsonValue], body["tools"])  # noqa: LIT010  # same var reused across match arms
-            return cast(Mapping[str, JsonValue], cast(Mapping[str, JsonValue], tools[0])["input_schema"])
+            return _mapping(first["input_schema"])
         case "bedrock_converse" | "bedrock_invoke_nova":
-            tools = cast(list[JsonValue], cast(Mapping[str, JsonValue], body["toolConfig"])["tools"])  # noqa: LIT010  # same var reused across match arms
-            spec: Final = cast(Mapping[str, JsonValue], cast(Mapping[str, JsonValue], tools[0])["toolSpec"])
-            return cast(Mapping[str, JsonValue], cast(Mapping[str, JsonValue], spec["inputSchema"])["json"])
+            return _mapping(_mapping(_mapping(first["toolSpec"])["inputSchema"])["json"])
         case "gemini":
-            tool0: Final = cast(Mapping[str, JsonValue], cast(list[JsonValue], body["tools"])[0])
-            decls: Final = cast(list[JsonValue], tool0["function_declarations"])
-            return cast(Mapping[str, JsonValue], cast(Mapping[str, JsonValue], decls[0])["parameters"])
+            return _mapping(first["parameters"])
 
 
 @pytest.mark.parametrize(
@@ -610,7 +730,7 @@ def _tool_input_schema(case: _Case, body: Mapping[str, JsonValue]) -> Mapping[st
         "together_glm",
         "xai_grok3mini",
     ),
-    ids=lambda c: c["id"],
+    ids=_case_id,
 )
 def test_developer_role_translation(case: _Case, respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock, f"canned-{case['id']}")
@@ -624,10 +744,8 @@ def test_developer_role_translation(case: _Case, respx_mock: MockRouter) -> None
         },
     )
     body: Final = _request_body(route)
-    if case["developer_kept"]:
-        assert _message_roles(case, body)[0] == "developer"
-    else:
-        assert "Be a good bot!" in _system_texts(case, body)
+    assert "developer" not in _message_roles(case, body)
+    assert _system_texts(case, body) == ("Be a good bot!",)
     assert "Hello, how are you?" in _user_texts(case, body)
     assert response.choices[0].message.content == f"canned-{case['id']}"
 
@@ -646,7 +764,7 @@ def test_developer_role_translation(case: _Case, respx_mock: MockRouter) -> None
         "together_glm",
         "xai_grok3mini",
     ),
-    ids=lambda c: c["id"],
+    ids=_case_id,
 )
 def test_content_list_handling(case: _Case, respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock, f"canned-{case['id']}")
@@ -654,7 +772,13 @@ def test_content_list_handling(case: _Case, respx_mock: MockRouter) -> None:
         case,
         {"messages": [{"role": "user", "content": [{"type": "text", "text": "Hello, how are you?"}]}]},
     )
-    assert "Hello, how are you?" in _user_texts(case, _request_body(route))
+    body: Final = _request_body(route)
+    assert _user_texts(case, body) == ("Hello, how are you?",)
+    first_content: Final = _mappings(body["messages"])[0]["content"]
+    if case["id"] == "mistral_medium":
+        assert first_content == "Hello, how are you?"
+    else:
+        assert isinstance(first_content, list)
     assert response.choices[0].message.content == f"canned-{case['id']}"
 
 
@@ -693,7 +817,7 @@ _TOOL_ARRAY_SCHEMA: Final[Mapping[str, JsonValue]] = {
         "openai_o3mini",
         "router_gpt4omini",
     ),
-    ids=lambda c: c["id"],
+    ids=_case_id,
 )
 def test_tool_call_with_property_type_array(case: _Case, respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock, f"canned-{case['id']}")
@@ -705,15 +829,14 @@ def test_tool_call_with_property_type_array(case: _Case, respx_mock: MockRouter)
         },
     )
     body: Final = _request_body(route)
-    assert _tools_payload(case, body)
+    assert _tool_names(case, body) == ("shoe_get_id",)
     schema: Final = _tool_input_schema(case, body)
-    props: Final = cast(Mapping[str, JsonValue], schema["properties"])
-    shoe_id: Final = cast(Mapping[str, JsonValue], props["shoe_id"])
-    if "type" in shoe_id:
-        assert sorted(cast(list[JsonValue], shoe_id["type"])) == ["number", "string"]
+    shoe_id: Final = _mapping(_mapping(schema["properties"])["shoe_id"])
+    assert schema["required"] == ["shoe_id"]
+    if case["shape"] == "gemini":
+        assert [_mapping(v)["type"] for v in _items(shoe_id["anyOf"])] == ["string", "number"]
     else:
-        variants: Final = cast(list[JsonValue], shoe_id["anyOf"])
-        assert {cast(Mapping[str, JsonValue], v)["type"] for v in variants} == {"string", "number"}
+        assert shoe_id["type"] == ["string", "number"]
     assert response.choices[0].message.content == f"canned-{case['id']}"
 
 
@@ -756,7 +879,7 @@ _TOOL_ENUM_SCHEMA: Final[Mapping[str, JsonValue]] = {
         "openai_o3mini",
         "router_gpt4omini",
     ),
-    ids=lambda c: c["id"],
+    ids=_case_id,
 )
 def test_tool_call_with_empty_enum_property(case: _Case, respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock, f"canned-{case['id']}")
@@ -768,11 +891,13 @@ def test_tool_call_with_empty_enum_property(case: _Case, respx_mock: MockRouter)
         },
     )
     body: Final = _request_body(route)
+    assert _tool_names(case, body) == ("litellm_product_search",)
     schema: Final = _tool_input_schema(case, body)
-    props: Final = cast(Mapping[str, JsonValue], schema["properties"])
-    search_mode: Final = cast(Mapping[str, JsonValue], props["search_mode"])
-    enum_values: Final = cast(list[JsonValue], search_mode.get("enum", ()))
-    assert "product_search" in enum_values
+    search_mode: Final = _mapping(_mapping(schema["properties"])["search_mode"])
+    enum_values: Final = _items(search_mode["enum"])
+    assert len(enum_values) == 3
+    assert enum_values[0] == (None if case["shape"] == "gemini" else "")
+    assert enum_values[1:] == ("product_search", "product_search_with_filters")
     assert response.choices[0].message.content == f"canned-{case['id']}"
 
 
@@ -799,7 +924,7 @@ def test_tool_call_with_empty_enum_property(case: _Case, respx_mock: MockRouter)
         "together_glm",
         "xai_grok3mini",
     ),
-    ids=lambda c: c["id"],
+    ids=_case_id,
 )
 def test_pydantic_model_input(case: _Case, respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock, f"canned-{case['id']}")
@@ -822,7 +947,7 @@ def test_pydantic_model_input(case: _Case, respx_mock: MockRouter) -> None:
         "openai_o1",
         "router_gpt4omini",
     ),
-    ids=lambda c: c["id"],
+    ids=_case_id,
 )
 def test_file_data_unit_test(case: _Case, respx_mock: MockRouter) -> None:
     pdf_b64: Final = base64.b64encode(b"%PDF-1.4 offline dummy").decode()
@@ -842,7 +967,8 @@ def test_file_data_unit_test(case: _Case, respx_mock: MockRouter) -> None:
             ],
         },
     )
-    assert pdf_b64 in json.dumps(raw_request)
+    assert raw_request.get("error") is None
+    assert pdf_b64 in json.dumps(raw_request.get("raw_request_body"))
 
 
 @pytest.mark.parametrize(
@@ -868,7 +994,7 @@ def test_file_data_unit_test(case: _Case, respx_mock: MockRouter) -> None:
         "together_glm",
         "xai_grok3mini",
     ),
-    ids=lambda c: c["id"],
+    ids=_case_id,
 )
 def test_message_with_name(case: _Case, respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock, f"canned-{case['id']}")
@@ -906,7 +1032,7 @@ def test_message_with_name(case: _Case, respx_mock: MockRouter) -> None:
         "openai_o3mini",
         "router_gpt4omini",
     ),
-    ids=lambda c: c["id"],
+    ids=_case_id,
 )
 def test_json_response_format(case: _Case, response_format: Mapping[str, JsonValue], respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock, '{"city":"San Francisco","state":"CA"}')
@@ -921,12 +1047,16 @@ def test_json_response_format(case: _Case, response_format: Mapping[str, JsonVal
         },
     )
     body: Final = _request_body(route)
-    if response_format["type"] == "json_object":
-        if case["shape"] == "gemini":
-            config: Final = cast(Mapping[str, JsonValue], body.get("generationConfig", {}))
-            assert config.get("response_mime_type") == "application/json"
-        elif case["shape"] in ("openai", "bedrock_invoke_openai"):
-            assert cast(Mapping[str, JsonValue], body["response_format"])["type"] == "json_object"
+    match case["shape"]:
+        case "gemini":
+            mime_types: Final = {"json_object": "application/json", "text": "text/plain"}
+            config: Final = _mapping(body["generationConfig"])
+            assert config["response_mime_type"] == mime_types[str(response_format["type"])]
+        case "openai" | "bedrock_invoke_openai":
+            assert body["response_format"] == response_format
+        case _:
+            assert "response_format" not in body
+    assert not _tools_payload(case, body)
     assert response.choices[0].message.content == '{"city":"San Francisco","state":"CA"}'
 
 
@@ -970,7 +1100,7 @@ _WEATHER_TOOL: Final[Mapping[str, JsonValue]] = {
         "together_glm",
         "xai_grok3mini",
     ),
-    ids=lambda c: c["id"],
+    ids=_case_id,
 )
 def test_response_format_type_text_with_tool_calls_no_tool_choice(case: _Case, respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock, f"canned-{case['id']}")
@@ -984,15 +1114,16 @@ def test_response_format_type_text_with_tool_calls_no_tool_choice(case: _Case, r
         },
     )
     body: Final = _request_body(route)
-    assert _tools_payload(case, body)
+    assert _tool_names(case, body) == ("get_current_weather",)
     assert "tool_choice" not in body
+    assert "toolChoice" not in _mapping(body.get("toolConfig", {}))
     assert response.choices[0].message.content == f"canned-{case['id']}"
 
 
 @pytest.mark.parametrize(
     "case",
     _CASES,
-    ids=lambda c: c["id"],
+    ids=_case_id,
 )
 def test_response_format_type_text(case: _Case) -> None:
     _, provider, _, _ = litellm.get_llm_provider(model=case["kwargs"]["model"])
@@ -1037,6 +1168,7 @@ class _EventsList(BaseModel):
         "bedrock_converse_novamicro",
         "bedrock_converse_gptoss",
         "bedrock_invoke_haiku",
+        "bedrock_invoke_novamicro",
         "bedrock_invoke_kimi",
         "groq_oss120b",
         "mistral_medium",
@@ -1045,10 +1177,10 @@ class _EventsList(BaseModel):
         "openai_o3mini",
         "router_gpt4omini",
     ),
-    ids=lambda c: c["id"],
+    ids=_case_id,
 )
 def test_json_response_pydantic_obj(case: _Case, respx_mock: MockRouter) -> None:
-    route: Final = _register(case, respx_mock, '{"first_response":"paris"}')
+    route: Final = _register(case, respx_mock, '{"first_response":"paris"}', json_via_tool=True)
     response: Final = _complete(
         case,
         {
@@ -1062,7 +1194,7 @@ def test_json_response_pydantic_obj(case: _Case, respx_mock: MockRouter) -> None
     body: Final = _request_body(route)
     serialized: Final = json.dumps(body)
     assert "first_response" in serialized
-    assert response.choices[0].message.content == '{"first_response":"paris"}'
+    assert json.loads(response.choices[0].message.content) == {"first_response": "paris"}
     assert response.choices[0].message.tool_calls is None
 
 
@@ -1077,6 +1209,7 @@ def test_json_response_pydantic_obj(case: _Case, respx_mock: MockRouter) -> None
         "bedrock_converse_novamicro",
         "bedrock_converse_gptoss",
         "bedrock_invoke_haiku",
+        "bedrock_invoke_novamicro",
         "bedrock_invoke_kimi",
         "bedrock_invoke_novamicro",
         "groq_oss120b",
@@ -1086,10 +1219,10 @@ def test_json_response_pydantic_obj(case: _Case, respx_mock: MockRouter) -> None
         "openai_o3mini",
         "router_gpt4omini",
     ),
-    ids=lambda c: c["id"],
+    ids=_case_id,
 )
 def test_json_response_nested_pydantic_obj(case: _Case, respx_mock: MockRouter) -> None:
-    route: Final = _register(case, respx_mock, '{"events":[]}')
+    route: Final = _register(case, respx_mock, '{"events":[]}', json_via_tool=True)
     response: Final = _complete(
         case,
         {
@@ -1101,7 +1234,7 @@ def test_json_response_nested_pydantic_obj(case: _Case, respx_mock: MockRouter) 
     serialized: Final = json.dumps(body)
     assert "events" in serialized
     assert "participants" in serialized
-    assert response.choices[0].message.content == '{"events":[]}'
+    assert json.loads(response.choices[0].message.content) == {"events": []}
     assert response.choices[0].message.tool_calls is None
 
 
@@ -1116,6 +1249,7 @@ def test_json_response_nested_pydantic_obj(case: _Case, respx_mock: MockRouter) 
         "bedrock_converse_novamicro",
         "bedrock_converse_gptoss",
         "bedrock_invoke_haiku",
+        "bedrock_invoke_novamicro",
         "bedrock_invoke_kimi",
         "bedrock_invoke_novamicro",
         "groq_oss120b",
@@ -1125,10 +1259,10 @@ def test_json_response_nested_pydantic_obj(case: _Case, respx_mock: MockRouter) 
         "openai_o3mini",
         "router_gpt4omini",
     ),
-    ids=lambda c: c["id"],
+    ids=_case_id,
 )
 def test_json_response_nested_json_schema(case: _Case, respx_mock: MockRouter) -> None:
-    route: Final = _register(case, respx_mock, '{"events":[]}')
+    route: Final = _register(case, respx_mock, '{"events":[]}', json_via_tool=True)
     response: Final = _complete(
         case,
         {
@@ -1140,7 +1274,7 @@ def test_json_response_nested_json_schema(case: _Case, respx_mock: MockRouter) -
     serialized: Final = json.dumps(body)
     assert "events" in serialized
     assert "participants" in serialized
-    assert response.choices[0].message.content == '{"events":[]}'
+    assert json.loads(response.choices[0].message.content) == {"events": []}
     assert response.choices[0].message.tool_calls is None
 
 
@@ -1189,12 +1323,12 @@ def test_audio_input_gemini(respx_mock: MockRouter) -> None:
         "router_gpt4omini",
         "together_glm",
     ),
-    ids=lambda c: c["id"],
+    ids=_case_id,
 )
 def test_json_response_format_stream(case: _Case, respx_mock: MockRouter) -> None:
     canned: Final = '{"city":"San Francisco"}'
     route: Final = _register(case, respx_mock, canned, stream=True)
-    response: Final = _complete(
+    response: Final = _stream(
         case,
         {
             "messages": [
@@ -1202,14 +1336,13 @@ def test_json_response_format_stream(case: _Case, respx_mock: MockRouter) -> Non
                 {"role": "user", "content": "Respond with this in json. city=San Francisco, state=CA"},
             ],
             "response_format": {"type": "json_object"},
-            "stream": True,
         },
     )
-    content: Final = "".join(
-        chunk.choices[0].delta.content or "" for chunk in cast(Iterable[JsonValue], response)
-    )
+    content: Final = "".join(chunk.choices[0].delta.content or "" for chunk in response)
     assert content == canned
-    assert route.calls
+    body: Final = _request_body(route)
+    if case["shape"] in ("openai", "anthropic") and not case["id"].startswith("groq"):
+        assert body["stream"] is True
 
 
 @pytest.mark.parametrize(
@@ -1222,16 +1355,14 @@ def test_json_response_format_stream(case: _Case, respx_mock: MockRouter) -> Non
         "router_gpt4omini",
         "together_glm",
     ),
-    ids=lambda c: c["id"],
+    ids=_case_id,
 )
 @pytest.mark.parametrize("detail", (None, "low", "high"), ids=("detail_none", "detail_low", "detail_high"))
 @pytest.mark.parametrize("image_url", _PNG_URLS, ids=("litellm_logo", "awsmp_png"))
 def test_image_url(case: _Case, detail: str | None, image_url: str, respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock, f"canned-{case['id']}")
-    image_part: Final[Mapping[str, JsonValue]] = (
-        {"type": "image_url", "image_url": {"url": _PNG_URLS[0], "detail": detail}}
-        if detail is not None
-        else {"type": "image_url", "image_url": {"url": image_url}}
+    image_url_part: Final[Mapping[str, JsonValue]] = (
+        {"url": image_url} if detail is None else {"url": image_url, "detail": detail}
     )
     response: Final = _complete(
         case,
@@ -1239,16 +1370,27 @@ def test_image_url(case: _Case, detail: str | None, image_url: str, respx_mock: 
             "messages": [
                 {
                     "role": "user",
-                    "content": [{"type": "text", "text": "What's in this image?"}, image_part],
+                    "content": [
+                        {"type": "text", "text": "What's in this image?"},
+                        {"type": "image_url", "image_url": image_url_part},
+                    ],
                 }
             ]
         },
     )
     body: Final = _request_body(route)
-    serialized: Final = json.dumps(body)
-    anthropic_shapes: Final = ("anthropic", "bedrock_invoke", "bedrock_converse", "bedrock_invoke_nova")
-    expected_marker: Final = "image" if case["shape"] in anthropic_shapes else "image_url"
-    assert expected_marker in serialized
+    assert "What's in this image?" in _user_texts(case, body)
+    content: Final = _mappings(_mappings(body["messages"])[0]["content"])
+    image_block: Final = content[1]
+    if case["shape"] == "bedrock_invoke":
+        assert image_block["type"] == "image"
+        source: Final = _mapping(image_block["source"])
+        assert source["type"] == "base64"
+        assert source["data"] == _PNG_B64
+        assert source["media_type"] == ("image/jpeg" if image_url.endswith(".jpg") else "image/png")
+    else:
+        assert image_block["type"] == "image_url"
+        assert image_block["image_url"] == image_url_part
     assert response.choices[0].message.content == f"canned-{case['id']}"
 
 
@@ -1265,7 +1407,7 @@ def test_image_url(case: _Case, detail: str | None, image_url: str, respx_mock: 
         "router_gpt4omini",
         "together_glm",
     ),
-    ids=lambda c: c["id"],
+    ids=_case_id,
 )
 def test_image_url_string(case: _Case, respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock, f"canned-{case['id']}")
@@ -1284,8 +1426,18 @@ def test_image_url_string(case: _Case, respx_mock: MockRouter) -> None:
         },
     )
     body: Final = _request_body(route)
-    serialized: Final = json.dumps(body)
-    assert "image" in serialized
+    assert "What's in this image?" in _user_texts(case, body)
+    image_block: Final = _items(
+        _mappings(body["contents"])[0]["parts"]
+        if case["shape"] == "gemini"
+        else _mappings(body["messages"])[0]["content"]
+    )[1]
+    match case["shape"]:
+        case "openai":
+            assert image_block == {"type": "image_url", "image_url": {"url": _PNG_URLS[1]}}
+        case _:
+            assert _PNG_B64 in json.dumps(image_block)
+            assert _PNG_URLS[1] not in json.dumps(image_block)
     assert response.choices[0].message.content == f"canned-{case['id']}"
 
 
@@ -1304,7 +1456,7 @@ def test_image_url_string(case: _Case, respx_mock: MockRouter) -> None:
         "openai_o3mini",
         "router_gpt4omini",
     ),
-    ids=lambda c: c["id"],
+    ids=_case_id,
 )
 def test_empty_tools(case: _Case, respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock, f"canned-{case['id']}")
@@ -1354,7 +1506,7 @@ def _cost_model_key(case: _Case) -> str | None:
         "together_glm",
         "xai_grok3mini",
     ),
-    ids=lambda c: c["id"],
+    ids=_case_id,
 )
 async def test_completion_cost(case: _Case, respx_mock: MockRouter) -> None:
     _register(case, respx_mock, f"canned-{case['id']}")
@@ -1370,10 +1522,7 @@ async def test_completion_cost(case: _Case, respx_mock: MockRouter) -> None:
     cost_entry: Final = litellm.model_cost.get(model_key) if model_key is not None else None
     actual_cost: Final = response._hidden_params["response_cost"]
     if cost_entry is not None and "input_cost_per_token" in cost_entry:
-        expected: Final = (
-            10 * cost_entry["input_cost_per_token"]
-            + 5 * cost_entry["output_cost_per_token"]
-        )
+        expected: Final = 10 * cost_entry["input_cost_per_token"] + 5 * cost_entry["output_cost_per_token"]
         assert actual_cost == pytest.approx(expected)
     else:
         try:
@@ -1401,6 +1550,9 @@ def test_supports_audio_input_gemini(input_type: str) -> None:
         endpoint=CallTypes.completion,
         kwargs={
             "model": "gemini/gemini-2.5-flash",
+            "modalities": ["text", "audio"],
+            "audio": {"voice": "alloy", "format": "wav"},
+            "drop_params": True,
             "messages": [
                 {
                     "role": "user",
@@ -1409,7 +1561,8 @@ def test_supports_audio_input_gemini(input_type: str) -> None:
             ],
         },
     )
-    serialized: Final = json.dumps(raw_request)
+    assert raw_request.get("error") is None
+    serialized: Final = json.dumps(raw_request.get("raw_request_body"))
     if input_type == "input_audio":
         assert wav_b64 in serialized
     else:
@@ -1444,7 +1597,7 @@ def test_reasoning_effort_gemini(respx_mock: MockRouter) -> None:
     assert response.choices[0].message.content == "canned-gemini"
 
 
-@pytest.mark.parametrize("case", _pick("openai_o1", "openai_o3mini", "azure_o3mini", "azure_o3mini_live"), ids=lambda c: c["id"])
+@pytest.mark.parametrize("case", _pick("openai_o1", "openai_o3mini", "azure_o3mini", "azure_o3mini_live"), ids=_case_id)
 def test_o_series_reasoning_effort_forwarded(case: _Case, respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock, f"canned-{case['id']}")
     _complete(
@@ -1458,7 +1611,7 @@ def test_o_series_reasoning_effort_forwarded(case: _Case, respx_mock: MockRouter
     assert body["reasoning_effort"] == "low"
 
 
-@pytest.mark.parametrize("case", _pick("openai_o1", "openai_o3mini", "azure_o3mini", "azure_o3mini_live"), ids=lambda c: c["id"])
+@pytest.mark.parametrize("case", _pick("openai_o1", "openai_o3mini", "azure_o3mini", "azure_o3mini_live"), ids=_case_id)
 def test_o_series_developer_role_kept(case: _Case, respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock, f"canned-{case['id']}")
     _complete(
@@ -1476,7 +1629,7 @@ def test_o_series_developer_role_kept(case: _Case, respx_mock: MockRouter) -> No
     assert first["content"] == "Be a good bot!"
 
 
-@pytest.mark.parametrize("case", _pick("openai_o1", "openai_o3mini", "azure_o3mini", "azure_o3mini_live"), ids=lambda c: c["id"])
+@pytest.mark.parametrize("case", _pick("openai_o1", "openai_o3mini", "azure_o3mini", "azure_o3mini_live"), ids=_case_id)
 def test_o_series_temperature_dropped(case: _Case, respx_mock: MockRouter) -> None:
     route: Final = _register(case, respx_mock, f"canned-{case['id']}")
     _complete(
