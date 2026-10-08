@@ -488,6 +488,8 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/search/{search_tool_name}",
         "/decisions",
         "/v1/decisions",
+        "/systemone",
+        "/v1/systemone",
         # OCR
         "/ocr",
         "/v1/ocr",
@@ -549,6 +551,8 @@ class LiteLLMRoutes(enum.Enum):
         "/lens/{lens_id}/executions/{execution_id}",
         "/lens/{lens_id}/cancel",
         "/lens/{lens_id}/findings/{finding_id}",
+        "/lens/feedback",
+        "/lens/feedback/summary",
         "/lens/preview/sample",
         "/lens/workers/register",
         "/lens/workers/{worker_id}",
@@ -853,6 +857,7 @@ class LiteLLMRoutes(enum.Enum):
             "/public/mcp_hub",
             "/public/skill_hub",
             "/public/litellm_model_cost_map",
+            "/moyai/connect/exchange",
         )
     )
 
@@ -1063,6 +1068,7 @@ class LiteLLMRoutes(enum.Enum):
     admin_viewer_routes = (
         [
             "/lens/traces/findings",
+            "/lens/feedback/summary",
             "/user/list",
             "/user/available_users",
             "/user/available_roles",
@@ -1365,6 +1371,7 @@ class KeyRequestBase(GenerateRequestBase):
     enforced_params: list[str] | None = None
     allowed_routes: list | None = []
     allowed_passthrough_routes: list | None = None
+    denied_passthrough_routes: list[str] | None = None
     allowed_vector_store_indexes: list[AllowedVectorStoreIndexItem] | None = None
     rpm_limit_type: Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"] | None = (
         None  # raise an error if 'guaranteed_throughput' is set and we're overallocating rpm
@@ -1674,6 +1681,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     source_url: str | None = None
     timeout: float | None = None
     max_concurrent_requests: int | None = None
+    rpm: int | None = Field(default=None, ge=0)
     # BYOM submission fields — set by the endpoint, not by the caller.
     # Any caller-provided values are silently overridden before persistence.
     approval_status: str | None = Field(
@@ -1781,6 +1789,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     source_url: str | None = None
     timeout: float | None = None
     max_concurrent_requests: int | None = None
+    rpm: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def validate_protocol_transport(self) -> "UpdateMCPServerRequest":
@@ -2212,6 +2221,7 @@ class NewTeamRequest(TeamBase):
     prompts: list[str] | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
     allowed_passthrough_routes: list | None = None
+    denied_passthrough_routes: list[str] | None = None
     disable_global_guardrails: bool | None = None
     secret_manager_settings: dict | None = None
     model_rpm_limit: dict[str, int] | None = None
@@ -2293,6 +2303,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     team_member_tpm_limit: int | None = None
     team_member_key_duration: str | None = None
     allowed_passthrough_routes: list | None = None
+    denied_passthrough_routes: list[str] | None = None
     secret_manager_settings: dict | None = None
     prompts: list[str] | None = None
     model_rpm_limit: dict[str, int] | None = None
@@ -2732,6 +2743,9 @@ class ScheduledJobStaggerSettings(LiteLLMPydanticObjectBase):
     )
 
 
+DEFAULT_RESPONSES_WEBSOCKET_SESSION_LIMIT_SECONDS: Final[float] = 3600.0
+
+
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
@@ -3041,6 +3055,12 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     pass_through_request_timeout: float | None = Field(
         default=None,
         description="Default upstream request timeout in seconds for native and custom pass-through endpoints that use pass_through_request. Defaults to 600 when unset.",
+    )
+    responses_websocket_session_limit_seconds: float = Field(
+        default=DEFAULT_RESPONSES_WEBSOCKET_SESSION_LIMIT_SECONDS,
+        ge=60,
+        le=7200,
+        description="Maximum lifetime in seconds of a Responses API WebSocket session, measured from connection accept and covering the idle wait for the first response.create frame. Defaults to 3600, matching OpenAI's documented 60-minute WebSocket connection limit. Must be between 60 and 7200 seconds.",
     )
     pass_through_endpoints: list[PassThroughGenericEndpoint] | None = Field(
         default=None,
@@ -3645,6 +3665,8 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     user_role: str | None = None
     spend: float = 0.0
     max_budget: float | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
     models: list[str] = []
     budget_duration: str | None = None
     budget_reset_at: datetime | None = None
@@ -5102,6 +5124,7 @@ LiteLLM_ManagementEndpoint_MetadataFields_Premium: Final = [
     "logging",
     "secret_manager_settings",
     "allowed_passthrough_routes",
+    "denied_passthrough_routes",
 ]
 
 # Metadata keys that are immutable once set: preserved when an update omits them,

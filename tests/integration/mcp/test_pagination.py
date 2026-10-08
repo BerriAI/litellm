@@ -1,7 +1,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Literal
+from typing import Final, Literal
 
 import httpx
 import pytest
@@ -11,7 +11,7 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CallToolRequest, CallToolRequestParams, CallToolResult, PaginatedRequestParams
 
 from integration._support.client import Gateway
-from integration._support.mcp import paginated_mcp_peer
+from integration._support.mcp import McpPeer, paginated_mcp_peer
 from integration._support.process import owned_proxy
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.types.mcp import MCPTransport
@@ -138,7 +138,7 @@ def test_continuations_reauthorize_and_reject_registry_changes(tmp_path: Path, m
 
     assert os.environ.get("DATABASE_URL"), "This integration case requires disposable-database access"
 
-    async def exercise(a, b, peer, identity, owner, stranger, policy):
+    async def exercise(a, b, peer, identity, owner, stranger, policy, spare):
         owner_a = Gateway(a.client, owner, peer.url)
         owner_b = Gateway(b.client, owner, peer.url)
         stranger_b = Gateway(b.client, stranger, peer.url)
@@ -165,9 +165,9 @@ def test_continuations_reauthorize_and_reject_registry_changes(tmp_path: Path, m
             {
                 "key": owner,
                 **(
-                    {"access_group_ids": []}
+                    {"access_group_ids": [], "object_permission": {"mcp_servers": [spare]}}
                     if grant == "access_group"
-                    else {"object_permission": {"mcp_servers": ["no-mcp-servers"]}}
+                    else {"object_permission": {"mcp_servers": [spare]}}
                 ),
             },
         )
@@ -177,7 +177,7 @@ def test_continuations_reauthorize_and_reject_registry_changes(tmp_path: Path, m
                 with pytest.raises(MCPError, match="fresh listing"):
                     await getattr(session, method)(params=PaginatedRequestParams(cursor=first.next_cursor))
                 assert not any(call["body"].get("method", "").endswith("/list") for call in peer.drain())
-        a.post("/key/update", {"key": owner, **policy})
+        a.post("/key/update", {"key": owner, "object_permission": {"mcp_servers": []}, **policy})
         changed = a.request("PUT", "/v1/mcp/server", {"server_id": identity, "description": "new catalog generation"})
         assert changed.status_code == 202, changed.text
         for method, first in first_pages.items():
@@ -207,7 +207,7 @@ def test_continuations_reauthorize_and_reject_registry_changes(tmp_path: Path, m
             capture_output=True,
             text=True,
         )
-        with paginated_mcp_peer() as peer, httpx.Client() as client:
+        with paginated_mcp_peer() as peer, paginated_mcp_peer() as spare_peer, httpx.Client() as client:
             seed = Gateway(client, "sk-pagination-test", peer.url)
             config = tmp_path / "database-proxy.yaml"
             config.write_text(
@@ -231,6 +231,7 @@ def test_continuations_reauthorize_and_reject_registry_changes(tmp_path: Path, m
                 a.scenario() as scenario,
             ):
                 identity = register_mcp(scenario, peer, "pages")
+                spare: Final = register_mcp(scenario, spare_peer, "spare")
                 group = a.request(
                     "POST",
                     "/v1/access_group",
@@ -248,7 +249,7 @@ def test_continuations_reauthorize_and_reject_registry_changes(tmp_path: Path, m
                 owner = scenario.key(**policy)
                 stranger = scenario.key(object_permission={"mcp_servers": [identity]})
                 assert owner != stranger
-                asyncio.run(exercise(a, b, peer, identity, owner, stranger, policy))
+                asyncio.run(exercise(a, b, peer, identity, owner, stranger, policy, spare))
 
 
 @pytest.mark.parametrize("changed", ["key", "snapshot"])
@@ -561,3 +562,59 @@ def test_missing_user_keeps_explicit_key_and_team_grants(
                         assert not forbidden.ok, forbidden
                         assert tool_calls(allowed.drain()) == ()
                         assert private.drain() == ()
+
+
+def test_aggregate_freshness_matches_real_upstream() -> None:
+    from mcp.types import (
+        ListPromptsRequest,
+        ListResourcesRequest,
+        ListResourceTemplatesRequest,
+        ListToolsRequest,
+        ListToolsResult,
+    )
+    from litellm.proxy._experimental.mcp_server.catalog import combine_optional_catalog, list_tools_page
+
+    async def exercise(peer: McpPeer) -> None:
+        client: Final = MCPClient(server_url=peer.url, transport_type=MCPTransport.http, protocol_version="2026-07-28")
+        for request in (ListPromptsRequest(), ListResourcesRequest(), ListResourceTemplatesRequest()):
+            page: Final = await client.list_page(request)
+            assert page.ttl_ms == 9000
+            result: Final = combine_optional_catalog(request, [page], None, None)
+            assert result.ttl_ms == 9000
+            assert result.cache_scope == "private"
+
+        async def fetch(server_id: str, cursor: str | None) -> ListToolsResult:
+            return await client.list_page(ListToolsRequest())
+
+        tools_result: Final = await list_tools_page(
+            cursor=None, caller_scope="caller", snapshot="snapshot", server_ids=("server",), fetch=fetch, now=100
+        )
+        assert 0 < tools_result.ttl_ms <= 9000
+        assert tools_result.cache_scope == "private"
+        assert len(tools_result.tools) == 3
+
+    with paginated_mcp_peer(page_size=3, ttl_ms=9000) as peer:
+        asyncio.run(exercise(peer))
+
+
+@pytest.mark.parametrize("ttl_ms", [0, 9000])
+def test_discovery_cache_freshness_and_caller_isolation_over_http(ttl_ms: int) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    async def exercise(peer: McpPeer) -> None:
+        server: Final = MCPServer(
+            server_id="pages", name="pages", url=peer.url, transport=MCPTransport.http, protocol_version="2026-07-28"
+        )
+        for manager in (MCPServerManager(), MCPServerManager()):
+            for user in (UserAPIKeyAuth(user_id="one"), UserAPIKeyAuth(user_id="two")):
+                for _ in range(2):
+                    result: Final = await manager.get_prompts_from_server(server, user)
+                    assert [prompt.name for prompt in result] == ["pages-prompt0", "pages-prompt1", "pages-prompt2"]
+
+    with paginated_mcp_peer(page_size=3, ttl_ms=ttl_ms) as peer:
+        asyncio.run(exercise(peer))
+        observed: Final = peer.drain()
+        listings: Final = [item for item in observed if item.get("body", {}).get("method") == "prompts/list"]
+        assert len(listings) == (8 if ttl_ms == 0 else 4)

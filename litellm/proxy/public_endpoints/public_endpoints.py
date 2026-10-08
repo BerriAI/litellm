@@ -221,10 +221,10 @@ def _load_endpoints() -> list[_EndpointEntry]:
 async def public_model_hub():
     import litellm
     from litellm.proxy.health_endpoints._health_endpoints import (
-        _convert_health_check_to_dict,
+        convert_health_check_to_dict,
     )
     from litellm.proxy.proxy_server import (
-        _get_model_group_info,
+        get_model_group_info,
         llm_router,
         prisma_client,
     )
@@ -234,7 +234,7 @@ async def public_model_hub():
 
     model_groups: list[ModelGroupInfoProxy] = []
     if litellm.public_model_groups is not None:
-        model_groups = _get_model_group_info(
+        model_groups = get_model_group_info(  # rebind-ok: pre-existing rebinding on a rename-only line
             llm_router=llm_router,
             all_models_str=litellm.public_model_groups,
             model_group=None,
@@ -248,7 +248,7 @@ async def public_model_hub():
             for check in latest_checks:
                 key = check.model_id if check.model_id else check.model_name
                 if key:
-                    health_check_dict = _convert_health_check_to_dict(check)
+                    health_check_dict = convert_health_check_to_dict(check)
                     health_checks_map[key] = health_check_dict
                     if check.model_name:
                         health_checks_map[check.model_name] = health_check_dict
@@ -322,7 +322,7 @@ async def get_mcp_servers():
 async def public_skill_hub():
     """Return enabled (public) Claude Code skills — no auth required."""
     from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import (
-        _get_prisma_client,
+        get_prisma_client,
     )
     from litellm.types.proxy.claude_code_endpoints import (
         ListPluginsResponse,
@@ -330,7 +330,7 @@ async def public_skill_hub():
     )
 
     try:
-        prisma_client: Final = await _get_prisma_client()
+        prisma_client: Final = await get_prisma_client()
         plugins: Final = await _plugin_table(prisma_client).find_many(where={"enabled": True})
         items: Final = []
         for plugin in plugins:
@@ -366,7 +366,7 @@ async def public_skill_hub():
 )
 async def public_model_hub_info():
     import litellm
-    from litellm.proxy.proxy_server import _title, version
+    from litellm.proxy.proxy_server import title, version
 
     try:
         from litellm_enterprise.proxy.proxy_server import EnterpriseProxyConfig
@@ -376,7 +376,7 @@ async def public_model_hub_info():
         custom_docs_description = None
 
     return PublicModelHubInfo(
-        docs_title=_title,
+        docs_title=title,
         custom_docs_description=custom_docs_description,
         litellm_version=version,
         useful_links=litellm.public_model_groups_links,

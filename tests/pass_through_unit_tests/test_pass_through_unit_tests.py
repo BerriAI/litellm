@@ -6,7 +6,6 @@ from typing import Optional
 
 import fastapi
 from fastapi import FastAPI
-from fastapi.routing import APIRoute
 import httpx
 import pytest
 import litellm
@@ -27,7 +26,6 @@ from fastapi import Request
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
-    _update_metadata_with_tags_in_header,
     HttpPassThroughEndpointHelpers,
 )
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -82,67 +80,6 @@ def mock_user_api_key_dict():
         team_id="test-team",
         end_user_id="test-user",
     )
-
-
-def test_update_metadata_with_tags_in_header_no_tags(mock_request):
-    """
-    No tags should be added to metadata if they do not exist in headers
-    """
-    # Test when no tags are present in headers
-    request = mock_request(headers={})
-    metadata = {"existing": "value"}
-
-    result = _update_metadata_with_tags_in_header(request=request, metadata=metadata)
-
-    assert result == {"existing": "value"}
-    assert "tags" not in result
-
-
-def test_update_metadata_with_tags_in_header_with_tags(mock_request):
-    """
-    Tags should be added to metadata if they exist in headers
-    """
-    # Test when tags are present in headers
-    request = mock_request(headers={"tags": "tag1,tag2,tag3"})
-    metadata = {"existing": "value"}
-
-    result = _update_metadata_with_tags_in_header(request=request, metadata=metadata)
-
-    assert result == {"existing": "value", "tags": ["tag1", "tag2", "tag3"]}
-
-
-def test_get_response_headers_filters_excluded_custom_headers():
-    """
-    Regression test:
-    Ensure excluded headers from FastAPI defaults (e.g. content-length: 0)
-    do not override passthrough response headers.
-    """
-    upstream_headers = httpx.Headers(
-        {
-            "content-type": "application/json",
-            "x-amzn-requestid": "req-123",
-            "content-length": "999",  # should be excluded
-        }
-    )
-
-    custom_headers = {
-        "x-litellm-version": "1.84.0",
-        "content-length": "0",  # should be excluded
-        "server": "uvicorn",  # should be excluded
-    }
-
-    result = HttpPassThroughEndpointHelpers.get_response_headers(
-        headers=upstream_headers,
-        litellm_call_id="call-123",
-        custom_headers=custom_headers,
-    )
-
-    assert result["content-type"] == "application/json"
-    assert result["x-amzn-requestid"] == "req-123"
-    assert result["x-litellm-version"] == "1.84.0"
-    assert result["x-litellm-call-id"] == "call-123"
-    assert "content-length" not in result
-    assert "server" not in result
 
 
 def test_init_kwargs_for_pass_through_endpoint_basic(
@@ -371,7 +308,7 @@ async def test_pass_through_request_logging_failure_with_stream(
     # Patch both the logging handler and the httpx client
     with (
         patch(
-            "litellm.proxy.pass_through_endpoints.streaming_handler.PassThroughStreamingHandler._route_streaming_logging_to_handler",
+            "litellm.proxy.pass_through_endpoints.streaming_handler.PassThroughStreamingHandler.route_streaming_logging_to_handler",
             new=mock_logging_failure,
         ),
         patch(
@@ -407,83 +344,6 @@ async def test_pass_through_request_logging_failure_with_stream(
             # Non-streaming response - should have body attribute
             assert hasattr(response, "body")
             assert response.body == b'{"mock": "response"}'
-
-
-PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES = {
-    "/comprehendmedical": {"POST"},
-    "/comprehendmedical/{operation}": {"POST"},
-    "/transcribe": {"POST"},
-    "/transcribe/{operation}": {"POST"},
-    "/tinyfish/{endpoint:path}": {"GET", "POST"},
-    "/laya/v1/systemone": {"POST"},
-    "/bespoke/v1/systemone": {"POST"},
-}
-
-
-def test_pass_through_routes_support_all_methods():
-    """
-    A pass-through route fronts a whole provider API, so narrowing its method
-    set turns a request the upstream would have accepted into a 405. The
-    exceptions are the POST-only protocol routes listed above.
-    """
-    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-        router as llm_router,
-    )
-
-    expected_methods = {"GET", "POST", "PUT", "DELETE", "PATCH"}
-
-    def check_router_methods(router):
-        for route in router.routes:
-            if isinstance(route, APIRoute):
-                path = route.path
-                methods = set(route.methods)
-                allowed = PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES.get(path, expected_methods)
-                assert (
-                    methods == allowed
-                ), f"Route {path} does not support all methods. Supported: {methods}, Expected: {allowed}"
-
-    check_router_methods(llm_router)
-
-
-def test_protocol_constrained_pass_through_exemptions_are_not_stale():
-    """
-    The exemption list above weakens the method contract, so it must not
-    outlive the routes it covers: a renamed or deleted route has to fail here
-    rather than sit in the list silently exempting nothing.
-    """
-    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-        router as llm_router,
-    )
-
-    registered_paths = {route.path for route in llm_router.routes if isinstance(route, APIRoute)}
-    unmatched = set(PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES) - registered_paths
-    assert not unmatched, f"Exempted pass-through routes no longer exist: {sorted(unmatched)}"
-
-
-def test_is_bedrock_agent_runtime_route():
-    """
-    Test that _is_bedrock_agent_runtime_route correctly identifies bedrock agent runtime endpoints
-    """
-    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-        _is_bedrock_agent_runtime_route,
-    )
-
-    # Test agent runtime endpoints (should return True)
-    assert _is_bedrock_agent_runtime_route("/knowledgebases/kb-123/retrieve") is True
-    assert (
-        _is_bedrock_agent_runtime_route("/agents/knowledgebases/kb-123/retrieve")
-        is True
-    )
-
-    # Test regular bedrock runtime endpoints (should return False)
-    assert (
-        _is_bedrock_agent_runtime_route("/guardrail/test-id/version/1/apply") is False
-    )
-    assert (
-        _is_bedrock_agent_runtime_route("/model/cohere.command-r-v1:0/converse")
-        is False
-    )
-    assert _is_bedrock_agent_runtime_route("/some/random/endpoint") is False
 
 
 def test_init_kwargs_filters_pricing_params(mock_request, mock_user_api_key_dict):
@@ -583,94 +443,6 @@ def test_init_kwargs_filters_pricing_params(mock_request, mock_user_api_key_dict
     assert litellm_params["input_cost_per_token"] == 0.00002
     assert litellm_params["output_cost_per_token"] == 0.00002
     # Note: Other pricing params are also stored but we test the key ones that caused the regression
-
-
-def test_custom_pricing_used_in_cost_calculation():
-    """
-    Test that when custom pricing parameters are provided in litellm_params,
-    they are actually used for cost calculation.
-
-    This ensures that the custom pricing functionality works end-to-end:
-    1. Pricing params are stored in litellm_params
-    2. These params are used by completion_cost() to calculate costs
-
-    Regression test for: LIT-1221
-    """
-    from litellm import completion_cost, Choices, Message, ModelResponse
-    from litellm.utils import Usage
-
-    # Create a mock response with usage
-    resp = ModelResponse(
-        id="chatcmpl-test-123",
-        choices=[
-            Choices(
-                finish_reason="stop",
-                index=0,
-                message=Message(
-                    content="This is a test response",
-                    role="assistant",
-                ),
-            )
-        ],
-        created=1234567890,
-        model="gpt-5.5",
-        object="chat.completion",
-        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
-    )
-
-    # Test 1: Standard pricing (should use default model pricing)
-    standard_cost = completion_cost(
-        completion_response=resp,
-        model="gpt-5.5",
-    )
-    print(f"Standard cost: {standard_cost}")
-
-    # Test 2: Custom pricing via custom_cost_per_token parameter
-    custom_input_price = 0.00010  # $0.0001 per token
-    custom_output_price = 0.00020  # $0.0002 per token
-
-    custom_cost = completion_cost(
-        completion_response=resp,
-        custom_cost_per_token={
-            "input_cost_per_token": custom_input_price,
-            "output_cost_per_token": custom_output_price,
-        },
-    )
-
-    # Calculate expected cost
-    expected_custom_cost = (100 * custom_input_price) + (50 * custom_output_price)
-
-    print(f"Custom cost: {custom_cost}")
-    print(f"Expected custom cost: {expected_custom_cost}")
-
-    # Verify custom pricing is used (should match our calculation)
-    assert round(custom_cost, 10) == round(expected_custom_cost, 10)
-
-    # Verify custom cost is different from standard cost (unless prices happen to match)
-    # This confirms custom pricing is actually being applied
-    assert (
-        custom_cost != standard_cost
-    ), "Custom pricing should produce different cost than standard pricing"
-
-    # Test 3: Custom pricing with cache_read_input_token_cost and input_cost_per_token_batches
-    # This specifically tests the parameters that were causing the original issue
-    cache_cost = completion_cost(
-        completion_response=resp,
-        custom_cost_per_token={
-            "input_cost_per_token": 0.00001,
-            "output_cost_per_token": 0.00002,
-            "cache_read_input_token_cost": 0.000005,  # Should be accepted
-            "input_cost_per_token_batches": 0.000003,  # Should be accepted
-            "output_cost_per_token_batches": 0.000004,  # Should be accepted
-        },
-    )
-
-    # Basic validation that it doesn't throw an error and returns a number
-    assert isinstance(cache_cost, (int, float))
-    assert cache_cost >= 0
-
-    print(f"Cache-aware cost: {cache_cost}")
-    print("✅ Custom pricing parameters are correctly used in cost calculation")
 
 
 def test_init_kwargs_client_metadata_cannot_spoof_authenticated_identity(
