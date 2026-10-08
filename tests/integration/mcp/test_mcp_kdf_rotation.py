@@ -14,6 +14,7 @@ from typing import Final
 
 import httpx
 import pytest
+import yaml
 from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from integration._support.client import Gateway
@@ -68,6 +69,11 @@ class _RevokeForm(TypedDict):
 
 class _IntrospectForm(TypedDict):
     token: ReadOnly[str]
+
+
+class _ClaudeCodeTokenForm(TypedDict):
+    grant_type: ReadOnly[str]
+    refresh_token: ReadOnly[str]
 
 
 class _ClientRegistration(TypedDict):
@@ -137,6 +143,24 @@ def _refresh_envelope(identity_server: str, key: str, keys: EnvelopeKeys, upstre
     )
     assert isinstance(sealed, SealedEnvelope), sealed
     return sealed.token.get_secret_value()
+
+
+def _proxy_api_session_refresh(user_id: str, keys: SessionKeys) -> str:
+    minted: Final = mint_session_refresh_token(
+        SessionPrincipal(user_id=user_id, client_id="claude_code", audience="proxy_api"),
+        keys,
+        datetime.now(timezone.utc),
+    )
+    assert isinstance(minted, MintedSessionToken), minted
+    return minted.token.get_secret_value()
+
+
+def _claude_code_gateway_config(path: Path) -> Path:
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config["general_settings"]["enable_claude_code_gateway"] = True
+    config_path: Final = path / "claude-code-gateway.yaml"
+    config_path.write_text(yaml.safe_dump(config))
+    return config_path
 
 
 def _session_refresh(user_id: str, client_id: str, keys: SessionKeys) -> str:
@@ -492,3 +516,54 @@ def test_session_access_token_minted_under_legacy_scrypt_key_introspects_active_
         )
         assert response.status_code == 200, response.text
         assert response.json()["active"] is True, response.text
+
+
+def test_claude_code_gateway_refresh_of_an_hkdf_session_token_is_renewed_without_grace(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    config: Final = _claude_code_gateway_config(tmp_path)
+    with owned_proxy(gateway, tmp_path, {}, config=config) as graced, graced.scenario() as scenario:
+        refresh: Final = _proxy_api_session_refresh(scenario.user(), _hkdf_session_keys(graced.key))
+        response: Final = graced.client.post(
+            "/claude_code_gateway/oauth/token",
+            data=_ClaudeCodeTokenForm(grant_type="refresh_token", refresh_token=refresh),
+        )
+        assert response.status_code == 200, response.text
+        renewed: Final = response.json()
+        opened: Final = open_session_refresh_token(
+            renewed["refresh_token"], _hkdf_session_keys(graced.key), datetime.now(timezone.utc)
+        )
+        assert isinstance(opened, OpenedSessionToken), opened
+
+
+def test_claude_code_gateway_refresh_of_a_legacy_scrypt_session_token_is_rejected_without_grace(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    config: Final = _claude_code_gateway_config(tmp_path)
+    with owned_proxy(gateway, tmp_path, {}, config=config) as graced, graced.scenario() as scenario:
+        refresh: Final = _proxy_api_session_refresh(scenario.user(), _scrypt_session_keys(graced.key))
+        response: Final = graced.client.post(
+            "/claude_code_gateway/oauth/token",
+            data=_ClaudeCodeTokenForm(grant_type="refresh_token", refresh_token=refresh),
+        )
+        assert response.status_code == 400, response.text
+        assert response.json()["error"] == "invalid_grant", response.text
+
+
+def test_claude_code_gateway_refresh_of_a_legacy_scrypt_session_token_is_renewed_during_the_legacy_grace_window(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    config: Final = _claude_code_gateway_config(tmp_path)
+    with owned_proxy(gateway, tmp_path, GRACE, config=config) as graced, graced.scenario() as scenario:
+        refresh: Final = _proxy_api_session_refresh(scenario.user(), _scrypt_session_keys(graced.key))
+        response: Final = graced.client.post(
+            "/claude_code_gateway/oauth/token",
+            data=_ClaudeCodeTokenForm(grant_type="refresh_token", refresh_token=refresh),
+        )
+        assert response.status_code == 200, response.text
+        renewed: Final = response.json()
+        assert renewed["refresh_token"] != refresh, response.text
+        opened: Final = open_session_refresh_token(
+            renewed["refresh_token"], _hkdf_session_keys(graced.key), datetime.now(timezone.utc)
+        )
+        assert isinstance(opened, OpenedSessionToken), opened

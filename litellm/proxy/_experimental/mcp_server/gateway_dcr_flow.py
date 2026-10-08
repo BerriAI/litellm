@@ -1550,7 +1550,9 @@ async def refresh_proxy_credential(
     signing: Final = resolve_session_signing(master_key, "mcp_gateway refresh grant")
     if isinstance(signing, Response):
         return signing
-    opened: Final = _open_presented_refresh_token(refresh_token, client_id, signing)
+    opened: Final = _open_presented_refresh_token(
+        refresh_token, client_id, signing, legacy_keys=legacy_session_keys_from_master_key(master_key, signing.keys)
+    )
     if isinstance(opened, Response):
         return opened
     if opened.principal.audience != PROXY_API_AUDIENCE:

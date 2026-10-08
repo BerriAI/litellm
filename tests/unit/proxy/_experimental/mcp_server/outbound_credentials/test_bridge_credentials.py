@@ -356,19 +356,26 @@ def _legacy_keys(master_key: str) -> EnvelopeKeys:
 
 
 def test_envelope_key_derivation_matches_an_independent_rfc5869_vector():
-    keys: Final = envelope_keys_from_master_key("sk-1234")
-    assert keys.signing_key.get_secret_value() == _rfc5869(b"sk-1234", b"litellm-mcp-bridge:envelope-signing:").hex()
+    keys: Final = envelope_keys_from_master_key("sk-kat-master-key")
     assert (
-        keys.encryption_key.get_secret_value() == _rfc5869(b"sk-1234", b"litellm-mcp-bridge:envelope-encryption:").hex()
+        keys.signing_key.get_secret_value()
+        == _rfc5869(b"sk-kat-master-key", b"litellm-mcp-bridge:envelope-signing:").hex()
+    )
+    assert (
+        keys.encryption_key.get_secret_value()
+        == _rfc5869(b"sk-kat-master-key", b"litellm-mcp-bridge:envelope-encryption:").hex()
     )
     # literal pin computed from the same hand implementation (RFC 5869, salt = 32 zero bytes)
-    assert keys.signing_key.get_secret_value() == "331032bfe2b8d86bd00586ea69c0d854140019ca0e0adbe4dd0cc9e06cb36605"
+    assert keys.signing_key.get_secret_value() == "20386b6579b080c3cc909c641fbf358c2db29869107289d56a823e9394064c3c"
 
 
 def test_session_key_derivation_matches_an_independent_rfc5869_vector():
-    keys: Final = session_keys_from_master_key("sk-1234")
-    assert keys.signing_key.get_secret_value() == _rfc5869(b"sk-1234", b"litellm-mcp-gateway:session-signing:").hex()
-    assert keys.signing_key.get_secret_value() == "511f07b16ceeb5fba1660033785d4b9a4a6e80c749a51d639a688c287671a0e6"
+    keys: Final = session_keys_from_master_key("sk-kat-master-key")
+    assert (
+        keys.signing_key.get_secret_value()
+        == _rfc5869(b"sk-kat-master-key", b"litellm-mcp-gateway:session-signing:").hex()
+    )
+    assert keys.signing_key.get_secret_value() == "3a40b8858630f352a274de0e488b9cb05388346f7bcd4dc0da9cdec480652b44"
 
 
 def test_the_three_derived_keys_are_pairwise_distinct():
