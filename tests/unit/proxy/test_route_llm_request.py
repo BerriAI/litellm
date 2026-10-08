@@ -1567,7 +1567,7 @@ async def test_route_request_router_settings_override_skips_null_fields():
     must not reach the router as explicit per-request values, or they switch the router-level
     fallbacks and retries off for that key.
     """
-    data = {
+    data: Final = {
         "model": "gpt-3.5-turbo",
         "messages": [{"role": "user", "content": "Hello"}],
         "stream": True,
@@ -1580,13 +1580,13 @@ async def test_route_request_router_settings_override_skips_null_fields():
         },
     }
 
-    llm_router = MagicMock()
+    llm_router: Final = MagicMock()
     llm_router.acompletion.return_value = "success"
 
-    response = await route_request(data, llm_router, None, "acompletion")
+    response: Final = await route_request(data, llm_router, None, "acompletion")
 
     assert response == "success"
-    call_kwargs = llm_router.acompletion.call_args[1]
+    call_kwargs: Final = llm_router.acompletion.call_args[1]
     assert call_kwargs["timeout"] == 600
     assert "fallbacks" not in call_kwargs
     assert "context_window_fallbacks" not in call_kwargs

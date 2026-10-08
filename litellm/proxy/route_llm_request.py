@@ -648,7 +648,6 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             "enable_tag_filtering",
         ]
 
-        # Merge override settings into data (only if set, and not already set in request)
         for key in per_request_settings:
             if override_settings.get(key) is not None and key not in data:
                 data[key] = override_settings[key]
