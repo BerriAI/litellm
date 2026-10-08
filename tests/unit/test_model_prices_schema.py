@@ -56,6 +56,15 @@ class _CopilotEndpointRow(BaseModel):
     supported_endpoints: tuple[str, ...]
 
 
+class _CopilotThinkingCapabilities(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    supports_reasoning: bool | None = None
+    supports_adaptive_thinking: bool | None = None
+    supports_legacy_thinking: bool | None = None
+    thinking_always_on: bool | None = None
+
+
 def _copilot_endpoint_rows(path: Path) -> Mapping[str, _CopilotEndpointRow]:
     prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
     return MappingProxyType(
@@ -67,9 +76,25 @@ def _copilot_endpoint_rows(path: Path) -> Mapping[str, _CopilotEndpointRow]:
     )
 
 
+def _thinking_capabilities(prices: Mapping[str, JsonValue], key: str) -> _CopilotThinkingCapabilities:
+    return _CopilotThinkingCapabilities.model_validate(prices[key])
+
+
 def _github_copilot_catalog_rows(path: Path) -> Mapping[str, JsonValue]:
     prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
     return MappingProxyType({key: value for key, value in prices.items() if key.startswith("github_copilot/")})
+
+
+_THINKING_KEYS: Final[tuple[str, ...]] = (
+    "supports_reasoning",
+    "supports_adaptive_thinking",
+    "supports_legacy_thinking",
+    "thinking_always_on",
+)
+
+
+def _anthropic_counterpart(key: str) -> str:
+    return key.removeprefix("github_copilot/").removesuffix("-fast").replace(".", "-")
 
 
 @pytest.mark.parametrize(("path",), [(PRICES_PATH,), (BACKUP_PRICES_PATH,)], ids=("main", "backup"))
@@ -94,6 +119,28 @@ def test_github_copilot_rows_resolve_through_get_model_info() -> None:
     assert {
         key: (litellm.get_model_info(key)["mode"], litellm.get_model_info(key)["max_input_tokens"]) for key in rows
     } == {key: (row.mode, row.max_input_tokens) for key, row in rows.items()}
+
+
+def test_github_copilot_messages_claude_rows_keep_their_anthropic_thinking_capabilities() -> None:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(PRICES_PATH.read_bytes())
+    claude_rows: Final = tuple(
+        key
+        for key, row in _copilot_endpoint_rows(PRICES_PATH).items()
+        if key.startswith("github_copilot/claude-") and "/v1/messages" in row.supported_endpoints
+    )
+    assert claude_rows
+    assert {key: _thinking_capabilities(prices, key) for key in claude_rows} == {
+        key: _thinking_capabilities(prices, _anthropic_counterpart(key)) for key in claude_rows
+    }
+    assert {
+        key: tuple(litellm.get_model_info(key).get(thinking_key) for thinking_key in _THINKING_KEYS)
+        for key in claude_rows
+    } == {
+        key: tuple(
+            litellm.get_model_info(_anthropic_counterpart(key)).get(thinking_key) for thinking_key in _THINKING_KEYS
+        )
+        for key in claude_rows
+    }
 
 
 def test_committed_schema_matches_generator_output(prices: dict, committed_schema: dict):

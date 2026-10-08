@@ -31308,10 +31308,13 @@
             "/v1/chat/completions",
             "/v1/messages"
         ],
+        "supports_adaptive_thinking": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "thinking_always_on": true
     },
     "github_copilot/claude-fable-5.1": {
         "litellm_provider": "github_copilot",
@@ -31323,10 +31326,13 @@
             "/v1/chat/completions",
             "/v1/messages"
         ],
+        "supports_adaptive_thinking": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "thinking_always_on": true
     },
     "github_copilot/claude-haiku-4.5": {
         "cache_creation_input_token_cost": 1.25e-06,
@@ -31355,10 +31361,13 @@
             "/v1/chat/completions",
             "/v1/messages"
         ],
+        "supports_adaptive_thinking": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "thinking_always_on": false
     },
     "github_copilot/claude-opus-4.8": {
         "litellm_provider": "github_copilot",
@@ -31370,8 +31379,10 @@
             "/v1/chat/completions",
             "/v1/messages"
         ],
+        "supports_adaptive_thinking": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_vision": true
     },
@@ -31385,8 +31396,10 @@
             "/v1/chat/completions",
             "/v1/messages"
         ],
+        "supports_adaptive_thinking": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_vision": true
     },
@@ -31400,8 +31413,10 @@
             "/v1/chat/completions",
             "/v1/messages"
         ],
+        "supports_adaptive_thinking": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_vision": true
     },
@@ -31415,10 +31430,13 @@
             "/v1/chat/completions",
             "/v1/messages"
         ],
+        "supports_adaptive_thinking": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "thinking_always_on": true
     },
     "github_copilot/claude-sonnet-5": {
         "litellm_provider": "github_copilot",
@@ -31430,8 +31448,10 @@
             "/v1/chat/completions",
             "/v1/messages"
         ],
+        "supports_adaptive_thinking": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_vision": true
     },
@@ -31445,10 +31465,13 @@
             "/v1/chat/completions",
             "/v1/messages"
         ],
+        "supports_adaptive_thinking": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "thinking_always_on": true
     },
     "github_copilot/gemini-3.7-flash": {
         "litellm_provider": "github_copilot",
