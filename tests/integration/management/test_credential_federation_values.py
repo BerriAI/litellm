@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
+from itertools import product
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, TypeVar
@@ -43,7 +45,7 @@ from tests.integration._support.client import (
     string_value,
 )
 from tests.integration._support.database import read_rows
-from tests.integration._support.process import OwnedProxy, owned_proxy_process
+from tests.integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
 T = TypeVar("T")
@@ -562,7 +564,13 @@ class _Secrets:
         )
 
 
-_REMOVED_ENVIRONMENT: Final = ("ANTHROPIC_IDENTITY_TOKEN_FILE", "ANTHROPIC_API_KEY", "ANTHROPIC_API_BASE")
+_REMOVED_ENVIRONMENT: Final = (
+    "ANTHROPIC_IDENTITY_TOKEN_FILE",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_API_BASE",
+    "ANTHROPIC_FEDERATION_RULE_ID",
+    "ANTHROPIC_ORGANIZATION_ID",
+)
 
 
 def _secrets(directory: Path) -> _Secrets:
@@ -817,3 +825,388 @@ def test_worker_kill_mid_credential_burst(gateway: Gateway, tmp_path: Path) -> N
                     for name in landed:
                         _converged(survivor, name, _shape("token_file", f"fdrl-{name}"))
                     _stable(partial(_chat_outcome, survivor, model), lambda outcome: outcome == (200, True))
+
+
+_FAIL_CLOSED_HINT: Final = "Settings > Workload identity"
+_REFUSAL_CLIENTS: Final = (
+    "chat",
+    "chat_stream",
+    "chat_async",
+    "messages",
+    "messages_stream",
+    "responses",
+    "responses_stream",
+)
+_OWNED_PROXY_CELL_SECONDS: Final = 2 * graceful_stop_seconds() + 120
+
+
+@dataclass(frozen=True, slots=True)
+class _Misconfiguration:
+    reference: str
+    missing: tuple[str, ...]
+    blank: bool
+    expected: str
+
+    def values(self, rig: FederationRig, tag: str) -> dict[str, JsonValue]:
+        token: Final = (
+            str(rig.secrets.token_file)
+            if self.reference == "anthropic_identity_token_file"
+            else f"oidc/env/{_IDENTITY_TOKEN_VARIABLE}"
+        )
+        ids: Final = {"anthropic_federation_rule_id": f"fdrl-{tag}", "anthropic_organization_id": f"org-{tag}"}
+        kept: Final = {key: value for key, value in ids.items() if key not in self.missing}
+        blanked: Final = {key: "" for key in self.missing} if self.blank else {}
+        return {self.reference: token, **kept, **blanked}
+
+
+_MISCONFIGURED: Final[Mapping[str, _Misconfiguration]] = MappingProxyType(
+    {
+        "token_file_without_org": _Misconfiguration(
+            "anthropic_identity_token_file",
+            ("anthropic_organization_id",),
+            False,
+            "anthropic_identity_token_file is set, but anthropic_organization_id is not set",
+        ),
+        "token_file_without_rule": _Misconfiguration(
+            "anthropic_identity_token_file",
+            ("anthropic_federation_rule_id",),
+            False,
+            "anthropic_identity_token_file is set, but anthropic_federation_rule_id is not set",
+        ),
+        "inline_token_without_org": _Misconfiguration(
+            "anthropic_identity_token",
+            ("anthropic_organization_id",),
+            False,
+            "anthropic_identity_token is set, but anthropic_organization_id is not set",
+        ),
+        "inline_token_without_rule": _Misconfiguration(
+            "anthropic_identity_token",
+            ("anthropic_federation_rule_id",),
+            False,
+            "anthropic_identity_token is set, but anthropic_federation_rule_id is not set",
+        ),
+        "token_file_without_ids": _Misconfiguration(
+            "anthropic_identity_token_file",
+            ("anthropic_federation_rule_id", "anthropic_organization_id"),
+            False,
+            "anthropic_identity_token_file is set, but anthropic_federation_rule_id and anthropic_organization_id"
+            " are not set",
+        ),
+        "token_file_blank_org": _Misconfiguration(
+            "anthropic_identity_token_file",
+            ("anthropic_organization_id",),
+            True,
+            "anthropic_identity_token_file is set, but anthropic_organization_id is not set",
+        ),
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _Misconfigured:
+    tag: str
+    credential: str
+    model: str
+    shape: _Misconfiguration
+
+
+def _misconfigured(rig: FederationRig, scenario: Scenario, shape: _Misconfiguration) -> _Misconfigured:
+    tag: Final = uuid.uuid4().hex
+    credential: Final = _create(rig.owned.gateway, scenario, shape.values(rig, tag))
+    model: Final = _federated_deployment(rig.owned.gateway, scenario, credential, rig.peer.wire.url)
+    return _Misconfigured(tag=tag, credential=credential, model=model, shape=shape)
+
+
+async def _async_chat(base_url: str, key: str, model: str, marker: str) -> None:
+    await openai.AsyncOpenAI(base_url=base_url + "/v1", api_key=key, max_retries=0).chat.completions.create(
+        model=model, messages=[{"role": "user", "content": prompt(marker)}]
+    )
+
+
+def _attempt(rig: FederationRig, client: str, model: str, marker: str) -> None:
+    base_url: Final = str(rig.owned.gateway.client.base_url)
+    key: Final = rig.owned.gateway.key
+    chat: Final = openai.OpenAI(base_url=base_url + "/v1", api_key=key, max_retries=0)
+    messages: Final = anthropic.Anthropic(base_url=base_url, api_key=key, max_retries=0)
+    match client:
+        case "chat":
+            chat.chat.completions.create(model=model, messages=[{"role": "user", "content": prompt(marker)}])
+        case "chat_stream":
+            for _ in chat.chat.completions.create(
+                model=model, messages=[{"role": "user", "content": prompt(marker)}], stream=True
+            ):
+                pass
+        case "chat_async":
+            asyncio.run(_async_chat(base_url, key, model, marker))
+        case "messages":
+            messages.messages.create(model=model, max_tokens=64, messages=[{"role": "user", "content": prompt(marker)}])
+        case "messages_stream":
+            with messages.messages.stream(
+                model=model, max_tokens=64, messages=[{"role": "user", "content": prompt(marker)}]
+            ) as stream:
+                stream.get_final_message()
+        case "responses":
+            chat.responses.create(model=model, input=prompt(marker))
+        case "responses_stream":
+            for _ in chat.responses.create(model=model, input=prompt(marker), stream=True):
+                pass
+        case _:
+            pytest.fail(f"unknown client {client!r}")
+
+
+def _refusal(rig: FederationRig, client: str, model: str, marker: str) -> tuple[int, str]:
+    try:
+        _attempt(rig, client, model, marker)
+    except (openai.APIStatusError, anthropic.APIStatusError) as error:
+        return error.status_code, str(error)
+    pytest.fail(f"{client} succeeded against the misconfigured deployment {model}")
+
+
+def _assert_names_missing_id(message: str, shape: _Misconfiguration) -> None:
+    assert shape.expected in message, message
+    assert _FAIL_CLOSED_HINT in message, message
+
+
+def _assert_fails_closed(outcome: tuple[int, str], shape: _Misconfiguration) -> None:
+    status, message = outcome
+    assert status == 401, message
+    _assert_names_missing_id(message, shape)
+
+
+def _assert_peer_untouched(rig: FederationRig, *fragments: str) -> None:
+    bodies: Final = tuple(request.body.decode() for request in rig.peer.requests())
+    touched: Final = tuple(body for body in bodies if any(fragment in body for fragment in fragments))
+    assert touched == (), touched
+
+
+@pytest.mark.timeout(240)
+@pytest.mark.parametrize("client", _REFUSAL_CLIENTS)
+@pytest.mark.parametrize("shape", tuple(_MISCONFIGURED))
+def test_legacy_reference_without_ids_fails_closed_before_any_exchange(
+    federation: FederationRig, shape: str, client: str
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    with federation.owned.gateway.scenario() as scenario:
+        misconfigured: Final = _misconfigured(federation, scenario, _MISCONFIGURED[shape])
+        _deployments_visible(federation.owned.gateway, (misconfigured.model,))
+        _assert_fails_closed(_refusal(federation, client, misconfigured.model, marker), misconfigured.shape)
+        _assert_peer_untouched(federation, misconfigured.tag, marker)
+
+
+@pytest.mark.timeout(240)
+def test_file_upload_fails_closed_naming_the_missing_id(federation: FederationRig) -> None:
+    note: Final = uuid.uuid4().hex
+    with federation.owned.gateway.scenario() as scenario:
+        misconfigured: Final = _misconfigured(federation, scenario, _MISCONFIGURED["token_file_without_org"])
+        _deployments_visible(federation.owned.gateway, (misconfigured.model,))
+        response: Final = federation.owned.gateway.request_multipart(
+            "/v1/files",
+            {"purpose": "user_data", "model": misconfigured.model},
+            {"file": ("notes.jsonl", json.dumps({"note": note}).encode(), "application/jsonl")},
+        )
+        _assert_fails_closed((response.status_code, response.text), misconfigured.shape)
+        _assert_peer_untouched(federation, misconfigured.tag, note)
+
+
+@pytest.mark.timeout(240)
+def test_skills_listing_fails_closed_naming_the_missing_id(federation: FederationRig) -> None:
+    with federation.owned.gateway.scenario() as scenario:
+        misconfigured: Final = _misconfigured(federation, scenario, _MISCONFIGURED["inline_token_without_rule"])
+        _deployments_visible(federation.owned.gateway, (misconfigured.model,))
+        response: Final = federation.owned.gateway.request(
+            "GET", "/v1/skills", params={"beta": "true", "model": misconfigured.model}, headers=_CLOSE
+        )
+        _assert_fails_closed((response.status_code, response.text), misconfigured.shape)
+        upstream: Final = federation.peer.requests()
+        listed: Final = tuple(request for request in upstream if request.target.startswith("/v1/skills"))
+        assert listed == (), listed
+        _assert_peer_untouched(federation, misconfigured.tag)
+
+
+@pytest.mark.timeout(240)
+def test_health_report_names_the_missing_id(federation: FederationRig) -> None:
+    with federation.owned.gateway.scenario() as scenario:
+        misconfigured: Final = _misconfigured(federation, scenario, _MISCONFIGURED["token_file_without_rule"])
+        _deployments_visible(federation.owned.gateway, (misconfigured.model,))
+        response: Final = federation.owned.gateway.request(
+            "GET", "/health", params={"model": misconfigured.model}, headers=_CLOSE
+        )
+        assert response.status_code == 503, response.text
+        unhealthy: Final = JSON_OBJECT.validate_json(response.content)["unhealthy_endpoints"]
+        assert isinstance(unhealthy, list) and len(unhealthy) == 1, response.text
+        _assert_names_missing_id(string_value(object_value(unhealthy[0])["error"]), misconfigured.shape)
+        _assert_peer_untouched(federation, misconfigured.tag)
+
+
+@pytest.mark.timeout(240)
+def test_connection_probe_names_the_missing_id(federation: FederationRig) -> None:
+    with federation.owned.gateway.scenario() as scenario:
+        misconfigured: Final = _misconfigured(federation, scenario, _MISCONFIGURED["inline_token_without_org"])
+        _deployments_visible(federation.owned.gateway, (misconfigured.model,))
+        response: Final = federation.owned.gateway.request(
+            "POST",
+            "/health/test_connection",
+            {
+                "litellm_params": {
+                    "model": _MODEL,
+                    "api_base": federation.peer.wire.url,
+                    "litellm_credential_name": misconfigured.credential,
+                },
+                "mode": "chat",
+            },
+            headers=_CLOSE,
+        )
+        assert response.status_code == 200, response.text
+        assert JSON_OBJECT.validate_json(response.content)["status"] == "error", response.text
+        _assert_names_missing_id(response.text, misconfigured.shape)
+        _assert_peer_untouched(federation, misconfigured.tag)
+
+
+@pytest.mark.timeout(240)
+def test_static_key_beside_a_stray_token_reference_still_wins(federation: FederationRig) -> None:
+    tag: Final = uuid.uuid4().hex
+    marker: Final = uuid.uuid4().hex
+    api_key: Final = f"sk-ant-api03-{tag}"
+    owned: Final = federation.owned
+    with owned.gateway.scenario() as scenario:
+        credential: Final = _create(
+            owned.gateway,
+            scenario,
+            {
+                "api_key": api_key,
+                "anthropic_identity_token_file": str(federation.secrets.token_file),
+                "anthropic_federation_rule_id": f"fdrl-{tag}",
+            },
+        )
+        model: Final = _federated_deployment(owned.gateway, scenario, credential, federation.peer.wire.url)
+        _deployments_visible(owned.gateway, (model,))
+        _call(federation, "chat", model, marker)
+        upstream: Final = federation.peer.requests()
+        sent: Final = tuple(
+            request for request in upstream if request.target == "/v1/messages" and marker in request.body.decode()
+        )
+        assert len(sent) == 1, upstream
+        assert sent[0].headers.get("x-api-key") == api_key, sent[0].headers
+        assert "authorization" not in sent[0].headers, sent[0].headers
+        _assert_peer_untouched(federation, tag)
+
+
+@pytest.mark.timeout(240)
+def test_blank_token_file_reference_is_unset_and_the_ambient_token_federates(federation: FederationRig) -> None:
+    rule_id: Final = f"fdrl-blank-{uuid.uuid4().hex}"
+    marker: Final = uuid.uuid4().hex
+    owned: Final = federation.owned
+    with owned.gateway.scenario() as scenario:
+        credential: Final = _create(owned.gateway, scenario, {**_ids(rule_id), "anthropic_identity_token_file": ""})
+        model: Final = _federated_deployment(owned.gateway, scenario, credential, federation.peer.wire.url)
+        _deployments_visible(owned.gateway, (model,))
+        _call(federation, "chat", model, marker)
+        grants: Final = tuple(
+            JSON_OBJECT.validate_json(request.body)
+            for request in federation.peer.requests()
+            if request.target == "/v1/oauth/token"
+        )
+        mine: Final = tuple(grant for grant in grants if grant["federation_rule_id"] == rule_id)
+        assert mine, grants
+        assert all(grant["assertion"] == federation.secrets.environment_token for grant in mine), mine
+
+
+def test_unauthenticated_call_is_refused_before_the_credential_is_read(federation: FederationRig) -> None:
+    owned: Final = federation.owned
+    marker: Final = uuid.uuid4().hex
+    with owned.gateway.scenario() as scenario:
+        entry: Final = _misconfigured(federation, scenario, _MISCONFIGURED["token_file_without_org"])
+        _deployments_visible(owned.gateway, (entry.model,))
+        refused: Final = owned.gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": entry.model, "messages": [{"role": "user", "content": prompt(marker)}]},
+            key=f"sk-not-a-key-{marker}",
+            headers=_CLOSE,
+        )
+        assert refused.status_code == 401, refused.text
+        assert _FAIL_CLOSED_HINT not in refused.text, refused.text
+        _assert_fails_closed(_refusal(federation, "chat", entry.model, uuid.uuid4().hex), entry.shape)
+        _assert_peer_untouched(federation, entry.tag, marker)
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+def test_environment_organization_id_completes_a_legacy_reference(gateway: Gateway, tmp_path: Path) -> None:
+    directory: Final = tmp_path.resolve()
+    secrets: Final = _secrets(directory)
+    tag: Final = uuid.uuid4().hex
+    organization: Final = f"org-env-{tag}"
+    rule_id: Final = f"fdrl-{tag}"
+    marker: Final = uuid.uuid4().hex
+    with wire_server(_federation_peer) as wire:
+        with owned_proxy_process(
+            gateway,
+            directory,
+            {**secrets.overrides(), "ANTHROPIC_ORGANIZATION_ID": organization},
+            remove_environment=_REMOVED_ENVIRONMENT,
+            workers=2,
+        ) as owned:
+            with owned.gateway.scenario() as scenario:
+                credential: Final = _create(
+                    owned.gateway,
+                    scenario,
+                    {"anthropic_identity_token_file": str(secrets.token_file), "anthropic_federation_rule_id": rule_id},
+                )
+                model: Final = _federated_deployment(owned.gateway, scenario, credential, wire.url)
+                _deployments_visible(owned.gateway, (model,))
+                response: Final = _chat(owned.gateway, model, marker)
+                assert response.status_code == 200, response.text
+                upstream: Final = wire.drain()
+                grants: Final = tuple(
+                    JSON_OBJECT.validate_json(request.body)
+                    for request in upstream
+                    if request.target == "/v1/oauth/token"
+                )
+                mine: Final = tuple(grant for grant in grants if grant["federation_rule_id"] == rule_id)
+                assert mine, upstream
+                assert all(grant["organization_id"] == organization for grant in mine), mine
+                assert all(grant["assertion"] == secrets.token_file.read_text() for grant in mine), mine
+
+
+@pytest.mark.timeout(240)
+def test_mixed_burst_fails_closed_without_disturbing_healthy_federation(federation: FederationRig) -> None:
+    owned: Final = federation.owned
+    shapes: Final = tuple(_MISCONFIGURED.values())
+    healthy: Final = tuple(product(SOURCES, CLIENTS))
+    with owned.gateway.scenario() as scenario:
+        misconfigured: Final = tuple(
+            _misconfigured(federation, scenario, shapes[index % len(shapes)]) for index in range(12)
+        )
+        _deployments_visible(owned.gateway, tuple(entry.model for entry in misconfigured))
+        control: Final = scenario.model()
+        serial_markers: Final = tuple(uuid.uuid4().hex for _ in _REFUSAL_CLIENTS)
+        for client, marker in zip(_REFUSAL_CLIENTS, serial_markers, strict=True):
+            _assert_fails_closed(_refusal(federation, client, misconfigured[0].model, marker), misconfigured[0].shape)
+        refused_markers: Final = tuple(uuid.uuid4().hex for _ in misconfigured)
+        healthy_markers: Final = tuple(uuid.uuid4().hex for _ in healthy)
+
+        def refuse(index: int) -> tuple[int, str]:
+            client: Final = _REFUSAL_CLIENTS[index % len(_REFUSAL_CLIENTS)]
+            return _refusal(federation, client, misconfigured[index].model, refused_markers[index])
+
+        def federate(index: int) -> None:
+            source, client = healthy[index]
+            _call(federation, client, federation.deployments[source], healthy_markers[index])
+
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            refusals: Final = tuple(pool.submit(refuse, index) for index in range(len(misconfigured)))
+            federations: Final = tuple(pool.submit(federate, index) for index in range(len(healthy)))
+            controls: Final = tuple(pool.submit(_chat_outcome, owned.gateway, control) for _ in range(4))
+            outcomes: Final = tuple(future.result() for future in refusals)
+            for future in federations:
+                future.result()
+            assert tuple(future.result()[0] for future in controls) == (200,) * 4
+        for entry, outcome in zip(misconfigured, outcomes, strict=True):
+            _assert_fails_closed(outcome, entry.shape)
+        sent: Final = tuple(
+            request.body.decode() for request in federation.peer.requests() if request.target == "/v1/messages"
+        )
+        for marker in healthy_markers:
+            assert sum(marker in body for body in sent) == 1, marker
+        _assert_peer_untouched(federation, *serial_markers, *refused_markers, *(entry.tag for entry in misconfigured))
+        assert owned.gateway.request("GET", "/health/liveliness").status_code == 200
