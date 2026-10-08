@@ -11,6 +11,11 @@
         },
         "url": {
           "type": "string"
+        },
+        "user": {
+          "description": "Who started the conversation, e.g. the Slack user's email.",
+          "type": "string",
+          "x-python-optional": true
         }
       },
       "required": [

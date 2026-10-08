@@ -116,6 +116,8 @@ pub struct TraceSpansRow {
     pub source_url: String,
     #[serde(default)]
     pub source_title: String,
+    #[serde(default)]
+    pub source_user: String,
     pub team_id: String,
     pub api_key_hash: String,
     pub user_id: String,

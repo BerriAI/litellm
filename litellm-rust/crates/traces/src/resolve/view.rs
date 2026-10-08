@@ -146,6 +146,7 @@ fn source(row: &TraceSpansRow) -> Option<RunSource> {
             .unwrap_or(RunSourceType::Custom),
         url: row.source_url.clone(),
         title: row.source_title.clone(),
+        user: row.source_user.clone(),
     })
 }
 

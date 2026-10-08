@@ -5,6 +5,15 @@ import { scenarios, type Scenario } from "./scenarios";
 
 const executionId = (traceId: string) => btoa(JSON.stringify(["traces", "", traceId]));
 const iso = (time: number) => new Date(time).toISOString();
+const DEMO_ASKERS = ["maya@acme.dev", "jordan@acme.dev", "priya@acme.dev"];
+
+/** Demo runs start from a Slack thread so the run header shows who asked and where. */
+const demoSource = (scene: Scenario, index: number): NonNullable<Trace["summary"]["source"]> => ({
+  type: "slack",
+  url: `https://acme.slack.com/archives/C0DEMO/p${1_700_000_000_000 + index}`,
+  title: scene.question,
+  user: DEMO_ASKERS[index % DEMO_ASKERS.length],
+});
 
 function makeTrace(scene: Scenario, index: number, now: number) {
   const traceId = (index + 1).toString(16).padStart(32, "0");
@@ -79,6 +88,7 @@ function makeTrace(scene: Scenario, index: number, now: number) {
       status: scene.failed ? "error" : "ok",
       tool_calls: toolCount,
       trace_id: traceId,
+      source: demoSource(scene, index),
     },
     agents: [
       {
