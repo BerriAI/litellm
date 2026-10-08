@@ -3,6 +3,7 @@ import type { ApiClient } from "@/lib/http/client";
 import { getAuthHeaderName } from "@/lib/http/runtime";
 import type { Client } from "openapi-fetch";
 import type { components, paths } from "@/lib/http/schema";
+import { liveDatasetsApi, type DatasetsApi } from "../datasets/client";
 import type {
   ActivitySelection,
   AnalysisModelInfo,
@@ -12,6 +13,7 @@ import type {
   RunWindow,
   Sample,
   Settings,
+  SignalConfig,
   WorkerCreated,
 } from "../model/types";
 
@@ -45,6 +47,7 @@ export interface AnalysisKeyRequest {
 export interface LensApi {
   /** Partitions query caches between backends (one token, or the demo). */
   readonly scope: string;
+  readonly datasets: DatasetsApi;
   lenses(): Promise<LensList>;
   activity(): Promise<components["schemas"]["ActivityAvailability"]>;
   runs(lensId: string, offset: number): Promise<Job[]>;
@@ -60,6 +63,8 @@ export interface LensApi {
   saveLens(id: string | undefined, settings: Settings): Promise<Lens>;
   startRun(lensId: string, request?: RunWindow): Promise<void>;
   watchAll(): Promise<components["schemas"]["WatchAllResult"]>;
+  signalConfig(): Promise<SignalConfig>;
+  saveSignalConfig(config: SignalConfig): Promise<SignalConfig>;
   cancelRun(lensId: string): Promise<void>;
   reviewFinding(lensId: string, findingId: string, status: FindingStatus, reason: string): Promise<void>;
   registerWorker(analysisKeyId: string): Promise<WorkerCreated>;
@@ -87,6 +92,7 @@ export function liveLensApi(client: LensClient, apiClient: ApiClient, accessToke
   const worker = (worker_id: string) => ({ headers, params: { path: { worker_id } } });
   return {
     scope: accessToken,
+    datasets: liveDatasetsApi(client, apiClient, accessToken),
     lenses: () => required(client.GET("/lens", { headers })),
     activity: () => required(client.GET("/lens/activity/available", { headers })),
     runs: (lensId, offset) =>
@@ -165,6 +171,8 @@ export function liveLensApi(client: LensClient, apiClient: ApiClient, accessToke
       ),
     startRun: (lensId, request = {}) => sent(client.POST("/lens/{lens_id}/runs", { ...lens(lensId), body: request })),
     watchAll: () => required(client.POST("/lens/watch-all", { headers })),
+    signalConfig: () => required(client.GET("/lens/signals", { headers })),
+    saveSignalConfig: (config) => required(client.PUT("/lens/signals", { headers, body: config })),
     cancelRun: (lensId) => sent(client.POST("/lens/{lens_id}/cancel", lens(lensId))),
     reviewFinding: (lensId, findingId, status, reason) =>
       sent(
@@ -178,7 +186,7 @@ export function liveLensApi(client: LensClient, apiClient: ApiClient, accessToke
       required(
         client.POST("/lens/workers/register", {
           headers,
-          body: { name: "Lens worker", analysis_key_id: analysisKeyId },
+          body: { name: "Lens worker", analysis_key_id: analysisKeyId, managed: true },
         }),
       ),
     setWorkerBillingKey: (workerId, analysisKeyId) =>

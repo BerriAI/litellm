@@ -16,6 +16,7 @@ mod insert;
 pub mod query;
 mod query_access;
 mod reads;
+mod receipt;
 mod schema;
 mod span_batches;
 mod span_row;
@@ -32,6 +33,7 @@ pub use litellm_traces::{QueryScope, ReadQuery};
 pub use query::{QueryHelp, execute_read, query_help, query_sql};
 pub use query_access::QueryReaders;
 pub use reads::ClickHouseTraces;
+pub use receipt::trace_received;
 pub use schema::{
     NORMALIZED_FIELD_DEFINITIONS, NormalizedFieldDefinition, apply_migrations, ensure_schema,
     reconcile_retention, schema_statements,

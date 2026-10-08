@@ -16,6 +16,8 @@ from litellm.rust_bridge.trace.generated.models import (
     LensEvidenceParams,
     LensSampleParams,
     PartRow,
+    TraceAgentRow,
+    TraceAgentsParams,
 )
 from litellm.rust_bridge.trace.generated.responses import TraceSQLResponse
 from litellm.rust_bridge.trace.generated.types import ReadQueryName
@@ -25,6 +27,7 @@ from litellm.rust_bridge.trace.queries import (
     LENS_CONTENT,
     LENS_EVIDENCE,
     LENS_SAMPLE,
+    TRACE_AGENTS,
     ClickHouseSQLEnvelope,
     ParamsT,
     ReadQuery,
@@ -56,13 +59,13 @@ _EMPTY_TENANT: Final = Tenant("", "")
 
 
 class NativeStore(Protocol):
-    def __init__(self, config: "NativeConfig") -> None: ...
-
     def ensure_schema(self) -> Awaitable[None]: ...
 
     def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> Awaitable[None]: ...
 
-    def ingest(self, payload: bytes, content_type: str | None, tenant: Mapping[str, str]) -> Awaitable[int]: ...
+    def ingest(
+        self, payload: bytes, content_type: str | None, tenant: Mapping[str, str], logs: bool = False
+    ) -> Awaitable[int]: ...
 
     def list_traces(
         self, scope: TraceScope, start_ms: int, end_ms: int, cursor: str | None, limit: int
@@ -162,7 +165,13 @@ def _validate_query_response(adapter: TypeAdapter[_ResponseT], value: JsonValue)
 
 
 class ClickHouseStorage:
-    def __init__(self, config: TraceStorageConfig) -> None:
+    def __init__(self, config: TraceStorageConfig | NativeStore) -> None:
+        self._native: Final = self._transport(config)
+
+    @staticmethod
+    def _transport(config: TraceStorageConfig | NativeStore) -> NativeStore:
+        if not isinstance(config, TraceStorageConfig):
+            return config
         native: Final = _native()
         validated: Final = native.NativeTraceConfig(
             config.database,
@@ -170,7 +179,7 @@ class ClickHouseStorage:
             config.retention_days,
             config.max_attribute_value_bytes,
         )
-        self._native: Final = native.NativeTraceStorage(validated)
+        return native.NativeTraceStorage(validated)
 
     async def ensure_schema(self) -> None:
         await self._native.ensure_schema()
@@ -178,8 +187,8 @@ class ClickHouseStorage:
     async def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> None:
         await self._native.insert_rows(table, rows)
 
-    async def ingest(self, payload: bytes, content_type: str | None, tenant: Tenant) -> int:
-        return await self._native.ingest(payload, content_type, asdict(tenant))
+    async def ingest(self, payload: bytes, content_type: str | None, tenant: Tenant, logs: bool = False) -> int:
+        return await self._native.ingest(payload, content_type, asdict(tenant), logs)
 
     async def list_traces(
         self,
@@ -226,6 +235,9 @@ class ClickHouseStorage:
     async def query_help(self, scope: QueryScope, secret: str) -> TraceQueryHelp:
         result: Final = await self._native.query_help(scope, secret)
         return _validate_query_response(_HELP_RESPONSE, result)
+
+    async def trace_agents(self, parameters: TraceAgentsParams) -> tuple[TraceAgentRow, ...]:
+        return await self.query(TRACE_AGENTS, parameters)
 
     async def lens_sample(self, parameters: LensSampleParams) -> tuple[ExecutionRow, ...]:
         return await self.query(LENS_SAMPLE, parameters)

@@ -8,8 +8,8 @@ import { useMutation } from "@tanstack/react-query";
 import { Code, Info, LoaderCircle, RotateCcw, Send } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { makeSystemOneRequest } from "../../llm_calls/system_one";
-import { SYSTEM_ONE_EXAMPLE } from "./lib/example";
-import type { SystemOneRequest } from "./lib/schemas";
+import { DECISIONS_EXAMPLE, SYSTEM_ONE_EXAMPLE } from "./lib/example";
+import type { DecisionEndpoint, PlaygroundRequest } from "./lib/schemas";
 import JsonEditor from "./JsonEditor";
 import QuestionBreakdown from "./QuestionBreakdown";
 import ResponseView from "./ResponseView";
@@ -23,12 +23,14 @@ interface SystemOneUIProps {
 type ApiKeySource = "session" | "custom";
 
 interface SystemOneSendVariables {
-  payload: SystemOneRequest;
+  payload: PlaygroundRequest;
+  endpoint: DecisionEndpoint;
   apiKey: string;
   signal: AbortSignal;
 }
 
 const EXAMPLE_PAYLOAD = JSON.stringify(SYSTEM_ONE_EXAMPLE, null, 2);
+const DECISIONS_EXAMPLE_PAYLOAD = JSON.stringify(DECISIONS_EXAMPLE, null, 2);
 const DECISION_MODELS_DISCUSSION_URL = "https://github.com/BerriAI/litellm/discussions/44231";
 
 function getCustomProxyBaseUrl(): string | undefined {
@@ -38,15 +40,21 @@ function getCustomProxyBaseUrl(): string | undefined {
 export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation = false }: SystemOneUIProps) {
   const [apiKeySource, setApiKeySource] = useState<ApiKeySource>(disabledPersonalKeyCreation ? "custom" : "session");
   const [customApiKey, setCustomApiKey] = useState("");
-  const [rawPayload, setRawPayload] = useState(EXAMPLE_PAYLOAD);
+  const [endpoint, setEndpoint] = useState<DecisionEndpoint>("/typesafe/v1/systemone");
+  const [payloads, setPayloads] = useState<Record<DecisionEndpoint, string>>({
+    "/v1/systemone": DECISIONS_EXAMPLE_PAYLOAD,
+    "/typesafe/v1/systemone": EXAMPLE_PAYLOAD,
+  });
+  const rawPayload = payloads[endpoint];
+  const examplePayload = endpoint === "/v1/systemone" ? DECISIONS_EXAMPLE_PAYLOAD : EXAMPLE_PAYLOAD;
   const activeController = useRef<AbortController | null>(null);
-  const validation = useMemo(() => validateSystemOnePayload(rawPayload), [rawPayload]);
+  const validation = useMemo(() => validateSystemOnePayload(rawPayload, endpoint), [rawPayload, endpoint]);
   const effectiveApiKey = apiKeySource === "session" ? accessToken || "" : customApiKey.trim();
   const hasSyntaxError = validation.issues.some((issue) => issue.path === "syntax");
 
   const systemOne = useMutation({
-    mutationFn: ({ payload, apiKey, signal }: SystemOneSendVariables) =>
-      makeSystemOneRequest(payload, apiKey, getCustomProxyBaseUrl(), signal),
+    mutationFn: ({ payload, apiKey, signal, endpoint }: SystemOneSendVariables) =>
+      makeSystemOneRequest(payload, apiKey, getCustomProxyBaseUrl(), { signal, endpoint }),
   });
   const isLoading = systemOne.isPending;
   const { reset: resetSystemOne } = systemOne;
@@ -68,7 +76,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
   function handlePayloadChange(value: string) {
     if (value !== rawPayload) {
       clearRequestState();
-      setRawPayload(value);
+      setPayloads((current) => ({ ...current, [endpoint]: value }));
     }
   }
 
@@ -85,12 +93,35 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
     clearRequestState();
     const controller = new AbortController();
     activeController.current = controller;
-    systemOne.mutate({ payload: validation.payload, apiKey: effectiveApiKey, signal: controller.signal });
+    const variables = { payload: validation.payload, apiKey: effectiveApiKey, signal: controller.signal, endpoint };
+    systemOne.mutate(variables);
   }
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-auto p-4 xl:overflow-hidden">
       <section className="grid gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-medium text-muted-foreground">Endpoint</span>
+          <Select
+            value={endpoint}
+            onValueChange={(value) => {
+              if (value === "/v1/systemone" || value === "/typesafe/v1/systemone") {
+                clearRequestState();
+                setEndpoint(value);
+              }
+            }}
+          >
+            <SelectTrigger className="w-80" aria-label="Decision endpoint">
+              <SelectValue>
+                {endpoint === "/v1/systemone" ? "System One · /v1/systemone" : "TypeSafe · /typesafe/v1/systemone"}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="/v1/systemone">System One · /v1/systemone</SelectItem>
+              <SelectItem value="/typesafe/v1/systemone">TypeSafe · /typesafe/v1/systemone</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium text-muted-foreground">Virtual Key Source</span>
@@ -127,8 +158,8 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
           <div className="ml-auto flex items-center gap-2">
             <Button
               variant="outline"
-              onClick={() => handlePayloadChange(EXAMPLE_PAYLOAD)}
-              disabled={rawPayload === EXAMPLE_PAYLOAD}
+              onClick={() => handlePayloadChange(examplePayload)}
+              disabled={rawPayload === examplePayload}
             >
               <RotateCcw />
               Reset example
@@ -148,12 +179,15 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
             </Button>
           </div>
         </div>
-        <Alert role="note" aria-label="System One beta notice">
+        <Alert role="note" aria-label="Decision endpoint notice">
           <Info />
-          <AlertTitle>Beta: TypeSafe Jev only for now</AlertTitle>
+          <AlertTitle>
+            {endpoint === "/v1/systemone" ? "Decision models · System One" : "TypeSafe Jev · System One"}
+          </AlertTitle>
           <AlertDescription>
-            Sends System One requests (choice, noul, score) through /typesafe/v1/systemone and requires TYPESAFE_API_KEY
-            on the proxy. Support for more System One-compatible models is in progress.{" "}
+            {endpoint === "/v1/systemone"
+              ? "Sends choice, noul, and score questions through /v1/systemone. Replace the example model with a decision model configured on your proxy, or omit model to use the proxy's configured default."
+              : "Sends requests through /typesafe/v1/systemone and requires TYPESAFE_API_KEY on the proxy."}{" "}
             <a href={DECISION_MODELS_DISCUSSION_URL} target="_blank" rel="noopener noreferrer" className="underline">
               Give us feedback on what you want for decision models
             </a>

@@ -6,16 +6,17 @@ import traceback
 from typing import Final
 
 import httpx
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
-from litellm.secret_managers.dispatch import get_secret_from_manager
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
 )
+from litellm.secret_managers.secret_manager_handler import get_secret_from_manager
+from litellm.types.llms.base import LiteLLMBaseModel
 
 oidc_cache: Final = DualCache()
 
@@ -25,7 +26,7 @@ _PARSED_LITERAL: Final = TypeAdapter(object)
 _OIDC_TOKEN_EXPIRY_MARGIN_SECONDS: Final = 60
 
 
-class _OidcTokenClaims(BaseModel):
+class _OidcTokenClaims(LiteLLMBaseModel):
     exp: float | None = None
 
 

@@ -25,6 +25,7 @@ from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    validate_arize_otlp_protocol_value,
     validate_langfuse_environment_value,
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
@@ -34,7 +35,11 @@ from litellm.types.agents import AgentCaller, AgentResponse
 from litellm.types.integrations.compression_interception import (
     CompressionSavingsMetadata,
 )
+from litellm.types.integrations.otel_span_attributes import (
+    SpanAttributes as SpanAttributes,  # noqa: PLC0414  # public re-export
+)
 from litellm.types.integrations.slack_alerting import AlertType
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     ResponsesAPIResponse,
@@ -52,6 +57,9 @@ from litellm.types.mcp import (
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 from litellm.types.proxy.agent_identity import ManagedAgentContext
+from litellm.types.proxy.auth.special_headers import (
+    SpecialHeaders as SpecialHeaders,  # noqa: PLC0414  # public re-export
+)
 from litellm.types.proxy.carried_budget_state import (
     OrgBudgetSnapshot,
     TeamBudgetSnapshot,
@@ -59,7 +67,7 @@ from litellm.types.proxy.carried_budget_state import (
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
-from litellm.types.router import RouterErrors, UpdateRouterConfig
+from litellm.types.router import AllowedModelRegion, RouterErrors, UpdateRouterConfig
 from litellm.types.router_weights import validate_router_settings_dict
 from litellm.types.secret_managers.main import KeyManagementSystem
 from litellm.types.utils import (
@@ -480,6 +488,8 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/search/{search_tool_name}",
         "/decisions",
         "/v1/decisions",
+        "/systemone",
+        "/v1/systemone",
         # OCR
         "/ocr",
         "/v1/ocr",
@@ -541,10 +551,13 @@ class LiteLLMRoutes(enum.Enum):
         "/lens/{lens_id}/executions/{execution_id}",
         "/lens/{lens_id}/cancel",
         "/lens/{lens_id}/findings/{finding_id}",
+        "/lens/feedback",
+        "/lens/feedback/summary",
         "/lens/preview/sample",
         "/lens/workers/register",
         "/lens/workers/{worker_id}",
         "/v1/traces",
+        "/v1/logs",
         "/v1/traces/query",
         "/v1/traces/query/help",
         "/v1/traces/{trace_id}",
@@ -844,6 +857,7 @@ class LiteLLMRoutes(enum.Enum):
             "/public/mcp_hub",
             "/public/skill_hub",
             "/public/litellm_model_cost_map",
+            "/moyai/connect/exchange",
         )
     )
 
@@ -1053,6 +1067,8 @@ class LiteLLMRoutes(enum.Enum):
     # updating this list — the default-allow behavior covers it automatically.
     admin_viewer_routes = (
         [
+            "/lens/traces/findings",
+            "/lens/feedback/summary",
             "/user/list",
             "/user/available_users",
             "/user/available_roles",
@@ -1355,6 +1371,7 @@ class KeyRequestBase(GenerateRequestBase):
     enforced_params: list[str] | None = None
     allowed_routes: list | None = []
     allowed_passthrough_routes: list | None = None
+    denied_passthrough_routes: list[str] | None = None
     allowed_vector_store_indexes: list[AllowedVectorStoreIndexItem] | None = None
     rpm_limit_type: Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"] | None = (
         None  # raise an error if 'guaranteed_throughput' is set and we're overallocating rpm
@@ -1664,6 +1681,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     source_url: str | None = None
     timeout: float | None = None
     max_concurrent_requests: int | None = None
+    rpm: int | None = Field(default=None, ge=0)
     # BYOM submission fields — set by the endpoint, not by the caller.
     # Any caller-provided values are silently overridden before persistence.
     approval_status: str | None = Field(
@@ -1771,6 +1789,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     source_url: str | None = None
     timeout: float | None = None
     max_concurrent_requests: int | None = None
+    rpm: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def validate_protocol_transport(self) -> "UpdateMCPServerRequest":
@@ -2062,9 +2081,6 @@ class DeleteUserRequest(LiteLLMPydanticObjectBase):
     user_ids: list[str]  # required
 
 
-AllowedModelRegion = Literal["eu", "us"]
-
-
 class BudgetNewRequest(LiteLLMPydanticObjectBase):
     budget_id: str | None = Field(default=None, description="The unique budget id.")
     max_budget: float | None = Field(
@@ -2205,6 +2221,7 @@ class NewTeamRequest(TeamBase):
     prompts: list[str] | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
     allowed_passthrough_routes: list | None = None
+    denied_passthrough_routes: list[str] | None = None
     disable_global_guardrails: bool | None = None
     secret_manager_settings: dict | None = None
     model_rpm_limit: dict[str, int] | None = None
@@ -2286,6 +2303,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     team_member_tpm_limit: int | None = None
     team_member_key_duration: str | None = None
     allowed_passthrough_routes: list | None = None
+    denied_passthrough_routes: list[str] | None = None
     secret_manager_settings: dict | None = None
     prompts: list[str] | None = None
     model_rpm_limit: dict[str, int] | None = None
@@ -2377,6 +2395,8 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
                 validate_langfuse_environment_value(callback_vars[key])
             if key == "langfuse_span_scope":
                 validate_langfuse_span_scope_value(callback_vars[key])
+            if key == "arize_otlp_protocol":
+                validate_arize_otlp_protocol_value(callback_vars[key])
         return values
 
 
@@ -2594,7 +2614,7 @@ class CallbackDelete(LiteLLMPydanticObjectBase):
     callback_name: str
 
 
-class FieldDetail(BaseModel):
+class FieldDetail(LiteLLMBaseModel):
     field_name: str
     field_type: str
     field_description: str
@@ -2721,6 +2741,9 @@ class ScheduledJobStaggerSettings(LiteLLMPydanticObjectBase):
             "0 pins a job to its unshifted schedule"
         ),
     )
+
+
+DEFAULT_RESPONSES_WEBSOCKET_SESSION_LIMIT_SECONDS: Final[float] = 3600.0
 
 
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
@@ -2889,6 +2912,21 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="max batch input file size in MB for /v1/files uploads with purpose=batch, if a file is larger than this size it will be rejected before being forwarded to the provider",
     )
+    max_batch_file_records: int | None = Field(
+        None,
+        gt=0,
+        description="max records (non-blank lines) per batch input file for /v1/files uploads with purpose=batch, applied per key. A key's metadata can override it and a team's metadata adds a team cap on top, both set by a proxy admin; the lower of the key's value and the team's value wins. Unset means no limit",
+    )
+    max_batch_file_uploads_per_day: int | None = Field(
+        None,
+        gt=0,
+        description="max /v1/files uploads with purpose=batch per key (per user for JWT callers) per UTC day. A key's metadata can override it and a team's metadata adds a shared team cap, both set by a proxy admin. Unset means no limit",
+    )
+    max_file_downloads_per_minute: int | None = Field(
+        None,
+        gt=0,
+        description="max GET /v1/files/{file_id}/content calls per key (per user for JWT callers) per file per minute. A key's metadata can override it and a team's metadata adds a shared team cap, both set by a proxy admin. Unset means no limit",
+    )
     max_file_size_mb: int | None = Field(
         None,
         description="max file size in MB for /v1/files uploads, for any purpose, if a file is larger than this size it will be rejected before being forwarded to the provider",
@@ -2998,6 +3036,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.",
     )
+    vector_store_deny_by_default: bool = Field(
+        default=False,
+        description="When True, a vector store must be explicitly listed in object_permission.vector_stores: a virtual key needs its own grant plus its team's, a keyless team member needs the team's, and a user with neither needs their own. A missing permission record, an empty list, or an unresolved team grants nothing. Dashboard session keys are not yet covered",
+    )
+    search_tool_deny_by_default: bool = Field(
+        default=False,
+        description="When True, a search tool must be explicitly listed in object_permission.search_tools: a virtual key needs its own grant plus its team's, a keyless team member needs the team's, and a user with neither needs their own. A missing permission record, an empty list, or an unresolved team grants nothing, and the unregistered search fallback is denied. The master key and dashboard sessions are exempt",
+    )
     missing_session_id: Literal["generate", "reject", "omit"] | None = Field(
         None,
         description="What to do with LLM API requests that carry no session id (x-litellm-session-id header, metadata.session_id, etc.). 'generate' stamps one id into litellm_session_id, litellm_trace_id and metadata.session_id so SpendLogs and logging callbacks agree; 'reject' returns 400; 'omit' leaves SpendLogs.session_id null, matching callbacks such as Langfuse that only record a client-established metadata.session_id. Unset keeps the legacy behavior where SpendLogs falls back to the trace id while callbacks get no session id.",
@@ -3009,6 +3055,12 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     pass_through_request_timeout: float | None = Field(
         default=None,
         description="Default upstream request timeout in seconds for native and custom pass-through endpoints that use pass_through_request. Defaults to 600 when unset.",
+    )
+    responses_websocket_session_limit_seconds: float = Field(
+        default=DEFAULT_RESPONSES_WEBSOCKET_SESSION_LIMIT_SECONDS,
+        ge=60,
+        le=7200,
+        description="Maximum lifetime in seconds of a Responses API WebSocket session, measured from connection accept and covering the idle wait for the first response.create frame. Defaults to 3600, matching OpenAI's documented 60-minute WebSocket connection limit. Must be between 60 and 7200 seconds.",
     )
     pass_through_endpoints: list[PassThroughGenericEndpoint] | None = Field(
         default=None,
@@ -3132,6 +3184,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         ge=1,
         description="Number of trusted reverse proxies/load balancers in front of the gateway that append to X-Forwarded-For. When set (and mcp_trusted_proxy_ranges validates the direct peer), the client IP for MCP access control is read this many entries from the right of the chain instead of the spoofable leftmost value, defeating append-style X-Forwarded-For forgery.",
+    )
+    mcp_prefer_client_id_metadata_document: bool | None = Field(
+        None,
+        description="When true, a gateway-managed OAuth2 MCP server whose authorization server advertises Client ID Metadata Document support identifies itself with the gateway's public metadata document URL even when that authorization server also offers dynamic client registration. Requires a public HTTPS PROXY_BASE_URL the authorization server can fetch. Default false: dynamic client registration is used whenever the authorization server offers it, and the metadata document only when it does not.",
     )
     trusted_proxy_ranges: list[str] | None = Field(
         None,
@@ -3613,6 +3669,8 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     user_role: str | None = None
     spend: float = 0.0
     max_budget: float | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
     models: list[str] = []
     budget_duration: str | None = None
     budget_reset_at: datetime | None = None
@@ -3814,7 +3872,7 @@ class LiteLLM_ProjectTableCachedObj(LiteLLM_ProjectTable):
     last_refreshed_at: float | None = None
 
 
-class LiteLLM_UserTableFiltered(BaseModel):  # done to avoid exposing sensitive data
+class LiteLLM_UserTableFiltered(LiteLLMBaseModel):  # done to avoid exposing sensitive data
     user_id: str
     user_email: str | None = None
 
@@ -4282,66 +4340,6 @@ class SpendLogsPayload(TypedDict):
     litellm_call_id: ReadOnly[str | None]
 
 
-class SpanAttributes(str, enum.Enum):
-    # Note: We've taken this from opentelemetry-semantic-conventions-ai
-    # I chose to not add a new dependency to litellm for this
-
-    # Semantic Conventions for LLM requests, this needs to be removed after
-    # OpenTelemetry Semantic Conventions support Gen AI.
-    # Issue at https://github.com/open-telemetry/opentelemetry-python/issues/3868
-    # Refer to https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/llm-spans.md
-
-    LLM_SYSTEM = "gen_ai.system"
-    LLM_REQUEST_MODEL = "gen_ai.request.model"
-    LLM_REQUEST_MAX_TOKENS = "gen_ai.request.max_tokens"
-    LLM_REQUEST_TEMPERATURE = "gen_ai.request.temperature"
-    LLM_REQUEST_TOP_P = "gen_ai.request.top_p"
-    LLM_PROMPTS = "gen_ai.prompt"
-    LLM_COMPLETIONS = "gen_ai.completion"
-    LLM_RESPONSE_MODEL = "gen_ai.response.model"
-    LLM_USAGE_COMPLETION_TOKENS = "gen_ai.usage.completion_tokens"
-    LLM_USAGE_PROMPT_TOKENS = "gen_ai.usage.prompt_tokens"
-
-    # OTEL 1.38 attributes
-    GEN_AI_INPUT_MESSAGES = "gen_ai.input.messages"
-    GEN_AI_OUTPUT_MESSAGES = "gen_ai.output.messages"
-    GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
-    GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
-    GEN_AI_USAGE_TOTAL_TOKENS = "gen_ai.usage.total_tokens"
-    GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
-    GEN_AI_REQUEST_ID = "gen_ai.request.id"
-    GEN_AI_SYSTEM_INSTRUCTIONS = "gen_ai.system_instructions"
-    GEN_AI_RESPONSE_FINISH_REASONS = "gen_ai.response.finish_reasons"
-
-    LLM_TOKEN_TYPE = "gen_ai.token.type"
-    # To be added
-    # LLM_RESPONSE_FINISH_REASON = "gen_ai.response.finish_reasons"
-    # LLM_RESPONSE_ID = "gen_ai.response.id"
-
-    # LLM
-    LLM_REQUEST_TYPE = "llm.request.type"
-    LLM_USAGE_TOTAL_TOKENS = "llm.usage.total_tokens"
-    LLM_USAGE_TOKEN_TYPE = "llm.usage.token_type"
-    LLM_USER = "llm.user"
-    LLM_HEADERS = "llm.headers"
-    LLM_TOP_K = "llm.top_k"
-    LLM_IS_STREAMING = "llm.is_streaming"
-    LLM_FREQUENCY_PENALTY = "llm.frequency_penalty"
-    LLM_PRESENCE_PENALTY = "llm.presence_penalty"
-    LLM_CHAT_STOP_SEQUENCES = "llm.chat.stop_sequences"
-    LLM_REQUEST_FUNCTIONS = "llm.request.functions"
-    LLM_REQUEST_REPETITION_PENALTY = "llm.request.repetition_penalty"
-    LLM_RESPONSE_FINISH_REASON = "llm.response.finish_reason"
-    LLM_RESPONSE_STOP_REASON = "llm.response.stop_reason"
-    LLM_CONTENT_COMPLETION_CHUNK = "llm.content.completion.chunk"
-
-    # OpenAI
-    LLM_OPENAI_RESPONSE_SYSTEM_FINGERPRINT = "gen_ai.openai.system_fingerprint"
-    LLM_OPENAI_API_BASE = "gen_ai.openai.api_base"
-    LLM_OPENAI_API_VERSION = "gen_ai.openai.api_version"
-    LLM_OPENAI_API_TYPE = "gen_ai.openai.api_type"
-
-
 class ManagementEndpointLoggingPayload(LiteLLMPydanticObjectBase):
     route: str
     request_data: dict
@@ -4548,6 +4546,26 @@ class ProxyErrorTypes(str, enum.Enum):
     Organization does not have access to the vector store
     """
 
+    user_vector_store_access_denied = "user_vector_store_access_denied"
+    """
+    User does not have access to the vector store
+    """
+
+    key_search_tool_access_denied = "key_search_tool_access_denied"
+    """
+    Key does not have access to the search tool
+    """
+
+    team_search_tool_access_denied = "team_search_tool_access_denied"
+    """
+    Team does not have access to the search tool
+    """
+
+    user_search_tool_access_denied = "user_search_tool_access_denied"
+    """
+    User does not have access to the search tool
+    """
+
     team_member_already_in_team = "team_member_already_in_team"
     """
     Team member is already in team
@@ -4582,7 +4600,7 @@ class ProxyErrorTypes(str, enum.Enum):
 
     @classmethod
     def get_vector_store_access_error_type_for_object(
-        cls, object_type: Literal["key", "team", "org"]
+        cls, object_type: Literal["key", "team", "org", "user"]
     ) -> "ProxyErrorTypes":
         """
         Get the vector store access error type for object_type
@@ -4593,6 +4611,18 @@ class ProxyErrorTypes(str, enum.Enum):
             return cls.team_vector_store_access_denied
         elif object_type == "org":
             return cls.org_vector_store_access_denied
+        elif object_type == "user":
+            return cls.user_vector_store_access_denied
+
+    @classmethod
+    def get_search_tool_access_error_type_for_object(
+        cls, object_type: Literal["key", "team", "user"]
+    ) -> "ProxyErrorTypes":
+        return {
+            "key": cls.key_search_tool_access_denied,
+            "team": cls.team_search_tool_access_denied,
+            "user": cls.user_search_tool_access_denied,
+        }[object_type]
 
 
 DB_CONNECTION_ERROR_TYPES: Final = (
@@ -4790,14 +4820,14 @@ class TeamMemberUpdateResponse(MemberUpdateResponse):
     temp_budget_expiry: datetime | None = None
 
 
-class TeamModelAddRequest(BaseModel):
+class TeamModelAddRequest(LiteLLMBaseModel):
     """Request to add models to a team"""
 
     team_id: str
     models: list[str]
 
 
-class TeamModelDeleteRequest(BaseModel):
+class TeamModelDeleteRequest(LiteLLMBaseModel):
     """Request to delete models from a team"""
 
     team_id: str
@@ -4852,20 +4882,20 @@ class TeamInfoMember(Member):
     user_alias: str | None = None
 
 
-class TeamEditUnrestricted(BaseModel):
+class TeamEditUnrestricted(LiteLLMBaseModel):
     kind: Literal["unrestricted"] = "unrestricted"
 
 
-class TeamEditAsTeamAdmin(BaseModel):
+class TeamEditAsTeamAdmin(LiteLLMBaseModel):
     kind: Literal["team_admin"] = "team_admin"
     editable_fields: tuple[str, ...]
 
 
-class TeamEditAsTeamAdminDisabled(BaseModel):
+class TeamEditAsTeamAdminDisabled(LiteLLMBaseModel):
     kind: Literal["team_admin_disabled"] = "team_admin_disabled"
 
 
-class TeamEditNone(BaseModel):
+class TeamEditNone(LiteLLMBaseModel):
     kind: Literal["none"] = "none"
 
 
@@ -4904,7 +4934,7 @@ class TeamInfoResponseObject(TypedDict):
     team_memberships: ReadOnly[tuple[TeamInfoMembership, ...]]
 
 
-class TeamMemberResetBudgetResponse(BaseModel):
+class TeamMemberResetBudgetResponse(LiteLLMBaseModel):
     team_id: str
     user_id: str
     budget_id: str | None
@@ -4974,42 +5004,6 @@ class JWTKeyMappingResponse(LiteLLMPydanticObjectBase):
     updated_at: datetime
     created_by: str | None = None
     updated_by: str | None = None
-
-
-class SpecialHeaders(enum.Enum):
-    """Used by user_api_key_auth.py to get litellm key"""
-
-    openai_authorization = "Authorization"
-    azure_authorization = "API-Key"
-    anthropic_authorization = "x-api-key"
-    google_ai_studio_authorization = "x-goog-api-key"
-    azure_apim_authorization = "Ocp-Apim-Subscription-Key"
-    custom_litellm_api_key = "x-litellm-api-key"
-    mcp_auth = "x-mcp-auth"
-    mcp_servers = "x-mcp-servers"
-    mcp_access_groups = "x-mcp-access-groups"
-
-    @classmethod
-    def litellm_credential_header_names(cls) -> "frozenset[str]":
-        """Lowercased header names user_api_key_auth accepts as a litellm key.
-
-        Every header here authenticates the caller, so any code that forwards a
-        request onward (e.g. the plugin reverse proxy) must strip all of them to
-        avoid leaking the caller's litellm credential downstream. The static
-        custom-key header (general_settings.litellm_key_header_name) is runtime
-        config and must be added on top of this set by the caller.
-        """
-        return frozenset(
-            header.value.lower()
-            for header in (
-                cls.openai_authorization,
-                cls.azure_authorization,
-                cls.anthropic_authorization,
-                cls.google_ai_studio_authorization,
-                cls.azure_apim_authorization,
-                cls.custom_litellm_api_key,
-            )
-        )
 
 
 class LitellmDataForBackendLLMCall(TypedDict, total=False):
@@ -5134,6 +5128,7 @@ LiteLLM_ManagementEndpoint_MetadataFields_Premium: Final = [
     "logging",
     "secret_manager_settings",
     "allowed_passthrough_routes",
+    "denied_passthrough_routes",
 ]
 
 # Metadata keys that are immutable once set: preserved when an update omits them,
@@ -5226,12 +5221,12 @@ class RoleBasedPermissions(OIDCPermissions):
     }
 
 
-class RoleMapping(BaseModel):
+class RoleMapping(LiteLLMBaseModel):
     role: str
     internal_role: RBAC_ROLES
 
 
-class JWTLiteLLMRoleMap(BaseModel):
+class JWTLiteLLMRoleMap(LiteLLMBaseModel):
     jwt_role: str
     litellm_role: LitellmUserRoles
 
@@ -5244,7 +5239,7 @@ class ScopeMapping(OIDCPermissions):
     }
 
 
-class JWTRoutingOverride(BaseModel):
+class JWTRoutingOverride(LiteLLMBaseModel):
     """
     Override default auth routing for JWT-shaped bearer tokens.
 
@@ -5263,9 +5258,7 @@ class JWTRoutingOverride(BaseModel):
     aud: str | list[str] | None = None
     path: Literal["oauth2"] = "oauth2"
 
-    model_config = {
-        "extra": "forbid",
-    }
+    model_config = ConfigDict(extra="forbid")
 
 
 class UnregisteredJWTClientBehavior(str, enum.Enum):
@@ -5287,7 +5280,7 @@ class UnregisteredJWTClientBehavior(str, enum.Enum):
     AUTO_REGISTER = "auto_register"
 
 
-class JWTIssuerConfig(BaseModel):
+class JWTIssuerConfig(LiteLLMBaseModel):
     """
     Issuer-bound JWT validation configuration.
 
@@ -5344,9 +5337,7 @@ class JWTIssuerConfig(BaseModel):
         description="Issuer-specific policy when the virtual key claim has no mapping. Falls back to the global policy.",
     )
 
-    model_config = {
-        "extra": "forbid",
-    }
+    model_config = ConfigDict(extra="forbid")
 
     @model_validator(mode="after")
     def validate_audience_configured(self) -> "JWTIssuerConfig":
@@ -5643,7 +5634,7 @@ class SpecialManagementEndpointEnums(enum.Enum):
     DEFAULT_ORGANIZATION = "default_organization"
 
 
-class TransformRequestBody(BaseModel):
+class TransformRequestBody(LiteLLMBaseModel):
     call_type: CallTypes
     request_body: dict
 
