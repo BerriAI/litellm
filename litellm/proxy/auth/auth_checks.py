@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from functools import partial
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Optional, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Optional, Protocol, TypeAlias, cast
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -404,7 +404,8 @@ typed_general_settings: Final = _typed_request_body
 def _metadata_has_trace_id(metadata: object) -> bool:
     if not isinstance(metadata, dict):
         return False
-    trace_id: Final[object] = metadata.get("trace_id")
+    metadata_dict: Final = cast(dict[str, object], metadata)
+    trace_id: Final[object] = metadata_dict.get("trace_id")
     return isinstance(trace_id, str) and bool(trace_id)
 
 
@@ -428,8 +429,11 @@ def _request_has_trace_id(request_body: Mapping[str, object], request: Request, 
             return True
     metadata_variable_name: Final = metadata_variable_name_for_route(get_request_route(request))
     selected_metadata: Final[object] = request_body.get(metadata_variable_name)
-    if isinstance(selected_metadata, dict) and "trace_id" in selected_metadata:
-        return _metadata_has_trace_id(selected_metadata)
+    selected_metadata_dict: Final[dict[str, object] | None] = (
+        cast(dict[str, object], selected_metadata) if isinstance(selected_metadata, dict) else None
+    )
+    if selected_metadata_dict is not None and "trace_id" in selected_metadata_dict:
+        return _metadata_has_trace_id(selected_metadata_dict)
     other_metadata_variable_name: Final = "litellm_metadata" if metadata_variable_name == "metadata" else "metadata"
     return _metadata_has_trace_id(request_body.get(other_metadata_variable_name))
 
@@ -1176,10 +1180,16 @@ async def common_checks(
         )
         or pass_through_route
     )
+    team_metadata_value: Final[object] = (
+        cast(object, team_object.metadata) if team_object is not None else None
+    )
+    team_metadata: Final[dict[str, object] | None] = (
+        cast(dict[str, object], team_metadata_value) if isinstance(team_metadata_value, dict) else None
+    )
     if (
         team_object is not None
-        and isinstance(team_object.metadata, dict)
-        and team_object.metadata.get("require_trace_id") is True
+        and team_metadata is not None
+        and team_metadata.get("require_trace_id") is True
         and request.method not in ("GET", "HEAD", "OPTIONS")
         and (RouteChecks.is_llm_api_route(route=route) or pass_through_route)
         and not RouteChecks.check_route_access(
