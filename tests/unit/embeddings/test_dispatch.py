@@ -33,9 +33,9 @@ def test_sync_embedding_request_projects_public_arguments() -> None:
     expected: Final = EmbeddingResponse(model="test-model", data=[])
 
     def native(request: NativeCall) -> EmbeddingResponse:
-        assert request.bound["model"] == "test-model"
-        assert request.bound["input"] == "hello"
-        assert request.bound["custom_llm_provider"] == "openai"
+        assert request.resolved["model"] == "test-model"
+        assert request.resolved["input"] == "hello"
+        assert request.resolved["custom_llm_provider"] == "openai"
         return expected
 
     binding: Final[NativeBinding[Callable[[NativeCall], EmbeddingResponse]]] = NativeBinding(
