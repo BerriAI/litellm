@@ -285,6 +285,46 @@ def test_decisions_cost_uses_litellm_token_pricing() -> None:
     assert cost == pytest.approx(expected_cost)
 
 
+@pytest.mark.parametrize(
+    "response",
+    (
+        DecisionsResponse(
+            model="jev-latest",
+            answers={},
+            usage=DecisionsUsage(
+                input_tokens=_INPUT_TOKENS,
+                output_tokens=_OUTPUT_TOKENS,
+                cached_tokens=_CACHED_TOKENS,
+                cache_write_tokens=_CACHE_WRITE_TOKENS,
+            ),
+        ),
+        OpenAIDecisionResponse.model_validate(_OPENAI_RESPONSE),
+    ),
+    ids=("systemone", "openai"),
+)
+def test_custom_token_pricing_bills_cached_decisions_input_tokens_once(
+    response: DecisionsResponse | OpenAIDecisionResponse,
+) -> None:
+    cost: Final = litellm.completion_cost(
+        completion_response=response,
+        model="gpt-6-luna",
+        custom_llm_provider="openai",
+        custom_cost_per_token={
+            "input_cost_per_token": 1.0,
+            "output_cost_per_token": 2.0,
+            "cache_read_input_token_cost": 0.1,
+            "cache_creation_input_token_cost": 1.25,
+        },
+    )
+
+    assert cost == pytest.approx(
+        (_INPUT_TOKENS - _CACHED_TOKENS - _CACHE_WRITE_TOKENS) * 1.0
+        + _CACHED_TOKENS * 0.1
+        + _CACHE_WRITE_TOKENS * 1.25
+        + _OUTPUT_TOKENS * 2.0
+    )
+
+
 def test_decisions_response_hidden_params_getter_preserves_mutable_identity() -> None:
     response: Final = DecisionsResponse(model="decider", answers={}, usage=None)
 

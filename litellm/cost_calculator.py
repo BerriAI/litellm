@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from httpx import Response
 from pydantic import BaseModel
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
 import litellm._logging
@@ -1034,6 +1034,8 @@ def get_usage_object(
         ),
     )
 
+    if isinstance(completion_response, (DecisionsResponse, OpenAIDecisionResponse)):
+        return None if completion_response.usage is None else _decisions_usage(completion_response.usage)
     if usage_obj is None:
         return None
     if isinstance(usage_obj, Usage):
@@ -1064,15 +1066,28 @@ def get_usage_object(
         return None
 
 
-def _decisions_usage(
-    *, input_tokens: int, output_tokens: int, cached_tokens: int, cache_write_tokens: int
-) -> dict[str, object]:
-    return {
-        "prompt_tokens": input_tokens,
-        "completion_tokens": output_tokens,
-        "cache_read_input_tokens": cached_tokens,
-        "cache_creation_input_tokens": cache_write_tokens,
-    }
+def _decisions_prompt_tokens_details(usage: DecisionsUsage | OpenAIDecisionUsage) -> PromptTokensDetailsWrapper:
+    match usage:
+        case DecisionsUsage():
+            return PromptTokensDetailsWrapper(
+                cached_tokens=usage.cached_tokens, cache_write_tokens=usage.cache_write_tokens
+            )
+        case OpenAIDecisionUsage():
+            return PromptTokensDetailsWrapper(
+                cached_tokens=usage.input_tokens_details.cached_tokens,
+                cache_write_tokens=usage.input_tokens_details.cache_write_tokens,
+            )
+        case _:
+            assert_never(usage)
+
+
+def _decisions_usage(usage: DecisionsUsage | OpenAIDecisionUsage) -> Usage:
+    return Usage(
+        prompt_tokens=usage.input_tokens,
+        completion_tokens=usage.output_tokens,
+        total_tokens=usage.input_tokens + usage.output_tokens,
+        prompt_tokens_details=_decisions_prompt_tokens_details(usage),
+    )
 
 
 def _is_known_usage_objects(usage_obj):
@@ -1493,20 +1508,8 @@ def completion_cost(
                             "usage",
                             litellm.Usage(**_usage_for_dump.model_dump()),
                         )
-                    if isinstance(usage_obj, DecisionsUsage):
-                        _usage = _decisions_usage(
-                            input_tokens=usage_obj.input_tokens,
-                            output_tokens=usage_obj.output_tokens,
-                            cached_tokens=usage_obj.cached_tokens,
-                            cache_write_tokens=usage_obj.cache_write_tokens,
-                        )
-                    elif isinstance(usage_obj, OpenAIDecisionUsage):
-                        _usage = _decisions_usage(
-                            input_tokens=usage_obj.input_tokens,
-                            output_tokens=usage_obj.output_tokens,
-                            cached_tokens=usage_obj.input_tokens_details.cached_tokens,
-                            cache_write_tokens=usage_obj.input_tokens_details.cache_write_tokens,
-                        )
+                    if isinstance(usage_obj, (DecisionsUsage, OpenAIDecisionUsage)):
+                        _usage = _decisions_usage(usage_obj).model_dump()
                     elif usage_obj is None:
                         _usage = {}
                     elif isinstance(usage_obj, BaseModel):
