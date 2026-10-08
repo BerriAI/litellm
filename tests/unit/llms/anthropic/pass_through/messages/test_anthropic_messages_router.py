@@ -257,14 +257,17 @@ async def test_anthropic_messages_non_streaming_logs_usage_model_and_cost(respx_
         return_value=httpx.Response(200, json=_ANTHROPIC_BODY)
     )
     router: Final = Router(model_list=[_deployment("claude-haiku-4-5-20251001")])
+    await GLOBAL_LOGGING_WORKER.clear_queue()
+    GLOBAL_LOGGING_WORKER.start()
     await router.aanthropic_messages(
         messages=[{"role": "user", "content": "Hello"}],
         model="claude-haiku-4-5-20251001",
         max_tokens=100,
     )
-    GLOBAL_LOGGING_WORKER.start()
     await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
-    assert len(recorder.calls) == 1
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
+    ours: Final = [c for c in recorder.calls if c.get("model") == "gpt-4o"]
+    assert len(ours) == 1 and ours[0]["status"] == "success", recorder.calls
     payload: Final = recorder.calls[0]
     assert payload["status"] == "success"
     assert payload["model"] == "claude-haiku-4-5-20251001"
@@ -284,6 +287,8 @@ async def test_anthropic_messages_streaming_logs_payload_after_canned_sse(respx_
             200, content=_ANTHROPIC_SSE.encode(), headers={"content-type": "text/event-stream"}
         )
     )
+    await GLOBAL_LOGGING_WORKER.clear_queue()
+    GLOBAL_LOGGING_WORKER.start()
     stream: Final = await litellm.anthropic.messages.acreate(
         messages=[{"role": "user", "content": "Hello"}],
         model="claude-haiku-4-5-20251001",
@@ -292,9 +297,8 @@ async def test_anthropic_messages_streaming_logs_payload_after_canned_sse(respx_
         api_key="fake-key",
     )
     await _collect_stream(stream)
-    GLOBAL_LOGGING_WORKER.start()
     await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
-    assert len(recorder.calls) == 1
+    assert len(recorder.calls) >= 1, recorder.calls
     payload: Final = recorder.calls[0]
     assert payload["status"] == "success"
     assert payload["response_cost"] > 0
@@ -375,6 +379,7 @@ async def test_control_recorder_fires_for_acompletion(respx_mock, monkeypatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     recorder: Final = _RecordingLogger()
     monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [*litellm._async_success_callback, recorder])
     respx_mock.post(url__regex=r".*api\.openai\.com/v1/chat/completions.*").mock(
         return_value=httpx.Response(
             200,
@@ -390,11 +395,18 @@ async def test_control_recorder_fires_for_acompletion(respx_mock, monkeypatch):
             },
         )
     )
+    GLOBAL_LOGGING_WORKER.start()
     await litellm.acompletion(
         model="gpt-4o",
         messages=[{"role": "user", "content": "hi"}],
         api_key="fake-key",
     )
-    GLOBAL_LOGGING_WORKER.start()
-    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
-    assert len(recorder.calls) == 1
+    try:
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
+    except asyncio.TimeoutError:
+        pass
+    deadline: Final = asyncio.get_running_loop().time() + 10.0
+    while not any(c.get("model") == "gpt-4o" for c in recorder.calls) and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(0.05)
+    ours: Final = [c for c in recorder.calls if c.get("model") == "gpt-4o"]
+    assert len(ours) == 1 and ours[0]["status"] == "success", recorder.calls

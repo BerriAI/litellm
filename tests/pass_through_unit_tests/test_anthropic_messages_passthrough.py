@@ -130,3 +130,42 @@ class TestAnthropicOpenAIAPI(BaseAnthropicMessagesTest):
             pass
 
 
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_litellm_router_non_streaming():
+    """
+    Test the anthropic_messages with non-streaming request
+    """
+    litellm.turn_on_debug()
+    router = Router(
+        model_list=[
+            {
+                "model_name": "claude-special-alias",
+                "litellm_params": {
+                    "model": "claude-haiku-4-5-20251001",
+                    "api_key": os.getenv("ANTHROPIC_API_KEY"),
+                },
+            }
+        ]
+    )
+
+    # Set up test parameters
+    messages = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
+
+    # Call the handler
+    response = await router.aanthropic_messages(
+        messages=messages,
+        model="claude-special-alias",
+        max_tokens=100,
+    )
+
+    # Verify response
+    assert "id" in response
+    assert "content" in response
+    assert "model" in response
+    assert response["role"] == "assistant"
+
+    print(f"Non-streaming response: {json.dumps(response, indent=2)}")
+    return response
+
