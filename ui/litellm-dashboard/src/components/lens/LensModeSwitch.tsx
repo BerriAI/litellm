@@ -22,11 +22,8 @@ export function LensModeSwitch({
   const settingsTitle = connected ? "Worker connected" : "Connect worker";
   const tabs = Object.entries(LENS_TABS).filter(([view]) => view !== "settings" || workers);
   return (
-    <TabsPrimitive.List
-      aria-label="Lens"
-      className="relative inline-flex h-8 max-w-full items-center gap-0.5 rounded-lg bg-muted/60 p-0.5"
-    >
-      <TabsPrimitive.Indicator className="absolute top-0.5 bottom-0.5 left-(--active-tab-left) w-(--active-tab-width) rounded-md bg-card shadow-sm transition-[left,width] duration-200 motion-reduce:transition-none" />
+    <TabsPrimitive.List aria-label="Lens" className="relative inline-flex h-8 max-w-full items-center gap-1">
+      <TabsPrimitive.Indicator className="absolute -bottom-[9px] left-(--active-tab-left) h-0.5 w-(--active-tab-width) rounded-full bg-foreground transition-[left,width] duration-200 motion-reduce:transition-none" />
       {tabs.map(([view, label]) => (
         <TabsPrimitive.Tab
           key={view}
@@ -34,8 +31,8 @@ export function LensModeSwitch({
           title={view === "settings" ? settingsTitle : undefined}
           aria-description={view === "investigations" && activity !== "idle" ? ACTIVITY_LABEL[activity] : undefined}
           className={cn(
-            "relative z-raised inline-flex h-full items-center gap-1.5 rounded-md text-xs font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 data-active:text-foreground sm:text-sm",
-            view === "settings" ? "px-2" : "px-2.5 sm:px-3",
+            "relative z-raised inline-flex h-full items-center gap-1.5 rounded-md text-sm font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 data-active:text-foreground",
+            view === "settings" ? "px-2" : "px-2.5",
           )}
         >
           {view === "settings" ? (
