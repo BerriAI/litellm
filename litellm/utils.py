@@ -7270,7 +7270,7 @@ def _get_retry_after_from_exception_header(
         return retry_after
 
     except Exception:
-        retry_after = -1
+        return -1
 
 
 def calculate_retry_after(
