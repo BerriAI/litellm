@@ -101,24 +101,6 @@ async def get_spend_logs(session, request_id=None, api_key=None):
         return await response.json()
 
 
-@pytest.mark.skip(
-    reason="Flaky in CI: /spend/logs?request_id=... returns 500 even after a 20s wait for the spend log to be written. Spend-log accuracy is covered by tests/unit/proxy/spend_tracking/ and the proxy_spend_accuracy_tests CircleCI job."
-)
-@pytest.mark.asyncio
-async def test_spend_logs():
-    """
-    - Create key
-    - Make call (makes sure it's in spend logs)
-    - Get request id from logs
-    """
-    async with aiohttp.ClientSession() as session:
-        key_gen = await generate_key(session=session)
-        key = key_gen["key"]
-        response = await chat_completion(session=session, key=key)
-        await asyncio.sleep(20)
-        await get_spend_logs(session=session, request_id=response["id"])
-
-
 async def generate_org(session: aiohttp.ClientSession) -> dict:
     """
     Generate a new organization using the API.
@@ -236,59 +218,3 @@ async def test_get_predicted_spend_logs():
 
         assert "response" in result
         assert len(result["response"]) > 0
-
-
-@pytest.mark.skip(reason="High traffic load test, meant to be run locally")
-@pytest.mark.asyncio
-async def test_spend_logs_high_traffic():
-    """
-    - Create key
-    - Make 30 concurrent calls
-    - Get all logs for that key
-    - Wait 10s
-    - Assert it's 30
-    """
-
-    async def retry_request(func, *args, _max_attempts=5, **kwargs):
-        for attempt in range(_max_attempts):
-            try:
-                return await func(*args, **kwargs)
-            except (
-                aiohttp.client_exceptions.ClientOSError,
-                aiohttp.client_exceptions.ServerDisconnectedError,
-            ) as e:
-                if attempt + 1 == _max_attempts:
-                    raise  # re-raise the last ClientOSError if all attempts failed
-                print(f"Attempt {attempt+1} failed, retrying...")
-
-    async with aiohttp.ClientSession(
-        timeout=aiohttp.ClientTimeout(total=600)
-    ) as session:
-        start = time.time()
-        key_gen = await generate_key(session=session)
-        key = key_gen["key"]
-        n = 1000
-        tasks = [
-            retry_request(
-                chat_completion_high_traffic,
-                session=session,
-                key=key,
-                model="azure-gpt-3.5",
-            )
-            for _ in range(n)
-        ]
-        chat_completions = await asyncio.gather(*tasks)
-        successful_completions = [c for c in chat_completions if c is not None]
-        print(f"Num successful completions: {len(successful_completions)}")
-        await asyncio.sleep(10)
-        try:
-            response = await retry_request(get_spend_logs, session=session, api_key=key)
-            print(f"response: {response}")
-            print(f"len responses: {len(response)}")
-            assert len(response) == n
-            print(n, time.time() - start, len(response))
-        except Exception:
-            print(n, time.time() - start, 0)
-        raise Exception("it worked!")
-
-

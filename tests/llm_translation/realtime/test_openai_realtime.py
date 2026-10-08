@@ -136,33 +136,3 @@ async def test_openai_realtime_direct_call_no_intent():
     ), "session.created response missing session object"
     assert "id" in session_message["session"], "Session object missing id field"
     assert "model" in session_message["session"], "Session object missing model field"
-
-
-def test_realtime_query_params_construction():
-    """
-    Test that query params are constructed correctly by the proxy server logic
-    """
-    from litellm.types.realtime import RealtimeQueryParams
-
-    # Test case 1: intent is None (should not be included)
-    model = "gpt-4o-realtime-preview"
-    intent = None
-
-    query_params: RealtimeQueryParams = {"model": model}
-    if intent is not None:
-        query_params["intent"] = intent
-
-    assert "model" in query_params
-    assert query_params["model"] == model
-    assert "intent" not in query_params
-
-    # Test case 2: intent is provided (should be included)
-    intent = "chat"
-    query_params2: RealtimeQueryParams = {"model": model}
-    if intent is not None:
-        query_params2["intent"] = intent
-
-    assert "model" in query_params2
-    assert query_params2["model"] == model
-    assert "intent" in query_params2
-    assert query_params2["intent"] == intent

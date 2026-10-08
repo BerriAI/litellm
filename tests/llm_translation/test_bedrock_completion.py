@@ -709,16 +709,6 @@ class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
             "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         }
 
-    def test_tool_call_no_arguments(self, tool_call_no_arguments):
-        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        pass
-
-    def test_prompt_caching(self):
-        """
-        Remove override once we have access to Bedrock prompt caching
-        """
-        pass
-
     def test_completion_cost(self):
         """
         Test if region models info is correctly used for cost calculation. Using the base model info for cost calculation.
@@ -770,9 +760,6 @@ class TestBedrockConverseChatNormal(BaseLLMChatTest):
             "aws_region_name": "us-east-1",
         }
 
-    def test_tool_call_no_arguments(self, tool_call_no_arguments):
-        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        pass
 
 
 class TestBedrockConverseNovaTestSuite(BaseLLMChatTest):
@@ -789,14 +776,7 @@ class TestBedrockConverseNovaTestSuite(BaseLLMChatTest):
             "aws_region_name": "us-east-1",
         }
 
-    def test_tool_call_no_arguments(self, tool_call_no_arguments):
-        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        pass
 
-    def test_prompt_caching(self):
-        """
-        TODO: Ensure this test passes our base llm test suite
-        """
 
 
 class TestBedrockRerank(BaseLLMRerankTest):

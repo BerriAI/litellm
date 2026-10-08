@@ -95,36 +95,6 @@ class BaseAnthropicMessagesTest:
         return response
 
     @pytest.mark.asyncio
-    async def test_streaming_base(self):
-        """Base test for streaming requests"""
-        request_params = self.model_config
-        # Set up test parameters
-        messages = [{"role": "user", "content": "Hello, can you tell me a short joke?"}]
-
-        # Prepare call arguments
-        call_args = {
-            "messages": messages,
-            "max_tokens": 100,
-            "stream": True,
-            "client": AsyncHTTPHandler(),
-        }
-
-        # Add any additional config from subclass
-        call_args.update(request_params)
-
-        # Call the handler
-        response = await litellm.anthropic.messages.acreate(**call_args)
-
-        collected_chunks = []
-        if isinstance(response, AsyncIterator):
-            async for chunk in response:
-                print("chunk=", chunk)
-                collected_chunks.append(chunk)
-
-        print("collected_chunks=", collected_chunks)
-        return collected_chunks
-
-    @pytest.mark.asyncio
     async def test_response_format_consistency(self):
         """
         Test that response content blocks are consistently dicts (not Pydantic objects).
