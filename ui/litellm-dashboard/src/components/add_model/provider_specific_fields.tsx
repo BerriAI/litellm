@@ -201,8 +201,8 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
   }, [selectedProviderEnum, selectedProvider, providerMetadata]);
 
   const authTypeHiddenFieldKeys = React.useMemo(
-    () => hiddenAuthFieldKeys(availableAuthTypes, selectedAuthType?.id ?? ""),
-    [availableAuthTypes, selectedAuthType],
+    () => hiddenAuthFieldKeys(authTypes, selectedAuthType?.id ?? ""),
+    [authTypes, selectedAuthType?.id],
   );
 
   const allFields = React.useMemo(() => {
