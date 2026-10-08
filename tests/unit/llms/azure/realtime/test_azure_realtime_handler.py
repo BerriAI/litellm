@@ -6,7 +6,6 @@ import pytest
 from litellm.llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 
 
-
 @pytest.mark.asyncio
 async def test_async_realtime_uses_max_size_parameter():
     """
@@ -40,14 +39,9 @@ async def test_async_realtime_uses_max_size_parameter():
 
     shared_context = get_shared_realtime_ssl_context()
     with (
-        patch(
-            "websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)
-        ) as mock_ws_connect,
-        patch(
-            "litellm.llms.azure.realtime.handler.RealTimeStreaming"
-        ) as mock_realtime_streaming,
+        patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect,
+        patch("litellm.llms.azure.realtime.handler.RealTimeStreaming") as mock_realtime_streaming,
     ):
-
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
         mock_streaming_instance.bidirectional_forward = AsyncMock()
@@ -184,10 +178,7 @@ async def test_construct_url_forwards_transcription_intent_ga_without_model_quer
         query_params={"intent": "transcription"},
     )
 
-    assert url == (
-        "wss://my-endpoint.openai.azure.com/openai/v1/realtime"
-        "?intent=transcription"
-    )
+    assert url == ("wss://my-endpoint.openai.azure.com/openai/v1/realtime?intent=transcription")
 
 
 @pytest.mark.asyncio
@@ -309,14 +300,9 @@ async def test_async_realtime_uses_ga_protocol_end_to_end():
             return None
 
     with (
-        patch(
-            "websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)
-        ) as mock_ws_connect,
-        patch(
-            "litellm.llms.azure.realtime.handler.RealTimeStreaming"
-        ) as mock_realtime_streaming,
+        patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect,
+        patch("litellm.llms.azure.realtime.handler.RealTimeStreaming") as mock_realtime_streaming,
     ):
-
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
         mock_streaming_instance.bidirectional_forward = AsyncMock()
@@ -340,10 +326,7 @@ async def test_async_realtime_uses_ga_protocol_end_to_end():
         assert "model=gpt-4o-realtime-preview" in called_url
         assert "api-version" not in called_url
         assert "deployment" not in called_url
-        assert (
-            mock_realtime_streaming.call_args.kwargs["backend_uses_beta_protocol"]
-            is False
-        )
+        assert mock_realtime_streaming.call_args.kwargs["backend_uses_beta_protocol"] is False
 
 
 @pytest.mark.asyncio
@@ -374,14 +357,9 @@ async def test_async_realtime_ga_without_api_version():
             return None
 
     with (
-        patch(
-            "websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)
-        ) as mock_ws_connect,
-        patch(
-            "litellm.llms.azure.realtime.handler.RealTimeStreaming"
-        ) as mock_realtime_streaming,
+        patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect,
+        patch("litellm.llms.azure.realtime.handler.RealTimeStreaming") as mock_realtime_streaming,
     ):
-
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
         mock_streaming_instance.bidirectional_forward = AsyncMock()
@@ -441,7 +419,12 @@ async def test_arealtime_transcription_intent_defaults_to_ga(monkeypatch):
         MagicMock(async_realtime=mock_async_realtime),
     )
 
-    def fake_get_llm_provider(model, api_base=None, api_key=None):
+    def fake_get_llm_provider(
+        model,
+        api_base=None,
+        api_key=None,
+        custom_llm_provider: str | None = None,
+    ):
         return (
             "gpt-realtime-whisper",
             "azure",
@@ -494,14 +477,9 @@ async def test_async_realtime_default_maintains_backwards_compatibility():
             return None
 
     with (
-        patch(
-            "websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)
-        ) as mock_ws_connect,
-        patch(
-            "litellm.llms.azure.realtime.handler.RealTimeStreaming"
-        ) as mock_realtime_streaming,
+        patch("websockets.connect", return_value=DummyAsyncContextManager(mock_backend_ws)) as mock_ws_connect,
+        patch("litellm.llms.azure.realtime.handler.RealTimeStreaming") as mock_realtime_streaming,
     ):
-
         mock_streaming_instance = MagicMock()
         mock_realtime_streaming.return_value = mock_streaming_instance
         mock_streaming_instance.bidirectional_forward = AsyncMock()
@@ -520,10 +498,7 @@ async def test_async_realtime_default_maintains_backwards_compatibility():
         called_url = mock_ws_connect.call_args[0][0]
         assert "/openai/realtime?" in called_url
         assert "/openai/v1/realtime" not in called_url
-        assert (
-            mock_realtime_streaming.call_args.kwargs["backend_uses_beta_protocol"]
-            is True
-        )
+        assert mock_realtime_streaming.call_args.kwargs["backend_uses_beta_protocol"] is True
 
 
 class _DummyAsyncContextManager:
@@ -602,16 +577,21 @@ async def test_arealtime_resolves_azure_ad_token_when_no_api_key(monkeypatch):
 
     mock_async_realtime = AsyncMock()
     monkeypatch.setattr(realtime_main, "azure_realtime", MagicMock(async_realtime=mock_async_realtime))
-    monkeypatch.setattr(
-        realtime_main,
-        "get_llm_provider",
-        lambda model, api_base=None, api_key=None: (
+
+    def fake_get_llm_provider(
+        model,
+        api_base=None,
+        api_key=None,
+        custom_llm_provider: str | None = None,
+    ):
+        return (
             "gpt-realtime-whisper",
             "azure",
             None,
             "https://my-endpoint.openai.azure.com",
-        ),
-    )
+        )
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", fake_get_llm_provider)
     monkeypatch.delenv("AZURE_API_KEY", raising=False)
 
     captured_params = {}
@@ -642,16 +622,21 @@ async def test_arealtime_does_not_resolve_azure_ad_token_when_api_key_present(mo
 
     mock_async_realtime = AsyncMock()
     monkeypatch.setattr(realtime_main, "azure_realtime", MagicMock(async_realtime=mock_async_realtime))
-    monkeypatch.setattr(
-        realtime_main,
-        "get_llm_provider",
-        lambda model, api_base=None, api_key=None: (
+
+    def fake_get_llm_provider(
+        model,
+        api_base=None,
+        api_key=None,
+        custom_llm_provider: str | None = None,
+    ):
+        return (
             "gpt-realtime-whisper",
             "azure",
             "test-key",
             "https://my-endpoint.openai.azure.com",
-        ),
-    )
+        )
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", fake_get_llm_provider)
 
     def fail_get_azure_ad_token(litellm_params):
         raise AssertionError("should not resolve an AD token when an api_key is configured")
@@ -718,16 +703,21 @@ async def test_arealtime_forwards_deployment_azure_ad_token(monkeypatch, no_ambi
 
     mock_async_realtime = AsyncMock()
     monkeypatch.setattr(realtime_main, "azure_realtime", MagicMock(async_realtime=mock_async_realtime))
-    monkeypatch.setattr(
-        realtime_main,
-        "get_llm_provider",
-        lambda model, api_base=None, api_key=None: (
+
+    def fake_get_llm_provider(
+        model,
+        api_base=None,
+        api_key=None,
+        custom_llm_provider: str | None = None,
+    ):
+        return (
             "gpt-realtime-whisper",
             "azure",
             None,
             "https://my-endpoint.openai.azure.com",
-        ),
-    )
+        )
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", fake_get_llm_provider)
     monkeypatch.delenv("AZURE_API_KEY", raising=False)
     monkeypatch.setattr(realtime_main.litellm, "api_key", None)
 
