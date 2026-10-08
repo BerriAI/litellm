@@ -28,6 +28,7 @@ from litellm.proxy.guardrails.guardrail_hooks.highflame.highflame import (
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
 )
+from litellm.proxy.guardrails.guardrail_endpoints import get_guardrail_ui_settings
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import ChatCompletionMessageToolCall, Function
@@ -545,6 +546,15 @@ class TestConfiguration:
 
         assert guardrail.guard_url == "https://api-dev.highflame.test/v1/shield/guard"
         assert guardrail.token_url == "https://auth-dev.highflame.test/oauth2/token"
+
+    @pytest.mark.asyncio
+    async def test_admin_ui_offers_only_modes_the_guardrail_accepts(self):
+        offered = (await get_guardrail_ui_settings()).supported_modes_by_provider["highflame"]
+
+        for mode in offered:
+            assert _guardrail(FakeHighflame(), event_hook=mode).event_hook == mode
+        assert "during_mcp_call" not in offered
+        assert {"pre_call", "post_call", "pre_mcp_call", "post_mcp_call"} <= set(offered)
 
     def test_init_guardrails_v2_reads_highflame_settings(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(litellm, "guardrail_name_config_map", {})
