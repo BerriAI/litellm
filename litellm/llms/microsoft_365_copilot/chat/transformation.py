@@ -24,38 +24,38 @@ if TYPE_CHECKING:
 
 
 class _TextPart(BaseModel):
-    model_config = ConfigDict(extra="ignore", strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     type: Literal["text"]
     text: str
 
 
 class _GraphConversation(BaseModel):
-    model_config = ConfigDict(extra="ignore", strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     id: str
 
 
 class _GraphMessage(BaseModel):
-    model_config = ConfigDict(extra="ignore", strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     text: str | None = None
 
 
 class _GraphConversationResponse(BaseModel):
-    model_config = ConfigDict(extra="ignore", strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     messages: list[_GraphMessage] | None = None
 
 
 class _GraphError(BaseModel):
-    model_config = ConfigDict(extra="ignore", strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     message: str | None = None
 
 
 class _GraphErrorResponse(BaseModel):
-    model_config = ConfigDict(extra="ignore", strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     error: _GraphError | None = None
 
