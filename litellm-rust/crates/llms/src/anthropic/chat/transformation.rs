@@ -25,23 +25,13 @@ use crate::{
             streaming::{ChatStream, StreamShape},
             transformation::{
                 BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
-                Unsupported, ValidatedEnvironment, unsupported_message, unsupported_param,
+                ValidatedEnvironment, reject_stream, validate_message,
             },
         },
         messages::streaming::anthropic_sse_event_stream,
     },
 };
 
-/// Anthropic parameter names, post `map_openai_params`, that the Rust path can
-/// place verbatim in the Messages body.
-///
-/// `top_k` is deliberately absent even though the Messages API takes it.
-/// `temperature` and `top_p` reach this gate already resolved, because
-/// `map_openai_params` runs first and applies `_apply_sampling_param` to them.
-/// `top_k` bypasses `map_openai_params` entirely, so Python applies that same
-/// per-model gate inside `transform_request`, the function this route replaces.
-/// Forwarding it would send `top_k` to a model that removed sampling params and
-/// take a 400 after the call, where Python drops it and succeeds.
 const SUPPORTED_PARAMS: &[(&str, &str)] = &[
     ("max_tokens", "max_tokens"),
     ("temperature", "temperature"),
@@ -128,9 +118,6 @@ impl BaseConfig for AnthropicConfig {
             serde_json::from_value(response.body).map_err(|error| {
                 Error::InvalidResponse(crate::ErrorDetail::invalid("messages response", error))
             })?;
-        // The route declines tool and thinking requests, so a non-text block
-        // means the response carries something this path never asked for.
-        // Decline rather than silently dropping it; the host falls back.
         if body
             .content
             .iter()
@@ -211,20 +198,19 @@ impl BaseConfig for AnthropicConfig {
     /// the resolved key must not be applied over the top. Any other forwarded
     /// `authorization` is unrelated to this header and does not defer, which is
     /// also what Python does: it sends the deployment's `x-api-key` alongside.
-    fn unsupported_reason(
+    fn validate_request(
         &self,
         messages: &[ChatMessage],
         optional_params: &Map<String, Value>,
-    ) -> Option<Unsupported> {
-        unsupported_param(self.supported_openai_param_mappings(), &[], optional_params)
-            .or_else(|| messages.iter().find_map(unsupported_message))
-            // Anthropic rejects a request whose first turn is not a user turn.
-            // Python only repairs that under `litellm.modify_params`, which the
-            // core cannot observe, so decline instead of guessing.
-            .or_else(|| {
-                (!build_conversation(messages).opens_on_user_turn())
-                    .then_some(Unsupported("conversation does not open on a user turn"))
-            })
+    ) -> Result<(), Error> {
+        reject_stream(optional_params)?;
+        messages.iter().try_for_each(validate_message)?;
+        if !build_conversation(messages).opens_on_user_turn() {
+            return Err(Error::Unsupported(
+                "conversation does not open on a user turn",
+            ));
+        }
+        Ok(())
     }
 }
 

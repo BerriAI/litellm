@@ -243,27 +243,66 @@ async def test_unstarted_native_inference_has_no_provider_or_callback_effects(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True))
 @pytest.mark.parametrize(
-    "options",
+    "extension",
     (
-        {"stream": True},
-        {"extra_body": {"provider_option": True}},
-        {"mock_response": "mock"},
-        {"num_retries": 1},
-        {"use_chat_completions_api": True},
-        {"model_list": []},
+        None,
+        False,
+        0,
+        {"nested": [True, None, {"value": 7}]},
+        {
+            "format": {
+                "type": "json_schema",
+                "schema": {
+                    "type": "object",
+                    "properties": {"answer": {"type": "string"}},
+                    "required": ["answer"],
+                    "additionalProperties": False,
+                },
+            },
+            "previous_message_id": None,
+        },
     ),
 )
-async def test_native_responses_declines_unsupported_requests_before_callbacks(
+async def test_native_projection_preserves_provider_extensions(
+    route: Route, asynchronous: bool, recording_server: RecordingServer, extension: object
+) -> None:
+    recorder: Final = RecordingLogger()
+    await execute(
+        route,
+        asynchronous,
+        recording_server,
+        {
+            "provider_extension": extension,
+            "extra_body": {"provider_override": extension, "temperature": 0.75},
+            "temperature": 0.25,
+            "drop_params": True,
+            "callbacks": [recorder],
+            "litellm_metadata": {"opaque": object()},
+        },
+    )
+    assert len(recording_server.requests) == 1
+    body: Final = _OBJECT.validate_python(recording_server.requests[0].body)
+    assert body["provider_extension"] == extension
+    assert body["provider_override"] == extension
+    assert body["temperature"] == 0.75
+    assert "extra_body" not in body
+    assert "drop_params" not in body
+    assert "callbacks" not in body
+    assert "litellm_metadata" not in body
+    assert "api_key" not in body
+
+
+@pytest.mark.asyncio
+async def test_native_responses_streaming_failure_is_terminal(
     recording_server: RecordingServer,
-    options: Mapping[str, object],
 ) -> None:
     recorder: Final = RecordingLogger()
     recording_server.expected_requests = 0
-    with pytest.raises(_native.RustBridgeDeclined):
-        native_call("responses", True, recording_server, {**options, "callbacks": [recorder]})
+    with pytest.raises(Exception, match="streaming"):
+        await execute("responses", True, recording_server, {"stream": True, "callbacks": [recorder]})
     assert not recording_server.requests
-    assert not recorder.events
 
 
 @pytest.mark.asyncio
@@ -272,9 +311,8 @@ async def test_native_chat_validation_failure_is_terminal(
     asynchronous: bool, recording_server: RecordingServer
 ) -> None:
     recording_server.expected_requests = 0
-    with pytest.raises(Exception, match="chat completions requires at least one message") as failure:
+    with pytest.raises(Exception, match="chat completions requires at least one message"):
         await execute("chat", asynchronous, recording_server, {"messages": []})
-    assert not isinstance(failure.value, _native.RustBridgeDeclined)
     assert not recording_server.requests
 
 

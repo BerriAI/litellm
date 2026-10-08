@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from typing import Final
 
 import pytest
@@ -46,39 +46,6 @@ def test_sync_embedding_request_projects_public_arguments() -> None:
         ("test-model", "hello"),
         {"custom_llm_provider": "openai", "dimensions": 8},
         python=lambda *args, **kwargs: pytest.fail("required native route must handle this call"),
-        binding=binding,
-        native=native_call_hook,
-        rules=rules,
-    )
-
-    assert response is expected
-
-
-@pytest.mark.asyncio
-async def test_async_embedding_falls_back_after_native_declines() -> None:
-    from litellm.rust_bridge.bindings import native_exception_types
-
-    native_types: Final = native_exception_types()
-    if native_types is None:
-        pytest.skip("native bridge is unavailable")
-    declined, _ = native_types
-    expected: Final = EmbeddingResponse(model="test-model", data=[])
-    rules: Final[Rules] = (RouteRule(Route.EMBEDDINGS, Rollout.RUST_OPT_OUT),)
-
-    async def native(request: NativeCall) -> EmbeddingResponse:
-        raise declined("unsupported")
-
-    async def python(*args: object, **kwargs: object) -> EmbeddingResponse:
-        return expected
-
-    binding: Final[NativeBinding[Callable[[NativeCall], Awaitable[EmbeddingResponse]]]] = NativeBinding(
-        "aembedding", validate=lambda _: None
-    )
-    binding.override(native)
-    response: Final = await dispatch._ADISPATCH.arun(  # pyright: ignore[reportPrivateUsage]  # test an explicit route decision
-        ("test-model", "hello"),
-        {},
-        python=python,
         binding=binding,
         native=native_call_hook,
         rules=rules,

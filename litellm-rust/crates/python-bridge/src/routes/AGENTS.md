@@ -4,7 +4,7 @@ These invariants apply to lifecycle-bearing public calls; value-oriented APIs th
 
 Route modules own public argument projection, route-specific host operations, response and error construction, and composition of the core route with the Python host. Provider dispatch, transport execution and normalization belong to core and provider crates. Runtime waiting, cancellation mechanics and execution state validation belong to `litellm-host-python`
 
-Before execution starts, perform only admission checks needed to select native execution or legacy fallback. Do not fully project a request just to decide admission. Keep effectful settings reads, HTTP client acquisition, secret-source construction and caller context capture inside execution, after argument preparation and SDK preflight. Configure resources from that prepared view, never the original entrypoint kwargs
+The Python catalog selects native execution before calling the bridge. Request validation in Rust returns terminal errors and never selects legacy execution. Keep effectful settings reads, HTTP client acquisition, secret-source construction and caller context capture inside execution, after argument preparation and SDK preflight. Configure resources from that prepared view, never the original entrypoint kwargs
 
 The host driver owns sequencing and terminal events; the bridge supplies fallible resource composition without exposing route types to the driver. An unstarted async call performs no resource setup. Setup errors after start follow the terminal failure contract and never authorize fallback or provider replay
 

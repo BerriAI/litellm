@@ -28,17 +28,13 @@ TRANSCRIPTION_FIELDS: Final = frozenset(
 )
 
 
-class RustBridgeDeclined(Exception):
-    pass
-
-
 class RustUpstreamError(Exception):
     pass
 
 
 @pytest.fixture(autouse=True)
 def isolated_bridge(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
-    native: Final = SimpleNamespace(RustBridgeDeclined=RustBridgeDeclined, RustUpstreamError=RustUpstreamError)
+    native: Final = SimpleNamespace(RustUpstreamError=RustUpstreamError)
     monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
     monkeypatch.delenv("LITELLM_RUST", raising=False)
     configuration.reset_rust_configuration()
@@ -122,10 +118,10 @@ def test_missing_native_binding_raises_without_python_fallback() -> None:
         dispatch_sync()
 
 
-def test_admission_decline_raises_for_required_route() -> None:
-    NATIVE_TRANSCRIPTION.override(SyncBridge(RustBridgeDeclined("unsupported format")))
+def test_native_failure_raises_for_required_route() -> None:
+    NATIVE_TRANSCRIPTION.override(SyncBridge(RuntimeError("unsupported format")))
 
-    with pytest.raises(RuntimeError, match="declined the request: unsupported format"):
+    with pytest.raises(RuntimeError, match="unsupported format"):
         dispatch_sync()
 
 

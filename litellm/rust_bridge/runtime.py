@@ -7,7 +7,7 @@ from typing import Final, Generic, NoReturn, TypeAlias, TypeVar
 from typing_extensions import assert_never
 
 from litellm.exceptions import APIError
-from litellm.rust_bridge.bindings import NativeBinding, native_exception_types
+from litellm.rust_bridge.bindings import NativeBinding, native_upstream_exception
 from litellm.rust_bridge.catalog import RouteContext, Rules, decision
 from litellm.rust_bridge.configuration import Decision
 from litellm.rust_bridge.response_metadata import mark_rust_response
@@ -22,16 +22,11 @@ class RustHandled(Generic[ResultT]):
 
 
 @dataclass(frozen=True, slots=True)
-class RustDeclined:
-    reason: str
-
-
-@dataclass(frozen=True, slots=True)
 class RustUnavailable:
     pass
 
 
-RustAttempt: TypeAlias = RustHandled[ResultT] | RustDeclined | RustUnavailable
+RustAttempt: TypeAlias = RustHandled[ResultT] | RustUnavailable
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,7 +129,7 @@ async def _aattempt_native(
 def _required(result: RustAttempt[ResultT], context: RouteContext) -> ResultT:
     if isinstance(result, RustHandled):
         return mark_rust_response(result.value)
-    _raise_required(result, _error_context(context))
+    _raise_required(_error_context(context))
 
 
 def _identity(value: ResultT) -> ResultT:
@@ -153,14 +148,11 @@ def attempt(
 ) -> RustAttempt[ResultT]:
     if native_call is None:
         return RustUnavailable()
-    exceptions: Final = native_exception_types()
-    if exceptions is None:
+    upstream: Final = native_upstream_exception()
+    if upstream is None:
         return RustHandled(adapt(native_call()))
-    declined, upstream = exceptions
     try:
         value: Final = native_call()
-    except declined as error:
-        return RustDeclined(reason=_decline_reason(error))
     except upstream as error:
         _raise_upstream(error, context)
     return RustHandled(adapt(value))
@@ -174,37 +166,18 @@ async def aattempt(
 ) -> RustAttempt[ResultT]:
     if native_call is None:
         return RustUnavailable()
-    exceptions: Final = native_exception_types()
-    if exceptions is None:
+    upstream: Final = native_upstream_exception()
+    if upstream is None:
         return RustHandled(adapt(await native_call()))
-    declined, upstream = exceptions
     try:
         value: Final = await native_call()
-    except declined as error:
-        return RustDeclined(reason=_decline_reason(error))
     except upstream as error:
         _raise_upstream(error, context)
     return RustHandled(adapt(value))
 
 
-def _decline_reason(error: BaseException) -> str:
-    reason: Final[object] = error.args[0] if error.args else str(error)
-    return reason if isinstance(reason, str) else str(reason)
-
-
-def _raise_required(
-    result: RustDeclined | RustUnavailable,
-    context: BridgeErrorContext,
-) -> NoReturn:
-    raise RuntimeError(f"Rust {context.route} bridge {_required_reason(result)}")
-
-
-def _required_reason(result: RustDeclined | RustUnavailable) -> str:
-    match result:
-        case RustUnavailable():
-            return "is unavailable"
-        case RustDeclined(reason=reason):
-            return f"declined the request: {reason}"
+def _raise_required(context: BridgeErrorContext) -> NoReturn:
+    raise RuntimeError(f"Rust {context.route} bridge is unavailable")
 
 
 def _raise_upstream(error: BaseException, context: BridgeErrorContext) -> NoReturn:

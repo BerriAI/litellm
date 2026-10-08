@@ -279,7 +279,7 @@ pub(in crate::cache) fn configured(
 )> {
     let handle = native_handle(configured)?.ok_or_else(|| {
         pyo3::exceptions::PyRuntimeError::new_err(
-            "the configured cache changed to a Python cache after native admission",
+            "native inference requires a native cache backend",
         )
     })?;
     let cache = handle.extract::<PyRef<'_, NativeCacheHandle>>()?;

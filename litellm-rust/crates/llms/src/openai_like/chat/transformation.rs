@@ -25,11 +25,6 @@ use crate::{
     openai_like::common_utils::{complete_openai_like_url, openai_compatible_provider_info},
 };
 
-/// OpenAI parameter names the Rust path can place verbatim in the request body.
-/// Tool parameters are absent on purpose: the message gate already declines
-/// tool-call content, and a `tools` request that did get through would produce
-/// a tool-call response this port cannot normalize yet, so it declines before
-/// the call instead of after it.
 const SUPPORTED_PARAMS: &[(&str, &str)] = &[
     ("frequency_penalty", "frequency_penalty"),
     ("logit_bias", "logit_bias"),
@@ -230,11 +225,6 @@ fn normalize_choice(position: usize, choice: &Value) -> Result<ChatCompletionsCh
         .and_then(Value::as_array)
         .is_some_and(|calls| !calls.is_empty())
     {
-        // Python rewrites the lone tool call into content only under
-        // `json_mode`, a request flag `transform_response` cannot see, and the
-        // normalized type cannot carry tool calls at all. Declining is
-        // terminal at this point, but passing back an empty assistant turn
-        // would fabricate the reply.
         return Err(Error::Unsupported("tool call response"));
     }
     if message.get("refusal").is_some_and(|value| !value.is_null()) {

@@ -1,6 +1,5 @@
 //! Input token counting for a request body, mirroring `litellm.token_counter`
-//! for the shapes it can count exactly. Everything else is declined so the host
-//! keeps its own counter as the reference.
+//! for the shapes it can count exactly.
 
 #![forbid(unsafe_code)]
 
