@@ -1,10 +1,3 @@
-"""One locked transaction brings a team's roster to a target set or applies a member delta, whatever its size.
-
-The SCIM group endpoints write through here. Each member of a group push used to go through
-/team/member_add or /team/member_delete on its own, so a 500-member group was thousands of
-statements and outlasted the edge in front of the proxy.
-"""
-
 import asyncio
 import json
 from collections.abc import Iterator, Mapping, Sequence
