@@ -33,7 +33,7 @@ import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import RouterSettingsSummary from "../common_components/RouterSettingsSummary";
 import { hasRouterSettings } from "../common_components/routerSettingsPayload";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
-import { KeyResponse } from "../key_team_helpers/key_list";
+import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import LoggingSettingsView from "../logging_settings_view";
 import { toast } from "@/lib/toast";
 import { getPolicyInfoWithGuardrails, keyDeleteCall, keyUpdateCall } from "../networking";
@@ -50,6 +50,9 @@ import { parseErrorMessage } from "../shared/errorUtils";
 import { InheritedBudgetHint, inheritedBudgetGates, keyOwnerBudgetSource } from "../shared/InheritedBudgetHint";
 import { KeyEditView } from "./key_edit_view";
 import { isTeamAdminEditingMemberKey, teamAdminMemberKeyPayload } from "./teamAdminMemberKeyPayload";
+import { canModifyKey as canUserModifyKey } from "../key_quick_edit/canModifyKey";
+import { KeyBudgetQuickEdit } from "../key_quick_edit/KeyBudgetQuickEdit";
+import { KeyModelsQuickEdit } from "../key_quick_edit/KeyModelsQuickEdit";
 
 export function needsLifetimeSpendBackfill(spend: number, totalSpend: number | null | undefined): boolean {
   return (totalSpend ?? 0) < spend;
@@ -61,7 +64,7 @@ interface KeyInfoViewProps {
   keyData: KeyResponse | undefined;
   onKeyDataUpdate?: (data: Partial<KeyResponse>) => void;
   onDelete?: () => void;
-  teams: any[] | null;
+  teams: Team[] | null;
   backButtonText?: string;
 }
 
@@ -464,14 +467,27 @@ export default function KeyInfoView({
     return `${dateStr} at ${timeStr}`;
   };
 
-  const canModifyKey =
-    isProxyAdminRole(userRole || "") ||
-    (teamsData &&
-      isUserTeamAdminForSingleTeam(
-        teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0]?.members_with_roles,
-        userID || "",
-      )) ||
-    (userID === currentKeyData.user_id && userRole !== "Internal Viewer");
+  const permissionContext = {
+    userRole,
+    userId: userID,
+    key: currentKeyData,
+    teams: teamsData,
+  };
+  const canModifyKey = canUserModifyKey(permissionContext);
+  const quickEditTeam = teams?.find((team) => team.team_id === currentKeyData.team_id);
+  const permissionTeam = teamsData?.find((team) => team.team_id === currentKeyData.team_id);
+  const memberKeyContext = {
+    userRole: userRole || "",
+    userId: userID || "",
+    keyUserId: currentKeyData.user_id,
+    keyTeamId: currentKeyData.team_id,
+    teamMembers: permissionTeam?.members_with_roles,
+  };
+  const isTeamAdminEditingMember = isTeamAdminEditingMemberKey(memberKeyContext);
+  const handleQuickKeyDataUpdate = (updated: Partial<KeyResponse>) => {
+    setCurrentKeyData((prevData) => (prevData ? { ...prevData, ...updated } : prevData));
+    onKeyDataUpdate?.(updated);
+  };
 
   const isKeyAdmin =
     isProxyAdminRole(userRole || "") ||
@@ -694,8 +710,17 @@ export default function KeyInfoView({
           {/* Overview Panel */}
           <TabsContent value="overview" keepMounted>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-              <Card className="block p-6">
-                <p className="text-sm">Spend</p>
+              <Card className="group/editable block p-6">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm">Spend</p>
+                  <KeyBudgetQuickEdit
+                    keyData={currentKeyData}
+                    accessToken={accessToken}
+                    canModify={canModifyKey}
+                    onKeyDataUpdate={handleQuickKeyDataUpdate}
+                    buttonClassName="size-7"
+                  />
+                </div>
                 <div className="mt-2">
                   <h3 className="text-lg font-medium">${formatNumberWithCommas(currentKeyData.spend, 4)}</h3>
                   <p className="text-sm">
@@ -747,8 +772,21 @@ export default function KeyInfoView({
                 </div>
               </Card>
 
-              <Card className="block p-6">
-                <p className="text-sm">Models</p>
+              <Card className="group/editable block p-6">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm">Models</p>
+                  <KeyModelsQuickEdit
+                    keyData={currentKeyData}
+                    team={quickEditTeam}
+                    accessToken={accessToken}
+                    userId={userID}
+                    userRole={userRole}
+                    canModify={canModifyKey}
+                    canEditModels={!isTeamAdminEditingMember}
+                    onKeyDataUpdate={handleQuickKeyDataUpdate}
+                    buttonClassName="size-7"
+                  />
+                </div>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {currentKeyData.models && currentKeyData.models.length > 0 ? (
                     currentKeyData.models.map((model, index) => (

@@ -62,13 +62,12 @@ import {
   tagLimitsToRows,
   tagRowsToLimits,
 } from "../key_team_helpers/TagRateLimitEditor";
-import { excludeProxyWideSentinel, hasAllModelsSentinel } from "../key_team_helpers/fetch_available_models_team_key";
+import { hasAllModelsSentinel } from "../key_team_helpers/fetch_available_models_team_key";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import { toast } from "@/lib/toast";
-import { getPromptsList, modelAvailableCall, tagListCall } from "../networking";
-import { fetchTeamModels } from "../organisms/create_key_button";
+import { getPromptsList, tagListCall } from "../networking";
 import NumericalInput from "../shared/numerical_input";
 import { MultiSelect } from "../shared/MultiSelect";
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
@@ -76,6 +75,7 @@ import { Tag } from "../tag_management/types";
 import EditLoggingSettings from "../team/EditLoggingSettings";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import { useKeyAssignableModels } from "../key_quick_edit/useKeyAssignableModels";
 
 interface KeyEditViewProps {
   keyData: KeyResponse;
@@ -109,7 +109,15 @@ export function KeyEditView({
   const [promptsList, setPromptsList] = useState<string[]>([]);
   const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
   const team = teams?.find((team) => team.team_id === keyData.team_id);
-  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const modelScope = {
+    keyData,
+    team,
+    userId: userID,
+    userRole,
+    accessToken,
+    enabled: true,
+  };
+  const { data: availableModels = [] } = useKeyAssignableModels(modelScope);
   const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>(
     Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
       ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
@@ -152,25 +160,6 @@ export function KeyEditView({
   const mcpToolPermissions = form.watch("mcp_tool_permissions");
 
   useEffect(() => {
-    const fetchModels = async () => {
-      if (!userID || !userRole || !accessToken) return;
-
-      try {
-        if (keyData.team_id === null) {
-          // Fetch user models if no team
-          const model_available = await modelAvailableCall(accessToken, userID, userRole);
-          const available_model_names = model_available["data"].map((element: { id: string }) => element.id);
-          setAvailableModels(excludeProxyWideSentinel(available_model_names));
-        } else if (team?.team_id) {
-          // Fetch team models if team exists
-          const models = await fetchTeamModels(userID, userRole, accessToken, team.team_id);
-          setAvailableModels(excludeProxyWideSentinel(Array.from(new Set([...team.models, ...models]))));
-        }
-      } catch (error) {
-        console.error("Error fetching models:", error);
-      }
-    };
-
     const fetchPrompts = async () => {
       if (!accessToken) return;
       try {
@@ -182,8 +171,7 @@ export function KeyEditView({
     };
 
     if (canViewPrompts) fetchPrompts();
-    fetchModels();
-  }, [userID, userRole, accessToken, team, keyData.team_id, canViewPrompts]);
+  }, [accessToken, canViewPrompts]);
 
   // Sync disabled callbacks with form when component mounts
   useEffect(() => {

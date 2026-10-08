@@ -5,6 +5,7 @@ import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useApplyUserBudgetToTeamKeys } from "@/app/(dashboard)/hooks/uiSettings/useApplyUserBudgetToTeamKeys";
 import { useAllTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import {
   DataTable,
@@ -88,6 +89,7 @@ const appliedFilter = (filters: ColumnFiltersState, column: FilterColumn): strin
 };
 
 export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
+  const { accessToken, userId, userRole } = useAuthorized();
   const { data: fetchedOrganizations } = useOrganizations();
   const organizations = useMemo(() => fetchedOrganizations ?? [], [fetchedOrganizations]);
   const { data: fetchedTeams } = useAllTeams();
@@ -149,8 +151,11 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
       organizations,
       onSelectKey: (key: KeyResponse) => void setSelectedKeyId(key.token),
       applyUserBudgetToTeamKeys,
+      accessToken,
+      userId,
+      userRole,
     }),
-    [allTeams, organizations, setSelectedKeyId, applyUserBudgetToTeamKeys],
+    [allTeams, organizations, setSelectedKeyId, applyUserBudgetToTeamKeys, accessToken, userId, userRole],
   );
   const columns = useMemo(() => getKeyTableColumns(columnDeps), [columnDeps]);
 

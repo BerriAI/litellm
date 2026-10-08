@@ -23,6 +23,10 @@ import { orgDetailHref, teamDetailHref } from "@/utils/entityLinks";
 
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { Organization } from "../networking";
+import { canModifyKey } from "../key_quick_edit/canModifyKey";
+import { KeyBudgetQuickEdit } from "../key_quick_edit/KeyBudgetQuickEdit";
+import { KeyModelsQuickEdit } from "../key_quick_edit/KeyModelsQuickEdit";
+import { isTeamAdminEditingMemberKey } from "../templates/teamAdminMemberKeyPayload";
 
 interface KeyStatus {
   tone: StatusTone;
@@ -87,6 +91,9 @@ interface KeyTableColumnsDeps {
   organizations: Organization[];
   onSelectKey: (key: KeyResponse) => void;
   applyUserBudgetToTeamKeys: boolean;
+  accessToken: string | null;
+  userId: string | null;
+  userRole: string | null;
 }
 
 export const getKeyTableColumns = ({
@@ -94,6 +101,9 @@ export const getKeyTableColumns = ({
   organizations,
   onSelectKey,
   applyUserBudgetToTeamKeys,
+  accessToken,
+  userId,
+  userRole,
 }: KeyTableColumnsDeps): ColumnDef<KeyResponse>[] => [
   {
     id: "key_alias",
@@ -272,19 +282,32 @@ export const getKeyTableColumns = ({
     size: 180,
     enableSorting: true,
     cell: ({ row }) => {
-      const team = allTeams.find((t) => t.team_id === row.original.team_id);
-      const orgId = row.original.organization_id || row.original.org_id || team?.organization_id;
+      const key = row.original;
+      const team = allTeams.find((candidate) => candidate.team_id === key.team_id);
+      const orgId = key.organization_id || key.org_id || team?.organization_id;
       const organization = organizations.find((o) => o.organization_id === orgId);
+      const permissionContext = { userRole, userId, key, teams: allTeams };
+      const canModify = canModifyKey(permissionContext);
       return (
-        <SpendBudgetCell
-          spend={row.original.spend}
-          maxBudget={row.original.max_budget}
-          inheritedGates={
-            row.original.max_budget == null
-              ? inheritedBudgetGates(team, organization, keyOwnerBudgetSource(row.original, applyUserBudgetToTeamKeys))
-              : []
-          }
-        />
+        <div className="group/editable relative flex min-w-0 items-center gap-1">
+          <div className="min-w-0 flex-1">
+            <SpendBudgetCell
+              spend={key.spend}
+              maxBudget={key.max_budget}
+              inheritedGates={
+                key.max_budget == null
+                  ? inheritedBudgetGates(team, organization, keyOwnerBudgetSource(key, applyUserBudgetToTeamKeys))
+                  : []
+              }
+            />
+          </div>
+          <KeyBudgetQuickEdit
+            keyData={key}
+            accessToken={accessToken}
+            canModify={canModify}
+            buttonClassName="absolute right-0 top-1/2 -translate-y-1/2 bg-background"
+          />
+        </div>
       );
     },
   },
@@ -318,13 +341,38 @@ export const getKeyTableColumns = ({
     header: "Models",
     size: 220,
     enableSorting: false,
-    cell: (info) => (
-      <ModelsCell
-        models={info.getValue() as string[] | null | undefined}
-        allowedRoutes={info.row.original.allowed_routes}
-        keyType={info.row.original.key_type}
-      />
-    ),
+    cell: ({ row }) => {
+      const key = row.original;
+      const team = allTeams.find((candidate) => candidate.team_id === key.team_id);
+      const permissionContext = { userRole, userId, key, teams: allTeams };
+      const canModify = canModifyKey(permissionContext);
+      const memberKeyContext = {
+        userRole: userRole ?? "",
+        userId: userId ?? "",
+        keyUserId: key.user_id,
+        keyTeamId: key.team_id,
+        teamMembers: team?.members_with_roles,
+      };
+      const isMemberKey = isTeamAdminEditingMemberKey(memberKeyContext);
+
+      return (
+        <div className="group/editable relative flex min-w-0 items-start">
+          <div className="min-w-0 flex-1">
+            <ModelsCell models={key.models} allowedRoutes={key.allowed_routes} keyType={key.key_type} />
+          </div>
+          <KeyModelsQuickEdit
+            keyData={key}
+            team={team}
+            accessToken={accessToken}
+            userId={userId}
+            userRole={userRole}
+            canModify={canModify}
+            canEditModels={!isMemberKey}
+            buttonClassName="absolute right-0 top-0 bg-background"
+          />
+        </div>
+      );
+    },
   },
   {
     id: "rate_limits",
