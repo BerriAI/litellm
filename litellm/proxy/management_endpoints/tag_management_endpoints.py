@@ -33,6 +33,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     raise_public,
 )
 from litellm.proxy.management_helpers.utils import handle_budget_for_entity
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
     DailyTagSpendRepository,
@@ -104,6 +105,14 @@ class _VerificationTokenTableClient(Protocol):
         self,
         where: Mapping[str, object] | None = None,
     ) -> "Sequence[PrismaVerificationToken]": ...
+
+
+class _StoredTagTableWithBudget:
+    def __init__(self, table: "_TagTableClient") -> None:
+        self._table: Final = table
+
+    async def find_many(self, *, where: Mapping[str, object]) -> "Sequence[_TagRecord]":
+        return await self._table.find_many(where=where, include={"litellm_budget_table": True})
 
 
 class _DailyTagSpendGroupByRow(TypedDict):
@@ -664,39 +673,56 @@ async def list_tags(
         scoped_to_usage: Final = team_scope is not None or tag_scope is not None or usage_only
 
         ## QUERY DYNAMIC TAGS ##
-        # Use group_by instead of find_many(distinct=["tag"]).
-        # Prisma's distinct fetches all columns for all rows and deduplicates
-        # in application code, which is extremely slow on large tables.
-        # See: https://www.prisma.io/docs/orm/prisma-client/queries/aggregation-grouping-summarizing#distinct-under-the-hood
-        dynamic_tag_where: dict[str, object] = {"tag": {"not": None}}
+        used_tag_names: Sequence[str]
+        dynamic_tag_rows: Sequence[Mapping[str, object]]
         if team_scope is not None:
-            dynamic_tag_where["team_id"] = {"in": list(permitted_teams)}
-            if team_key_filter is not None:
-                dynamic_tag_where["api_key"] = {
-                    "in": [team_key_filter] if isinstance(team_key_filter, str) else list(team_key_filter)
+            dynamic_tag_rows = [
+                {
+                    "tag": row["tag"],
+                    "_min": {"created_at": row["created_at"]},
+                    "_max": {"updated_at": row["updated_at"]},
                 }
-        elif tag_scope:
-            dynamic_tag_where = {**dynamic_tag_where, **tag_scope}
-        if start_date is not None and end_date is not None:
-            dynamic_tag_where["date"] = {"gte": start_date, "lte": end_date}
+                for row in await DailyTagSpendRepository(prisma_client).tags_used_in_teams(
+                    team_ids=permitted_teams,
+                    api_keys=None
+                    if team_key_filter is None
+                    else [team_key_filter] if isinstance(team_key_filter, str) else list(team_key_filter),
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+            ]
+            used_tag_names = [str(row["tag"]) for row in dynamic_tag_rows if row["tag"]]
+        else:
+            # Use group_by instead of find_many(distinct=["tag"]).
+            # Prisma's distinct fetches all columns for all rows and deduplicates
+            # in application code, which is extremely slow on large tables.
+            # See: https://www.prisma.io/docs/orm/prisma-client/queries/aggregation-grouping-summarizing#distinct-under-the-hood
+            dynamic_tag_where: dict[str, object] = {"tag": {"not": None}}
+            if tag_scope:
+                dynamic_tag_where = {**dynamic_tag_where, **tag_scope}
+            if start_date is not None and end_date is not None:
+                dynamic_tag_where["date"] = {"gte": start_date, "lte": end_date}
 
-        dynamic_tag_rows: Final = await _table(DailyTagSpendRepository(prisma_client)).group_by(
-            by=["tag"],
-            where=dynamic_tag_where,
-            min={"created_at": True},
-            max={"updated_at": True},
-        )
+            dynamic_tag_rows: Final = await _table(DailyTagSpendRepository(prisma_client)).group_by(
+                by=["tag"],
+                where=dynamic_tag_where,
+                min={"created_at": True},
+                max={"updated_at": True},
+            )
 
-        used_tag_names: Final = [row["tag"] for row in dynamic_tag_rows if row["tag"]]
+            used_tag_names = [row["tag"] for row in dynamic_tag_rows if row["tag"]]
         if scoped_to_usage and not used_tag_names:
             return []
 
-        stored_tag_where: Final = {"tag_name": {"in": used_tag_names}} if scoped_to_usage else None
-
         ## QUERY STORED TAGS ##
-        tag_records: Final = await _table(TagRepository(prisma_client)).find_many(
-            where=stored_tag_where,
-            include={"litellm_budget_table": True},
+        tag_records: Final = (
+            await find_many_in(
+                _StoredTagTableWithBudget(_table(TagRepository(prisma_client))),
+                "tag_name",
+                used_tag_names,
+            )
+            if scoped_to_usage
+            else await _table(TagRepository(prisma_client)).find_many(include={"litellm_budget_table": True})
         )
 
         stored_tag_names: Final = set()

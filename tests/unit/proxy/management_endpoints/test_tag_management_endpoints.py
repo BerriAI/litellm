@@ -49,9 +49,7 @@ class FakeVerificationTokenTable:
         self.calls: list[dict[str, object]] = []
 
     async def find_many(self, **kwargs: object) -> tuple[Mock, ...]:
-        inspect.signature(LiteLLM_VerificationTokenActions.find_many).bind(
-            self, **kwargs
-        )
+        inspect.signature(LiteLLM_VerificationTokenActions.find_many).bind(self, **kwargs)
         self.calls.append(kwargs)
         return self._records
 
@@ -76,9 +74,7 @@ async def test_create_and_get_tag():
         with (
             patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
             patch("litellm.proxy.proxy_server.llm_router"),
-            patch(
-                "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
-            ),
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
             patch(
                 "litellm.proxy.management_endpoints.tag_management_endpoints.get_deployments_by_model"
             ) as mock_get_deployments,
@@ -171,9 +167,7 @@ async def test_update_tag():
     try:
         with (
             patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
-            patch(
-                "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
-            ),
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
         ):
             # Setup prisma mocks
             mock_db = Mock()
@@ -516,9 +510,7 @@ async def test_new_tag_invalidates_tag_and_registry_caches():
             _tag_cache_doubles() as (recording_cache, mock_publish),
             patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
             patch("litellm.proxy.proxy_server.llm_router"),
-            patch(
-                "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
-            ),
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
             patch(
                 "litellm.proxy.management_endpoints.tag_management_endpoints.get_deployments_by_model"
             ) as mock_get_deployments,
@@ -571,9 +563,7 @@ async def test_update_tag_invalidates_only_the_tag_cache():
         with (
             _tag_cache_doubles() as (recording_cache, mock_publish),
             patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
-            patch(
-                "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
-            ),
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
         ):
             mock_db = Mock()
             mock_prisma.db = mock_db
@@ -719,9 +709,7 @@ async def test_list_tags_with_dynamic_tags():
             assert "dynamic-tag-2" in tag_names
 
             # Verify dynamic tags include created_at/updated_at
-            dynamic_tags = {
-                t["name"]: t for t in result if t["name"].startswith("dynamic-")
-            }
+            dynamic_tags = {t["name"]: t for t in result if t["name"].startswith("dynamic-")}
             assert dynamic_tags["dynamic-tag-1"]["created_at"] is not None
             assert dynamic_tags["dynamic-tag-1"]["updated_at"] is not None
 
@@ -843,9 +831,7 @@ async def test_internal_user_list_tags_only_returns_tags_used_by_their_keys():
                 "stored-owned-tag",
                 "dynamic-owned-tag",
             ]
-            assert fake_token_table.calls == [
-                {"where": {"user_id": "internal-user-123"}}
-            ]
+            assert fake_token_table.calls == [{"where": {"user_id": "internal-user-123"}}]
             mock_db.litellm_dailytagspend.group_by.assert_awaited_once_with(
                 by=["tag"],
                 where={
@@ -899,15 +885,11 @@ async def test_internal_user_list_tags_does_not_500_on_unsupported_prisma_kwarg(
             mock_db.litellm_dailytagspend.group_by = AsyncMock(return_value=[])
             mock_db.litellm_tagtable.find_many = AsyncMock(return_value=[])
 
-            response = client.get(
-                "/tag/list", headers={"Authorization": "Bearer new-user-key"}
-            )
+            response = client.get("/tag/list", headers={"Authorization": "Bearer new-user-key"})
 
             assert response.status_code == 200, response.text
             assert response.json() == []
-            assert fake_token_table.calls == [
-                {"where": {"user_id": "brand-new-internal-user"}}
-            ]
+            assert fake_token_table.calls == [{"where": {"user_id": "brand-new-internal-user"}}]
     finally:
         app.dependency_overrides.clear()
 
@@ -971,9 +953,7 @@ class _FakeDailySpendTable:
         return [call["where"] for call in self.calls if "where" in call]
 
 
-def _daily_tag_spend_row(
-    *, spend: float, tag: str | None, team_id: str, api_key: str = ""
-) -> SimpleNamespace:
+def _daily_tag_spend_row(*, spend: float, tag: str | None, team_id: str, api_key: str = "") -> SimpleNamespace:
     return SimpleNamespace(
         date="2026-06-01",
         api_key=api_key,
@@ -1381,9 +1361,7 @@ async def test_add_tag_to_deployment_preserves_encrypted_fields():
         await _add_tag_to_deployment(deployment, "test-tag")
 
         # Verify find_unique was called
-        mock_db.litellm_proxymodeltable.find_unique.assert_called_once_with(
-            where={"model_id": "model-123"}
-        )
+        mock_db.litellm_proxymodeltable.find_unique.assert_called_once_with(where={"model_id": "model-123"})
 
         # Verify update was called with preserved encrypted fields
         update_call = mock_db.litellm_proxymodeltable.update.call_args
@@ -1689,9 +1667,7 @@ async def test_tag_daily_activity_team_ids_denied_for_non_member():
             team_ids="team-a",
             start_date="2026-06-01",
             end_date="2026-06-02",
-            user_api_key_dict=UserAPIKeyAuth(
-                user_id="internal-user-1", user_role=LitellmUserRoles.INTERNAL_USER
-            ),
+            user_api_key_dict=UserAPIKeyAuth(user_id="internal-user-1", user_role=LitellmUserRoles.INTERNAL_USER),
         )
 
     assert exc_info.value.status_code == 404
@@ -1762,17 +1738,13 @@ async def test_admin_tag_list_team_ids_scopes_dynamic_tags_to_team():
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN
     )
-    group_by_mock = AsyncMock(
-        return_value=[
-            {
-                "tag": "team-tag",
-                "_min": {"created_at": "2026-06-01T00:00:00Z"},
-                "_max": {"updated_at": "2026-06-02T00:00:00Z"},
-            }
-        ]
+    query_raw_mock = AsyncMock(
+        return_value=[{"tag": "team-tag", "created_at": "2026-06-01T00:00:00Z", "updated_at": "2026-06-02T00:00:00Z"}]
     )
+    group_by_mock = AsyncMock(return_value=[])
     mock_prisma = SimpleNamespace(
         db=SimpleNamespace(
+            query_raw=query_raw_mock,
             litellm_dailytagspend=SimpleNamespace(group_by=group_by_mock),
             litellm_tagtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
             litellm_teamtable=SimpleNamespace(
@@ -1789,9 +1761,11 @@ async def test_admin_tag_list_team_ids_scopes_dynamic_tags_to_team():
 
     assert response.status_code == 200, response.text
     assert [tag["name"] for tag in response.json()] == ["team-tag"]
-    where = group_by_mock.await_args.kwargs["where"]
-    assert where["team_id"] == {"in": ["team-a"]}
-    assert "api_key" not in where
+    query_raw_mock.assert_awaited_once()
+    args = query_raw_mock.await_args.args
+    assert args[1] == ["team-a"]
+    assert args[2] is None
+    group_by_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1808,20 +1782,15 @@ async def test_internal_member_tag_list_team_ids_scoped_to_own_keys():
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
         api_key="key-m1", user_id="member-1", user_role=LitellmUserRoles.INTERNAL_USER
     )
-    group_by_mock = AsyncMock(
-        return_value=[
-            {
-                "tag": "member-tag",
-                "_min": {"created_at": "2026-06-01T00:00:00Z"},
-                "_max": {"updated_at": "2026-06-02T00:00:00Z"},
-            }
-        ]
+    query_raw_mock = AsyncMock(
+        return_value=[{"tag": "member-tag", "created_at": "2026-06-01T00:00:00Z", "updated_at": "2026-06-02T00:00:00Z"}]
     )
     token_record = Mock()
     token_record.token = "key-m2"
     mock_prisma = SimpleNamespace(
         db=SimpleNamespace(
-            litellm_dailytagspend=SimpleNamespace(group_by=group_by_mock),
+            query_raw=query_raw_mock,
+            litellm_dailytagspend=SimpleNamespace(group_by=AsyncMock(return_value=[])),
             litellm_tagtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
             litellm_teamtable=SimpleNamespace(
                 find_many=AsyncMock(return_value=[_team_row_without_member_view("team-a", "member-1")])
@@ -1852,9 +1821,10 @@ async def test_internal_member_tag_list_team_ids_scoped_to_own_keys():
 
     assert response.status_code == 200, response.text
     assert [tag["name"] for tag in response.json()] == ["member-tag"]
-    where = group_by_mock.await_args.kwargs["where"]
-    assert where["team_id"] == {"in": ["team-a"]}
-    assert where["api_key"] == {"in": ["key-m2"]}
+    query_raw_mock.assert_awaited_once()
+    args = query_raw_mock.await_args.args
+    assert args[1] == ["team-a"]
+    assert args[2] == ["key-m2"]
 
 
 @pytest.mark.asyncio
@@ -1871,10 +1841,11 @@ async def test_tag_list_team_ids_non_member_gets_404():
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_id="outsider-1", user_role=LitellmUserRoles.INTERNAL_USER
     )
-    group_by_mock = AsyncMock(return_value=[])
+    query_raw_mock = AsyncMock(return_value=[])
     mock_prisma = SimpleNamespace(
         db=SimpleNamespace(
-            litellm_dailytagspend=SimpleNamespace(group_by=group_by_mock),
+            query_raw=query_raw_mock,
+            litellm_dailytagspend=SimpleNamespace(group_by=AsyncMock(return_value=[])),
             litellm_tagtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
             litellm_teamtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
             litellm_verificationtoken=FakeVerificationTokenTable([]),
@@ -1902,7 +1873,7 @@ async def test_tag_list_team_ids_non_member_gets_404():
         app.dependency_overrides.clear()
 
     assert response.status_code == 404, response.text
-    group_by_mock.assert_not_awaited()
+    query_raw_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1919,10 +1890,11 @@ async def test_tag_list_team_ids_member_without_keys_returns_empty_without_query
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_id="member-1", user_role=LitellmUserRoles.INTERNAL_USER
     )
-    group_by_mock = AsyncMock(return_value=[])
+    query_raw_mock = AsyncMock(return_value=[])
     mock_prisma = SimpleNamespace(
         db=SimpleNamespace(
-            litellm_dailytagspend=SimpleNamespace(group_by=group_by_mock),
+            query_raw=query_raw_mock,
+            litellm_dailytagspend=SimpleNamespace(group_by=AsyncMock(return_value=[])),
             litellm_tagtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
             litellm_teamtable=SimpleNamespace(
                 find_many=AsyncMock(return_value=[_team_row_without_member_view("team-a", "member-1")])
@@ -1953,7 +1925,7 @@ async def test_tag_list_team_ids_member_without_keys_returns_empty_without_query
 
     assert response.status_code == 200, response.text
     assert response.json() == []
-    group_by_mock.assert_not_awaited()
+    query_raw_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -75,7 +75,6 @@ litellm/proxy/management_endpoints/session_endpoints.py revoke_ui_session_keys p
 litellm/proxy/management_endpoints/tag_management_endpoints.py _get_model_names prisma model_id.in `model_ids` 0
 litellm/proxy/management_endpoints/tag_management_endpoints.py _get_tag_list_scope prisma api_key.in `scoped_api_keys` 0
 litellm/proxy/management_endpoints/tag_management_endpoints.py info_tag prisma tag_name.in `data.names` 0
-litellm/proxy/management_endpoints/tag_management_endpoints.py list_tags prisma tag_name.in `used_tag_names` 0
 litellm/proxy/management_endpoints/team_endpoints.py _append_permissions_to_specific_teams prisma team_id.in `team_ids` 0
 litellm/proxy/management_endpoints/team_endpoints.py _authorize_and_filter_teams prisma organization_id.in `allowed_org_ids` 0
 litellm/proxy/management_endpoints/team_endpoints.py _batch_resolve_access_group_resources prisma access_group_id.in `unique_ids` 0
@@ -138,4 +137,6 @@ litellm/proxy/utils.py prefetch_config_params prisma param_name.in `param_names`
 litellm/repositories/daily_activity_repository.py DailyActivityRepository.daily_rows prisma [scope.entity_id_field].in `list(scope.entity_ids)` 0
 litellm/repositories/daily_activity_repository.py DailyActivityRepository.daily_rows prisma api_key.in `list(scope.api_keys)` 0
 litellm/repositories/daily_activity_repository.py DailyActivityRepository.daily_rows prisma not.in `list(scope.exclude_entity_ids)` 0
+litellm/repositories/daily_activity_repository.py _dimension_prisma_filter prisma [column].in `list(included)` 0
+litellm/repositories/daily_activity_repository.py _dimension_prisma_filter prisma not.in `list(excluded)` 0
 litellm/router_utils/auto_router_model_naming.py <module> raw-sql classifier_type.IN `IN ({_LLM_CLASSIFIER_TYPES_SQL})` 0

@@ -7,7 +7,8 @@ These are thin wrappers for tables that do not (yet) need domain-specific query
 methods; richer repositories live in their own modules.
 """
 
-from typing import TYPE_CHECKING, Any, Final, Generic
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final, Generic, Protocol, cast
 
 from litellm.proxy.common_utils.config_sync_pubsub import wrap_table_actions_for_config_sync
 from litellm.repositories.prisma_protocols import RowT_co, TableActions
@@ -211,8 +212,42 @@ class WorkflowMessageRepository(PrismaTableRepository["prisma_models.LiteLLM_Wor
     table_name = "litellm_workflowmessage"
 
 
+_TAGS_USED_IN_TEAMS_SQL: Final = '''SELECT "tag", MIN("created_at") AS created_at, MAX("updated_at") AS updated_at
+FROM "LiteLLM_DailyTagSpend"
+WHERE "tag" IS NOT NULL
+  AND "team_id" = ANY($1::text[])
+  AND ($2::text[] IS NULL OR "api_key" = ANY($2::text[]))
+  AND ($3::text IS NULL OR "date" >= $3)
+  AND ($4::text IS NULL OR "date" <= $4)
+GROUP BY "tag"'''
+
+
+class _QueryRawDatabase(Protocol):
+    async def query_raw(self, query: str, *args: object) -> "Sequence[Mapping[str, object]] | None": ...
+
+
 class DailyTagSpendRepository(PrismaTableRepository["prisma_models.LiteLLM_DailyTagSpend"]):
     table_name = "litellm_dailytagspend"
+
+    async def tags_used_in_teams(
+        self,
+        *,
+        team_ids: Sequence[str],
+        api_keys: Sequence[str] | None,
+        start_date: str | None,
+        end_date: str | None,
+    ) -> "tuple[Mapping[str, object], ...]":
+        database: Final = cast(
+            _QueryRawDatabase, self.prisma_client.db
+        )  # cast-ok: Prisma delegates database methods dynamically
+        rows: Final = await database.query_raw(
+            _TAGS_USED_IN_TEAMS_SQL,
+            list(team_ids),
+            list(api_keys) if api_keys is not None else None,
+            start_date,
+            end_date,
+        )
+        return tuple(row for row in rows or () if row["tag"])
 
 
 class SpendLogToolIndexRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogToolIndex"]):
