@@ -2,6 +2,7 @@
 ## Helper utilities for token counting
 import base64
 import io
+import json
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from itertools import accumulate
@@ -991,6 +992,9 @@ def _format_function_definitions(tools: Sequence[object]) -> str:
     lines.append("")
     for tool in tools:
         if not isinstance(tool, Mapping):
+            continue
+        if "input_schema" in tool:
+            lines.append(json.dumps(tool, ensure_ascii=False))
             continue
         for function in _function_definitions_for_tool(cast(Mapping[str, object], tool)):
             lines.extend(_format_single_function_definition(function))

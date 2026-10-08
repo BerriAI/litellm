@@ -6186,6 +6186,30 @@ def test_pre_call_checks_counts_anthropic_system_tokens(monkeypatch, system):
 
 
 @pytest.mark.asyncio
+async def test_aanthropic_messages_enforces_context_window_with_schema_tokens():
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "small-ctx",
+                "litellm_params": {"model": "anthropic/claude-3-5-haiku-20241022", "mock_response": "hi"},
+                "model_info": {"max_input_tokens": 80},
+            }
+        ],
+        enable_pre_call_checks=True,
+    )
+    messages: Final = [{"role": "user", "content": "hi"}]
+    assert await router.aanthropic_messages(model="small-ctx", messages=messages, max_tokens=5) is not None
+    with pytest.raises(litellm.ContextWindowExceededError):
+        await router.aanthropic_messages(
+            model="small-ctx",
+            messages=messages,
+            max_tokens=5,
+            system="system content " * 100,
+            tools=[{"name": "lookup", "input_schema": {"type": "object", "properties": {"values": {"type": "array"}}}}],
+        )
+
+
+@pytest.mark.asyncio
 async def test_aanthropic_messages_enforces_context_window_with_system_and_tools():
     """
     End-to-end router regression for /v1/messages: a request whose only oversized
