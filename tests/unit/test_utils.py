@@ -7216,7 +7216,8 @@ async def test_nested_wrapper_exits_schedule_one_async_success_log(monkeypatch: 
 
 def test_get_model_info_surfaces_context_cache_storage_rate(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    local_cost_map: dict[str, object] = litellm.get_model_cost_map(url="")
+    monkeypatch.setattr(litellm, "model_cost", local_cost_map)
     litellm.get_model_info.cache_clear()
     priced: Final = {
         name: entry["cache_storage_cost_per_token_per_hour"]

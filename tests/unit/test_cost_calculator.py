@@ -5832,19 +5832,27 @@ def _storage_cost_map(_local_model_cost_map: None) -> Iterator[None]:
 
 
 def _first_chat_model(provider_prefix: str, *, with_storage_rate: bool) -> str:
+    names: Final = [name for name in litellm.model_cost if isinstance(name, str)]
     return next(
         name
-        for name, entry in litellm.model_cost.items()
-        if _is_priced_chat_entry(entry, provider_prefix) and (_STORAGE_RATE_KEY in entry) == with_storage_rate
+        for name in names
+        if _is_priced_chat_entry(_cost_map_entry(name), provider_prefix, with_storage_rate=with_storage_rate)
     )
 
 
-def _is_priced_chat_entry(entry: object, provider_prefix: str) -> bool:
+def _cost_map_entry(name: str) -> object:
+    entry: object = litellm.model_cost.get(name)
+    return entry
+
+
+def _is_priced_chat_entry(entry: object, provider_prefix: str, *, with_storage_rate: bool) -> bool:
     return (
         isinstance(entry, dict)
         and entry.get("mode") == "chat"
-        and str(entry.get("litellm_provider", "")).startswith(provider_prefix)
+        and isinstance(provider := entry.get("litellm_provider"), str)
+        and provider.startswith(provider_prefix)
         and entry.get("input_cost_per_token") is not None
+        and (_STORAGE_RATE_KEY in entry) == with_storage_rate
     )
 
 
@@ -5934,6 +5942,7 @@ def _routed_request_cost(deployment_pricing: Mapping[str, float], token_hours: f
         ]
     )
     deployment_id: Final = router.model_list[0]["model_info"]["id"]
+    assert isinstance(deployment_id, str)
     return _vertex_request_cost({**deployment_pricing, "metadata": {"model_info": {"id": deployment_id}}}, token_hours)
 
 
@@ -5964,8 +5973,10 @@ def test_custom_token_prices_without_a_storage_rate_bill_storage_at_the_underlyi
 
 
 def test_a_storage_only_override_keeps_the_underlying_token_prices(_storage_cost_map: None) -> None:
-    deployment_rate: Final = litellm.get_model_info(f"vertex_ai/{_STORAGE_DEPLOYMENT_MODEL}")[_STORAGE_RATE_KEY] * 3
-    storage_only: Final = {_STORAGE_RATE_KEY: deployment_rate}
+    cost_map_rate: Final = litellm.get_model_info(f"vertex_ai/{_STORAGE_DEPLOYMENT_MODEL}")[_STORAGE_RATE_KEY]
+    assert isinstance(cost_map_rate, float)
+    deployment_rate: Final = cost_map_rate * 3
+    storage_only: Final[dict[str, float]] = {_STORAGE_RATE_KEY: deployment_rate}
 
     no_override: Final = _vertex_request_cost({}, token_hours=0.0)
     without_storage: Final = _routed_request_cost(storage_only, token_hours=0.0)

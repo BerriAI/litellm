@@ -1883,17 +1883,20 @@ def completion_cost(
                     )
                 else:
                     additional_costs = None
-                cache_storage_cost: Final = _context_cache_storage_cost(
+                _storage_response: ModelResponse | None = (
+                    completion_response if isinstance(completion_response, ModelResponse) else None
+                )
+                _storage_provider: str | None = custom_llm_provider if isinstance(custom_llm_provider, str) else None
+                _storage_region: str | None = region_name if isinstance(region_name, str) else None
+                cache_storage_cost: float = _context_cache_storage_cost(
                     litellm_logging_obj,
                     requested_model=requested_model,
-                    completion_response=completion_response,
+                    completion_response=_storage_response,
                     base_model=base_model,
-                    custom_llm_provider=custom_llm_provider,
+                    custom_llm_provider=_storage_provider,
                     router_model_id=router_model_id,
-                    region_name=region_name,
+                    region_name=_storage_region,
                 )
-                if cache_storage_cost > 0:
-                    additional_costs = {**(additional_costs or {}), "cache_storage_cost": cache_storage_cost}
 
                 _final_cost = prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
                 cost_for_built_in_tools = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
@@ -1906,6 +1909,9 @@ def completion_cost(
                 _final_cost += cost_for_built_in_tools
                 if additional_costs:
                     _final_cost += sum(additional_costs.values())
+                if cache_storage_cost > 0:
+                    _final_cost += cache_storage_cost
+                    additional_costs = {**(additional_costs or {}), "cache_storage_cost": cache_storage_cost}
 
                 original_cost = _final_cost
                 if litellm.cost_discount_config:
