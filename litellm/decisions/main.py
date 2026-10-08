@@ -6,6 +6,7 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
@@ -60,6 +61,28 @@ def _provider_config(model: str, custom_llm_provider: str) -> BaseDecisionsConfi
     return provider_config
 
 
+def _body_for_provider(
+    body: DecisionsRequestBody,
+    provider_config: BaseDecisionsConfig,
+    *,
+    model: str,
+    provider: str,
+    drop_params: object,
+) -> DecisionsRequestBody:
+    if body.safety_identifier is None or provider_config.supports_safety_identifier:
+        return body
+    if litellm.drop_params is True or normalize_drop_params(drop_params) is True:
+        return body.model_copy(update={"safety_identifier": None})
+    raise litellm.UnsupportedParamsError(
+        message=(
+            f"{provider} does not support parameters: ['safety_identifier'], for model={model}. "
+            "To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+        ),
+        model=model,
+        llm_provider=provider,
+    )
+
+
 def _prepare_call(
     *,
     model: str,
@@ -97,7 +120,12 @@ def _prepare_call(
             model=model,
             llm_provider=provider,
         ) from error
-    request: Final = DecisionsRequest(model=canonical_model, body=body)
+    request: Final = DecisionsRequest(
+        model=canonical_model,
+        body=_body_for_provider(
+            body, provider_config, model=model, provider=provider, drop_params=kwargs.get("drop_params")
+        ),
+    )
 
     resolved_api_base: Final = provider_config.resolve_api_base(dynamic_api_base or api_base)
     if resolved_api_base is None:

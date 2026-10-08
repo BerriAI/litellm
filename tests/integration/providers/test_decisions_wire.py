@@ -604,3 +604,53 @@ def test_a_deployment_whose_provider_has_no_decisions_support_is_refused_naming_
         for provider in _PROVIDERS:
             assert provider.name in response.text, response.text
         assert _upstream_calls(gateway, handle) == []
+
+
+def test_safety_identifier_is_refused_for_system_one_providers_unless_the_deployment_drops_params(
+    gateway: Gateway,
+) -> None:
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, _PERPLEXITY.upstream_reply())
+        strict: Final = _deployment(scenario, handle, _PERPLEXITY)
+        refused: Final = _decide(gateway, strict, safety_identifier="end-user-7")
+        assert refused.status_code == 400, refused.text
+        assert "safety_identifier" in refused.text and "drop_params" in refused.text, refused.text
+        assert _upstream_calls(gateway, handle) == []
+
+        dropping: Final = scenario.model(
+            model=_PERPLEXITY.model, api_base=handle.api_base(), api_key=_PERPLEXITY.api_key, drop_params=True
+        )
+        accepted: Final = _decide(gateway, dropping, safety_identifier="end-user-7")
+        assert accepted.status_code == 200, accepted.text
+        assert accepted.json() == _PERPLEXITY.litellm_response()
+        (call,) = _upstream_calls(gateway, handle)
+        assert call["body"] == _PERPLEXITY.upstream_body()
+
+
+@pytest.mark.parametrize(
+    ("questions", "system_one_questions"),
+    (
+        ([], {}),
+        (
+            [{**_PREDICATE, "type": "choice", "choices": []}],
+            {"q": {"type": "choice", "instructions": "Is it?", "criteria": {}}},
+        ),
+        (
+            [{**_PREDICATE, "type": "score", "levels": []}],
+            {"q": {"type": "score", "instructions": "Is it?", "criteria": []}},
+        ),
+    ),
+    ids=("no questions", "choice without choices", "score without levels"),
+)
+def test_empty_collections_reach_the_provider_and_its_verdict_comes_back(
+    gateway: Gateway, questions: list[JsonValue], system_one_questions: dict[str, JsonValue]
+) -> None:
+    verdict: Final = "at least one criterion is required"
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, {"error": {"message": verdict}}, status=400)
+        model: Final = _deployment(scenario, handle, _PERPLEXITY)
+        response: Final = _decide(gateway, model, questions=questions)
+        assert response.status_code == 400, response.text
+        assert verdict in response.text, response.text
+        (call,) = _upstream_calls(gateway, handle)
+        assert call["body"] == {"model": _PERPLEXITY.body_model, "state": _INPUT, "questions": system_one_questions}

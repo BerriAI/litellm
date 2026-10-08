@@ -765,3 +765,48 @@ async def test_strands_decider_provider_resolution_and_router_dispatch(
     assert provider_resolution[:2] == ("strands-decider-2B-hobson-v19", "strands_decider")
     assert route.called
     assert response.model == "jev-1.13"
+
+
+def test_safety_identifier_is_refused_before_http_when_the_provider_cannot_take_it(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_SYSTEM_ONE_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"safety_identifier.*drop_params") as caught:
+        litellm.decisions(
+            model="perplexity/pplx-decider-v1-27b",
+            input=_INPUT,
+            questions=_predicate(),
+            safety_identifier="end-user-7",
+            api_key="caller-key",
+        )
+
+    assert caught.value.status_code == 400
+    assert not route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ("call", "global"))
+async def test_safety_identifier_is_dropped_from_the_wire_under_drop_params(
+    scope: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", scope == "global")
+    route: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_SYSTEM_ONE_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model="perplexity/pplx-decider-v1-27b",
+        input=_INPUT,
+        questions=_predicate(),
+        safety_identifier="end-user-7",
+        api_key="caller-key",
+        **({"drop_params": True} if scope == "call" else {}),
+    )
+
+    assert route.called
+    assert json.loads(respx_mock.calls[0].request.content) == {
+        "model": "pplx-decider-v1-27b",
+        "state": _INPUT,
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert response.answers[0].model_dump(mode="json") == {"type": "predicate", "name": "is_defect", "probability": 0.9}

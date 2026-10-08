@@ -23,6 +23,7 @@ class BaseDecisionsConfig(ABC):
     api_key_env: tuple[str, ...] = ()
     api_base_env: tuple[str, ...] = ()
     api_key_required: bool = True
+    supports_safety_identifier: bool = False
 
     def get_default_api_base(self) -> str | None:
         return None
