@@ -1004,26 +1004,41 @@ def test_map_team_model_tolerates_concurrent_deployment_removal():
         assert reader.result(timeout=10) is None
 
 
-def test_map_team_model_tolerates_stale_team_index_after_removal():
+def test_team_model_lookup_prefers_team_deployment_after_stale_index():
     router: Final = Router(
         model_list=[
+            {
+                "model_name": "public-model",
+                "litellm_params": {"model": "openai/gpt-6-luna", "api_key": "unused-for-routing"},
+                "model_info": {"id": "global-deployment"},
+            },
+            {
+                "model_name": "unrelated-model",
+                "litellm_params": {"model": "openai/gpt-6-luna", "api_key": "unused-for-routing"},
+                "model_info": {"id": "unrelated-deployment"},
+            },
             {
                 "model_name": "internal-team-model",
                 "litellm_params": {"model": "openai/gpt-6-luna", "api_key": "unused-for-routing"},
                 "model_info": {
-                    "id": "deployment-1",
+                    "id": "team-deployment",
                     "team_id": "team-1",
                     "team_public_model_name": "public-model",
                 },
             },
         ],
     )
-    assert router.delete_deployment("deployment-1") is not None
+    assert router.delete_deployment("unrelated-deployment") is not None
 
     # This stale index is the snapshot a concurrent reader may retain.
-    router.team_model_to_deployment_indices[("team-1", "public-model")] = [0]
+    router.team_model_to_deployment_indices[("team-1", "public-model")] = [2]
 
-    assert router.map_team_model("public-model", "team-1") is None
+    result: Final = router.get_all_deployments("public-model", team_id="team-1")
+    assert [model["model_info"]["id"] for model in result] == ["team-deployment"]
+    aliased_result: Final = router.get_all_deployments(
+        "public-model", model_alias="mapped-public-model", team_id="team-1"
+    )
+    assert [model["model_name"] for model in aliased_result] == ["mapped-public-model"]
 
 
 def test_get_all_deployments_preserves_survivor_from_stale_model_name_index():
@@ -1046,10 +1061,13 @@ def test_get_all_deployments_preserves_survivor_from_stale_model_name_index():
     # This stale index is the snapshot a concurrent reader may retain.
     router.model_name_to_deployment_indices["model-b"] = [1]
 
-    result: Final = router.get_all_deployments("model-b", model_alias="public-model-b")
-    assert len(result) == 1
-    assert result[0]["model_name"] == "public-model-b"
-    assert result[0]["model_info"]["id"] == "deployment-b"
+    result: Final = router.get_all_deployments("model-b")
+    assert [model["model_info"]["id"] for model in result] == ["deployment-b"]
+
+    aliased_result: Final = router.get_all_deployments("model-b", model_alias="public-model-b")
+    assert len(aliased_result) == 1
+    assert aliased_result[0]["model_name"] == "public-model-b"
+    assert aliased_result[0]["model_info"]["id"] == "deployment-b"
 
 
 def test_team_model_has_alternatives():

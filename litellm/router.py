@@ -12007,6 +12007,18 @@ class Router:
         team_id: str | None = None,
     ) -> list[DeploymentTypedDict]:
         current_models: Final = tuple(self.model_list)
+        team_models: Final = tuple(
+            model
+            for model in current_models
+            if team_id is not None
+            and (model.get("model_info") or {}).get("team_id") == team_id
+            and (model.get("model_info") or {}).get("team_public_model_name") == model_name
+        )
+        if team_models:
+            if model_alias is None:
+                return list(team_models)
+            return [{**model, "model_name": model_alias} for model in team_models]
+
         matching_models: Final = tuple(
             model
             for model in current_models
