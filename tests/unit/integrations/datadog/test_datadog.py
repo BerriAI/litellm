@@ -2,6 +2,7 @@ import gzip
 import json
 import os
 from datetime import datetime
+from pathlib import Path
 from typing import Coroutine, Final, TypedDict
 from unittest.mock import AsyncMock, patch
 
@@ -9,6 +10,7 @@ import pytest
 import respx
 from httpx import Request, Response
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly
 
 import litellm
 import litellm.integrations.datadog.datadog as datadog_module
@@ -813,10 +815,10 @@ _INTAKE_URL: Final = "https://http-intake.logs.test.datadoghq.com/api/v2/logs"
 
 
 class _ServiceEventMessage(TypedDict):
-    service: str
-    call_type: str
-    error: str
-    is_error: bool
+    service: ReadOnly[str]
+    call_type: ReadOnly[str]
+    error: ReadOnly[str]
+    is_error: ReadOnly[bool]
 
 
 @pytest.fixture
@@ -889,10 +891,11 @@ async def test_a_failed_request_is_delivered_as_an_error_log_that_keeps_the_erro
 
 @pytest.mark.asyncio
 async def test_a_failing_redis_cache_is_delivered_to_datadog_as_redis_warnings(
-    delivery: tuple[DataDogLogger, respx.Route], monkeypatch: pytest.MonkeyPatch
+    delivery: tuple[DataDogLogger, respx.Route], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     datadog_logger, intake = delivery
-    redis_cache: Final = Cache(type="redis", host="127.0.0.1", port="1")
+    absent_socket: Final = str(tmp_path / "absent.sock")
+    redis_cache: Final = Cache(type="redis", url=f"unix://{absent_socket}")
     monkeypatch.setattr(redis_cache.cache.service_logger_obj, "dd_logger", datadog_logger, raising=False)
     monkeypatch.setattr(litellm, "service_callback", ["datadog"])
     monkeypatch.setattr(litellm, "callbacks", [])
@@ -914,4 +917,4 @@ async def test_a_failing_redis_cache_is_delivered_to_datadog_as_redis_warnings(
     messages: Final = [TypeAdapter(_ServiceEventMessage).validate_json(log["message"]) for log in logs]
     assert {message["service"] for message in messages} == {"redis"}
     assert all(message["is_error"] is True for message in messages)
-    assert all("127.0.0.1:1" in message["error"] for message in messages)
+    assert all(absent_socket in message["error"] for message in messages)

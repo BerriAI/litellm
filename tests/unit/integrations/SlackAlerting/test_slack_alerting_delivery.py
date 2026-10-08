@@ -3,6 +3,8 @@ import datetime
 from collections.abc import Sequence
 from typing import Final, Literal, TypedDict
 
+from typing_extensions import ReadOnly
+
 import httpx
 import pytest
 import respx
@@ -33,17 +35,17 @@ _DAILY_BASE: Final = "https://daily-report.openai.example/v1"
 
 
 class _SlackPayload(TypedDict):
-    text: str
+    text: ReadOnly[str]
 
 
 class _TeamRow(TypedDict):
-    team_alias: str
-    total_spend: float
+    team_alias: ReadOnly[str]
+    total_spend: ReadOnly[float]
 
 
 class _TagRow(TypedDict):
-    individual_request_tag: str
-    total_spend: float
+    individual_request_tag: ReadOnly[str]
+    total_spend: ReadOnly[float]
 
 
 _PAYLOAD: Final = TypeAdapter(_SlackPayload)
@@ -113,6 +115,34 @@ async def test_send_alert_is_queued_until_flush_then_posted_to_the_webhook_once(
     assert len(texts) == 1
     assert texts[0].startswith("Alert type: `budget_alerts`\nLevel: `Low`\n")
     assert texts[0].endswith("Message: Test message")
+
+
+@pytest.mark.asyncio
+async def test_a_queued_alert_is_posted_by_the_periodic_flush_without_a_manual_flush(
+    respx_mock: respx.MockRouter,
+) -> None:
+    delivered: Final = asyncio.Event()
+
+    def deliver(request: httpx.Request) -> httpx.Response:
+        delivered.set()
+        return httpx.Response(200, text="ok")
+
+    route: Final = respx_mock.post(_WEBHOOK).mock(side_effect=deliver)
+    slack_alerting: Final = SlackAlerting(
+        alerting_threshold=1, internal_usage_cache=DualCache(), alerting=["slack"], flush_interval=0.01
+    )
+    slack_alerting.update_values(alerting=["slack"])
+    flush_task: Final = slack_alerting._periodic_flush_task
+    assert flush_task is not None
+    try:
+        await slack_alerting.send_alert("Timed message", "Low", AlertType.budget_alerts, alerting_metadata={})
+        await asyncio.wait_for(delivered.wait(), timeout=5)
+    finally:
+        flush_task.cancel()
+
+    texts: Final = _posted_texts(route)
+    assert len(texts) == 1
+    assert texts[0].endswith("Message: Timed message")
 
 
 class _DeploymentSettled(CustomLogger):

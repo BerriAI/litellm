@@ -1,6 +1,8 @@
 import json
 from typing import Final, TypedDict
 
+from typing_extensions import ReadOnly
+
 import httpx
 import pytest
 import respx
@@ -53,8 +55,8 @@ _ANTHROPIC_STREAM: Final = (
 
 
 class _ChatMessage(TypedDict):
-    role: str
-    content: str
+    role: ReadOnly[str]
+    content: ReadOnly[str]
 
 
 @pytest.fixture(autouse=True)
@@ -221,27 +223,27 @@ def _authorized_key() -> UserAPIKeyAuth:
 
 
 class _SearchResultsPage(TypedDict):
-    object: str
-    search_query: str
-    data: list[dict[str, object]]
+    object: ReadOnly[str]
+    search_query: ReadOnly[str]
+    data: ReadOnly[list[dict[str, object]]]
 
 
 class _ProviderFields(TypedDict):
-    search_results: list[_SearchResultsPage]
+    search_results: ReadOnly[list[_SearchResultsPage]]
 
 
 class _ProxyMessage(TypedDict):
-    role: str
-    content: str
-    provider_specific_fields: _ProviderFields
+    role: ReadOnly[str]
+    content: ReadOnly[str]
+    provider_specific_fields: ReadOnly[_ProviderFields]
 
 
 class _ProxyChoice(TypedDict):
-    message: _ProxyMessage
+    message: ReadOnly[_ProxyMessage]
 
 
 class _ProxyCompletion(TypedDict):
-    choices: list[_ProxyChoice]
+    choices: ReadOnly[list[_ProxyChoice]]
 
 
 @pytest.mark.asyncio

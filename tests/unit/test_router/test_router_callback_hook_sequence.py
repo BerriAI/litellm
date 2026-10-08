@@ -6,6 +6,8 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from typing import Final, Literal, NamedTuple, TypedDict
 
+from typing_extensions import ReadOnly
+
 import httpx
 import pytest
 import respx
@@ -260,17 +262,17 @@ def _router(model: str, api_base: str = _PRIMARY) -> Router:
 
 
 class _RouterMetadata(TypedDict):
-    model_group: str
-    deployment: str
+    model_group: ReadOnly[str]
+    deployment: ReadOnly[str]
 
 
 class _RouterModelInfo(TypedDict):
-    id: str
+    id: ReadOnly[str]
 
 
 class _RouterParams(TypedDict):
-    metadata: _RouterMetadata
-    model_info: _RouterModelInfo
+    metadata: ReadOnly[_RouterMetadata]
+    model_info: ReadOnly[_RouterModelInfo]
 
 
 def _router_params(event: _HookEvent) -> _RouterParams:

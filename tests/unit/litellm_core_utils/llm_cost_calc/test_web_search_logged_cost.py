@@ -2,6 +2,8 @@ import asyncio
 import json
 from typing import Final, Literal, TypedDict
 
+from typing_extensions import ReadOnly
+
 import httpx
 import pytest
 import respx
@@ -90,9 +92,9 @@ _ContextSize = Literal["search_context_size_low", "search_context_size_medium", 
 
 
 class _LoggedCost(TypedDict):
-    response_cost: float
-    prompt_tokens: int
-    completion_tokens: int
+    response_cost: ReadOnly[float]
+    prompt_tokens: ReadOnly[int]
+    completion_tokens: ReadOnly[int]
 
 
 class _CostRecorder(CustomLogger):

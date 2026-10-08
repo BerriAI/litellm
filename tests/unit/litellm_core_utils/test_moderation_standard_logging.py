@@ -1,6 +1,8 @@
 import asyncio
 from typing import Final, Literal, TypedDict
 
+from typing_extensions import ReadOnly
+
 import httpx
 import pytest
 import respx
@@ -28,12 +30,12 @@ _MODERATION_RESPONSE: Final = {
 
 
 class _LoggedModeration(TypedDict):
-    call_type: str
-    status: str
-    custom_llm_provider: str | None
-    messages: object
-    response: object
-    model_group: str | None
+    call_type: ReadOnly[str]
+    status: ReadOnly[str]
+    custom_llm_provider: ReadOnly[str | None]
+    messages: ReadOnly[object]
+    response: ReadOnly[object]
+    model_group: ReadOnly[str | None]
 
 
 class _ModerationRecorder(CustomLogger):

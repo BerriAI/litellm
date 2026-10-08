@@ -2,6 +2,8 @@ import asyncio
 import json
 from typing import Final, TypedDict
 
+from typing_extensions import ReadOnly
+
 import httpx
 import pytest
 import respx
@@ -53,10 +55,10 @@ _STREAM: Final = _sse(
 
 
 class _LoggedUsage(TypedDict):
-    prompt_tokens: int
-    completion_tokens: int
-    total_tokens: int
-    messages: object
+    prompt_tokens: ReadOnly[int]
+    completion_tokens: ReadOnly[int]
+    total_tokens: ReadOnly[int]
+    messages: ReadOnly[object]
 
 
 class _UsageRecorder(CustomLogger):

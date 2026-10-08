@@ -3,6 +3,8 @@ from collections.abc import Sequence
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Final, NotRequired, TypedDict
+
+from typing_extensions import ReadOnly
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -26,13 +28,13 @@ from prometheus_client import REGISTRY
 
 
 class _ServiceEvent(TypedDict):
-    service: str
-    call_type: str
-    duration: float
-    is_error: bool
-    error: str | None
-    event_metadata: dict[str, str] | None
-    table_name: NotRequired[str]
+    service: ReadOnly[str]
+    call_type: ReadOnly[str]
+    duration: ReadOnly[float]
+    is_error: ReadOnly[bool]
+    error: ReadOnly[str | None]
+    event_metadata: ReadOnly[dict[str, str] | None]
+    table_name: NotRequired[ReadOnly[str]]
 
 
 class _ServiceSpanExporter(InMemorySpanExporter):
