@@ -59,16 +59,13 @@ def test_budget_duration_schedules_reset_at_the_next_standardized_boundary(gatew
 
 def test_admin_health_counts_every_deployment_and_reports_a_live_one_healthy(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
-        model_id: Final = _model_id(scenario.model())
-        report: Final = gateway.get("/health")
-        healthy_count: Final = report["healthy_count"]
-        unhealthy_count: Final = report["unhealthy_count"]
-        assert isinstance(healthy_count, int) and isinstance(unhealthy_count, int), report
-        assert healthy_count + unhealthy_count > 0, report
+        model: Final = scenario.model()
+        model_id: Final = _model_id(model)
+        report: Final = gateway.get("/health", {"model": model})
+        assert (report["healthy_count"], report["unhealthy_count"]) == (1, 0), report
         healthy: Final = report["healthy_endpoints"]
-        assert isinstance(healthy, list)
-        assert len(healthy) == healthy_count
-        assert model_id in {object_value(endpoint).get("model_id") for endpoint in healthy}, report
+        assert isinstance(healthy, list) and len(healthy) == 1, report
+        assert object_value(healthy[0]).get("model_id") == model_id, report
 
 
 def test_routes_listing_is_served_without_credentials(gateway: Gateway) -> None:
