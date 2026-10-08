@@ -2761,3 +2761,14 @@ async def test_async_get_cache_partial_hit_keeps_file_block_items_uncached() -> 
     assert cached_response.final_embedding_cached_response is not None
     assert cached_response.final_embedding_cached_response.data[1].embedding == [0.1, 0.2]
     assert cached_response.final_embedding_cached_response.data[0] is None
+
+
+def test_handle_kwargs_input_answers_400_for_a_single_object_input() -> None:
+    caching_handler: Final = LLMCachingHandler(
+        original_function=aembedding, request_kwargs={}, start_time=datetime(2026, 1, 1)
+    )
+    clip_block: Final = {"type": "file", "file": {"file_data": "data:video/mp4;base64,AAAA"}}
+    with pytest.raises(litellm.BadRequestError, match="string or a list"):
+        caching_handler.handle_kwargs_input_list_or_str(
+            {"model": "gemini/gemini-embedding-2-preview", "custom_llm_provider": "gemini", "input": clip_block}
+        )

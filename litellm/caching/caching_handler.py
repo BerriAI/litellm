@@ -519,7 +519,11 @@ class LLMCachingHandler:
         elif isinstance(kwargs["input"], list):
             return kwargs["input"]
         else:
-            raise ValueError("input must be a string or a list")
+            raise litellm.BadRequestError(
+                message="input must be a string or a list of strings and content blocks",
+                model=str(kwargs.get("model")),
+                llm_provider=str(kwargs.get("custom_llm_provider")),
+            )
 
     def _extract_model_from_cached_results(self, non_null_list: list[tuple[int, CachedEmbedding]]) -> str | None:
         """

@@ -5,9 +5,9 @@ Why separate file? Make it easy to see how transformation works
 """
 
 from collections.abc import Iterator, Mapping, Sequence
-from typing import Final, Literal
+from typing import Annotated, Final, Literal, cast
 
-from pydantic import ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm.exceptions import BadRequestError
 from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIX, gemini_video_metadata_from_openai
@@ -155,7 +155,7 @@ class _EmbeddingFile(LiteLLMBaseModel):
     file_id: str | None = None
     file_data: str | None = None
     filename: str | None = None
-    format: str | None = None
+    format: Annotated[str, Field(min_length=1)] | None = None
     video_metadata: _EmbeddingVideoMetadata | None = None
 
 
@@ -168,6 +168,11 @@ class _EmbeddingFileBlock(LiteLLMBaseModel):
 
 _file_block_adapter: Final = TypeAdapter(_EmbeddingFileBlock)
 _video_metadata_adapter: Final = TypeAdapter(VideoMetadataType)
+_input_shape_adapter: Final[TypeAdapter[str | list[object]]] = TypeAdapter(str | list[object])
+_mapping_adapter: Final = TypeAdapter(dict[str, object])
+_BLOCK_FIELDS: Final = frozenset(_EmbeddingFileBlock.model_fields)
+_FILE_FIELDS: Final = frozenset(_EmbeddingFile.model_fields)
+_VIDEO_METADATA_FIELDS: Final = frozenset(_EmbeddingVideoMetadata.model_fields)
 _FILE_SOURCE_FORMS: Final = "a data: URI, a gs:// URL, a files/ reference, or a Gemini Files API URI"
 
 
@@ -179,13 +184,41 @@ def _validation_error_summary(error: ValidationError) -> str:
     return "; ".join(f"{'.'.join(str(loc) for loc in detail['loc'])}: {detail['msg']}" for detail in error.errors())
 
 
-def _parse_file_block(element: object) -> _EmbeddingFileBlock:
+def _as_mapping(value: object) -> dict[str, object] | None:
+    try:
+        return _mapping_adapter.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _only_fields(mapping: Mapping[str, object], fields: frozenset[str]) -> dict[str, object]:
+    return {key: value for key, value in mapping.items() if key in fields}
+
+
+def _dropping_unsupported_keys(block: Mapping[str, object]) -> dict[str, object]:
+    """What `drop_params` keeps of a file content block: the keys this surface understands, at every level."""
+    kept_block: Final = _only_fields(block, _BLOCK_FIELDS)
+    file: Final = _as_mapping(block.get("file"))
+    if file is None:
+        return kept_block
+    kept_file: Final = _only_fields(file, _FILE_FIELDS)
+    video_metadata: Final = _as_mapping(file.get("video_metadata"))
+    if video_metadata is None:
+        return {**kept_block, "file": kept_file}
+    return {
+        **kept_block,
+        "file": {**kept_file, "video_metadata": _only_fields(video_metadata, _VIDEO_METADATA_FIELDS)},
+    }
+
+
+def _parse_file_block(element: object, drop_params: bool) -> _EmbeddingFileBlock:
     if not isinstance(element, Mapping):
         raise _invalid_input(
             f"Embedding input elements must be strings or file content blocks, got {type(element).__name__}"
         )
+    block: Final = cast(Mapping[str, object], element)  # cast-ok: isinstance leaves the key and value types unknown
     try:
-        return _file_block_adapter.validate_python(element)
+        return _file_block_adapter.validate_python(_dropping_unsupported_keys(block) if drop_params else block)
     except ValidationError as error:
         raise _invalid_input(
             f"Invalid file content block in embedding input: {_validation_error_summary(error)}"
@@ -249,18 +282,30 @@ def _media_part(
     if is_file_reference(source):
         file_info: Final = resolved_files.get(source)
         if file_info is None:
-            raise ValueError(f"File reference {source} not resolved")
+            raise _invalid_input(
+                f"File reference {source!r} could not be resolved: "
+                "Gemini Files API references are only supported through the gemini/ provider"
+            )
         return PartType(
             file_data=FileDataType(mime_type=mime_type_override or file_info["mime_type"], file_uri=file_info["uri"])
         )
     raise _invalid_input(f"A file content block source must be {_FILE_SOURCE_FORMS}, got {source[:50]!r}")
 
 
+def _top_level_elements(
+    input: GeminiEmbeddingInput,
+) -> Sequence[GeminiEmbeddingElement | list[str] | list[GeminiEmbeddingElement]]:
+    try:
+        _input_shape_adapter.validate_python(input)
+    except ValidationError as error:
+        raise _invalid_input(
+            f"Embedding input must be a string or a list of strings and file content blocks, got {type(input).__name__}"
+        ) from error
+    return [input] if isinstance(input, str) else input
+
+
 def _elements(input: GeminiEmbeddingInput) -> Iterator[GeminiEmbeddingElement]:
-    if isinstance(input, str):
-        yield input
-        return
-    for element in input:
+    for element in _top_level_elements(input):
         if isinstance(element, list):
             yield from element
         else:
@@ -270,7 +315,7 @@ def _elements(input: GeminiEmbeddingInput) -> Iterator[GeminiEmbeddingElement]:
 def _element_source(element: GeminiEmbeddingElement) -> str:
     if isinstance(element, str):
         return element
-    return _file_block_source(_parse_file_block(element))
+    return _file_block_source(_parse_file_block(element, drop_params=True))
 
 
 def flatten_media_sources(input: GeminiEmbeddingInput) -> tuple[str, ...]:
@@ -308,6 +353,7 @@ def _is_multimodal_element(element: GeminiEmbeddingElement) -> bool:
 def _build_part_for_input(
     element: GeminiEmbeddingElement,
     resolved_files: Mapping[str, Mapping[str, str]] | None = None,
+    drop_params: bool = False,
 ) -> PartType:
     """
     Build a single PartType for an input element, handling text, data URIs,
@@ -319,7 +365,7 @@ def _build_part_for_input(
     if isinstance(element, str):
         return _media_part(element, None, files) if _is_multimodal_element(element) else PartType(text=element)
 
-    block: Final = _parse_file_block(element)
+    block: Final = _parse_file_block(element, drop_params)
     part: Final = _media_part(_file_block_source(block), block.file.format, files)
     if block.file.video_metadata is None:
         return part
@@ -348,6 +394,7 @@ def transform_openai_input_gemini_content(
     model: str,
     optional_params: dict,
     resolved_files: dict[str, dict[str, str]] | None = None,
+    drop_params: bool = False,
 ) -> VertexAIBatchEmbeddingsRequestBody:
     """
     Transform OpenAI embedding input to Gemini batchEmbedContents format.
@@ -368,16 +415,18 @@ def transform_openai_input_gemini_content(
 
     gemini_params: Final = _filter_embed_params(optional_params)
 
-    input_list: Final = [input] if isinstance(input, str) else input
+    input_list: Final = _top_level_elements(input)
     requests: Final[list[EmbedContentRequest]] = []
 
     for element in input_list:
         if isinstance(element, list):
             if not element:
                 raise ValueError("Nested input list must not be empty")
-            parts = [_build_part_for_input(sub, resolved_files=resolved_files) for sub in element]
+            parts = [
+                _build_part_for_input(sub, resolved_files=resolved_files, drop_params=drop_params) for sub in element
+            ]
         else:
-            parts = [_build_part_for_input(element, resolved_files=resolved_files)]
+            parts = [_build_part_for_input(element, resolved_files=resolved_files, drop_params=drop_params)]
         request = EmbedContentRequest(
             model=gemini_model_name,
             content=ContentType(parts=parts),
@@ -393,6 +442,7 @@ def transform_openai_input_gemini_embed_content(
     model: str,
     optional_params: dict,
     resolved_files: dict[str, dict[str, str]] | None = None,
+    drop_params: bool = False,
 ) -> dict:
     """
     Transform OpenAI embedding input to Gemini embedContent format (multimodal).
@@ -410,7 +460,7 @@ def transform_openai_input_gemini_embed_content(
 
     gemini_params: Final = _filter_embed_params(optional_params)
 
-    input_list: Final = [input] if isinstance(input, str) else input
+    input_list: Final = _top_level_elements(input)
     parts: Final[list[PartType]] = []
 
     for element in input_list:
@@ -419,7 +469,7 @@ def transform_openai_input_gemini_embed_content(
                 "Nested (combined) embeddings are not supported on the embedContent path. "
                 "Use the batchEmbedContents path or pass a flat list instead."
             )
-        parts.append(_build_part_for_input(element, resolved_files=resolved_files))
+        parts.append(_build_part_for_input(element, resolved_files=resolved_files, drop_params=drop_params))
 
     request_body: Final[dict] = {
         "content": ContentType(parts=parts),
@@ -452,7 +502,7 @@ def _is_image_element(
 ) -> bool:
     if isinstance(element, str):
         return _source_mime_type(element, None, resolved_files) in _IMAGE_MIME_TYPES
-    block: Final = _parse_file_block(element)
+    block: Final = _parse_file_block(element, drop_params=True)
     return _source_mime_type(_file_block_source(block), block.file.format, resolved_files) in _IMAGE_MIME_TYPES
 
 

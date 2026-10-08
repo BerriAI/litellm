@@ -76,6 +76,10 @@ class TestIsMultimodalInput:
     def test_nested_list_with_image_is_multimodal(self):
         assert _is_multimodal_input([["a red shoe", IMAGE_DATA_URI]]) is True
 
+    def test_single_object_input_answers_400(self):
+        with pytest.raises(BadRequestError, match="string or a list"):
+            _is_multimodal_input(_file_block(file_data=VIDEO_DATA_URI))
+
 
 class TestBuildPartForInput:
     def test_text_input(self):
@@ -102,8 +106,8 @@ class TestBuildPartForInput:
         assert part["file_data"] is not None
         assert part["file_data"]["mime_type"] == "image/jpeg"
 
-    def test_file_reference_unresolved_raises(self):
-        with pytest.raises(ValueError, match="not resolved"):
+    def test_file_reference_unresolved_answers_400_naming_the_gemini_provider(self):
+        with pytest.raises(BadRequestError, match="gemini/ provider"):
             _build_part_for_input("files/abc")
 
 
@@ -530,6 +534,7 @@ class TestFileContentBlocks:
             (_file_block(file_data=VIDEO_DATA_URI, video_metadata={"fps": True}), "video_metadata.fps"),
             (_file_block(file_data=VIDEO_DATA_URI, video_metadata={"start_offset": 5}), "video_metadata.start_offset"),
             (_file_block(file_data=VIDEO_DATA_URI, detail="high"), "file.detail"),
+            (_file_block(file_data=VIDEO_DATA_URI, format=""), "file.format"),
             (_file_block(file_id="gs://my-bucket/clip.mp4", file_data=VIDEO_DATA_URI), "not both"),
             (_file_block(), "needs file.file_id or file.file_data"),
             (
@@ -542,6 +547,46 @@ class TestFileContentBlocks:
     def test_malformed_block_answers_400_naming_the_field(self, block, named_in_error):
         with pytest.raises(BadRequestError, match=named_in_error):
             _build_part_for_input(block)
+
+    def test_drop_params_drops_the_block_keys_this_surface_does_not_take(self):
+        block = _file_block(
+            file_data=VIDEO_DATA_URI,
+            detail="high",
+            video_metadata={"fps": 1, "start_offset": "1s", "resolution": "low"},
+        )
+        part = _build_part_for_input({**block, "cache_control": {"type": "ephemeral"}}, drop_params=True)
+        assert part["inline_data"]["mime_type"] == "video/mp4"
+        assert part["video_metadata"] == {"fps": 1.0, "startOffset": "1s"}
+
+    def test_drop_params_still_answers_400_for_a_malformed_value(self):
+        block = _file_block(file_data=VIDEO_DATA_URI, detail="high", video_metadata={"fps": "fast"})
+        with pytest.raises(BadRequestError, match=r"video_metadata\.fps"):
+            _build_part_for_input(block, drop_params=True)
+
+    @pytest.mark.parametrize(
+        "transform", [transform_openai_input_gemini_content, transform_openai_input_gemini_embed_content]
+    )
+    def test_transforms_forward_drop_params_to_every_block(self, transform):
+        block = _file_block(file_data=VIDEO_DATA_URI, detail="high")
+        with pytest.raises(BadRequestError, match=r"file\.detail"):
+            transform(input=[block], model="gemini-embedding-2-preview", optional_params={})
+        transform(input=[block], model="gemini-embedding-2-preview", optional_params={}, drop_params=True)
+
+    def test_batch_path_forwards_drop_params_into_nested_lists(self):
+        block = _file_block(file_data=VIDEO_DATA_URI, detail="high")
+        body = transform_openai_input_gemini_content(
+            input=[[block, "a caption"]], model="gemini-embedding-2-preview", optional_params={}, drop_params=True
+        )
+        assert len(body["requests"][0]["content"]["parts"]) == 2
+
+    @pytest.mark.parametrize(
+        "transform", [transform_openai_input_gemini_content, transform_openai_input_gemini_embed_content]
+    )
+    def test_single_object_input_answers_400(self, transform):
+        with pytest.raises(BadRequestError, match="string or a list"):
+            transform(
+                input=_file_block(file_data=VIDEO_DATA_URI), model="gemini-embedding-2-preview", optional_params={}
+            )
 
     def test_process_response_counts_only_the_text_tokens_next_to_a_block(self):
         text = "a solid color clip"

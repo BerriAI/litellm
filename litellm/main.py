@@ -6378,6 +6378,10 @@ def embedding(
     """
     azure: Final = kwargs.get("azure", None)
     client: Final = kwargs.pop("client", None)
+    drop_params_kwarg: Final = (
+        cast(object, kwargs["drop_params"]) if "drop_params" in kwargs else None  # cast-ok: untyped request kwargs
+    )
+    drop_unsupported_params: Final = litellm.drop_params is True or normalize_drop_params(drop_params_kwarg) is True
     shared_session: Final = kwargs.get("shared_session", None)
     max_retries: Final = kwargs.get("max_retries", None)
     litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
@@ -6858,6 +6862,7 @@ def embedding(
                 api_base=api_base,
                 client=client,
                 extra_headers=headers,
+                drop_params=drop_unsupported_params,
             )
 
         elif custom_llm_provider == "vertex_ai":
@@ -6910,6 +6915,7 @@ def embedding(
                     api_base=api_base,
                     client=client,
                     extra_headers=headers,
+                    drop_params=drop_unsupported_params,
                 )
             elif (
                 "image" in optional_params

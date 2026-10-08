@@ -138,6 +138,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         timeout=300,
         client=None,
         extra_headers: dict | None = None,
+        drop_params: bool = False,
     ) -> EmbeddingResponse:
         _auth_header, vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,
@@ -206,6 +207,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 api_key=api_key,
                 optional_params=optional_params,
                 logging_obj=logging_obj,
+                drop_params=drop_params,
             )
 
         ### TRANSFORMATION (sync path) ###
@@ -222,6 +224,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 model=model,
                 optional_params=optional_params,
                 resolved_files=resolved_files,
+                drop_params=drop_params,
             )
         else:
             if has_file_refs and not api_key:
@@ -239,6 +242,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 model=model,
                 optional_params=optional_params,
                 resolved_files=resolved_files,
+                drop_params=drop_params,
             )
 
         ## LOGGING
@@ -295,6 +299,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         api_key: str | None = None,
         optional_params: dict | None = None,
         logging_obj: "LiteLLMLoggingObj | None" = None,
+        drop_params: bool = False,
     ) -> EmbeddingResponse:
         if client is None:
             _params: Final = {}
@@ -325,6 +330,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 model=model,
                 optional_params=optional_params or {},
                 resolved_files=resolved_files,
+                drop_params=drop_params,
             )
         else:
             if has_file_refs and not api_key:
@@ -342,6 +348,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 model=model,
                 optional_params=optional_params or {},
                 resolved_files=resolved_files,
+                drop_params=drop_params,
             )
 
         ## LOGGING
