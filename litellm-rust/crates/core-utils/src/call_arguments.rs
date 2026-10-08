@@ -61,11 +61,7 @@ pub fn compose_body<B: Serialize>(
             .chain(
                 extensions
                     .chain(overrides.into_iter().flatten())
-                    .filter(|(name, _)| {
-                        name.as_str() != "model"
-                            && name.as_str() != "extra_body"
-                            && !crate::params::is_control_param(name)
-                    })
+                    .filter(|(name, _)| !crate::params::is_litellm_owned(name))
                     .map(|(name, value)| (name.clone(), value.clone())),
             )
             .collect(),
@@ -135,7 +131,7 @@ mod tests {
             body,
             json!({
                 "model":"resolved", "known":null, "future":{"new":[false,0,null]},
-                "null":null, "zero":0, "metadata":{"provider":true}
+                "null":null, "zero":0
             })
         );
         assert_eq!(serde_json::to_value(arguments).unwrap(), original);
