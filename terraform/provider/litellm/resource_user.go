@@ -164,8 +164,7 @@ func resourceLiteLLMUser() *schema.Resource {
 				Type:        schema.TypeBool,
 				Optional:    true,
 				Default:     false,
-				Deprecated:  "The proxy has no user-level block. This only blocks the key auto-created with the user, and only at creation; changing it afterwards has no effect. Use litellm_key_block to block keys instead.",
-				Description: "Whether to block the key auto-created with the user. Only sent on creation",
+				Description: "Whether to block the key auto-created with the user. Only sent on creation; use litellm_key_block to change it afterwards",
 			},
 			"key": {
 				Type:        schema.TypeString,
