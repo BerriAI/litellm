@@ -876,6 +876,17 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric("litellm_cached_tokens_metric"),
             )
 
+            self.litellm_cache_similarity_score = self._histogram_factory(
+                name="litellm_cache_similarity_score",
+                documentation=(
+                    "Similarity score (0-1 cosine) of semantic cache lookups, recorded "
+                    "for both hits and misses so the score distribution relative to the "
+                    "similarity threshold is visible"
+                ),
+                labelnames=self.get_labels_for_metric("litellm_cache_similarity_score"),
+                buckets=[0.0, 0.5, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 0.99, 1.0],
+            )
+
             # Provider prompt-caching metrics
             self.litellm_provider_cache_read_input_tokens_metric = self._counter_factory(
                 name="litellm_provider_cache_read_input_tokens_metric",
@@ -1678,6 +1689,7 @@ class PrometheusLogger(CustomLogger):
             standard_logging_payload=standard_logging_payload,
             enum_values=enum_values,
             label_context=label_context,
+            request_metadata=_metadata,
         )
 
         self._increment_media_generation_metrics(
@@ -1880,11 +1892,49 @@ class PrometheusLogger(CustomLogger):
                 amount=float(value),
             )
 
+    def _observe_cache_similarity_score(
+        self,
+        request_metadata: Mapping[str, object] | None,
+        enum_values: UserAPIKeyLabelValues,
+        label_context: PrometheusLabelFactoryContext | None = None,
+    ) -> None:
+        """
+        Record the semantic-cache similarity score, if present.
+
+        Semantic cache backends write a numeric "semantic-similarity" into
+        litellm_params["metadata"] on every lookup (hit or miss). Exact-match
+        caches never set it, so this no-ops for them. The value is caller-
+        influenced, so it is range-checked to the documented 0-1 cosine score.
+        """
+        if not isinstance(request_metadata, Mapping):
+            return
+        raw_score: Final = request_metadata.get("semantic-similarity")
+        if not isinstance(raw_score, (int, float, str)):
+            return
+        try:
+            score: Final = float(raw_score)
+        except (TypeError, ValueError):
+            return
+        if not math.isfinite(score) or not 0.0 <= score <= 1.0:
+            return
+        _labels: Final = prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric("litellm_cache_similarity_score"),
+            enum_values=enum_values,
+            label_context=label_context,
+        )
+        self.litellm_cache_similarity_score.labels(**_labels).observe(score)
+        self._track_end_user_metric_series(
+            self.litellm_cache_similarity_score,
+            "litellm_cache_similarity_score",
+            _labels,
+        )
+
     def _increment_cache_metrics(
         self,
         standard_logging_payload: StandardLoggingPayload,
         enum_values: UserAPIKeyLabelValues,
         label_context: PrometheusLabelFactoryContext | None = None,
+        request_metadata: Mapping[str, object] | None = None,
     ):
         """
         Increment cache-related Prometheus metrics based on cache hit/miss status.
@@ -1892,7 +1942,11 @@ class PrometheusLogger(CustomLogger):
         Args:
             standard_logging_payload: Contains cache_hit field (True/False/None)
             enum_values: Label values for Prometheus metrics
+            request_metadata: litellm_params["metadata"]; semantic cache backends
+                record a "semantic-similarity" score here on lookup
         """
+        self._observe_cache_similarity_score(request_metadata, enum_values, label_context)
+
         cache_hit: Final = standard_logging_payload.get("cache_hit")
 
         if cache_hit is None:

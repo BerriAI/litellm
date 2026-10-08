@@ -292,6 +292,7 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_cache_hits_metric",
     "litellm_cache_misses_metric",
     "litellm_cached_tokens_metric",
+    "litellm_cache_similarity_score",
     # Provider prompt-caching metrics (e.g. OpenAI/Anthropic/Bedrock/Gemini)
     "litellm_provider_cache_read_input_tokens_metric",
     "litellm_provider_cache_creation_input_tokens_metric",
@@ -885,6 +886,7 @@ class PrometheusMetricLabels:
     litellm_cache_hits_metric = _cache_metric_labels
     litellm_cache_misses_metric = _cache_metric_labels
     litellm_cached_tokens_metric = _cache_metric_labels
+    litellm_cache_similarity_score = _cache_metric_labels
 
     # Provider prompt-caching metrics - track tokens read/written to provider caches
     litellm_provider_cache_read_input_tokens_metric = _cache_metric_labels
