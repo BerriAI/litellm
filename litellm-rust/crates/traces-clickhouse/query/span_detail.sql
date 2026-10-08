@@ -1,24 +1,20 @@
-SELECT o.SpanId AS span_id, o.Input AS input,
-       if(o.Output = '' AND o.ObservationType = 'agent', answer.output, o.Output) AS output,
-       o.SpanAttributes AS attributes
-FROM otel_traces AS o
-LEFT JOIN (
-    SELECT TeamId, ApiKeyHash, ParentSpanId AS parent_span_id, argMax(Output, Timestamp) AS output
+SELECT {span_id:String} AS span_id, span.1 AS input,
+       if(span.2 = '' AND span.4 = 'agent', answer, span.2) AS output,
+       span.3 AS attributes
+FROM (
+    SELECT TeamId, ApiKeyHash,
+           argMinIf((Input, Output, SpanAttributes, ObservationType), (Timestamp, EngineReceivedMs, StatusMessage),
+                    SpanId = {span_id:String}) AS span,
+           argMaxIf(Output, Timestamp,
+                    ParentSpanId = {span_id:String} AND ObservationType = 'llm' AND Output != '') AS answer
     FROM otel_traces
-    WHERE TraceId = {trace_id:String} AND ParentSpanId = {span_id:String}
-      AND ObservationType = 'llm' AND Output != ''
-      AND ({all_teams:UInt8} = 1
-           OR ({user_id:String} != '' AND UserId = {user_id:String})
-           OR has({team_ids:Array(String)}, TeamId))
-      AND ({trace_ref:String} = '' OR
-           hex(SHA256(concat(TeamId, char(0), ApiKeyHash, char(0), TraceId))) = {trace_ref:String})
-    GROUP BY TeamId, ApiKeyHash, ParentSpanId
-) AS answer ON answer.parent_span_id = o.SpanId
-    AND answer.TeamId = o.TeamId AND answer.ApiKeyHash = o.ApiKeyHash
-WHERE o.TraceId = {trace_id:String} AND o.SpanId = {span_id:String}
-  AND ({all_teams:UInt8} = 1
-       OR ({user_id:String} != '' AND o.UserId = {user_id:String})
-       OR has({team_ids:Array(String)}, o.TeamId))
-  AND ({trace_ref:String} = '' OR
-       hex(SHA256(concat(o.TeamId, char(0), o.ApiKeyHash, char(0), o.TraceId))) = {trace_ref:String})
+    PREWHERE TraceId = {trace_id:String} AND (SpanId = {span_id:String} OR ParentSpanId = {span_id:String})
+    WHERE {all_teams:UInt8} = 1
+          OR ({user_id:String} != '' AND UserId = {user_id:String})
+          OR has({team_ids:Array(String)}, TeamId)
+    GROUP BY TeamId, ApiKeyHash
+    HAVING countIf(SpanId = {span_id:String}) > 0
+       AND ({trace_ref:String} = '' OR
+            hex(SHA256(concat(TeamId, char(0), ApiKeyHash, char(0), {trace_id:String}))) = {trace_ref:String})
+)
 LIMIT 1
