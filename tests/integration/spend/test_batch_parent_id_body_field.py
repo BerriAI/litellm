@@ -237,17 +237,18 @@ def test_any_shape_of_batch_parent_id_on_a_speech_request_is_still_tracked(
 
 def test_a_concurrent_burst_mixing_forged_and_plain_requests_bills_every_request(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
-        models: Final = tuple(
-            _scripted_model(gateway, scenario, "openai/omni-moderation-latest", _moderation_reply) for _ in range(20)
-        )
-        key: Final = scenario.key(models=list(models))
+        model: Final = _scripted_model(gateway, scenario, "openai/tts-1", _speech_reply)
+        key: Final = scenario.key(models=[model])
+        warm_up: Final = _speech(gateway, model, key, {})
+        assert warm_up.status_code == 200, warm_up.text
+        eventually(lambda: _spend_rows(key), lambda values: len(values) == 1, seconds=70)
         extras: Final = tuple({"batch_parent_id": FORGED_PARENT} if index % 2 else {} for index in range(20))
 
         with ThreadPoolExecutor(max_workers=10) as pool:
-            responses: Final = tuple(
-                pool.map(lambda pair: _moderation(gateway, pair[0], key, pair[1]), zip(models, extras))
-            )
+            responses: Final = tuple(pool.map(lambda extra: _speech(gateway, model, key, extra), extras))
 
         assert [response.status_code for response in responses] == [200] * 20, [r.text for r in responses]
-        rows: Final = eventually(lambda: _spend_rows(key), lambda values: len(values) == 20, seconds=90)
-        assert {row["call_type"] for row in rows} == {"amoderation"}, rows
+        rows: Final = eventually(lambda: _spend_rows(key), lambda values: len(values) == 21, seconds=90)
+        assert {row["call_type"] for row in rows} == {"aspeech"}, rows
+        expected_spend: Final = 21 * float(str(rows[0]["spend"]))
+        eventually(lambda: _key_spend(key), lambda value: value == pytest.approx(expected_spend), seconds=90)

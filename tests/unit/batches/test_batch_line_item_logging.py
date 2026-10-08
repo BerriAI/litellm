@@ -1241,6 +1241,40 @@ async def test_supplied_result_files_skip_the_output_and_error_fetch(recorder):
     assert file_mock.await_args.kwargs["file_id"] == "input-file-1"
 
 
+def _error_file_unreadable(file_id: str, **_kwargs):
+    if file_id == "error-file-1":
+        raise ValueError("error file gone")
+    return SimpleNamespace(content=_FILE_BYTES[file_id])
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_error_file_defers_every_line_to_the_next_retrieve(recorder):
+    claim_cache: Final = DualCache()
+    batch: Final = _batch()
+    parent: Final = _parent_logging()
+    emitted: list[int] = []  # mutable-ok: collects one count per retrieve
+    for side_effect in (_error_file_unreadable, _file_content):
+        with patch(
+            "litellm.files.main.afile_content", AsyncMock(side_effect=side_effect)
+        ):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+            emitted.append(
+                await log_batch_line_items(
+                    batch=batch,
+                    custom_llm_provider="openai",
+                    parent=parent,
+                    model_name="gpt-4o",
+                    litellm_params=None,
+                    model_info=None,
+                    result_files=BatchResultFiles(output=OUTPUT_JSONL, error=None),
+                    claim_cache=claim_cache,
+                )
+            )
+
+    assert emitted == [0, 2]
+    assert len(recorder.success_events) == 1
+    assert len(recorder.failure_events) == 1
+
+
 @pytest.mark.asyncio
 async def test_empty_result_files_fall_back_to_fetching_everything(recorder):
     file_mock: Final = AsyncMock(side_effect=_file_content)
