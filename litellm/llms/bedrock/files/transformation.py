@@ -1378,10 +1378,11 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         if not isinstance(signed_headers_object, Mapping):
             raise TypeError("S3 request signing did not produce request headers")
         signed_headers: Final = _S3_SIGNED_REQUEST_HEADERS_ADAPTER.validate_python(signed_headers_object)
-        litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM] = MappingProxyType({**signed_headers, "Range": "bytes=0-0"})
-        litellm_params[S3_RETRIEVE_FILE_ID_PARAM] = file_id
-        litellm_params[S3_RETRIEVE_FILE_KEY_PARAM] = object_key
-        litellm_params[S3_RETRIEVE_FILE_RELATIVE_KEY_PARAM] = relative_key
+        range_headers: Final = MappingProxyType({**signed_headers, "Range": "bytes=0-0"})
+        litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM] = range_headers  # rebind-ok: handed to validate_environment
+        litellm_params[S3_RETRIEVE_FILE_ID_PARAM] = file_id  # rebind-ok: required by response transform
+        litellm_params[S3_RETRIEVE_FILE_KEY_PARAM] = object_key  # rebind-ok: required by response transform
+        litellm_params[S3_RETRIEVE_FILE_RELATIVE_KEY_PARAM] = relative_key  # rebind-ok: required by response transform
         return url, params
 
     def transform_retrieve_file_response(
