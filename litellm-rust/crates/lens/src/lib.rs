@@ -18,7 +18,7 @@ use axum::{
     Json, Router,
     body::{Body, to_bytes},
     extract::State as AppState,
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode},
     routing::{get, post},
 };
 pub use error::Error;
@@ -50,6 +50,47 @@ pub mod wire {
 }
 
 const READ_QUEUE_WAIT: Duration = Duration::from_secs(10);
+pub const READ_CLASS_HEADER: &str = "x-lens-read-class";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReadClass {
+    Interactive,
+    Background,
+}
+
+impl ReadClass {
+    fn from_headers(headers: &HeaderMap) -> Result<Self, Error> {
+        match headers.get(READ_CLASS_HEADER).map(HeaderValue::as_bytes) {
+            None | Some(b"interactive") => Ok(Self::Interactive),
+            Some(b"background") => Ok(Self::Background),
+            Some(_) => Err(Error::InvalidRequest),
+        }
+    }
+}
+
+struct ReadSlots {
+    interactive: Arc<Semaphore>,
+    background: Arc<Semaphore>,
+}
+
+impl ReadSlots {
+    const INTERACTIVE: usize = 8;
+    const BACKGROUND: usize = 4;
+
+    fn new() -> Self {
+        Self {
+            interactive: Arc::new(Semaphore::new(Self::INTERACTIVE)),
+            background: Arc::new(Semaphore::new(Self::BACKGROUND)),
+        }
+    }
+
+    fn pool(&self, class: ReadClass) -> &Arc<Semaphore> {
+        match class {
+            ReadClass::Interactive => &self.interactive,
+            ReadClass::Background => &self.background,
+        }
+    }
+}
 
 pub struct State {
     pub credentials: Arc<auth::Credentials>,
@@ -57,7 +98,7 @@ pub struct State {
     pub schema_ready: AtomicBool,
     service_token: String,
     ingest_slots: Arc<Semaphore>,
-    read_slots: Arc<Semaphore>,
+    read_slots: ReadSlots,
     export_slots: Arc<Semaphore>,
 }
 
@@ -69,7 +110,7 @@ impl State {
             schema_ready: AtomicBool::new(false),
             service_token,
             ingest_slots: Arc::new(Semaphore::new(2)),
-            read_slots: Arc::new(Semaphore::new(8)),
+            read_slots: ReadSlots::new(),
             export_slots: Arc::new(Semaphore::new(2)),
         }
     }
@@ -137,7 +178,7 @@ async fn receipt(
 ) -> Result<Json<Value>, Error> {
     let tenant = state.credentials.tenant(&headers)?;
     state.require_storage()?;
-    let _permit = wait_for_read_slot(state.read_slots.acquire()).await?;
+    let _permit = wait_for_read_slot(state.read_slots.interactive.acquire()).await?;
     let body = tokio::time::timeout(Duration::from_secs(5), to_bytes(body, 64 * 1024))
         .await
         .map_err(|_| Error::Unavailable)?
@@ -215,7 +256,8 @@ async fn read(
 ) -> Result<Json<Value>, Error> {
     auth::authorize_service(&headers, &state.service_token)?;
     state.require_storage()?;
-    let permit = wait_for_read_slot(state.read_slots.clone().acquire_owned()).await?;
+    let class = ReadClass::from_headers(&headers)?;
+    let permit = wait_for_read_slot(state.read_slots.pool(class).clone().acquire_owned()).await?;
     let body = tokio::time::timeout(Duration::from_secs(10), to_bytes(body, 1024 * 1024))
         .await
         .map_err(|_| Error::Unavailable)?
@@ -287,9 +329,32 @@ pub async fn provision(state: Arc<State>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Error, READ_QUEUE_WAIT, wait_for_read_slot};
+    use super::{Error, READ_CLASS_HEADER, READ_QUEUE_WAIT, ReadClass, wait_for_read_slot};
+    use axum::http::{HeaderMap, HeaderValue};
+    use rstest::rstest;
     use std::sync::Arc;
     use tokio::sync::Semaphore;
+
+    #[rstest]
+    #[case::absent(None, Some(ReadClass::Interactive))]
+    #[case::interactive(Some("interactive"), Some(ReadClass::Interactive))]
+    #[case::background(Some("background"), Some(ReadClass::Background))]
+    #[case::unknown(Some("bulk"), None)]
+    #[case::wrong_case(Some("Background"), None)]
+    fn read_class_comes_from_the_header(
+        #[case] value: Option<&'static str>,
+        #[case] expected: Option<ReadClass>,
+    ) {
+        let headers = value
+            .map(|value| {
+                HeaderMap::from_iter([(
+                    READ_CLASS_HEADER.parse().unwrap(),
+                    HeaderValue::from_static(value),
+                )])
+            })
+            .unwrap_or_default();
+        assert_eq!(ReadClass::from_headers(&headers).ok(), expected);
+    }
 
     #[tokio::test]
     async fn ninth_read_waits_for_a_permit_and_succeeds() {
