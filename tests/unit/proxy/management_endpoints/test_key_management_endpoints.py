@@ -21259,17 +21259,17 @@ async def test_rotate_master_key_reencrypts_guardrail_params(monkeypatch):
 class _PeerWorkerCoordinationRedis:
     """Coordination Redis shared by two workers: a publish lands on the peer worker's subscriber at once."""
 
-    namespace = None
+    namespace: Final = None
 
     def __init__(self, peer_worker_cache: UserApiKeyCache) -> None:
         self._peer_subscriber = AuthCacheInvalidationSubscriber(redis_cache=self, user_api_key_cache=peer_worker_cache)
-        self.published: list[str] = []
+        self.published: tuple[str, ...] = ()
 
     def init_pubsub_client(self) -> "_PeerWorkerCoordinationRedis":
         return self
 
     async def publish(self, channel: str, message: str) -> int:
-        self.published.append(message)
+        self.published = (*self.published, message)
         self._peer_subscriber._apply_message({"type": "message", "data": message.encode()})
         return 1
 
@@ -21397,4 +21397,4 @@ async def test_delete_verification_tokens_evicts_only_the_rows_the_caller_may_de
     assert usage_cache.get_cache(other_tenant_counter) == 7
     assert usage_cache.get_cache(hashed_token) is None
     assert deleting_worker_cache.get_cache(hashed_token, model_type=UserAPIKeyAuth) is None
-    assert coordination_redis.published == [json.dumps({"cache_key": hashed_token})]
+    assert coordination_redis.published == (json.dumps({"cache_key": hashed_token}),)
