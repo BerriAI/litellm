@@ -4619,7 +4619,9 @@ class Router:
             for candidate in self.get_model_list(model_name=model, team_id=get_request_team_id(kwargs)) or ()
         )
 
-    async def _prompt_management_acompletion(self, model: str, messages: list[AllMessageValues], **kwargs: object):
+    async def _prompt_management_acompletion(
+        self, model: str, messages: list[AllMessageValues], **kwargs: object
+    ) -> ModelResponse | CustomStreamWrapper:
         return await self._prompt_management_factory(
             model=model, messages=messages, kwargs={"model": model, "messages": messages, **kwargs}
         )

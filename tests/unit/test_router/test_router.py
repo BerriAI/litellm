@@ -23428,13 +23428,8 @@ async def test_schedule_acompletion_queues_a_prompt_management_model(monkeypatch
             }
         ]
     )
-    provider_calls: Final[list[dict[str, object]]] = []
-
-    async def _provider(**kwargs: object) -> litellm.ModelResponse:
-        provider_calls.append(kwargs)
-        return litellm.ModelResponse()
-
-    monkeypatch.setattr(litellm, "acompletion", _provider)
+    provider: Final = AsyncMock(return_value=litellm.ModelResponse())
+    monkeypatch.setattr(litellm, "acompletion", provider)
     logging_obj: Final = LiteLLMLogging(
         model="cached-chat",
         messages=_PRIORITY_MESSAGES,
@@ -23450,8 +23445,8 @@ async def test_schedule_acompletion_queues_a_prompt_management_model(monkeypatch
         )
     assert add_request.await_count == 1
     assert add_request.await_args.kwargs["request"].priority == 1
-    assert len(provider_calls) == 1
-    assert "priority" not in provider_calls[0]
+    assert provider.await_count == 1
+    assert "priority" not in provider.await_args.kwargs
     assert response._hidden_params["additional_headers"]["x-litellm-request-prioritization-used"] is True
 
 
