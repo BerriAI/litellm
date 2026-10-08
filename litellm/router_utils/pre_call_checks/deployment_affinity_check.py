@@ -24,6 +24,7 @@ from litellm.caching.affinity_cache import (
     ROUTER_SESSION_PINS_TARGET,
     claim_affinity_pin,
     claim_affinity_pin_in_memory,
+    delete_affinity_pin_if_model_id,
     set_local_affinity_pin,
 )
 from litellm.caching.dual_cache import DualCache
@@ -334,18 +335,14 @@ class DeploymentAffinityCheck(CustomLogger):
     async def _drop_stale_pin(self, cache_key: str, stale_model_id: str) -> None:
         """Best-effort invalidation of a pin whose deployment is no longer healthy.
 
-        Re-reads the pin and only deletes it when it still names the stale
-        deployment: a sibling worker may have already re-pinned the session
-        after our read, and deleting blindly would erase its fresh pin.
-        The post-call hook re-claims the pin for the deployment actually chosen
-        through an atomic first-writer-wins SET, so concurrent requests still
-        converge on a single winner.
+        The compare-and-delete is atomic (one Lua script on Redis, one synchronous
+        tick in memory): a sibling worker that re-pinned the session after our read
+        keeps its fresh pin. The post-call hook re-claims the pin for the deployment
+        actually chosen through an atomic first-writer-wins SET, so concurrent
+        requests still converge on a single winner.
         """
         try:
-            current: Final = await self.cache.async_get_cache(cache_key)
-            if self._pinned_model_id(current) != stale_model_id:
-                return
-            await self.cache.async_delete_cache(cache_key)
+            await delete_affinity_pin_if_model_id(self.cache, cache_key=cache_key, model_id=stale_model_id)
         except Exception as e:  # noqa: BLE001  # affinity is best-effort; never break routing
             verbose_router_logger.debug(
                 "DeploymentAffinityCheck: failed to drop stale session pin. error=%s",

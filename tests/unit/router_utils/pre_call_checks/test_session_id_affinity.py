@@ -971,9 +971,71 @@ async def test_stale_pin_drop_never_breaks_routing_on_cache_failure():
     session_cache_key: Final = DeploymentAffinityCheck.get_session_affinity_cache_key("group", "s1", user_key=None)
     await cache.async_set_cache(session_cache_key, {"model_id": "dep-a"})
 
-    with patch.object(DualCache, "async_delete_cache", new=AsyncMock(side_effect=RuntimeError("cache down"))):
+    with patch.object(InMemoryCache, "delete_cache", side_effect=RuntimeError("cache down")):
         await callback._drop_stale_pin(cache_key=session_cache_key, stale_model_id="dep-a")
 
     assert await cache.async_get_cache(session_cache_key) == {"model_id": "dep-a"}, (
         "a failed cleanup must leave the pin untouched and never raise"
+    )
+
+
+@pytest.mark.asyncio
+async def test_stale_pin_delete_is_atomic_compare_and_delete():
+    """The stale-pin delete must be one atomic step, not read-then-delete.
+
+    Regression test for review feedback on #45198: a sibling worker that re-pins
+    the session after our filter observed the stale pin must keep its fresh pin.
+    """
+    redis_store: Final = {}
+
+    async def fake_atomic_script(keys, args):
+        key: Final = keys[0]
+        expected: Final = args[0]
+        raw: Final = redis_store.get(key)
+        stored_id: Final = json.loads(raw)["model_id"] if raw is not None else None
+        if stored_id == expected:
+            del redis_store[key]
+            return 1
+        return 0
+
+    registered: Final = {}
+
+    def capture_script(source):
+        registered["source"] = source
+        return fake_atomic_script
+
+    fake_redis: Final = MagicMock()
+    fake_redis.async_register_script = MagicMock(side_effect=capture_script)
+    cache: Final = DualCache()
+    cache.redis_cache = fake_redis
+    callback: Final = DeploymentAffinityCheck(
+        cache=cache,
+        ttl_seconds=600,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=False,
+        enable_session_id_affinity=True,
+    )
+    session_cache_key: Final = DeploymentAffinityCheck.get_session_affinity_cache_key("group", "s1", user_key=None)
+
+    redis_store[session_cache_key] = json.dumps({"model_id": "dep-a"})
+    # Sibling worker re-pins after our filter observed dep-a but before the delete runs.
+    redis_store[session_cache_key] = json.dumps({"model_id": "dep-b"})
+
+    with (
+        patch.object(DualCache, "async_get_cache", new=AsyncMock()) as get_spy,
+        patch.object(DualCache, "async_delete_cache", new=AsyncMock()) as delete_spy,
+    ):
+        await callback._drop_stale_pin(cache_key=session_cache_key, stale_model_id="dep-a")
+
+    assert json.loads(redis_store[session_cache_key]) == {"model_id": "dep-b"}, (
+        "the atomic compare-and-delete must leave the sibling's fresh pin untouched"
+    )
+    get_spy.assert_not_called()
+    delete_spy.assert_not_called()
+    script_source: Final = registered["source"]
+    assert "redis.call('GET', KEYS[1])" in script_source, (
+        "the delete must run as a Lua script that compares before deleting"
+    )
+    assert "redis.call('DEL', KEYS[1])" in script_source, (
+        "the delete must run as a Lua script that compares before deleting"
     )
