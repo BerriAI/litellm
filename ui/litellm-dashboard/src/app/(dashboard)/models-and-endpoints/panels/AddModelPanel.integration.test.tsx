@@ -221,6 +221,22 @@ describe("AddModelPanel submit payload contract", () => {
     expect(screen.queryByPlaceholderText("Select models")).not.toBeInTheDocument();
   });
 
+  it("offers the catalog models when a name typed before the catalog arrived was cleared again", async () => {
+    const catalog = createCatalogFeed();
+    mockUseModelCostMap.mockImplementation(() => catalog.useData());
+    const { user } = await setup();
+    await user.click(screen.getByRole("combobox", { name: /provider/i }));
+    await user.click(await screen.findByText("OpenAI"));
+    const typed = await screen.findByPlaceholderText("gpt-3.5-turbo");
+    await user.type(typed, "my-fine-tune");
+    await user.clear(typed);
+
+    act(() => catalog.publish({ "gpt-4o-2024-08-06": { litellm_provider: "openai" } }));
+    await user.click(await screen.findByPlaceholderText("Select models"));
+
+    expect(await screen.findByText("gpt-4o-2024-08-06")).toBeInTheDocument();
+  });
+
   it("swaps the offered models when the provider changes while the catalog stays the same", async () => {
     const catalog = createCatalogFeed();
     catalog.publish({
