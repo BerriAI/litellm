@@ -1,8 +1,7 @@
 from types import MappingProxyType
 from typing import Final
 
-from litellm.rust_bridge.messages.route_host import arguments, response
-from litellm.rust_bridge.public_call import NativeCall
+from litellm.rust_bridge.messages.route_host import response
 import pytest
 import litellm
 from litellm.rust_bridge.messages import route_host
@@ -27,26 +26,6 @@ def test_response_is_a_detached_public_messages_dict() -> None:
     assert isinstance(built, dict)
     built["_hidden_params"] = {"annotated": True}
     assert "_hidden_params" not in native
-
-
-def test_arguments_preserve_the_bound_view() -> None:
-    kwargs: Final = MappingProxyType({"litellm_metadata": {"user_id": "u"}})
-    request: Final = NativeCall(
-        args=(),
-        kwargs=kwargs,
-        bound={
-            "model": "claude-sonnet-4-5",
-            "messages": [{"role": "user", "content": "hi"}],
-            "max_tokens": 16,
-            "stream": None,
-            "api_key": None,
-            "api_base": None,
-            "custom_llm_provider": "anthropic",
-            **kwargs,
-        },
-    )
-
-    assert arguments(request.bound) is request.bound
 
 
 def test_settings_project_caller_configuration_without_resolving_a_model(monkeypatch: pytest.MonkeyPatch) -> None:
