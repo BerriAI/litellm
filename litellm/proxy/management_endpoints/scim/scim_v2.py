@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from functools import partial
 from itertools import chain, groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, overload
+from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, Protocol, overload
 
 from fastapi import (
     APIRouter,
@@ -32,6 +32,7 @@ from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.models.user import SCIMPlaceholder
 from litellm.proxy._types import (
+    DeleteTeamRequest,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
@@ -54,6 +55,7 @@ from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
+    delete_team,
     new_team,
     team_member_add,
     team_member_delete,
@@ -2746,33 +2748,32 @@ async def update_group(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def delete_group(
-    group_id: str = Path(..., title="Group ID"),
+    group_id: Annotated[str, Path(title="Group ID")],
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
-    """
-    Delete a group according to SCIM v2 protocol
+    """Delete a group according to SCIM v2 protocol.
+
+    The group's team is deleted the way ``/team/delete`` deletes it, so the members'
+    group entries, their membership rows and every key issued on the team go with it,
+    however many members the group has.
     """
     verbose_proxy_logger.debug("SCIM DELETE GROUP request for group_id=%s", group_id)
     try:
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
         existing_team: Final = await _check_team_exists(group_id)
-
         member_ids: Final = await _get_team_member_user_ids_from_team(existing_team)
 
-        # For each member, remove this team from their teams list
-        for member_id in member_ids:
-            user = await _table(UserRepository(prisma_client)).find_unique(where={"user_id": member_id})
-            if user:
-                current_teams = user.teams or []
-                if group_id in current_teams:
-                    new_teams = [t for t in current_teams if t != group_id]
-                    await _table(UserRepository(prisma_client)).update(
-                        where={"user_id": member_id}, data={"teams": new_teams}
-                    )
-
+        await delete_team(
+            data=DeleteTeamRequest(team_ids=[group_id]),
+            http_request=Request(scope={"type": "http", "path": f"/scim/v2/Groups/{group_id}"}),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key=user_api_key_dict.api_key,
+                user_id=user_api_key_dict.user_id,
+            ),
+            litellm_changed_by=None,
+        )
         await _recompute_scim_member_roles(prisma_client, member_ids)
-
-        # Delete team
-        await _table(TeamRepository(prisma_client)).delete(where={"team_id": group_id})
 
         return Response(status_code=204)
 

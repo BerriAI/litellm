@@ -3,7 +3,9 @@
 POST /scim/v2/Groups, PUT and PATCH /scim/v2/Groups/{id} used to run /team/member_add once per member, so a
 500-member push was thousands of statements and outlasted the edge in front of the proxy. One locked
 transaction now resolves every member, writes the roster and the membership rows and tags the users, so a
-push of 500 members runs as many statements as a push of 5.
+push of 500 members runs as many statements as a push of 5. DELETE /scim/v2/Groups/{id} used to detach the
+members one at a time and leave their membership rows and the team's keys behind; it now goes through
+/team/delete's bulk path, so deleting 500 members costs as many statements as deleting 5 and leaves nothing.
 """
 
 import os
@@ -107,16 +109,35 @@ def _member_ids(body: Mapping[str, JsonValue]) -> frozenset[str]:
     return frozenset(string_value(object_value(member)["value"]) for member in members)
 
 
+def _delete_group(candidate: Gateway, team: str) -> httpx.Response:
+    return candidate.request("DELETE", f"/scim/v2/Groups/{team}")
+
+
+def _delete_team_if_present(scenario: Scenario, team: str) -> None:
+    if read_rows('SELECT team_id FROM "LiteLLM_TeamTable" WHERE team_id = %s', (team,)):
+        scenario.delete_team(team)
+
+
 def _created_team(scenario: Scenario, created: httpx.Response) -> str:
     assert created.status_code == 201, created.text
     team: Final = string_value(_body(created)["id"])
-    scenario.cleanups.callback(scenario.delete_team, team)
+    scenario.cleanups.callback(_delete_team_if_present, scenario, team)
     return team
+
+
+def _team_key(candidate: Gateway, team: str) -> str:
+    created: Final = candidate.post("/key/generate", {"team_id": team, "key_alias": f"integration-{uuid.uuid4().hex}"})
+    return string_value(created["key"])
 
 
 def _membership_user_ids(team: str) -> frozenset[str]:
     rows: Final = read_rows('SELECT user_id FROM "LiteLLM_TeamMembership" WHERE team_id = %s', (team,))
     return frozenset(string_value(row["user_id"]) for row in rows)
+
+
+def _keys_of(team: str) -> frozenset[str]:
+    rows: Final = read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE team_id = %s', (team,))
+    return frozenset(string_value(row["token"]) for row in rows)
 
 
 _UTC_MICROSECONDS: Final = "YYYY-MM-DD HH24:MI:SS.US"
@@ -146,7 +167,22 @@ def _assert_landed(candidate: Gateway, team: str, users: Sequence[str]) -> None:
     assert _users_referencing(team) == frozenset(users)
 
 
-@pytest.mark.timeout(300)  # owned proxy boot plus three 500-member pushes
+def _groups_of(candidate: Gateway, user: str) -> frozenset[str]:
+    groups: Final = candidate.get(f"/scim/v2/Users/{user}").get("groups") or []
+    assert isinstance(groups, list), groups
+    return frozenset(string_value(object_value(group)["value"]) for group in groups)
+
+
+def _assert_gone(candidate: Gateway, team: str, users: Sequence[str], key: str) -> None:
+    assert candidate.request("GET", f"/scim/v2/Groups/{team}").status_code == 404
+    assert team not in _groups_of(candidate, users[0])
+    assert _membership_user_ids(team) == frozenset()
+    assert _users_referencing(team) == frozenset()
+    assert _keys_of(team) == frozenset()
+    assert candidate.request("GET", "/v1/models", key=key).status_code == 401
+
+
+@pytest.mark.timeout(300)  # owned proxy boot plus three 500-member pushes and a 500-member delete
 def test_group_pushes_of_500_members_run_as_many_statements_as_pushes_of_5(
     gateway: Gateway, tmp_path: Path, record_property: Callable[[str, object], None]
 ) -> None:
@@ -192,10 +228,20 @@ def test_group_pushes_of_500_members_run_as_many_statements_as_pushes_of_5(
         _assert_landed(candidate, small_team, [*small_a, *small_b])
         _assert_landed(candidate, large_team, [*small_a, *large])
 
+        small_key: Final = _team_key(candidate, small_team)
+        large_key: Final = _team_key(candidate, large_team)
+        deleted_small: Final = _measured(relay, lambda: _delete_group(candidate, small_team))
+        deleted_large: Final = _measured(relay, lambda: _delete_group(candidate, large_team))
+        assert deleted_small.response.status_code == 204, deleted_small.response.text
+        assert deleted_large.response.status_code == 204, deleted_large.response.text
+        _assert_gone(candidate, small_team, [*small_a, *small_b], small_key)
+        _assert_gone(candidate, large_team, [*small_a, *large], large_key)
+
         pushes: Final = (
             ("POST", created_small, created_large),
             ("PUT", replaced_small, replaced_large),
             ("PATCH", patched_small, patched_large),
+            ("DELETE", deleted_small, deleted_large),
         )
         for verb, small, big in pushes:
             record_property(
