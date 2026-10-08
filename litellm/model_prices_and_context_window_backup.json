@@ -53201,7 +53201,7 @@
         ]
     },
     "azure/sora-2": {
-        "deprecation_date": "2026-10-15",
+        "deprecation_date": "2026-11-02",
         "litellm_provider": "azure",
         "mode": "video_generation",
         "output_cost_per_video_per_second": 0.1,
