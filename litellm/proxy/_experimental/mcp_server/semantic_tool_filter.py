@@ -8,6 +8,9 @@ import asyncio
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
+from mcp.types import Tool as MCPTool
+from pydantic import TypeAdapter
+
 from litellm._logging import verbose_logger
 from litellm.exceptions import ContextWindowExceededError
 from litellm.litellm_core_utils.exception_mapping_utils import ExceptionCheckers
@@ -17,7 +20,6 @@ from litellm.proxy._experimental.mcp_server.utils import MCP_TOOL_PREFIX_SEPARAT
 
 if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
-    from semantic_router.routers.base import Route
 
     from litellm.router import Router
     from litellm.router_strategy.auto_router.litellm_encoder import LiteLLMRouterEncoder
@@ -109,7 +111,7 @@ class SemanticMCPToolFilter:
                 return
 
             # Fetch tools from all servers in parallel
-            all_tools: Final[list[object]] = []
+            all_tools: Final[Sequence[object]] = []
             for server_id, server in registry.items():
                 try:
                     tools = await global_mcp_server_manager.get_tools_for_server(server_id)
@@ -136,19 +138,21 @@ class SemanticMCPToolFilter:
         finally:
             self.startup_index_ready = True
 
-    def extract_tool_info(self, tool) -> tuple[str, str]:
+    def extract_tool_info(self, tool: object) -> tuple[str, str]:
         """Extract name and description from MCP tool or OpenAI function dict."""
         name: str
         description: str
 
         if isinstance(tool, dict):
             # OpenAI function format
-            name = tool.get("name", "")
-            description = tool.get("description", name)
+            tool_dict: Final = TypeAdapter(Mapping[str, object]).validate_python(tool)
+            name = str(tool_dict.get("name", ""))
+            description = str(tool_dict.get("description", name))
         else:
             # MCPTool object
-            name = str(tool.name)
-            description = str(tool.description) if tool.description else str(tool.name)
+            mcp_tool: Final = MCPTool.model_validate(tool)
+            name = str(mcp_tool.name)
+            description = str(mcp_tool.description) if mcp_tool.description else str(mcp_tool.name)
 
         return name, description
 
@@ -165,7 +169,7 @@ class SemanticMCPToolFilter:
             score_threshold=self.similarity_threshold,
         )
 
-    def _tools_to_routes_and_map(self, tools: Sequence[object]) -> tuple[list["Route"], dict[str, object]]:
+    def _tools_to_routes_and_map(self, tools: Sequence[object]) -> tuple[Sequence[object], Mapping[str, object]]:
         from semantic_router.routers.base import Route
 
         extracted: Final = tuple((self.extract_tool_info(tool), tool) for tool in tools)
@@ -208,11 +212,11 @@ class SemanticMCPToolFilter:
             self.context_window_error = None
             routes, tool_map = self._tools_to_routes_and_map(tools)
             self.tool_router = SemanticRouter(
-                routes=routes,
+                routes=list(routes),
                 encoder=self._new_encoder(),
                 auto_sync="local",
             )
-            self._tool_map = tool_map
+            self._tool_map = dict(tool_map)
 
             verbose_logger.info("Built semantic router with %s tools", len(routes))
 
@@ -250,9 +254,9 @@ class SemanticMCPToolFilter:
             # so dimensions are seeded with an async probe to keep the build async.
             dims_probe: Final = await encoder.aencode_queries(["test"])
             router.index.dimensions = len(dims_probe[0])
-            await router.aadd(routes)
+            await router.aadd(list(routes))
 
-            self._tool_map = tool_map
+            self._tool_map = dict(tool_map)
             self.tool_router = router
 
             verbose_logger.info("Built semantic router with %s tools via async index build", len(routes))
@@ -532,9 +536,8 @@ class SemanticMCPToolFilter:
 
                 if isinstance(content, list):
                     texts = [
-                        block.get("text", "") if isinstance(block, dict) else str(block)
-                        for block in content
-                        if isinstance(block, (dict, str))
+                        str(block.get("text", "")) if isinstance(block, Mapping) else str(block)
+                        for block in TypeAdapter(Sequence[Mapping[str, object] | str]).validate_python(content)
                     ]
                     return " ".join(texts)
 
