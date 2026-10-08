@@ -14,6 +14,7 @@ import type { TraceHandoff } from "../../api";
 import { runCost } from "../../list/AgentTracesTable";
 import { traceRefOf, traceShareUrl } from "../../routing";
 import { IdChip } from "../../ui/IdChip";
+import { RunSourceLink } from "../../ui/RunSource";
 import { SpanIcon } from "../../ui/SpanIcon";
 import { FrameworkLogo, traceFramework } from "../../ui/TraceFramework";
 import type { SignalFlag, Trace } from "../../types";
@@ -166,6 +167,7 @@ export function RunHeader({
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
         <StatusPill failed={failed} />
         {signals.length > 0 && <SignalPills flags={signals} showScore className="flex-wrap" />}
+        {summary.source && <RunSourceLink source={summary.source} />}
         <Stat label="Duration" value={fmtMs(summary.duration_ms)} />
         <Stat label="Steps" value={summary.span_count.toLocaleString()} />
         <Stat label="Tokens" value={fmtTok(summary.input_tokens + summary.output_tokens)} />

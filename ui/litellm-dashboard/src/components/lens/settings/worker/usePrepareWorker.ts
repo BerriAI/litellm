@@ -5,10 +5,9 @@ import { lensKeys } from "../../data/queries";
 import type { LensApi } from "../../data/service";
 import { useLensApi } from "../../data/LensServices";
 import type { WorkerCreated } from "../../model/types";
-import { validateWorkerAddress, analysisAccessSchema, type AnalysisAccess } from "./workerSchema";
+import { analysisAccessSchema, type AnalysisAccess } from "./workerSchema";
 
 export interface WorkerRegistration {
-  readonly address: string;
   readonly useExisting: boolean;
   readonly analysisKey: string | null;
   readonly access: AnalysisAccess;
@@ -30,8 +29,7 @@ async function releaseUnusedKey(api: LensApi, keyId: string): Promise<void> {
 }
 
 async function prepareWorker(api: LensApi, registration: WorkerRegistration): Promise<WorkerCreated | null> {
-  const { address, useExisting, analysisKey, access, editingWorker } = registration;
-  validateWorkerAddress(address);
+  const { useExisting, analysisKey, access, editingWorker } = registration;
   if (useExisting && !analysisKey) throw new Error("Choose an existing key");
   const keyId = useExisting && analysisKey ? analysisKey : await createAnalysisKey(api, access);
   const newKey = useExisting ? null : keyId;
