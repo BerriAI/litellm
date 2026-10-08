@@ -22,12 +22,10 @@ These tests align with Databricks Partner Architecture best practices:
     https://github.com/databrickslabs/partner-architecture
 """
 
-import json
 import sys
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
-from unittest.mock import MagicMock, patch, Mock
-
 
 from litellm.llms.databricks.common_utils import DatabricksBase, DatabricksException
 
@@ -271,15 +269,11 @@ class TestValidateEnvironmentWithOAuth:
         """OAuth M2M is used when client_id and client_secret are set."""
         monkeypatch.setenv("DATABRICKS_CLIENT_ID", "test-client-id")
         monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "test-secret")
-        monkeypatch.setenv(
-            "DATABRICKS_API_BASE", "https://adb-123.net/serving-endpoints"
-        )
+        monkeypatch.setenv("DATABRICKS_API_BASE", "https://adb-123.net/serving-endpoints")
 
         databricks_base = DatabricksBase()
 
-        with patch.object(
-            databricks_base, "_get_oauth_m2m_token", return_value="oauth-token"
-        ) as mock_oauth:
+        with patch.object(databricks_base, "_get_oauth_m2m_token", return_value="oauth-token") as mock_oauth:
             api_base, headers = databricks_base.databricks_validate_environment(
                 api_key=None,
                 api_base=None,
@@ -356,9 +350,7 @@ class TestSDKPartnerTelemetry:
 
         mock_workspace_client = MagicMock()
         mock_workspace_client.config.host = "https://adb-123.net"
-        mock_workspace_client.config.authenticate.return_value = {
-            "Authorization": "Bearer token"
-        }
+        mock_workspace_client.config.authenticate.return_value = {"Authorization": "Bearer token"}
 
         mock_useragent = MagicMock()
         # Create a mock databricks.sdk module to simulate the SDK being available
@@ -369,9 +361,7 @@ class TestSDKPartnerTelemetry:
         mock_sdk_module.useragent = mock_useragent
 
         # Mock both databricks and databricks.sdk modules to ensure the import works
-        with patch.dict(
-            sys.modules, {"databricks": MagicMock(), "databricks.sdk": mock_sdk_module}
-        ):
+        with patch.dict(sys.modules, {"databricks": MagicMock(), "databricks.sdk": mock_sdk_module}):
             databricks_base._get_databricks_credentials(
                 api_key=None,
                 api_base=None,
@@ -513,9 +503,7 @@ class TestLiteLLMEmbeddingUserAgent:
                 },
             ),
         ) as mock_validate:
-            with patch(
-                "litellm.llms.openai_like.embedding.handler.OpenAILikeEmbeddingHandler.embedding"
-            ):
+            with patch("litellm.llms.openai_like.embedding.handler.OpenAILikeEmbeddingHandler.embedding"):
                 try:
                     handler.embedding(
                         model="databricks/test-model",
@@ -545,9 +533,7 @@ class TestAuthenticationPriority:
 
         databricks_base = DatabricksBase()
 
-        with patch.object(
-            databricks_base, "_get_oauth_m2m_token", return_value="oauth-token"
-        ) as mock_oauth:
+        with patch.object(databricks_base, "_get_oauth_m2m_token", return_value="oauth-token") as mock_oauth:
             api_base, headers = databricks_base.databricks_validate_environment(
                 api_key=None,  # No PAT provided - OAuth should be used
                 api_base=None,
@@ -569,9 +555,7 @@ class TestAuthenticationPriority:
         databricks_base = DatabricksBase()
 
         # Mock the OAuth call - it will be attempted but PAT should override
-        with patch.object(
-            databricks_base, "_get_oauth_m2m_token", return_value="oauth-token"
-        ):
+        with patch.object(databricks_base, "_get_oauth_m2m_token", return_value="oauth-token"):
             api_base, headers = databricks_base.databricks_validate_environment(
                 api_key="dapi-explicit-pat",
                 api_base=None,
@@ -610,9 +594,7 @@ class TestAuthenticationPriority:
 
         mock_workspace_client = MagicMock()
         mock_workspace_client.config.host = "https://adb-123.net"
-        mock_workspace_client.config.authenticate.return_value = {
-            "Authorization": "Bearer sdk-token"
-        }
+        mock_workspace_client.config.authenticate.return_value = {"Authorization": "Bearer sdk-token"}
 
         # Create a mock databricks.sdk module to simulate the SDK being available
         # This allows us to test the SDK fallback authentication without requiring
@@ -622,9 +604,7 @@ class TestAuthenticationPriority:
         mock_sdk_module.useragent = MagicMock()
 
         # Mock both databricks and databricks.sdk modules to ensure the import works
-        with patch.dict(
-            sys.modules, {"databricks": MagicMock(), "databricks.sdk": mock_sdk_module}
-        ):
+        with patch.dict(sys.modules, {"databricks": MagicMock(), "databricks.sdk": mock_sdk_module}):
             api_base, headers = databricks_base.databricks_validate_environment(
                 api_key=None,
                 api_base=None,
@@ -703,14 +683,60 @@ class TestEndpointURLConstruction:
             headers={},
         )
 
-        assert config.get_complete_url(
-            api_base="https://test.net/ai-gateway/mlflow/v1",
-            api_key="test-key",
-            model="catalog.schema.kimi-k3",
-            optional_params={},
-            litellm_params={},
-        ) == "https://test.net/ai-gateway/mlflow/v1/chat/completions"
+        assert (
+            config.get_complete_url(
+                api_base="https://test.net/ai-gateway/mlflow/v1",
+                api_key="test-key",
+                model="catalog.schema.kimi-k3",
+                optional_params={},
+                litellm_params={},
+            )
+            == "https://test.net/ai-gateway/mlflow/v1/chat/completions"
+        )
         assert request["model"] == "catalog.schema.kimi-k3"
+
+    @pytest.mark.parametrize(
+        ("model", "expected_url"),
+        [
+            ("system.ai.bge-large-en", "https://test.net/ai-gateway/mlflow/v1/embeddings"),
+            ("databricks-bge-large-en", "https://test.net/serving-endpoints/embeddings"),
+        ],
+    )
+    def test_embedding_unity_model_routes_to_ai_gateway(self, monkeypatch, model, expected_url):
+        import httpx
+
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+        from litellm.llms.databricks.embed.handler import DatabricksEmbeddingHandler
+
+        monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+        monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
+        requested_urls = []
+
+        def fake_workspace(request: httpx.Request) -> httpx.Response:
+            requested_urls.append(str(request.url))
+            return httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "model": model,
+                    "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                    "usage": {"prompt_tokens": 1, "total_tokens": 1},
+                },
+            )
+
+        response = DatabricksEmbeddingHandler().embedding(
+            model=model,
+            input=["hello"],
+            timeout=30,
+            logging_obj=MagicMock(),
+            api_key="test-key",
+            api_base="https://test.net/serving-endpoints",
+            optional_params={},
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(fake_workspace))),
+        )
+
+        assert requested_urls == [expected_url]
+        assert response.data[0]["embedding"] == [0.1, 0.2]
 
     def test_chat_legacy_endpoint_remains_default(self, monkeypatch):
         from litellm.llms.databricks.chat.transformation import DatabricksConfig

@@ -22,6 +22,11 @@ class DatabricksException(BaseLLMException):
     pass
 
 
+def uses_unity_gateway(model: str) -> bool:
+    """Unity Catalog model services are named catalog.schema.model and are served by the AI Gateway."""
+    return model.removeprefix("databricks/").count(".") >= 2
+
+
 class DatabricksBase:
     """
     Base class for Databricks integration with authentication,

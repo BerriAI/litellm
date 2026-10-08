@@ -6,6 +6,7 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.databricks.cost_calculator import cost_per_token
 from litellm.types.utils import ModelInfo, Usage
 
@@ -68,6 +69,13 @@ PUBLISHED_DBU_PER_MILLION: Final = {
     "databricks/databricks-gpt-5-4-mini": ("10.714", "64.286", "10.714", "1.071"),
     "databricks/databricks-gpt-5-4-nano": ("2.857", "17.857", "2.857", "0.286"),
     "databricks/databricks-gemini-3-6-flash": ("26.786", "133.929", "26.786", "2.679"),
+    # Rows below: https://www.databricks.com/product/pricing/proprietary-foundation-model-serving as of 2026-10-06.
+    # The two Flash rows are the 50% promotional DBU rate Databricks lists through 2026-12-31; the image rows
+    # publish no cache rate, so cache fields repeat the input rate.
+    "databricks/databricks-gemini-3-8-flash": ("10.714", "53.571", "10.714", "1.071"),
+    "databricks/databricks-gemini-3-7-flash": ("10.714", "53.571", "10.714", "1.071"),
+    "databricks/databricks-gemini-3-pro-image": ("35.714", "2142.86", "35.714", "35.714"),
+    "databricks/databricks-gemini-3-1-flash-image": ("8.929", "1071.43", "8.929", "8.929"),
     "databricks/databricks-gemini-3-5-flash": ("26.786", "160.714", "26.786", "2.679"),
     "databricks/databricks-gemini-3-5-flash-lite": ("5.357", "44.643", "5.357", "0.536"),
     "databricks/databricks-gemini-3-1-pro": ("35.714", "214.286", "35.714", "3.571"),
@@ -105,6 +113,8 @@ ENTRIES_STORING_LIST_RATE_DESPITE_PROMOTION: Final = (
     "databricks/databricks-gemini-3-1-flash-lite",
 )
 CACHE_FIELDS: Final = ("cache_creation_input_token_cost", "cache_read_input_token_cost")
+UNITY_CATALOG_PREFIX: Final = "databricks/system.ai."
+ENDPOINT_PREFIX: Final = "databricks/databricks-"
 
 
 def _model_info(model: str) -> ModelInfo:
@@ -203,7 +213,7 @@ def test_every_model_without_published_cache_dbu_bills_cache_at_its_own_input_ra
     without_published_rates: Final = [
         model
         for model, info in litellm.model_cost.items()
-        if model.startswith("databricks/")
+        if model.startswith(ENDPOINT_PREFIX)
         and info.get("input_cost_per_token")
         and model not in PUBLISHED_DBU_PER_MILLION
     ]
@@ -255,3 +265,62 @@ def test_cost_per_token_bills_the_served_priority_tier(
     prompt_cost, completion_cost = cost_per_token(model="databricks/dbrx-tiered-test", usage=usage)
     assert prompt_cost == pytest.approx(30 * 0.001)
     assert completion_cost == pytest.approx(40 * 0.002)
+
+
+def test_every_databricks_endpoint_has_an_identical_unity_catalog_twin(local_model_cost_map: None) -> None:
+    endpoints: Final = {model: info for model, info in litellm.model_cost.items() if model.startswith(ENDPOINT_PREFIX)}
+    twins: Final = {model: info for model, info in litellm.model_cost.items() if model.startswith(UNITY_CATALOG_PREFIX)}
+
+    assert endpoints
+    assert {model.removeprefix(ENDPOINT_PREFIX) for model in endpoints} == {
+        model.removeprefix(UNITY_CATALOG_PREFIX) for model in twins
+    }
+    assert all(twins[model.replace(ENDPOINT_PREFIX, UNITY_CATALOG_PREFIX)] == info for model, info in endpoints.items())
+
+
+def test_unity_catalog_name_routes_to_databricks_and_bills_like_its_endpoint(local_model_cost_map: None) -> None:
+    unity_model: Final = "databricks/system.ai.claude-opus-5"
+    endpoint_model: Final = "databricks/databricks-claude-opus-5"
+    usage: Final = Usage(
+        prompt_tokens=11000,
+        completion_tokens=500,
+        total_tokens=11500,
+        cache_creation_input_tokens=2000,
+        cache_read_input_tokens=8000,
+    )
+
+    routed_model, provider, _, _ = get_llm_provider(model=unity_model)
+
+    assert (routed_model, provider) == ("system.ai.claude-opus-5", "databricks")
+    assert cost_per_token(model=unity_model, usage=usage) == cost_per_token(model=endpoint_model, usage=usage)
+    assert all(cost > 0 for cost in cost_per_token(model=unity_model, usage=usage))
+
+
+NEWLY_PUBLISHED_GEMINI_ROWS: Final = (
+    "databricks/databricks-gemini-3-8-flash",
+    "databricks/databricks-gemini-3-7-flash",
+    "databricks/databricks-gemini-3-pro-image",
+    "databricks/databricks-gemini-3-1-flash-image",
+)
+
+
+@pytest.mark.parametrize("model", NEWLY_PUBLISHED_GEMINI_ROWS)
+def test_newly_published_gemini_rows_bill_at_their_dbu_rate(local_model_cost_map: None, model: str) -> None:
+    info: Final = _model_info(model)
+    raw_entry: Final = litellm.model_cost[model]
+    published: Final = PUBLISHED_DBU_PER_MILLION[model]
+
+    for field, dbu_per_million in zip(PRICE_FIELDS, published, strict=True):
+        assert info[field] == pytest.approx(_dollars_per_token(dbu_per_million)), field
+    assert raw_entry["input_dbu_cost_per_token"] == pytest.approx(float(Decimal(published[0]) / Decimal(10) ** 6))
+    assert raw_entry["output_dbu_cost_per_token"] == pytest.approx(float(Decimal(published[1]) / Decimal(10) ** 6))
+
+
+def test_gemini_flash_promotional_dbu_rate_matches_google_list_price(local_model_cost_map: None) -> None:
+    # Databricks' promotional Flash DBU rate (10.714 / 53.571 / 1.071 per 1M, pricing page as of 2026-10-06)
+    # equals Google's list price for gemini-3.8-flash (https://ai.google.dev/gemini-api/docs/pricing, same date).
+    databricks: Final = _model_info("databricks/databricks-gemini-3-8-flash")
+    google: Final = litellm.model_cost["gemini/gemini-3.8-flash"]
+
+    for field in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"):
+        assert databricks[field] == pytest.approx(google[field], rel=1e-3), field

@@ -57,7 +57,7 @@ from ...anthropic.chat.transformation import (
     AnthropicConfig,
 )
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
-from ..common_utils import DatabricksBase, DatabricksException
+from ..common_utils import DatabricksBase, DatabricksException, uses_unity_gateway
 
 
 def _is_bare_assistant_message(message_dict: Mapping[str, object]) -> bool:
@@ -250,7 +250,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        use_ai_gateway: Final = model.removeprefix("databricks/").count(".") >= 2
+        use_ai_gateway: Final = uses_unity_gateway(model)
         api_base = self._get_api_base(api_base, use_ai_gateway=use_ai_gateway)
         url_base: Final = api_base.rstrip("/") if use_ai_gateway else api_base
         complete_url: Final = f"{url_base}/chat/completions"

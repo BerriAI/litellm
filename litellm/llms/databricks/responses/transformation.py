@@ -8,9 +8,10 @@ Reference: https://docs.databricks.com/aws/en/machine-learning/foundation-model-
 """
 
 import os
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
-from litellm.llms.databricks.common_utils import DatabricksBase
+from litellm.llms.databricks.common_utils import DatabricksBase, uses_unity_gateway
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import ResponseInputParam
 from litellm.types.router import GenericLiteLLMParams
@@ -66,12 +67,13 @@ class DatabricksResponsesAPIConfig(DatabricksBase, OpenAIResponsesAPIConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
-        api_base = api_base or os.getenv("DATABRICKS_API_BASE")
-        api_base = self._get_api_base(api_base)
-        api_base = api_base.rstrip("/")
-        return f"{api_base}/responses"
+        model: Final = str(litellm_params.get("model") or "")
+        resolved_api_base: Final = self._get_api_base(
+            api_base or os.getenv("DATABRICKS_API_BASE"), use_ai_gateway=uses_unity_gateway(model)
+        )
+        return f"{resolved_api_base.rstrip('/')}/responses"
 
     def transform_responses_api_request(
         self,
