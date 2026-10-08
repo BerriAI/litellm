@@ -6,7 +6,6 @@ use litellm_secrets_types::{
     SecretWriteContext,
 };
 use rstest::{fixture, rstest};
-use strum::VariantArray;
 
 #[fixture]
 fn timeout() -> Duration {
@@ -129,11 +128,21 @@ fn rotation_write_context_preserves_the_operation_context(aws_context: SecretOpe
 fn provider_context_accepts_only_its_owner(
     #[case] owner: KeyManagementSystem,
     #[case] context: SecretOperationContext,
+    #[values(
+        KeyManagementSystem::GoogleKms,
+        KeyManagementSystem::AzureKeyVault,
+        KeyManagementSystem::AwsSecretManager,
+        KeyManagementSystem::GoogleSecretManager,
+        KeyManagementSystem::HashicorpVault,
+        KeyManagementSystem::Cyberark,
+        KeyManagementSystem::Local,
+        KeyManagementSystem::AwsKms,
+        KeyManagementSystem::Custom
+    )]
+    system: KeyManagementSystem,
 ) {
-    for system in KeyManagementSystem::VARIANTS.iter().copied() {
-        assert_eq!(context.validate_for(system).is_ok(), system == owner);
-        assert!(SecretOperationContext::Default.validate_for(system).is_ok());
-    }
+    assert_eq!(context.validate_for(system).is_ok(), system == owner);
+    assert!(SecretOperationContext::Default.validate_for(system).is_ok());
     if matches!(
         owner,
         KeyManagementSystem::AzureKeyVault | KeyManagementSystem::GoogleSecretManager
