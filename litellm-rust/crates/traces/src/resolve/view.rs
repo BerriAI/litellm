@@ -6,7 +6,9 @@ use time::OffsetDateTime;
 use crate::{
     normalize::ObservationType,
     query::named::{ListTracesRow, SpendByResponseIdsRow as SpendRow, TraceSpansRow},
-    view::{AgentNode, Span, SpanStatus, Trace, TraceSummary},
+    view::{
+        AgentNode, RunSource, RunSourceType, Span, SpanStatus, SpendMatch, Trace, TraceSummary,
+    },
 };
 
 use super::{
@@ -23,7 +25,18 @@ fn optional(value: &str) -> Option<String> {
 fn span(resolution: &Resolution<'_>, index: usize, trace_start_ns: i64) -> Span {
     let row = resolution.row(index);
     let status = resolution.status_source(index);
-    let requests = resolution.requests(index).complete_requests();
+    let (requests, spend_match) = if let Some(matched) = resolution.call_match(index) {
+        (matched.requests.clone(), Some(matched.state))
+    } else {
+        (resolution.requests(index).complete_requests(), None)
+    };
+    let spend = requests
+        .as_ref()
+        .and_then(|requests| request_cost(requests));
+    let spend_log_request_id = match (spend_match, requests.as_deref()) {
+        (Some(SpendMatch::Matched), Some([request])) => Some(request.request_id.clone()),
+        _ => None,
+    };
     Span {
         span_id: row.span_id.clone(),
         parent_span_id: optional(&row.parent_span_id),
@@ -42,9 +55,9 @@ fn span(resolution: &Resolution<'_>, index: usize, trace_start_ns: i64) -> Span 
         input_tokens: row.input_tokens,
         output_tokens: row.output_tokens,
         litellm_request_id: optional(&row.litellm_request_id),
-        spend: requests
-            .as_ref()
-            .and_then(|requests| request_cost(requests)),
+        spend,
+        spend_log_request_id,
+        spend_match,
     }
 }
 
@@ -87,6 +100,7 @@ fn agents(resolution: &Resolution<'_>) -> Vec<AgentNode> {
                 .filter(|(owner, _)| *owner == name)
                 .map(|(_, requests)| requests.clone())
                 .collect();
+            let priced = total(&owned_calls);
             AgentNode {
                 name: name.to_owned(),
                 parent_agent,
@@ -101,7 +115,8 @@ fn agents(resolution: &Resolution<'_>) -> Vec<AgentNode> {
                     .map(|span| graph.rows[*span].duration_ns)
                     .sum::<u64>() as f64
                     / NANOS_PER_MS,
-                spend: total(&owned_calls),
+                spend: priced.spend,
+                priced_calls: priced.priced_calls,
             }
         })
         .collect()
@@ -123,6 +138,16 @@ pub fn iso_time(ms: i64) -> String {
         instant.minute(),
         instant.second(),
     )
+}
+
+fn source(row: &TraceSpansRow) -> Option<RunSource> {
+    row.source_url.starts_with("https://").then(|| RunSource {
+        kind: serde_json::from_value(serde_json::Value::from(row.source_type.as_str()))
+            .unwrap_or(RunSourceType::Custom),
+        url: row.source_url.clone(),
+        title: row.source_title.clone(),
+        user: row.source_user.clone(),
+    })
 }
 
 fn sorted_unique<'a>(values: impl Iterator<Item = &'a str>) -> Vec<String> {
@@ -160,6 +185,12 @@ pub fn resolve_trace(
     } else {
         calls.iter().map(|call| &rows[*call]).collect()
     };
+    let priced = total(
+        &calls
+            .iter()
+            .map(|call| resolution.call_requests(*call))
+            .collect::<Vec<_>>(),
+    );
     let first_input = spans
         .iter()
         .zip(rows)
@@ -208,14 +239,17 @@ pub fn resolve_trace(
         input_tokens: counted.iter().map(|row| u64::from(row.input_tokens)).sum(),
         output_tokens: counted.iter().map(|row| u64::from(row.output_tokens)).sum(),
         models: sorted_unique(calls.iter().map(|call| rows[*call].model.as_str())),
-        spend: total(
-            &calls
-                .iter()
-                .map(|call| resolution.call_requests(*call))
-                .collect::<Vec<_>>(),
-        ),
+        spend: priced.spend,
+        priced_calls: priced.priced_calls,
+        source: source(&rows[root]).or_else(|| {
+            rows.iter()
+                .filter_map(|row| Some((row.start_ns, source(row)?)))
+                .min_by_key(|(start_ns, _)| *start_ns)
+                .map(|(_, source)| source)
+        }),
     };
     Some(Trace {
+        gateway_spend_pending: resolution.gateway_spend_pending(),
         summary,
         agents,
         spans,
@@ -250,5 +284,7 @@ pub fn listed_summary(row: &ListTracesRow) -> TraceSummary {
         output_tokens: row.output_tokens,
         models: row.models.clone(),
         spend: None,
+        priced_calls: 0,
+        source: None,
     }
 }

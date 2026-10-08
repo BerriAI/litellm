@@ -94,10 +94,11 @@ from litellm.proxy._types import (
     UpdateTeamRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import (
+from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
     OrganizationNotFoundError,
-    _cache_team_object,
+    _cache_team_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     allowed_route_check_inside_route,
+    cache_team_object,
     can_org_access_model,
     delete_cache_key_objects,
     delete_cache_team_object,
@@ -129,15 +130,22 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     InvalidDateRange,
     parse_canonical_date_range,
 )
-from litellm.proxy.management_endpoints.common_utils import (
-    _check_disable_global_guardrails_caller_permission,
-    _check_passthrough_routes_caller_permission,
-    _set_object_metadata_field,
-    _team_member_has_permission,
-    _update_metadata_fields,
-    _upsert_budget_and_membership,
-    _user_has_admin_view,
+from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
+    _check_disable_global_guardrails_caller_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _check_passthrough_routes_caller_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _set_object_metadata_field,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _team_member_has_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _update_metadata_fields,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _upsert_budget_and_membership,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    check_disable_global_guardrails_caller_permission,
+    check_passthrough_routes_caller_permission,
     member_budget_patch,
+    set_object_metadata_field,
+    team_member_has_permission,
+    update_metadata_fields,
+    upsert_budget_and_membership,
+    user_api_key_has_admin_view,
     validate_budget_duration,
     validate_team_model_max_budget,
 )
@@ -161,10 +169,12 @@ from litellm.proxy.management_helpers.access_group_team_sync import (
     reconcile_team_access_group_membership,
     sync_team_access_group_membership,
 )
-from litellm.proxy.management_helpers.object_permission_utils import (
-    _set_object_permission,
+from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
+    _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     enforce_all_proxy_mcp_servers_grant_is_admin_only,
     handle_update_object_permission_common,
+    invalidate_cached_object_permissions,
+    set_object_permission,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
@@ -453,7 +463,7 @@ def _sanitize_for_log(value: object) -> str:
     return text.replace("\r", "").replace("\n", "")
 
 
-async def _refresh_cached_team(
+async def refresh_cached_team(
     team_row: _CacheableTeamRow,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
@@ -472,12 +482,15 @@ async def _refresh_cached_team(
     via `model_dump()` to match the cache shape `_cache_team_object`
     expects.
     """
-    await _cache_team_object(
+    await cache_team_object(
         team_id=team_row.team_id,
         team_table=LiteLLM_TeamTableCachedObj.model_validate(team_row.model_dump()),
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
+
+
+_refresh_cached_team: Final = refresh_cached_team
 
 
 _GENERAL_SETTINGS: Final = TypeAdapter(dict[str, object])
@@ -595,7 +608,7 @@ class TeamMemberBudgetHandler:
         new_team_data_json["metadata"]["team_member_budget_id"] = team_member_budget_table.budget_id
 
         # Remove team member fields from new_team_data_json
-        TeamMemberBudgetHandler._clean_team_member_fields(new_team_data_json)
+        TeamMemberBudgetHandler.clean_team_member_fields(new_team_data_json)
 
         return new_team_data_json
 
@@ -667,16 +680,18 @@ class TeamMemberBudgetHandler:
             )
 
         # Remove team member fields from updated_kv
-        TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)
+        TeamMemberBudgetHandler.clean_team_member_fields(updated_kv)
         return updated_kv
 
     @staticmethod
-    def _clean_team_member_fields(data_dict: dict) -> None:
+    def clean_team_member_fields(data_dict: dict) -> None:
         """Remove team member fields from data dictionary"""
         data_dict.pop("team_member_budget", None)
         data_dict.pop("team_member_budget_duration", None)
         data_dict.pop("team_member_rpm_limit", None)
         data_dict.pop("team_member_tpm_limit", None)
+
+    _clean_team_member_fields = clean_team_member_fields
 
     @staticmethod
     async def clear_team_member_budget_fields(
@@ -711,7 +726,7 @@ class TeamMemberBudgetHandler:
                 user_api_key_dict=user_api_key_dict,
             )
 
-        TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)
+        TeamMemberBudgetHandler.clean_team_member_fields(updated_kv)
         return updated_kv
 
     @staticmethod
@@ -1388,6 +1403,7 @@ async def new_team(
     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
+    - denied_passthrough_routes: Optional[List[str]] - List of pass through routes the team's keys may not call, even if allowed. Applies together with each key's `denied_passthrough_routes`.
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
@@ -1407,7 +1423,7 @@ async def new_team(
     Example Request:
     ```
     curl --location 'http://0.0.0.0:4000/team/new' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
       "team_alias": "my-new-team_2",
@@ -1419,7 +1435,7 @@ async def new_team(
 
      ```
     curl --location 'http://0.0.0.0:4000/team/new' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
                 "team_alias": "QA Prod Bot",
@@ -1601,8 +1617,8 @@ async def new_team(
             if not creating_user_in_list:
                 data.members_with_roles.append(Member(role="admin", user_id=user_api_key_dict.user_id))
 
-        _check_passthrough_routes_caller_permission(data, user_api_key_dict, entity="team")
-        _check_disable_global_guardrails_caller_permission(
+        check_passthrough_routes_caller_permission(data, user_api_key_dict, entity="team")
+        check_disable_global_guardrails_caller_permission(
             data.disable_global_guardrails,
             data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
             user_api_key_dict,
@@ -1649,7 +1665,7 @@ async def new_team(
             is_proxy_admin=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
             prisma_client=prisma_client,
         )
-        data_json = await _set_object_permission(
+        data_json = await set_object_permission(  # rebind-ok: pre-existing rebinding on a rename-only line
             data_json=data_json,
             prisma_client=prisma_client,
         )
@@ -1680,7 +1696,7 @@ async def new_team(
         # Set Management Endpoint Metadata Fields
         for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
             if getattr(data, field, None) is not None:
-                _set_object_metadata_field(
+                set_object_metadata_field(
                     object_data=complete_team_data,
                     field_name=field,
                     value=getattr(data, field),
@@ -1688,7 +1704,7 @@ async def new_team(
 
         for field in LiteLLM_ManagementEndpoint_MetadataFields:
             if getattr(data, field, None) is not None:
-                _set_object_metadata_field(
+                set_object_metadata_field(
                     object_data=complete_team_data,
                     field_name=field,
                     value=getattr(data, field),
@@ -2150,6 +2166,7 @@ async def update_team(
     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
+    - denied_passthrough_routes: Optional[List[str]] - List of pass through routes the team's keys may not call, even if allowed. Applies together with each key's `denied_passthrough_routes`.
     - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit per model for this team. Example: {"gpt-4": 100, "gpt-3.5-turbo": 200}
     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit per model for this team. Example: {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
     - default_estimated_output_tokens: Optional[int] - Expected output tokens reserved for TPM limiting when a request omits max_tokens, for keys on this team that do not set their own. Positive integer.
@@ -2167,7 +2184,7 @@ async def update_team(
 
     ```
     curl --location 'http://0.0.0.0:4000/team/update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data-raw '{
         "team_id": "8d916b1c-510d-4894-a334-1c16a93344f5",
@@ -2178,7 +2195,7 @@ async def update_team(
     Example - Update Team `max_budget` budget
     ```
     curl --location 'http://0.0.0.0:4000/team/update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data-raw '{
         "team_id": "8d916b1c-510d-4894-a334-1c16a93344f5",
@@ -2282,8 +2299,13 @@ async def update_team(
             entity="team",
         )
 
-        _check_passthrough_routes_caller_permission(data, user_api_key_dict, entity="team")
-        _check_disable_global_guardrails_caller_permission(
+        check_passthrough_routes_caller_permission(
+            data,
+            user_api_key_dict,
+            entity="team",
+            existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,
+        )
+        check_disable_global_guardrails_caller_permission(
             data.disable_global_guardrails,
             data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
             user_api_key_dict,
@@ -2497,7 +2519,7 @@ async def update_team(
                 explicitly_set_fields=_team_member_fields_in_request,
             )
         else:
-            TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)
+            TeamMemberBudgetHandler.clean_team_member_fields(updated_kv)
 
         # Check object permission
         if data.object_permission is not None:
@@ -2513,7 +2535,7 @@ async def update_team(
             )
 
         # update team metadata fields
-        _update_metadata_fields(updated_kv=updated_kv)
+        update_metadata_fields(updated_kv=updated_kv)
 
         if updated_kv.get("metadata") is not None:
             updated_kv["metadata"] = encrypt_callback_vars(updated_kv["metadata"])
@@ -2546,7 +2568,11 @@ async def update_team(
 
         verbose_proxy_logger.info("Successfully updated team - %s, info", team_row.team_id)
         await sync_team_access_group_membership(prisma_client=prisma_client, team_id=team_row.team_id)
-        await _refresh_cached_team(
+        await invalidate_cached_object_permissions(
+            object_permission_ids=(existing_team.object_permission_id, team_row.object_permission_id),
+            user_api_key_cache=user_api_key_cache,
+        )
+        await refresh_cached_team(
             team_row=team_row,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
@@ -2597,7 +2623,7 @@ async def patch_team(
 
     ```
     curl --location --request PATCH 'http://0.0.0.0:4000/team/8d916b1c-510d-4894-a334-1c16a93344f5' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data-raw '{
         "metadata": {"cost_center": "1234", "deprecated_key": null}
@@ -3368,7 +3394,7 @@ async def team_member_add(
     ```
 
     curl -X POST 'http://0.0.0.0:4000/team/member_add' \
-    -H 'Authorization: Bearer sk-1234' \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
     -H 'Content-Type: application/json' \
     -d '{"team_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849", "member": {"role": "user", "user_id": "krrish247652@berri.ai"}}'
 
@@ -3513,7 +3539,7 @@ def _is_member_addressed_by(member: Member, data: TeamMemberDeleteRequest) -> bo
     )
 
 
-def _cleanup_members_with_roles(
+def cleanup_members_with_roles(
     existing_team_row: LiteLLM_TeamTable,
     data: TeamMemberDeleteRequest,
 ) -> tuple[tuple[Member, ...], list[Member]]:
@@ -3528,6 +3554,9 @@ def _cleanup_members_with_roles(
     )
     new_team_members: Final = [m for m in existing_team_row.members_with_roles if not _is_member_addressed_by(m, data)]
     return removed_team_members, new_team_members
+
+
+_cleanup_members_with_roles: Final = cleanup_members_with_roles
 
 
 @router.post(
@@ -3549,7 +3578,7 @@ async def team_member_delete(
     ```
     curl -X POST 'http://0.0.0.0:8000/team/member_delete' \
 
-    -H 'Authorization: Bearer sk-1234' \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
 
     -H 'Content-Type: application/json' \
 
@@ -3639,7 +3668,7 @@ async def _team_member_delete(
                 detail={"error": f"Team id={data.team_id} does not exist in db"},
             )
 
-        removed_team_members, new_team_members = _cleanup_members_with_roles(
+        removed_team_members, new_team_members = cleanup_members_with_roles(
             existing_team_row=LiteLLM_TeamTable(team_id=data.team_id, members_with_roles=fresh_members),
             data=data,
         )
@@ -3705,10 +3734,10 @@ async def _team_member_delete(
         if user_ids_to_delete:
             if keys_to_delete:
                 from litellm.proxy.management_endpoints.key_management_endpoints import (
-                    _persist_deleted_verification_tokens,
+                    persist_deleted_verification_tokens,
                 )
 
-                await _persist_deleted_verification_tokens(
+                await persist_deleted_verification_tokens(
                     keys=keys_to_delete,
                     prisma_client=prisma_client,
                     user_api_key_dict=user_api_key_dict,
@@ -3875,7 +3904,7 @@ async def team_member_update(
             if data.role is not None
             else None
         )
-        await _upsert_budget_and_membership(
+        await upsert_budget_and_membership(
             tx=tx,
             team_id=data.team_id,
             user_id=received_user_id,
@@ -4196,7 +4225,7 @@ async def bulk_team_member_add(
     Example request:
     ```bash
     curl --location 'http://0.0.0.0:4000/team/bulk_member_add' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "team_id": "team-1234",
@@ -4329,7 +4358,7 @@ async def delete_team(
 
     ```
     curl --location 'http://0.0.0.0:4000/team/delete' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data-raw '{
         "team_ids": ["8d916b1c-510d-4894-a334-1c16a93344f5"]
@@ -4419,7 +4448,7 @@ async def delete_team(
     ## DELETE ASSOCIATED KEYS
     # Fetch keys before deletion to persist them
     from litellm.proxy.management_endpoints.key_management_endpoints import (
-        _persist_deleted_verification_tokens,
+        persist_deleted_verification_tokens,
     )
 
     keys_to_delete: Final = await _tokens_db(prisma_client).find_many(where={"team_id": {"in": data.team_ids}})
@@ -4429,7 +4458,7 @@ async def delete_team(
     )
 
     if keys_to_delete:
-        await _persist_deleted_verification_tokens(
+        await persist_deleted_verification_tokens(
             keys=keys_to_delete,
             prisma_client=prisma_client,
             user_api_key_dict=user_api_key_dict,
@@ -5141,7 +5170,7 @@ async def block_team(
     Example:
     ```
     curl --location 'http://0.0.0.0:4000/team/block' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "team_id": "team-1234"
@@ -5196,7 +5225,7 @@ async def unblock_team(
     Example:
     ```
     curl --location 'http://0.0.0.0:4000/team/unblock' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "team_id": "team-1234"
@@ -5533,7 +5562,7 @@ async def _enforce_list_team_v2_access(
     Returns the (possibly overridden) user_id, org_admin_org_ids and, for an
     org admin's own query, the caller's own team ids.
     """
-    is_proxy_admin: Final = _user_has_admin_view(user_api_key_dict)
+    is_proxy_admin: Final = user_api_key_has_admin_view(user_api_key_dict)
     caller_user_id: Final = user_api_key_dict.user_id
 
     if is_proxy_admin:
@@ -5797,7 +5826,7 @@ async def _authorize_and_filter_teams(
     - Own query (user_id matches caller): teams the user is a member of, across all orgs.
     - Others: 401.
     """
-    is_proxy_admin: Final = _user_has_admin_view(user_api_key_dict)
+    is_proxy_admin: Final = user_api_key_has_admin_view(user_api_key_dict)
     is_own_query: Final = (
         user_id is not None and user_api_key_dict.user_id is not None and user_api_key_dict.user_id == user_id
     )
@@ -5867,7 +5896,7 @@ async def list_team(
     """
     ```
     curl --location --request GET 'http://0.0.0.0:4000/team/list' \
-        --header 'Authorization: Bearer sk-1234'
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Parameters:
@@ -6071,7 +6100,7 @@ async def team_model_add(
     Example Request:
     ```
     curl --location 'http://0.0.0.0:4000/team/model/add' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "team_id": "team-1234",
@@ -6157,7 +6186,7 @@ async def append_team_models(
             detail={"error": f"Team not found, passed team_id={data.team_id}"},
         )
 
-    await _refresh_cached_team(
+    await refresh_cached_team(
         team_row=updated_team,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
@@ -6187,7 +6216,7 @@ async def team_model_delete(
     Example Request:
     ```
     curl --location 'http://0.0.0.0:4000/team/model/delete' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "team_id": "team-1234",
@@ -6240,7 +6269,7 @@ async def team_model_delete(
             detail={"error": f"Team not found, passed team_id={data.team_id}"},
         )
 
-    await _refresh_cached_team(
+    await refresh_cached_team(
         team_row=updated_team,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
@@ -6288,7 +6317,7 @@ async def team_member_permissions(
     # a Proxy Admin would. Team / org admins keep their existing scope.
     if (
         hasattr(user_api_key_dict, "user_role")
-        and not _user_has_admin_view(user_api_key_dict)
+        and not user_api_key_has_admin_view(user_api_key_dict)
         and not await get_team_access().allows(user_api_key_dict, complete_team_data, TEAM_OR_ORG_ADMIN)
         and not _is_available_team(
             team_id=complete_team_data.team_id,
@@ -6544,7 +6573,7 @@ async def resolve_team_daily_activity_scope(
     if exclude_team_ids:
         exclude_team_ids_list = exclude_team_ids.split(",") if exclude_team_ids else None
 
-    if not _user_has_admin_view(user_api_key_dict):
+    if not user_api_key_has_admin_view(user_api_key_dict):
         user_info: Final = await get_user_object(
             user_id=user_api_key_dict.user_id,
             prisma_client=prisma_client,
@@ -6586,12 +6615,12 @@ async def resolve_team_daily_activity_scope(
     # filtering the entire response by their own API keys (they can re-
     # request the admin-only teams separately to get the wider view).
     user_api_keys: list[str] | None = None
-    if not _user_has_admin_view(user_api_key_dict) and team_ids_list and team_aliases:
+    if not user_api_key_has_admin_view(user_api_key_dict) and team_ids_list and team_aliases:
         has_full_team_view = True
         for team_alias in team_aliases:
             team_obj = LiteLLM_TeamTable.model_validate(team_alias.model_dump())
             is_admin = is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
-            has_perm = _team_member_has_permission(
+            has_perm = team_member_has_permission(
                 user_api_key_dict=user_api_key_dict,
                 team_obj=team_obj,
                 permission="/team/daily/activity",

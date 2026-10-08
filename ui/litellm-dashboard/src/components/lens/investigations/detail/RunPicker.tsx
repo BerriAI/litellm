@@ -20,7 +20,10 @@ export interface RunPickerProps {
 export function RunPicker({ lens, job }: RunPickerProps) {
   const { batchId, selectRun } = useRunRoute();
   const history = useRunHistory(lens, 0);
+  if (!job) return null;
   const options = history.data ?? lens.jobs;
+  const reused = job.coverage?.reused ?? 0;
+  const newlyReviewed = Math.max(0, (job.coverage?.screened ?? 0) - reused);
   const aggregate = batchId === "latest" || batchId === "all";
   const outsideHistory = !aggregate && !options.some((j) => j.id === batchId);
   return (
@@ -32,7 +35,7 @@ export function RunPicker({ lens, job }: RunPickerProps) {
         onChange={(e) => selectRun(e.target.value)}
       >
         <option value="latest">Latest run</option>
-        {job && outsideHistory && (
+        {outsideHistory && (
           <option value={batchId}>
             {when(job.created_at)} · {runStatus(job)}
           </option>
@@ -44,7 +47,7 @@ export function RunPicker({ lens, job }: RunPickerProps) {
         ))}
         <option value="all">All accumulated findings</option>
       </select>
-      {job && batchId !== "all" && (
+      {batchId !== "all" && (
         <Popover key={job.id}>
           <PopoverTrigger
             aria-label="Run details"
@@ -55,7 +58,7 @@ export function RunPicker({ lens, job }: RunPickerProps) {
           <PopoverContent align="end" className="gap-3">
             <PopoverTitle>Run details</PopoverTitle>
             <p className="text-xs text-muted-foreground">
-              {job.coverage?.screened ?? 0} / {job.coverage?.selected ?? 0} selected runs reviewed
+              {newlyReviewed} newly reviewed · {reused} reused reviews
               <ScanDuration job={job} />
             </p>
             <p className="text-xs text-muted-foreground">

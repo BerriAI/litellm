@@ -25,6 +25,7 @@ from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    validate_arize_otlp_protocol_value,
     validate_langfuse_environment_value,
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
@@ -487,6 +488,8 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/search/{search_tool_name}",
         "/decisions",
         "/v1/decisions",
+        "/systemone",
+        "/v1/systemone",
         # OCR
         "/ocr",
         "/v1/ocr",
@@ -548,6 +551,8 @@ class LiteLLMRoutes(enum.Enum):
         "/lens/{lens_id}/executions/{execution_id}",
         "/lens/{lens_id}/cancel",
         "/lens/{lens_id}/findings/{finding_id}",
+        "/lens/feedback",
+        "/lens/feedback/summary",
         "/lens/preview/sample",
         "/lens/workers/register",
         "/lens/workers/{worker_id}",
@@ -852,6 +857,7 @@ class LiteLLMRoutes(enum.Enum):
             "/public/mcp_hub",
             "/public/skill_hub",
             "/public/litellm_model_cost_map",
+            "/moyai/connect/exchange",
         )
     )
 
@@ -1062,6 +1068,7 @@ class LiteLLMRoutes(enum.Enum):
     admin_viewer_routes = (
         [
             "/lens/traces/findings",
+            "/lens/feedback/summary",
             "/user/list",
             "/user/available_users",
             "/user/available_roles",
@@ -1364,6 +1371,7 @@ class KeyRequestBase(GenerateRequestBase):
     enforced_params: list[str] | None = None
     allowed_routes: list | None = []
     allowed_passthrough_routes: list | None = None
+    denied_passthrough_routes: list[str] | None = None
     allowed_vector_store_indexes: list[AllowedVectorStoreIndexItem] | None = None
     rpm_limit_type: Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"] | None = (
         None  # raise an error if 'guaranteed_throughput' is set and we're overallocating rpm
@@ -1673,6 +1681,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     source_url: str | None = None
     timeout: float | None = None
     max_concurrent_requests: int | None = None
+    rpm: int | None = Field(default=None, ge=0)
     # BYOM submission fields — set by the endpoint, not by the caller.
     # Any caller-provided values are silently overridden before persistence.
     approval_status: str | None = Field(
@@ -1780,6 +1789,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     source_url: str | None = None
     timeout: float | None = None
     max_concurrent_requests: int | None = None
+    rpm: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def validate_protocol_transport(self) -> "UpdateMCPServerRequest":
@@ -2211,6 +2221,7 @@ class NewTeamRequest(TeamBase):
     prompts: list[str] | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
     allowed_passthrough_routes: list | None = None
+    denied_passthrough_routes: list[str] | None = None
     disable_global_guardrails: bool | None = None
     secret_manager_settings: dict | None = None
     model_rpm_limit: dict[str, int] | None = None
@@ -2292,6 +2303,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     team_member_tpm_limit: int | None = None
     team_member_key_duration: str | None = None
     allowed_passthrough_routes: list | None = None
+    denied_passthrough_routes: list[str] | None = None
     secret_manager_settings: dict | None = None
     prompts: list[str] | None = None
     model_rpm_limit: dict[str, int] | None = None
@@ -2383,6 +2395,8 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
                 validate_langfuse_environment_value(callback_vars[key])
             if key == "langfuse_span_scope":
                 validate_langfuse_span_scope_value(callback_vars[key])
+            if key == "arize_otlp_protocol":
+                validate_arize_otlp_protocol_value(callback_vars[key])
         return values
 
 
@@ -2729,6 +2743,9 @@ class ScheduledJobStaggerSettings(LiteLLMPydanticObjectBase):
     )
 
 
+DEFAULT_RESPONSES_WEBSOCKET_SESSION_LIMIT_SECONDS: Final[float] = 3600.0
+
+
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
@@ -3019,6 +3036,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.",
     )
+    vector_store_deny_by_default: bool = Field(
+        default=False,
+        description="When True, a vector store must be explicitly listed in object_permission.vector_stores: a virtual key needs its own grant plus its team's, a keyless team member needs the team's, and a user with neither needs their own. A missing permission record, an empty list, or an unresolved team grants nothing. Dashboard session keys are not yet covered",
+    )
+    search_tool_deny_by_default: bool = Field(
+        default=False,
+        description="When True, a search tool must be explicitly listed in object_permission.search_tools: a virtual key needs its own grant plus its team's, a keyless team member needs the team's, and a user with neither needs their own. A missing permission record, an empty list, or an unresolved team grants nothing, and the unregistered search fallback is denied. The master key and dashboard sessions are exempt",
+    )
     missing_session_id: Literal["generate", "reject", "omit"] | None = Field(
         None,
         description="What to do with LLM API requests that carry no session id (x-litellm-session-id header, metadata.session_id, etc.). 'generate' stamps one id into litellm_session_id, litellm_trace_id and metadata.session_id so SpendLogs and logging callbacks agree; 'reject' returns 400; 'omit' leaves SpendLogs.session_id null, matching callbacks such as Langfuse that only record a client-established metadata.session_id. Unset keeps the legacy behavior where SpendLogs falls back to the trace id while callbacks get no session id.",
@@ -3030,6 +3055,12 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     pass_through_request_timeout: float | None = Field(
         default=None,
         description="Default upstream request timeout in seconds for native and custom pass-through endpoints that use pass_through_request. Defaults to 600 when unset.",
+    )
+    responses_websocket_session_limit_seconds: float = Field(
+        default=DEFAULT_RESPONSES_WEBSOCKET_SESSION_LIMIT_SECONDS,
+        ge=60,
+        le=7200,
+        description="Maximum lifetime in seconds of a Responses API WebSocket session, measured from connection accept and covering the idle wait for the first response.create frame. Defaults to 3600, matching OpenAI's documented 60-minute WebSocket connection limit. Must be between 60 and 7200 seconds.",
     )
     pass_through_endpoints: list[PassThroughGenericEndpoint] | None = Field(
         default=None,
@@ -3153,6 +3184,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         ge=1,
         description="Number of trusted reverse proxies/load balancers in front of the gateway that append to X-Forwarded-For. When set (and mcp_trusted_proxy_ranges validates the direct peer), the client IP for MCP access control is read this many entries from the right of the chain instead of the spoofable leftmost value, defeating append-style X-Forwarded-For forgery.",
+    )
+    mcp_prefer_client_id_metadata_document: bool | None = Field(
+        None,
+        description="When true, a gateway-managed OAuth2 MCP server whose authorization server advertises Client ID Metadata Document support identifies itself with the gateway's public metadata document URL even when that authorization server also offers dynamic client registration. Requires a public HTTPS PROXY_BASE_URL the authorization server can fetch. Default false: dynamic client registration is used whenever the authorization server offers it, and the metadata document only when it does not.",
     )
     trusted_proxy_ranges: list[str] | None = Field(
         None,
@@ -3634,6 +3669,8 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     user_role: str | None = None
     spend: float = 0.0
     max_budget: float | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
     models: list[str] = []
     budget_duration: str | None = None
     budget_reset_at: datetime | None = None
@@ -4509,6 +4546,26 @@ class ProxyErrorTypes(str, enum.Enum):
     Organization does not have access to the vector store
     """
 
+    user_vector_store_access_denied = "user_vector_store_access_denied"
+    """
+    User does not have access to the vector store
+    """
+
+    key_search_tool_access_denied = "key_search_tool_access_denied"
+    """
+    Key does not have access to the search tool
+    """
+
+    team_search_tool_access_denied = "team_search_tool_access_denied"
+    """
+    Team does not have access to the search tool
+    """
+
+    user_search_tool_access_denied = "user_search_tool_access_denied"
+    """
+    User does not have access to the search tool
+    """
+
     team_member_already_in_team = "team_member_already_in_team"
     """
     Team member is already in team
@@ -4543,7 +4600,7 @@ class ProxyErrorTypes(str, enum.Enum):
 
     @classmethod
     def get_vector_store_access_error_type_for_object(
-        cls, object_type: Literal["key", "team", "org"]
+        cls, object_type: Literal["key", "team", "org", "user"]
     ) -> "ProxyErrorTypes":
         """
         Get the vector store access error type for object_type
@@ -4554,6 +4611,18 @@ class ProxyErrorTypes(str, enum.Enum):
             return cls.team_vector_store_access_denied
         elif object_type == "org":
             return cls.org_vector_store_access_denied
+        elif object_type == "user":
+            return cls.user_vector_store_access_denied
+
+    @classmethod
+    def get_search_tool_access_error_type_for_object(
+        cls, object_type: Literal["key", "team", "user"]
+    ) -> "ProxyErrorTypes":
+        return {
+            "key": cls.key_search_tool_access_denied,
+            "team": cls.team_search_tool_access_denied,
+            "user": cls.user_search_tool_access_denied,
+        }[object_type]
 
 
 DB_CONNECTION_ERROR_TYPES: Final = (
@@ -5059,6 +5128,7 @@ LiteLLM_ManagementEndpoint_MetadataFields_Premium: Final = [
     "logging",
     "secret_manager_settings",
     "allowed_passthrough_routes",
+    "denied_passthrough_routes",
 ]
 
 # Metadata keys that are immutable once set: preserved when an update omits them,

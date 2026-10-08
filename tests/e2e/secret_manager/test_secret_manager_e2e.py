@@ -13,6 +13,7 @@ from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, ChatResponse, KeyGenerateBody, LiteLLMParamsBody
 from proxy_client import ProxyClient
 from secret_store import SecretStore
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 
 pytestmark = [pytest.mark.e2e, pytest.mark.secret_manager]
 
@@ -73,6 +74,14 @@ def _eventually(proxy: ProxyClient, read: Callable[[], str | None], expected: st
 
 class TestSecretManager:
     @pytest.mark.covers("other.config.secret_resolution.kms_integration")
+    @meta(
+        Subject(
+            domain=Domain.DEPLOY_OPS,
+            providers=(Provider.OPENAI,),
+            models=(BACKEND_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_deployment_key_resolves_from_the_manager(
         self, proxy: ProxyClient, resources: ResourceManager, store: SecretStore, scoped_key: str
     ) -> None:
@@ -83,6 +92,14 @@ class TestSecretManager:
         assert response.choices, f"the manager-backed deployment answered with no choices: {response}"
 
     @pytest.mark.covers("other.config.secret_resolution.manager_value_used")
+    @meta(
+        Subject(
+            domain=Domain.DEPLOY_OPS,
+            providers=(Provider.OPENAI,),
+            models=(BACKEND_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_deployment_uses_the_value_the_manager_holds(
         self, proxy: ProxyClient, resources: ResourceManager, store: SecretStore, scoped_key: str
     ) -> None:
@@ -100,6 +117,11 @@ class TestSecretManager:
                 pytest.fail(f"expected the provider to reject the manager-held key with 401, got {result}")
 
     @pytest.mark.covers("other.config.secret_manager.virtual_key_stored")
+    @meta(
+        Subject(
+            domain=Domain.DEPLOY_OPS,
+        )
+    )
     def test_generated_key_is_written_to_the_manager(
         self, proxy: ProxyClient, resources: ResourceManager, store: SecretStore
     ) -> None:
@@ -113,6 +135,11 @@ class TestSecretManager:
 
     @pytest.mark.requires_capability("deletes_stored_keys")
     @pytest.mark.covers("other.config.secret_manager.virtual_key_deleted")
+    @meta(
+        Subject(
+            domain=Domain.DEPLOY_OPS,
+        )
+    )
     def test_deleted_key_is_removed_from_the_manager(
         self, proxy: ProxyClient, resources: ResourceManager, store: SecretStore
     ) -> None:

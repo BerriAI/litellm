@@ -274,8 +274,8 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         verbose_logger.debug("Google AI Interactions response: %s", raw_json)
 
         response: Final = InteractionsAPIResponse(**raw_json)
-        response._hidden_params["headers"] = dict(raw_response.headers)
-        response._hidden_params["additional_headers"] = process_response_headers(dict(raw_response.headers))
+        response.hidden_params["headers"] = dict(raw_response.headers)
+        response.hidden_params["additional_headers"] = process_response_headers(dict(raw_response.headers))
 
         return response
 
@@ -328,7 +328,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
                 headers=dict(raw_response.headers),
             )
         response: Final = InteractionsAPIResponse(**raw_json)
-        response._hidden_params["headers"] = dict(raw_response.headers)
+        response.hidden_params["headers"] = dict(raw_response.headers)
         return response
 
     def transform_delete_interaction_request(

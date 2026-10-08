@@ -56,6 +56,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
+from litellm.proxy._experimental.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
     canonical_resource_uri,
@@ -125,6 +126,9 @@ _CLAIM_TTL_BUFFER_SECONDS: Final = 60
 _USED_CODE_CACHE_PREFIX: Final = "mcp_gateway_dcr_code_used:"
 _USED_FLOW_CACHE_PREFIX: Final = "mcp_gateway_dcr_flow_used:"
 _USED_REFRESH_CACHE_PREFIX: Final = "mcp_gateway_dcr_refresh_used:"
+_REFRESH_REPLAYED_DESCRIPTION: Final = "the refresh token was already used"
+_REVOKED_REFRESH_FAMILY_CACHE_PREFIX: Final = "mcp_gateway_dcr_refresh_family_revoked:"
+_REFRESH_FAMILY_REVOKED_DESCRIPTION: Final = "the refresh token was revoked"
 
 MAX_REDIRECT_URIS: Final = 4
 MAX_REDIRECT_URI_LENGTH: Final = 256
@@ -341,6 +345,41 @@ def _oauth_error(status_code: int, error: str, description: str) -> JSONResponse
         content={"error": error, "error_description": description},
         headers=TOKEN_NO_CACHE_HEADERS,
     )
+
+
+class SessionSigning(LiteLLMBaseModel):
+    """The key material a token verb mints and opens session tokens under, resolved once per
+    call together with the instant it serves, so every token the call issues or checks agrees
+    on ``now``."""
+
+    model_config = ConfigDict(frozen=True)
+    keys: SessionSigningKeys
+    now: datetime
+
+
+def resolve_session_signing(master_key: str | None, caller: str) -> SessionSigning | Response:
+    """A token verb's precondition: the proxy has a master key and the session signing
+    configuration validates. Either defect is an operator fault the verb answers as a 500
+    (never a 4xx the client would treat as its own), logged under ``caller``."""
+    if master_key is None:
+        verbose_logger.error("%s rejected: no master_key configured", caller)
+        return _oauth_error(500, "server_error", "the gateway has no master key configured")
+    keys: Final = active_session_signing_keys(master_key)
+    if isinstance(keys, SessionSigningConfigError):
+        verbose_logger.error("%s rejected: %s", caller, keys.detail)
+        return _oauth_error(500, "server_error", "the gateway session signing configuration is invalid")
+    return SessionSigning(keys=keys, now=datetime.now(timezone.utc))
+
+
+def _refresh_claim_key(jti: str) -> str:
+    return f"{_USED_REFRESH_CACHE_PREFIX}{jti}"
+
+
+def _refresh_family_key(family: str) -> str:
+    return f"{_REVOKED_REFRESH_FAMILY_CACHE_PREFIX}{family}"
+
+
+_REFRESH_CLAIM_TTL_SECONDS: Final = SESSION_REFRESH_TTL_SECONDS + _CLAIM_TTL_BUFFER_SECONDS
 
 
 def _seal(prefix: str, payload: BaseModel) -> str:
@@ -774,6 +813,7 @@ def _open_flow_for(
     return flow
 
 
+@catalog_operation(global_manager)
 async def _flow_target(
     flow: _ConnectFlow, lookup_server_reachability: LookupServerReachability
 ) -> tuple[Literal["unscoped", "interactive", "m2m", "stale"], MCPServer | None]:
@@ -1054,13 +1094,17 @@ class _SingleUseGuard:
     async def peek(self, key: str) -> Literal["unclaimed", "claimed", "unavailable"]:
         """Read-only view of a single-use marker, resolved against the same shared authority as
         :meth:`claim` so introspection observes exactly the record redemption and revocation wrote.
-        A backend fault is ``"unavailable"`` (fail closed) rather than a guess either way."""
+        A backend fault is ``"unavailable"`` (fail closed) rather than a guess either way, which is why
+        the read goes to the Redis client itself: the cache wrapper's ``async_get_cache`` turns a fault
+        into ``None``, and ``None`` here would pass as unclaimed. The key is namespaced exactly as the
+        wrapper namespaces every write, or a ``namespace`` configured under ``coordination_redis`` or
+        ``cache_params`` would hide the marker."""
         from litellm.proxy.proxy_server import redis_usage_cache  # noqa: PLC0415  # circular import at module load
 
         redis_cache: Final = redis_usage_cache or getattr(self._cache, "redis_cache", None)
         if redis_cache is not None:
             try:
-                value = await redis_cache.async_get_cache(key)
+                value = await redis_cache.init_async_client().get(redis_cache.check_and_fix_namespace(key=key))
             except Exception as e:  # noqa: BLE001  # ANY Redis fault fails the read closed
                 verbose_logger.warning("mcp gateway single-use peek: shared cache backend unavailable: %s", e)
                 return "unavailable"
@@ -1069,9 +1113,28 @@ class _SingleUseGuard:
         return "unclaimed" if local is None else "claimed"
 
 
-def _session_token_pair(principal: SessionPrincipal, keys: SessionSigningKeys, now: datetime) -> Response:
+async def _family_refusal(guard: _SingleUseGuard, family: str | None) -> Response | None:
+    """A refresh token whose rotation chain a revocation ended is refused before anything is
+    minted; a backend that cannot say answers 503."""
+    if family is None:
+        return None
+    peeked: Final = await guard.peek(_refresh_family_key(family))
+    match peeked:
+        case "unclaimed":
+            return None
+        case "claimed":
+            return _oauth_error(400, "invalid_grant", _REFRESH_FAMILY_REVOKED_DESCRIPTION)
+        case "unavailable":
+            return _oauth_error(503, "temporarily_unavailable", _CLAIM_UNAVAILABLE_DESCRIPTION)
+        case _:
+            assert_never(peeked)
+
+
+def _session_token_pair(
+    principal: SessionPrincipal, keys: SessionSigningKeys, now: datetime, family: str | None
+) -> Response:
     access: Final = mint_session_token(principal, keys, now)
-    refresh: Final = mint_session_refresh_token(principal, keys, now)
+    refresh: Final = mint_session_refresh_token(principal, keys, now, family=family)
     if not isinstance(access, MintedSessionToken) or not isinstance(refresh, MintedSessionToken):
         return _oauth_error(500, "server_error", "failed to mint the session credential")
     return JSONResponse(
@@ -1096,20 +1159,21 @@ class _ProxyCredentialTokenResponse(TypedDict):
     issued_token_type: NotRequired[ReadOnly[_IssuedTokenType]]
 
 
-def _proxy_credential_response(
+def proxy_credential_response(
     minted: MintedProxyCredential,
     principal: SessionPrincipal,
-    keys: SessionSigningKeys,
-    now: datetime,
+    signing: SessionSigning,
     issued_token_type: _IssuedTokenType | None = None,
+    family: str | None = None,
 ) -> Response:
     """The proxy-API token response: the access token is the very credential ``lite
     login`` stores (accepted on every proxy route with user and team attribution), and
     the refresh token is a gateway-sealed rotating token bound to the team the credential
-    was minted for, so a renewal keeps the team the user consented to. A token exchange
-    also states ``issued_token_type``, which RFC 8693 section 2.2.1 requires."""
+    was minted for, so a renewal keeps the team the user consented to, and to the rotation
+    chain (``family``) the presented token belonged to. A token exchange also states
+    ``issued_token_type``, which RFC 8693 section 2.2.1 requires."""
     bound_principal: Final = principal.model_copy(update=MappingProxyType({"team_id": minted.team_id}))
-    refresh: Final = mint_session_refresh_token(bound_principal, keys, now)
+    refresh: Final = mint_session_refresh_token(bound_principal, signing.keys, signing.now, family=family)
     if not isinstance(refresh, MintedSessionToken):
         return _oauth_error(500, "server_error", "failed to mint the session credential")
     credential: Final[_ProxyCredentialTokenResponse] = {
@@ -1160,7 +1224,7 @@ def _mint_failure_response(failure: ProxyCredentialMintFailure) -> Response:
             )
         case "team_required":
             return _oauth_error(
-                400, "invalid_grant", "this user belongs to a team; sign in again and pick the team for this credential"
+                400, "invalid_grant", "this user belongs to a team; sign in again to get a credential issued for it"
             )
         case "unavailable" | "faulted" | "unresolvable" | "no_active_key":
             return _reload_failure_response(failure)
@@ -1205,19 +1269,13 @@ async def aggregate_token(
     with that audience, and the RFC 8693 token exchange that turns an IdP token straight
     into the proxy-API credential. Every path re-validates the litellm user live before
     minting, so a deactivated user cannot obtain or renew a session."""
-    if master_key is None:
-        verbose_logger.error("mcp_gateway_dcr token grant rejected: no master_key configured")
-        return _oauth_error(500, "server_error", "the gateway has no master key configured")
-    keys: Final = active_session_signing_keys(master_key)
-    if isinstance(keys, SessionSigningConfigError):
-        verbose_logger.error("mcp_gateway_dcr token grant rejected: %s", keys.detail)
-        return _oauth_error(500, "server_error", "the gateway session signing configuration is invalid")
-    now: Final = datetime.now(timezone.utc)
+    signing: Final = resolve_session_signing(master_key, "mcp_gateway_dcr token grant")
+    if isinstance(signing, Response):
+        return signing
     issue: Final = _GrantIssuer(
         request=request,
         resource=resource,
-        keys=keys,
-        now=now,
+        signing=signing,
         reload_user=reload_user,
         mint_proxy_credential=mint_proxy_credential,
         guard=_SingleUseGuard(cache),
@@ -1230,7 +1288,7 @@ async def aggregate_token(
             client_id=client_id,
             code_verifier=code_verifier,
             resource=resource,
-            now=now,
+            now=signing.now,
             issue=issue,
         )
     if grant_type == "refresh_token":
@@ -1239,8 +1297,7 @@ async def aggregate_token(
             refresh_token=refresh_token,
             client_id=client_id,
             resource=resource,
-            keys=keys,
-            now=now,
+            signing=signing,
             issue=issue,
         )
     if grant_type == TOKEN_EXCHANGE_GRANT_TYPE:
@@ -1259,6 +1316,44 @@ async def aggregate_token(
     )
 
 
+class _ProxyCredentialIssuer:
+    """The proxy-API tail every grant for that audience shares once its own proof has checked
+    out: refuse a rotation chain that was already ended, mint the live credential (which
+    revalidates the user and the team membership against the database), then claim the
+    single-use marker, ending the whole chain when the marker was already claimed. The claim
+    comes AFTER minting so a transient DB 503 or a membership refusal never burns a
+    still-valid grant, and it fails closed when it cannot be recorded."""
+
+    def __init__(
+        self, signing: SessionSigning, mint_proxy_credential: MintProxyCredential, guard: _SingleUseGuard
+    ) -> None:
+        self._signing: Final = signing
+        self._mint_proxy_credential: Final = mint_proxy_credential
+        self._guard: Final = guard
+
+    async def __call__(
+        self,
+        principal: SessionPrincipal,
+        claim_key: str,
+        claim_ttl_seconds: int,
+        replayed: str,
+        family: str | None = None,
+    ) -> Response:
+        ended: Final = await _family_refusal(self._guard, family)
+        if ended is not None:
+            return ended
+        minted: Final = await self._mint_proxy_credential(principal.user_id, principal.team_id)
+        if not isinstance(minted, MintedProxyCredential):
+            return _mint_failure_response(minted)
+        refusal: Final = _claim_refusal(
+            await self._guard.claim(claim_key, claim_ttl_seconds),
+            replayed=_oauth_error(400, "invalid_grant", replayed),
+        )
+        if refusal is not None:
+            return refusal
+        return proxy_credential_response(minted, principal, self._signing, family=family)
+
+
 class _GrantIssuer:
     """The tail every grant shares once its own proof (code + PKCE, or a refresh token)
     has checked out: revalidate the user live, claim the single-use marker, mint. The
@@ -1269,55 +1364,59 @@ class _GrantIssuer:
         self,
         request: Request,
         resource: str | None,
-        keys: SessionSigningKeys,
-        now: datetime,
+        signing: SessionSigning,
         reload_user: ReloadUser,
         mint_proxy_credential: MintProxyCredential,
         guard: _SingleUseGuard,
     ) -> None:
         self._request: Final = request
         self._resource: Final = resource
-        self._keys: Final = keys
-        self._now: Final = now
+        self._signing: Final = signing
         self._reload_user: Final = reload_user
         self._mint_proxy_credential: Final = mint_proxy_credential
         self._guard: Final = guard
+        self._proxy_credential: Final = _ProxyCredentialIssuer(signing, mint_proxy_credential, guard)
 
     async def __call__(
-        self, principal: SessionPrincipal, claim_key: str, claim_ttl_seconds: int, replayed: str
+        self,
+        principal: SessionPrincipal,
+        claim_key: str,
+        claim_ttl_seconds: int,
+        replayed: str,
+        family: str | None = None,
     ) -> Response:
         match principal.audience:
             case None:
-                return await self._issue_session_pair(principal, claim_key, claim_ttl_seconds, replayed)
+                return await self._issue_session_pair(principal, claim_key, claim_ttl_seconds, replayed, family)
             case "proxy_api":
-                return await self._issue_proxy_credential(principal, claim_key, claim_ttl_seconds, replayed)
+                return await self._issue_proxy_credential(principal, claim_key, claim_ttl_seconds, replayed, family)
             case _:
                 assert_never(principal.audience)
 
     async def _issue_session_pair(
-        self, principal: SessionPrincipal, claim_key: str, claim_ttl_seconds: int, replayed: str
+        self, principal: SessionPrincipal, claim_key: str, claim_ttl_seconds: int, replayed: str, family: str | None
     ) -> Response:
+        ended: Final = await _family_refusal(self._guard, family)
+        if ended is not None:
+            return ended
         failure: Final = await self._reload_user(principal.user_id)
         if failure is not None:
             return _reload_failure_response(failure)
-        refusal: Final = await self._claim_refusal(claim_key, claim_ttl_seconds, replayed)
+        refusal: Final = _claim_refusal(
+            await self._guard.claim(claim_key, claim_ttl_seconds),
+            replayed=_oauth_error(400, "invalid_grant", replayed),
+        )
         if refusal is not None:
             return refusal
-        return _session_token_pair(principal, self._keys, self._now)
+        return _session_token_pair(principal, self._signing.keys, self._signing.now, family)
 
     async def _issue_proxy_credential(
-        self, principal: SessionPrincipal, claim_key: str, claim_ttl_seconds: int, replayed: str
+        self, principal: SessionPrincipal, claim_key: str, claim_ttl_seconds: int, replayed: str, family: str | None
     ) -> Response:
         target_refusal: Final = self._proxy_api_target_refusal()
         if target_refusal is not None:
             return target_refusal
-        minted: Final = await self._mint_proxy_credential(principal.user_id, principal.team_id)
-        if not isinstance(minted, MintedProxyCredential):
-            return _mint_failure_response(minted)
-        refusal: Final = await self._claim_refusal(claim_key, claim_ttl_seconds, replayed)
-        if refusal is not None:
-            return refusal
-        return _proxy_credential_response(minted, principal, self._keys, self._now)
+        return await self._proxy_credential(principal, claim_key, claim_ttl_seconds, replayed, family)
 
     async def exchange(
         self, subject_token: str, client_id: str, exchange_subject_token: ExchangeSubjectToken
@@ -1337,19 +1436,12 @@ class _GrantIssuer:
         minted: Final = await self._mint_proxy_credential(principal.user_id, principal.team_id)
         if not isinstance(minted, MintedProxyCredential):
             return _mint_failure_response(minted)
-        return _proxy_credential_response(
-            minted, principal, self._keys, self._now, issued_token_type=ACCESS_TOKEN_TOKEN_TYPE
-        )
+        return proxy_credential_response(minted, principal, self._signing, issued_token_type=ACCESS_TOKEN_TOKEN_TYPE)
 
     def _proxy_api_target_refusal(self) -> Response | None:
         if self._resource is None or is_proxy_api_resource(self._request, self._resource):
             return None
         return _oauth_error(400, "invalid_target", "resource does not match the proxy API this grant was issued for")
-
-    async def _claim_refusal(self, claim_key: str, claim_ttl_seconds: int, replayed: str) -> Response | None:
-        return _claim_refusal(
-            await self._guard.claim(claim_key, claim_ttl_seconds), replayed=_oauth_error(400, "invalid_grant", replayed)
-        )
 
 
 async def _authorization_code_grant(
@@ -1393,30 +1485,73 @@ async def _authorization_code_grant(
     )
 
 
+def _open_presented_refresh_token(
+    refresh_token: str | None, client_id: str, signing: SessionSigning
+) -> SessionRefreshOpened | Response:
+    if not refresh_token:
+        return _oauth_error(400, "invalid_request", "refresh_token is required")
+    opened: Final = open_session_refresh_bearer(refresh_token, signing.keys, signing.now, expected_client_id=client_id)
+    if not isinstance(opened, SessionRefreshOpened):
+        return _oauth_error(400, "invalid_grant", "the refresh token is invalid for this client")
+    return opened
+
+
 async def _refresh_token_grant(
     request: Request,
     refresh_token: str | None,
     client_id: str,
     resource: str | None,
-    keys: SessionSigningKeys,
-    now: datetime,
+    signing: SessionSigning,
     issue: _GrantIssuer,
 ) -> Response:
-    if not refresh_token:
-        return _oauth_error(400, "invalid_request", "refresh_token is required")
-    opened: Final = open_session_refresh_bearer(refresh_token, keys, now, expected_client_id=client_id)
-    if not isinstance(opened, SessionRefreshOpened):
-        return _oauth_error(400, "invalid_grant", "the refresh token is invalid for this client")
+    opened: Final = _open_presented_refresh_token(refresh_token, client_id, signing)
+    if isinstance(opened, Response):
+        return opened
     if _resource_conflicts_with_scope(request, resource, opened.principal.resource_server_id):
         return _oauth_error(400, "invalid_target", "resource does not match the scope this token was issued for")
     # Refresh-token rotation (OAuth 2.0 Security BCP section 4.13): the presented refresh token is
     # single-use, so a captured or replayed refresh token cannot mint a second pair after the
-    # legitimate holder rotated.
+    # legitimate holder rotated. A replay refuses only itself, never the chain (section 4.13.2's
+    # chain ending): Claude Code renews from its in-memory copy, so a second terminal on the same
+    # machine presents the token the first one already rotated, then recovers from the shared
+    # credential file, and the chain it recovers into has to be alive. Only a revocation ends it.
     return await issue(
         opened.principal,
-        claim_key=f"{_USED_REFRESH_CACHE_PREFIX}{opened.jti}",
-        claim_ttl_seconds=SESSION_REFRESH_TTL_SECONDS + _CLAIM_TTL_BUFFER_SECONDS,
-        replayed="the refresh token was already used",
+        claim_key=_refresh_claim_key(opened.jti),
+        claim_ttl_seconds=_REFRESH_CLAIM_TTL_SECONDS,
+        replayed=_REFRESH_REPLAYED_DESCRIPTION,
+        family=opened.family,
+    )
+
+
+async def refresh_proxy_credential(
+    refresh_token: str | None,
+    client_id: str,
+    master_key: str | None,
+    cache: DualCache,
+    mint_proxy_credential: MintProxyCredential,
+) -> Response:
+    """The refresh_token grant for a fixed public client the gateway never registered (the
+    Claude Code CLI, which presents no client_id of its own): the token must have been minted
+    for ``client_id`` with the proxy-API audience, the credential is re-minted live, and the
+    presented token rotates under the same single-use record the DCR flow burns, so one
+    revocation covers both front doors. The identity-only session pair is never issued here:
+    a token of that audience answers invalid_grant even when its client binding matches."""
+    signing: Final = resolve_session_signing(master_key, "mcp_gateway refresh grant")
+    if isinstance(signing, Response):
+        return signing
+    opened: Final = _open_presented_refresh_token(refresh_token, client_id, signing)
+    if isinstance(opened, Response):
+        return opened
+    if opened.principal.audience != PROXY_API_AUDIENCE:
+        return _oauth_error(400, "invalid_grant", "the refresh token is invalid for this client")
+    issue: Final = _ProxyCredentialIssuer(signing, mint_proxy_credential, _SingleUseGuard(cache))
+    return await issue(
+        opened.principal,
+        claim_key=_refresh_claim_key(opened.jti),
+        claim_ttl_seconds=_REFRESH_CLAIM_TTL_SECONDS,
+        replayed=_REFRESH_REPLAYED_DESCRIPTION,
+        family=opened.family,
     )
 
 
@@ -1448,7 +1583,8 @@ async def _token_exchange_grant(
 
 async def revoke_refresh_token(token: str, client_id: str, master_key: str | None, cache: DualCache) -> Response:
     """RFC 7009 revocation for the gateway's refresh tokens: burn the presented token's
-    ``jti`` so neither the holder nor a thief can rotate it again. Access tokens are
+    ``jti`` and the rotation chain it belongs to, so no rotation of it, whoever holds one,
+    mints again (section 2.1: the grant is revoked, not one token). Access tokens are
     stateless and expire on their own (the proxy-API credential within
     ``CLI_JWT_EXPIRATION_HOURS``), so per RFC 7009 section 2.2 an unrecognized or already
     dead token still answers 200; only an unknown client is refused. A live token whose
@@ -1457,20 +1593,28 @@ async def revoke_refresh_token(token: str, client_id: str, master_key: str | Non
     never happened."""
     if not is_gateway_dcr_client_id(client_id) or open_gateway_dcr_client(client_id) is None:
         return _oauth_error(401, "invalid_client", "unknown or malformed client_id")
-    if master_key is None:
-        verbose_logger.error("mcp_gateway_dcr revoke rejected: no master_key configured")
-        return _oauth_error(500, "server_error", "the gateway has no master key configured")
-    keys: Final = active_session_signing_keys(master_key)
-    if isinstance(keys, SessionSigningConfigError):
-        verbose_logger.error("mcp_gateway_dcr revoke rejected: %s", keys.detail)
-        return _oauth_error(500, "server_error", "the gateway session signing configuration is invalid")
-    now: Final = datetime.now(timezone.utc)
-    opened: Final = open_session_refresh_bearer(token, keys, now, expected_client_id=client_id)
+    return await revoke_session_refresh_token(token, client_id, master_key, cache)
+
+
+async def revoke_session_refresh_token(
+    token: str, client_id: str, master_key: str | None, cache: DualCache
+) -> Response:
+    """The client-agnostic half of RFC 7009 revocation, shared with the fixed public clients
+    the gateway never registered: burn the presented refresh token's ``jti`` and its rotation
+    chain when it was issued to ``client_id``, answer 200 for anything else (an access token,
+    a dead or foreign token, garbage), and 503 when a burn could not be recorded in the shared
+    backend. The chain marker is written first: a fault between the two writes then leaves
+    every token of the chain refused rather than a descendant still renewable, and the retry
+    the 503 asks for only has the presented ``jti`` left to burn."""
+    signing: Final = resolve_session_signing(master_key, "mcp_gateway revoke")
+    if isinstance(signing, Response):
+        return signing
+    opened: Final = open_session_refresh_bearer(token, signing.keys, signing.now, expected_client_id=client_id)
     if isinstance(opened, SessionRefreshOpened):
-        burned: Final = await _SingleUseGuard(cache).claim(
-            f"{_USED_REFRESH_CACHE_PREFIX}{opened.jti}", SESSION_REFRESH_TTL_SECONDS + _CLAIM_TTL_BUFFER_SECONDS
-        )
-        if burned == "unavailable":
+        guard: Final = _SingleUseGuard(cache)
+        ended: Final = await guard.claim(_refresh_family_key(opened.family), _REFRESH_CLAIM_TTL_SECONDS)
+        burned: Final = await guard.claim(_refresh_claim_key(opened.jti), _REFRESH_CLAIM_TTL_SECONDS)
+        if "unavailable" in (burned, ended):
             return _oauth_error(503, "temporarily_unavailable", _CLAIM_UNAVAILABLE_DESCRIPTION)
     return Response(content="{}", media_type="application/json", headers=TOKEN_NO_CACHE_HEADERS)
 
@@ -1542,10 +1686,12 @@ async def introspect_gateway_token(
     if not isinstance(opened, OpenedSessionToken):
         return _inactive_introspection_response()
     if opened.kind == "session_refresh":
-        peeked: Final = await _SingleUseGuard(cache).peek(f"{_USED_REFRESH_CACHE_PREFIX}{opened.jti}")
-        if peeked == "unavailable":
+        guard: Final = _SingleUseGuard(cache)
+        used: Final = await guard.peek(_refresh_claim_key(opened.jti))
+        ended: Final = await guard.peek(_refresh_family_key(opened.family))
+        if "unavailable" in (used, ended):
             return _oauth_error(503, "temporarily_unavailable", _CLAIM_UNAVAILABLE_DESCRIPTION)
-        if peeked == "claimed":
+        if "claimed" in (used, ended):
             return _inactive_introspection_response()
     failure: Final = await reload_user(opened.principal.user_id)
     if failure == "unavailable" or failure == "faulted":

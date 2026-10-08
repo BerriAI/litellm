@@ -115,35 +115,21 @@ type GroupOrSpan = Span | { group: Span[] };
 
 const groupKey = (span: Pick<Span, "name" | "type" | "agent">): string => `${span.agent}|${span.name}|${span.type}`;
 
-/** Siblings sharing agent + name + type fold into one group once there are enough of them (or enough failures). */
 function groupChildren(children: readonly Span[]): GroupOrSpan[] {
-  const byKey = new Map<string, Span[]>();
+  const runs: Span[][] = [];
   for (const child of children) {
-    const key = groupKey(child);
-    const list = byKey.get(key);
-    if (list) list.push(child);
-    else byKey.set(key, [child]);
+    const previous = runs.at(-1);
+    if (previous && groupKey(previous[0]) === groupKey(child)) previous.push(child);
+    else runs.push([child]);
   }
-  const emitted = new Set<string>();
-  const out: GroupOrSpan[] = [];
-  for (const child of children) {
-    const key = groupKey(child);
-    const group = byKey.get(key) ?? [child];
-    const failed = group.filter((s) => s.status === "error").length;
-    if (group.length >= GROUP_THRESHOLD_OK || failed >= GROUP_THRESHOLD_ERROR) {
-      if (!emitted.has(key)) {
-        emitted.add(key);
-        out.push({ group });
-      }
-    } else {
-      out.push(child);
-    }
-  }
-  return out;
+  return runs.flatMap((group): GroupOrSpan[] => {
+    const failed = group.filter((span) => span.status === "error").length;
+    return group.length >= GROUP_THRESHOLD_OK || failed >= GROUP_THRESHOLD_ERROR ? [{ group }] : group;
+  });
 }
 
-export const groupRowId = (parentKey: string, span: Pick<Span, "name" | "type" | "agent">): string =>
-  `grp::${parentKey}::${groupKey(span)}`;
+export const groupRowId = (parentKey: string, span: Pick<Span, "span_id">): string =>
+  `grp::${parentKey}::${span.span_id}`;
 
 interface RowContext {
   children: ChildrenMap;
@@ -266,16 +252,6 @@ export function nearestVisibleSpanId(spans: readonly Span[], spanId: string, hid
     current = byId.get(current.parent_span_id);
   }
   return current?.span_id ?? spanId;
-}
-
-/* ------------------------------------------------------------------ */
-/*  Trace-level rollups                                                */
-/* ------------------------------------------------------------------ */
-
-/** Earliest failing non-root span (the root just echoes its children), else the root. */
-export function firstErrorSpan(spans: readonly Span[]): Span | null {
-  const failed = spans.filter((s) => s.status === "error").sort(byStart);
-  return failed.find((s) => s.parent_span_id !== null) ?? failed[0] ?? null;
 }
 
 /* ------------------------------------------------------------------ */
