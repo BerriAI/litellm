@@ -2450,6 +2450,11 @@ async def test_store_batch_output_file_skips_lookup_for_fallback_written_moments
     stored_object = managed_file_table.rows["unified-output"].file_object
     assert stored_object is not None
     assert (stored_object.bytes, stored_object.litellm_details_fallback) == (836, True)
+    assert managed_file_table.upsert_calls == []
+    assert managed_file_table.update_many_calls[0][0] == {
+        "unified_file_id": "unified-output"
+    }
+    assert set(managed_file_table.update_many_calls[0][1]) == {"file_object"}
 
 
 @pytest.mark.asyncio
@@ -3133,6 +3138,9 @@ async def test_afile_retrieve_case3_times_out_on_default_provider_route():
         )
 
     retrieve.assert_awaited_once()
+    assert retrieve.await_args.kwargs["file_id"] == "provider-output"
+    assert retrieve.await_args.kwargs["max_retries"] == 0
+    assert "custom_llm_provider" not in retrieve.await_args.kwargs
 
 
 @pytest.mark.asyncio
