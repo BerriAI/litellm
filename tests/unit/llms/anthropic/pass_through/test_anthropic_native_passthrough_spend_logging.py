@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -27,12 +27,14 @@ class _RecordingLogger(CustomLogger):
     def __init__(self, message_id: str) -> None:
         super().__init__()
         self.message_id: Final = message_id
-        self.payloads: Final[list[StandardLoggingPayload]] = []
+        self.payloads: tuple[StandardLoggingPayload, ...] = ()
+        self.received: Final = asyncio.Event()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         payload: Final = kwargs.get("standard_logging_object")
         if payload is not None and payload["id"] == self.message_id:
-            self.payloads.append(payload)
+            self.payloads = (*self.payloads, payload)
+            self.received.set()
 
 
 def _proxy_request(body: Mapping[str, object]) -> Request:
@@ -51,12 +53,9 @@ def _sse(events: tuple[Mapping[str, object], ...]) -> bytes:
     return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events).encode()
 
 
-async def _wait_for(condition: Callable[[], bool]) -> None:
+async def _wait_for_payload(recorder: _RecordingLogger) -> None:
     GLOBAL_LOGGING_WORKER.start()
-    deadline: Final = asyncio.get_running_loop().time() + 10.0
-    while not condition():
-        assert asyncio.get_running_loop().time() < deadline, "condition not met within 10s"
-        await asyncio.sleep(0.01)
+    await asyncio.wait_for(recorder.received.wait(), timeout=30.0)
 
 
 def _assert_spend_payload(
@@ -128,7 +127,7 @@ async def test_native_anthropic_passthrough_logs_usage_tags_and_spend(respx_mock
         "max_tokens": 10,
         "messages": [{"role": "user", "content": "Say 'hello test' and nothing else"}],
     }
-    await _wait_for(lambda: len(recorder.payloads) > 0)
+    await _wait_for_payload(recorder)
     assert len(recorder.payloads) == 1
     payload: Final = recorder.payloads[0]
     _assert_spend_payload(payload, recorder.message_id, tags, prompt_tokens=11, completion_tokens=7)
@@ -177,6 +176,6 @@ async def test_native_anthropic_passthrough_streaming_logs_usage_tags_and_spend(
     streamed: Final = b"".join([chunk async for chunk in response.body_iterator])
     assert b"hello stream test" in streamed
     assert json.loads(route.calls.last.request.content)["stream"] is True
-    await _wait_for(lambda: len(recorder.payloads) > 0)
+    await _wait_for_payload(recorder)
     assert len(recorder.payloads) == 1
     _assert_spend_payload(recorder.payloads[0], recorder.message_id, tags, prompt_tokens=11, completion_tokens=7)

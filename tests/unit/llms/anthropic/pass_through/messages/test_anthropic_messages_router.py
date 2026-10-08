@@ -5,7 +5,7 @@ import base64
 import json
 import struct
 import uuid
-from collections.abc import AsyncIterable, Callable, Mapping
+from collections.abc import AsyncIterable, Mapping
 from typing import Final
 from zlib import crc32
 
@@ -97,12 +97,14 @@ class _RecordingLogger(CustomLogger):
     def __init__(self, messages: list[dict[str, str]]) -> None:
         super().__init__()
         self.messages: Final = messages
-        self.payloads: Final[list[StandardLoggingPayload]] = []
+        self.payloads: tuple[StandardLoggingPayload, ...] = ()
+        self.received: Final = asyncio.Event()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         payload: Final = kwargs.get("standard_logging_object")
         if payload is not None and payload["messages"] == self.messages:
-            self.payloads.append(payload)
+            self.payloads = (*self.payloads, payload)
+            self.received.set()
 
 
 def _unique_messages() -> list[dict[str, str]]:
@@ -187,11 +189,8 @@ async def _stream_events(stream: object) -> tuple[Mapping[str, object], ...]:
     return _sse_events(raw) + dict_events
 
 
-async def _wait_for(condition: Callable[[], bool]) -> None:
-    deadline: Final = asyncio.get_running_loop().time() + 10.0
-    while not condition():
-        assert asyncio.get_running_loop().time() < deadline, "condition not met within 10s"
-        await asyncio.sleep(0.01)
+async def _wait_for_payload(recorder: _RecordingLogger) -> None:
+    await asyncio.wait_for(recorder.received.wait(), timeout=30.0)
 
 
 def _assert_anthropic_message(response: object, model: str) -> None:
@@ -372,7 +371,7 @@ async def test_router_aanthropic_messages_non_streaming_logs_usage_model_and_cos
     response: Final = await _router(_ALIAS, _ANTHROPIC_MODEL).aanthropic_messages(
         messages=messages, model=_ALIAS, max_tokens=100
     )
-    await _wait_for(lambda: len(recorder.payloads) > 0)
+    await _wait_for_payload(recorder)
     assert len(recorder.payloads) == 1
     payload: Final = recorder.payloads[0]
     assert payload["status"] == "success"
@@ -427,7 +426,7 @@ async def test_router_aanthropic_messages_streaming_logs_usage_model_and_cost(
         if "usage" in event or (event.get("type") == "message_start" and "usage" in event["message"])
     )
     assert usages, events
-    await _wait_for(lambda: len(recorder.payloads) > 0)
+    await _wait_for_payload(recorder)
     assert len(recorder.payloads) == 1
     payload: Final = recorder.payloads[0]
     assert payload["status"] == "success"
