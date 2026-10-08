@@ -3,9 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import type { KeyResponse } from "@/components/key_team_helpers/key_list";
+import { writeStorage } from "@/lib/storage";
 import { keyDetailHref } from "@/utils/entityLinks";
 import { uiHref } from "@/utils/uiHref";
 import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
+import { COMMAND_PALETTE_HINT_KEY } from "./CommandPaletteHint";
 import { CommandPaletteProvider } from "./CommandPaletteProvider";
 import { CommandPaletteTrigger } from "./CommandPaletteTrigger";
 
@@ -66,6 +68,7 @@ function renderPalette() {
 
 beforeEach(() => {
   testQueryClient.clear();
+  window.localStorage.clear();
   cachedKeyResults.clear();
   vi.clearAllMocks();
   mocks.pathname = "/api-keys";
@@ -112,6 +115,58 @@ afterEach(() => {
 });
 
 describe("CommandPalette integration", () => {
+  it("shows the discovery hint on the keys route", async () => {
+    renderPalette();
+
+    expect(await screen.findByText("to search keys")).toBeVisible();
+  });
+
+  it("opens the palette from the hint and persists that it was seen", async () => {
+    const user = userEvent.setup();
+    renderPalette();
+
+    await user.click(screen.getByRole("button", { name: /to search keys/ }));
+
+    expect(await screen.findByRole("combobox", { name: "Search" })).toBeVisible();
+    expect(screen.queryByText("to search keys")).not.toBeInTheDocument();
+    expect(window.localStorage.getItem(COMMAND_PALETTE_HINT_KEY.name)).toBe("true");
+  });
+
+  it("hides and persists the discovery hint when Ctrl+K opens the palette", async () => {
+    renderPalette();
+
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+
+    expect(await screen.findByRole("combobox", { name: "Search" })).toBeVisible();
+    expect(screen.queryByText("to search keys")).not.toBeInTheDocument();
+    expect(window.localStorage.getItem(COMMAND_PALETTE_HINT_KEY.name)).toBe("true");
+  });
+
+  it("dismisses the discovery hint without opening the palette", async () => {
+    const user = userEvent.setup();
+    renderPalette();
+
+    await user.click(screen.getByRole("button", { name: "Dismiss search hint" }));
+
+    expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument();
+    expect(screen.queryByText("to search keys")).not.toBeInTheDocument();
+    expect(window.localStorage.getItem(COMMAND_PALETTE_HINT_KEY.name)).toBe("true");
+  });
+
+  it("does not show the discovery hint when it has already been seen", () => {
+    writeStorage(COMMAND_PALETTE_HINT_KEY, true);
+    renderPalette();
+
+    expect(screen.queryByText("to search keys")).not.toBeInTheDocument();
+  });
+
+  it("shows global-search copy outside the keys routes", async () => {
+    mocks.pathname = "/logs";
+    renderPalette();
+
+    expect(await screen.findByText("to search or jump to a page")).toBeVisible();
+  });
+
   it("opens and focuses with Ctrl+K, rejects extra modifiers, and toggles closed", async () => {
     renderPalette();
     fireEvent.keyDown(document, { key: "k", ctrlKey: true, shiftKey: true });

@@ -1,22 +1,17 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
 import { Search } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { routeSegmentForPathname } from "@/utils/uiHref";
-import { paletteScopeForRoute, shortcutLabel } from "./utils";
+import { paletteScopeForRoute } from "./utils";
 import { useCommandPalette } from "./CommandPaletteProvider";
-
-const subscribeToShortcut = () => () => {};
-const getClientShortcut = () =>
-  typeof navigator === "undefined" ? "Ctrl K" : shortcutLabel(navigator.platform, navigator.userAgent);
-const getServerShortcut = () => "Ctrl K";
+import { useShortcutLabel } from "./useShortcutLabel";
 
 export function CommandPaletteTrigger({ mobile = false }: { mobile?: boolean }) {
   const pathname = usePathname();
   const { open, setOpen } = useCommandPalette();
-  const shortcut = useSyncExternalStore(subscribeToShortcut, getClientShortcut, getServerShortcut);
+  const shortcut = useShortcutLabel();
   const isKeysRoute = paletteScopeForRoute(routeSegmentForPathname(pathname)) === "keys";
   const label = isKeysRoute ? "Search keys…" : "Search or jump to…";
 
