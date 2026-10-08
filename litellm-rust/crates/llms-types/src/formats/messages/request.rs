@@ -191,6 +191,21 @@ pub enum MessagesTool {
 }
 
 #[macro_rules_attribute::apply(wire_type)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContextTrigger {
+    InputTokens {
+        value: u64,
+        #[serde(flatten)]
+        extra: Map<String, Value>,
+    },
+    ToolUses {
+        value: u64,
+        #[serde(flatten)]
+        extra: Map<String, Value>,
+    },
+}
+
+#[macro_rules_attribute::apply(wire_type)]
 #[serde(tag = "type")]
 pub enum ContextEdit {
     #[serde(rename = "compact_20260112")]

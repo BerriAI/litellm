@@ -1,6 +1,12 @@
 use serde_json::{Map, Value};
 use strum::IntoStaticStr;
 
+mod content;
+pub use content::{
+    ChatContentPart, ChatFile, ChatInputAudio, ChatLogprobs, ChatMediaUrl, ChatMediaUrlParameters,
+    ChatTokenLogprob, ChatTopLogprob, ChatVideoMetadata, PromptCacheBreakpoint, PromptCacheMode,
+};
+
 /// Reasoning effort level accepted or applied by the model.
 #[macro_rules_attribute::apply(wire_type)]
 #[derive(Copy, Eq, IntoStaticStr)]

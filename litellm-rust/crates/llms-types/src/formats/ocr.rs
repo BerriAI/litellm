@@ -150,3 +150,15 @@ impl LiteLLMOcrResponse {
 fn ocr_object() -> String {
     "ocr".into()
 }
+
+#[serde_with::skip_serializing_none]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
+pub struct OcrBoundingBox {
+    pub top_left_x: Option<serde_json::Number>,
+    pub top_left_y: Option<serde_json::Number>,
+    pub bottom_right_x: Option<serde_json::Number>,
+    pub bottom_right_y: Option<serde_json::Number>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}

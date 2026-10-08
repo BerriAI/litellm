@@ -1,3 +1,5 @@
+use super::ResponsesOutputItem;
+use crate::recognized::Recognized;
 use serde_json::{Map, Value};
 
 #[derive(
@@ -88,6 +90,18 @@ pub struct ResponsesErrorBody {
     #[serde(rename = "type")]
     pub error_type: &'static str,
     pub message: String,
+}
+
+#[serde_with::skip_serializing_none]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
+pub struct ResponsesEventResponse {
+    pub id: Option<String>,
+    pub model: Option<String>,
+    pub status: Option<String>,
+    pub output: Option<Vec<Recognized<ResponsesOutputItem>>>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 #[cfg(test)]
