@@ -273,6 +273,36 @@ async def test_exchange_concurrent_replay_claims_nonce_once(monkeypatch: pytest.
 
 
 @pytest.mark.asyncio
+async def test_persist_moyai_url_writes_ui_settings_cache_under_config_params_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm._internal_context import current_service_target
+    from litellm.proxy import proxy_server
+    from litellm.proxy.moyai_endpoints import _persist_moyai_url
+    from litellm.proxy.utils import CONFIG_PARAMS_TARGET
+
+    seen_targets: list[str | None] = []
+
+    async def _set(key: str, value: dict, ttl: int | None = None) -> None:
+        seen_targets.append(current_service_target())
+
+    monkeypatch.setattr(
+        proxy_server,
+        "user_api_key_cache",
+        SimpleNamespace(async_set_cache=AsyncMock(side_effect=_set)),
+    )
+
+    prisma = MagicMock()
+    prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+    prisma.db.litellm_uisettings.upsert = AsyncMock()
+
+    await _persist_moyai_url(prisma, "https://moyai.example.com")
+
+    assert seen_targets == [CONFIG_PARAMS_TARGET]
+    assert current_service_target() is None
+
+
+@pytest.mark.asyncio
 async def test_exchange_replay_survives_fresh_worker_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     from fastapi import HTTPException
     from litellm.caching.caching import DualCache
