@@ -195,11 +195,7 @@ const VertexCredentialsProbe = () => {
 
 const GitHubCopilotAuthTypeProbe = () => {
   const { watch } = useFormContext<MountedFormValues>();
-  return (
-    <output data-testid="github-copilot-auth-type">
-      {String(watch(GITHUB_COPILOT_AUTH_TYPE_KEY) ?? "")}
-    </output>
-  );
+  return <output data-testid="github-copilot-auth-type">{String(watch(GITHUB_COPILOT_AUTH_TYPE_KEY) ?? "")}</output>;
 };
 
 const ValidationForm = ({ children }: { readonly children: ReactNode }) => {

@@ -624,19 +624,13 @@ describe("AddModelForm", () => {
       vi.mocked(modelCreateCall).mockClear();
       const props = await renderAsAdmin(Providers.GITHUB_COPILOT);
 
-      await chooseSelectOption(
-        user,
-        screen.getByRole("combobox", { name: "Auth Type:" }),
-        "Per-user GitHub OAuth",
-      );
+      await chooseSelectOption(user, screen.getByRole("combobox", { name: "Auth Type:" }), "Per-user GitHub OAuth");
       await user.click(screen.getByRole("button", { name: "Create credential" }));
       const dialog = await screen.findByRole("dialog");
       const providerSelect = within(dialog).getByPlaceholderText("Select a provider");
       expect(providerSelect).toHaveValue(Providers.GITHUB_COPILOT);
       expect(providerSelect).toBeDisabled();
-      expect(within(dialog).getByRole("combobox", { name: "Auth Type:" })).toHaveTextContent(
-        "Per-user GitHub OAuth",
-      );
+      expect(within(dialog).getByRole("combobox", { name: "Auth Type:" })).toHaveTextContent("Per-user GitHub OAuth");
       fireEvent.change(within(dialog).getByLabelText("Credential Name:"), {
         target: { value: "github-per-user" },
       });
