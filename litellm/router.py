@@ -24,6 +24,7 @@ from collections import defaultdict
 from collections.abc import (
     AsyncGenerator,
     AsyncIterator,
+    Awaitable,
     Callable,
     Generator,
     Iterable,
@@ -2930,13 +2931,12 @@ class Router:
             kwargs["original_function"] = self._acompletion
 
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
-            request_priority: Final = self._resolve_request_priority(model=model, kwargs=kwargs)
             start_time: Final = time.time()
             controls: Final = per_request_fallback_controls(kwargs)
             kwargs[MID_STREAM_FALLBACK_CONTROLS_KEY] = controls  # rebind-ok: forwarded to every hop
-            request_kwargs: Final = {key: value for key, value in kwargs.items() if key != "priority"}
-            original_function: Final = (
-                self._prompt_management_acompletion
+            request_priority, request_kwargs = self._split_request_priority(model=model, kwargs=kwargs)
+            original_function: Final[Callable[..., Awaitable[object]]] = (
+                self._prompt_management_acompletion(model=model, messages=messages)
                 if self._is_prompt_management_model(model)
                 else self.async_function_with_fallbacks
             )
@@ -4569,7 +4569,9 @@ class Router:
     ):
         return await self.acompletion(model=model, messages=messages, stream=stream, priority=priority, **kwargs)
 
-    def _resolve_request_priority(self, model: str, kwargs: Mapping[str, object]) -> int | None:
+    def _split_request_priority(
+        self, model: str, kwargs: Mapping[str, object]
+    ) -> tuple[int | None, Mapping[str, object]]:
         request_priority: Final = resolve_request_priority(
             requested=kwargs.get("priority"),
             default_priority=self.default_priority,
@@ -4589,15 +4591,15 @@ class Router:
                     "code": "400",
                 },
             )
-        return request_priority
+        return request_priority, {key: value for key, value in kwargs.items() if key != "priority"}
 
     async def _schedule_factory(
         self,
         model: str,
         priority: int,
-        original_function: Callable,
+        original_function: Callable[..., Awaitable[object]],
         args: tuple[object, ...],
-        kwargs: dict[str, object],
+        kwargs: Mapping[str, object],
     ):
         await self._wait_for_scheduler_turn(
             model=model, priority=priority, parent_otel_span=get_parent_otel_span_from_kwargs(kwargs)
@@ -4647,12 +4649,15 @@ class Router:
             for candidate in self.get_model_list(model_name=model, team_id=get_request_team_id(kwargs)) or ()
         )
 
-    async def _prompt_management_acompletion(
-        self, model: str, messages: list[AllMessageValues], **kwargs: object
-    ) -> ModelResponse | CustomStreamWrapper:
-        return await self._prompt_management_factory(
-            model=model, messages=messages, kwargs={"model": model, "messages": messages, **kwargs}
-        )
+    def _prompt_management_acompletion(
+        self,
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: _prompt_management_factory takes the caller's list
+    ) -> Callable[..., Awaitable[object]]:
+        async def acompletion(**kwargs: object) -> object:  # kwargs-ok: called with the request's own keyword payload
+            return await self._prompt_management_factory(model=model, messages=messages, kwargs=dict(kwargs))
+
+        return acompletion
 
     async def _prompt_management_factory(
         self,
@@ -5146,8 +5151,7 @@ class Router:
             kwargs["original_function"] = self._atext_completion
 
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
-            request_priority: Final = self._resolve_request_priority(model=model, kwargs=kwargs)
-            request_kwargs: Final = {key: value for key, value in kwargs.items() if key != "priority"}
+            request_priority, request_kwargs = self._split_request_priority(model=model, kwargs=kwargs)
             if request_priority is None:
                 return await self.async_function_with_fallbacks(**request_kwargs)
             return await self._schedule_factory(

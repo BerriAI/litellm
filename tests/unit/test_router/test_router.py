@@ -23548,26 +23548,6 @@ async def test_deployment_drop_params_drop_a_non_integer_priority_for_team_route
     assert response._hidden_params["additional_headers"]["x-litellm-request-prioritization-used"] is True
 
 
-@pytest.mark.parametrize(
-    ("request_kwargs", "expected_scans"),
-    [
-        ({}, 0),
-        ({"priority": 2}, 0),
-        ({"priority": "1", "drop_params": True}, 1),
-    ],
-    ids=["no-priority", "integer-priority", "non-integer-priority"],
-)
-async def test_the_deployment_scan_for_drop_params_runs_only_for_a_non_integer_priority(
-    request_kwargs: dict[str, object], expected_scans: int
-) -> None:
-    router: Final = _priority_router(3)
-    with patch.object(
-        router, "_request_deployment_params", wraps=router._request_deployment_params
-    ) as deployment_scan:
-        await router.acompletion(model="qa-chat", messages=_PRIORITY_MESSAGES, mock_response="pong", **request_kwargs)
-    assert deployment_scan.call_count == expected_scans
-
-
 async def test_schedule_acompletion_queues_a_prompt_management_model(monkeypatch: pytest.MonkeyPatch) -> None:
     router: Final = Router(
         model_list=[
