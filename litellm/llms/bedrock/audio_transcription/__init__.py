@@ -63,7 +63,7 @@ class BedrockAudioTranscriptionRustDispatch:
                 "optional_params": optional_params,
                 "timeout_seconds": timeout_to_seconds(timeout),
             }
-            call: Final = NativeCall(args=(), kwargs=fields, bound=fields)
+            call: Final = NativeCall(args=(), kwargs=fields, base={})
             return TranscriptionResponse(**rust(call))
 
         return runtime.run(
@@ -96,7 +96,7 @@ class BedrockAudioTranscriptionRustDispatch:
                 "optional_params": optional_params,
                 "timeout_seconds": timeout_to_seconds(timeout),
             }
-            call: Final = NativeCall(args=(), kwargs=fields, bound=fields)
+            call: Final = NativeCall(args=(), kwargs=fields, base={})
             return TranscriptionResponse(**await rust(call))
 
         return await runtime.arun(
