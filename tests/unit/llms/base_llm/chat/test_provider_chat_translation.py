@@ -1078,6 +1078,7 @@ def test_json_response_pydantic_obj(case: _Case, respx_mock: MockRouter) -> None
         "bedrock_converse_gptoss",
         "bedrock_invoke_haiku",
         "bedrock_invoke_kimi",
+        "bedrock_invoke_novamicro",
         "groq_oss120b",
         "mistral_medium",
         "openai_gpt4omini",
@@ -1116,6 +1117,7 @@ def test_json_response_nested_pydantic_obj(case: _Case, respx_mock: MockRouter) 
         "bedrock_converse_gptoss",
         "bedrock_invoke_haiku",
         "bedrock_invoke_kimi",
+        "bedrock_invoke_novamicro",
         "groq_oss120b",
         "mistral_medium",
         "openai_gpt4omini",
@@ -1350,6 +1352,7 @@ def _cost_model_key(case: _Case) -> str | None:
         "openai_o3mini",
         "router_gpt4omini",
         "together_glm",
+        "xai_grok3mini",
     ),
     ids=lambda c: c["id"],
 )
@@ -1373,9 +1376,14 @@ async def test_completion_cost(case: _Case, respx_mock: MockRouter) -> None:
         )
         assert actual_cost == pytest.approx(expected)
     else:
-        assert actual_cost == litellm.completion_cost(
-            completion_response=response, model=cast(str, case["kwargs"]["model"])
-        )
+        try:
+            expected_cost: Final = litellm.completion_cost(
+                completion_response=response, model=cast(str, case["kwargs"]["model"])
+            )
+        except litellm.exceptions.ModelNotMappedError:
+            assert actual_cost is None
+        else:
+            assert actual_cost == expected_cost
 
 
 @pytest.mark.parametrize("input_type", ("input_audio", "audio_url"))
