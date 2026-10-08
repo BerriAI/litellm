@@ -263,7 +263,7 @@ def _gateway_dcr_challenge_target(
 
 def _gateway_dcr_challenge_scope(
     route: str,
-    mcp_servers: list[str] | None,
+    mcp_servers: Sequence[str] | None,
     client_ip: str | None,
 ) -> str | None:
     if MCPRequestHandler.extract_target_server_names_from_path(route) or not mcp_servers:

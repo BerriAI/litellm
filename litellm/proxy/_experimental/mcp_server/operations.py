@@ -565,14 +565,21 @@ def _http_detail_message(detail: object) -> str:
     return str(detail.get("error")) if isinstance(detail, dict) and detail.get("error") else str(detail)
 
 
+_GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
 def raise_if_unscoped_aggregate_request(
-    mcp_servers: list[str] | None,
+    mcp_servers: Sequence[str] | None,
     user_api_key_auth: UserAPIKeyAuth | None,
     toolset_id: str | None,
 ) -> None:
-    from litellm.proxy.proxy_server import general_settings  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy import proxy_server  # noqa: PLC0415  # proxy import cycle
 
-    if not general_settings or not general_settings.get("mcp_require_explicit_server_scope", False):
+    raw_settings: Final[object] = getattr(proxy_server, "general_settings", None)
+    if not raw_settings:
+        return
+    settings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(raw_settings)
+    if not settings.get("mcp_require_explicit_server_scope", False):
         return
     if mcp_servers is not None or toolset_id is not None:
         return

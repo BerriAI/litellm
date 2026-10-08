@@ -43,16 +43,16 @@ import hmac
 import html
 import secrets
 from base64 import urlsafe_b64encode
-from collections.abc import Awaitable, Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Final, Literal, Protocol, TypeVar, cast
+from typing import Final, Literal, Protocol, TypeVar
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_serializer, model_validator
 from pydantic_core.core_schema import SerializerFunctionWrapHandler
 from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
@@ -299,24 +299,26 @@ class GatewayDcrClient(LiteLLMBaseModel):
     iat: int
 
 
+_SEALED_PAYLOAD_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
 def _legacy_server_scope_payload(payload: object) -> object:
-    if not isinstance(payload, dict):
+    if not isinstance(payload, Mapping):
         return payload
-    values: Final = cast(dict[str, object], payload)
+    values: Final = _SEALED_PAYLOAD_ADAPTER.validate_python(payload)
     if "resource_server_id" not in values:
         return values
     if "resource_server_ids" in values:
         raise ValueError("sealed payload cannot contain both resource_server_id and resource_server_ids")
     resource_server_id: Final = values["resource_server_id"]
-    server_scope: Final[dict[str, object]] = (
+    return {key: value for key, value in values.items() if key != "resource_server_id"} | (
         {"resource_server_ids": (resource_server_id,)} if resource_server_id is not None else {}
     )
-    return {key: value for key, value in values.items() if key != "resource_server_id"} | server_scope
 
 
 def _server_scope_wire_payload(
-    payload: dict[str, object], resource_server_ids: tuple[str, ...] | None
-) -> dict[str, object]:
+    payload: Mapping[str, object], resource_server_ids: tuple[str, ...] | None
+) -> Mapping[str, object]:
     if resource_server_ids is None or len(resource_server_ids) != 1:
         return payload
     return {key: value for key, value in payload.items() if key != "resource_server_ids"} | {
@@ -334,8 +336,8 @@ class _ServerScopedSealedModel(LiteLLMBaseModel):
         return _legacy_server_scope_payload(payload)
 
     @model_serializer(mode="wrap")
-    def _serialize_server_scope(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
-        payload: Final = cast(dict[str, object], handler(self))
+    def _serialize_server_scope(self, handler: SerializerFunctionWrapHandler) -> Mapping[str, object]:
+        payload: Final = _SEALED_PAYLOAD_ADAPTER.validate_python(handler(self))
         return _server_scope_wire_payload(payload, self.resource_server_ids)
 
 
@@ -969,7 +971,7 @@ class ConnectFlowDescription(TypedDict):
     server_id: ReadOnly[str | None]
     server_name: ReadOnly[str | None]
     connected: ReadOnly[bool | None]
-    servers: ReadOnly[list[ConnectFlowServer] | None]
+    servers: ReadOnly[Sequence[ConnectFlowServer] | None]
 
 
 async def _describe_connect_flow_server(

@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import secrets
 from collections import Counter
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from functools import lru_cache
 from typing import Final, Literal, TypeAlias
@@ -314,7 +315,7 @@ class _SessionClaims(LiteLLMBaseModel):
     user_id: str = Field(min_length=1)
     client_id: str = Field(min_length=1)
     resource_server_id: str | None = None
-    resource_server_ids: list[str] | None = Field(default=None, min_length=2)
+    resource_server_ids: Sequence[str] | None = Field(default=None, min_length=2)
     audience: SessionAudience | None = None
     team_id: str | None = None
     family: str | None = Field(default=None, min_length=1)
