@@ -642,3 +642,36 @@ def test_litellm_completion_forwards_token_exchange_settings() -> None:
     }
     assert messages == original_messages
     assert headers == original_headers
+
+
+def test_litellm_completion_accepts_max_tokens_without_sending_it_to_graph() -> None:
+    client, requests = _sync_client()
+
+    response: Final = litellm.completion(
+        model=_MODEL,
+        messages=_messages(),
+        api_key="delegated-max-token",
+        max_tokens=16,
+        max_completion_tokens=32,
+        client=client,
+    )
+
+    graph_chat_requests: Final = tuple(request for request in requests if request.url.path.endswith("/chat"))
+    assert isinstance(response, ModelResponse)
+    assert json.loads(graph_chat_requests[-1].content) == {
+        "message": {"text": "hello Copilot"},
+        "locationHint": {"timeZone": "UTC"},
+    }
+
+
+def test_litellm_completion_still_rejects_temperature() -> None:
+    client, _ = _sync_client()
+
+    with pytest.raises(litellm.UnsupportedParamsError):
+        litellm.completion(
+            model=_MODEL,
+            messages=_messages(),
+            api_key="delegated-temperature",
+            temperature=0.2,
+            client=client,
+        )

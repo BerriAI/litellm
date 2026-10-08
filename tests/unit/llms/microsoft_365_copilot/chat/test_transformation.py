@@ -177,10 +177,14 @@ def test_extract_graph_error_message_uses_final_stringified_message() -> None:
     assert empty_reply_error == ""
 
 
-def test_provider_config_only_supports_stream() -> None:
+def test_provider_config_accepts_openai_compatibility_params() -> None:
     config: Final = Microsoft365CopilotChatConfig()
 
-    assert config.get_supported_openai_params("microsoft_365_copilot/chat") == ["stream"]
+    assert config.get_supported_openai_params("microsoft_365_copilot/chat") == [
+        "stream",
+        "max_tokens",
+        "max_completion_tokens",
+    ]
 
 
 def test_provider_is_registered_for_model_resolution_and_chat_config() -> None:

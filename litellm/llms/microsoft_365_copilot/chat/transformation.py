@@ -85,7 +85,8 @@ _JSON_VALUE_ADAPTER: Final = TypeAdapter(object)
 
 class Microsoft365CopilotChatConfig(BaseConfig):
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: BaseConfig requires a list return
-        return ["stream"]
+        # OpenAI-client compatibility; Graph has no length limit and these values are never sent.
+        return ["stream", "max_tokens", "max_completion_tokens"]
 
     def transform_request(
         self,

@@ -81528,5 +81528,11 @@
         "thinking_always_on": false,
         "prompt_cache_min_tokens": 512,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
+    },
+    "microsoft_365_copilot/chat": {
+        "litellm_provider": "microsoft_365_copilot",
+        "mode": "chat",
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0
     }
 }
