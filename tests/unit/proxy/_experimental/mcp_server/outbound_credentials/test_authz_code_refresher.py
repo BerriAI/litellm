@@ -325,3 +325,46 @@ async def test_verified_refresh_preserves_binding_proof_in_storage():
     assert token.refresh_token == "rotated"
     assert token.identity_binding_proof == "verified-binding"
     assert persist.await_args.kwargs["identity_binding_proof"] == "verified-binding"
+
+
+@pytest.mark.asyncio
+async def test_cimd_refresh_on_fresh_replica_preserves_user_and_client_identity(monkeypatch):
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    server = MCPServer.model_validate(
+        {
+            "server_id": "srv",
+            "name": "srv",
+            "server_name": "srv",
+            "transport": "http",
+            "url": "https://mcp.example.com/mcp",
+            "auth_type": "oauth2",
+            "oauth2_flow": "authorization_code",
+            "token_url": "https://idp.example.com/token",
+            "client_id_metadata_document_supported": True,
+        }
+    )
+    posted = []
+    persisted = []
+    refreshed = await _refresher(
+        server=server,
+        body={"access_token": "new-at", "expires_in": 3600},
+        post_sink=posted,
+        persist_sink=persisted,
+    ).refresh("alice", "srv", OAuthToken(access_token="old-at", refresh_token="old-rt"))
+    assert refreshed is not None
+    assert refreshed.access_token == "new-at"
+    assert posted == [
+        (
+            "https://idp.example.com/token",
+            {
+                "grant_type": "refresh_token",
+                "refresh_token": "old-rt",
+                "client_id": "https://gateway.example.com/oauth/client-metadata.json",
+            },
+            {},
+        )
+    ]
+    assert persisted == [("alice", "srv", "new-at", "old-rt", 3600, None)]
+    assert server.client_id is None

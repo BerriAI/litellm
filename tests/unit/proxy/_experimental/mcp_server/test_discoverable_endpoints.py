@@ -13362,3 +13362,227 @@ async def test_register_application_type_keeps_no_registration_endpoint_fallback
         "redirect_uris": ["https://gateway.example/callback"],
     }
     assert len(upstream.calls) == 0
+
+
+def _cimd_oauth_server():
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    return MCPServer.model_validate(
+        {
+            "server_id": "cimd-server",
+            "name": "cimd-server",
+            "server_name": "cimd-server",
+            "url": "https://mcp.example.com/mcp",
+            "transport": "http",
+            "auth_type": "oauth2",
+            "oauth2_flow": "authorization_code",
+            "authorization_url": "https://idp.example.com/authorize",
+            "token_url": "https://idp.example.com/token",
+            "client_id_metadata_document_supported": True,
+        }
+    )
+
+
+def _cimd_request():
+    from starlette.requests import Request
+
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "scheme": "https",
+            "path": "/",
+            "root_path": "",
+            "query_string": b"",
+            "headers": [],
+            "server": ("gateway.example.com", 443),
+            "client": ("127.0.0.1", 10000),
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_cimd_registration_returns_https_identity_without_dcr(monkeypatch):
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    reuse = AsyncMock(return_value=False)
+    post = AsyncMock()
+    monkeypatch.setattr(endpoints, "_reuse_persisted_dcr_client_if_available", reuse)
+    monkeypatch.setattr(endpoints, "_post_dcr_registration", post)
+    response = await endpoints.register_client_with_server(
+        _cimd_request(), _cimd_oauth_server(), "Gateway", None, None, None
+    )
+    body = json.loads(response.body) if hasattr(response, "body") else response
+    assert body["client_id"] == "https://gateway.example.com/oauth/client-metadata.json"
+    assert "client_secret" not in body
+    post.assert_not_awaited()
+    reuse.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_cimd_authorization_uses_metadata_identity_and_s256(monkeypatch):
+    from urllib.parse import parse_qs, urlparse
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    monkeypatch.setattr(endpoints, "encode_state_with_base_url", lambda **kwargs: "sealed-state")
+    response = await endpoints.authorize_with_server(
+        _cimd_request(),
+        _cimd_oauth_server(),
+        "placeholder",
+        "https://gateway.example.com/ui/",
+        code_challenge="a" * 43,
+        code_challenge_method="S256",
+    )
+    params = parse_qs(urlparse(response.headers["location"]).query)
+    assert params["client_id"] == ["https://gateway.example.com/oauth/client-metadata.json"]
+    assert params["redirect_uri"] == ["https://gateway.example.com/callback"]
+    assert params["code_challenge_method"] == ["S256"]
+
+
+@pytest.mark.asyncio
+async def test_cimd_authorization_rejects_missing_pkce(monkeypatch):
+    from fastapi import HTTPException
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    monkeypatch.setattr(endpoints, "encode_state_with_base_url", lambda **kwargs: "sealed-state")
+    with pytest.raises(HTTPException) as exc:
+        await endpoints.authorize_with_server(
+            _cimd_request(), _cimd_oauth_server(), "placeholder", "https://gateway.example.com/ui/"
+        )
+    assert exc.value.status_code == 400
+
+
+def test_cimd_refresh_request_uses_same_identity_without_caller_secret(monkeypatch):
+    from litellm.proxy._experimental.mcp_server.oauth_utils import build_upstream_oauth2_token_request
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    request = build_upstream_oauth2_token_request(
+        _cimd_oauth_server(), auth_method=None, client_id="placeholder", client_secret="dummy"
+    )
+    assert request.body["client_id"] == "https://gateway.example.com/oauth/client-metadata.json"
+    assert "client_secret" not in request.body
+    assert "Authorization" not in request.headers
+
+
+@pytest.mark.parametrize(
+    "base", [None, "http://gateway.example.com", "invalid", "https://user:secret@gateway.example.com"]
+)
+@pytest.mark.asyncio
+async def test_cimd_without_stable_https_origin_reports_actionable_error(monkeypatch, base):
+    from fastapi import HTTPException
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    if base is not None:
+        monkeypatch.setenv("PROXY_BASE_URL", base)
+    monkeypatch.setattr(endpoints, "_reuse_persisted_dcr_client_if_available", AsyncMock(return_value=False))
+    post = AsyncMock()
+    monkeypatch.setattr(endpoints, "_post_dcr_registration", post)
+    with pytest.raises(HTTPException) as exc:
+        await endpoints.register_client_with_server(_cimd_request(), _cimd_oauth_server(), "Gateway", None, None, None)
+    assert exc.value.status_code == 400
+    assert "HTTPS PROXY_BASE_URL" in str(exc.value.detail)
+    post.assert_not_awaited()
+
+
+@pytest.mark.parametrize("base", [None, "http://gateway.example.com"])
+@pytest.mark.asyncio
+async def test_cimd_without_https_origin_falls_back_to_available_dcr(monkeypatch, base):
+    import httpx
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    if base is not None:
+        monkeypatch.setenv("PROXY_BASE_URL", base)
+    server = _cimd_oauth_server().model_copy(update={"registration_url": "https://idp.example.com/register"})
+    monkeypatch.setattr(endpoints, "_reuse_persisted_dcr_client_if_available", AsyncMock(return_value=False))
+    post = AsyncMock(return_value=httpx.Response(201, json={"client_id": "registered-client"}))
+    monkeypatch.setattr(endpoints, "_post_dcr_registration", post)
+    response = await endpoints.register_client_with_server(_cimd_request(), server, "Gateway", None, None, None)
+    assert json.loads(response.body)["client_id"] == "registered-client"
+    post.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"client_id": "static-client", "client_secret": "static-secret"},
+        {"client_id": "persisted-dcr-client", "dcr_issuer": "https://idp.example.com"},
+        {"client_id_metadata_document_supported": False},
+        {"auth_type": "oauth_delegate", "dcr_bridge": True},
+        {"auth_type": "true_passthrough", "dcr_bridge": True},
+        {"delegate_auth_to_upstream": True},
+        {"oauth2_flow": "client_credentials"},
+        {"client_secret": "configured-secret"},
+        {"token_endpoint_auth_method": "client_secret_basic"},
+    ],
+)
+def test_cimd_preserves_existing_identity_and_other_auth_modes(monkeypatch, updates):
+    from litellm.proxy._experimental.mcp_server.oauth_utils import get_cimd_client_id
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    assert get_cimd_client_id(_cimd_oauth_server().model_copy(update=updates)) is None
+
+
+@pytest.mark.asyncio
+async def test_cimd_document_is_public_and_binds_configured_origin(monkeypatch):
+    import httpx
+    from fastapi import FastAPI
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com/proxy")
+    app = FastAPI()
+    app.include_router(endpoints.router)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://attacker.example") as client:
+        response = await client.get("/oauth/client-metadata.json", headers={"X-Forwarded-Host": "attacker.example"})
+    assert response.status_code == 200
+    assert response.json()["client_id"] == "https://gateway.example.com/proxy/oauth/client-metadata.json"
+    assert response.json()["redirect_uris"] == ["https://gateway.example.com/proxy/callback"]
+    assert response.json()["token_endpoint_auth_method"] == "none"
+    assert "client_secret" not in response.json()
+    assert response.headers["cache-control"] == "public, max-age=300"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("base", [None, "https://[invalid"])
+async def test_cimd_document_is_unavailable_without_configured_https_origin(monkeypatch, base):
+    from fastapi import HTTPException
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    if base is not None:
+        monkeypatch.setenv("PROXY_BASE_URL", base)
+    with pytest.raises(HTTPException) as exc:
+        await endpoints.oauth_client_metadata()
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_cimd_upstream_client_rejection_is_gateway_fault(monkeypatch):
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    client = MagicMock()
+    client.post = AsyncMock(
+        return_value=_upstream_token_response(
+            401, json_body={"error": "invalid_client", "error_description": "provider-private-detail"}
+        )
+    )
+    monkeypatch.setattr(endpoints, "get_async_httpx_client", lambda **kwargs: client)
+    response = await endpoints.exchange_token_with_server(
+        request=_cimd_request(),
+        mcp_server=_cimd_oauth_server(),
+        grant_type="authorization_code",
+        code="code",
+        redirect_uri="https://gateway.example.com/callback",
+        client_id="caller-placeholder",
+        client_secret="dummy",
+        code_verifier="verifier",
+    )
+    assert response.status_code == 502
+    body = json.loads(response.body)
+    assert body["error"] == "server_error"
+    assert "provider-private-detail" not in body["error_description"]

@@ -73,8 +73,11 @@ from litellm.proxy._experimental.mcp_server.oauth_identity_binding import (
     enforce_oauth_identity_binding,
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
+    CIMD_METADATA_PATH,
     TOKEN_NO_CACHE_HEADERS,
     build_upstream_oauth2_token_request,
+    get_cimd_client_id,
+    get_cimd_document_url,
     get_request_base_url,
     oauth_client_registration_matches,
     resolve_upstream_resource,
@@ -967,7 +970,8 @@ async def authorize_with_server(
 
     binding: Final = resolved_server.oauth_identity_binding
     enforce_binding: Final = binding is not None and binding.mode == "enforce"
-    if enforce_binding:
+    cimd_client_id: Final = get_cimd_client_id(resolved_server)
+    if enforce_binding or cimd_client_id:
         _require_s256_pkce(code_challenge, code_challenge_method)
 
     if resolved_server.is_dcr_bridge:
@@ -1031,7 +1035,7 @@ async def authorize_with_server(
     relay_state: Final = secrets.token_urlsafe(_OAUTH_STATE_HANDLE_BYTES)
 
     params: Final = {
-        "client_id": resolved_server.client_id if resolved_server.client_id else client_id,
+        "client_id": resolved_server.client_id or cimd_client_id or client_id,
         "redirect_uri": f"{request_base_url}/callback",
         "state": relay_state,
         "response_type": response_type or "code",
@@ -1068,7 +1072,7 @@ def _token_credential_source(mcp_server: MCPServer) -> CredentialSource:
     """Mirrors the resolved-client rule in :func:`exchange_token_with_server`: when the server has a
     stored client_id the gateway presents its own credentials upstream, so a credential rejection is
     the operator's fault, not the caller's."""
-    return "gateway_stored" if mcp_server.client_id else "caller_supplied"
+    return "gateway_stored" if mcp_server.client_id or get_cimd_client_id(mcp_server) else "caller_supplied"
 
 
 async def exchange_token_with_server(
@@ -1979,8 +1983,21 @@ async def register_client_with_server(
             ),
         )
 
+    cimd_client_id: Final = get_cimd_client_id(resolved_server)
+    if cimd_client_id:
+        return {
+            "client_id": cimd_client_id,
+            "token_endpoint_auth_method": "none",
+            "redirect_uris": client_facing_redirect_uris,
+        }
     registration_url: Final = resolved_server.effective_registration_url
     if registration_url is None:
+        if resolved_server.client_id_metadata_document_supported and resolved_server.is_gateway_managed_oauth2:
+            raise HTTPException(
+                status_code=400,
+                detail="CIMD requires a stable HTTPS PROXY_BASE_URL and public-client authentication; "
+                "configure these or provide a pre-registered OAuth client",
+            )
         return dummy_return
 
     bridge_relay: Final = _dcr_bridge_relays_client_registration(resolved_server)
@@ -3150,3 +3167,25 @@ async def register_client(request: Request, mcp_server_name: str | None = None):
             client_redirect_uris=client_redirect_uris,
             client_application_type=client_application_type,
         )
+
+
+@router.get(CIMD_METADATA_PATH, include_in_schema=False)
+async def oauth_client_metadata() -> JSONResponse:
+    from mcp.shared.auth import OAuthClientInformationFull
+    from pydantic import AnyUrl
+
+    document_url: Final = get_cimd_document_url()
+    if document_url is None:
+        raise HTTPException(status_code=404, detail="CIMD requires a configured HTTPS PROXY_BASE_URL")
+    base_url: Final = document_url.removesuffix(CIMD_METADATA_PATH)
+    metadata: Final = OAuthClientInformationFull(
+        client_id=document_url,
+        client_name="LiteLLM MCP Gateway",
+        redirect_uris=[AnyUrl(f"{base_url}/callback")],
+        token_endpoint_auth_method="none",
+        grant_types=["authorization_code", "refresh_token"],
+        response_types=["code"],
+    )
+    return JSONResponse(
+        metadata.model_dump(mode="json", exclude_none=True), headers={"Cache-Control": "public, max-age=300"}
+    )

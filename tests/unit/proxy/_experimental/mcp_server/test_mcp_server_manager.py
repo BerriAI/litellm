@@ -1461,6 +1461,7 @@ class TestMCPServerManager:
         manager = MCPServerManager()
 
         metadata = MCPOAuthMetadata(
+            client_id_metadata_document_supported=True,
             authorization_url="https://attacker.example.com/authorize",
             token_url="https://attacker.example.com/token",
             scopes=["read", "admin"],
@@ -1478,6 +1479,8 @@ class TestMCPServerManager:
         assert server.token_url is None
         assert server.scopes == ["read", "admin"]
 
+        assert server.client_id_metadata_document_supported is False
+
     @pytest.mark.asyncio
     async def test_load_servers_from_config_fills_token_url_when_metadata_corroborates_manual_authorization_url(self):
         """Corroborated metadata keeps the self-heal on the config path: when the discovered document
@@ -1487,6 +1490,7 @@ class TestMCPServerManager:
         manager = MCPServerManager()
 
         metadata = MCPOAuthMetadata(
+            client_id_metadata_document_supported=True,
             authorization_url="https://idp.example.com/authorize",
             token_url="https://idp.example.com/token",
             scopes=["read", "admin"],
@@ -1502,6 +1506,8 @@ class TestMCPServerManager:
         server = next(iter(manager.config_mcp_servers.values()))
         assert server.token_url == "https://idp.example.com/token"
         assert server.scopes == ["read", "admin"]
+
+        assert server.client_id_metadata_document_supported is True
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("blank_authorization_url", ["", "   "])
@@ -2535,6 +2541,7 @@ class TestMCPServerManager:
         )
 
         metadata = MCPOAuthMetadata(
+            client_id_metadata_document_supported=True,
             authorization_url="https://idp.example.com/authorize",
             token_url="https://idp.example.com/token",
             registration_url="https://idp.example.com/register",
@@ -2547,6 +2554,8 @@ class TestMCPServerManager:
         assert built.token_url == "https://idp.example.com/token"
         assert built.registration_url == "https://idp.example.com/register"
         assert built.scopes == ["read"]
+
+        assert built.client_id_metadata_document_supported is True
 
     @pytest.mark.asyncio
     async def test_build_from_table_uses_issuer_anchored_endpoints_when_issuer_configured(self):
@@ -4507,6 +4516,7 @@ class TestMCPServerManager:
                 "authorization_endpoint": "https://idp.example.com/authorize",
                 "token_endpoint": "https://idp.example.com/token",
                 "scopes_supported": ["read", "write"],
+                "client_id_metadata_document_supported": True,
             },
         )
         mock_client = MagicMock()
@@ -4521,6 +4531,8 @@ class TestMCPServerManager:
         assert result.authorization_url == "https://idp.example.com/authorize"
         assert result.token_url == "https://idp.example.com/token"
         assert result.scopes == ["read", "write"]
+
+        assert result.client_id_metadata_document_supported is True
 
     @pytest.mark.asyncio
     async def test_fetch_single_authorization_server_metadata_rejects_issuer_mismatch(self):
@@ -19108,3 +19120,18 @@ def test_discovery_keys_bind_static_auth_to_caller_and_configuration() -> None:
         manager._discovery_key(updated, first, None, None, None, None),
     )
     assert len(set(keys)) == 3
+
+
+@pytest.mark.parametrize("advertised", [False, True])
+def test_untrusted_metadata_cannot_enable_cimd_without_matching_authorization_endpoint(advertised):
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        _restrict_discovery_to_corroborated_authorization_server,
+    )
+
+    metadata = MCPOAuthMetadata(scopes=["read"], client_id_metadata_document_supported=advertised)
+    result = _restrict_discovery_to_corroborated_authorization_server(
+        metadata, "https://trusted.example.com/authorize", "server", False
+    )
+    assert result is not None
+    assert result.client_id_metadata_document_supported is False
+    assert result.scopes == ["read"]

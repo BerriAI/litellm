@@ -127,6 +127,34 @@ def _resolve_proxy_base_url_env() -> str | None:
     return None
 
 
+CIMD_METADATA_PATH: Final = "/oauth/client-metadata.json"
+
+
+def get_cimd_document_url() -> str | None:
+    try:
+        configured: Final = _resolve_proxy_base_url_env()
+        parsed: Final = urlparse(configured or "")
+    except ValueError:
+        return None
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username is not None or parsed.password is not None:
+        return None
+    return f"{configured}{CIMD_METADATA_PATH}"
+
+
+def get_cimd_client_id(server: "MCPServer") -> str | None:
+    if getattr(server, "client_id_metadata_document_supported", False) is not True:
+        return None
+    if (
+        not server.is_gateway_managed_oauth2
+        or not server.needs_user_oauth_token
+        or server.client_id
+        or server.client_secret
+        or server.token_endpoint_auth_method == "client_secret_basic"
+    ):
+        return None
+    return get_cimd_document_url()
+
+
 BYOK_RESOURCE_METADATA_PATH: Final = "/v1/mcp/oauth/protected-resource"
 
 
@@ -754,10 +782,11 @@ def build_upstream_oauth2_token_request(
     authenticate as the caller's own client rather than the server's; ``resource`` always comes from
     the server, so no leg can choose or forget it.
     """
+    cimd_client_id: Final = get_cimd_client_id(mcp_server)
     client_auth: Final = build_token_endpoint_client_auth(
-        auth_method=normalize_token_endpoint_auth_method(auth_method),
-        client_id=client_id,
-        client_secret=client_secret,
+        auth_method=None if cimd_client_id else normalize_token_endpoint_auth_method(auth_method),
+        client_id=cimd_client_id or client_id,
+        client_secret=None if cimd_client_id else client_secret,
     )
     resource: Final = resolve_upstream_resource(mcp_server)
     if not resource:

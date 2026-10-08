@@ -448,6 +448,7 @@ class _AuthorizationServerMetadataPayload(TypedDict, total=False):
     authorization_endpoint: str
     token_endpoint: str
     registration_endpoint: str
+    client_id_metadata_document_supported: ReadOnly[object]
     scopes_supported: Sequence[str]
     grant_types_supported: Sequence[str]
     token_endpoint_auth_methods_supported: Sequence[str]
@@ -904,7 +905,7 @@ def _restrict_discovery_to_corroborated_authorization_server(
         return metadata
     if _endpoints_corroborate_authorization_url(metadata.authorization_url, manual_authorization_url):
         return metadata
-    if not metadata.token_url and not metadata.registration_url:
+    if not metadata.token_url and not metadata.registration_url and not metadata.client_id_metadata_document_supported:
         return metadata
     bridge_note: Final = (
         " The discovered registration_url is rejected with it, so this dcr_bridge server stays on the"
@@ -922,7 +923,9 @@ def _restrict_discovery_to_corroborated_authorization_server(
         _normalized_authorize_endpoint(manual_authorization_url),
         bridge_note,
     )
-    return metadata.model_copy(update={"token_url": None, "registration_url": None})
+    return metadata.model_copy(
+        update={"token_url": None, "registration_url": None, "client_id_metadata_document_supported": False}
+    )
 
 
 def _redacted_origin_list(urls: Sequence[str]) -> str:
@@ -2044,6 +2047,7 @@ class MCPServerManager:
             update={
                 "scopes": server.scopes or metadata.scopes,
                 "issuer": server.issuer or discovered_issuer,
+                "client_id_metadata_document_supported": metadata.client_id_metadata_document_supported,
                 "authorization_response_iss_parameter_supported": (
                     metadata.authorization_response_iss_parameter_supported
                     if discovered_issuer is not None
@@ -2598,6 +2602,9 @@ class MCPServerManager:
                 scopes=resolved_scopes,
                 configured_scopes=tuple(configured_scopes) if configured_scopes else None,
                 issuer=effective_issuer,
+                client_id_metadata_document_supported=(
+                    gated_oauth_metadata.client_id_metadata_document_supported if gated_oauth_metadata else False
+                ),
                 authorization_response_iss_parameter_supported=(
                     gated_oauth_metadata.authorization_response_iss_parameter_supported
                     if gated_oauth_metadata
@@ -3176,6 +3183,9 @@ class MCPServerManager:
             scopes=resolved_scopes,
             configured_scopes=configured_scopes,
             issuer=effective_issuer,
+            client_id_metadata_document_supported=(
+                gated_oauth_metadata.client_id_metadata_document_supported if gated_oauth_metadata else False
+            ),
             authorization_response_iss_parameter_supported=(
                 gated_oauth_metadata.authorization_response_iss_parameter_supported if gated_oauth_metadata else False
             ),
@@ -5278,6 +5288,7 @@ class MCPServerManager:
                 authorization_url=data.get("authorization_endpoint"),
                 token_url=data.get("token_endpoint"),
                 registration_url=data.get("registration_endpoint"),
+                client_id_metadata_document_supported=data.get("client_id_metadata_document_supported") is True,
                 discovered_issuer=claimed_issuer if isinstance(claimed_issuer, str) and claimed_issuer else None,
                 authorization_response_iss_parameter_supported=data.get(
                     "authorization_response_iss_parameter_supported"
