@@ -1077,7 +1077,7 @@ def _has_passthrough_body_hook() -> bool:
         and (
             callback.default_on is True
             if isinstance(callback, CustomGuardrail)
-            else type(callback).async_pre_call_hook is not CustomLogger.async_pre_call_hook
+            else type(callback).async_pre_call_hook is not CustomLogger.async_pre_call_hook  # pyright: ignore[reportUnknownMemberType]  # compare legacy hook descriptors without invoking their untyped dict signature
         )
         for callback in ProxyLogging._callback_capabilities().resolved_callbacks  # pyright: ignore[reportPrivateUsage]  # resolve callback strings exactly as the pre-call dispatcher does
     )
@@ -1164,13 +1164,18 @@ async def pass_through_request(
         # parsed dict (hooks mutate it, breaking the signature / Content-Length).
         # Tolerate request objects without `state` (test fixtures) and only honor
         # values httpx accepts for `content=`.
-        state_raw_body: str | bytes | None = (
+        state_body_value: Final[object] = (
             getattr(_request_state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, None)
             if _request_state is not None
             else None
         )
-        if state_raw_body is not None and not isinstance(state_raw_body, (str, bytes, bytearray)):
-            state_raw_body = None
+        state_raw_body: Final = (
+            state_body_value
+            if isinstance(state_body_value, (str, bytes))
+            else bytes(state_body_value)
+            if isinstance(state_body_value, bytearray)
+            else None
+        )
 
         # Skip body parsing for multipart requests - make_multipart_http_request will handle it
         # But if custom_body is provided (e.g., JSON parsed despite multipart content-type), use it
@@ -1182,7 +1187,7 @@ async def pass_through_request(
             # Don't parse multipart body here - it will be handled by make_multipart_http_request
             _parsed_body = {}
         else:
-            _parsed_body = await read_request_body(request)  # rebind-ok: pre-existing rebinding on a rename-only line
+            _parsed_body = TypeAdapter(object).validate_python(await read_request_body(request))
         raw_body_to_forward: Final = (
             state_raw_body
             if state_raw_body is not None
@@ -1243,7 +1248,12 @@ async def pass_through_request(
         ## LOGGING OBJECT ## - initialize before pre_call_hook so guardrails can access it
         # Surface the requested model (when the body carries one) so logging/spans
         # read e.g. ``chat gpt-4o`` instead of ``chat unknown``.
-        passthrough_model: Final = (_parsed_body.get("model") if isinstance(_parsed_body, dict) else None) or "unknown"
+        model_value: Final = (
+            TypeAdapter(dict[str, object]).validate_python(_parsed_body).get("model")
+            if isinstance(_parsed_body, dict)
+            else None
+        )
+        passthrough_model: Final = model_value if isinstance(model_value, str) and model_value else "unknown"
         start_time: Final = datetime.now()
         team_callbacks: Final = _resolve_team_callback_wiring(
             user_api_key_dict=user_api_key_dict,
@@ -1272,11 +1282,16 @@ async def pass_through_request(
         _parsed_body["litellm_logging_obj"] = logging_obj
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
-        _parsed_body = await proxy_logging_obj.pre_call_hook(
-            user_api_key_dict=user_api_key_dict,
-            data=_parsed_body,
-            call_type="pass_through_endpoint",
-            endpoint_type=endpoint_type,
+        _parsed_body = (
+            cast(  # cast-ok: dispatcher returns an object payload; retain its identity and legacy invalid-hook handling
+                dict[str, object],
+                await proxy_logging_obj.pre_call_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    data=_parsed_body,
+                    call_type="pass_through_endpoint",
+                    endpoint_type=endpoint_type,
+                ),
+            )
         )
         if custom_llm_provider in ("laya", "bespoke"):
             hook_body: Final = TypeAdapter(dict[str, object]).validate_python(_parsed_body)
@@ -1944,7 +1959,9 @@ async def pass_through_request(
         # Monitoring: Trigger post_call_failure_hook
         # for pass through endpoint failure
         #########################################################
-        request_payload: Final[dict] = _parsed_body if isinstance(_parsed_body, dict) else {}
+        request_payload: Final = (
+            TypeAdapter(dict[str, object]).validate_python(_parsed_body) if isinstance(_parsed_body, dict) else {}
+        )
         # add user_api_key_dict, litellm_call_id, passthrough_logging_payloa for logging
         if kwargs:
             for key, value in kwargs.items():
@@ -1953,7 +1970,7 @@ async def pass_through_request(
             request_payload["litellm_logging_obj"] = logging_obj
 
         if "model" not in request_payload and _parsed_body and isinstance(_parsed_body, dict):
-            request_payload["model"] = _parsed_body.get("model", "")
+            request_payload["model"] = request_payload.get("model", "")
         if "custom_llm_provider" not in request_payload and custom_llm_provider:
             request_payload["custom_llm_provider"] = custom_llm_provider
 
@@ -2035,7 +2052,7 @@ def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> di
 
 async def _parse_request_data_by_content_type(
     request: Request,
-) -> tuple[object, object, None, bool | None]:
+) -> tuple[object, object, None, object]:
     """
     Parse request data based on content type.
 
@@ -2056,9 +2073,10 @@ async def _parse_request_data_by_content_type(
         try:
             json_body: Final[object] = await request.json()
             if isinstance(json_body, dict):
-                query_params_data = json_body.get("query_params")
-                custom_body_data = json_body.get("custom_body")
-                stream = json_body.get("stream")
+                json_envelope: Final = TypeAdapter(dict[str, object]).validate_python(json_body)
+                query_params_data = json_envelope.get("query_params")
+                custom_body_data = json_envelope.get("custom_body")
+                stream = json_envelope.get("stream")
         except json.JSONDecodeError:
             # Handle requests with no body (e.g., DELETE requests)
             pass
@@ -2068,9 +2086,10 @@ async def _parse_request_data_by_content_type(
         try:
             multipart_body: Final[object] = await request.json()
             if isinstance(multipart_body, dict):
-                query_params_data = multipart_body.get("query_params")
-                custom_body_data = multipart_body.get("custom_body")
-                stream = multipart_body.get("stream")
+                multipart_envelope: Final = TypeAdapter(dict[str, object]).validate_python(multipart_body)
+                query_params_data = multipart_envelope.get("query_params")
+                custom_body_data = multipart_envelope.get("custom_body")
+                stream = multipart_envelope.get("stream")
                 if custom_body_data is None and multipart_body:
                     custom_body_data = multipart_body
         except (json.JSONDecodeError, Exception):
