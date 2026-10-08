@@ -584,6 +584,8 @@ from litellm.proxy.lens.endpoints import router as lens_router
 from litellm.proxy.lens.repository import WriterDatabase
 from litellm.proxy.lens.signal_repository import SignalRepository
 from litellm.proxy.lens.signals import (
+    SIGNAL_BACKLOG_SWEEP,
+    SIGNAL_LIVE_SWEEP,
     DecisionQuestions,
     DecisionsCall,
     DecisionState,
@@ -768,6 +770,7 @@ from litellm.proxy.middleware.request_size_limit_middleware import (
 from litellm.proxy.middleware.security_headers_middleware import (
     SecurityHeadersMiddleware,
 )
+from litellm.proxy.moyai_endpoints import router as moyai_router
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
@@ -885,7 +888,7 @@ from litellm.secret_managers.main import (
     secret_manager_would_be_consulted,
     str_to_bool,
 )
-from litellm.tracing.config import is_clickhouse_tracing_enabled
+from litellm.tracing.config import is_lens_tracing_enabled
 from litellm.types.integrations.slack_alerting import AlertType, SlackAlertingArgs
 from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
@@ -1666,7 +1669,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         dict[str, object] | None,
         TypeAdapter(dict[str, object] | None).validate_python(general_settings.get("tracing")),
     )
-    tracing_enabled: Final = is_clickhouse_tracing_enabled(tracing_settings)
+    tracing_enabled: Final = is_lens_tracing_enabled(tracing_settings)
     async with manage_tracing(
         enabled=tracing_enabled,
         settings=tracing_settings,
@@ -1675,17 +1678,21 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         from litellm.proxy.admin_mcp import admin_mcp_lifespan
 
         signal_completion: Final[DecisionsCall] = _call_current_lens_signal_router
-        signal_task: Final = (
-            asyncio.create_task(
-                run_signal_loop(
-                    receiver.storage,
-                    SignalRepository(WriterDatabase(writer_wrapper(prisma_client.db))),
-                    signal_completion,
-                    router_ready=lambda: llm_router is not None,
+        signal_tasks: Final = (
+            tuple(
+                asyncio.create_task(
+                    run_signal_loop(
+                        receiver.storage,
+                        SignalRepository(WriterDatabase(writer_wrapper(prisma_client.db))),
+                        signal_completion,
+                        router_ready=lambda: llm_router is not None,
+                        sweep=sweep,
+                    )
                 )
+                for sweep in (SIGNAL_LIVE_SWEEP, SIGNAL_BACKLOG_SWEEP)
             )
             if receiver is not None and prisma_client is not None
-            else None
+            else ()
         )
 
         try:
@@ -1694,9 +1701,9 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                     await admin_mcp_stack.enter_async_context(admin_mcp_lifespan(app))
                     yield state
                 finally:
-                    if signal_task is not None:
+                    for signal_task in signal_tasks:
                         signal_task.cancel()
-                        await asyncio.gather(signal_task, return_exceptions=True)
+                    await asyncio.gather(*signal_tasks, return_exceptions=True)
 
                     if model_info_scheduler is not None and model_info_scheduler.running:
                         model_info_scheduler.remove_job("refresh_model_info")
@@ -20177,6 +20184,7 @@ app.include_router(callback_management_endpoints_router)
 app.include_router(debugging_endpoints_router)
 app.include_router(rust_control_plane_router)
 app.include_router(ui_crud_endpoints_router)
+app.include_router(moyai_router)
 app.include_router(user_banner_endpoints_router)
 app.include_router(latest_release_endpoints_router)
 app.include_router(team_callback_router)
