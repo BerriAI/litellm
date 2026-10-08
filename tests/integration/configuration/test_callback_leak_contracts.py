@@ -2,6 +2,7 @@ import json
 import re
 import uuid
 from collections import Counter
+from itertools import chain
 from pathlib import Path
 from typing import Final
 
@@ -42,7 +43,7 @@ Samples = tuple[Counter[str], ...]
 
 
 def _kinds(samples: Samples) -> frozenset[str]:
-    return frozenset(kind for sample in samples for kind in sample)
+    return frozenset(chain.from_iterable(samples))
 
 
 def _series(samples: Samples, kind: str) -> tuple[int, ...]:

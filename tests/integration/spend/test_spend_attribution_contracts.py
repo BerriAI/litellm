@@ -1,3 +1,4 @@
+from contextlib import ExitStack
 from itertools import chain
 from typing import Final
 
@@ -57,28 +58,23 @@ def _membership(gateway: Gateway, user_id: str, team_id: str) -> dict[str, JsonV
     return memberships[0]
 
 
-def _delete_budgets(scenario: Scenario, budget_ids: list[str]) -> None:
-    for budget_id in budget_ids:
-        scenario.delete_budget(budget_id)
-
-
 def test_team_member_budget_blocks_the_member_after_spend_lands(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
         team: Final = scenario.team()
-        member_budgets: Final[list[str]] = []
-        scenario.cleanups.callback(_delete_budgets, scenario, member_budgets)
         created: Final = gateway.post(
             "/user/new",
             {"user_id": f"integration-{model}", "team_id": team, "models": [model], "max_budget": 10.0},
         )
         user: Final = string_value(created["user_id"])
         key: Final = string_value(created["key"])
-        scenario.cleanups.callback(scenario.delete_user, user)
-        scenario.cleanups.callback(delete_key_if_present, gateway, key)
-        gateway.post("/team/member_update", {"team_id": team, "user_id": user, "max_budget_in_team": MEMBER_BUDGET})
-        membership: Final = _membership(gateway, user, team)
-        member_budgets.append(string_value(membership["budget_id"]))
+        with ExitStack() as member_cleanups:
+            member_cleanups.callback(scenario.delete_user, user)
+            member_cleanups.callback(delete_key_if_present, gateway, key)
+            gateway.post("/team/member_update", {"team_id": team, "user_id": user, "max_budget_in_team": MEMBER_BUDGET})
+            membership: Final = _membership(gateway, user, team)
+            scenario.cleanups.callback(scenario.delete_budget, string_value(membership["budget_id"]))
+            scenario.cleanups.push(member_cleanups.pop_all())
         assert object_value(membership["litellm_budget_table"])["max_budget"] == MEMBER_BUDGET
         assert (
             gateway.request(
