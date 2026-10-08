@@ -1925,11 +1925,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         request_optional_params: Final = optional_params.copy()
         if self.custom_llm_provider == "anthropic":
             extra_body: Final = request_optional_params.get("extra_body")
-            if isinstance(extra_body, dict):
-                thinking: Final = cast(object, extra_body.get("thinking"))
-                if thinking is not None:
-                    request_optional_params["thinking"] = thinking
-                    request_optional_params.pop("extra_body", None)
+            if isinstance(extra_body, dict) and "thinking" in extra_body and extra_body["thinking"] is not None:
+                request_optional_params["thinking"] = extra_body["thinking"]
+                request_optional_params.pop("extra_body", None)
 
         if "tools" not in request_optional_params and messages is not None and has_tool_call_blocks(messages):
             request_optional_params["tools"], _ = self._map_tools(add_dummy_tool(custom_llm_provider="anthropic"))
