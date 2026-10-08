@@ -622,3 +622,89 @@ class TestUpstreamFailureEndsStreamWithErrorEvent:
         chunks = _collect(iter(()))
         assert [chunk["type"] for chunk in chunks] == ["message_start", "error"]
         assert chunks[1]["error"] == {"type": "api_error", "message": INCOMPLETE_STREAM_ERROR_MESSAGE}
+
+
+def _tool_call_events(item_id: str, call_id: str, arguments: str, *, deltas: bool, done: bool) -> list[dict]:
+    """One Responses function_call item; its arguments arrive as deltas, a done event, or both."""
+    events: list[dict] = [
+        {
+            "type": "response.output_item.added",
+            "item": {
+                "type": "function_call",
+                "id": item_id,
+                "call_id": call_id,
+                "name": "get_weather",
+                "arguments": "",
+            },
+        }
+    ]
+    if deltas:
+        half = len(arguments) // 2
+        events += [
+            {"type": "response.function_call_arguments.delta", "item_id": item_id, "delta": arguments[:half]},
+            {"type": "response.function_call_arguments.delta", "item_id": item_id, "delta": arguments[half:]},
+        ]
+    if done:
+        events.append({"type": "response.function_call_arguments.done", "item_id": item_id, "arguments": arguments})
+    events.append(
+        {
+            "type": "response.output_item.done",
+            "item": {"type": "function_call", "id": item_id, "call_id": call_id, "arguments": arguments},
+        }
+    )
+    return events
+
+
+def _tool_inputs_by_block(chunks: list) -> dict[int, str]:
+    inputs: dict[int, str] = {}
+    for chunk in chunks:
+        if chunk["type"] == "content_block_start":
+            inputs[chunk["index"]] = ""
+        elif chunk["type"] == "content_block_delta" and chunk["delta"]["type"] == "input_json_delta":
+            inputs[chunk["index"]] += chunk["delta"]["partial_json"]
+    return inputs
+
+
+_CITY_ARGUMENTS = ('{"city": "Paris"}', '{"city": "London"}', '{"city": "Tokyo"}')
+
+
+class TestFunctionCallArgumentsDone:
+    """Regression for #45348: the ChatGPT/Codex backend sends parallel tool calls' arguments
+    only in ``response.function_call_arguments.done``. Each tool_use block must still carry
+    its arguments exactly once, whether they came as deltas, a done event, or both."""
+
+    def test_parallel_calls_with_arguments_only_on_done_keep_their_arguments(self):
+        events = [
+            event
+            for i, arguments in enumerate(_CITY_ARGUMENTS)
+            for event in _tool_call_events(f"fc_{i}", f"call_{i}", arguments, deltas=False, done=True)
+        ]
+
+        assert _tool_inputs_by_block(_process_all(events)) == dict(enumerate(_CITY_ARGUMENTS))
+
+    def test_calls_with_deltas_and_done_are_not_duplicated(self):
+        events = [
+            event
+            for i, arguments in enumerate(_CITY_ARGUMENTS)
+            for event in _tool_call_events(f"fc_{i}", f"call_{i}", arguments, deltas=True, done=True)
+        ]
+
+        assert _tool_inputs_by_block(_process_all(events)) == dict(enumerate(_CITY_ARGUMENTS))
+
+    def test_mixed_delta_and_done_only_calls_each_get_their_own_arguments(self):
+        events = (
+            _tool_call_events("fc_0", "call_0", _CITY_ARGUMENTS[0], deltas=True, done=True)
+            + _tool_call_events("fc_1", "call_1", _CITY_ARGUMENTS[1], deltas=False, done=True)
+            + _tool_call_events("fc_2", "call_2", _CITY_ARGUMENTS[2], deltas=True, done=False)
+        )
+
+        assert _tool_inputs_by_block(_process_all(events)) == dict(enumerate(_CITY_ARGUMENTS))
+
+    def test_done_only_call_streams_its_arguments_before_its_block_stops(self):
+        chunks = _process_all(_tool_call_events("fc_0", "call_0", _CITY_ARGUMENTS[0], deltas=False, done=True))
+
+        assert [(c["type"], c["index"]) for c in chunks] == [
+            ("content_block_start", 0),
+            ("content_block_delta", 0),
+            ("content_block_stop", 0),
+        ]

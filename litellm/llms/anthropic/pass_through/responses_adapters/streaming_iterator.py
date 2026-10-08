@@ -110,6 +110,8 @@ class AnthropicResponsesStreamWrapper:
       response.reasoning_summary_part.added -> content_block_delta (thinking_delta separator)
       response.reasoning_summary_text.delta -> content_block_delta (thinking_delta)
       response.function_call_arguments.delta -> content_block_delta (input_json_delta)
+      response.function_call_arguments.done  -> content_block_delta (input_json_delta), only for
+                                                a call whose arguments arrived without deltas
       response.output_item.done          -> content_block_delta (signature_delta) + content_block_stop
       response.completed                 -> message_delta + message_stop
       response.failed                    -> error (the stream ends without message_stop)
@@ -131,6 +133,9 @@ class AnthropicResponsesStreamWrapper:
         self._item_id_to_block_index: dict[str, int] = {}
         # Track open function_call items by item_id so we can emit tool_use start
         self._pending_tool_ids: dict[str, str] = {}  # item_id -> call_id / name accumulator
+        # tool_use blocks that already received input_json_delta, so a later
+        # function_call_arguments.done does not send the arguments a second time
+        self._tool_blocks_with_input: set[int] = set()  # mutable-ok: per-stream accumulator state
         self._sent_message_start = False
         self._sent_message_stop = False
         self._stream_failed = False
@@ -206,6 +211,36 @@ class AnthropicResponsesStreamWrapper:
                 }
             )
         self._chunk_queue.append({"type": "content_block_stop", "index": block_idx})
+
+    def _emit_arguments_sent_only_on_done(self, event: object) -> None:
+        """Send the complete arguments of a call that streamed no argument deltas.
+
+        Some backends (e.g. the ChatGPT/Codex backend for parallel tool calls) deliver
+        a call's arguments only in ``response.function_call_arguments.done``; without
+        this the tool_use block would close with empty input.
+        """
+        item_id: Final = self._field(event, "item_id")
+        arguments: Final = self._field(event, "arguments")
+        block_idx: Final = (
+            self._item_id_to_block_index.get(item_id, self._current_block_index)
+            if isinstance(item_id, str) and item_id
+            else self._current_block_index
+        )
+        if (
+            block_idx < 0
+            or block_idx in self._tool_blocks_with_input
+            or not isinstance(arguments, str)
+            or not arguments
+        ):
+            return
+        self._tool_blocks_with_input.add(block_idx)
+        self._chunk_queue.append(
+            {
+                "type": "content_block_delta",
+                "index": block_idx,
+                "delta": {"type": "input_json_delta", "partial_json": arguments},
+            }
+        )
 
     def _process_event(self, event: object) -> None:
         """Convert one Responses API event into zero or more Anthropic chunks queued for emission."""
@@ -338,6 +373,8 @@ class AnthropicResponsesStreamWrapper:
                 if item_id
                 else self._current_block_index
             )
+            if delta:
+                self._tool_blocks_with_input.add(block_idx)
             self._chunk_queue.append(
                 {
                     "type": "content_block_delta",
@@ -345,6 +382,11 @@ class AnthropicResponsesStreamWrapper:
                     "delta": {"type": "input_json_delta", "partial_json": delta},
                 }
             )
+            return
+
+        # ---- function call arguments done ----
+        if event_type == "response.function_call_arguments.done":
+            self._emit_arguments_sent_only_on_done(event)  # pyright: ignore[reportUnknownArgumentType]  # event is narrowed to a bare dict by the dict fallbacks above
             return
 
         # ---- output item done -> content_block_stop ----

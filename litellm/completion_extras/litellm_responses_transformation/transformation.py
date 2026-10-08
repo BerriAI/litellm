@@ -1544,6 +1544,27 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return status_mapping.get(status, "stop")
 
 
+_TOOL_INPUT_DELTA_EVENTS: Final = frozenset(
+    {
+        ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA.value,
+        ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DELTA.value,
+    }
+)
+# done event type -> (field holding the complete input, delta event type it stands in for)
+_TOOL_INPUT_DONE_EVENTS: Final = MappingProxyType(
+    {
+        ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE.value: (
+            "arguments",
+            ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA.value,
+        ),
+        ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DONE.value: (
+            "input",
+            ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DELTA.value,
+        ),
+    }
+)
+
+
 class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
     def __init__(
         self,
@@ -1555,6 +1576,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         self._chat_completion_id: str | None = None
         self._served_service_tier: str | None = None
         self._tool_call_index_map: dict[int, int] = {}  # mutable-ok: per-stream accumulator state
+        # output_index of tool calls whose arguments already streamed (via deltas or a
+        # non-empty output_item.added), so a later *.done event does not repeat them
+        self._tool_calls_with_arguments: set[int] = set()  # mutable-ok: per-stream accumulator state
 
     def _handle_string_chunk(
         self, str_line: Union[str, "BaseModel"]
@@ -1869,10 +1893,49 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         return self._with_served_service_tier(
             self._with_stream_scoped_id(
                 OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
-                    chunk, tool_call_index_map=self._tool_call_index_map
+                    self._arguments_done_as_delta_if_unstreamed(chunk),
+                    tool_call_index_map=self._tool_call_index_map,
                 )
             )
         )
+
+    def _arguments_done_as_delta_if_unstreamed(
+        self,
+        chunk: dict[str, object],  # mutable-ok: chunk_parser's chunk, handed on to the dict-typed translator
+    ) -> dict[str, object]:  # mutable-ok: same chunk type the translator takes
+        """Turn a tool call's ``*.done`` event into one delta when no delta carried its arguments.
+
+        Some backends (e.g. the ChatGPT/Codex backend for parallel tool calls) send a call's
+        arguments only in ``response.function_call_arguments.done``. Calls whose arguments
+        already streamed keep the done event as a no-op, so nothing is sent twice.
+        """
+        event_type: Final = chunk.get("type")
+        output_index: Final = chunk.get("output_index", 0)
+        if not isinstance(event_type, str) or not isinstance(output_index, int):
+            return chunk
+        if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED:
+            item: Final = chunk.get("item")
+            item_fields: Final[Mapping[str, object]] = (
+                cast(Mapping[str, object], item)  # cast-ok: isinstance confirms a Responses output item mapping
+                if isinstance(item, dict)
+                else MappingProxyType({})
+            )
+            if item_fields.get("arguments") or item_fields.get("input") or chunk.get("arguments"):
+                self._tool_calls_with_arguments.add(output_index)
+            return chunk
+        if event_type in _TOOL_INPUT_DELTA_EVENTS:
+            if chunk.get("delta"):
+                self._tool_calls_with_arguments.add(output_index)
+            return chunk
+        done_field_and_delta_type: Final = _TOOL_INPUT_DONE_EVENTS.get(event_type)
+        if done_field_and_delta_type is None or output_index in self._tool_calls_with_arguments:
+            return chunk
+        done_field, delta_type = done_field_and_delta_type
+        full_input: Final = chunk.get(done_field)
+        if not isinstance(full_input, str) or not full_input:
+            return chunk
+        self._tool_calls_with_arguments.add(output_index)
+        return {**chunk, "type": delta_type, "delta": full_input}
 
     def _remember_served_service_tier(self, chunk: dict[str, object]) -> None:
         response_payload: Final = chunk.get("response")
