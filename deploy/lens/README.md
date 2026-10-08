@@ -6,21 +6,20 @@ Agent exporters send traces directly to Lens. LiteLLM sends its optional request
 
 ## New local installation
 
-Install Docker with Compose and Git, then build the gateway and Lens from one checkout:
+Install Docker with Compose, Python 3.10 or later, and Git. Clone LiteLLM, select a published release that includes Lens, and start the existing Compose stack:
 
 ```bash
 git clone https://github.com/BerriAI/litellm.git
 cd litellm
-export LITELLM_RELEASE_TAG="sha-$(git rev-parse HEAD)"
-export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 24)"
-export LITELLM_LENS_SERVICE_TOKEN="$(openssl rand -hex 32)"
-export OPENAI_API_KEY='<your-provider-key>'
-docker compose -f docker/docker-compose.tracing.yml up -d --build
+python3 deploy/lens/configure.py --version <release-version>
+docker compose --env-file deploy/lens/.env -f deploy/lens/stack.yaml up -d --wait
 ```
 
-Save the generated keys privately and reuse them when restarting or upgrading. This stack binds to localhost and uses development database passwords; use your normal secrets, TLS, backups, and ingress for a hosted deployment
+The configuration command generates your keys and database passwords once, saves them in `deploy/lens/.env` with owner-only permissions, and preserves them on subsequent runs. Back up this file alongside your database volumes. Both images use the selected release; there is no local image build
 
-Open `http://localhost:4002/ui/` and sign in as `admin` with `LITELLM_MASTER_KEY`. Under **Lens > Traces > Set up tracing**, generate a tracing key and copy the ingestion URL. Local exporters use `http://localhost:4318`. Model calls keep their existing LiteLLM URL and model key
+Open `http://localhost:4000/ui/` and sign in as `admin` using `LITELLM_MASTER_KEY` from the saved file. Open **Lens**, select your framework, generate a tracing key, and copy the displayed configuration. The trace endpoint is already filled in. Keep your agent's existing model credentials; the tracing key only authorizes trace uploads
+
+PostgreSQL and ClickHouse use persistent Docker volumes and have no host ports. The dashboard and trace listener bind to localhost. Use your normal TLS and ingress for a hosted deployment. Stop the stack with `docker compose --env-file deploy/lens/.env -f deploy/lens/stack.yaml down`; omit `-v` to retain data
 
 Under **Lens > Investigations > Connect worker**, choose an analysis model and monthly budget. The deployed service connects automatically after you save these settings. There is no worker command or second token to copy
 
@@ -68,14 +67,30 @@ Lens does not need provider credentials, PostgreSQL credentials, a GPU, or the L
 
 ### Kubernetes with Helm
 
-Both `helm/litellm` and `helm/litellm-helm` support the Lens service. Keep your existing release, namespace, values, and database configuration. Create two Secrets through your normal secret manager: `litellm-lens-service` with key `service-token`, and `litellm-lens-clickhouse` with key `url`
+Both `helm/litellm` and `helm/litellm-helm` support Lens. Keep your existing chart, release name, namespace, and values. Add:
 
 ```yaml
 lensWorker:
   enabled: true
-  image:
-    repository: <matching-worker-image-repository>
-    digest: sha256:<matching-worker-image-digest>
+```
+
+Then run your usual Helm deployment command using the matching published chart. The chart supplies the matching Lens image, generates the shared service secret, starts a single ClickHouse instance with a persistent volume, and connects the services. Your cluster needs a default storage class, or set `lensWorker.clickhouse.storageClassName`. Bundled storage defaults to 20 GiB; set `lensWorker.clickhouse.storage` before installation to choose another size
+
+When your chart manages an ingress with one hostname, the chart fills in the public tracing address and routes `/lens-ingest` directly to Lens. TLS is detected from `ingress.tls` or an ALB certificate annotation. With custom ingress, multiple hostnames, or TLS terminated elsewhere, set the address explicitly:
+
+```yaml
+lensWorker:
+  enabled: true
+  publicUrl: https://<your-litellm-host>/lens-ingest
+```
+
+For a dedicated trace hostname, configure `lensWorker.ingress.enabled`, `host`, `className`, and `tls`. Its hostname supplies the public address unless you override `publicUrl`. Internal Lens routes stay private
+
+To use an existing ClickHouse database and secrets managed by your platform, keep these overrides:
+
+```yaml
+lensWorker:
+  enabled: true
   serviceTokenSecret:
     name: litellm-lens-service
     key: service-token
@@ -84,21 +99,13 @@ lensWorker:
     key: url
   clickhouseDatabase: litellm
   retentionDays: 14
-  publicUrl: https://<your-litellm-host>/lens-ingest
 ```
 
-Set `clickhouseDatabase` and `retentionDays` to your existing database and retention before upgrading
+Supplying `clickhouseSecret.name` uses that database and disables bundled storage. Keep your database name and retention policy. For GitOps tools that render Helm without cluster access, supply both existing secrets so rendering cannot regenerate credentials
 
-When the chart's main ingress is enabled, it routes `/lens-ingest` directly to Lens. With a custom ingress, add that route yourself. For a dedicated hostname, use `lensWorker.ingress.enabled`, `host`, `className`, and `tls`, and set `publicUrl` to that hostname. The chart connects LiteLLM to Lens internally and gives both services the shared secret
+Normal Helm upgrades reuse the generated credentials. Secrets are retained on uninstall, and the ClickHouse volume is retained by Kubernetes. Back them up together. Treat changing the database, storage class, or secret reference as an infrastructure change, not a routine version update
 
-Update your existing component image overrides to matching builds, then use the chart from that checkout:
-
-```bash
-helm upgrade --install litellm ./helm/litellm \
-  --namespace litellm -f values.yaml --wait
-```
-
-Use `./helm/litellm-helm` if that is your existing chart. `lensWorker.replicaCount` scales ingestion and investigations. Each replica needs access to the same ClickHouse and gateway. Credentials refresh every 30 seconds; a newly created key may briefly receive a retryable 429. Revocations propagate on refresh, and a replica stops accepting traces when its credential snapshot reaches 90 seconds
+After deployment, open **Lens**. If it was already open, click **Check setup**. The setup section moves to your framework and tracing key when Lens is reachable and storage is ready. Investigation setup asks for the analysis model and budget; the installed service connects automatically
 
 ## Upgrade
 
@@ -106,13 +113,9 @@ Upgrade LiteLLM and Lens from the same source commit and release identity. For a
 
 Keep the same databases, encryption keys, shared service secret, and public ingestion URL. Pause scheduled investigations and finish or cancel active runs, update both images through your usual deployment process, then check ingestion and run an investigation before resuming schedules. Do not run `docker compose down -v`
 
-When upgrading from the Python worker, replace it with the Rust Lens service, move the existing ClickHouse connection to Lens, and configure the service URLs and secret on LiteLLM. Existing trace data remains in the same ClickHouse database; findings and settings remain in PostgreSQL. Stop the old worker. Generate dedicated tracing keys and change agent exporters to the ingestion URL. A virtual model key no longer authorizes uploads; the old gateway upload endpoints return 410 with setup guidance
-
-If you retain an explicit `LENS_WORKER_TOKEN`, it remains an optional investigation credential. Normal setup uses the shared service connection and registers one managed worker identity. Configure the analysis model and billing key in the dashboard; provider keys stay on LiteLLM
-
 ## Development
 
-`make lens-dev` starts LiteLLM, the Rust Lens service, and the hot-reload dashboard. Set `LENS_DEV_PROXY_PORT` and `LENS_DEV_UI_PORT` to change the local ports. For containers, pass the same release identity to both builds. Unversioned or incompatible workers are refused before claiming work
+`make lens-dev` starts LiteLLM, Lens, and the hot-reload dashboard. Set `LENS_DEV_PROXY_PORT` and `LENS_DEV_UI_PORT` to change the local ports. For containers, pass the same release identity to both builds. Unversioned or incompatible workers are refused before claiming work
 
 ## Configure a lens
 

@@ -39,7 +39,8 @@ from integration.cost_calculation.cost_tracking_case import (
 )
 from pydantic import JsonValue
 
-from litellm.decisions.main import DECISIONS_ENDPOINTS
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager
 
 if _data_errors := data_errors():
     raise ValueError("\n".join(_data_errors))
@@ -276,7 +277,11 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             )
             decisions_provider: Final = case.rates.litellm_provider
             upstream_model: Final = case.litellm_model.removeprefix(f"{decisions_provider}/")
-            upstream_path: Final = f"/{scenario_id}" + DECISIONS_ENDPOINTS[decisions_provider].endpoint_url(
+            decisions_config: Final = ProviderConfigManager.get_provider_decisions_config(
+                upstream_model, LlmProviders(decisions_provider)
+            )
+            assert decisions_config is not None, f"{case.name}: no decisions config for {decisions_provider}"
+            upstream_path: Final = f"/{scenario_id}" + decisions_config.get_complete_url(
                 "https://upstream-placeholder.invalid", upstream_model
             ).removeprefix("https://upstream-placeholder.invalid")
             decision_observations: Final = tuple(
