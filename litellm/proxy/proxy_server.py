@@ -425,9 +425,9 @@ from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
 from litellm.proxy.common_utils.discoverable_model_filter import discoverable_rows, undiscoverable_model_names
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-    decrypt_for_rewrite,
     decrypt_value_helper,
     encrypt_value_helper,
+    legacy_unreadable,
 )
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
 from litellm.proxy.common_utils.fips import (
@@ -7857,7 +7857,10 @@ class ProxyConfig:
         _decrypt_and_set_db_env_variables): this is a write path, and
         loading values into os.environ is the read path's responsibility.
         """
-        decrypted_env_vars: Final = {k: decrypt_for_rewrite(value=v, key=k) for k, v in environment_variables.items()}
+        decrypted_env_vars: Final = {
+            k: v if legacy_unreadable(v) else decrypt_value_helper(value=v, key=k, return_original_value=True)
+            for k, v in environment_variables.items()
+        }
         return self.encrypt_env_variables(
             environment_variables=decrypted_env_vars,
             new_encryption_key=new_encryption_key,
