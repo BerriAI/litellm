@@ -793,7 +793,9 @@ async def _server_with_oauth_endpoints(
         global_mcp_server_manager,
     )
 
-    return await global_mcp_server_manager.ensure_oauth_metadata_discovered(mcp_server)
+    if needed_endpoint(mcp_server) is None:
+        return await global_mcp_server_manager.ensure_oauth_metadata_discovered(mcp_server)
+    return await global_mcp_server_manager.ensure_oauth_metadata_discovered(mcp_server, needed_endpoint=needed_endpoint)
 
 
 def _raise_unless_oauth2_discovery_server(

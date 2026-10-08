@@ -2231,12 +2231,27 @@ class MCPServerManager:
             if should_defer != has_slot:
                 self._set_oauth_discovery_deferred(server.server_id, should_defer)
 
-    async def ensure_oauth_metadata_discovered(self, server: MCPServer, *, _retry_stale: bool = True) -> MCPServer:
+    async def ensure_oauth_metadata_discovered(
+        self,
+        server: MCPServer,
+        *,
+        needed_endpoint: Callable[[MCPServer], str | None] | None = None,
+        _retry_stale: bool = True,
+    ) -> MCPServer:
         return await self.catalog.resolve_oauth_metadata(
-            server, lambda selected: self._ensure_oauth_metadata_discovered(selected, _retry_stale=_retry_stale)
+            server,
+            lambda selected: self._ensure_oauth_metadata_discovered(
+                selected, needed_endpoint=needed_endpoint, _retry_stale=_retry_stale
+            ),
         )
 
-    async def _ensure_oauth_metadata_discovered(self, server: MCPServer, *, _retry_stale: bool = True) -> MCPServer:
+    async def _ensure_oauth_metadata_discovered(
+        self,
+        server: MCPServer,
+        *,
+        needed_endpoint: Callable[[MCPServer], str | None] | None = None,
+        _retry_stale: bool = True,
+    ) -> MCPServer:
         """Join the bounded discovery task and return the resolved server.
 
         Concurrent callers share one task per server. A failed attempt remains
@@ -2244,9 +2259,12 @@ class MCPServerManager:
 
         Args:
             server: The MCP server whose OAuth metadata must be resolved.
+            needed_endpoint: A caller-specific endpoint that may remain usable when
+                optional capability discovery fails.
 
         Returns:
-            The resolved server; the registered server when no discovery is
+            The resolved server; a configured caller endpoint remains usable on
+            optional capability-discovery failure. The registered server when no discovery is
             pending, or when discovery failed for a client-forwarded-token
             server, whose session consumes no discovered endpoint.
 
@@ -2264,19 +2282,25 @@ class MCPServerManager:
             outcome: Final = await asyncio.shield(task)
         except asyncio.CancelledError:
             if task.cancelled() and not self._oauth_discovery_slot_is_current(server.server_id, generation):
-                return await self._rejoin_oauth_metadata_discovery(server, retry_stale=_retry_stale)
+                return await self._rejoin_oauth_metadata_discovery(
+                    server, needed_endpoint=needed_endpoint, retry_stale=_retry_stale
+                )
             raise
         match outcome:
             case _OAuthDiscoveryResolved(resolved_server):
                 self.catalog.assert_current(resolved_server)
                 return resolved_server
             case _OAuthDiscoveryStale():
-                return await self._rejoin_oauth_metadata_discovery(server, retry_stale=_retry_stale)
+                return await self._rejoin_oauth_metadata_discovery(
+                    server, needed_endpoint=needed_endpoint, retry_stale=_retry_stale
+                )
             case _OAuthDiscoveryFailed(timed_out=timed_out):
                 current: Final = self._registered_server(server)
                 self.catalog.assert_current(current)
-                if current.is_client_forwarded_token or not oauth_endpoints_unresolved(
-                    current, include_client_metadata=False
+                if (
+                    current.is_client_forwarded_token
+                    or not oauth_endpoints_unresolved(current, include_client_metadata=False)
+                    or (needed_endpoint is not None and needed_endpoint(current) is not None)
                 ):
                     return current
                 server_ref: Final = current.alias or current.server_name or current.name or current.server_id
@@ -2288,9 +2312,13 @@ class MCPServerManager:
 
         return assert_never(outcome)
 
-    async def _rejoin_oauth_metadata_discovery(self, server: MCPServer, *, retry_stale: bool) -> MCPServer:
+    async def _rejoin_oauth_metadata_discovery(
+        self, server: MCPServer, *, needed_endpoint: Callable[[MCPServer], str | None] | None = None, retry_stale: bool
+    ) -> MCPServer:
         if retry_stale:
-            return await self.ensure_oauth_metadata_discovered(server, _retry_stale=False)
+            return await self.ensure_oauth_metadata_discovered(
+                server, needed_endpoint=needed_endpoint, _retry_stale=False
+            )
         current: Final = self._registered_server(server)
         if not oauth_endpoints_unresolved(current, include_client_metadata=False) or current.is_client_forwarded_token:
             return current

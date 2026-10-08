@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     import httpx
     from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
     from fastapi import APIRouter
+    from respx import MockRouter
 
     from litellm.proxy.auth.handle_jwt import JWTHandler
 
@@ -13574,3 +13575,49 @@ async def test_cimd_upstream_client_rejection_is_gateway_fault(monkeypatch, resp
     body = json.loads(response.body)
     assert body["error"] == "server_error"
     assert "provider-private-detail" not in body["error_description"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flow", ["refresh", "authorize"])
+async def test_optional_cimd_discovery_preserves_the_callers_configured_endpoint(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: "MockRouter", flow: str
+) -> None:
+    from urllib.parse import parse_qs
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager as manager_module
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    monkeypatch.setenv("LITELLM_MCP_OAUTH_DISCOVERY_ON_STARTUP", "0")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "cimd-test-state-signing-key")
+    token: Final = respx_mock.post("https://idp.example.com/token").respond(
+        200, json={"access_token": "upstream-access", "token_type": "Bearer", "expires_in": 3600}
+    )
+    discovery: Final = respx_mock.route().respond(503)
+    manager: Final = manager_module.MCPServerManager()
+    monkeypatch.setattr(manager_module, "global_mcp_server_manager", manager)
+    await manager.load_servers_from_config({"manual": {
+        "url": "https://mcp.example.com/mcp", "transport": "http", "auth_type": "oauth2",
+        "oauth2_flow": "authorization_code",
+        **({"token_url": "https://idp.example.com/token"} if flow == "refresh"
+           else {"authorization_url": "https://idp.example.com/authorize"}),
+    }})
+    server: Final = next(iter(manager.config_mcp_servers.values()))
+    async with manager.catalog.operation():
+        if flow == "refresh":
+            response: Final = await endpoints.exchange_token_with_server(
+                request=_cimd_request(), mcp_server=server, grant_type="refresh_token",
+                refresh_token="existing-refresh", client_id="existing-client",
+                code=None, redirect_uri=None, client_secret=None, code_verifier=None,
+            )
+            assert response.status_code == 200
+            assert json.loads(response.body)["access_token"] == "upstream-access"
+            assert parse_qs(token.calls[0].request.content.decode())["refresh_token"] == ["existing-refresh"]
+        else:
+            redirect: Final = await endpoints.authorize_with_server(
+                _cimd_request(), server, "existing-client", "https://gateway.example.com/ui/",
+                code_challenge="a" * 43, code_challenge_method="S256",
+            )
+            assert redirect.status_code == 307
+            assert redirect.headers["location"].startswith("https://idp.example.com/authorize?")
+    assert discovery.call_count > 0
