@@ -57,6 +57,7 @@ interface CredentialModalProps {
   existingCredential?: CredentialItem | null;
   initialProvider?: string | null;
   initialAuthMethod?: AnthropicAuthMethod;
+  initialAuthTypeId?: string;
   providerLocked?: boolean;
 }
 
@@ -87,6 +88,7 @@ export default function CredentialModal({
   existingCredential = null,
   initialProvider = null,
   initialAuthMethod,
+  initialAuthTypeId,
   providerLocked = false,
 }: CredentialModalProps) {
   const isEdit = mode === "edit";
@@ -235,6 +237,7 @@ export default function CredentialModal({
               <ProviderSpecificFields
                 selectedProvider={selectedProvider}
                 hiddenFieldKeys={selection.authMethod === "federation" ? API_KEY_FIELDS : NO_HIDDEN_FIELDS}
+                initialAuthTypeId={initialAuthTypeId}
               />
 
               {selection.authMethod === "federation" && (

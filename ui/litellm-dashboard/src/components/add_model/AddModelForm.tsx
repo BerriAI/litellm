@@ -35,6 +35,7 @@ import ConditionalPublicModelName from "./conditional_public_model_name";
 import LiteLLMModelNameField from "./litellm_model_name";
 import ConnectionErrorDisplay from "./model_connection_test";
 import ProviderSpecificFields from "./provider_specific_fields";
+import { authTypesFor } from "./provider_auth_types";
 import { TEST_MODES } from "./add_model_modes";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { credentialsKeys } from "@/app/(dashboard)/hooks/credentials/useCredentials";
@@ -100,10 +101,14 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   const { data: tagsList } = useTags();
   const selectedCredentialName = useWatch({ control: form.control, name: "litellm_credential_name" });
   const queryClient = useQueryClient();
-  const [isFederatedCredentialModalOpen, setIsFederatedCredentialModalOpen] = useState(false);
+  const [isCredentialModalOpen, setIsCredentialModalOpen] = useState(false);
+  const [credentialModalAuthTypeId, setCredentialModalAuthTypeId] = useState<string | undefined>();
+  const [selectedAuthTypeId, setSelectedAuthTypeId] = useState("");
+  const canCreateCredential = isProxyAdminRole(userRole ?? "");
   const canCreateFederatedCredential = isProxyAdminRole(userRole ?? "") && isAnthropicProvider(selectedProvider);
+  const selectedAuthType = authTypesFor(selectedProvider).find(({ id }) => id === selectedAuthTypeId);
 
-  const handleCreateFederatedCredential = async (values: Record<string, unknown>) => {
+  const handleCreateCredential = async (values: Record<string, unknown>) => {
     const credential = buildCredential(values, withoutRestrictedFields(values));
     try {
       await credentialCreateCall(accessToken, credential);
@@ -112,9 +117,22 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
       return;
     }
     toast.success("Credential added successfully");
-    setIsFederatedCredentialModalOpen(false);
+    setIsCredentialModalOpen(false);
     await queryClient.invalidateQueries({ queryKey: credentialsKeys.all });
     form.setValue("litellm_credential_name", credential.credential_name, { shouldDirty: true });
+  };
+
+  const openCredentialModal = (authTypeId?: string) => {
+    setCredentialModalAuthTypeId(authTypeId);
+    setIsCredentialModalOpen(true);
+  };
+
+  const handleSubmit = async () => {
+    if (selectedAuthType?.credentialOnly && !selectedCredentialName) {
+      toast.error("Create or select a credential for this auth type");
+      return false;
+    }
+    return handleOk();
   };
 
   const handleTestConnection = async () => {
@@ -198,7 +216,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
               <form
                 onSubmit={(event) => {
                   event.preventDefault();
-                  void handleOk().then((submitted) => {
+                  void handleSubmit().then((submitted) => {
                     if (submitted) {
                       setTeamAdminSelectedTeam(null);
                     }
@@ -341,7 +359,12 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                             <span className="px-4 text-muted-foreground text-sm">OR</span>
                             <div className="grow border-t border-border"></div>
                           </div>
-                          <ProviderSpecificFields selectedProvider={selectedProvider} />
+                          <ProviderSpecificFields
+                            selectedProvider={selectedProvider}
+                            context="model"
+                            onAuthTypeChange={setSelectedAuthTypeId}
+                            onCreateCredential={canCreateCredential ? openCredentialModal : undefined}
+                          />
                           {canCreateFederatedCredential && (
                             <div className="mb-4 flex flex-col items-start gap-2">
                               <span className="text-sm text-muted-foreground">
@@ -350,7 +373,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                               <Button
                                 type="button"
                                 variant="outline"
-                                onClick={() => setIsFederatedCredentialModalOpen(true)}
+                                onClick={() => openCredentialModal()}
                               >
                                 Use workload identity federation
                               </Button>
@@ -486,15 +509,16 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
         </CardContent>
       </Card>
 
-      {isFederatedCredentialModalOpen && (
+      {isCredentialModalOpen && (
         <CredentialModal
           open
           mode="add"
           initialProvider={selectedProvider}
           initialAuthMethod="federation"
+          initialAuthTypeId={credentialModalAuthTypeId}
           providerLocked
-          onCancel={() => setIsFederatedCredentialModalOpen(false)}
-          onSubmit={handleCreateFederatedCredential}
+          onCancel={() => setIsCredentialModalOpen(false)}
+          onSubmit={handleCreateCredential}
         />
       )}
       {/* Test Connection Results Modal */}

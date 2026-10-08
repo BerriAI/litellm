@@ -488,6 +488,44 @@ describe("ProviderSpecificFields", () => {
     expect(screen.queryByLabelText("Delegated Access Token")).not.toBeInTheDocument();
   });
 
+  it("offers a credential-only OAuth mode in model context", async () => {
+    const onCreateCredential = vi.fn();
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MountedFormHost>
+          <ProviderSpecificFields
+            selectedProvider="MICROSOFT_365_COPILOT"
+            context="model"
+            onCreateCredential={onCreateCredential}
+          />
+        </MountedFormHost>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("This auth type is saved as an LLM credential and attached to this model.")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Token Endpoint URL")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Create credential" }));
+    expect(onCreateCredential).toHaveBeenCalledWith("oauth_token_exchange");
+  });
+
+  it("hides credential-only auth modes from non-admin model forms", async () => {
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MountedFormHost>
+          <ProviderSpecificFields selectedProvider="MICROSOFT_365_COPILOT" context="model" />
+        </MountedFormHost>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole("combobox", { name: "Auth Type:" })).toHaveTextContent(
+      "Static delegated access token",
+    );
+    expect(screen.queryByText("OAuth token exchange (on-behalf-of)")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Delegated Access Token")).toBeInTheDocument();
+  });
+
   it("switches Microsoft 365 Copilot fields to a static delegated access token", async () => {
     const user = userEvent.setup();
     const queryClient = createQueryClient();
