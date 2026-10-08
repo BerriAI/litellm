@@ -6952,7 +6952,9 @@ class ProxyConfig:
 
             if "spend_logs_metadata_fields" in general_settings:
                 _ = ConfigGeneralSettings.model_validate(
-                    MappingProxyType({"spend_logs_metadata_fields": general_settings["spend_logs_metadata_fields"]})
+                    MappingProxyType(
+                        {"spend_logs_metadata_fields": typed_general_settings["spend_logs_metadata_fields"]}
+                    )
                 )
 
             ### PKCE MULTI-INSTANCE PREREQUISITE CHECK ###

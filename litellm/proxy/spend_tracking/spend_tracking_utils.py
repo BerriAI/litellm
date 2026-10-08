@@ -1731,15 +1731,19 @@ def should_store_prompts_and_responses_in_spend_logs() -> bool:
     return get_secret_bool("STORE_PROMPTS_IN_SPEND_LOGS") is True
 
 
-_SPEND_LOGS_METADATA_FIELDS_ADAPTER: Final = TypeAdapter(SpendLogsMetadataFields | None)
+_SPEND_LOGS_METADATA_FIELDS_ADAPTER: Final[TypeAdapter[SpendLogsMetadataFields | None]] = TypeAdapter(
+    SpendLogsMetadataFields | None
+)
 _SPEND_LOGS_METADATA_ADAPTER: Final = TypeAdapter(dict[str, JsonValue])
 
 
 def configured_spend_logs_metadata_fields() -> SpendLogsMetadataFields | None:
-    from litellm.proxy.proxy_server import general_settings
+    from litellm.proxy.proxy_server import general_settings_view
 
     try:
-        return _SPEND_LOGS_METADATA_FIELDS_ADAPTER.validate_python(general_settings.get("spend_logs_metadata_fields"))
+        return _SPEND_LOGS_METADATA_FIELDS_ADAPTER.validate_python(
+            general_settings_view().get("spend_logs_metadata_fields")
+        )
     except ValidationError as e:
         verbose_proxy_logger.error("Ignoring invalid general_settings.spend_logs_metadata_fields: %s", e)
         return None
