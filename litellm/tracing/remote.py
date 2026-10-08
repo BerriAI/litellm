@@ -1,4 +1,3 @@
-import json
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -7,15 +6,14 @@ from typing import Final, NoReturn
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import JsonValue, TypeAdapter
 from typing_extensions import assert_never
 
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.rust_bridge.trace.errors import TraceChanged
 from litellm.rust_bridge.trace.generated.types import QueryScope, ReadQueryName, TraceScope
+from litellm.rust_bridge.trace.storage import RawJson
 
 MAX_RESPONSE_BYTES: Final = 64 * 1024 * 1024
-_JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -69,7 +67,6 @@ class _ReadFailure(Enum):
     QUERY_TOO_LARGE = "query_too_large"
     UNAVAILABLE = "unavailable"
     RESPONSE_TOO_LARGE = "response_too_large"
-    INVALID_RESPONSE = "invalid_response"
 
 
 def _raise_read_failure(failure: _ReadFailure) -> NoReturn:
@@ -84,8 +81,6 @@ def _raise_read_failure(failure: _ReadFailure) -> NoReturn:
             raise RuntimeError("Lens trace storage is unavailable")
         case _ReadFailure.RESPONSE_TOO_LARGE:
             raise RuntimeError("Lens response exceeds the size limit")
-        case _ReadFailure.INVALID_RESPONSE:
-            raise ValueError("Invalid Lens response")
         case _:
             assert_never(failure)
 
@@ -97,13 +92,13 @@ class RemoteTraceStore:
     async def ensure_schema(self) -> None:
         return
 
-    async def _read(self, request: Mapping[str, object]) -> JsonValue:
+    async def _read(self, request: Mapping[str, object]) -> RawJson:
         result: Final = await self._read_result(request)
         if isinstance(result, _ReadFailure):
             _raise_read_failure(result)
         return result
 
-    async def _read_result(self, request: Mapping[str, object]) -> JsonValue | _ReadFailure:
+    async def _read_result(self, request: Mapping[str, object]) -> RawJson | _ReadFailure:
         try:
             async with self.client.stream("POST", "/internal/read", json=dict(request)) as response:
                 match response.status_code:
@@ -114,15 +109,13 @@ class RemoteTraceStore:
                     case 413:
                         return _ReadFailure.QUERY_TOO_LARGE
                     case 200:
-                        return _JSON.validate_json(await bounded_response(response, MAX_RESPONSE_BYTES))
+                        return RawJson(await bounded_response(response, MAX_RESPONSE_BYTES))
                     case _:
                         return _ReadFailure.UNAVAILABLE
         except httpx.HTTPError:
             return _ReadFailure.UNAVAILABLE
         except RuntimeError:
             return _ReadFailure.RESPONSE_TOO_LARGE
-        except ValueError:
-            return _ReadFailure.INVALID_RESPONSE
 
     async def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> None:
         if table != "spend_logs":
@@ -137,7 +130,7 @@ class RemoteTraceStore:
 
     async def list_traces(
         self, scope: TraceScope, start_ms: int, end_ms: int, cursor: str | None, limit: int
-    ) -> JsonValue:
+    ) -> RawJson:
         return await self._read(
             {
                 "operation": "list",
@@ -151,7 +144,7 @@ class RemoteTraceStore:
 
     async def get_trace(
         self, trace_id: str, scope: TraceScope, trace_ref: str, cursor: str | None = None, page_size: int | None = None
-    ) -> JsonValue:
+    ) -> RawJson:
         return await self._read(
             {
                 "operation": "trace",
@@ -163,7 +156,7 @@ class RemoteTraceStore:
             }
         )
 
-    async def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str) -> JsonValue:
+    async def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str) -> RawJson:
         return await self._read(
             {
                 "operation": "span",
@@ -176,7 +169,7 @@ class RemoteTraceStore:
 
     async def get_span_error(
         self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str, cursor: str | None
-    ) -> JsonValue:
+    ) -> RawJson:
         return await self._read(
             {
                 "operation": "span_error",
@@ -188,14 +181,14 @@ class RemoteTraceStore:
             }
         )
 
-    async def query_sql(self, sql: str, scope: QueryScope, secret: str) -> str:
-        return json.dumps(await self._read({"operation": "sql", "sql": sql, "scope": scope}))
+    async def query_sql(self, sql: str, scope: QueryScope, secret: str) -> RawJson:
+        return await self._read({"operation": "sql", "sql": sql, "scope": scope})
 
-    async def query_help(self, scope: QueryScope, secret: str) -> JsonValue:
+    async def query_help(self, scope: QueryScope, secret: str) -> RawJson:
         return await self._read({"operation": "help", "scope": scope})
 
-    async def query(self, name: ReadQueryName, parameters: Mapping[str, str | int | float | Sequence[str]]) -> str:
-        return json.dumps(await self._read({"operation": "query", "name": name, "parameters": dict(parameters)}))
+    async def query(self, name: ReadQueryName, parameters: Mapping[str, str | int | float | Sequence[str]]) -> RawJson:
+        return await self._read({"operation": "query", "name": name, "parameters": dict(parameters)})
 
 
 async def bounded_response(response: httpx.Response, limit: int) -> bytes:

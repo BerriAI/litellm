@@ -5,7 +5,9 @@ from functools import partial
 from typing import TYPE_CHECKING, Annotated, Final, TypeAlias
 
 from fastapi import Depends
+from pydantic import TypeAdapter
 
+from litellm.constants import PERMITTED_LOG_TEAMS_CACHE_TTL
 from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
 from litellm.proxy.auth.authorization import permitted_log_team_ids
 
@@ -16,6 +18,12 @@ if TYPE_CHECKING:
 
 LogTeamLookup: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[tuple[str, ...]]]
 
+_TEAM_IDS: Final = TypeAdapter(tuple[str, ...])
+
+
+def _permitted_log_teams_cache_key(user_id: str) -> str:
+    return f"permitted_log_team_ids:{user_id}"
+
 
 async def load_permitted_log_team_ids(
     auth: UserAPIKeyAuth,
@@ -24,11 +32,29 @@ async def load_permitted_log_team_ids(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
 ) -> tuple[str, ...]:
+    if prisma_client is None or auth.user_id is None:
+        return ()
+    cache_key: Final = _permitted_log_teams_cache_key(auth.user_id)
+    cached: Final = await user_api_key_cache.async_get_cache(cache_key, local_only=True)
+    if cached is not None:
+        return _TEAM_IDS.validate_python(cached)
+    team_ids: Final = await _query_permitted_log_team_ids(
+        auth, prisma_client=prisma_client, user_api_key_cache=user_api_key_cache, proxy_logging_obj=proxy_logging_obj
+    )
+    await user_api_key_cache.async_set_cache(cache_key, team_ids, local_only=True, ttl=PERMITTED_LOG_TEAMS_CACHE_TTL)
+    return team_ids
+
+
+async def _query_permitted_log_team_ids(
+    auth: UserAPIKeyAuth,
+    *,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> tuple[str, ...]:
     from litellm.proxy.auth.auth_checks import get_user_object
     from litellm.repositories.team_repository import TeamRepository
 
-    if prisma_client is None:
-        return ()
     user_obj: Final = await get_user_object(
         user_id=auth.user_id,
         prisma_client=prisma_client,

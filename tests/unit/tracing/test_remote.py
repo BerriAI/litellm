@@ -5,10 +5,10 @@ from typing import Final
 
 import httpx
 import pytest
-from pydantic import JsonValue
 
 from litellm.rust_bridge.trace.errors import TraceChanged
 from litellm.rust_bridge.trace.generated.types import AllQueryScope, TraceScope
+from litellm.rust_bridge.trace.storage import ClickHouseStorage, RawJson
 from litellm.tracing.remote import LensConnection, RemoteTraceStore, bounded_response
 
 
@@ -32,7 +32,7 @@ def test_connection_requires_a_strong_secret_and_preserves_the_configured_prefix
 
 async def _read_case(
     store: RemoteTraceStore, operation: str, scope: TraceScope, query_scope: AllQueryScope
-) -> tuple[JsonValue, Mapping[str, object]]:
+) -> tuple[RawJson, Mapping[str, object]]:
     match operation:
         case "list":
             return (
@@ -83,7 +83,7 @@ async def _read_case(
             )
         case "sql":
             return (
-                json.loads(await store.query_sql("SELECT 1", query_scope, "unused-local-secret")),
+                await store.query_sql("SELECT 1", query_scope, "unused-local-secret"),
                 {"operation": operation, "scope": query_scope, "sql": "SELECT 1"},
             )
         case "help":
@@ -93,7 +93,7 @@ async def _read_case(
             )
         case _:
             return (
-                json.loads(await store.query("lens_sample", {"source": "traces"})),
+                await store.query("lens_sample", {"source": "traces"}),
                 {"operation": operation, "name": "lens_sample", "parameters": {"source": "traces"}},
             )
 
@@ -107,7 +107,7 @@ async def test_remote_reads_preserve_scope_and_pagination(operation: str) -> Non
 
     def accept(request: httpx.Request) -> httpx.Response:
         requests.put_nowait(request)
-        return httpx.Response(200, json={"data": [{"value": "safe"}]})
+        return httpx.Response(200, content=b'{"data": [{"value": "safe"}]}')
 
     async with httpx.AsyncClient(base_url="http://lens/prefix/", transport=httpx.MockTransport(accept)) as client:
         store: Final = RemoteTraceStore(client)
@@ -115,7 +115,7 @@ async def test_remote_reads_preserve_scope_and_pagination(operation: str) -> Non
         request: Final = requests.get_nowait()
         assert request.url.path == "/prefix/internal/read"
         assert json.loads(request.content) == json.loads(json.dumps(expected))
-        assert result == {"data": [{"value": "safe"}]}
+        assert result == RawJson(b'{"data": [{"value": "safe"}]}')
         assert b"unused-local-secret" not in request.content
 
 
@@ -154,8 +154,8 @@ async def test_reads_reject_oversized_responses_and_invalid_json() -> None:
     async with httpx.AsyncClient(
         base_url="http://lens", transport=httpx.MockTransport(lambda request: httpx.Response(200, content=b"{"))
     ) as client:
-        with pytest.raises(ValueError, match="Invalid Lens response"):
-            await RemoteTraceStore(client).query_help(AllQueryScope(kind="all"), "secret")
+        with pytest.raises(RuntimeError, match="invalid response"):
+            await ClickHouseStorage(RemoteTraceStore(client)).query_help(AllQueryScope(kind="all"), "secret")
 
 
 @pytest.mark.asyncio

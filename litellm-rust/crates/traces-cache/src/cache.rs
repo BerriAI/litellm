@@ -2,7 +2,7 @@ use std::{future::Future, sync::Arc, time::Duration};
 
 use litellm_traces::{
     Trace, TraceSummary,
-    query::named::{ReadAccessParams, TraceSpansRow},
+    query::named::{ReadAccessParams, SpanDetailRow, TraceSpansRow},
 };
 use moka::{Expiry, future::Cache};
 use serde::Serialize;
@@ -12,8 +12,9 @@ use crate::Error;
 
 pub const LIVE_TTL: Duration = Duration::from_secs(5);
 pub const SETTLED_TTL: Duration = Duration::from_secs(10 * 60);
-const SETTLED_AFTER_MS: u64 = 5 * 60 * 1000;
+pub const QUIET_PERIOD: Duration = Duration::from_secs(5 * 60);
 const MAX_INDEX_ENTRIES: u64 = 100_000;
+const MAX_SPAN_DETAIL_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, Eq, Hash, PartialEq)]
 pub struct SnapshotKey(String);
@@ -56,10 +57,31 @@ impl SnapshotKey {
     pub(crate) fn scope(source: &str, access: &ReadAccessParams) -> Result<Self, Error> {
         Self::digest(&("scope", source, access))
     }
+
+    pub(crate) fn identity(
+        source: &str,
+        access: &ReadAccessParams,
+        trace_id: &str,
+    ) -> Result<Self, Error> {
+        Self::digest(&("identity", source, access, trace_id))
+    }
+
+    pub(crate) fn span(
+        latest: &Self,
+        served: Option<ServedSnapshot>,
+        span_id: &str,
+    ) -> Result<Self, Error> {
+        Self::digest(&(
+            "span",
+            &latest.0,
+            served.map(|served| served.snapshot_ms),
+            span_id,
+        ))
+    }
 }
 
-/// Native sessions can resume without a terminal record, so their reads retain `LIVE_TTL`.
-/// Other traces with known spend settle after `SETTLED_AFTER_MS` of inactivity.
+/// A trace with known spend settles once no span has ended for `QUIET_PERIOD`, whatever framework
+/// emitted it. A session that resumes later shows its new spans once `SETTLED_TTL` expires.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Freshness {
     Live,
@@ -68,12 +90,6 @@ pub enum Freshness {
 
 impl Freshness {
     pub fn of(rows: &[TraceSpansRow], spend_known: bool, snapshot_ms: u64) -> Self {
-        if rows
-            .iter()
-            .any(|row| matches!(row.framework.as_str(), "claude-code" | "claude-agent-sdk"))
-        {
-            return Self::Live;
-        }
         let last_end_ms = rows
             .iter()
             .map(|row| row.start_ns.saturating_add_unsigned(row.duration_ns) / 1_000_000)
@@ -82,7 +98,8 @@ impl Freshness {
         let quiet_ms = i64::try_from(snapshot_ms)
             .unwrap_or(i64::MAX)
             .saturating_sub(last_end_ms);
-        if spend_known && quiet_ms >= SETTLED_AFTER_MS as i64 {
+        let quiet_period_ms = i64::try_from(QUIET_PERIOD.as_millis()).unwrap_or(i64::MAX);
+        if spend_known && quiet_ms >= quiet_period_ms {
             Self::Settled
         } else {
             Self::Live
@@ -136,12 +153,18 @@ impl Snapshot {
 }
 
 #[derive(Clone, Copy)]
-struct Latest {
+pub(crate) struct ServedSnapshot {
     snapshot_ms: u64,
     freshness: Freshness,
 }
 
-impl Fresh for Latest {
+impl ServedSnapshot {
+    pub(crate) fn freshness(self) -> Freshness {
+        self.freshness
+    }
+}
+
+impl Fresh for ServedSnapshot {
     fn freshness(&self) -> Freshness {
         self.freshness
     }
@@ -151,7 +174,7 @@ impl Fresh for Latest {
 /// currently serves so repeated opens reuse one read until its freshness expires.
 pub struct SnapshotCache {
     pinned: Cache<SnapshotKey, Arc<Snapshot>>,
-    latest: Cache<SnapshotKey, Latest>,
+    latest: Cache<SnapshotKey, ServedSnapshot>,
     max_graph_bytes: usize,
 }
 
@@ -212,7 +235,7 @@ impl SnapshotCache {
             .latest
             .try_get_with(latest, async {
                 let snapshot = load_at(now_ms).await?;
-                Ok::<_, Arc<E>>(Latest {
+                Ok::<_, Arc<E>>(ServedSnapshot {
                     snapshot_ms: snapshot.snapshot_ms,
                     freshness: snapshot.freshness,
                 })
@@ -220,6 +243,10 @@ impl SnapshotCache {
             .await
             .map_err(|error| Arc::clone(&*error))?;
         load_at(entry.snapshot_ms).await
+    }
+
+    pub(crate) async fn served(&self, latest: &SnapshotKey) -> Option<ServedSnapshot> {
+        self.latest.get(latest).await
     }
 
     fn snapshot(
@@ -284,6 +311,52 @@ impl ListCache {
             limits: Cache::builder()
                 .max_capacity(MAX_INDEX_ENTRIES)
                 .time_to_live(SETTLED_TTL)
+                .build(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct CachedSpan {
+    pub(crate) row: SpanDetailRow,
+    pub(crate) freshness: Freshness,
+}
+
+impl Fresh for CachedSpan {
+    fn freshness(&self) -> Freshness {
+        self.freshness
+    }
+}
+
+fn span_weight(span: &CachedSpan) -> u32 {
+    let row = &span.row;
+    let attributes: usize = row
+        .attributes
+        .iter()
+        .map(|(key, value)| key.len() + value.len())
+        .sum();
+    let bytes = row.span_id.len() + row.input.len() + row.output.len() + attributes;
+    u32::try_from(bytes.max(1)).unwrap_or(u32::MAX)
+}
+
+/// Resolved trace references, which never change once a trace exists, and span details keyed by
+/// the snapshot the trace currently serves, so they refresh whenever that snapshot does.
+pub(crate) struct SpanCache {
+    pub(crate) identities: Cache<SnapshotKey, String>,
+    pub(crate) details: Cache<SnapshotKey, CachedSpan>,
+}
+
+impl SpanCache {
+    pub(crate) fn new() -> Self {
+        Self {
+            identities: Cache::builder()
+                .max_capacity(MAX_INDEX_ENTRIES)
+                .time_to_live(SETTLED_TTL)
+                .build(),
+            details: Cache::builder()
+                .max_capacity(MAX_SPAN_DETAIL_BYTES)
+                .weigher(|_: &SnapshotKey, span: &CachedSpan| span_weight(span))
+                .expire_after(ByFreshness)
                 .build(),
         }
     }
@@ -386,12 +459,13 @@ mod tests {
     }
 
     const LAST_END_MS: u64 = 1_790_742_989_010;
+    const QUIET_MS: u64 = QUIET_PERIOD.as_millis() as u64;
 
     #[rstest]
     #[case::just_ended(LAST_END_MS, true, Freshness::Live)]
-    #[case::quiet_just_under(LAST_END_MS + SETTLED_AFTER_MS - 1, true, Freshness::Live)]
-    #[case::quiet_long_enough(LAST_END_MS + SETTLED_AFTER_MS, true, Freshness::Settled)]
-    #[case::spend_unknown(LAST_END_MS + SETTLED_AFTER_MS, false, Freshness::Live)]
+    #[case::quiet_just_under(LAST_END_MS + QUIET_MS - 1, true, Freshness::Live)]
+    #[case::quiet_long_enough(LAST_END_MS + QUIET_MS, true, Freshness::Settled)]
+    #[case::spend_unknown(LAST_END_MS + QUIET_MS, false, Freshness::Live)]
     fn freshness_settles_once_spans_stop_and_spend_is_known(
         #[case] snapshot_ms: u64,
         #[case] spend_known: bool,
@@ -404,16 +478,22 @@ mod tests {
     }
 
     #[rstest]
-    #[case::claude_code("claude-code")]
-    #[case::claude_agent_sdk("claude-agent-sdk")]
-    fn idle_native_sessions_remain_live(#[case] framework: &str) {
+    #[case::claude_code("claude-code", LAST_END_MS + QUIET_MS - 1, Freshness::Live)]
+    #[case::claude_code_quiet("claude-code", LAST_END_MS + QUIET_MS, Freshness::Settled)]
+    #[case::claude_agent_sdk("claude-agent-sdk", LAST_END_MS + QUIET_MS - 1, Freshness::Live)]
+    #[case::claude_agent_sdk_quiet("claude-agent-sdk", LAST_END_MS + QUIET_MS, Freshness::Settled)]
+    fn native_sessions_settle_after_the_same_quiet_period(
+        #[case] framework: &str,
+        #[case] snapshot_ms: u64,
+        #[case] expected: Freshness,
+    ) {
         let native = TraceSpansRow {
             framework: framework.into(),
             ..row("native")
         };
         assert_eq!(
-            Freshness::of(&[row("root"), native], true, LAST_END_MS + SETTLED_AFTER_MS),
-            Freshness::Live
+            Freshness::of(&[row("root"), native], true, snapshot_ms),
+            expected
         );
     }
 }
