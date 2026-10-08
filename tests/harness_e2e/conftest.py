@@ -64,7 +64,7 @@ def harness_params() -> list:
                 not harness_available(h), reason=f"{h.value} runtime not installed"
             ),
         )
-        for h in Harness
+        for h in DEFAULT_MODEL_GROUPS
     ]
 
 
