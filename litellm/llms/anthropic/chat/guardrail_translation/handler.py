@@ -1237,8 +1237,10 @@ class AnthropicMessagesHandler(BaseTranslation):
         returned_tool_calls: Sequence[object] | None,
         guardrail_name: str | None,
     ) -> None:
-        if returned_tool_calls is None or len(returned_tool_calls) != len(pre_guardrail_tool_calls):
+        if returned_tool_calls is None:
             return
+        if len(returned_tool_calls) != len(pre_guardrail_tool_calls):
+            raise unappliable_request_rewrite(guardrail_name)
         post_guardrail_tool_calls: Final = _tool_call_shapes(returned_tool_calls)
         tool_use_blocks: Final = tuple(
             block
