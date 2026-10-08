@@ -2060,6 +2060,71 @@ async def test_real_router_selection_keeps_origin_reasoning_and_strips_foreign_o
 
 
 @pytest.mark.asyncio
+async def test_affinity_pin_yields_to_the_fallback_hops_target_order_and_strips_the_origins_reasoning():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {
+                    "model": "openai/gpt-6-astra",
+                    "api_base": "https://api.openai.com/v1",
+                    "api_key": "key-openai",
+                    "order": 1,
+                },
+                "model_info": {"id": "dep-openai"},
+            },
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {
+                    "model": "bedrock_mantle/openai.gpt-6-astra",
+                    "api_base": "https://bedrock-mantle.us-east-1.api.aws",
+                    "api_key": "key-mantle",
+                    "order": 2,
+                },
+                "model_info": {"id": "dep-mantle"},
+            },
+        ],
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
+    )
+    openai_wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("blob-openai", "dep-openai")
+
+    def history() -> list:
+        return [
+            {"type": "message", "role": "user", "content": "first question"},
+            {
+                "type": "reasoning",
+                "encrypted_content": openai_wrapped,
+                "summary": [{"type": "summary_text", "text": "openai summary"}],
+            },
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "first answer"}]},
+            {"type": "message", "role": "user", "content": "second question"},
+        ]
+
+    try:
+        first_attempt = {"input": history(), "store": False}
+        pinned = await router.async_get_available_deployment(
+            model="gpt-6-astra", request_kwargs=first_attempt, input=first_attempt["input"]
+        )
+        assert pinned["model_info"]["id"] == "dep-openai"
+        assert first_attempt["input"] == history()
+
+        hop = {"input": history(), "store": False, "_target_order": 2, "fallback_depth": 1}
+        hop_deployment = await router.async_get_available_deployment(
+            model="gpt-6-astra", request_kwargs=hop, input=hop["input"]
+        )
+        assert hop_deployment["model_info"]["id"] == "dep-mantle"
+        assert hop["input"] == [
+            {"type": "message", "role": "user", "content": "first question"},
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "openai summary"}]},
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "first answer"}]},
+            {"type": "message", "role": "user", "content": "second question"},
+        ]
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
 async def test_affinity_keeps_mixed_origins_on_the_same_encryption_boundary():
     from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
         EncryptedContentAffinityCheck,

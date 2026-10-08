@@ -4724,6 +4724,88 @@ async def test_aresponses_streaming_iterator_fallback():
 
 
 @pytest.mark.asyncio
+async def test_aresponses_mid_stream_order_fallback_hop_drops_the_encrypted_reasoning_the_next_provider_cannot_decrypt():
+    """A Codex-style multi-turn history replays the order-1 provider's encrypted reasoning. When that
+    provider's stream breaks before its first output chunk, the order-2 hop must not replay reasoning
+    the next provider cannot decrypt; the readable summary stays."""
+    inputs_by_provider: Final[dict[str, list]] = {}
+
+    def history() -> list:
+        return [
+            {"type": "message", "role": "user", "content": "What is 17*23?"},
+            {
+                "type": "reasoning",
+                "id": "rs_order1",
+                "encrypted_content": "gAAAAA-minted-by-order-1",
+                "summary": [{"type": "summary_text", "text": "multiply 17 by 23"}],
+            },
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "391"}]},
+            {"type": "message", "role": "user", "content": "And 19*21?"},
+        ]
+
+    async def _handler(**handler_kwargs):
+        provider: Final = handler_kwargs["custom_llm_provider"]
+        inputs_by_provider[provider] = copy.deepcopy(handler_kwargs["input"])
+        if provider == "openai":
+            return _make_responses_iterator(
+                chunks=[MagicMock(type="response.created"), MagicMock(type="response.in_progress")],
+                error=MidStreamFallbackError(
+                    message="The server had an error while processing your request",
+                    model="gpt-6-astra",
+                    llm_provider="openai",
+                    original_exception=litellm.InternalServerError(
+                        message="server_error", llm_provider="openai", model="gpt-6-astra"
+                    ),
+                    generated_content="",
+                    is_pre_first_chunk=True,
+                ),
+                model="gpt-6-astra",
+                hidden_params={"model_id": "openai-order-1"},
+            )
+        return _make_responses_iterator(
+            chunks=[MagicMock(type="response.created"), MagicMock(type="response.completed")],
+            model="openai.gpt-6-astra",
+            hidden_params={"model_id": "mantle-order-2"},
+        )
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra", "api_key": "openai-key", "order": 1},
+                "model_info": {"id": "openai-order-1"},
+            },
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {
+                    "model": "bedrock_mantle/openai.gpt-6-astra",
+                    "api_key": "mantle-bearer-token",
+                    "aws_region_name": "us-east-1",
+                    "order": 2,
+                },
+                "model_info": {"id": "mantle-order-2"},
+            },
+        ],
+        num_retries=0,
+    )
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+        new=AsyncMock(side_effect=_handler),
+    ):
+        stream = await router.aresponses(model="gpt-6-astra", input=history(), store=False, stream=True)
+        collected = [event async for event in stream]
+
+    assert [event.type for event in collected] == ["response.created", "response.completed"]
+    assert inputs_by_provider["openai"] == history()
+    assert inputs_by_provider["bedrock_mantle"] == [
+        {"type": "message", "role": "user", "content": "What is 17*23?"},
+        {"type": "reasoning", "summary": [{"type": "summary_text", "text": "multiply 17 by 23"}]},
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "391"}]},
+        {"type": "message", "role": "user", "content": "And 19*21?"},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_aresponses_streaming_content_policy_error_event_routes_to_content_policy_fallback():
     """Regression: a mid-stream content_policy_violation error event never reached
     content_policy_fallbacks. The iterator raised a bare APIError the wrapper does not
