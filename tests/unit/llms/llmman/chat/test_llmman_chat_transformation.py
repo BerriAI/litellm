@@ -30,7 +30,7 @@ ENV: Final = {
 )
 def test_get_openai_compatible_provider_info(api_base, api_key, env, expected_base, expected_key):
     with patch.dict("os.environ", env, clear=True):
-        assert LlmmanChatConfig()._get_openai_compatible_provider_info(api_base, api_key) == (
+        assert LlmmanChatConfig().get_openai_compatible_provider_info(api_base, api_key) == (
             expected_base,
             expected_key,
         )

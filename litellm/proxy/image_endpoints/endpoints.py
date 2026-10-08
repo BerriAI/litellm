@@ -1,6 +1,8 @@
 import asyncio
 import io
 from collections.abc import Sequence
+from itertools import chain
+from types import MappingProxyType
 from typing import Final, get_type_hints
 
 import orjson
@@ -36,6 +38,7 @@ from litellm.types.llms.openai import ChatCompletionUserMessage
 router: Final = APIRouter()
 
 IMAGE_EDIT_NUMERIC_FORM_FIELDS: Final = numeric_form_fields(get_type_hints(ImageEditRequestParams))
+IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS: Final = MappingProxyType({"prompt": None, "image": None})
 
 IMAGE_ARRAY_FIELD: Final = "image[]"
 MASK_ARRAY_FIELD: Final = "mask[]"
@@ -256,7 +259,7 @@ async def image_edit_api(
     curl -s -D >(grep -i x-request-id >&2) \
     -o >(jq -r '.data[0].b64_json' | base64 --decode > gift-basket.png) \
     -X POST "http://localhost:4000/v1/images/edits" \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -F "model=gpt-image-1" \
         -F "image[]=@soap.png" \
         -F 'prompt=Create a studio ghibli image of this'
@@ -294,12 +297,13 @@ async def image_edit_api(
     #########################################################
     # Read request body and convert UploadFiles to BytesIO
     #########################################################
+    form_fields: Final = coerce_numeric_form_fields(
+        parsed_body=await _read_request_body(request=request),
+        numeric_fields=IMAGE_EDIT_NUMERIC_FORM_FIELDS,
+    )
     data: Final = {
         key: value
-        for key, value in coerce_numeric_form_fields(
-            parsed_body=await _read_request_body(request=request),
-            numeric_fields=IMAGE_EDIT_NUMERIC_FORM_FIELDS,
-        ).items()
+        for key, value in chain(IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS.items(), form_fields.items())
         if key not in BRACKETED_FILE_FIELDS
     }
     image_files: Final = await batch_to_bytesio(image)
@@ -315,10 +319,6 @@ async def image_edit_api(
                 status_code=422,
                 detail=f"'{_field}' must be provided as a multipart file upload, not a string.",
             )
-
-    # Ensure prompt exists in data (default to None for models that don't require it)
-    if "prompt" not in data:
-        data["prompt"] = None
 
     #########################################################
     # Process request

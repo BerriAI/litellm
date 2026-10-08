@@ -14,13 +14,11 @@ import time
 # this file is to test litellm/proxy
 
 import asyncio
-import logging
 
 load_dotenv()
 
 import pytest
 import litellm
-from litellm._logging import verbose_proxy_logger
 
 from litellm.proxy.proxy_server import (
     LitellmUserRoles,
@@ -35,7 +33,6 @@ from litellm.proxy.proxy_server import (
 
 from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
 
-verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
 from starlette.datastructures import URL
 
@@ -49,6 +46,7 @@ from unittest.mock import patch, AsyncMock
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 import json
+from tests._master_key import MASTER_KEY
 
 
 def test_get_audit_log_changed_by_prefers_authenticated_user():
@@ -230,7 +228,7 @@ async def test_create_audit_log_in_db(prisma_client):
     print("prisma client=", prisma_client)
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm.proxy.proxy_server, "premium_user", True)
     setattr(litellm, "store_audit_logs", True)
 

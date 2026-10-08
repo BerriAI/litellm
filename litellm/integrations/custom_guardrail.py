@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, get_a
 
 import httpx
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
@@ -23,6 +24,7 @@ from litellm.types.guardrails import (
     DynamicGuardrailParams,
     GuardrailEventHooks,
     LitellmParams,
+    LoggingOnlyScope,
     Mode,
 )
 from litellm.types.llms.openai import AllMessageValues
@@ -54,6 +56,8 @@ from litellm.exceptions import (
     ModifyResponseException,
     SensitiveDataRouteException,
 )
+
+GUARDRAIL_SESSIONS_TARGET: Final = "guardrail_sessions"
 
 # Per-process secret tagging each recorded marker. The deployment hook only
 # honors markers carrying this token, so a caller cannot forge the metadata
@@ -177,6 +181,7 @@ class CustomGuardrail(CustomLogger):
     use_native_lifecycle_hooks: ClassVar[bool] = False
 
     records_own_guardrail_information: ClassVar[bool] = False
+    logging_only_scope: LoggingOnlyScope | None
 
     timeout: float | httpx.Timeout | None = None
 
@@ -253,6 +258,7 @@ class CustomGuardrail(CustomLogger):
         self.run_in_parallel: bool = run_in_parallel
         self.scan_raw_request: bool = scan_raw_request
         self.only_scan_new_messages: bool = only_scan_new_messages
+        self.logging_only_scope = None
         if timeout is not None:
             self.timeout = timeout
 
@@ -372,7 +378,7 @@ class CustomGuardrail(CustomLogger):
             land and degrade to blocking instead of silently letting the
             flagged request through unmodified.
         """
-        advisory_message: Final = {"role": "system", "content": message}  # mutable-ok: plain dict for live request
+        advisory_message: Final = {"role": "system", "content": message}
         existing_messages: Final = data.get("messages")
         existing_input: Final = data.get("input")
         existing_instructions: Final = data.get("instructions")
@@ -383,7 +389,7 @@ class CustomGuardrail(CustomLogger):
             # model to disregard a trailing warning. Prefer it over "input"
             # whenever present.
             if isinstance(existing_messages, list):
-                messages_with_instructions_note: Final = [  # mutable-ok: fresh list
+                messages_with_instructions_note: Final = [
                     *existing_messages,
                     advisory_message,
                 ]
@@ -395,7 +401,7 @@ class CustomGuardrail(CustomLogger):
             # real, read field (e.g. a chat-completions call carrying a stray
             # "input"), so write to both when both are present.
             if isinstance(existing_messages, list):
-                messages_with_input_note: Final = [*existing_messages, advisory_message]  # mutable-ok: fresh list
+                messages_with_input_note: Final = [*existing_messages, advisory_message]
                 data["messages"] = messages_with_input_note  # rebind-ok: mutates caller's dict by design
             # The Responses API reads "input", not "messages" -- appending only to
             # "messages" would leave the advisory unreachable for that endpoint.
@@ -409,10 +415,10 @@ class CustomGuardrail(CustomLogger):
             # non-delivery so the caller degrades to blocking.
             return False
         if isinstance(existing_messages, list):
-            messages_without_input_note: Final = [*existing_messages, advisory_message]  # mutable-ok: fresh list
+            messages_without_input_note: Final = [*existing_messages, advisory_message]
             data["messages"] = messages_without_input_note  # rebind-ok: mutates caller's dict by design
             return True
-        sole_message: Final = [advisory_message]  # mutable-ok: plain list for the live JSON request
+        sole_message: Final = [advisory_message]
         data["messages"] = sole_message  # rebind-ok: mutates caller's dict by design
         return True
 
@@ -474,6 +480,7 @@ class CustomGuardrail(CustomLogger):
     def _scanned_texts_cache_key(self, session_id: str) -> str:
         return f"guardrail_scanned_texts:{self.guardrail_name}:{session_id}"
 
+    @with_service_target(GUARDRAIL_SESSIONS_TARGET)
     async def filter_new_texts_for_session(
         self,
         texts: list[str] | None,
@@ -518,6 +525,7 @@ class CustomGuardrail(CustomLogger):
         seen: Final[set[str]] = {str(h) for h in cached} if isinstance(cached, list) else set()
         return [text for text in texts if self._scanned_text_hash(text) not in seen]
 
+    @with_service_target(GUARDRAIL_SESSIONS_TARGET)
     async def mark_texts_scanned(
         self,
         texts: list[str] | None,
@@ -812,6 +820,13 @@ class CustomGuardrail(CustomLogger):
     def uses_apply_guardrail_interface(self) -> bool:
         return type(self).apply_guardrail is not CustomGuardrail.apply_guardrail
 
+    @classmethod
+    def supports_logging_only_scope(cls) -> bool:
+        return (
+            cls.apply_guardrail is not CustomGuardrail.apply_guardrail
+            and cls.async_logging_hook is CustomGuardrail.async_logging_hook
+        )
+
     def _deployment_hook_target(self) -> "CustomLogger":
         if not self.uses_apply_guardrail_interface() or self.use_native_lifecycle_hooks:
             return self
@@ -943,7 +958,7 @@ class CustomGuardrail(CustomLogger):
         result: object,
         call_type: str,
     ) -> tuple[dict, object]:  # mutable-ok: CustomLogger.async_logging_hook contract
-        """logging_only: run apply_guardrail on copies of the logged request/response and record the verdict."""
+        """logging_only: scan copies of the logged request and/or response according to logging_only_scope."""
         from litellm.llms import get_guardrail_translation_mapping
 
         if not self.uses_apply_guardrail_interface():
@@ -990,6 +1005,28 @@ class CustomGuardrail(CustomLogger):
             "standard_logging_object": {**standard_logging_object, "guardrail_information": [*existing, *entries]},
         }, result
 
+    def _copy_scratch_request_fields(
+        self,
+        kwargs: Mapping[str, object],
+    ) -> tuple[object, object] | None:
+        optional_params: Final = kwargs.get("optional_params")
+        try:
+            return (
+                copy.deepcopy(kwargs.get("messages") or kwargs.get("input")),
+                copy.deepcopy(optional_params.get("tools") if isinstance(optional_params, Mapping) else None),
+            )
+        except Exception as e:
+            if self.logging_only_scope == "output":
+                return None
+            if self.logging_only_scope == "both":
+                verbose_logger.warning(
+                    "Guardrail %s: logging_only request copy failed, skipping request scan: %s",
+                    self.guardrail_name,
+                    e,
+                )
+                return None
+            raise
+
     async def _scan_logged_call(
         self,
         kwargs: dict,  # mutable-ok: CustomLogger.async_logging_hook contract
@@ -998,18 +1035,25 @@ class CustomGuardrail(CustomLogger):
         output_translation: "BaseTranslation",
         scratch_metadata: dict,  # mutable-ok: apply_guardrail records its verdict into request metadata
     ) -> None:
-        optional_params: Final = kwargs.get("optional_params") or {}
-        scratch_input: Final = copy.deepcopy(kwargs.get("messages") or kwargs.get("input"))
+        scratch_fields: Final = self._copy_scratch_request_fields(kwargs)
+        scratch_input, scratch_tools = scratch_fields or (None, None)
         scratch_request: Final = {
             "model": kwargs.get("model"),
             "messages": scratch_input,
             "input": scratch_input,
-            "tools": copy.deepcopy(optional_params.get("tools")),
+            "tools": scratch_tools,
             "litellm_call_id": kwargs.get("litellm_call_id"),
             "metadata": scratch_metadata,
         }
-        await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
-        if response is None:
+        if self.logging_only_scope != "output" and scratch_fields is not None:
+            if self.logging_only_scope == "both":
+                try:
+                    await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
+                except Exception as e:  # noqa: BLE001  # one direction's scan failure must not drop the other direction's verdict
+                    verbose_logger.warning("Guardrail %s: logging_only scan raised: %s", self.guardrail_name, e)
+            else:
+                await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
+        if response is None or self.logging_only_scope == "input":
             return
         await output_translation.process_output_response(
             response=copy.deepcopy(response), guardrail_to_apply=self, request_data=scratch_request

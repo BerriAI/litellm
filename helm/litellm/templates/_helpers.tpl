@@ -471,6 +471,24 @@ Directory of the collector's unix socket, shared by the gateway and
 collector containers through an emptyDir. Empty when the sidecar is off
 or gateway.collector.address is a tcp://127.0.0.1:<port> address.
 */}}
+{{- define "litellm.lensWorker.image" -}}
+{{- if .Values.lensWorker.image.digest -}}
+{{- if not (regexMatch "^sha256:[0-9a-f]{64}$" .Values.lensWorker.image.digest) -}}
+{{- fail "lensWorker.image.digest must be sha256 followed by 64 lowercase hex characters" -}}
+{{- end -}}
+{{- printf "%s@%s" .Values.lensWorker.image.repository .Values.lensWorker.image.digest -}}
+{{- else -}}
+{{- $backendTag := .Values.backend.image.tag | default .Chart.AppVersion -}}
+{{- $releaseTag := ternary (printf "v%s" $backendTag) $backendTag (regexMatch "^[0-9]" $backendTag) -}}
+{{- $tag := .Values.lensWorker.image.tag | default $releaseTag -}}
+{{- $repository := .Values.lensWorker.image.repository -}}
+{{- if and (hasPrefix "sha-" $tag) (eq $repository "ghcr.io/berriai/litellm-lens-worker") -}}
+{{- $repository = "ghcr.io/berriai/litellm-lens-worker-dev" -}}
+{{- end -}}
+{{- printf "%s:%s" $repository $tag -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "litellm.gateway.collectorSocketDir" -}}
 {{- if and .Values.gateway.collector.enabled (hasPrefix "unix://" .Values.gateway.collector.address) -}}
 {{- dir (trimPrefix "unix://" .Values.gateway.collector.address) -}}
@@ -495,4 +513,24 @@ shutdown drain window.
 - name: LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS
   value: {{ .drainTimeoutSeconds | quote }}
 {{- end }}
+{{- end -}}
+
+{{- define "litellm.lensConnectionEnv" -}}
+{{- if .Values.lensWorker.enabled }}
+- name: LITELLM_LENS_URL
+  value: {{ printf "http://%s-lens-worker:%v" (include "litellm.fullname" .) .Values.lensWorker.service.port | quote }}
+- name: LITELLM_LENS_PUBLIC_URL
+  value: {{ required "lensWorker.publicUrl is required" .Values.lensWorker.publicUrl | quote }}
+- name: LITELLM_LENS_SERVICE_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: {{ required "lensWorker.serviceTokenSecret.name is required" .Values.lensWorker.serviceTokenSecret.name | quote }}
+      key: {{ .Values.lensWorker.serviceTokenSecret.key | quote }}
+{{- end }}
+{{- end -}}
+
+{{- define "litellm.lensWorker.labels" -}}
+{{- $labels := include "litellm.commonLabels" . | fromYaml -}}
+{{- $_ := set $labels "app.kubernetes.io/name" (printf "%s-lens-worker" (include "litellm.name" . | trunc 51 | trimSuffix "-")) -}}
+{{- toYaml $labels -}}
 {{- end -}}

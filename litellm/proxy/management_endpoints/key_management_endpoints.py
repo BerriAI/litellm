@@ -30,6 +30,7 @@ from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
+from litellm._internal_context import service_target, with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching.dual_cache import DualCache
@@ -63,7 +64,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
-    enforce_batch_enqueued_token_limit_is_admin_only,
+    enforce_batch_limits_are_admin_only,
     enforce_output_token_estimates_are_admin_only,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -82,10 +83,10 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
 )
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
-from litellm.proxy.management.teams.access import TEAM_ADMIN_ONLY, TEAM_OR_ORG_ADMIN, is_team_admin
+from litellm.proxy.management.teams.authz import TEAM_ADMIN_ONLY, TEAM_OR_ORG_ADMIN, is_team_admin
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.common_utils import (
     _check_disable_global_guardrails_caller_permission,
@@ -93,6 +94,8 @@ from litellm.proxy.management_endpoints.common_utils import (
     _set_object_metadata_field,
     _team_member_has_permission,
     _user_has_admin_view,
+    check_allowed_passthrough_routes_caller_permission,
+    check_denied_passthrough_routes_caller_permission,
     validate_budget_duration,
     validate_finite_spend,
 )
@@ -124,7 +127,9 @@ from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+from litellm.proxy.search_endpoints.search_tool_registry import rotate_search_tools_master_key
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
+from litellm.proxy.spend_tracking.spend_counter_batch import SPEND_COUNTERS_TARGET
 from litellm.proxy.spend_tracking.spend_tracking_utils import _is_master_key
 from litellm.proxy.utils import (
     PrismaClient,
@@ -151,6 +156,7 @@ from litellm.repositories.verification_token_repository import (
 from litellm.router import Router
 from litellm.secret_managers.base_secret_manager import raise_if_unsafe_secret_name
 from litellm.secret_managers.main import get_secret
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyRequest,
     BulkUpdateKeyResponse,
@@ -209,7 +215,7 @@ class _KeyUpdateResult(TypedDict):
     data: ReadOnly[Mapping[str, object]]
 
 
-class _StoredKeyRouterSettings(BaseModel):
+class _StoredKeyRouterSettings(LiteLLMBaseModel):
     router_settings: Mapping[str, object] | None = None
 
 
@@ -352,9 +358,12 @@ _KEY_METADATA_REQUEST_FIELDS: Final = frozenset(
 )
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 def _decode_json_string_column(column: str, value: object) -> object:
     if column in _KEY_UPDATE_JSON_STRING_COLUMNS and isinstance(value, str):
-        return json.loads(value)
+        return _DECODED_JSON.validate_python(json.loads(value))
     return value
 
 
@@ -416,8 +425,8 @@ def _effective_key_for_generate(data: GenerateKeyRequest, now: datetime) -> Lite
         {field: value for field, value in requested.items() if field not in _KEY_METADATA_REQUEST_FIELDS}
     )
     metadata: Final = data.metadata or MappingProxyType({})
-    folded_metadata: Final = {**metadata, **metadata_fields}  # mutable-ok: encrypt_callback_vars needs a dict
-    columns: Final = handle_key_type(data, {**column_fields})  # mutable-ok: handle_key_type mutates in place
+    folded_metadata: Final = {**metadata, **metadata_fields}
+    columns: Final = handle_key_type(data, {**column_fields})
     expires: Final = (
         now + timedelta(seconds=duration_in_seconds(duration=data.duration)) if data.duration is not None else None
     )
@@ -808,7 +817,7 @@ def raise_on_invalid_key_logging_config(metadata: Mapping[str, object] | None) -
     """
     error: Final = logging_metadata_config_error(metadata)
     if error is not None:
-        raise HTTPException(status_code=400, detail={"error": error})  # mutable-ok: FastAPI detail contract
+        raise HTTPException(status_code=400, detail={"error": error})
 
 
 def common_key_access_checks(
@@ -1212,7 +1221,7 @@ async def _common_key_generation_helper(
         user_api_key_dict=user_api_key_dict,
         entity="key",
     )
-    enforce_batch_enqueued_token_limit_is_admin_only(
+    enforce_batch_limits_are_admin_only(
         data=data,
         existing_metadata=None,
         user_api_key_dict=user_api_key_dict,
@@ -2005,6 +2014,7 @@ async def generate_key_fn(
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
     - allowed_passthrough_routes: Optional[list] - List of allowed pass through endpoints for the key. Store the actual endpoint or store a wildcard pattern for a set of endpoints. Example - ["/my-custom-endpoint"]. Use this instead of allowed_routes, if you just want to specify which pass through endpoints the key can access, without specifying the routes. If allowed_routes is specified, allowed_pass_through_endpoints is ignored.
+    - denied_passthrough_routes: Optional[list] - List of pass through routes the key may not call, even if allowed by `allowed_passthrough_routes` or `allowed_routes`. Matches exact paths, path prefixes, and trailing `*` wildcards. Applies together with the team's `denied_passthrough_routes`. Example - ["/my-custom-endpoint/admin"].
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - key_type: Optional[str] - Type of key that determines default allowed routes. Options: "llm_api" (can call LLM API routes), "management" (can call management routes), "read_only" (can only call info/read routes), "default" (uses default allowed routes). Defaults to "default".
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
@@ -2021,7 +2031,7 @@ async def generate_key_fn(
 
     ```bash
     curl --location 'http://0.0.0.0:4000/key/generate' \
-        --header 'Authorization: Bearer sk-1234' \
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
         --header 'Content-Type: application/json' \
         --data '{
             "permissions": {"allow_pii_controls": true}
@@ -2219,7 +2229,7 @@ async def generate_service_account_key_fn(
 
     ```bash
     curl --location 'http://0.0.0.0:4000/key/generate' \
-        --header 'Authorization: Bearer sk-1234' \
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
         --header 'Content-Type: application/json' \
         --data '{
             "permissions": {"allow_pii_controls": true}
@@ -2264,7 +2274,7 @@ async def generate_service_account_key_fn(
 
     if data.metadata is None or data.metadata.get("service_account_id") is None:
         service_account_id: Final = data.key_alias or str(uuid.uuid4())
-        stamped_metadata: Final = {  # mutable-ok: GenerateKeyRequest.metadata is a plain dict field
+        stamped_metadata: Final = {
             **(data.metadata or MappingProxyType({})),
             "service_account_id": service_account_id,
         }
@@ -2751,7 +2761,7 @@ async def _process_single_key_update(
         existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
     )
 
-    enforce_batch_enqueued_token_limit_is_admin_only(
+    enforce_batch_limits_are_admin_only(
         data=update_key_request,
         existing_metadata=existing_key_row.metadata,
         user_api_key_dict=user_api_key_dict,
@@ -2767,6 +2777,11 @@ async def _process_single_key_update(
             existing_key_row=existing_key_row,
             user_api_key_cache=user_api_key_cache,
         )
+    check_denied_passthrough_routes_caller_permission(
+        update_key_request,
+        user_api_key_dict,
+        existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+    )
 
     # Custom key update hook
     if user_custom_key_update is not None:
@@ -3002,17 +3017,13 @@ async def _validate_end_user_budget_id_change(
     if requested_budget_id is None or requested_budget_id == (existing_budget_id or ""):
         return
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
-        forbidden_detail: Final = {  # mutable-ok: FastAPI detail contract
-            "error": "Only proxy admins can set end_user_budget_id on a key."
-        }
+        forbidden_detail: Final = {"error": "Only proxy admins can set end_user_budget_id on a key."}
         raise HTTPException(status_code=403, detail=forbidden_detail)
     if requested_budget_id == "":
         return
     budget_row: Final = await BudgetRepository(_require_prisma_client(prisma_client)).find_by_id(requested_budget_id)
     if budget_row is None:
-        missing_detail: Final = {  # mutable-ok: FastAPI detail contract
-            "error": f"end_user_budget_id={requested_budget_id} does not match any budget."
-        }
+        missing_detail: Final = {"error": f"end_user_budget_id={requested_budget_id} does not match any budget."}
         raise HTTPException(status_code=400, detail=missing_detail)
 
 
@@ -3088,10 +3099,7 @@ async def _validate_update_key_data(
         existing_key_row=existing_key_row,
         user_api_key_dict=user_api_key_dict,
     )
-    _check_passthrough_routes_caller_permission(
-        data=data,
-        user_api_key_dict=user_api_key_dict,
-    )
+    check_allowed_passthrough_routes_caller_permission(data, user_api_key_dict)
     _check_permissions_caller_permission(
         data=data,
         user_api_key_dict=user_api_key_dict,
@@ -3203,7 +3211,7 @@ async def _validate_update_key_data(
         user_api_key_dict=user_api_key_dict,
         entity="key",
     )
-    enforce_batch_enqueued_token_limit_is_admin_only(
+    enforce_batch_limits_are_admin_only(
         data=data,
         existing_metadata=_existing_metadata if isinstance(_existing_metadata, dict) else None,
         user_api_key_dict=user_api_key_dict,
@@ -3237,6 +3245,11 @@ async def _validate_update_key_data(
             user_api_key_cache=user_api_key_cache,
             route=("/key/update (max_budget/spend)" if _is_budget_change else "/key/update"),
         )
+    check_denied_passthrough_routes_caller_permission(
+        data,
+        user_api_key_dict,
+        existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+    )
 
     # Check team limits if key has a team_id (from request or existing key)
     team_obj: LiteLLM_TeamTableCachedObj | None = None
@@ -3425,6 +3438,7 @@ async def update_key_fn(
     - temp_budget_expiry: Optional[str] - Expiry time for the temporary budget increase (Enterprise only).
     - allowed_routes: Optional[list] - List of allowed routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/chat/completions", "/embeddings", "/keys/*"]
     - allowed_passthrough_routes: Optional[list] - List of allowed pass through routes for the key. Store the actual route or store a wildcard pattern for a set of routes. Example - ["/my-custom-endpoint"]. Use this instead of allowed_routes, if you just want to specify which pass through routes the key can access, without specifying the routes. If allowed_routes is specified, allowed_passthrough_routes is ignored.
+    - denied_passthrough_routes: Optional[list] - List of pass through routes the key may not call, even if allowed by `allowed_passthrough_routes` or `allowed_routes`. Matches exact paths, path prefixes, and trailing `*` wildcards. Applies together with the team's `denied_passthrough_routes`. Example - ["/my-custom-endpoint/admin"].
     - prompts: Optional[List[str]] - List of allowed prompts for the key. If specified, the key will only be able to use these specific prompts.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated
@@ -3437,10 +3451,10 @@ async def update_key_fn(
     Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/key/update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
-        "key": "sk-1234",
+        "key": "sk-<your-virtual-key>",
         "key_alias": "my-key",
         "user_id": "user-1234",
         "team_id": "team-1234",
@@ -3578,7 +3592,8 @@ async def update_key_fn(
             spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=data.spend, ttl=60)
             if spend_counter_cache.redis_cache is not None:
                 try:
-                    await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=data.spend, ttl=60)
+                    with service_target(SPEND_COUNTERS_TARGET):
+                        await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=data.spend, ttl=60)
                 except Exception as redis_err:
                     verbose_proxy_logger.warning(
                         "Failed to update spend counter %s in Redis after key spend update: %s. "
@@ -3662,12 +3677,12 @@ async def bulk_update_keys(
     Example request:
     ```bash
     curl --location 'http://0.0.0.0:4000/key/bulk_update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "keys": [
             {
-                "key": "sk-1234",
+                "key": "sk-<your-virtual-key>",
                 "max_budget": 100.0,
                 "team_id": "team-123",
                 "tags": ["production", "api"]
@@ -3940,7 +3955,7 @@ async def bulk_update_team_keys(
 
     # Block metadata.allowed_passthrough_routes for non-admins — the runtime
     # route checker reads it from key/team metadata to grant passthrough.
-    _check_passthrough_routes_caller_permission(data=data.update_fields, user_api_key_dict=user_api_key_dict)
+    check_allowed_passthrough_routes_caller_permission(data.update_fields, user_api_key_dict)
 
     if not requested_tokens:
         raise HTTPException(
@@ -4093,7 +4108,7 @@ async def delete_key_fn(
     Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/key/delete' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "keys": ["sk-QWrxEynunsNpV1zT48HIrw"]
@@ -4272,7 +4287,7 @@ async def info_key_fn_v2(
     Example Curl:
     ```
     curl -X GET "http://0.0.0.0:4000/key/info" \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
     -d {"keys": ["sk-1", "sk-2", "sk-3"]}
     ```
     """
@@ -4401,7 +4416,7 @@ async def info_key_fn(
     Example Curl:
     ```
     curl -X GET "http://0.0.0.0:4000/key/info?key=d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa" \
--H "Authorization: Bearer sk-1234"
+-H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Example Curl - if no key is passed, it will use the Key Passed in Authorization Header
@@ -4505,7 +4520,7 @@ def _check_model_access_group(models: list[str] | None, llm_router: Router | Non
         return True
 
     for model in models:
-        if llm_router._is_model_access_group_for_wildcard_route(model_access_group=model):
+        if llm_router.is_model_access_group_for_wildcard_route(model_access_group=model):
             if not premium_user:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -4547,7 +4562,7 @@ def metadata_json_with_limits(
     )
     if metadata is None and not limits:
         return json.dumps(None)
-    merged: Final = {**(metadata or _NO_METADATA), **dict(limits)}  # mutable-ok: encrypt_callback_vars takes a dict
+    merged: Final = {**(metadata or _NO_METADATA), **dict(limits)}
     return json.dumps(encrypt_callback_vars(merged))
 
 
@@ -4967,6 +4982,7 @@ async def can_modify_verification_token(
     return False
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def delete_verification_tokens(
     tokens: list,
     user_api_key_cache: UserApiKeyCache,
@@ -5297,6 +5313,15 @@ async def _rotate_master_key(
                     data={"param_value": prisma.Json(encrypted_env_vars)},
                 )
 
+    try:
+        from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
+
+        await GuardrailRegistry.rotate_guardrail_params_master_key(
+            prisma_client=prisma_client, new_master_key=new_master_key
+        )
+    except Exception as e:  # noqa: BLE001  # one store's failure must not abort the master-key rotation
+        verbose_proxy_logger.warning("Failed to rotate guardrail params: %s", str(e))
+
     # 4. process MCP server table
     try:
         await rotate_mcp_server_credentials_master_key(
@@ -5333,6 +5358,11 @@ async def _rotate_master_key(
         )
     except Exception as e:  # noqa: BLE001  # one store's failure must not abort the master-key rotation
         verbose_proxy_logger.warning("Failed to rotate SSO identity assertions: %s", str(e))
+
+    try:
+        await rotate_search_tools_master_key(prisma_client=prisma_client, new_master_key=new_master_key)
+    except Exception as e:  # noqa: BLE001  # one store's failure must not abort the master-key rotation
+        verbose_proxy_logger.warning("Failed to rotate search tool credentials: %s", str(e))
 
     # 5. process credentials table
     try:
@@ -5580,7 +5610,7 @@ async def _execute_virtual_key_regeneration(
             user_api_key_dict=user_api_key_dict,
             entity="key",
         )
-        enforce_batch_enqueued_token_limit_is_admin_only(
+        enforce_batch_limits_are_admin_only(
             data=data,
             existing_metadata=_existing_key_metadata if isinstance(_existing_key_metadata, dict) else None,
             user_api_key_dict=user_api_key_dict,
@@ -5776,8 +5806,8 @@ async def regenerate_key_fn(
 
     Example:
     ```bash
-    curl --location --request POST 'http://localhost:4000/key/sk-1234/regenerate' \
-    --header 'Authorization: Bearer sk-1234' \
+    curl --location --request POST "http://localhost:4000/key/$LITELLM_API_KEY/regenerate" \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data-raw '{
         "max_budget": 100,
@@ -5805,10 +5835,7 @@ async def regenerate_key_fn(
                 user_api_key_dict=user_api_key_dict,
                 allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
             )
-            _check_passthrough_routes_caller_permission(
-                data=data,
-                user_api_key_dict=user_api_key_dict,
-            )
+            check_allowed_passthrough_routes_caller_permission(data, user_api_key_dict)
             _check_permissions_caller_permission(
                 data=data,
                 user_api_key_dict=user_api_key_dict,
@@ -5926,6 +5953,11 @@ async def regenerate_key_fn(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={"error": "You are not authorized to regenerate this key"},
             )
+        check_denied_passthrough_routes_caller_permission(
+            data,
+            user_api_key_dict,
+            existing_metadata=_key_in_db.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+        )
 
         if data is not None and (data.access_group_ids or data.object_permission is not None):
             regenerate_team_table: LiteLLM_TeamTableCachedObj | None = None
@@ -6057,6 +6089,7 @@ def _validate_reset_spend_value(reset_to: object, key_in_db: LiteLLM_Verificatio
     return reset_to
 
 
+@with_service_target(SPEND_COUNTERS_TARGET)
 async def _set_spend_counter_with_floor_and_broadcast(counter_key: str, value: float) -> None:
     """
     Set a Redis-backed spend counter to `value`, mirror it into the short-lived
@@ -6129,7 +6162,7 @@ def _advance_one_key_budget_window(window: Mapping[str, object]) -> Mapping[str,
     if not isinstance(duration, str) or not duration:
         return window
     new_reset_at: Final = datetime.now(timezone.utc) + timedelta(seconds=duration_in_seconds(duration))
-    return {  # mutable-ok: this is the JSON payload persisted to budget_limits' Json column, which requires a plain dict
+    return {
         **window,
         "reset_at": new_reset_at.isoformat(),
     }
@@ -6163,9 +6196,9 @@ async def _reset_key_budget_windows(
 
     # prisma-client-py's typed update() takes plain dict literals for `where`/`data`; there is no
     # frozen-mapping equivalent to pass instead.
-    reset_payload: Final = {"budget_limits": json.dumps(reset_windows, default=str)}  # mutable-ok: prisma data kwarg
+    reset_payload: Final = {"budget_limits": json.dumps(reset_windows, default=str)}
     await VerificationTokenRepository(prisma_client).table.update(
-        where={"token": hashed_api_key},  # mutable-ok: prisma where kwarg
+        where={"token": hashed_api_key},
         data=reset_payload,
     )
 
@@ -6472,7 +6505,7 @@ KeyStatus = Literal["active", "expired", "revoked", "deleted"]
 VALID_STATUS_FILTER_VALUES: Final[frozenset[KeyStatus]] = frozenset({"active", "expired", "revoked", "deleted"})
 
 
-class _KeyStatusSource(BaseModel):
+class _KeyStatusSource(LiteLLMBaseModel):
     blocked: bool | None = None
     expires: datetime | None = None
 
@@ -7309,7 +7342,7 @@ async def block_key(
      Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/key/block' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "key": "sk-Fn8Ej39NxjAXrvpUGKghGw"
@@ -7423,7 +7456,7 @@ async def unblock_key(
     Example:
     ```bash
     curl --location 'http://0.0.0.0:4000/key/unblock' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "key": "sk-Fn8Ej39NxjAXrvpUGKghGw"
@@ -7540,7 +7573,7 @@ async def key_health(
 
     ```bash
     curl -X POST "http://localhost:4000/key/health" \
-     -H "Authorization: Bearer sk-1234" \
+     -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
      -H "Content-Type: application/json"
     ```
 

@@ -16,10 +16,11 @@ from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaita
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
 
 import aiohttp
-from typing_extensions import NotRequired, ReadOnly
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm import get_secret
@@ -59,7 +60,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.presidio import (
     PresidioAnalyzeRequest,
     PresidioAnalyzeResponseItem,
 )
-from litellm.types.utils import GuardrailStatus, StreamingChoices
+from litellm.types.utils import GuardrailStatus, Message, StreamingChoices
 from litellm.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -68,13 +69,20 @@ from litellm.utils import (
 )
 
 
+@with_config(ConfigDict(extra="allow", strict=True))
 class _PresidioAnonymizeItem(TypedDict, total=False):
     entity_type: ReadOnly[str | None]
 
 
+@with_config(ConfigDict(extra="allow", strict=True))
 class _PresidioAnonymizeResponse(TypedDict):
     text: ReadOnly[str]
     items: ReadOnly[NotRequired[list[_PresidioAnonymizeItem]]]
+
+
+_PRESIDIO_ANONYMIZE_ADAPTER: Final[TypeAdapter[_PresidioAnonymizeResponse | None]] = TypeAdapter(
+    _PresidioAnonymizeResponse | None
+)
 
 
 class _JsonResponse(Protocol):
@@ -769,7 +777,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     raise Exception(
                         f"Presidio anonymizer returned non-JSON Content-Type '{content_type}'; body: '{error_body[:200]}'"
                     )
-                return await response.json()
+                return _PRESIDIO_ANONYMIZE_ADAPTER.validate_python(await response.json())
 
     def _finalize_presidio_anonymize_simple(
         self,
@@ -1331,7 +1339,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         presidio_config: Final = self.get_presidio_settings_from_request_data(request_data or {})
 
         for choice in response.choices:
-            message = getattr(choice, "message", None)
+            message: Message | None = getattr(choice, "message", None)
             if message is None:
                 continue
 
@@ -1502,7 +1510,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     async def _mask_anthropic_sse_stream(
         self, first_chunk: bytes, rest: AsyncIterator[object], request_data: dict
     ) -> tuple[object, ...]:
-        rest_chunks: Final = [chunk async for chunk in rest]  # mutable-ok: tuple() cannot consume an async iterator
+        rest_chunks: Final = [chunk async for chunk in rest]
         chunks: Final = (first_chunk, *rest_chunks)
         assembled: Final = assemble_anthropic_sse_stream(chunks, restore_identity=True)
         if assembled is None:
@@ -1550,7 +1558,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
     def _unmask_responses_api_completed_chunk(self, chunk: object, pii_tokens: dict[str, str]) -> None:
         """
-        Unmask PII tokens in-place for a ``response.completed`` Responses API event.
+        Unmask PII tokens in-place for a ``response.completed`` / ``response.incomplete`` Responses API event.
 
         The chunk carries a ``response`` attribute (ResponsesAPIResponse) whose
         ``output`` list holds message items.  Each item has a ``content`` list of
@@ -1610,7 +1618,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             yield buffered_chunk
                         remaining_chunks = []
                     chunk_type = getattr(chunk, "type", None)
-                    if chunk_type == "response.completed" and pii_tokens:
+                    if chunk_type in ("response.completed", "response.incomplete") and pii_tokens:
                         self._unmask_responses_api_completed_chunk(chunk, pii_tokens)
                     saw_non_chat_chunk = True
                     yield chunk

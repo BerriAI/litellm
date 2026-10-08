@@ -1,9 +1,14 @@
 import os
+import sys
 import traceback
-from typing import Final
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+from typing import Final, Literal
 from unittest import mock
 
 from dotenv import load_dotenv
+
+from tests._master_key import MASTER_KEY
 
 import litellm.proxy
 import litellm.proxy.proxy_server
@@ -30,7 +35,7 @@ logging.basicConfig(
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 # test /chat/completion request to the proxy
 from fastapi.testclient import TestClient
@@ -44,8 +49,193 @@ from litellm.proxy.proxy_server import (  # Replace with the actual module where
 )
 from litellm.proxy.utils import ProxyLogging
 
+@pytest.fixture
+def admin_mcp_proxy(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.litellm_license import LicenseCheck
+
+    monkeypatch.setenv("LITELLM_ENABLE_ADMIN_MCP", "true")
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-" + "1234567890abcdef" * 4)
+    for name in ("WORKER_CONFIG", "CONFIG_FILE_PATH", "DATABASE_URL", "LITELLM_LICENSE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(proxy_server, "_license_check", LicenseCheck())
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {"disable_model_info_refresh": True})
+    monkeypatch.setattr(proxy_server, "scheduler", None)
+    return FastAPI(lifespan=proxy_server.proxy_startup_event)
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
+@pytest.mark.parametrize("failure_phase", ["startup", "serving", "shutdown", "cancelled", "license"])
+async def test_admin_mcp_failure_still_closes_proxy_resources(
+    admin_mcp_proxy: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_phase: Literal["startup", "serving", "shutdown", "cancelled", "license"],
+) -> None:
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.schedulers.base import STATE_PAUSED
+    from litellm_admin_mcp import server as connector_server
+    from litellm_admin_mcp.gateway import Gateway
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+    from litellm.proxy.shutdown.scheduled_jobs import AwaitableAsyncIOExecutor
+
+    monkeypatch.setattr(proxy_server, "premium_user", failure_phase != "license")
+    executor: Final = AwaitableAsyncIOExecutor()
+    scheduler: Final = AsyncIOScheduler(executors={"default": executor})
+    monkeypatch.setattr(proxy_server, "scheduler", scheduler)
+    monkeypatch.setattr(proxy_server, "scheduler_executor", executor)
+    scheduler.start()
+
+    @asynccontextmanager
+    async def failing_connector(_app: FastAPI) -> AsyncGenerator[None, None]:
+        if failure_phase == "startup":
+            raise RuntimeError("startup failed")
+        yield
+        assert scheduler.state == STATE_PAUSED
+        assert GracefulShutdownManager.is_shutting_down()
+        assert proxy_server.shared_aiohttp_session is not None
+        assert not proxy_server.shared_aiohttp_session.closed
+        if failure_phase == "shutdown":
+            raise RuntimeError("shutdown failed")
+
+    def connector_app(_gateway: Gateway) -> FastAPI:
+        return FastAPI(lifespan=failing_connector)
+
+    monkeypatch.setattr(connector_server, "create_http_app", connector_app)
+    expected_error: Final = (
+        HTTPException if failure_phase == "license"
+        else asyncio.CancelledError if failure_phase == "cancelled"
+        else RuntimeError
+    )
+    message: Final = "LITELLM_LICENSE" if failure_phase == "license" else f"{failure_phase} failed"
+    async def run_lifespan() -> None:
+        async with admin_mcp_proxy.router.lifespan_context(admin_mcp_proxy) as state:
+            assert state == {"tracing_receiver": None}
+            if failure_phase == "serving":
+                raise RuntimeError("serving failed")
+            if failure_phase == "cancelled":
+                raise asyncio.CancelledError("cancelled failed")
+
+    with pytest.raises(expected_error, match=message):
+        await run_lifespan()
+
+    assert proxy_server.shared_aiohttp_session is not None
+    assert proxy_server.shared_aiohttp_session.closed
+    assert proxy_server.master_key is None
+    assert all(route.name != "admin_mcp" for route in admin_mcp_proxy.routes)
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
+async def test_proxy_shutdown_drains_active_admin_tool_before_closing_connector(
+    admin_mcp_proxy: FastAPI, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx2
+
+    from litellm.proxy.middleware.in_flight_requests_middleware import InFlightRequestsMiddleware
+    from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+
+    monkeypatch.setenv("LITELLM_ADMIN_TOOLS", "list_teams")
+    admin_mcp_proxy.add_middleware(InFlightRequestsMiddleware)
+    started: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+
+    @admin_mcp_proxy.get("/user/info")
+    async def user_info() -> dict[str, object]:
+        return {"user_id": "admin", "user_info": {"user_id": "admin", "user_role": "proxy_admin"}}
+
+    @admin_mcp_proxy.get("/team/list", operation_id="list_team_team_list_get")
+    async def list_teams() -> dict[str, object]:
+        started.set()
+        await release.wait()
+        return {"teams": ["completed-before-shutdown"]}
+
+    async def complete_during_drain() -> None:
+        async with asyncio.timeout(5):
+            while not GracefulShutdownManager.is_shutting_down():
+                await asyncio.sleep(0)
+        release.set()
+
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=admin_mcp_proxy), base_url="http://localhost:4000"
+    ) as client:
+        async with admin_mcp_proxy.router.lifespan_context(admin_mcp_proxy) as state:
+            assert state == {"tracing_receiver": None}
+            request: Final = asyncio.create_task(client.post(
+                "/admin/mcp",
+                headers={"Authorization": "Bearer admin", "Accept": "application/json, text/event-stream"},
+                json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "list_teams"}},
+            ))
+            await asyncio.wait_for(started.wait(), timeout=5)
+            completion: Final = asyncio.create_task(complete_during_drain())
+        await asyncio.wait_for(completion, timeout=5)
+        response: Final = await asyncio.wait_for(request, timeout=5)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["isError"] is False
+    assert json.loads(response.json()["result"]["content"][0]["text"]) == {
+        "teams": ["completed-before-shutdown"]
+    }
+    assert InFlightRequestsMiddleware.get_count() == 0
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
+async def test_proxy_shutdown_closes_admin_connector_when_drain_is_cancelled(
+    admin_mcp_proxy: FastAPI,
+) -> None:
+    import httpx2
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.middleware.in_flight_requests_middleware import InFlightRequestsMiddleware
+    from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+
+    admin_mcp_proxy.add_middleware(InFlightRequestsMiddleware)
+    ready: Final = asyncio.Event()
+    shutdown: Final = asyncio.Event()
+    started: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+
+    @admin_mcp_proxy.get("/hold")
+    async def hold_request() -> dict[str, bool]:
+        started.set()
+        await release.wait()
+        return {"complete": True}
+
+    async def serve() -> None:
+        async with admin_mcp_proxy.router.lifespan_context(admin_mcp_proxy):
+            ready.set()
+            await shutdown.wait()
+
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=admin_mcp_proxy), base_url="http://localhost:4000"
+    ) as client:
+        serving: Final = asyncio.create_task(serve())
+        await asyncio.wait_for(ready.wait(), timeout=5)
+        assert any(route.name == "admin_mcp" for route in admin_mcp_proxy.routes)
+        request: Final = asyncio.create_task(client.get("/hold"))
+        try:
+            await asyncio.wait_for(started.wait(), timeout=5)
+            shutdown.set()
+            async with asyncio.timeout(5):
+                while not GracefulShutdownManager.is_shutting_down():
+                    await asyncio.sleep(0)
+            serving.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await serving
+            assert all(route.name != "admin_mcp" for route in admin_mcp_proxy.routes)
+            assert proxy_server.shared_aiohttp_session is not None
+            assert proxy_server.shared_aiohttp_session.closed
+        finally:
+            release.set()
+            await asyncio.wait_for(request, timeout=5)
+
+    assert InFlightRequestsMiddleware.get_count() == 0
+
+
 # Your bearer token
-token = "sk-1234"
+token = MASTER_KEY
 
 headers = {"Authorization": f"Bearer {token}"}
 
@@ -263,7 +453,7 @@ def test_add_headers_to_request(litellm_key_header_name):
         "X-Stainless-Header": "Stainless-Value",
         "anthropic-beta": "beta-value",
     }
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     request._url = URL(url="/chat/completions")
     request._body = json.dumps({"model": "gpt-3.5-turbo"}).encode("utf-8")
     request_headers = clean_headers(headers, litellm_key_header_name)
@@ -444,7 +634,7 @@ async def test_team_disable_guardrails(mock_acompletion, client_no_auth, monkeyp
 
     user_api_key_cache: Final = UserApiKeyCache()
     _team_id = "1234"
-    user_key = "sk-12345678"
+    user_key = "sk-98765678"
 
     valid_token = UserAPIKeyAuth(
         team_id=_team_id,
@@ -463,10 +653,10 @@ async def test_team_disable_guardrails(mock_acompletion, client_no_auth, monkeyp
     user_api_key_cache.set_cache(key="team_id:{}".format(_team_id), value=team_obj)
 
     monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
 
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     request._url = URL(url="/chat/completions")
 
     body = {"metadata": {"guardrails": {"hide_secrets": False}}}
@@ -506,7 +696,7 @@ def test_custom_logger_failure_handler(mock_acompletion, client_no_auth, monkeyp
     proxy_logging_obj._init_litellm_callbacks(llm_router=None)
 
     monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm.proxy.proxy_server, "prisma_client", "FAKE-VAR")
     setattr(litellm.proxy.proxy_server, "proxy_logging_obj", proxy_logging_obj)
 
@@ -1119,8 +1309,6 @@ from litellm.proxy._types import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.team_endpoints import team_member_add
 from tests.unit.proxy.management_endpoints.test_key_generate_prisma import prisma_client
-
-
 @pytest.fixture
 def mock_prisma_client():
     client = MagicMock()
@@ -1139,7 +1327,7 @@ def mock_prisma_client():
 async def test_create_user_default_budget(prisma_client, user_role):  # noqa: F811  # pytest fixture, not a redefinition
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm, "max_internal_user_budget", 10)
     setattr(litellm, "internal_user_budget_duration", "5m")
     await litellm.proxy.proxy_server.prisma_client.connect()
@@ -1202,7 +1390,7 @@ async def test_create_team_member_add(prisma_client, new_member_method):  # noqa
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm, "max_internal_user_budget", 10)
     setattr(litellm, "internal_user_budget_duration", "5m")
     await litellm.proxy.proxy_server.prisma_client.connect()
@@ -1316,12 +1504,12 @@ async def test_create_team_member_add_team_admin_user_api_key_auth(
     user_api_key_cache: Final = UserApiKeyCache()
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm, "max_internal_user_budget", 10)
     setattr(litellm, "internal_user_budget_duration", "5m")
     user = f"ishaan {uuid.uuid4().hex}"
     _team_id = "litellm-test-client-id-new"
-    user_key = "sk-12345678"
+    user_key = "sk-98765678"
 
     valid_token = UserAPIKeyAuth(
         team_id=_team_id,
@@ -1347,7 +1535,7 @@ async def test_create_team_member_add_team_admin_user_api_key_auth(
 
     from starlette.datastructures import URL
 
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST", "path": team_route, "headers": []})
     request._url = URL(url=team_route)
 
     body = {}
@@ -1391,12 +1579,12 @@ async def test_create_team_member_add_team_admin(
     )
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm, "max_internal_user_budget", 10)
     setattr(litellm, "internal_user_budget_duration", "5m")
     user = f"ishaan {uuid.uuid4().hex}"
     _team_id = "litellm-test-client-id-new"
-    user_key = "sk-12345678"
+    user_key = "sk-98765678"
     team_admin = f"krrish {uuid.uuid4().hex}"
 
     valid_token = UserAPIKeyAuth(
@@ -1517,7 +1705,7 @@ async def test_user_info_team_list(prisma_client):  # noqa: F811  # pytest fixtu
     from litellm.proxy._types import LiteLLM_UserTable
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     await litellm.proxy.proxy_server.prisma_client.connect()
 
     from litellm.proxy.management_endpoints.internal_user_endpoints import user_info
@@ -1541,7 +1729,7 @@ async def test_user_info_team_list(prisma_client):  # noqa: F811  # pytest fixtu
                 request=MagicMock(),
                 user_id=None,
                 user_api_key_dict=UserAPIKeyAuth(
-                    api_key="sk-1234", user_id="default_user_id"
+                    api_key=MASTER_KEY, user_id="default_user_id"
                 ),
             )
         except Exception:
@@ -1565,7 +1753,7 @@ async def test_add_callback_via_key(prisma_client):  # noqa: F811  # pytest fixt
     from litellm.proxy.proxy_server import chat_completion
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     await litellm.proxy.proxy_server.prisma_client.connect()
 
     litellm.set_verbose = True
@@ -1662,7 +1850,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils(
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
 
@@ -1821,7 +2009,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_gcs_bucket(
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
 
@@ -1957,7 +2145,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_langsmith(
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
 
@@ -2131,7 +2319,7 @@ async def test_proxy_model_group_alias_checks(prisma_client, hidden):  # noqa: F
     from litellm.proxy.proxy_server import model_group_info, model_info_v1, model_list
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     await litellm.proxy.proxy_server.prisma_client.connect()
 
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
@@ -2212,7 +2400,7 @@ async def test_proxy_model_group_info_rerank(prisma_client):  # noqa: F811  # py
     from litellm.proxy.proxy_server import model_group_info, model_info_v1, model_list
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     await litellm.proxy.proxy_server.prisma_client.connect()
 
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
@@ -2266,7 +2454,7 @@ async def test_proxy_model_group_info_rerank(prisma_client):  # noqa: F811  # py
 #     from litellm.proxy._types import TeamMemberAddRequest, Member, NewTeamRequest
 
 #     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-#     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+#     setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 #     try:
 
 #         async def test():
@@ -2275,7 +2463,7 @@ async def test_proxy_model_group_info_rerank(prisma_client):  # noqa: F811  # py
 
 #             user_api_key_dict = UserAPIKeyAuth(
 #                 user_role=LitellmUserRoles.PROXY_ADMIN,
-#                 api_key="sk-1234",
+#                 api_key=MASTER_KEY,
 #                 user_id="1234",
 #             )
 

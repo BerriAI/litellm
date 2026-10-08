@@ -339,6 +339,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     "standard_logging_object",
+    "litellm_roi_estimator",
     "proxy_server_request",
     "secret_fields",
     "_guardrail_pipelines",
@@ -561,7 +562,7 @@ def _strip_client_message_redaction_opt_out(data: dict[str, object]) -> None:
 
 
 def _strip_client_callback_credentials(
-    data: dict[str, Any],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
+    data: dict[str, object],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
 ) -> None:
     """Drop callback credentials and destinations supplied by the caller.
 
@@ -625,7 +626,7 @@ def _strip_client_pricing_overrides(data: dict[str, object]) -> None:
 
 
 def _strip_router_reserved_metadata(
-    data: dict[str, Any],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
+    data: dict[str, object],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
 ) -> None:
     """Drop the router-owned fallback stamps from any client-supplied metadata bucket."""
     for metadata_key in ("metadata", "litellm_metadata"):
@@ -1760,7 +1761,7 @@ class LiteLLMProxyRequestSetup:
                     ):  # don't override k-v pair sent by request (user request)
                         data[_metadata_variable_name]["spend_logs_metadata"][key] = value
             else:
-                data[_metadata_variable_name]["spend_logs_metadata"] = key_metadata["spend_logs_metadata"]
+                data[_metadata_variable_name]["spend_logs_metadata"] = dict(key_metadata["spend_logs_metadata"])
 
         ## KEY-LEVEL DISABLE FALLBACKS
         if "disable_fallbacks" in key_metadata and isinstance(key_metadata["disable_fallbacks"], bool):
@@ -1776,6 +1777,53 @@ class LiteLLMProxyRequestSetup:
             _metadata_variable_name=_metadata_variable_name,
         )
         return data
+
+    @staticmethod
+    def add_team_and_project_level_controls(
+        user_api_key_dict: UserAPIKeyAuth, metadata: dict[str, object]
+    ) -> dict[str, object]:
+        team_metadata: Final = user_api_key_dict.team_metadata or MappingProxyType({})
+        project_metadata: Final = user_api_key_dict.project_metadata or MappingProxyType({})
+        request_tags: Final = metadata.get("tags")
+        team_tags: Final = team_metadata.get("tags")
+        project_tags: Final = project_metadata.get("tags")
+        disable_global_guardrails: Final = team_metadata.get("disable_global_guardrails")
+        opted_out_global_guardrails: Final = team_metadata.get("opted_out_global_guardrails")
+        spend_logs_metadata: Final = LiteLLMProxyRequestSetup._merge_spend_logs_metadata(
+            team_spend_logs_metadata=team_metadata.get("spend_logs_metadata"),
+            request_spend_logs_metadata=metadata.get("spend_logs_metadata"),
+        )
+        tags: Final = LiteLLMProxyRequestSetup._merge_tags(
+            request_tags=LiteLLMProxyRequestSetup._merge_tags(
+                request_tags=request_tags if isinstance(request_tags, list) else None,
+                tags_to_add=team_tags if isinstance(team_tags, list) else None,
+            ),
+            tags_to_add=project_tags if isinstance(project_tags, list) else None,
+        )
+        controls: Final = (
+            ("tags", tags or None),
+            ("spend_logs_metadata", spend_logs_metadata),
+            (
+                "disable_global_guardrails",
+                disable_global_guardrails if isinstance(disable_global_guardrails, bool) else None,
+            ),
+            (
+                "opted_out_global_guardrails",
+                opted_out_global_guardrails if isinstance(opted_out_global_guardrails, list) else None,
+            ),
+        )
+        return {**metadata, **{key: value for key, value in controls if value is not None}}
+
+    @staticmethod
+    def _merge_spend_logs_metadata(
+        team_spend_logs_metadata: object, request_spend_logs_metadata: object
+    ) -> dict[str, object] | None:
+        """Team values as defaults, the request's own values win on the same key. None when neither is a dict"""
+        team_values: Final = team_spend_logs_metadata if isinstance(team_spend_logs_metadata, dict) else None
+        request_values: Final = request_spend_logs_metadata if isinstance(request_spend_logs_metadata, dict) else None
+        if team_values is None and request_values is None:
+            return None
+        return {**(team_values or {}), **(request_values or {})}
 
     @staticmethod
     def _merge_tags(request_tags: list | None, tags_to_add: list | None) -> list:
@@ -1981,9 +2029,7 @@ def refresh_proxy_server_request_body_snapshot(
         | _TRANSPORT_ONLY_CREDENTIAL_KEYS
         | _CALLBACK_CREDENTIAL_KEYS
     )
-    body: Final = {  # mutable-ok: audit JSON serialization requires a dict with shared nested messages
-        k: v for k, v in data.items() if k not in _body_snapshot_exclude
-    }
+    body: Final = {k: v for k, v in data.items() if k not in _body_snapshot_exclude}
     proxy_server_request["body"] = body
     if guardrails_applied and isinstance(logging_obj, Logging):
         metadata: Final = data.get(get_metadata_variable_name_from_kwargs(data))
@@ -2314,38 +2360,12 @@ async def add_litellm_data_to_request(
         data=data,
         _metadata_variable_name=_metadata_variable_name,
     )
-    ## TEAM-LEVEL SPEND LOGS/TAGS
+    data[_metadata_variable_name] = LiteLLMProxyRequestSetup.add_team_and_project_level_controls(
+        user_api_key_dict=user_api_key_dict,
+        metadata=data[_metadata_variable_name],
+    )
     team_metadata: Final = user_api_key_dict.team_metadata or {}
-    if "tags" in team_metadata and team_metadata["tags"] is not None:
-        data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
-            request_tags=data[_metadata_variable_name].get("tags"),
-            tags_to_add=team_metadata["tags"],
-        )
-    if "disable_global_guardrails" in team_metadata and isinstance(team_metadata["disable_global_guardrails"], bool):
-        data[_metadata_variable_name]["disable_global_guardrails"] = team_metadata["disable_global_guardrails"]
-    if "opted_out_global_guardrails" in team_metadata and isinstance(
-        team_metadata["opted_out_global_guardrails"], list
-    ):
-        data[_metadata_variable_name]["opted_out_global_guardrails"] = team_metadata["opted_out_global_guardrails"]
-    if "spend_logs_metadata" in team_metadata and isinstance(team_metadata["spend_logs_metadata"], dict):
-        if "spend_logs_metadata" in data[_metadata_variable_name] and isinstance(
-            data[_metadata_variable_name]["spend_logs_metadata"], dict
-        ):
-            for key, value in team_metadata["spend_logs_metadata"].items():
-                if (
-                    key not in data[_metadata_variable_name]["spend_logs_metadata"]
-                ):  # don't override k-v pair sent by request (user request)
-                    data[_metadata_variable_name]["spend_logs_metadata"][key] = value
-        else:
-            data[_metadata_variable_name]["spend_logs_metadata"] = team_metadata["spend_logs_metadata"]
-
-    ## PROJECT-LEVEL TAGS
     project_metadata: Final = user_api_key_dict.project_metadata or {}
-    if "tags" in project_metadata and project_metadata["tags"] is not None:
-        data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
-            request_tags=data[_metadata_variable_name].get("tags"),
-            tags_to_add=project_metadata["tags"],
-        )
 
     # inherited_tags: every tag key/team/project policy contributed, read
     # directly from those three sources rather than snapshotted off the shared
@@ -2544,6 +2564,10 @@ async def add_litellm_data_to_request(
     _update_model_if_key_alias_exists(
         data=data,
         user_api_key_dict=user_api_key_dict,
+    )
+
+    data[_metadata_variable_name]["litellm_roi_estimator"] = (
+        getattr(request.state, "litellm_roi_estimator", False) is True
     )
 
     verbose_proxy_logger.debug("[PROXY] returned data from litellm_pre_call_utils: %s", data)
