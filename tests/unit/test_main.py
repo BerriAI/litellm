@@ -1,8 +1,8 @@
 import asyncio
 import base64
 import contextlib
-import email.utils
 import copy
+import email.utils
 import io
 import json
 import logging
