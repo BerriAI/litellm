@@ -597,10 +597,21 @@ if MCP_AVAILABLE:
         Returns:
             Tuple of (mcp_auth_header, mcp_server_auth_headers, raw_headers, oauth2_headers)
         """
-        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            OPTIONAL_STRING_ADAPTER,
+            MCPRequestHandler,
+        )
+        from litellm.proxy.proxy_server import general_settings
 
         headers: Final = request.headers
-        admitted_credential: Final = MCPRequestHandler.caller_admission_credential(headers, user_api_key_dict)
+        custom_key_header_name: Final = OPTIONAL_STRING_ADAPTER.validate_python(
+            general_settings.get("litellm_key_header_name")
+        )
+        admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
+            headers,
+            user_api_key_dict,
+            custom_key_header_name=custom_key_header_name,
+        )
         oauth2_headers_from_request: Final = MCPRequestHandler.get_oauth2_headers_from_headers(headers)
         (
             scrubbed_oauth2_headers,

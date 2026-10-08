@@ -87,7 +87,7 @@ if TYPE_CHECKING:
 
 
 _EMPTY_TOOLSET_GRANTS: Final[Mapping[str, Sequence[str]]] = MappingProxyType({})
-_OPTIONAL_STRING_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
+OPTIONAL_STRING_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 
 
 def _normalize_caller_admission_credential(value: str) -> str:
@@ -633,8 +633,15 @@ class MCPRequestHandler:
 
             # Scrub gateway-shaped credentials and the exact LiteLLM credential that admitted this request.
             raw_headers = dict(headers)
+            from litellm.proxy.proxy_server import general_settings
+
+            custom_key_header_name: Final = OPTIONAL_STRING_ADAPTER.validate_python(
+                general_settings.get("litellm_key_header_name")
+            )
             admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
-                headers, validated_user_api_key_auth
+                headers,
+                validated_user_api_key_auth,
+                custom_key_header_name=custom_key_header_name,
             )
             (
                 oauth2_headers,
@@ -1587,18 +1594,30 @@ class MCPRequestHandler:
     def caller_admission_credential(
         headers: Headers,
         user_api_key_auth: UserAPIKeyAuth,
+        *,
+        custom_key_header_name: str | None,
     ) -> str | None:
         if user_api_key_auth.api_key is None:
             return None
-        from litellm.proxy.proxy_server import general_settings_view
-
-        custom_header_name: Final = _OPTIONAL_STRING_ADAPTER.validate_python(
-            general_settings_view().get("litellm_key_header_name")
+        admission_header_names: Final = (
+            MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_PRIMARY,
+            MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_SECONDARY,
+            SpecialHeaders.azure_authorization.value,
+            SpecialHeaders.anthropic_authorization.value,
+            SpecialHeaders.google_ai_studio_authorization.value,
+            SpecialHeaders.azure_apim_authorization.value,
         )
         litellm_api_key: Final = (
-            headers.get(custom_header_name)
-            if custom_header_name is not None
-            else MCPRequestHandler.get_litellm_api_key_from_headers(headers)
+            headers.get(custom_key_header_name)
+            if custom_key_header_name is not None
+            else next(
+                (
+                    header_value
+                    for header_name in admission_header_names
+                    if (header_value := headers.get(header_name)) is not None
+                ),
+                None,
+            )
         )
         if litellm_api_key is None:
             return None

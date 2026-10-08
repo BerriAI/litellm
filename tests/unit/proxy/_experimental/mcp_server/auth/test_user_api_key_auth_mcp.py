@@ -9608,156 +9608,354 @@ class TestSessionBearerEgressScrub:
         assert mcp_auth == caller_key
         assert per_server == {"echo_srv": {"Authorization": caller_key}}
 
-    async def test_process_scrubs_master_admission_key_from_per_server_auth(self) -> None:
-        master_key: Final = "sk-" + "1234"
-        scope: Final = {
-            "type": "http",
-            "method": "POST",
-            "path": "/mcp/",
-            "headers": [
-                (b"x-litellm-api-key", f"Bearer {master_key}".encode()),
-                (b"x-mcp-echo_srv-authorization", f"Bearer {master_key}".encode()),
-            ],
-        }
-        master_auth: Final = UserAPIKeyAuth(api_key="litellm_proxy_master_key")
-
-        with patch(
-            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
-            new_callable=AsyncMock,
-            return_value=master_auth,
-        ) as mock_auth:
-            auth, _mcp_auth, _servers, mcp_server_auth, _oauth2, raw = await MCPRequestHandler.process_mcp_request(scope)
-
-        mock_auth.assert_awaited_once()
-        assert auth is master_auth
-        assert not mcp_server_auth
-        assert raw["x-litellm-api-key"] == f"Bearer {master_key}"
-
-    async def test_process_scrubs_basic_admission_key_from_per_server_auth(self) -> None:
-        caller_key: Final = "sk-caller-admission-key-123"
-        scope: Final = {
-            "type": "http",
-            "method": "POST",
-            "path": "/mcp/",
-            "headers": [
-                (b"x-litellm-api-key", f"Basic {caller_key}".encode()),
-                (b"x-mcp-echo_srv-authorization", caller_key.encode()),
-            ],
-        }
-        caller_auth: Final = UserAPIKeyAuth(api_key="stored-key-hash")
-
-        with patch(
-            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
-            new_callable=AsyncMock,
-            return_value=caller_auth,
-        ) as mock_auth:
-            auth, _mcp_auth, _servers, mcp_server_auth, _oauth2, raw = await MCPRequestHandler.process_mcp_request(scope)
-
-        mock_auth.assert_awaited_once()
-        assert auth is caller_auth
-        assert not mcp_server_auth
-        assert raw is not None
-        assert raw["x-litellm-api-key"] == f"Basic {caller_key}"
-
     @pytest.mark.parametrize(
-        "per_server_value",
+        "admission_value,per_server_value",
         (
-            "BEARER sk-caller-admission-key-123",
-            "Bearer  sk-caller-admission-key-123",
-            "Basic sk-caller-admission-key-123",
+            ("Bearer sk-caller-admission-key-123", "BEARER sk-caller-admission-key-123"),
+            ("Bearer sk-caller-admission-key-123", "Bearer  sk-caller-admission-key-123"),
+            ("Bearer sk-caller-admission-key-123", "Basic sk-caller-admission-key-123"),
+            ("Basic sk-caller-admission-key-123", "sk-caller-admission-key-123"),
+            ("Bearer sk-caller-admission-key-123", "bearer sk-caller-admission-key-123"),
         ),
     )
-    async def test_process_scrubs_case_and_whitespace_variants_of_caller_key(self, per_server_value: str) -> None:
+    async def test_caller_admission_credential_scrubs_bearer_variants_and_basic(
+        self,
+        admission_value: str,
+        per_server_value: str,
+    ) -> None:
+        upstream_authorization: Final = "Bearer unrelated-upstream-token"
+        headers: Final = Headers(
+            {
+                "x-litellm-api-key": admission_value,
+                "authorization": upstream_authorization,
+                "x-mcp-auth": per_server_value,
+                "x-mcp-echo_srv-authorization": per_server_value,
+                "x-upstream-token": upstream_authorization,
+            }
+        )
+        user_api_key_auth: Final = UserAPIKeyAuth(api_key="stored-key-hash")
+        admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
+            headers,
+            user_api_key_auth,
+            custom_key_header_name=None,
+        )
+        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
+            admitted=False,
+            oauth2_headers={"Authorization": upstream_authorization},
+            raw_headers=dict(headers),
+            mcp_auth_header=per_server_value,
+            mcp_server_auth_headers={
+                "echo_srv": {"Authorization": per_server_value},
+                "other_srv": {"Authorization": upstream_authorization},
+            },
+            admitted_credential=admitted_credential,
+        )
+
+        assert result == (
+            {"Authorization": upstream_authorization},
+            {
+                "x-litellm-api-key": admission_value,
+                "authorization": upstream_authorization,
+                "x-upstream-token": upstream_authorization,
+            },
+            None,
+            {"other_srv": {"Authorization": upstream_authorization}},
+        )
+
+    async def test_caller_admission_credential_prefers_x_litellm_header(self) -> None:
         caller_key: Final = "sk-caller-admission-key-123"
-        scope: Final = {
-            "type": "http",
-            "method": "POST",
-            "path": "/mcp/",
-            "headers": [
-                (b"x-litellm-api-key", f"Bearer {caller_key}".encode()),
-                (b"x-mcp-echo_srv-authorization", per_server_value.encode()),
-            ],
-        }
-        caller_auth: Final = UserAPIKeyAuth(api_key="stored-key-hash")
+        upstream_authorization: Final = "Bearer unrelated-upstream-token"
+        provider_key: Final = "provider-key-not-admitted"
+        headers: Final = Headers(
+            {
+                "x-litellm-api-key": f"Bearer {caller_key}",
+                "authorization": upstream_authorization,
+                SpecialHeaders.azure_authorization.value: provider_key,
+                "x-mcp-auth": f"Bearer {caller_key}",
+                "x-mcp-echo_srv-authorization": f"Bearer {caller_key}",
+            }
+        )
+        admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
+            headers,
+            UserAPIKeyAuth(api_key="stored-key-hash"),
+            custom_key_header_name=None,
+        )
+        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
+            admitted=False,
+            oauth2_headers={"Authorization": upstream_authorization},
+            raw_headers=dict(headers),
+            mcp_auth_header=f"Bearer {caller_key}",
+            mcp_server_auth_headers={
+                "echo_srv": {"Authorization": f"Bearer {caller_key}"},
+                "other_srv": {"Authorization": upstream_authorization},
+            },
+            admitted_credential=admitted_credential,
+        )
 
-        with patch(
-            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
-            new_callable=AsyncMock,
-            return_value=caller_auth,
-        ):
-            auth, _mcp_auth, _servers, mcp_server_auth, _oauth2, raw = await MCPRequestHandler.process_mcp_request(scope)
+        assert result == (
+            {"Authorization": upstream_authorization},
+            {
+                "x-litellm-api-key": f"Bearer {caller_key}",
+                "authorization": upstream_authorization,
+                "api-key": provider_key,
+            },
+            None,
+            {"other_srv": {"Authorization": upstream_authorization}},
+        )
 
-        assert auth is caller_auth
-        assert not mcp_server_auth
-        assert raw is not None
-        assert raw["x-litellm-api-key"] == f"Bearer {caller_key}"
-
-    async def test_process_scrubs_custom_header_admission_key_from_per_server_auth(self) -> None:
+    async def test_caller_admission_credential_prefers_authorization_before_provider_headers(self) -> None:
         caller_key: Final = "sk-caller-admission-key-123"
-        scope: Final = {
-            "type": "http",
-            "method": "POST",
-            "path": "/mcp/",
-            "headers": [
-                (b"x-custom-api-key", f"Bearer {caller_key}".encode()),
-                (b"x-mcp-echo_srv-authorization", caller_key.encode()),
-            ],
-        }
-        caller_auth: Final = UserAPIKeyAuth(api_key="stored-key-hash")
+        provider_key: Final = "provider-key-not-admitted"
+        headers: Final = Headers(
+            {
+                "authorization": f"Bearer {caller_key}",
+                SpecialHeaders.azure_authorization.value: provider_key,
+                "x-mcp-auth": f"Bearer {caller_key}",
+                "x-mcp-echo_srv-authorization": f"Bearer {caller_key}",
+            }
+        )
+        admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
+            headers,
+            UserAPIKeyAuth(api_key="stored-key-hash"),
+            custom_key_header_name=None,
+        )
+        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
+            admitted=False,
+            oauth2_headers={"Authorization": f"Bearer {caller_key}"},
+            raw_headers=dict(headers),
+            mcp_auth_header=f"Bearer {caller_key}",
+            mcp_server_auth_headers={"echo_srv": {"Authorization": f"Bearer {caller_key}"}},
+            admitted_credential=admitted_credential,
+        )
 
-        with (
-            patch(
-                "litellm.proxy.proxy_server.general_settings",
-                {"litellm_key_header_name": "x-custom-api-key"},
-            ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
-                new_callable=AsyncMock,
-                return_value=caller_auth,
-            ) as mock_auth,
-        ):
-            auth, _mcp_auth, _servers, mcp_server_auth, _oauth2, raw = await MCPRequestHandler.process_mcp_request(
-                scope
-            )
+        assert result == (
+            None,
+            {"api-key": provider_key},
+            None,
+            {},
+        )
 
-        mock_auth.assert_awaited_once()
-        assert auth is caller_auth
-        assert not mcp_server_auth
-        assert raw is not None
-        assert "x-custom-api-key" not in raw
-
-    async def test_process_does_not_use_standard_key_when_custom_admission_header_is_absent(self) -> None:
+    async def test_caller_admission_credential_uses_configured_custom_header(self) -> None:
         caller_key: Final = "sk-caller-admission-key-123"
-        scope: Final = {
-            "type": "http",
-            "method": "POST",
-            "path": "/mcp/",
-            "headers": [
-                (b"x-litellm-api-key", f"Bearer {caller_key}".encode()),
-                (b"x-mcp-echo_srv-authorization", f"Bearer {caller_key}".encode()),
-            ],
-        }
-        caller_auth: Final = UserAPIKeyAuth(api_key="authenticated-by-other-means")
+        standard_key: Final = "Bearer standard-key-not-admitted"
+        upstream_authorization: Final = "Bearer unrelated-upstream-token"
+        headers: Final = Headers(
+            {
+                "x-custom-api-key": f"Bearer {caller_key}",
+                "x-litellm-api-key": standard_key,
+                "authorization": upstream_authorization,
+                "x-mcp-auth": f"Bearer {caller_key}",
+                "x-mcp-echo_srv-authorization": f"Bearer {caller_key}",
+            }
+        )
+        admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
+            headers,
+            UserAPIKeyAuth(api_key="stored-key-hash"),
+            custom_key_header_name="x-custom-api-key",
+        )
+        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
+            admitted=False,
+            oauth2_headers={"Authorization": upstream_authorization},
+            raw_headers=dict(headers),
+            mcp_auth_header=f"Bearer {caller_key}",
+            mcp_server_auth_headers={"echo_srv": {"Authorization": f"Bearer {caller_key}"}},
+            admitted_credential=admitted_credential,
+        )
 
-        with (
-            patch(
-                "litellm.proxy.proxy_server.general_settings",
-                {"litellm_key_header_name": "x-custom-api-key"},
-            ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
-                new_callable=AsyncMock,
-                return_value=caller_auth,
-            ),
-        ):
-            auth, _mcp_auth, _servers, mcp_server_auth, _oauth2, raw = await MCPRequestHandler.process_mcp_request(
-                scope
-            )
+        assert result == (
+            {"Authorization": upstream_authorization},
+            {
+                "x-litellm-api-key": standard_key,
+                "authorization": upstream_authorization,
+            },
+            None,
+            {},
+        )
 
-        assert auth is caller_auth
-        assert mcp_server_auth == {"echo_srv": {"Authorization": f"Bearer {caller_key}"}}
-        assert raw is not None
-        assert raw["x-litellm-api-key"] == f"Bearer {caller_key}"
+    async def test_caller_admission_credential_does_not_fall_back_when_custom_header_is_absent(self) -> None:
+        caller_value: Final = "Bearer sk-caller-admission-key-123"
+        headers: Final = Headers(
+            {
+                "x-litellm-api-key": caller_value,
+                "authorization": caller_value,
+                "x-mcp-auth": caller_value,
+                "x-mcp-echo_srv-authorization": caller_value,
+            }
+        )
+        admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
+            headers,
+            UserAPIKeyAuth(api_key="stored-key-hash"),
+            custom_key_header_name="x-custom-api-key",
+        )
+        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
+            admitted=False,
+            oauth2_headers={"Authorization": caller_value},
+            raw_headers=dict(headers),
+            mcp_auth_header=caller_value,
+            mcp_server_auth_headers={"echo_srv": {"Authorization": caller_value}},
+            admitted_credential=admitted_credential,
+        )
+
+        assert result == (
+            {"Authorization": caller_value},
+            {
+                "x-litellm-api-key": caller_value,
+                "authorization": caller_value,
+                "x-mcp-auth": caller_value,
+                "x-mcp-echo_srv-authorization": caller_value,
+            },
+            caller_value,
+            {"echo_srv": {"Authorization": caller_value}},
+        )
+
+    async def test_caller_admission_credential_uses_master_key_alias_as_admission_gate(self) -> None:
+        master_key: Final = "sk-1234"
+        headers: Final = Headers(
+            {
+                "x-litellm-api-key": f"Bearer {master_key}",
+                "authorization": f"Bearer {master_key}",
+                "x-mcp-auth": f"Bearer {master_key}",
+                "x-mcp-echo_srv-authorization": f"Bearer {master_key}",
+            }
+        )
+        admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
+            headers,
+            UserAPIKeyAuth(api_key="litellm_proxy_master_key"),
+            custom_key_header_name=None,
+        )
+        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
+            admitted=False,
+            oauth2_headers={"Authorization": f"Bearer {master_key}"},
+            raw_headers=dict(headers),
+            mcp_auth_header=f"Bearer {master_key}",
+            mcp_server_auth_headers={"echo_srv": {"Authorization": f"Bearer {master_key}"}},
+            admitted_credential=admitted_credential,
+        )
+
+        assert result == (
+            None,
+            {"x-litellm-api-key": f"Bearer {master_key}"},
+            None,
+            {},
+        )
+
+    @pytest.mark.parametrize(
+        "provider_header_name",
+        (
+            SpecialHeaders.azure_authorization.value,
+            SpecialHeaders.anthropic_authorization.value,
+            SpecialHeaders.google_ai_studio_authorization.value,
+            SpecialHeaders.azure_apim_authorization.value,
+        ),
+    )
+    async def test_caller_admission_credential_scrubs_provider_header(
+        self,
+        provider_header_name: str,
+    ) -> None:
+        provider_key: Final = "provider-admission-key"
+        headers: Final = Headers(
+            {
+                provider_header_name: provider_key,
+                "x-mcp-auth": f"Bearer {provider_key}",
+                "x-mcp-echo_srv-authorization": f"Bearer {provider_key}",
+                "x-upstream-token": "Bearer unrelated-upstream-token",
+            }
+        )
+        admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
+            headers,
+            UserAPIKeyAuth(api_key="stored-key-hash"),
+            custom_key_header_name=None,
+        )
+        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
+            admitted=False,
+            oauth2_headers=None,
+            raw_headers=dict(headers),
+            mcp_auth_header=f"Bearer {provider_key}",
+            mcp_server_auth_headers={
+                "echo_srv": {"Authorization": f"Bearer {provider_key}"},
+                "other_srv": {"Authorization": "Bearer unrelated-upstream-token"},
+            },
+            admitted_credential=admitted_credential,
+        )
+
+        assert result == (
+            None,
+            {"x-upstream-token": "Bearer unrelated-upstream-token"},
+            None,
+            {"other_srv": {"Authorization": "Bearer unrelated-upstream-token"}},
+        )
+
+    async def test_caller_admission_credential_follows_provider_header_precedence(self) -> None:
+        azure_key: Final = "azure-admission-key"
+        headers: Final = Headers(
+            {
+                SpecialHeaders.azure_authorization.value: azure_key,
+                SpecialHeaders.anthropic_authorization.value: "anthropic-not-admitted",
+                SpecialHeaders.google_ai_studio_authorization.value: "google-not-admitted",
+                SpecialHeaders.azure_apim_authorization.value: "apim-not-admitted",
+                "x-mcp-echo_srv-authorization": f"Bearer {azure_key}",
+            }
+        )
+        admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
+            headers,
+            UserAPIKeyAuth(api_key="stored-key-hash"),
+            custom_key_header_name=None,
+        )
+        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
+            admitted=False,
+            oauth2_headers=None,
+            raw_headers=dict(headers),
+            mcp_auth_header=f"Bearer {azure_key}",
+            mcp_server_auth_headers={"echo_srv": {"Authorization": f"Bearer {azure_key}"}},
+            admitted_credential=admitted_credential,
+        )
+
+        assert result == (
+            None,
+            {
+                "x-api-key": "anthropic-not-admitted",
+                "x-goog-api-key": "google-not-admitted",
+                "ocp-apim-subscription-key": "apim-not-admitted",
+            },
+            None,
+            {},
+        )
+
+    async def test_caller_admission_credential_returns_none_without_admitted_api_key(self) -> None:
+        caller_value: Final = "Bearer sk-caller-admission-key-123"
+        headers: Final = Headers(
+            {
+                "x-litellm-api-key": caller_value,
+                "authorization": caller_value,
+                "x-mcp-auth": caller_value,
+                "x-mcp-echo_srv-authorization": caller_value,
+            }
+        )
+        admitted_credential: Final = MCPRequestHandler.caller_admission_credential(
+            headers,
+            UserAPIKeyAuth(api_key=None),
+            custom_key_header_name=None,
+        )
+        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
+            admitted=False,
+            oauth2_headers={"Authorization": caller_value},
+            raw_headers=dict(headers),
+            mcp_auth_header=caller_value,
+            mcp_server_auth_headers={"echo_srv": {"Authorization": caller_value}},
+            admitted_credential=admitted_credential,
+        )
+
+        assert result == (
+            {"Authorization": caller_value},
+            {
+                "x-litellm-api-key": caller_value,
+                "authorization": caller_value,
+                "x-mcp-auth": caller_value,
+                "x-mcp-echo_srv-authorization": caller_value,
+            },
+            caller_value,
+            {"echo_srv": {"Authorization": caller_value}},
+        )
 
 
 # ---------------------------------------------------------------------------
