@@ -2581,9 +2581,7 @@ def test_no_server_owned_identity_field_reaches_a_non_admin_health_entry(server_
         {"model": "anthropic/claude-sonnet-5", server_owned_field: canary},
         details=True,
     )
-    stripped = _strip_admin_only_fields_from_health_result(
-        {"healthy_endpoints": [cleaned], "unhealthy_endpoints": []}
-    )
+    stripped = _strip_admin_only_fields_from_health_result({"healthy_endpoints": [cleaned], "unhealthy_endpoints": []})
 
     assert stripped["healthy_endpoints"][0]["model"] == "anthropic/claude-sonnet-5"
     assert server_owned_field not in stripped["healthy_endpoints"][0]
@@ -4060,6 +4058,40 @@ def test_health_test_connection_keeps_error_and_raw_request_through_the_allowlis
     assert not {"api_key", "timeout", "exception"} & set(body["result"])
 
 
+def test_health_test_connection_uses_request_headers_as_secret_fields_and_hides_them() -> None:
+    app: Final = FastAPI()
+    app.include_router(_health_endpoints_module.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    ahealth_check: Final = AsyncMock(return_value={"status": "healthy"})
+    authorization: Final = "Bearer a.b.c"
+    body_authorization: Final = "Bearer body-supplied.invalid"
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.ahealth_check", new=ahealth_check),
+    ):
+        response: Final = TestClient(app).post(
+            "/health/test_connection",
+            headers={"Authorization": authorization},
+            json={
+                "mode": "chat",
+                "litellm_params": {
+                    "model": "microsoft_365_copilot/chat",
+                    "secret_fields": {"raw_headers": {"authorization": body_authorization}},
+                },
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "success"
+    model_params: Final = ahealth_check.call_args.kwargs["model_params"]
+    assert model_params["secret_fields"]["raw_headers"]["authorization"] == authorization
+    assert "secret_fields" not in response.text
+    assert "raw_headers" not in response.text
+    assert authorization not in response.text
+    assert body_authorization not in response.text
+
+
 def test_clean_endpoint_data_keeps_only_json_safe_diagnostics():
     """
     LIT-6907: _clean_endpoint_data used to copy every litellm_param not on a
@@ -4382,6 +4414,81 @@ class TestTestConnectionUsesTheNamedCredential:
         assert response.status_code == 200, response.text
         assert response.json()["status"] == "success", response.text
         return probe
+
+    def test_oauth_connection_test_uses_caller_token_and_keeps_401_without_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        caller_token: Final = "a.b.c"
+        body_token: Final = "body.spoof.token"
+        endpoint: Final = "https://identity.example.com/health-check/oauth2/v2.0/token"
+        deployment: Final = {
+            "model_name": "microsoft_365_copilot/chat",
+            "litellm_params": {
+                "model": "microsoft_365_copilot/chat",
+                "custom_llm_provider": "microsoft_365_copilot",
+                "token_exchange_endpoint": endpoint,
+                "client_id": "health-check-client",
+                "client_secret": "health-check-secret",
+                "token_exchange_profile": "jwt_bearer_obo",
+                "token_exchange_scope": "https://graph.microsoft.com/.default",
+            },
+            "model_info": {"mode": "chat"},
+        }
+        request_body: Final = {
+            "mode": "chat",
+            "litellm_params": {
+                "model": "microsoft_365_copilot/chat",
+                "secret_fields": {"raw_headers": {"authorization": f"Bearer {body_token}"}},
+            },
+            "model_info": {"mode": "chat"},
+        }
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+        app: Final = FastAPI()
+        app.include_router(_health_endpoints_module.router)
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+        client: Final = TestClient(app)
+        router: Final = MagicMock()
+        router.get_model_list.return_value = [deployment]
+        router.get_deployment.return_value = None
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.llm_router", router),
+            respx.mock(assert_all_called=True) as respx_mock,
+        ):
+            token_route: Final = respx_mock.post(endpoint).respond(
+                json={"access_token": "health-graph-token", "expires_in": 3600}
+            )
+            respx_mock.post("https://graph.microsoft.com/beta/copilot/conversations").respond(
+                status_code=201,
+                json={"id": "health-check-conversation", "state": "active"},
+            )
+            respx_mock.post(
+                "https://graph.microsoft.com/beta/copilot/conversations/health-check-conversation/chat"
+            ).respond(json={"messages": [{"text": "prompt echo"}, {"text": "Copilot response"}]})
+            response: Final = client.post(
+                "/health/test_connection",
+                headers={"Authorization": f"Bearer {caller_token}"},
+                json=request_body,
+            )
+
+            assert response.status_code == 200, response.text
+            assert response.json()["status"] == "success", response.text
+            token_request: Final = respx_mock.calls[0].request
+            assert f"assertion={caller_token}".encode() in token_request.content
+            assert body_token.encode() not in token_request.content
+
+            unauthorized_response: Final = client.post("/health/test_connection", json=request_body)
+
+        assert unauthorized_response.status_code == 200, unauthorized_response.text
+        assert unauthorized_response.json()["status"] == "error"
+        assert (
+            "requires the caller's IdP-issued access token in the Authorization header"
+            in unauthorized_response.json()["result"]["error"]
+        )
+        assert token_route.call_count == 1
 
     def test_request_api_key_does_not_inherit_microsoft_365_oauth_config(self):
         deployment: Final = {
