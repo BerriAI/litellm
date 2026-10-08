@@ -10,7 +10,7 @@ use pyo3::{
 use serde_json::Value;
 pub(crate) use websocket::ResponsesWebSocketConnection;
 
-use super::inference::InferenceHost;
+use super::codec::RouteCodec;
 use crate::errors::RustBridgeDeclined;
 
 fn run_responses(
@@ -20,7 +20,7 @@ fn run_responses(
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
-    let host = InferenceHost::new(request.clone(), "litellm.rust_bridge.responses.route_host");
+    let host = RouteCodec::new(request.clone(), "litellm.rust_bridge.responses.route_host");
     if let Some(reason) = py
         .import("litellm.rust_bridge.responses.route_host")?
         .getattr("decline_reason")?

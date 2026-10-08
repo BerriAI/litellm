@@ -1,15 +1,20 @@
-use crate::cache::{CacheCall, Cached, PythonCache, Selection};
+use crate::{
+    cache::{CacheCall, Cached, PythonCache, Selection},
+    routes::{
+        codec::connection_options,
+        parameters::{field, merged_request},
+    },
+};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
-use litellm_host_python::{InvokeError, PythonBinding, from_py, lookup, to_py};
+use litellm_host_python::{InvokeError, PythonBinding, from_py, to_py};
 use litellm_http::transport::Error as TransportError;
 use litellm_inference_messages::{
     Error, MessagesCall, MessagesSettings, MessagesShaping, messages_body,
     route::{Messages, MessagesStreamHead},
 };
 use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
-use litellm_llms_types::headers::ProviderSpecificHeaders;
 use pyo3::{
     exceptions::{PyException, PyValueError},
     gc::{PyTraverseError, PyVisit},
@@ -20,7 +25,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     errors::{RustUpstreamError, route_error_to_pyerr},
-    marshal::{optional_timeout, project_optional_fields, public_response, python_timeout_seconds},
+    marshal::{project_optional_fields, public_response},
 };
 
 const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.messages.route_host";
@@ -106,73 +111,40 @@ impl MessagesPythonHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> PyResult<Result<MessagesCall, Error>> {
-        let request = self.request.bind(py);
-        let argument = |name: &str| -> PyResult<Option<Bound<'_, PyAny>>> {
-            Ok(lookup(arguments, request, name)?.filter(|value| !value.is_none()))
-        };
-        let string = |name: &str| -> PyResult<Option<String>> {
-            argument(name)?.map(|value| value.extract()).transpose()
-        };
-        let model = string("model")?.ok_or_else(|| PyValueError::new_err("model is required"))?;
-        let messages =
-            argument("messages")?.ok_or_else(|| PyValueError::new_err("messages is required"))?;
-        let fields = project_optional_fields(BODY_FIELDS, argument)?;
+        let request = merged_request(self.request.bind(py).cast::<PyDict>()?, arguments)?;
+        let options = connection_options(py, ROUTE_HOST_MODULE, &request)?;
+        let messages = field(&request, "messages")?
+            .ok_or_else(|| PyValueError::new_err("messages is required"))?;
+        let fields = project_optional_fields(BODY_FIELDS, |name| field(&request, name))?;
         let body = [
-            ("model".to_string(), Value::String(model.clone())),
+            ("model".to_string(), Value::String(options.model.clone())),
             ("messages".to_string(), from_py(&messages)?),
         ]
         .into_iter()
         .chain(fields)
         .collect::<Map<String, Value>>();
-        let timeout = argument("timeout")?
-            .map(|value| python_timeout_seconds(py, value.unbind()))
-            .transpose()?
-            .flatten();
-        let custom_llm_provider = string("custom_llm_provider")?;
-        let shaping = self.shaping(py, &model, custom_llm_provider.as_deref(), arguments)?;
-        let api_key = string("api_key")?;
-        let api_base = string("api_base")?;
-        let extra_headers = self.merged_headers(py, arguments)?;
-        let provider_specific_header = self.provider_specific_header(py, arguments)?;
+        let shaping = self.shaping(
+            py,
+            &options.model,
+            options.custom_llm_provider.as_deref(),
+            arguments,
+        )?;
+        let headers = field(&request, "headers")?
+            .map(|value| from_py(&value))
+            .transpose()?;
+        let provider_specific_header = field(&request, "provider_specific_header")?
+            .map(|value| from_py(&value))
+            .transpose()?;
         Ok(messages_body(body).map(|body| MessagesCall {
             body,
-            api_key,
-            api_base,
-            extra_headers,
+            api_key: options.api_key,
+            api_base: options.api_base,
+            extra_headers: merge_headers(headers, options.extra_headers),
             provider_specific_header,
-            custom_llm_provider,
-            timeout: optional_timeout(timeout),
+            custom_llm_provider: options.custom_llm_provider,
+            timeout: options.timeout,
             shaping,
         }))
-    }
-
-    fn merged_headers(
-        &self,
-        py: Python<'_>,
-        arguments: &Bound<'_, PyDict>,
-    ) -> PyResult<Option<Map<String, Value>>> {
-        let request = self.request.bind(py);
-        let mapping = |name: &str| -> PyResult<Option<Map<String, Value>>> {
-            lookup(arguments, request, name)?
-                .filter(|value| !value.is_none())
-                .map(|value| from_py(&value))
-                .transpose()
-        };
-        Ok(merge_headers(
-            mapping("headers")?,
-            mapping("extra_headers")?,
-        ))
-    }
-
-    fn provider_specific_header(
-        &self,
-        py: Python<'_>,
-        arguments: &Bound<'_, PyDict>,
-    ) -> PyResult<Option<ProviderSpecificHeaders>> {
-        lookup(arguments, self.request.bind(py), "provider_specific_header")?
-            .filter(|value| !value.is_none())
-            .map(|value| from_py(&value))
-            .transpose()
     }
 
     fn shaping(

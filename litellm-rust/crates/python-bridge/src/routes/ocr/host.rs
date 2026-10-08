@@ -209,7 +209,7 @@ del provider
                 .unwrap()
                 .cast_into::<PyDict>()
                 .unwrap();
-            let mut host = OcrPythonHost::new(py.None());
+            let mut host = OcrPythonHost::new(PyDict::new(py).into_any().unbind());
             assert!(host.decode_request(py, &kwargs).unwrap().caller_token);
             locals.del_item("kwargs").unwrap();
             drop(kwargs);

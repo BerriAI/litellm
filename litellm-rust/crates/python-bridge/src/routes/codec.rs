@@ -12,7 +12,7 @@ use crate::{
     marshal::{RouteOptions, optional_timeout, public_response, python_timeout_seconds},
 };
 
-pub(super) struct InferenceHost {
+pub(super) struct RouteCodec {
     pub bound: Py<PyDict>,
     module: &'static str,
 }
@@ -29,7 +29,7 @@ impl ProjectedCall {
     }
 }
 
-impl InferenceHost {
+impl RouteCodec {
     pub fn new(bound: Bound<'_, PyDict>, module: &'static str) -> Self {
         Self {
             bound: bound.unbind(),
@@ -44,15 +44,8 @@ impl InferenceHost {
         input: &str,
     ) -> PyResult<ProjectedCall> {
         let request = merged_request(self.bound.bind(py), hooked)?;
-        let defaults = |provider: &str| -> PyResult<ConnectionDefaults> {
-            py.import(self.module)?
-                .getattr("connection_defaults")?
-                .call1((provider,))?
-                .extract()
-        };
-        let timeout_seconds = |value: Bound<'_, PyAny>| python_timeout_seconds(py, value.unbind());
         Ok(ProjectedCall {
-            options: route_options(&request, &defaults, &timeout_seconds)?,
+            options: connection_options(py, self.module, &request)?,
             input: from_py(
                 &field(&request, input)?
                     .ok_or_else(|| PyValueError::new_err(format!("{input} is required")))?,
@@ -90,6 +83,20 @@ impl InferenceHost {
 }
 
 type ConnectionDefaults = (Option<String>, Option<String>);
+
+pub(super) fn connection_options(
+    py: Python<'_>,
+    module: &str,
+    request: &Bound<'_, PyDict>,
+) -> PyResult<RouteOptions> {
+    let hook = py.import(module)?.getattr_opt("connection_defaults")?;
+    let defaults = |provider: &str| -> PyResult<ConnectionDefaults> {
+        hook.as_ref()
+            .map_or(Ok((None, None)), |hook| hook.call1((provider,))?.extract())
+    };
+    let timeout_seconds = |value: Bound<'_, PyAny>| python_timeout_seconds(py, value.unbind());
+    route_options(request, &defaults, &timeout_seconds)
+}
 
 fn route_options(
     request: &Bound<'_, PyDict>,
