@@ -55,13 +55,14 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.stubGlobal("fetch", network);
   network.mockResolvedValue(Response.json({}));
-  vi.mocked(apiClient.get).mockResolvedValue({
+  const readyService = {
     url: "https://traces.test",
     configured: true,
     release: "v1.2.3",
     connected: true,
     status: { storage_ready: true, credentials_ready: true },
-  });
+  };
+  vi.mocked(apiClient.get).mockResolvedValue(readyService);
   vi.mocked(apiClient.post).mockResolvedValue({ key: SECRET, active: true });
 });
 
@@ -227,13 +228,14 @@ describe("TracingSetupCard", () => {
   it("shows matching-version installation instructions without changing the landing design", async () => {
     const user = userEvent.setup();
     const onCheck = vi.fn();
-    vi.mocked(apiClient.get).mockResolvedValue({
+    const missingService = {
       configured: false,
       connected: false,
       release: "v1.2.3",
       url: "",
       status: {},
-    });
+    };
+    vi.mocked(apiClient.get).mockResolvedValue(missingService);
     const { card } = await renderCard({ detail: "Agent tracing is not enabled", onCheck });
     expect(await screen.findByText("Install Lens")).toBeVisible();
     expect(card).toHaveTextContent("Use Lens v1.2.3 to match this LiteLLM deployment");
@@ -246,12 +248,13 @@ describe("TracingSetupCard", () => {
       "https://docs.litellm.ai/docs/proxy/lens/deployment#using-docker",
     );
     expect(screen.queryByRole("combobox", { name: "Your agent framework" })).not.toBeInTheDocument();
-    vi.mocked(apiClient.get).mockResolvedValue({
+    const readyService = {
       configured: true,
       connected: true,
       url: "https://traces.test",
       status: { storage_ready: true },
-    });
+    };
+    vi.mocked(apiClient.get).mockResolvedValue(readyService);
     await user.click(screen.getByRole("button", { name: "Check setup" }));
     expect(onCheck).toHaveBeenCalledOnce();
     expect(await screen.findByRole("combobox", { name: "Your agent framework" })).toBeVisible();
@@ -263,12 +266,13 @@ describe("TracingSetupCard", () => {
   ])(
     "explains a configured service failure without recommending reinstallation",
     async (connected, storageReady, message) => {
-      vi.mocked(apiClient.get).mockResolvedValue({
+      const service = {
         configured: true,
         connected,
         url: "https://traces.test",
         status: { storage_ready: storageReady },
-      });
+      };
+      vi.mocked(apiClient.get).mockResolvedValue(service);
       await renderCard({ detail: "Service unavailable" });
       expect(await screen.findByText(message, { exact: false })).toBeVisible();
       expect(screen.queryByText("Install Lens")).not.toBeInTheDocument();

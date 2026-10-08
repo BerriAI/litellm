@@ -23,13 +23,15 @@ function serve({ enabled = false, traces = false, requests = false, connected = 
   list.mockResolvedValue({ lenses: [], workers: connected ? [worker()] : [], tracing_enabled: enabled });
   network.mockImplementation(async (input, init) => {
     const { path, method, body, query } = await readRequest(input, init);
-    if (path === "/lens/service")
-      return Response.json({
+    if (path === "/lens/service") {
+      const service = {
         url: "https://traces.test",
         configured: enabled,
         connected: enabled,
         status: { storage_ready: true, credentials_ready: true },
-      });
+      };
+      return Response.json(service);
+    }
     if (path === "/v1/traces")
       return enabled
         ? Response.json({ data: traces ? [data.runs[0].trace.summary] : [] })
