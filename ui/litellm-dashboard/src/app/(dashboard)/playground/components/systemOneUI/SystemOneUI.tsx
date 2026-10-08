@@ -42,11 +42,11 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
   const [customApiKey, setCustomApiKey] = useState("");
   const [endpoint, setEndpoint] = useState<DecisionEndpoint>("/typesafe/v1/systemone");
   const [payloads, setPayloads] = useState<Record<DecisionEndpoint, string>>({
-    "/v1/decisions": DECISIONS_EXAMPLE_PAYLOAD,
+    "/v1/systemone": DECISIONS_EXAMPLE_PAYLOAD,
     "/typesafe/v1/systemone": EXAMPLE_PAYLOAD,
   });
   const rawPayload = payloads[endpoint];
-  const examplePayload = endpoint === "/v1/decisions" ? DECISIONS_EXAMPLE_PAYLOAD : EXAMPLE_PAYLOAD;
+  const examplePayload = endpoint === "/v1/systemone" ? DECISIONS_EXAMPLE_PAYLOAD : EXAMPLE_PAYLOAD;
   const activeController = useRef<AbortController | null>(null);
   const validation = useMemo(() => validateSystemOnePayload(rawPayload, endpoint), [rawPayload, endpoint]);
   const effectiveApiKey = apiKeySource === "session" ? accessToken || "" : customApiKey.trim();
@@ -105,7 +105,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
           <Select
             value={endpoint}
             onValueChange={(value) => {
-              if (value === "/v1/decisions" || value === "/typesafe/v1/systemone") {
+              if (value === "/v1/systemone" || value === "/typesafe/v1/systemone") {
                 clearRequestState();
                 setEndpoint(value);
               }
@@ -113,11 +113,11 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
           >
             <SelectTrigger className="w-80" aria-label="Decision endpoint">
               <SelectValue>
-                {endpoint === "/v1/decisions" ? "Decisions · /v1/decisions" : "TypeSafe · /typesafe/v1/systemone"}
+                {endpoint === "/v1/systemone" ? "System One · /v1/systemone" : "TypeSafe · /typesafe/v1/systemone"}
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="/v1/decisions">Decisions · /v1/decisions</SelectItem>
+              <SelectItem value="/v1/systemone">System One · /v1/systemone</SelectItem>
               <SelectItem value="/typesafe/v1/systemone">TypeSafe · /typesafe/v1/systemone</SelectItem>
             </SelectContent>
           </Select>
@@ -182,11 +182,11 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
         <Alert role="note" aria-label="Decision endpoint notice">
           <Info />
           <AlertTitle>
-            {endpoint === "/v1/decisions" ? "Decision models · Jev format" : "TypeSafe Jev · System One"}
+            {endpoint === "/v1/systemone" ? "Decision models · System One" : "TypeSafe Jev · System One"}
           </AlertTitle>
           <AlertDescription>
-            {endpoint === "/v1/decisions"
-              ? "Sends choice, noul, and score questions through /v1/decisions. Replace the example model with a decision model configured on your proxy, or omit model to use the proxy's configured default."
+            {endpoint === "/v1/systemone"
+              ? "Sends choice, noul, and score questions through /v1/systemone. Replace the example model with a decision model configured on your proxy, or omit model to use the proxy's configured default."
               : "Sends requests through /typesafe/v1/systemone and requires TYPESAFE_API_KEY on the proxy."}{" "}
             <a href={DECISION_MODELS_DISCUSSION_URL} target="_blank" rel="noopener noreferrer" className="underline">
               Give us feedback on what you want for decision models

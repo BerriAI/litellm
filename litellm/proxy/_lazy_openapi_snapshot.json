@@ -9521,6 +9521,30 @@
           ]
         }
       },
+      "/systemone": {
+        "post": {
+          "operationId": "systemone_systemone_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Systemone",
+          "tags": [
+            "decisions"
+          ]
+        }
+      },
       "/v1/decisions": {
         "post": {
           "operationId": "decisions_v1_decisions_post",
@@ -9540,6 +9564,30 @@
             }
           ],
           "summary": "Decisions",
+          "tags": [
+            "decisions"
+          ]
+        }
+      },
+      "/v1/systemone": {
+        "post": {
+          "operationId": "systemone_v1_systemone_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Systemone",
           "tags": [
             "decisions"
           ]

@@ -488,6 +488,8 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/search/{search_tool_name}",
         "/decisions",
         "/v1/decisions",
+        "/systemone",
+        "/v1/systemone",
         # OCR
         "/ocr",
         "/v1/ocr",

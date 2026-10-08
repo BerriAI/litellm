@@ -75,7 +75,7 @@ describe("SystemOneUI integration", () => {
     render(<SystemOneUI accessToken="session-key" />);
     screen.getByRole("combobox", { name: "Decision endpoint" }).focus();
     await user.keyboard("{ArrowDown}");
-    await user.click(await screen.findByRole("option", { name: "Decisions · /v1/decisions" }));
+    await user.click(await screen.findByRole("option", { name: "System One · /v1/systemone" }));
 
     expect(screen.getByRole("note", { name: "Decision endpoint notice" })).toHaveTextContent(
       "omit model to use the proxy's configured default.",
@@ -162,7 +162,7 @@ describe("SystemOneUI integration", () => {
     render(<SystemOneUI accessToken="session-key" />);
     screen.getByRole("combobox", { name: "Decision endpoint" }).focus();
     await user.keyboard("{ArrowDown}");
-    await user.click(await screen.findByRole("option", { name: "Decisions · /v1/decisions" }));
+    await user.click(await screen.findByRole("option", { name: "System One · /v1/systemone" }));
     const editor = screen.getByRole("textbox", { name: "System One JSON payload" });
     const draft = JSON.stringify({
       model: "my-decider",
@@ -185,12 +185,12 @@ describe("SystemOneUI integration", () => {
 
     screen.getByRole("combobox", { name: "Decision endpoint" }).focus();
     await user.keyboard("{ArrowDown}");
-    await user.click(await screen.findByRole("option", { name: "Decisions · /v1/decisions" }));
+    await user.click(await screen.findByRole("option", { name: "System One · /v1/systemone" }));
     expect(editor).toHaveValue(draft);
     expect(screen.queryByText("Selected choice")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Send" }));
     expect(await screen.findByText("Selected choice")).toBeInTheDocument();
-    expect(mockFetch.mock.calls[1]?.[0]).toMatch(/\/v1\/decisions$/);
+    expect(mockFetch.mock.calls[1]?.[0]).toMatch(/\/v1\/systemone$/);
     expect(JSON.parse(mockFetch.mock.calls[1]?.[1]?.body as string)).toEqual(JSON.parse(draft));
   });
 
@@ -199,7 +199,7 @@ describe("SystemOneUI integration", () => {
     render(<SystemOneUI accessToken="session-key" />);
     screen.getByRole("combobox", { name: "Decision endpoint" }).focus();
     await user.keyboard("{ArrowDown}");
-    await user.click(await screen.findByRole("option", { name: "Decisions · /v1/decisions" }));
+    await user.click(await screen.findByRole("option", { name: "System One · /v1/systemone" }));
     const payload = { state: "An outage", questions: { urgent: { type: "noul", instructions: "Is this urgent?" } } };
     fireEvent.change(screen.getByRole("textbox", { name: "System One JSON payload" }), {
       target: { value: JSON.stringify(payload) },
@@ -207,7 +207,7 @@ describe("SystemOneUI integration", () => {
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: "Send" }));
     expect(await screen.findByText("jev-1.13.0")).toBeInTheDocument();
-    expect(mockFetch.mock.calls[0]?.[0]).toMatch(/\/v1\/decisions$/);
+    expect(mockFetch.mock.calls[0]?.[0]).toMatch(/\/v1\/systemone$/);
     const body = JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string);
     expect(body).toEqual(payload);
     expect(body).not.toHaveProperty("model");
@@ -227,7 +227,7 @@ describe("SystemOneUI integration", () => {
     await screen.findByRole("button", { name: "Cancel request" });
     screen.getByRole("combobox", { name: "Decision endpoint" }).focus();
     await user.keyboard("{ArrowDown}");
-    await user.click(await screen.findByRole("option", { name: "Decisions · /v1/decisions" }));
+    await user.click(await screen.findByRole("option", { name: "System One · /v1/systemone" }));
     expect(mockFetch.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
 
@@ -249,7 +249,7 @@ describe("SystemOneUI integration", () => {
     await user.click(screen.getByRole("button", { name: "Send" }));
     expect(await screen.findByText("jev-1.13.0")).toBeInTheDocument();
     expect(screen.getByText("Selected choice")).toBeInTheDocument();
-    expect(mockFetch.mock.calls[1]?.[0]).toMatch(/\/v1\/decisions$/);
+    expect(mockFetch.mock.calls[1]?.[0]).toMatch(/\/v1\/systemone$/);
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
