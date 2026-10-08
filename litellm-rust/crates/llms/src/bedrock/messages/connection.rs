@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::base_llm::auth::Headers;
 
-/// Trusted Bedrock connection settings supplied by the host for a Messages call.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BedrockMessagesConnection {

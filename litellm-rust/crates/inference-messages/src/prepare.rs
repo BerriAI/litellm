@@ -191,7 +191,13 @@ fn without_additional_drop_params(
 
 #[cfg(test)]
 mod tests {
-    use litellm_llms::base_llm::auth::resolve_auth;
+    use litellm_llms::{
+        base_llm::auth::{AuthScheme, resolve_auth},
+        bedrock::{
+            messages::connection::BedrockMessagesConnection,
+            request_metadata::{BedrockMetadataSource, BedrockRequestMetadataInput},
+        },
+    };
     use litellm_llms_types::headers::ProviderSpecificHeaders;
     use rstest::{fixture, rstest};
     use serde_json::{Map, Value, json};
@@ -539,16 +545,13 @@ mod tests {
         )
     }
 
-    fn trusted_metadata_input()
-    -> litellm_llms::bedrock::request_metadata::BedrockRequestMetadataInput {
-        litellm_llms::bedrock::request_metadata::BedrockRequestMetadataInput {
+    fn trusted_metadata_input() -> BedrockRequestMetadataInput {
+        BedrockRequestMetadataInput {
             allowed_fields: vec!["user_api_key_alias".to_string()],
-            sources: vec![
-                litellm_llms::bedrock::request_metadata::BedrockMetadataSource {
-                    identity: vec![("user_api_key_alias".into(), "prod-key".into())],
-                    spend_logs: vec![],
-                },
-            ],
+            sources: vec![BedrockMetadataSource {
+                identity: vec![("user_api_key_alias".into(), "prod-key".into())],
+                spend_logs: vec![],
+            }],
         }
     }
 
@@ -659,14 +662,12 @@ mod tests {
         #[case] stream: bool,
         #[case] expected_url: &str,
     ) {
-        shaping.bedrock_connection = Some(
-            litellm_llms::bedrock::messages::connection::BedrockMessagesConnection {
-                api_base: connection_api_base.map(str::to_string),
-                region: Some("us-east-2".into()),
-                model_id: Some("override/model".into()),
-                workspace_id: Some("trusted-project".into()),
-            },
-        );
+        shaping.bedrock_connection = Some(BedrockMessagesConnection {
+            api_base: connection_api_base.map(str::to_string),
+            region: Some("us-east-2".into()),
+            model_id: Some("override/model".into()),
+            workspace_id: Some("trusted-project".into()),
+        });
         let (validated, url) = environment_for(
             MessagesProvider::Bedrock,
             &shaping,
@@ -686,7 +687,7 @@ mod tests {
             .collect();
         assert_eq!(workspace, vec!["trusted-project"]);
         match &validated.auth {
-            litellm_llms::base_llm::auth::AuthScheme::AwsSigV4 { region, .. } => {
+            AuthScheme::AwsSigV4 { region, .. } => {
                 assert_eq!(region, "us-east-2");
             }
             other => panic!("expected SigV4 auth, got {other:?}"),
@@ -726,7 +727,7 @@ mod tests {
             .collect();
         assert_eq!(workspace, vec!["caller-project"]);
         match &validated.auth {
-            litellm_llms::base_llm::auth::AuthScheme::AwsSigV4 { region, .. } => {
+            AuthScheme::AwsSigV4 { region, .. } => {
                 assert_eq!(region, "us-west-2");
             }
             other => panic!("expected SigV4 auth, got {other:?}"),

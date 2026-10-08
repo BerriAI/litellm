@@ -8,7 +8,6 @@ pub const BEDROCK_REQUEST_METADATA_MAX_PAIRS: usize = 16;
 const IDENTITY_PREFIX: &str = "user_api_key_";
 const CLIENT_FIELD: &str = "spend_logs_metadata";
 
-/// One trusted metadata source whose pairs may be forwarded to Bedrock.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BedrockMetadataSource {
@@ -16,7 +15,6 @@ pub struct BedrockMetadataSource {
     pub spend_logs: Vec<(String, String)>,
 }
 
-/// Operator allow-list plus the trusted sources consulted when resolving it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BedrockRequestMetadataInput {
@@ -53,7 +51,6 @@ fn forwardable(key: &str, value: &str) -> bool {
     valid_text(key, false) && valid_text(value, true)
 }
 
-/// Resolve the trusted `(key, value)` pairs to forward as Bedrock request metadata.
 pub fn resolve_bedrock_request_metadata(
     input: &BedrockRequestMetadataInput,
 ) -> Vec<(String, String)> {
@@ -125,7 +122,6 @@ fn escape_non_ascii(json: &str) -> String {
         .collect()
 }
 
-/// Replace any caller-sent request-metadata header with the trusted resolved one.
 pub fn bedrock_request_metadata_headers(
     headers: Headers,
     input: &BedrockRequestMetadataInput,

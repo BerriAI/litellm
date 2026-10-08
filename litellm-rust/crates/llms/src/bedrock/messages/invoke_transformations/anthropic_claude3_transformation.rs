@@ -129,7 +129,6 @@ fn invoke_url(
 }
 
 impl AmazonAnthropicClaudeMessagesConfig {
-    /// The Bedrock invoke URL for the given trusted connection, streaming or not.
     pub fn connection_url(
         &self,
         api_base: Option<&str>,
@@ -146,8 +145,6 @@ impl AmazonAnthropicClaudeMessagesConfig {
         Ok(invoke_url(api_base, model, connection, env_lookup, path))
     }
 
-    /// The request environment for a trusted connection: workspace header, trusted request
-    /// metadata, then bearer or SigV4 scoped by the connection's region.
     pub fn connection_environment(
         &self,
         headers: Headers,
