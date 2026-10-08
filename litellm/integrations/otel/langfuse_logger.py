@@ -10,6 +10,7 @@ from litellm.integrations.otel.mappers.langfuse import (
 )
 from litellm.integrations.otel.model.request_io import request_input, response_output, stream_output
 from litellm.integrations.otel.model.trace_controls import caller_trace_controls
+from litellm.integrations.otel.model.utils import as_str
 from litellm.integrations.otel.plumbing.context import request_root_span
 
 if TYPE_CHECKING:
@@ -24,7 +25,9 @@ class LangfuseOpenTelemetryV2(OpenTelemetryV2):
     def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
         root: Final = request_root_span()
         if root is not None and root.is_recording():
-            root.set_attributes(LangfuseMapper.trace_attributes(caller_trace_controls(kwargs)))
+            root.set_attributes(
+                LangfuseMapper.trace_attributes(caller_trace_controls(kwargs), as_str(kwargs.get("call_type")))
+            )
         super().log_pre_api_call(model, messages, kwargs)
 
 
