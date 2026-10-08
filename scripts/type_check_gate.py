@@ -267,8 +267,8 @@ def environment_fingerprints(
     )
 
 
-def checker_identity() -> Checker:
-    return Checker("basedpyright", environment_fingerprints())
+def checker_identity(dep_groups: tuple[str, ...] = TYPECHECK_DEP_GROUPS) -> Checker:
+    return Checker("basedpyright", environment_fingerprints(dep_groups))
 
 
 def cmd_check(head: Mapping[str, int], base_ref: str) -> None:

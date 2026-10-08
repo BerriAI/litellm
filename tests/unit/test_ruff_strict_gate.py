@@ -4,10 +4,10 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Final
 
 import pytest
 
-import lint_base_counts
 import ruff_strict_gate as gate
 
 if sys.version_info >= (3, 11):
@@ -224,12 +224,19 @@ def test_a_graduated_rule_can_still_be_suppressed_without_tripping_unused_noqa()
     assert "RUF100" not in output
 
 
-@_needs_ruff
-def test_the_checker_identity_is_rekeyed_by_either_ruff_config_or_the_ruff_version():
-    identity = gate.checker_identity()
-    assert identity.name == "ruff-strict"
-    assert identity.fingerprints == (
-        lint_base_counts.sha256_of(gate.STRICT_CONFIG),
-        lint_base_counts.sha256_of(gate.BASE_CONFIG),
-        gate.ruff_version(),
-    )
+def test_editing_either_ruff_config_or_upgrading_ruff_rekeys_the_base_counts(tmp_path: Path) -> None:
+    strict: Final = tmp_path / "ruff-strict.toml"
+    base: Final = tmp_path / "ruff.toml"
+    strict.write_text("strict v1\n")
+    base.write_text("base v1\n")
+
+    def artifact(version: str) -> str:
+        return gate.checker_identity(strict, base, lambda: version).artifact_name("abc123")
+
+    before: Final = artifact("ruff 0.1.0")
+    assert artifact("ruff 0.1.0") == before
+    assert artifact("ruff 0.2.0") != before
+    strict.write_text("strict v2\n")
+    after_strict_edit: Final = artifact("ruff 0.1.0")
+    base.write_text("base v2\n")
+    assert len({before, after_strict_edit, artifact("ruff 0.1.0")}) == 3

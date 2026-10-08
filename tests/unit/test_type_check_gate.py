@@ -1,10 +1,10 @@
 import hashlib
 import json
 from pathlib import Path
+from typing import Final
 
 import pytest
 
-import lint_base_counts
 import type_check_gate as gate
 
 ROOT = gate.REPO_ROOT
@@ -225,14 +225,18 @@ def test_ensure_env_is_silent_when_the_env_already_exists(tmp_path, capsys):
     assert capsys.readouterr().err == ""
 
 
-def test_the_checker_identity_is_keyed_on_the_environment_fingerprints():
-    assert gate.checker_identity() == lint_base_counts.Checker("basedpyright", gate.environment_fingerprints())
+def test_changing_the_dependency_groups_rekeys_the_base_counts() -> None:
+    default: Final = gate.checker_identity().artifact_name("abc123")
+    assert gate.checker_identity().artifact_name("abc123") == default
+    assert gate.checker_identity(("proxy-dev",)).artifact_name("abc123") != default
 
 
 @pytest.mark.parametrize("rule", ["reportAny", "reportExplicitAny"])
-def test_any_rules_may_grow_past_their_base_up_to_the_cap_and_no_further(rule, capsys):
-    cap = gate.ANY_CAPS[rule]
-    base = {rule: cap - 5, "reportArgumentType": 3}
+def test_any_rules_may_grow_past_their_base_up_to_the_cap_and_no_further(
+    rule: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cap: Final = gate.ANY_CAPS[rule]
+    base: Final = {rule: cap - 5, "reportArgumentType": 3}
     gate.judge({rule: cap, "reportArgumentType": 3}, base, "a" * 40)
     assert "OK" in capsys.readouterr().out
     with pytest.raises(SystemExit) as exit_info:
@@ -241,19 +245,21 @@ def test_any_rules_may_grow_past_their_base_up_to_the_cap_and_no_further(rule, c
     assert f"BREACHED RULES: {rule} {cap + 1}/{cap} (+6)" in capsys.readouterr().out
 
 
-def test_an_any_rule_already_over_its_cap_at_base_does_not_fail_a_bystander(capsys):
-    over = gate.ANY_CAPS["reportAny"] + 50
+def test_an_any_rule_already_over_its_cap_at_base_does_not_fail_a_bystander(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    over: Final = gate.ANY_CAPS["reportAny"] + 50
     gate.judge({"reportAny": over}, {"reportAny": over}, "a" * 40)
     assert "OK" in capsys.readouterr().out
 
 
-def test_rules_without_a_cap_may_not_grow_past_their_base(capsys):
+def test_rules_without_a_cap_may_not_grow_past_their_base(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit):
         gate.judge({"reportArgumentType": 4}, {"reportArgumentType": 3}, "a" * 40)
     assert "BREACHED RULES: reportArgumentType 4/3 (+1)" in capsys.readouterr().out
 
 
-def test_no_head_output_is_refused_as_vacuous_before_any_base_lookup(capsys):
+def test_no_head_output_is_refused_as_vacuous_before_any_base_lookup(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as exit_info:
         gate.cmd_check({}, "irrelevant-base-ref")
     assert exit_info.value.code == 1

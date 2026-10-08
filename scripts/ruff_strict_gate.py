@@ -22,7 +22,7 @@ import subprocess
 import sys
 import tempfile
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Final, NamedTuple
 
@@ -62,8 +62,10 @@ def ruff_version() -> str:
     return _run(["ruff", "--version"]).strip()
 
 
-def checker_identity() -> Checker:
-    return Checker("ruff-strict", (sha256_of(STRICT_CONFIG), sha256_of(BASE_CONFIG), ruff_version()))
+def checker_identity(
+    strict_config: Path = STRICT_CONFIG, base_config: Path = BASE_CONFIG, version: Callable[[], str] = ruff_version
+) -> Checker:
+    return Checker("ruff-strict", (sha256_of(strict_config), sha256_of(base_config), version()))
 
 
 def _ruff_json(cwd: Path, config: Path) -> list:

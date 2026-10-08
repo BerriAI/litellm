@@ -14,9 +14,8 @@ import time
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
-from typing import NamedTuple
+from typing import Final, NamedTuple
 
-import lint_base_counts
 import test_quality_gate as gate
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -30,9 +29,13 @@ _SCAN_BASE = (
 _SCAN_BASE_WITH_SIGHUP_IGNORED = "import signal\nsignal.signal(signal.SIGHUP, signal.SIG_IGN)\n" + _SCAN_BASE
 
 
-def test_the_checker_identity_is_keyed_on_the_checker_source():
-    identity = gate.checker_identity()
-    assert identity == lint_base_counts.Checker("test-quality", (lint_base_counts.sha256_of(gate.CHECKER),))
+def test_editing_the_checker_rekeys_the_base_counts(tmp_path: Path) -> None:
+    checker: Final = tmp_path / "check.py"
+    checker.write_text("print('v1')\n")
+    before: Final = gate.checker_identity(checker).artifact_name("abc123")
+    assert gate.checker_identity(checker).artifact_name("abc123") == before
+    checker.write_text("print('v2')\n")
+    assert gate.checker_identity(checker).artifact_name("abc123") != before
 
 
 def test_parse_changed_lines_groups_hunks_under_their_own_file():

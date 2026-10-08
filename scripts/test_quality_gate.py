@@ -65,8 +65,8 @@ def _run(cmd: Sequence[str], cwd: Path = REPO_ROOT) -> str:
     return proc.stdout
 
 
-def checker_identity() -> Checker:
-    return Checker("test-quality", (sha256_of(CHECKER),))
+def checker_identity(checker: Path = CHECKER) -> Checker:
+    return Checker("test-quality", (sha256_of(checker),))
 
 
 def _check(root: Path, checker: Path) -> tuple[Violation, ...]:

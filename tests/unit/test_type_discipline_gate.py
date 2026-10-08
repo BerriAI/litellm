@@ -5,17 +5,23 @@ what is pinned here is the identity that keys those base counts and the diff sca
 that turns a breach into file:line.
 """
 
-import lint_base_counts
+from pathlib import Path
+from typing import Final
+
 import type_discipline_gate as gate
 
 
-def test_the_checker_identity_is_keyed_on_the_checker_source():
-    identity = gate.checker_identity()
-    assert identity == lint_base_counts.Checker("type-discipline", (lint_base_counts.sha256_of(gate.CHECKER),))
+def test_editing_the_checker_rekeys_the_base_counts(tmp_path: Path) -> None:
+    checker: Final = tmp_path / "check.py"
+    checker.write_text("print('v1')\n")
+    before: Final = gate.checker_identity(checker).artifact_name("abc123")
+    assert gate.checker_identity(checker).artifact_name("abc123") == before
+    checker.write_text("print('v2')\n")
+    assert gate.checker_identity(checker).artifact_name("abc123") != before
 
 
-def test_parse_changed_lines_groups_hunks_under_their_own_file():
-    diff = (
+def test_parse_changed_lines_groups_hunks_under_their_own_file() -> None:
+    diff: Final = (
         "diff --git a/litellm/a.py b/litellm/a.py\n"
         "--- a/litellm/a.py\n"
         "+++ b/litellm/a.py\n"
@@ -28,13 +34,13 @@ def test_parse_changed_lines_groups_hunks_under_their_own_file():
         "@@ -0,0 +10 @@\n"
         "+only\n"
     )
-    changed = gate.parse_changed_lines(diff)
+    changed: Final = gate.parse_changed_lines(diff)
     assert changed["litellm/a.py"] == {3, 4}
     assert changed["litellm/b.py"] == {10}
 
 
-def test_parse_changed_lines_handles_several_hunks_in_one_file():
-    diff = (
+def test_parse_changed_lines_handles_several_hunks_in_one_file() -> None:
+    diff: Final = (
         "+++ b/litellm/a.py\n"
         "@@ -0,0 +1,2 @@\n"
         "+a\n"
@@ -44,15 +50,15 @@ def test_parse_changed_lines_handles_several_hunks_in_one_file():
     assert gate.parse_changed_lines(diff)["litellm/a.py"] == {1, 2, 20}
 
 
-def test_parse_changed_lines_on_an_empty_diff_is_empty():
+def test_parse_changed_lines_on_an_empty_diff_is_empty() -> None:
     assert gate.parse_changed_lines("") == {}
 
 
-def test_introduced_keeps_only_violations_on_changed_lines():
-    violations = (
+def test_introduced_keeps_only_violations_on_changed_lines() -> None:
+    violations: Final = (
         gate.Violation("litellm/a.py", 3, "LIT006"),
         gate.Violation("litellm/a.py", 99, "LIT006"),
         gate.Violation("litellm/b.py", 3, "LIT001"),
     )
-    kept = gate.introduced(violations, {"litellm/a.py": {3}})
+    kept: Final = gate.introduced(violations, {"litellm/a.py": {3}})
     assert kept == [gate.Violation("litellm/a.py", 3, "LIT006")]
