@@ -1,0 +1,198 @@
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import type { KeyResponse } from "@/components/key_team_helpers/key_list";
+import { keyDetailHref } from "@/utils/entityLinks";
+import { uiHref } from "@/utils/uiHref";
+import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
+import { CommandPaletteProvider } from "./CommandPaletteProvider";
+import { CommandPaletteTrigger } from "./CommandPaletteTrigger";
+
+const mocks = vi.hoisted(() => ({
+  pathname: "/api-keys",
+  push: vi.fn<(href: string) => void>(),
+  useKeys: vi.fn(),
+}));
+
+vi.mock("next/navigation", () => ({
+  usePathname: () => mocks.pathname,
+  useRouter: () => ({ push: mocks.push }),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
+  useKeys: mocks.useKeys,
+}));
+
+const PROD_KEY = keyFixture("key-prod-1", "prod-backend", "sk-...AHeA", "platform-team");
+const STAGING_KEY = keyFixture("key-staging-1", "staging-agent", "sk-...stgB");
+const KEY_FIXTURES = [PROD_KEY, STAGING_KEY];
+
+function keyFixture(token: string, alias: string, keyName: string, teamAlias = ""): KeyResponse {
+  return {
+    token,
+    token_id: token,
+    key_name: keyName,
+    key_alias: alias,
+    spend: 2.5,
+    team_id: teamAlias ? "team-1" : null,
+    team_alias: teamAlias,
+  } as KeyResponse;
+}
+
+function sessionCookie() {
+  const encode = (value: object) =>
+    btoa(JSON.stringify(value)).replaceAll("=", "").replaceAll("+", "-").replaceAll("/", "_");
+  const claims = {
+    key: "sk-session-test",
+    user_id: "test-admin",
+    user_role: "proxy_admin",
+    premium_user: true,
+    auth_header_name: "X-Gateway-Session",
+    exp: Date.now() / 1000 + 3600,
+  };
+  document.cookie = `token=${encode({ alg: "none" })}.${encode(claims)}.test; Path=/`;
+}
+
+function renderPalette() {
+  return renderWithProviders(
+    <CommandPaletteProvider>
+      <CommandPaletteTrigger />
+    </CommandPaletteProvider>,
+  );
+}
+
+beforeEach(() => {
+  testQueryClient.clear();
+  vi.clearAllMocks();
+  mocks.pathname = "/api-keys";
+  sessionCookie();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      Response.json({
+        server_root_path: "",
+        proxy_base_url: null,
+        admin_ui_disabled: false,
+        auto_redirect_to_sso: false,
+        sso_configured: false,
+        is_control_plane: false,
+        workers: [],
+      }),
+    ),
+  );
+  vi.mocked(useKeys).mockImplementation((_page, _pageSize, options) => {
+    const keys = KEY_FIXTURES.filter((key) => {
+      const query = options.search?.toLowerCase();
+      return !query || key.key_alias.toLowerCase().includes(query) || key.key_name.toLowerCase().includes(query);
+    });
+    return {
+      data: { keys, total_count: keys.length, current_page: 1, total_pages: 1 },
+      isFetching: false,
+      isError: false,
+    } as ReturnType<typeof useKeys>;
+  });
+});
+
+afterEach(() => {
+  testQueryClient.clear();
+  vi.unstubAllGlobals();
+  document.cookie = "token=; Max-Age=0; Path=/";
+});
+
+describe("CommandPalette integration", () => {
+  it("opens and focuses with Ctrl+K, rejects extra modifiers, and toggles closed", async () => {
+    renderPalette();
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true, shiftKey: true });
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true, altKey: true });
+    expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+    const input = await screen.findByRole("combobox", { name: "Search" });
+    expect(input).toHaveFocus();
+    fireEvent.change(input, { target: { value: "stale" } });
+
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+    expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+    const reopenedInput = await screen.findByRole("combobox", { name: "Search" });
+    expect(reopenedInput).toHaveValue("");
+  });
+
+  it("searches keys, shows key details, and opens the selected key", async () => {
+    const user = userEvent.setup();
+    renderPalette();
+
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+    const input = await screen.findByRole("combobox", { name: "Search" });
+    expect(input).toHaveAttribute("placeholder", "Search keys by alias or ID…");
+    expect(screen.getAllByText("Virtual Keys")).toHaveLength(2);
+
+    await user.type(input, "prod");
+    await waitFor(() => {
+      expect(vi.mocked(useKeys)).toHaveBeenLastCalledWith(
+        1,
+        8,
+        expect.objectContaining({ search: "prod", sortBy: "created_at", sortOrder: "desc", expand: "user" }),
+        { enabled: true },
+      );
+    });
+    const keyOption = await screen.findByRole("option", { name: /prod-backend/ });
+    expect(keyOption).toHaveTextContent("platform-team");
+    expect(keyOption).toHaveTextContent("$2.50");
+    expect(screen.queryByRole("option", { name: /staging-agent/ })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(mocks.push).toHaveBeenCalledWith(keyDetailHref(PROD_KEY.token));
+    expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument();
+  });
+
+  it("opens the virtual-key table with the current search applied", async () => {
+    const user = userEvent.setup();
+    renderPalette();
+
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+    const input = await screen.findByRole("combobox", { name: "Search" });
+    await user.type(input, "prod");
+    await waitFor(() => {
+      expect(vi.mocked(useKeys)).toHaveBeenLastCalledWith(1, 8, expect.objectContaining({ search: "prod" }), {
+        enabled: true,
+      });
+    });
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(mocks.push).toHaveBeenCalledWith(`${uiHref("api-keys")}?key_search=prod`);
+  });
+
+  it("opens a matching global page from the teams route", async () => {
+    const user = userEvent.setup();
+    mocks.pathname = "/teams";
+    renderPalette();
+
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+    const input = await screen.findByRole("combobox", { name: "Search" });
+    expect(input).toHaveAttribute("placeholder", "Search pages and actions…");
+    await user.type(input, "logs");
+
+    const logsOption = await screen.findByRole("option", { name: /^Logs/ });
+    expect(logsOption).toBeVisible();
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(mocks.push).toHaveBeenCalledWith(uiHref("logs"));
+  });
+
+  it("switches from an empty keys scope to global search on Backspace", async () => {
+    renderPalette();
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+    const input = await screen.findByRole("combobox", { name: "Search" });
+    expect(input).toHaveAttribute("placeholder", "Search keys by alias or ID…");
+
+    fireEvent.keyDown(input, { key: "Backspace" });
+    expect(input).toHaveAttribute("placeholder", "Search pages and actions…");
+  });
+});

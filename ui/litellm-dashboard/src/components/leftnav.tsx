@@ -103,7 +103,7 @@ interface SidebarProps {
   allowVectorStoresForTeamAdmins?: boolean;
 }
 
-interface MenuItem {
+export interface MenuItem {
   key: string;
   page: string;
   route?: string;
@@ -114,7 +114,7 @@ interface MenuItem {
   external_url?: string;
 }
 
-interface MenuGroup {
+export interface MenuGroup {
   groupLabel: string;
   items: MenuItem[];
   roles?: string[];
@@ -390,7 +390,7 @@ const menuGroups: MenuGroup[] = [
 
 const HOME_ROUTE = "api-keys";
 
-const routeOf = (item: MenuItem): string => item.route ?? item.page;
+export const routeOf = (item: MenuItem): string => item.route ?? item.page;
 
 const routeForPathname = (pathname: string): string => routeSegmentForPathname(pathname) || HOME_ROUTE;
 
@@ -422,6 +422,8 @@ const SECTION_DISPLAY: Record<string, string> = {
   SETTINGS: "Settings",
 };
 
+export const sectionText = (groupLabel: string): string => SECTION_DISPLAY[groupLabel] ?? groupLabel;
+
 const prettify = (key: string): string =>
   key
     .split(/[-_]/)
@@ -435,7 +437,7 @@ export const getBreadcrumb = (pathname: string): { section: string | null; title
   const route = routeForPathname(pathname);
   for (const group of menuGroups) {
     for (const item of group.items) {
-      const section = SECTION_DISPLAY[group.groupLabel] ?? group.groupLabel;
+      const section = sectionText(group.groupLabel);
       if (routeOf(item) === route) return { section, title: labelText(item) };
       const child = item.children?.find((c) => routeOf(c) === route);
       if (child) return { section, title: labelText(child) };
