@@ -101,6 +101,7 @@ def _build_responses_kwargs(
         include_encrypted_reasoning=_provider_returns_encrypted_reasoning(
             model, forwarded_kwargs.get("custom_llm_provider")
         ),
+        drop_params=bool(forwarded_kwargs.get("drop_params") or litellm.drop_params),
     )
 
     # Normalize reasoning effort based on model capabilities
