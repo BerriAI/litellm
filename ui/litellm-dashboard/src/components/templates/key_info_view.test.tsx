@@ -729,6 +729,17 @@ describe("KeyInfoView", () => {
       );
     });
 
+    it("keeps access-group model chips unlinked while access-group names are loading", async () => {
+      vi.mocked(useModelAccessGroupNames).mockReturnValue(undefined);
+      const keyData = { ...MOCK_KEY_DATA, models: ["repro-access-group"] };
+      renderWithProviders(
+        <KeyInfoView keyData={keyData} onClose={() => {}} keyId="test-key-id" onKeyDataUpdate={() => {}} teams={[]} />,
+      );
+
+      expect(await screen.findAllByText("repro-access-group")).not.toHaveLength(0);
+      expect(screen.queryByRole("link", { name: "repro-access-group" })).not.toBeInTheDocument();
+    });
+
     it("keeps the all-proxy-models grant chip non-clickable", async () => {
       const keyData = { ...MOCK_KEY_DATA, models: ["all-proxy-models"] };
       renderWithProviders(

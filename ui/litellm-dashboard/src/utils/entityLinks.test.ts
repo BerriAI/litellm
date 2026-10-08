@@ -60,4 +60,9 @@ describe("modelOrAccessGroupHref", () => {
   it("keeps grant sentinels without a link unless they are access groups", () => {
     expect(modelOrAccessGroupHref("all-team-models", new Set())).toBeUndefined();
   });
+
+  it("keeps model names unlinked until access group names are available", () => {
+    expect(modelOrAccessGroupHref("repro-access-group", undefined)).toBeUndefined();
+    expect(modelOrAccessGroupHref("gpt-4.1", undefined)).toBeUndefined();
+  });
 });

@@ -267,9 +267,9 @@ export const useUserModels = (): UseQueryResult<string[]> => {
   });
 };
 
-export const useModelAccessGroupNames = (): ReadonlySet<string> => {
+export const useModelAccessGroupNames = (): ReadonlySet<string> | undefined => {
   const { accessToken, userId, userRole } = useAuthorized();
-  const { data } = useQuery<string[]>({
+  const { data, isError } = useQuery<string[]>({
     queryKey: modelAccessGroupNameKeys.list({}),
     queryFn: async () => {
       const response: AllProxyModelsResponse = await modelAvailableCall(
@@ -285,7 +285,11 @@ export const useModelAccessGroupNames = (): ReadonlySet<string> => {
     },
     enabled: Boolean(accessToken && userId && userRole),
   });
-  return useMemo(() => new Set(data ?? []), [data]);
+  return useMemo(() => {
+    if (isError) return new Set<string>();
+    if (data === undefined) return undefined;
+    return new Set(data);
+  }, [data, isError]);
 };
 
 export const useSelectedTeamModels = (teamID: string | null) => {

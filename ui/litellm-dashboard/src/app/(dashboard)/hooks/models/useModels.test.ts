@@ -595,8 +595,11 @@ describe("useModelAccessGroupNames", () => {
     React.createElement(QueryClientProvider, { client: queryClient }, children);
 
   it("fetches and returns the caller's model access group names", async () => {
-    (modelAvailableCall as any).mockResolvedValue({
-      data: [{ id: "repro-access-group" }, { id: "another-access-group" }],
+    vi.mocked(modelAvailableCall).mockResolvedValue({
+      data: [
+        { id: "repro-access-group", object: "model", created: 0, owned_by: "litellm" },
+        { id: "another-access-group", object: "model", created: 0, owned_by: "litellm" },
+      ],
     });
 
     const { result } = renderHook(() => useModelAccessGroupNames(), { wrapper });
@@ -614,6 +617,42 @@ describe("useModelAccessGroupNames", () => {
       true,
       true,
     );
+  });
+
+  it("returns undefined while the access-group lookup is pending", () => {
+    vi.mocked(modelAvailableCall).mockReturnValue(new Promise<AllProxyModelsResponse>(() => undefined));
+
+    const { result } = renderHook(() => useModelAccessGroupNames(), { wrapper });
+
+    expect(result.current).toBeUndefined();
+  });
+
+  it("returns undefined until authorization is ready", () => {
+    const unauthorizedContext = {
+      accessToken: null,
+      userId: null,
+      userRole: null,
+      token: null,
+      userEmail: "test@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: null,
+      showSSOBanner: false,
+    };
+    mockUseAuthorized.mockReturnValue(unauthorizedContext);
+
+    const { result } = renderHook(() => useModelAccessGroupNames(), { wrapper });
+
+    expect(result.current).toBeUndefined();
+    expect(modelAvailableCall).not.toHaveBeenCalled();
+  });
+
+  it("returns an empty set when the access-group lookup fails", async () => {
+    vi.mocked(modelAvailableCall).mockRejectedValue(new Error("lookup failed"));
+
+    const { result } = renderHook(() => useModelAccessGroupNames(), { wrapper });
+
+    await waitFor(() => expect(result.current).toBeDefined());
+    expect(result.current?.size).toBe(0);
   });
 });
 

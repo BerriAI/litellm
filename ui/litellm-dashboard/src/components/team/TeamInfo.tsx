@@ -155,7 +155,10 @@ const TEAM_MODEL_BADGE_TONES: Record<TeamModelBadgeKind, StatusTone> = {
   "access-group": "success",
 };
 
-const teamModelBadgeHref = (badge: TeamModelBadge, accessGroupNames: ReadonlySet<string>): string | undefined => {
+const teamModelBadgeHref = (
+  badge: TeamModelBadge,
+  accessGroupNames: ReadonlySet<string> | undefined,
+): string | undefined => {
   if (badge.kind === "direct") return modelOrAccessGroupHref(badge.label, accessGroupNames);
   if (badge.kind === "access-group") return modelGroupHref(badge.label);
   return undefined;

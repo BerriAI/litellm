@@ -34,6 +34,10 @@ export function accessGroupHref(accessGroup: string): string {
   return `${uiHref("models-and-endpoints")}?access_group=${encodeURIComponent(accessGroup)}`;
 }
 
-export function modelOrAccessGroupHref(name: string, accessGroupNames: ReadonlySet<string>): string | undefined {
+export function modelOrAccessGroupHref(
+  name: string,
+  accessGroupNames: ReadonlySet<string> | undefined,
+): string | undefined {
+  if (accessGroupNames === undefined) return undefined;
   return accessGroupNames.has(name) ? accessGroupHref(name) : modelGroupHref(name);
 }
