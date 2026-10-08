@@ -20,7 +20,8 @@ from litellm.proxy.guardrails.guardrail_registry import (
     guardrail_class_registry,
     guardrail_initializer_registry,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import GenericGuardrailAPIInputs, ModelResponse
 
 
 def test_akto_in_guardrail_initializer_registry():
@@ -1869,3 +1870,96 @@ async def test_a_modified_verdict_that_changed_no_text_blocks(akto_pre_call, sam
             inputs=sample_inputs, request_data=sample_request_data, input_type="request"
         )
     assert exc_info.value.message == "Content masked by Akto guardrail policy could not be applied"
+
+
+def _logged_call(text="Hello, how are you?"):
+    return {
+        "model": "gpt-5.5",
+        "messages": [{"role": "user", "content": text}],
+        "litellm_call_id": "call-1",
+        "litellm_params": {"metadata": {"user_api_key_request_route": "/v1/chat/completions"}},
+        "standard_logging_object": {"guardrail_information": []},
+    }
+
+
+def _logged_response(text="Fine, thanks"):
+    return ModelResponse(id="resp-1", choices=[{"message": {"role": "assistant", "content": text}}])
+
+
+def test_logging_only_is_a_supported_mode():
+    assert GuardrailEventHooks.logging_only in AktoGuardrail.get_supported_event_hooks()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("input_type", ["request", "response"])
+async def test_logging_only_handles_both_directions(input_type):
+    g = _akto("logging_only")
+    g.async_handler.post = AsyncMock(return_value=_mock_allowed_response())
+    request_data = _with_complete_response({}) if input_type == "response" else {}
+
+    await g.apply_guardrail(
+        inputs=GenericGuardrailAPIInputs(texts=["hi"]), request_data=request_data, input_type=input_type
+    )
+
+    g.async_handler.post.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_logging_only_checks_and_records_the_logged_request_and_response():
+    g = _akto("logging_only")
+    g.async_handler.post = AsyncMock(return_value=_mock_allowed_response())
+
+    await g.async_logging_hook(_logged_call(), _logged_response(), "acompletion")
+
+    sent = _calls(g)
+    assert [params for params, _ in sent] == [
+        {"akto_connector": "litellm", "guardrails": "true", "ingest_data": "true"},
+        {"akto_connector": "litellm", "response_guardrails": "true", "ingest_data": "true"},
+    ]
+    assert "Hello, how are you?" in sent[0][1]["requestPayload"]
+    assert "Fine, thanks" in sent[1][1]["responsePayload"]
+
+
+@pytest.mark.asyncio
+async def test_logging_only_block_verdict_is_recorded_without_raising():
+    g = _akto("logging_only")
+    g.async_handler.post = AsyncMock(return_value=_mock_blocked_response("Rejected"))
+    response = _logged_response()
+
+    out_kwargs, out_result = await g.async_logging_hook(_logged_call(), response, "acompletion")
+
+    assert out_result is response
+    g.async_handler.post.assert_called()
+    [entry] = out_kwargs["standard_logging_object"]["guardrail_information"]
+    assert (entry["guardrail_name"], entry["guardrail_mode"], entry["guardrail_status"]) == (
+        "test-logging_only",
+        "logging_only",
+        "guardrail_intervened",
+    )
+
+
+@pytest.mark.asyncio
+async def test_logging_only_ignores_an_unreachable_akto_even_when_fail_closed():
+    g = _akto("logging_only", unreachable_fallback="fail_closed")
+    g.async_handler.post = AsyncMock(side_effect=httpx.ConnectError("refused"))
+    response = _logged_response()
+
+    _, out_result = await g.async_logging_hook(_logged_call(), response, "acompletion")
+
+    assert out_result is response
+    g.async_handler.post.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_logging_only_sends_each_attachment_once():
+    g = _akto("logging_only")
+    g.async_handler.post = _file_verdict({"Allowed": True})
+    image = {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}
+    call = {**_logged_call(), "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}, image]}]}
+
+    await g.async_logging_hook(call, _logged_response(), "acompletion")
+
+    [file_call] = _file_calls(g)
+    assert json.loads(file_call.kwargs["data"])["files"] == [
+        {"filename": "a.png", "type": "image", "url": "https://example.com/a.png"}
+    ]
