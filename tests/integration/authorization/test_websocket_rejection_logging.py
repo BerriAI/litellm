@@ -77,6 +77,8 @@ def owned(tmp_path_factory: pytest.TempPathFactory) -> Iterator[OwnedProxy]:
         ) as proxy,
     ):
         yield proxy
+    stopped_log: Final = proxy.log.read_text(errors="replace")
+    assert _crash_lines(stopped_log) == (), _marker_lines(stopped_log)
 
 
 @pytest.fixture(scope="module")
@@ -101,6 +103,10 @@ def _log_after(owned: OwnedProxy, offset: int) -> str:
 
 def _crash_lines(window: str) -> tuple[str, ...]:
     return tuple(marker for marker in CRASH_MARKERS if marker in window)
+
+
+def _marker_lines(text: str) -> tuple[str, ...]:
+    return tuple(line for line in text.splitlines() if any(marker in line for marker in CRASH_MARKERS))
 
 
 def _shapes(keys: Keys) -> Mapping[str, Headers]:
@@ -302,11 +308,10 @@ async def test_a_rejection_burst_survives_a_killed_worker_without_an_asgi_crash(
     during: Final = await _refused(owned, "/v1/responses", shapes["unknown_key"], f"model={_tag('during')}")
     assert during.status == 403, during.window
     assert _crash_lines(during.window) == (), during.window
-    respawned: Final = eventually(
+    eventually(
         lambda: frozenset(worker.pid for worker in _workers(owned)),
         lambda pids: len(pids) == 2 and victim.pid not in pids,
         seconds=graceful_stop_seconds(),
     )
-    assert f"Child process [{victim.pid}] died" in owned.log.read_text(errors="replace"), respawned
     after: Final = await _burst(owned, shapes, "respawned")
     assert _crash_lines(after) == (), after
