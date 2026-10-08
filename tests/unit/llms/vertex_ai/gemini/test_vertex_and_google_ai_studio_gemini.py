@@ -2153,14 +2153,13 @@ def test_vertex_ai_gemini_3_penalty_parameters_unsupported():
             "presence_penalty" not in result
         ), f"presence_penalty should be filtered out for Gemini 3 model {model}"
 
-        # Other parameters should still be included
+        # Gemini 3 sampling parameters should be filtered out
         assert (
-            "temperature" in result
-        ), f"temperature should still be included for Gemini 3 model {model}"
+            "temperature" not in result
+        ), f"temperature should be filtered out for Gemini 3 model {model}"
         assert (
             "max_output_tokens" in result
         ), f"max_output_tokens should still be included for Gemini 3 model {model}"
-        assert result["temperature"] == 0.7
         assert result["max_output_tokens"] == 100
 
     # Test that non-Gemini 3 models still support penalty parameters (if they're not in the unsupported list)
@@ -2485,7 +2484,7 @@ def test_is_gemini_3_or_newer():
     ],
 )
 def test_gemini_3_reasoning_effort_maps_to_thinking_level(model: str):
-    """Test that reasoning_effort maps to thinkingLevel and default temperature=1.0"""
+    """Test that reasoning_effort maps to thinkingLevel without temperature."""
     from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
@@ -2510,7 +2509,7 @@ def test_gemini_3_reasoning_effort_maps_to_thinking_level(model: str):
             "thinkingLevel": effort,
             "includeThoughts": True,
         }
-        assert mapped["temperature"] == 1.0
+        assert "temperature" not in mapped
         assert "thinkingBudget" not in mapped["thinkingConfig"]
 
 
@@ -2945,28 +2944,66 @@ def test_reasoning_effort_dict_format_gemini_3():
     assert "thinkingConfig" not in result
 
 
-def test_temperature_default_for_gemini_3():
-    """Test that temperature defaults to 1.0 for Gemini 3+ models when not specified"""
+def test_sampling_params_are_removed_for_gemini_3():
+    """Gemini 3 requests must not include unsupported sampling parameters."""
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
     )
 
     v = VertexGeminiConfig()
     model = "gemini-3-pro-preview"
-    optional_params = {}
-
-    # No temperature specified
-    non_default_params = {}
     result = v.map_openai_params(
-        non_default_params=non_default_params,
-        optional_params=optional_params,
+        non_default_params={"temperature": 0.7, "top_p": 0.8, "top_k": 20},
+        optional_params={},
         model=model,
         drop_params=False,
     )
 
-    # Should default to 1.0
-    assert "temperature" in result
-    assert result["temperature"] == 1.0
+    assert "temperature" not in result
+    assert "top_p" not in result
+    assert "top_k" not in result
+
+
+@pytest.mark.parametrize("model", ["gemini-2.5-pro", "gemini-4-pro-preview"])
+def test_sampling_params_are_preserved_outside_gemini_3(model: str):
+    sampling_params: Final = {"temperature": 0.7, "top_p": 0.8, "top_k": 20}
+
+    result = VertexGeminiConfig().map_openai_params(
+        non_default_params=sampling_params,
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert result == sampling_params
+
+
+@pytest.mark.parametrize(
+    "custom_llm_provider",
+    ["gemini", "vertex_ai", "vertex_ai_beta"],
+)
+def test_get_optional_params_removes_sampling_params_for_gemini_3(
+    custom_llm_provider: str,
+):
+    from litellm.utils import get_optional_params
+
+    optional_params = get_optional_params(
+        model="gemini-3-pro-preview",
+        custom_llm_provider=custom_llm_provider,
+        temperature=0.7,
+        top_p=0.8,
+        top_k=20,
+        reasoning_effort="medium",
+        allowed_openai_params=["temperature", "top_p"],
+    )
+
+    assert optional_params["thinkingConfig"] == {
+        "thinkingLevel": "medium",
+        "includeThoughts": True,
+    }
+    assert "temperature" not in optional_params
+    assert "top_p" not in optional_params
+    assert "top_k" not in optional_params
 
 
 def test_media_resolution_from_detail_parameter():
@@ -3216,8 +3253,7 @@ def test_gemini_3_image_models_no_thinking_config():
 
     # Should NOT have thinkingConfig automatically added
     assert "thinkingConfig" not in result
-    # But should still get temperature=1.0 for Gemini 3
-    assert result["temperature"] == 1.0
+    assert "temperature" not in result
 
 
 def test_gemini_3_text_models_get_thinking_config():
@@ -3245,7 +3281,7 @@ def test_gemini_3_text_models_get_thinking_config():
 
     # Should NOT have thinkingConfig automatically added when user provides no reasoning_effort
     assert "thinkingConfig" not in result
-    assert result["temperature"] == 1.0
+    assert "temperature" not in result
 
 
 def test_gemini_image_models_excluded_from_thinking():

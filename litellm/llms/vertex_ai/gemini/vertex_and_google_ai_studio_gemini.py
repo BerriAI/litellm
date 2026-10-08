@@ -306,6 +306,22 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return cls._is_gemini_3_or_newer(model)
 
     @staticmethod
+    def _is_gemini_3(model: str) -> bool:
+        model_name: Final = model.split("/")[-1].lower()
+        return re.match(r"^gemini-3(?:[.-]|$)", model_name) is not None
+
+    @classmethod
+    def drop_gemini_3_sampling_params(
+        cls,
+        optional_params: dict[str, object],
+        model: str,
+    ) -> None:
+        if not cls._is_gemini_3(model):
+            return
+        for param in ("temperature", "top_p", "top_k"):
+            optional_params.pop(param, None)
+
+    @staticmethod
     def _forward_gemini_function_call_id(model: str) -> bool:
         """
         Whether to include `id` on function_call / function_response parts.
@@ -1139,37 +1155,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         drop_params: bool,
     ) -> dict:
         self._apply_include_server_side_tool_invocations(non_default_params, optional_params)
-        gemini_sampling_params_warned: bool = False
         for param, value in non_default_params.items():
             if param == "temperature":
-                if VertexGeminiConfig._is_gemini_3_or_newer(model):
-                    if value is not None and value < 1.0:
-                        verbose_logger.info(
-                            "Warning: Setting temperature < 1.0 for Gemini 3 models (%s) can cause infinite loops, degraded reasoning performance, and failure on complex tasks. Strongly recommended to use temperature = 1.0 (default).",
-                            model,
-                        )
-                    if not gemini_sampling_params_warned:
-                        verbose_logger.warning(
-                            "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to function for Gemini 3+ (%s) but are planned for removal in a future release. Move sampling guidance into the `system` instructions instead.",
-                            model,
-                        )
-                        gemini_sampling_params_warned = True
                 optional_params["temperature"] = value
             elif param == "top_p":
-                if VertexGeminiConfig._is_gemini_3_or_newer(model) and not gemini_sampling_params_warned:
-                    verbose_logger.warning(
-                        "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to function for Gemini 3+ (%s) but are planned for removal in a future release. Move sampling guidance into the `system` instructions instead.",
-                        model,
-                    )
-                    gemini_sampling_params_warned = True
                 optional_params["top_p"] = value
             elif param == "top_k":
-                if VertexGeminiConfig._is_gemini_3_or_newer(model) and not gemini_sampling_params_warned:
-                    verbose_logger.warning(
-                        "DeprecationWarning: `temperature`, `top_p`, and `top_k` continue to function for Gemini 3+ (%s) but are planned for removal in a future release. Move sampling guidance into the `system` instructions instead.",
-                        model,
-                    )
-                    gemini_sampling_params_warned = True
                 optional_params["top_k"] = value
             elif (
                 param == "stream" and value is True
@@ -1275,10 +1266,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif "AUDIO" not in optional_params["responseModalities"]:
                 optional_params["responseModalities"].append("AUDIO")
 
-        # Set default temperature to 1.0 for Gemini 3 models if not specified
-        if VertexGeminiConfig._is_gemini_3_or_newer(model):
-            if "temperature" not in optional_params:
-                optional_params["temperature"] = 1.0
+        VertexGeminiConfig.drop_gemini_3_sampling_params(
+            optional_params=optional_params,
+            model=model,
+        )
 
         self._drop_search_tools_mixed_with_functions(optional_params)
 

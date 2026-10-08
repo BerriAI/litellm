@@ -5066,6 +5066,12 @@ def get_optional_params(
         for path in nested_paths:
             optional_params = delete_nested_value(optional_params, path)
 
+    if custom_llm_provider in {"gemini", "vertex_ai", "vertex_ai_beta"}:
+        litellm.VertexGeminiConfig.drop_gemini_3_sampling_params(
+            optional_params=optional_params,
+            model=model,
+        )
+
     return optional_params
 
 
