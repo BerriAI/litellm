@@ -1262,7 +1262,9 @@ async def update_sso_settings(
         if isinstance(stored, str):
             stored = json.loads(stored)
         if isinstance(stored, dict):
-            before_sso_data = proxy_config._decrypt_db_variables(stored)
+            before_sso_data = (  # rebind-ok: pre-existing rebinding on a rename-only line
+                proxy_config.decrypt_db_variables(stored)
+            )
 
     # Load existing config
     config: Final = await proxy_config.get_config()
@@ -1286,7 +1288,7 @@ async def update_sso_settings(
                 # Clear environment variable if value is null/empty
                 os.environ.pop(env_var_name, None)
 
-    encrypted_sso_data: Final = proxy_config._encrypt_env_variables(environment_variables=sso_data)
+    encrypted_sso_data: Final = proxy_config.encrypt_env_variables(environment_variables=sso_data)
 
     # Save to dedicated SSO table
     await _stored_sso_settings_db(SSOConfigRepository(prisma_client)).upsert(
@@ -1554,7 +1556,7 @@ async def update_mcp_semantic_filter_settings(
         from litellm.proxy.proxy_server import prisma_client, proxy_config
 
         if prisma_client is not None:
-            await proxy_config._init_semantic_filter_settings_in_db(prisma_client=prisma_client)
+            await proxy_config.init_semantic_filter_settings_in_db(prisma_client=prisma_client)
     except Exception as e:
         verbose_proxy_logger.warning("Failed to reinitialize MCP semantic filter settings immediately: %s", e)
 

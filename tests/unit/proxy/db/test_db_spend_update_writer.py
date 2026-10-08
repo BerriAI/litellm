@@ -997,7 +997,7 @@ async def test_commit_spend_updates_to_db_increments_agent_spend():
         "agent_list_transactions": {agent_id: response_cost},
     }
 
-    with patch("litellm.proxy.utils._raise_failed_update_spend_exception"):
+    with patch("litellm.proxy.utils.raise_failed_update_spend_exception"):
         await db_writer._commit_spend_updates_to_db(
             prisma_client=mock_prisma_client,
             n_retry_times=0,
@@ -2029,7 +2029,7 @@ async def test_commit_key_spend_updates_includes_last_active():
 
     before_call = datetime.now(timezone.utc)
 
-    with patch("litellm.proxy.utils._raise_failed_update_spend_exception"):
+    with patch("litellm.proxy.utils.raise_failed_update_spend_exception"):
         await db_writer._commit_spend_updates_to_db(
             prisma_client=mock_prisma_client,
             n_retry_times=0,
@@ -3608,7 +3608,7 @@ async def test_commit_spend_updates_to_db_does_not_stamp_key_settings_updated_at
         "agent_list_transactions": {},
     }
 
-    with patch("litellm.proxy.utils._raise_failed_update_spend_exception"):
+    with patch("litellm.proxy.utils.raise_failed_update_spend_exception"):
         await db_writer._commit_spend_updates_to_db(
             prisma_client=mock_prisma_client,
             n_retry_times=0,

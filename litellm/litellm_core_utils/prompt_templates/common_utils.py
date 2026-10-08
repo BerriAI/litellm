@@ -568,9 +568,9 @@ def update_messages_with_model_file_ids(
     }
     """
     from litellm.proxy.openai_files_endpoints.common_utils import (
-        _is_base64_encoded_unified_file_id,
         convert_b64_uid_to_unified_uid,
         get_original_file_id,
+        is_base64_encoded_unified_file_id,
         is_model_embedded_id,
     )
 
@@ -606,7 +606,7 @@ def update_messages_with_model_file_ids(
                                 if model_file_id_mapping and model_id is not None
                                 else None
                             )
-                            if not provider_file_id and _is_base64_encoded_unified_file_id(file_id):
+                            if not provider_file_id and is_base64_encoded_unified_file_id(file_id):
                                 unified_file_id = convert_b64_uid_to_unified_uid(file_id)
                                 if "llm_output_file_id," in unified_file_id:
                                     provider_file_id = unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
@@ -637,9 +637,9 @@ def update_responses_input_with_model_file_ids(
                                Format: {"litellm_file_id": {"model_id": "provider_file_id"}}
     """
     from litellm.proxy.openai_files_endpoints.common_utils import (
-        _is_base64_encoded_unified_file_id,
         convert_b64_uid_to_unified_uid,
         get_original_file_id,
+        is_base64_encoded_unified_file_id,
         is_model_embedded_id,
     )
 
@@ -674,7 +674,7 @@ def update_responses_input_with_model_file_ids(
                             updated_content.append(updated_content_item)
                         else:
                             # Check if this is a base64-encoded unified file ID without mapping
-                            is_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
+                            is_unified_file_id = is_base64_encoded_unified_file_id(file_id)
                             if is_unified_file_id:
                                 # Fallback: decode unified file ID
                                 unified_file_id = convert_b64_uid_to_unified_uid(file_id)

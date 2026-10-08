@@ -188,16 +188,17 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     enabled: dailyActivityRequest !== null,
     deps: [accessToken, startTime, endTime, effectiveUserId],
   });
-  // Per-day tag activity for the Top agents chart; each day's User-Agent tags are folded into agents.
-  // Not user-scoped: tags are deployment-wide, the same as the User Agent Activity view.
+  // Tag data is deployment-wide with no per-user dimension, so Top agents only appears where the
+  // rest of the page is deployment-wide too: an admin's global view with no user selected.
+  const showTopAgents = isAdmin && usageView === "global" && effectiveUserId === null;
   const tagDailyRequest = useMemo<DailyActivityRequest | null>(
     () => (accessToken && startTime && endTime ? { accessToken, startTime, endTime, entityIds: null } : null),
     [accessToken, startTime, endTime],
   );
   const { data: tagDailyRaw, loading: tagDailyLoading } = useAggregatedDailyActivity({
     fetch: () => ENTITY_API.tag.aggregated(tagDailyRequest as DailyActivityRequest),
-    enabled: tagDailyRequest !== null && canViewTagUsage,
-    deps: [accessToken, startTime, endTime, canViewTagUsage],
+    enabled: tagDailyRequest !== null && showTopAgents,
+    deps: [accessToken, startTime, endTime, showTopAgents],
   });
   const tagDaily = useMemo(() => toDailyData(tagDailyRaw), [tagDailyRaw]);
   const [agentActivityTags, setAgentActivityTags] = useState<readonly string[] | undefined>(undefined);
@@ -257,7 +258,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     () => rollUpBreakdown(userSpendData.results, "providers").map(({ key, ...row }) => ({ provider: key, ...row })),
     [userSpendData.results],
   );
-  const { data: tagSummary, isLoading: tagSummaryLoading } = useTagSummary(startTime, endTime);
+  const { data: tagSummary, isLoading: tagSummaryLoading } = useTagSummary(startTime, endTime, showTopAgents);
 
   // Calculate top API keys from the breakdown data
   const topKeys = useMemo<TopKeyItem[]>(
@@ -414,13 +415,13 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                       ) : null
                     }
                     topAgents={
-                      canViewTagUsage ? (
+                      showTopAgents ? (
                         <TopAgents
                           rows={tagSummary}
                           daily={tagDaily}
                           loading={tagSummaryLoading || tagDailyLoading}
                           totalTokens={totals.tokens}
-                          onOpenAgent={isAdmin ? openAgentActivity : undefined}
+                          onOpenAgent={openAgentActivity}
                         />
                       ) : null
                     }

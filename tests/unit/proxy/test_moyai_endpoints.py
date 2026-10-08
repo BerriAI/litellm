@@ -1,10 +1,13 @@
 import json
 import time
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from litellm._internal_context import current_service_target
+from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
 
@@ -270,6 +273,37 @@ async def test_exchange_concurrent_replay_claims_nonce_once(monkeypatch: pytest.
     assert len(successes) == 1
     assert len(rejections) == 1
     assert len(mint_calls) == 1
+
+
+def _target_recording_cache(cache: DualCache) -> SimpleNamespace:
+    async def _set(key: str, value: object, **kwargs: object) -> None:
+        await cache.async_set_cache(key=f"{key}:service_target", value=current_service_target())
+        await cache.async_set_cache(key=key, value=value, **kwargs)
+
+    return SimpleNamespace(async_set_cache=_set)
+
+
+@pytest.mark.asyncio
+async def test_persist_moyai_url_writes_ui_settings_cache_under_config_params_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.moyai_endpoints import _persist_moyai_url
+    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import UI_SETTINGS_CACHE_KEY
+    from litellm.proxy.utils import CONFIG_PARAMS_TARGET
+
+    cache: Final = DualCache()
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", _target_recording_cache(cache))
+
+    prisma: Final = MagicMock()
+    prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+    prisma.db.litellm_uisettings.upsert = AsyncMock()
+
+    await _persist_moyai_url(prisma, "https://moyai.example.com")
+
+    assert await cache.async_get_cache(key=f"{UI_SETTINGS_CACHE_KEY}:service_target") == CONFIG_PARAMS_TARGET
+    assert await cache.async_get_cache(key=UI_SETTINGS_CACHE_KEY) == {"moyai_url": "https://moyai.example.com"}
+    assert current_service_target() is None
 
 
 @pytest.mark.asyncio

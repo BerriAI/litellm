@@ -1231,6 +1231,34 @@ def test_branchless_provider_transport_error_maps_to_api_connection_error():
         )
 
 
+def test_openrouter_transport_error_maps_to_api_connection_error():
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(status_code=500, message="[Errno 111] Connection refused")
+    original_exception.status_code_is_synthesized = True
+
+    with pytest.raises(litellm.APIConnectionError):
+        exception_type(
+            model="typesafe/jev-1.13",
+            original_exception=original_exception,
+            custom_llm_provider="openrouter",
+        )
+
+
+def test_openrouter_upstream_500_still_maps_to_api_error():
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(status_code=500, message="upstream exploded")
+
+    with pytest.raises(litellm.APIError) as excinfo:
+        exception_type(
+            model="typesafe/jev-1.13",
+            original_exception=original_exception,
+            custom_llm_provider="openrouter",
+        )
+    assert excinfo.value.status_code == 500
+
+
 def test_branchless_provider_upstream_500_still_maps_to_internal_server_error():
     from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
