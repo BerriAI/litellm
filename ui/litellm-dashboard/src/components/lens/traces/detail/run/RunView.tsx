@@ -17,6 +17,7 @@ import type { Trace } from "../../types";
 import { PagingBanner } from "./PagingBanner";
 import { RunBody } from "./RunBody";
 import { RunHeader } from "./RunHeader";
+import { FeedbackPanel } from "../feedback/FeedbackPanel";
 import { useTraceSignalFlags } from "../../list/useTraceSignals";
 
 interface RunViewProps {
@@ -175,6 +176,7 @@ function LoadedRun({
         onLiveChange={toggleLive}
         signals={signals}
       />
+      <FeedbackPanel summary={trace.summary} accessToken={accessToken} />
       {traceQuery.isRefetchError && (
         <div role="alert" className="flex items-center gap-3 border-b p-3 text-xs text-muted-foreground">
           Could not refresh this run. Previously received steps are still shown.

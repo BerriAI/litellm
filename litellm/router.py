@@ -199,6 +199,7 @@ from litellm.router_utils.common_utils import (
     resolve_model_group_alias,
     truncate_fallback_error_detail,
     warn_on_provider_credential_mismatch,
+    without_router_only_kwargs,
 )
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.cooldown_handlers import (
@@ -227,6 +228,7 @@ from litellm.router_utils.fallback_event_handlers import (
     get_pre_routing_selection,
     has_unattempted_fallback_target,
     mid_stream_fallback_hop_kwargs,
+    mid_stream_fallback_snapshot_kwargs,
     mid_stream_retry_kwargs,
     per_request_fallback_controls,
     record_disable_fallbacks,
@@ -2674,6 +2676,8 @@ class Router:
             kwargs["model"] = model
             kwargs["messages"] = messages
             kwargs["original_function"] = self._completion
+            controls: Final = per_request_fallback_controls(kwargs)
+            kwargs[MID_STREAM_FALLBACK_CONTROLS_KEY] = controls  # rebind-ok: forwarded to every hop
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
 
             response: Final = self.function_with_fallbacks(**kwargs)
@@ -2685,10 +2689,10 @@ class Router:
         model_name = None
         deployment = None
         try:
-            # Capture kwargs before deployment selection so the streaming
-            # fallback iterator can re-dispatch with the original model group.
-            input_kwargs_for_streaming_fallback: Final = kwargs.copy()
-            input_kwargs_for_streaming_fallback["model"] = model
+            controls: Final = kwargs.pop(MID_STREAM_FALLBACK_CONTROLS_KEY, None)
+            input_kwargs_for_streaming_fallback: Final = mid_stream_fallback_snapshot_kwargs(
+                model=model, controls=controls, kwargs=kwargs
+            )
 
             # pick the one that is available (lowest TPM/RPM)
             deployment = self.get_available_deployment(
@@ -2742,13 +2746,15 @@ class Router:
             if model in self.model_names or not self.has_model_id(model):
                 self.routing_strategy_pre_call_checks(deployment=deployment)
 
-            input_kwargs: Final = {
-                **litellm_params,
-                "messages": messages,
-                "caching": self.cache_responses,
-                "client": model_client,
-                **kwargs,
-            }
+            input_kwargs: Final = without_router_only_kwargs(
+                {
+                    **litellm_params,
+                    "messages": messages,
+                    "caching": self.cache_responses,
+                    "client": model_client,
+                    **kwargs,
+                }
+            )
             response: Final = litellm.completion(**input_kwargs)
             verbose_router_logger.info("litellm.completion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
 
@@ -2926,6 +2932,8 @@ class Router:
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             request_priority: Final = self._resolve_request_priority(model=model, kwargs=kwargs)
             start_time: Final = time.time()
+            controls: Final = per_request_fallback_controls(kwargs)
+            kwargs[MID_STREAM_FALLBACK_CONTROLS_KEY] = controls  # rebind-ok: forwarded to every hop
             request_kwargs: Final = {key: value for key, value in kwargs.items() if key != "priority"}
             original_function: Final = (
                 self._prompt_management_acompletion
@@ -3833,8 +3841,10 @@ class Router:
         deployment = None
         _timeout_debug_deployment_dict = {}  # this is a temporary dict to debug timeout issues
         try:
-            input_kwargs_for_streaming_fallback: Final = kwargs.copy()
-            input_kwargs_for_streaming_fallback["model"] = model
+            controls: Final = kwargs.pop(MID_STREAM_FALLBACK_CONTROLS_KEY, None)
+            input_kwargs_for_streaming_fallback: Final = mid_stream_fallback_snapshot_kwargs(
+                model=model, controls=controls, kwargs=kwargs
+            )
 
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
             start_time: Final = time.time()
@@ -3898,15 +3908,15 @@ class Router:
             )
             self.total_calls[model_name] += 1
 
-            input_kwargs: Final = {
-                **litellm_params,
-                "messages": messages,
-                "caching": self.cache_responses,
-                "client": model_client,
-                **kwargs,
-            }
-            input_kwargs.pop("silent_model", None)
-            input_kwargs.pop("include_fallback_errors", None)
+            input_kwargs: Final = without_router_only_kwargs(
+                {
+                    **litellm_params,
+                    "messages": messages,
+                    "caching": self.cache_responses,
+                    "client": model_client,
+                    **kwargs,
+                }
+            )
 
             logging_obj: Final[LiteLLMLogging | None] = kwargs.get("litellm_logging_obj", None)
 
