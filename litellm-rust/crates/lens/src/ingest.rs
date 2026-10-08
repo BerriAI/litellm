@@ -46,6 +46,15 @@ pub fn response(content_type: Option<&str>, outcome: Result<(), Error>) -> Respo
         .map(|_| StatusCode::OK)
         .unwrap_or_else(|error| error.status());
     let message = status.canonical_reason().unwrap_or("Trace request failed");
+    let rpc_code = match status {
+        StatusCode::OK => 0,
+        StatusCode::BAD_REQUEST => 3,
+        StatusCode::UNAUTHORIZED => 16,
+        StatusCode::PAYLOAD_TOO_LARGE | StatusCode::TOO_MANY_REQUESTS => 8,
+        StatusCode::CONFLICT => 10,
+        StatusCode::SERVICE_UNAVAILABLE => 14,
+        _ => 2,
+    };
     let protobuf = content_type.is_some_and(|value| {
         value
             .split(';')
@@ -58,7 +67,7 @@ pub fn response(content_type: Option<&str>, outcome: Result<(), Error>) -> Respo
                 Vec::new()
             } else {
                 OtlpError {
-                    code: 0,
+                    code: rpc_code,
                     message: message.into(),
                 }
                 .encode_to_vec()
@@ -70,7 +79,7 @@ pub fn response(content_type: Option<&str>, outcome: Result<(), Error>) -> Respo
             if outcome.is_ok() {
                 b"{}".to_vec()
             } else {
-                serde_json::json!({"code": 0, "message": message})
+                serde_json::json!({"code": rpc_code, "message": message})
                     .to_string()
                     .into_bytes()
             },
@@ -168,4 +177,68 @@ async fn store(
     )
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OtlpError, response};
+    use crate::Error;
+    use axum::body::to_bytes;
+    use prost::Message;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::invalid_request(Error::InvalidRequest, 400, 3, false)]
+    #[case::unauthenticated(Error::Unauthorized, 401, 16, false)]
+    #[case::payload_too_large(Error::TooLarge, 413, 8, false)]
+    #[case::credentials_pending(Error::CredentialsPending, 429, 8, true)]
+    #[case::storage_unavailable(Error::Unavailable, 503, 14, true)]
+    #[case::conflict(Error::TraceChanged, 409, 10, false)]
+    #[tokio::test]
+    async fn rejected_batches_have_matching_http_and_rpc_errors(
+        #[case] error: Error,
+        #[case] http_status: u16,
+        #[case] rpc_code: i32,
+        #[case] retryable: bool,
+        #[values("application/json", "application/x-protobuf")] content_type: &str,
+    ) {
+        let reply = response(Some(content_type), Err(error));
+        assert_eq!(reply.status().as_u16(), http_status);
+        assert_eq!(reply.headers()["content-type"], content_type);
+        assert_eq!(
+            reply
+                .headers()
+                .get("retry-after")
+                .map(|v| v.to_str().unwrap()),
+            retryable.then_some("5")
+        );
+        let message = reply.status().canonical_reason().unwrap();
+        let body = to_bytes(reply.into_body(), 1024).await.unwrap();
+        if content_type == "application/x-protobuf" {
+            let status = OtlpError::decode(body).unwrap();
+            assert_eq!(status.code, rpc_code);
+            assert_eq!(status.message, message);
+        } else {
+            let status: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(
+                status,
+                serde_json::json!({"code": rpc_code, "message": message})
+            );
+        }
+    }
+
+    #[rstest]
+    #[case::json("application/json", b"{}")]
+    #[case::protobuf("application/x-protobuf", b"")]
+    #[tokio::test]
+    async fn accepted_batches_keep_the_empty_export_response(
+        #[case] content_type: &str,
+        #[case] expected: &[u8],
+    ) {
+        let reply = response(Some(content_type), Ok(()));
+        assert_eq!(reply.status(), 200);
+        assert_eq!(reply.headers()["content-type"], content_type);
+        assert!(!reply.headers().contains_key("retry-after"));
+        assert_eq!(to_bytes(reply.into_body(), 1024).await.unwrap(), expected);
+    }
 }
