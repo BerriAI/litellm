@@ -6152,7 +6152,9 @@ def completion(
             response = _complete_langgraph(_dispatch_ctx)
 
         elif custom_llm_provider == "microsoft_365_copilot":
-            response = _complete_microsoft_365_copilot(_dispatch_ctx)  # rebind-ok: provider branches share the common return
+            response = _complete_microsoft_365_copilot(
+                _dispatch_ctx
+            )  # rebind-ok: provider branches share the common return
 
         elif custom_llm_provider == "langflow":
             # LangFlow - Visual AI Agent Platform

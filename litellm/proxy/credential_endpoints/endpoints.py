@@ -477,9 +477,7 @@ def _per_user_credential_names() -> tuple[str, ...]:
         for credential in litellm.credential_list
         if cast(  # cast-ok: credential_values is a plain dict at runtime
             Mapping[object, object], credential.credential_values
-        ).get(
-            GITHUB_COPILOT_AUTH_TYPE_KEY
-        )
+        ).get(GITHUB_COPILOT_AUTH_TYPE_KEY)
         == GITHUB_COPILOT_PER_USER_AUTH_TYPE
     )
 
