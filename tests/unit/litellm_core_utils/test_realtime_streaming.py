@@ -3649,7 +3649,7 @@ async def test_transcription_guardrail_sends_no_session_update_after_transcripti
     streaming: Final = RealTimeStreaming(
         client_ws,
         backend_ws,
-        MagicMock(),
+        _mock_logging(),
         provider_config=provider_config,
         model="gpt-4o-transcribe",
         force_transcription_model="gpt-4o-transcribe",
@@ -3684,7 +3684,9 @@ async def test_provider_transcription_session_created_flags_session_without_inte
     backend_ws: Final = MagicMock()
     backend_ws.recv = AsyncMock(side_effect=[json.dumps(session_created).encode(), ConnectionClosed(None, None)])
     backend_ws.send = AsyncMock()
-    streaming: Final = RealTimeStreaming(client_ws, backend_ws, MagicMock(), provider_config=provider_config, model="m")
+    streaming: Final = RealTimeStreaming(
+        client_ws, backend_ws, _mock_logging(), provider_config=provider_config, model="m"
+    )
 
     await streaming.backend_to_client_send_messages()
 
@@ -3803,7 +3805,7 @@ async def test_transcription_session_guardrail_block_only_reports_violation(
     streaming: Final = RealTimeStreaming(
         client_ws,
         backend_ws,
-        MagicMock(),
+        _mock_logging(),
         provider_config=_passthrough_transcription_config() if uses_provider_config else None,
         model="gpt-4o-transcribe",
         force_transcription_model="gpt-4o-transcribe",
