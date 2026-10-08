@@ -147,3 +147,55 @@ async def test_invalidate_cache_forces_db_refetch():
 
 def test_decode_rejects_garbage():
     assert decode_user_provider_credential("not-a-cipher") is None
+
+
+@pytest.mark.asyncio
+async def test_disconnect_on_one_worker_invalidates_other_workers_via_redis(monkeypatch):
+    """Two DualCache instances (two workers) sharing one Redis: a disconnect on A must
+    be visible on B, not just in A's in-memory layer."""
+    import fakeredis
+
+    from litellm.caching.redis_cache import RedisCache
+    from litellm.proxy.credential_endpoints import user_provider_credentials as upc
+
+    fake = fakeredis.FakeAsyncRedis()
+    redis = RedisCache(host="localhost", port=6379)
+    monkeypatch.setattr(redis, "init_async_client", lambda: fake)
+    cache_a = DualCache(redis_cache=redis)
+    cache_b = DualCache(redis_cache=redis)
+
+    payload = GithubCopilotUserConnectionPayload(access_token="gho_secret", github_login="octo")
+    ciphertext = upc._encode(payload)
+    table = MagicMock()
+    table.find_many = AsyncMock(side_effect=[[_row(credential_b64=ciphertext)], []])
+    prisma_client = _prisma(table)
+
+    # worker A "connects" (DB read + cache write)
+    tokens_a = await aget_user_provider_tokens(prisma_client, cache_a, "user-a", ["copilot-cred"])
+    assert tokens_a == {"copilot-cred": "gho_secret"}
+
+    # worker B reads the same connection straight from Redis (its in-memory layer is empty)
+    tokens_b = await aget_user_provider_tokens(prisma_client, cache_b, "user-a", ["copilot-cred"])
+    assert tokens_b == {"copilot-cred": "gho_secret"}
+
+    # worker A disconnects
+    await invalidate_user_provider_credential_cache(cache_a, "user-a", "copilot-cred")
+
+    # worker B must now see not-connected (DB returns no row on the second read)
+    tokens_b_after = await aget_user_provider_tokens(prisma_client, cache_b, "user-a", ["copilot-cred"])
+    assert tokens_b_after == {}
+    assert table.find_many.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_token_cache_uses_redis_only_when_attached():
+    """Backend selection is pinned: Redis attached -> Redis only; no Redis -> the DualCache."""
+    from litellm.caching.redis_cache import RedisCache
+    from litellm.proxy.credential_endpoints import user_provider_credentials as upc
+
+    bare = DualCache()
+    assert upc._token_cache(bare) is bare
+
+    redis = RedisCache(host="localhost", port=6379)
+    with_redis = DualCache(redis_cache=redis)
+    assert upc._token_cache(with_redis) is redis

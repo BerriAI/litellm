@@ -8933,6 +8933,8 @@ def test_body_snapshot_drops_only_the_marker_and_keeps_caller_value(marker: str)
     refresh_proxy_server_request_body_snapshot(caller_data)
 
     assert caller_request["body"][SERVER_STREAMING_CLASSIFICATION_KEY] == "caller-value", caller_request
+
+
 def test_arize_otlp_protocol_on_a_key_logging_entry_reaches_the_destination(monkeypatch):
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.proxy.litellm_pre_call_utils import resolve_tenant_otel_destinations
@@ -9033,6 +9035,7 @@ class TestResolveUserProviderCredentials:
         await _resolve_user_provider_credentials_for_request(
             data=data,
             authenticated_user_id="user-a",
+            team_id=None,
             llm_router=self._router(),
         )
 
@@ -9041,6 +9044,69 @@ class TestResolveUserProviderCredentials:
         # the shared fallback credential is never looked up
         call_where = table.find_many.await_args.kwargs["where"]
         assert call_where == {"AND": ({"user_id": "user-a"}, {"credential_name": {"in": ["copilot-cred"]}})}
+
+    @pytest.mark.asyncio
+    async def test_team_public_model_name_resolves_per_user_deployments(self, monkeypatch):
+        """A caller hitting a team's public model name must get the same per-user
+        credentials routing resolves: get_model_list needs the caller's team_id."""
+        from litellm import Router
+        from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
+
+        table = self._env(monkeypatch)
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "copilot-chat_team-1_dep",
+                    "litellm_params": {
+                        "model": "github_copilot/gpt-4o",
+                        "litellm_credential_name": "copilot-cred",
+                    },
+                    "model_info": {
+                        "id": "dep-abc",
+                        "team_id": "team-1",
+                        "team_public_model_name": "copilot-chat",
+                    },
+                }
+            ]
+        )
+        data = {"model": "copilot-chat", "secret_fields": {}}
+        await _resolve_user_provider_credentials_for_request(
+            data=data,
+            authenticated_user_id="user-a",
+            team_id="team-1",
+            llm_router=router,
+        )
+        table.find_many.assert_awaited()
+        call_where = table.find_many.await_args.kwargs["where"]
+        assert call_where == {"AND": ({"user_id": "user-a"}, {"credential_name": {"in": ["copilot-cred"]}})}
+
+    @pytest.mark.asyncio
+    async def test_deployment_id_resolves_per_user_deployment(self, monkeypatch):
+        """A request addressed by deployment id still discovers the per-user credential."""
+        from litellm import Router
+        from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
+
+        table = self._env(monkeypatch)
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "copilot-chat",
+                    "litellm_params": {
+                        "model": "github_copilot/gpt-4o",
+                        "litellm_credential_name": "copilot-cred",
+                    },
+                    "model_info": {"id": "dep-xyz"},
+                }
+            ]
+        )
+        data = {"model": "dep-xyz", "secret_fields": {}}
+        await _resolve_user_provider_credentials_for_request(
+            data=data,
+            authenticated_user_id="user-a",
+            team_id=None,
+            llm_router=router,
+        )
+        table.find_many.assert_awaited()
 
     @pytest.mark.asyncio
     async def test_group_with_no_per_user_deployment_leaves_secret_fields_untouched(self, monkeypatch):
@@ -9052,6 +9118,7 @@ class TestResolveUserProviderCredentials:
         await _resolve_user_provider_credentials_for_request(
             data=data,
             authenticated_user_id="user-a",
+            team_id=None,
             llm_router=Router(
                 model_list=[
                     {
@@ -9077,6 +9144,7 @@ class TestResolveUserProviderCredentials:
         await _resolve_user_provider_credentials_for_request(
             data=data,
             authenticated_user_id="user-a",
+            team_id=None,
             llm_router=self._router(),
         )
         assert data["secret_fields"]["user_provider_credentials"] == {}
@@ -9090,6 +9158,7 @@ class TestResolveUserProviderCredentials:
         await _resolve_user_provider_credentials_for_request(
             data=data,
             authenticated_user_id=None,
+            team_id=None,
             llm_router=self._router(),
         )
         assert "user_provider_credentials" not in data["secret_fields"]
@@ -9104,6 +9173,7 @@ class TestResolveUserProviderCredentials:
         await _resolve_user_provider_credentials_for_request(
             data=data,
             authenticated_user_id="user-a",
+            team_id=None,
             llm_router=Router(
                 model_list=[
                     {
@@ -9136,7 +9206,10 @@ class TestResolveUserProviderCredentials:
                 }
             ]
         )
-        assert _per_user_credential_names_for_groups(router, frozenset({"copilot-chat"})) == ("copilot-cred",)
+        router.get_deployment = MagicMock(return_value=None)
+        assert _per_user_credential_names_for_groups(router, frozenset({"copilot-chat"}), team_id=None) == (
+            "copilot-cred",
+        )
 
 
 def _per_user_env(monkeypatch, credential_names=("copilot-cred",)):
@@ -9191,6 +9264,7 @@ async def test_request_body_litellm_credential_name_is_rejected_for_per_user_mod
         await _resolve_user_provider_credentials_for_request(
             data=data,
             authenticated_user_id="user-a",
+            team_id=None,
             llm_router=router,
         )
     assert exc.value.status_code == 400
@@ -9216,6 +9290,7 @@ async def test_request_body_litellm_credential_name_untouched_for_shared_models(
     await _resolve_user_provider_credentials_for_request(
         data=data,
         authenticated_user_id="user-a",
+        team_id=None,
         llm_router=router,
     )
     assert "user_provider_credentials" not in data["secret_fields"]
@@ -9247,6 +9322,7 @@ async def test_transitive_fallback_chain_loads_per_user_credential(monkeypatch):
     await _resolve_user_provider_credentials_for_request(
         data=data,
         authenticated_user_id="user-a",
+        team_id=None,
         llm_router=router,
     )
     where = table.find_many.await_args.kwargs["where"]
@@ -9283,6 +9359,7 @@ async def test_secret_fields_user_provider_credentials_repr_hides_tokens(monkeyp
     await _resolve_user_provider_credentials_for_request(
         data=data,
         authenticated_user_id="user-a",
+        team_id=None,
         llm_router=router,
     )
     credentials = data["secret_fields"]["user_provider_credentials"]

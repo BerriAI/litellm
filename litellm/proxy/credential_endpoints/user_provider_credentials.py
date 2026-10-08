@@ -163,15 +163,21 @@ async def list_user_provider_credentials_for_credential(
     return await _table(prisma_client).find_many(where={"credential_name": credential_name})
 
 
+def _token_cache(cache: DualCache) -> "_TokenCache":
+    """Cross-worker consistency matters here: with Redis attached, use it alone
+    so a connect or disconnect invalidates on every worker, not just this one."""
+    return cast(  # cast-ok: DualCache and RedisCache both satisfy the used signatures
+        _TokenCache, cache.redis_cache if cache.redis_cache is not None else cache
+    )
+
+
 @with_service_target("user_provider_connections")
 async def invalidate_user_provider_credential_cache(
     cache: DualCache,
     user_id: str,
     credential_name: str,
 ) -> None:
-    token_cache: Final = cast(  # cast-ok: pins the untyped DualCache to the local _TokenCache Protocol
-        _TokenCache, cache
-    )
+    token_cache: Final = _token_cache(cache)
     await token_cache.async_delete_cache(_cache_key(user_id, credential_name))
 
 
@@ -186,9 +192,7 @@ async def aget_user_provider_tokens(
 
     Cached values are the stored ciphertext or the ``_NOT_CONNECTED`` marker;
     plaintext tokens only ever live in the returned dict."""
-    token_cache: Final = cast(  # cast-ok: pins the untyped DualCache to the local _TokenCache Protocol
-        _TokenCache, cache
-    )
+    token_cache: Final = _token_cache(cache)
     names: Final = tuple(dict.fromkeys(credential_names))
     if not names:
         return {}
