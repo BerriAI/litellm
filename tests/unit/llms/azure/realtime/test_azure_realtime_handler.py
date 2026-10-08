@@ -655,6 +655,42 @@ async def test_arealtime_does_not_resolve_azure_ad_token_when_api_key_present(mo
 
 
 @pytest.mark.asyncio
+async def test_arealtime_prefers_deployment_api_key_over_global_azure_key(monkeypatch):
+    import litellm
+    from litellm.realtime_api import main as realtime_main
+
+    mock_async_realtime = AsyncMock()
+    monkeypatch.setattr(realtime_main, "azure_realtime", MagicMock(async_realtime=mock_async_realtime))
+    monkeypatch.setattr(litellm, "api_key", "sk-global-key")
+    monkeypatch.delenv("AZURE_API_KEY", raising=False)
+
+    def fake_get_llm_provider(
+        model,
+        api_base=None,
+        api_key=None,
+        custom_llm_provider: str | None = None,
+    ):
+        return (
+            "gpt-realtime-whisper",
+            "azure",
+            None,
+            "https://my-endpoint.openai.azure.com",
+        )
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", fake_get_llm_provider)
+
+    await realtime_main._arealtime.__wrapped__(
+        model="azure/gpt-realtime-whisper",
+        websocket=MagicMock(),
+        api_key="sk-deployment-key",
+        api_version="2024-10-01-preview",
+        litellm_logging_obj=MagicMock(),
+    )
+
+    assert mock_async_realtime.call_args.kwargs["api_key"] == "sk-deployment-key"
+
+
+@pytest.mark.asyncio
 async def test_realtime_health_check_uses_bearer_token_when_no_api_key(monkeypatch):
     """
     An Entra ID-only realtime deployment must also pass its realtime health check.
