@@ -9,6 +9,7 @@ from typing import Final, cast
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
+from litellm.constants import DEFAULT_IMAGE_TOKEN_COUNT
 from litellm.integrations.anthropic_cache_control_hook import (
     CARRY_UNMATCHED_MESSAGE_POINTS,
     AnthropicCacheControlHook,
@@ -38,6 +39,9 @@ _SYSTEM: Final[TypeAdapter[str | list[dict[str, JsonValue]] | None]] = TypeAdapt
 _TTLS: Final = {"5m": 300, "30m": 1800, "1h": 3600, "24h": 86400}
 _COUNT: Final = TypeAdapter(int | None)
 _CONTROLS: Final = ("cache_control", "prompt_cache_breakpoint")
+_MEDIA: Final = frozenset(
+    ("image", "image_url", "input_image", "audio", "input_audio", "video_url", "file", "input_file", "document")
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,8 +259,17 @@ def estimate_cache_plan(
         )
         for part in parts
     )
+    media: Final = tuple(isinstance(part.value, dict) and part.value.get("type") in _MEDIA for part in parts)
+    parsed: Final = parse_prompt_tokens_details(usage)
+    reported: Final = parsed["audio_tokens"] + parsed["image_tokens"] + parsed["video_tokens"]
+    share: Final = max(1, reported // max(1, sum(media))) if reported else DEFAULT_IMAGE_TOKEN_COUNT
     weights: Final = tuple(
-        accumulate((_weight(model, settings, counter), *(_weight(model, part, counter) for part in serialized)))
+        accumulate(
+            (
+                _weight(model, settings, counter),
+                *(share if is_media else _weight(model, part, counter) for part, is_media in zip(serialized, media)),
+            )
+        )
     )
     hashes: Final = tuple(
         accumulate(
@@ -266,12 +279,16 @@ def estimate_cache_plan(
         )
     )[1:]
     options: Final = _OBJECT.validate_python(request.get("prompt_cache_options") or {})
-    retention: Final = request.get("prompt_cache_retention")
+    retention: Final = request.get("prompt_cache_retention") or (
+        "in_memory" if provider in ("openai", "azure") else None
+    )
     requested_ttl: Final = (
         _TTLS.get(retention) if provider in ("openai", "azure") and isinstance(retention, str) else None
     )
-    duration_pricing: Final = provider == "anthropic" or bool(
-        prices and prices.get("cache_creation_input_token_cost_above_1hr") is not None
+    duration_pricing: Final = (
+        provider == "anthropic"
+        or supports_anthropic_cache_control(model, provider)
+        or bool(prices and prices.get("cache_creation_input_token_cost_above_1hr") is not None)
     )
     default_ttl: Final = requested_ttl or (300 if duration_pricing else 600 if retention == "in_memory" else 1800)
     lifetime: Final = _ttl(options, default_ttl)
