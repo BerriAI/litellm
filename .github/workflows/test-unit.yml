@@ -346,6 +346,16 @@ jobs:
             timeout-minutes: 60
             job-timeout-minutes: 100
 
+          - shard: mcp-elicitation
+            artifact-name: mcp-elicitation
+            test-path: >-
+              tests/unit/proxy/_experimental/mcp_server/test_mcp_elicitation_handler.py
+              tests/unit/proxy/_experimental/mcp_server/test_mcp_server_manager.py
+            workers: 2
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+
           - shard: proxy-infra
             artifact-name: proxy-infra
             test-path: >-
