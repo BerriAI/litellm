@@ -1332,6 +1332,25 @@ class TestFireDeferredStreamLogging:
         assert mock_logging_obj._deferred_stream_complete_args is None
 
     @pytest.mark.asyncio
+    async def test_callback_failure_is_logged_without_escaping(self):
+        """A failed background callback must not surface as an unhandled task error."""
+        callback_error = RuntimeError("deferred callback failed")
+
+        async def failing_callback():
+            raise callback_error
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj._on_deferred_stream_complete = failing_callback
+        mock_logging_obj._deferred_stream_complete_args = ()
+
+        with patch("litellm.proxy.utils.verbose_proxy_logger.exception") as log_exception:
+            deferred_task = ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": mock_logging_obj})
+            assert deferred_task is not None
+            await deferred_task
+
+        log_exception.assert_called_once_with("Error in deferred stream callback: %s", callback_error)
+
+    @pytest.mark.asyncio
     async def test_deferred_guardrails_wait_for_success_logging(self):
         logging_started = asyncio.Event()
         release_logging = asyncio.Event()
