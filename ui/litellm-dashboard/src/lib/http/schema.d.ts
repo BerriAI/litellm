@@ -9088,6 +9088,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/lens/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Feedback */
+        get: operations["read_feedback_lens_feedback_get"];
+        /** Submit Feedback */
+        put: operations["submit_feedback_lens_feedback_put"];
+        post?: never;
+        /** Delete Feedback */
+        delete: operations["delete_feedback_lens_feedback_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/feedback/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Feedback Summary */
+        post: operations["feedback_summary_lens_feedback_summary_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/lens/internal/ingestion-credentials": {
         parameters: {
             query?: never;
@@ -30364,6 +30400,12 @@ export interface components {
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
              */
             reject_clientside_metadata_tags?: boolean | null;
+            /**
+             * Responses Websocket Session Limit Seconds
+             * @description Maximum lifetime in seconds of a Responses API WebSocket session, measured from connection accept and covering the idle wait for the first response.create frame. Defaults to 3600, matching OpenAI's documented 60-minute WebSocket connection limit. Must be between 60 and 7200 seconds.
+             * @default 3600
+             */
+            responses_websocket_session_limit_seconds: number;
             /** @description Spreads the proxy's scheduled background jobs (spend flushes, budget resets, config reloads, exports) across a window instead of firing them together on every replica. On by default; set to tune the window, pin a job, or turn it off. */
             scheduled_job_stagger?: components["schemas"]["ScheduledJobStaggerSettings"] | null;
             /**
@@ -32557,6 +32599,56 @@ export interface components {
              * @description The model name
              */
             model: string;
+        };
+        /** Feedback */
+        Feedback: {
+            /** Author */
+            author: string;
+            /** Comment */
+            comment: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Score */
+            score: number;
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** FeedbackSubmission */
+        FeedbackSubmission: {
+            /**
+             * Comment
+             * @default
+             */
+            comment: string;
+            /** Score */
+            score: number;
+            /** Session Id */
+            session_id?: string | null;
+            /** Trace Id */
+            trace_id?: string | null;
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
+            /**
+             * User
+             * @default
+             */
+            user: string;
         };
         /** FieldDetail */
         FieldDetail: {
@@ -45007,6 +45099,8 @@ export interface components {
             type: "slack" | "teams" | "discord" | "linear" | "github" | "jira" | "custom";
             /** Url */
             url: string;
+            /** User */
+            user?: string;
         };
         /** SCIMEnterpriseUser */
         SCIMEnterpriseUser: {
@@ -45568,8 +45662,18 @@ export interface components {
         };
         /** ServiceConnection */
         ServiceConnection: {
+            /**
+             * Configured
+             * @default false
+             */
+            configured: boolean;
             /** Connected */
             connected: boolean;
+            /**
+             * Release
+             * @default
+             */
+            release: string;
             status: components["schemas"]["ServiceStatus"];
             /** Url */
             url: string;
@@ -48012,6 +48116,39 @@ export interface components {
         TraceAgentList: {
             /** Agents */
             agents: components["schemas"]["TraceAgent"][];
+        };
+        /** TraceFeedback */
+        TraceFeedback: {
+            /** Feedback */
+            feedback: components["schemas"]["Feedback"][];
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
+        };
+        /** TraceFeedbackRequest */
+        TraceFeedbackRequest: {
+            /** Traces */
+            traces: components["schemas"]["TraceIdentity"][];
+        };
+        /** TraceFeedbackSummary */
+        TraceFeedbackSummary: {
+            /** Average */
+            average: number | null;
+            /** Count */
+            count: number;
+            /** Lowest */
+            lowest: number | null;
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
         };
         /** TraceFindingCount */
         TraceFindingCount: {
@@ -63616,6 +63753,137 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EvalCases"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_feedback_lens_feedback_get: {
+        parameters: {
+            query?: {
+                trace_id?: string | null;
+                session_id?: string | null;
+                trace_ref?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceFeedback"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_feedback_lens_feedback_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeedbackSubmission"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Feedback"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_feedback_lens_feedback_delete: {
+        parameters: {
+            query?: {
+                trace_id?: string | null;
+                session_id?: string | null;
+                trace_ref?: string;
+                user?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    feedback_summary_lens_feedback_summary_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TraceFeedbackRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceFeedbackSummary"][];
                 };
             };
             /** @description Validation Error */

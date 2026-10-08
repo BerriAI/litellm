@@ -21,6 +21,10 @@ import type {
   TraceFindingCount,
   TraceFindingsRequest,
   TraceSignals,
+  FeedbackQuery,
+  TraceFeedback,
+  TraceFeedbackRequest,
+  TraceFeedbackSummary,
   TraceAgentList,
   TraceAgentsQuery,
 } from "./types";
@@ -44,6 +48,8 @@ export interface TracesApi {
   agents(window: TraceWindow): Promise<AgentSummary[]>;
   findings(traces: TraceFindingsRequest["traces"]): Promise<TraceFindingCount[]>;
   signals(traces: TraceFindingsRequest["traces"]): Promise<TraceSignals[]>;
+  feedbackSummary(traces: TraceFeedbackRequest["traces"]): Promise<TraceFeedbackSummary[]>;
+  feedback(traceId: string, traceRef?: string): Promise<TraceFeedback>;
   anyRecorded(): Promise<boolean>;
   trace(traceId: string, traceRef?: string, cursor?: string | null): Promise<Trace>;
   span(traceId: string, spanId: string, traceRef?: string): Promise<SpanDetail>;
@@ -99,6 +105,16 @@ export function liveTracesApi(accessToken: string): TracesApi {
       apiClient.post<TraceSignals[]>("/lens/traces/signals", {
         accessToken,
         body: { traces } satisfies TraceFindingsRequest,
+      }),
+    feedbackSummary: (traces) =>
+      apiClient.post<TraceFeedbackSummary[]>("/lens/feedback/summary", {
+        accessToken,
+        body: { traces } satisfies TraceFeedbackRequest,
+      }),
+    feedback: (traceId, traceRef) =>
+      apiClient.get<TraceFeedback>("/lens/feedback", {
+        accessToken,
+        query: { trace_id: traceId, trace_ref: traceRef ?? "" } satisfies FeedbackQuery,
       }),
     anyRecorded: async () => {
       const page = await apiClient.get<TracePage>("/v1/traces", {

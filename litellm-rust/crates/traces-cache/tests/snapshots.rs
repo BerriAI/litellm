@@ -42,6 +42,7 @@ fn row(span_id: &str, parent: &str, name: &str, kind: &str, agent: &str) -> Trac
         source_type: String::new(),
         source_url: String::new(),
         source_title: String::new(),
+        source_user: String::new(),
         team_id: String::new(),
         api_key_hash: String::new(),
         user_id: String::new(),

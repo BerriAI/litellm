@@ -551,6 +551,8 @@ class LiteLLMRoutes(enum.Enum):
         "/lens/{lens_id}/executions/{execution_id}",
         "/lens/{lens_id}/cancel",
         "/lens/{lens_id}/findings/{finding_id}",
+        "/lens/feedback",
+        "/lens/feedback/summary",
         "/lens/preview/sample",
         "/lens/workers/register",
         "/lens/workers/{worker_id}",
@@ -1066,6 +1068,7 @@ class LiteLLMRoutes(enum.Enum):
     admin_viewer_routes = (
         [
             "/lens/traces/findings",
+            "/lens/feedback/summary",
             "/user/list",
             "/user/available_users",
             "/user/available_roles",
@@ -2740,6 +2743,9 @@ class ScheduledJobStaggerSettings(LiteLLMPydanticObjectBase):
     )
 
 
+DEFAULT_RESPONSES_WEBSOCKET_SESSION_LIMIT_SECONDS: Final[float] = 3600.0
+
+
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
@@ -3049,6 +3055,12 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     pass_through_request_timeout: float | None = Field(
         default=None,
         description="Default upstream request timeout in seconds for native and custom pass-through endpoints that use pass_through_request. Defaults to 600 when unset.",
+    )
+    responses_websocket_session_limit_seconds: float = Field(
+        default=DEFAULT_RESPONSES_WEBSOCKET_SESSION_LIMIT_SECONDS,
+        ge=60,
+        le=7200,
+        description="Maximum lifetime in seconds of a Responses API WebSocket session, measured from connection accept and covering the idle wait for the first response.create frame. Defaults to 3600, matching OpenAI's documented 60-minute WebSocket connection limit. Must be between 60 and 7200 seconds.",
     )
     pass_through_endpoints: list[PassThroughGenericEndpoint] | None = Field(
         default=None,
