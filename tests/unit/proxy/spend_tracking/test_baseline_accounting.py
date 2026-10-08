@@ -86,7 +86,7 @@ def _replay(*observations: BaselineObservation) -> tuple[BaselineEstimate, ...]:
 
 @pytest.mark.parametrize("write_rate", (None, 0.0, 0.017))
 @pytest.mark.parametrize("prefix", (4000, 8000))
-def test_multimodal_history_prices_absent_free_and_premium_writes(write_rate: float | None, prefix: int) -> None:
+def test_multimodal_history_prices_absent_zero_and_premium_writes(write_rate: float | None, prefix: int) -> None:
     usage: Final = Usage(
         prompt_tokens=8000, completion_tokens=20, total_tokens=8020,
         prompt_tokens_details=PromptTokensDetailsWrapper(
@@ -118,7 +118,7 @@ def test_multimodal_history_prices_absent_free_and_premium_writes(write_rate: fl
         baseline_model="gpt-6-astra", observation=first, pricing=snapshot, turn=None, daily=None,
     )
     ordinary: Final = 4500 * 0.01 + 2000 * 0.02 + 1000 * 0.03 + 500 * 0.04
-    cold: Final = ordinary if write_rate is None else ordinary * (8000 - prefix) / 8000 + prefix * write_rate
+    cold: Final = ordinary if not write_rate else ordinary * (8000 - prefix) / 8000 + prefix * write_rate
     warm: Final = ordinary * (8000 - prefix) / 8000 + prefix * (0.75 * 0.001 + 0.25 * 0.002)
     for estimate, expected in zip(estimates, (cold, warm, cold)):
         priced: Final = price_baseline_comparison(snapshot, estimate.usage, estimate.provenance)
