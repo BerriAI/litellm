@@ -1929,7 +1929,9 @@ async def test_logging_only_block_verdict_is_recorded_without_raising():
     out_kwargs, out_result = await g.async_logging_hook(_logged_call(), response, "acompletion")
 
     assert out_result is response
-    g.async_handler.post.assert_called()
+    assert [params for params, _ in _calls(g)] == [
+        {"akto_connector": "litellm", "guardrails": "true", "ingest_data": "true"}
+    ]
     [entry] = out_kwargs["standard_logging_object"]["guardrail_information"]
     assert (entry["guardrail_name"], entry["guardrail_mode"], entry["guardrail_status"]) == (
         "test-logging_only",
@@ -1944,10 +1946,14 @@ async def test_logging_only_ignores_an_unreachable_akto_even_when_fail_closed():
     g.async_handler.post = AsyncMock(side_effect=httpx.ConnectError("refused"))
     response = _logged_response()
 
-    _, out_result = await g.async_logging_hook(_logged_call(), response, "acompletion")
+    out_kwargs, out_result = await g.async_logging_hook(_logged_call(), response, "acompletion")
 
     assert out_result is response
-    g.async_handler.post.assert_called()
+    [entry] = out_kwargs["standard_logging_object"]["guardrail_information"]
+    assert (entry["guardrail_mode"], entry["guardrail_response"]) == (
+        "logging_only",
+        "Akto guardrail service unreachable",
+    )
 
 
 @pytest.mark.asyncio
