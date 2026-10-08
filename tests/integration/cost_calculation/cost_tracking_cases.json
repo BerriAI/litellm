@@ -642,20 +642,20 @@
     "gpt-realtime-mini-2025-12-15": {
       "litellm_provider": "openai",
       "mode": "realtime",
-      "input_cost_per_token": 6.0e-07,
+      "input_cost_per_token": 6e-07,
       "output_cost_per_token": 2.4e-06,
-      "input_cost_per_audio_token": 1.0e-05,
-      "cache_read_input_token_cost": 6.0e-08,
-      "cache_read_input_audio_token_cost": 3.0e-07,
-      "output_cost_per_audio_token": 2.0e-05
+      "input_cost_per_audio_token": 1e-05,
+      "cache_read_input_token_cost": 6e-08,
+      "cache_read_input_audio_token_cost": 3e-07,
+      "output_cost_per_audio_token": 2e-05
     },
     "gpt-realtime-2.1": {
       "litellm_provider": "openai",
       "mode": "realtime",
-      "input_cost_per_token": 4.0e-06,
+      "input_cost_per_token": 4e-06,
       "input_cost_per_audio_token": 3.2e-05,
-      "cache_read_input_token_cost": 4.0e-07,
-      "cache_read_input_audio_token_cost": 4.0e-07,
+      "cache_read_input_token_cost": 4e-07,
+      "cache_read_input_audio_token_cost": 4e-07,
       "output_cost_per_token": 2.4e-05,
       "output_cost_per_audio_token": 6.4e-05
     },
@@ -769,6 +769,105 @@
         "search_context_size_medium": 0.014
       },
       "web_search_billing_unit": "per_query"
+    },
+    "claude-haiku-5-5": {
+      "cache_creation_input_token_cost": 1.25e-07,
+      "cache_creation_input_token_cost_above_1hr": 2e-07,
+      "cache_read_input_token_cost": 1e-08,
+      "input_cost_per_token": 1e-07,
+      "input_cost_per_token_batches": 5e-08,
+      "litellm_provider": "anthropic",
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 128000,
+      "max_tokens": 128000,
+      "mode": "chat",
+      "output_cost_per_token": 5e-07,
+      "output_cost_per_token_batches": 2.5e-07,
+      "search_context_cost_per_query": {
+        "search_context_size_high": 0.01,
+        "search_context_size_low": 0.01,
+        "search_context_size_medium": 0.01
+      },
+      "supports_function_calling": true,
+      "provider_specific_entry": {
+        "us": 1.1
+      },
+      "input_cost_per_token_above_100k_tokens": 5e-07,
+      "output_cost_per_token_above_100k_tokens": 2.5e-06,
+      "cache_creation_input_token_cost_above_100k_tokens": 6.25e-07,
+      "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1e-06,
+      "cache_read_input_token_cost_above_100k_tokens": 5e-08
+    },
+    "azure_ai/claude-haiku-5-5": {
+      "input_cost_per_token_above_100k_tokens": 5e-07,
+      "output_cost_per_token_above_100k_tokens": 2.5e-06,
+      "cache_creation_input_token_cost_above_100k_tokens": 6.25e-07,
+      "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1e-06,
+      "cache_read_input_token_cost_above_100k_tokens": 5e-08,
+      "cache_creation_input_token_cost": 1.25e-07,
+      "cache_creation_input_token_cost_above_1hr": 2e-07,
+      "cache_read_input_token_cost": 1e-08,
+      "input_cost_per_token": 1e-07,
+      "litellm_provider": "azure_ai",
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 128000,
+      "max_tokens": 128000,
+      "mode": "chat",
+      "output_cost_per_token": 5e-07,
+      "search_context_cost_per_query": {
+        "search_context_size_high": 0.01,
+        "search_context_size_low": 0.01,
+        "search_context_size_medium": 0.01
+      },
+      "supports_function_calling": true
+    },
+    "global.anthropic.claude-haiku-5-5": {
+      "input_cost_per_token_above_100k_tokens": 5e-07,
+      "output_cost_per_token_above_100k_tokens": 2.5e-06,
+      "cache_creation_input_token_cost_above_100k_tokens": 6.25e-07,
+      "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1e-06,
+      "cache_read_input_token_cost_above_100k_tokens": 5e-08,
+      "cache_creation_input_token_cost": 1.25e-07,
+      "cache_creation_input_token_cost_above_1hr": 2e-07,
+      "cache_read_input_token_cost": 1e-08,
+      "input_cost_per_token": 1e-07,
+      "litellm_provider": "bedrock_converse",
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 128000,
+      "max_tokens": 128000,
+      "mode": "chat",
+      "output_cost_per_token": 5e-07,
+      "search_context_cost_per_query": {
+        "search_context_size_high": 0.01,
+        "search_context_size_low": 0.01,
+        "search_context_size_medium": 0.01
+      },
+      "supports_function_calling": true
+    },
+    "vertex_ai/claude-haiku-5-5": {
+      "input_cost_per_token_above_100k_tokens": 5e-07,
+      "output_cost_per_token_above_100k_tokens": 2.5e-06,
+      "cache_creation_input_token_cost_above_100k_tokens": 6.25e-07,
+      "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 1e-06,
+      "cache_read_input_token_cost_above_100k_tokens": 5e-08,
+      "cache_creation_input_token_cost": 1.25e-07,
+      "cache_creation_input_token_cost_above_1hr": 2e-07,
+      "cache_read_input_token_cost": 1e-08,
+      "input_cost_per_token": 1e-07,
+      "input_cost_per_token_batches": 5e-08,
+      "litellm_provider": "vertex_ai-anthropic_models",
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 128000,
+      "max_tokens": 128000,
+      "mode": "chat",
+      "output_cost_per_token": 5e-07,
+      "output_cost_per_token_batches": 2.5e-07,
+      "search_context_cost_per_query": {
+        "search_context_size_high": 0.01,
+        "search_context_size_low": 0.01,
+        "search_context_size_medium": 0.01
+      },
+      "supports_function_calling": true
     }
   },
   "cases": [
@@ -29687,7 +29786,13 @@
           }
         }
       },
-      "expected": {"spend": 0.0025118, "input_cost": 0.0020792, "output_cost": 0.0004326, "prompt_tokens": 1840, "completion_tokens": 412}
+      "expected": {
+        "spend": 0.0025118,
+        "input_cost": 0.0020792,
+        "output_cost": 0.0004326,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
     },
     {
       "name": "deepseek-deepseek-v4-chat-prompt_cache_hit",
@@ -32102,6 +32207,1193 @@
         "prompt_tokens": 100,
         "completion_tokens": 100
       }
+    },
+    {
+      "name": "claude-haiku-5-5-tiered_input_at_100k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "claude-haiku-5-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "e65d5c5dba46 summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-haiku-5-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted answer e65d5c5dba46"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "usage": {
+            "input_tokens": 100000,
+            "output_tokens": 500
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.01025,
+        "input_cost": 0.01,
+        "output_cost": 0.00025,
+        "prompt_tokens": 100000,
+        "completion_tokens": 500
+      }
+    },
+    {
+      "name": "claude-haiku-5-5-tiered_input_above_100k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "claude-haiku-5-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "ec0e40013da7 summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-haiku-5-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted answer ec0e40013da7"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "usage": {
+            "input_tokens": 100001,
+            "output_tokens": 500
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0512505,
+        "input_cost": 0.0500005,
+        "output_cost": 0.00125,
+        "prompt_tokens": 100001,
+        "completion_tokens": 500
+      }
+    },
+    {
+      "name": "claude-haiku-5-5-tiered_cache_read_above_100k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "claude-haiku-5-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "ccda75494d42 summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-haiku-5-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted answer ccda75494d42"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "usage": {
+            "input_tokens": 4096,
+            "output_tokens": 500,
+            "cache_read_input_tokens": 98304
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0082132,
+        "input_cost": 0.0069632,
+        "output_cost": 0.00125,
+        "cache_read_cost": 0.0049152,
+        "prompt_tokens": 102400,
+        "completion_tokens": 500
+      }
+    },
+    {
+      "name": "claude-haiku-5-5-tiered_cache_write_above_100k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "claude-haiku-5-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "bd5ce9bbb4b5 summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-haiku-5-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted answer bd5ce9bbb4b5"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "usage": {
+            "input_tokens": 4096,
+            "output_tokens": 500,
+            "cache_creation_input_tokens": 98304,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 98304,
+              "ephemeral_1h_input_tokens": 0
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.064738,
+        "input_cost": 0.063488,
+        "output_cost": 0.00125,
+        "cache_creation_cost": 0.06144,
+        "prompt_tokens": 102400,
+        "completion_tokens": 500
+      }
+    },
+    {
+      "name": "claude-haiku-5-5-tiered_cache_write_1h_above_100k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "claude-haiku-5-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                "cache_control": {
+                  "type": "ephemeral",
+                  "ttl": "1h"
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "53bb5d75f157 summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-haiku-5-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted answer 53bb5d75f157"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "usage": {
+            "input_tokens": 4096,
+            "output_tokens": 500,
+            "cache_creation_input_tokens": 98304,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 98304
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.101602,
+        "input_cost": 0.100352,
+        "output_cost": 0.00125,
+        "cache_creation_cost": 0.098304,
+        "prompt_tokens": 102400,
+        "completion_tokens": 500
+      }
+    },
+    {
+      "name": "azure_ai-claude-haiku-5-5-tiered_input_at_100k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "azure_ai/claude-haiku-5-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "b95d0c876657 summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-haiku-5-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted answer b95d0c876657"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "usage": {
+            "input_tokens": 100000,
+            "output_tokens": 500
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.01025,
+        "input_cost": 0.01,
+        "output_cost": 0.00025,
+        "prompt_tokens": 100000,
+        "completion_tokens": 500
+      }
+    },
+    {
+      "name": "azure_ai-claude-haiku-5-5-tiered_input_above_100k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "azure_ai/claude-haiku-5-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "3f3bb3055e90 summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-haiku-5-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted answer 3f3bb3055e90"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "usage": {
+            "input_tokens": 100001,
+            "output_tokens": 500
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0512505,
+        "input_cost": 0.0500005,
+        "output_cost": 0.00125,
+        "prompt_tokens": 100001,
+        "completion_tokens": 500
+      }
+    },
+    {
+      "name": "azure_ai-claude-haiku-5-5-tiered_cache_read_above_100k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "azure_ai/claude-haiku-5-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "1822882ad449 summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-haiku-5-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted answer 1822882ad449"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "usage": {
+            "input_tokens": 4096,
+            "output_tokens": 500,
+            "cache_read_input_tokens": 98304
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0082132,
+        "input_cost": 0.0069632,
+        "output_cost": 0.00125,
+        "cache_read_cost": 0.0049152,
+        "prompt_tokens": 102400,
+        "completion_tokens": 500
+      }
+    },
+    {
+      "name": "azure_ai-claude-haiku-5-5-tiered_cache_write_above_100k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "azure_ai/claude-haiku-5-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "9af7381e2183 summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-haiku-5-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted answer 9af7381e2183"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "usage": {
+            "input_tokens": 4096,
+            "output_tokens": 500,
+            "cache_creation_input_tokens": 98304,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 98304,
+              "ephemeral_1h_input_tokens": 0
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.064738,
+        "input_cost": 0.063488,
+        "output_cost": 0.00125,
+        "cache_creation_cost": 0.06144,
+        "prompt_tokens": 102400,
+        "completion_tokens": 500
+      }
+    },
+    {
+      "name": "azure_ai-claude-haiku-5-5-tiered_cache_write_1h_above_100k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "azure_ai/claude-haiku-5-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                "cache_control": {
+                  "type": "ephemeral",
+                  "ttl": "1h"
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "394f497dd97d summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-haiku-5-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted answer 394f497dd97d"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "usage": {
+            "input_tokens": 4096,
+            "output_tokens": 500,
+            "cache_creation_input_tokens": 98304,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 98304
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.101602,
+        "input_cost": 0.100352,
+        "output_cost": 0.00125,
+        "cache_creation_cost": 0.098304,
+        "prompt_tokens": 102400,
+        "completion_tokens": 500
+      }
+    },
+    {
+      "name": "vertex_ai-claude-haiku-5-5-tiered_input_at_100k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "vertex_ai/claude-haiku-5-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "9f18341d26a5 summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-haiku-5-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted answer 9f18341d26a5"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "usage": {
+            "input_tokens": 100000,
+            "output_tokens": 500
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.01025,
+        "input_cost": 0.01,
+        "output_cost": 0.00025,
+        "prompt_tokens": 100000,
+        "completion_tokens": 500
+      }
+    },
+    {
+      "name": "vertex_ai-claude-haiku-5-5-tiered_input_above_100k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "vertex_ai/claude-haiku-5-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "2fb22d01457e summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-haiku-5-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted answer 2fb22d01457e"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "usage": {
+            "input_tokens": 100001,
+            "output_tokens": 500
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0512505,
+        "input_cost": 0.0500005,
+        "output_cost": 0.00125,
+        "prompt_tokens": 100001,
+        "completion_tokens": 500
+      }
+    },
+    {
+      "name": "vertex_ai-claude-haiku-5-5-tiered_cache_read_above_100k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "vertex_ai/claude-haiku-5-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "7f77ca2a24ad summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-haiku-5-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted answer 7f77ca2a24ad"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "usage": {
+            "input_tokens": 4096,
+            "output_tokens": 500,
+            "cache_read_input_tokens": 98304
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0082132,
+        "input_cost": 0.0069632,
+        "output_cost": 0.00125,
+        "cache_read_cost": 0.0049152,
+        "prompt_tokens": 102400,
+        "completion_tokens": 500
+      }
+    },
+    {
+      "name": "vertex_ai-claude-haiku-5-5-tiered_cache_write_above_100k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "vertex_ai/claude-haiku-5-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "a268666514fc summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-haiku-5-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted answer a268666514fc"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "usage": {
+            "input_tokens": 4096,
+            "output_tokens": 500,
+            "cache_creation_input_tokens": 98304,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 98304,
+              "ephemeral_1h_input_tokens": 0
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.064738,
+        "input_cost": 0.063488,
+        "output_cost": 0.00125,
+        "cache_creation_cost": 0.06144,
+        "prompt_tokens": 102400,
+        "completion_tokens": 500
+      }
+    },
+    {
+      "name": "vertex_ai-claude-haiku-5-5-tiered_cache_write_1h_above_100k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "vertex_ai/claude-haiku-5-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                "cache_control": {
+                  "type": "ephemeral",
+                  "ttl": "1h"
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "0386f4db40d6 summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-haiku-5-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted answer 0386f4db40d6"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "usage": {
+            "input_tokens": 4096,
+            "output_tokens": 500,
+            "cache_creation_input_tokens": 98304,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 98304
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.101602,
+        "input_cost": 0.100352,
+        "output_cost": 0.00125,
+        "cache_creation_cost": 0.098304,
+        "prompt_tokens": 102400,
+        "completion_tokens": 500
+      }
+    },
+    {
+      "name": "global.anthropic.claude-haiku-5-5-tiered_input_at_100k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "global.anthropic.claude-haiku-5-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "89c940c3b33a summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "output": {
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "text": "scripted answer 89c940c3b33a"
+                }
+              ]
+            }
+          },
+          "stopReason": "end_turn",
+          "usage": {
+            "inputTokens": 100000,
+            "outputTokens": 500,
+            "totalTokens": 100500
+          },
+          "metrics": {
+            "latencyMs": 42
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.01025,
+        "input_cost": 0.01,
+        "output_cost": 0.00025,
+        "prompt_tokens": 100000,
+        "completion_tokens": 500
+      }
+    },
+    {
+      "name": "global.anthropic.claude-haiku-5-5-tiered_input_above_100k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "global.anthropic.claude-haiku-5-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "9954d8cebb0d summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "output": {
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "text": "scripted answer 9954d8cebb0d"
+                }
+              ]
+            }
+          },
+          "stopReason": "end_turn",
+          "usage": {
+            "inputTokens": 100001,
+            "outputTokens": 500,
+            "totalTokens": 100501
+          },
+          "metrics": {
+            "latencyMs": 42
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0512505,
+        "input_cost": 0.0500005,
+        "output_cost": 0.00125,
+        "prompt_tokens": 100001,
+        "completion_tokens": 500
+      }
+    },
+    {
+      "name": "global.anthropic.claude-haiku-5-5-tiered_cache_read_above_100k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "global.anthropic.claude-haiku-5-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "2ee7a25dbb73 summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "output": {
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "text": "scripted answer 2ee7a25dbb73"
+                }
+              ]
+            }
+          },
+          "stopReason": "end_turn",
+          "usage": {
+            "inputTokens": 4096,
+            "outputTokens": 500,
+            "totalTokens": 102900,
+            "cacheReadInputTokens": 98304
+          },
+          "metrics": {
+            "latencyMs": 42
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0082132,
+        "input_cost": 0.0069632,
+        "output_cost": 0.00125,
+        "cache_read_cost": 0.0049152,
+        "prompt_tokens": 102400,
+        "completion_tokens": 500
+      }
+    },
+    {
+      "name": "global.anthropic.claude-haiku-5-5-tiered_cache_write_above_100k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "global.anthropic.claude-haiku-5-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "3cbcdb9c46ac summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "output": {
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "text": "scripted answer 3cbcdb9c46ac"
+                }
+              ]
+            }
+          },
+          "stopReason": "end_turn",
+          "usage": {
+            "inputTokens": 4096,
+            "outputTokens": 500,
+            "totalTokens": 102900,
+            "cacheWriteInputTokens": 98304,
+            "cacheDetails": [
+              {
+                "inputTokens": 98304,
+                "ttl": "5m"
+              }
+            ]
+          },
+          "metrics": {
+            "latencyMs": 42
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.064738,
+        "input_cost": 0.063488,
+        "output_cost": 0.00125,
+        "cache_creation_cost": 0.06144,
+        "prompt_tokens": 102400,
+        "completion_tokens": 500
+      }
     }
   ],
   "batch_cases": [
@@ -32149,8 +33441,8 @@
       ],
       "expected": {
         "spend": 0.000126,
-        "input_cost": 0.000056,
-        "output_cost": 0.00007,
+        "input_cost": 5.6e-05,
+        "output_cost": 7e-05,
         "prompt_tokens": 100,
         "completion_tokens": 10,
         "cost_header": false
