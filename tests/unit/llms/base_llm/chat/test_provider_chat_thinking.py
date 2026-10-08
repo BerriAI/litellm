@@ -21,7 +21,7 @@ from tests.unit.llms.base_llm.chat.test_provider_chat_translation import (
     _BY_ID,
     _Case,
     _aws_frame,
-    _complete,
+    _call as _provider_call,
     _request_body,
 )
 
@@ -79,7 +79,7 @@ def _case_id(case: _Case) -> str:
 
 
 def _call(case: _Case, **extra: JsonValue) -> object:
-    return _complete(case, extra)
+    return _provider_call(case, extra)
 
 
 def _anthropic_sse(events: tuple[Mapping[str, JsonValue], ...]) -> str:
