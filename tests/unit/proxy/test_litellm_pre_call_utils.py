@@ -9230,6 +9230,128 @@ class TestResolveUserProviderCredentials:
         assert data["secret_fields"]["user_provider_credentials_user_id"] == "user-a"
 
     @pytest.mark.asyncio
+    async def test_fallback_discovery_bounds_matcher_calls_on_huge_lists(self, monkeypatch):
+        """30k unmatched fallback entries must not mean 30k matcher calls: the
+        index runs the router matcher only over a capped fuzzy subset."""
+        import litellm.router_utils.fallback_event_handlers as feh
+        from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
+
+        self._env(monkeypatch)
+        entries_seen: list[int] = []
+        real_matcher = feh.get_fallback_model_group
+
+        def _spy(fallbacks, model_group):
+            entries_seen.append(len(fallbacks))
+            return real_matcher(fallbacks=fallbacks, model_group=model_group)
+
+        monkeypatch.setattr(feh, "get_fallback_model_group", _spy)
+        router = MagicMock()
+        router.fallbacks = []
+        router.context_window_fallbacks = []
+        router.content_policy_fallbacks = []
+        router.get_model_list = MagicMock(return_value=[])
+        router.get_deployment = MagicMock(return_value=None)
+        data = {
+            "model": "gpt-4o",
+            "fallbacks": [{"unmatched-%d" % i: ["x"]} for i in range(30_000)],
+            "secret_fields": {},
+        }
+        await _resolve_user_provider_credentials_for_request(
+            data=data,
+            authenticated_user_id="user-a",
+            team_id=None,
+            llm_router=router,
+        )
+        total = sum(entries_seen)
+        assert total <= 512, (
+            f"matcher work must be bounded by the cap, got {total} entries across {len(entries_seen)} calls"
+        )
+
+    @pytest.mark.asyncio
+    async def test_model_alias_map_target_loads_per_user_tokens(self, monkeypatch):
+        """litellm.model_alias_map rewrites data['model'] after pre-call discovery:
+        the alias target's per-user credential must be discovered on the rewritten
+        name the router actually receives."""
+        from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
+
+        table = self._env(monkeypatch)
+        monkeypatch.setattr(litellm, "model_alias_map", {"chat-alias": "copilot-chat"})
+        router = MagicMock()
+        router.fallbacks = []
+        router.context_window_fallbacks = []
+        router.content_policy_fallbacks = []
+        router.get_model_list = MagicMock(
+            side_effect=lambda model_name=None, team_id=None: (
+                [
+                    {
+                        "model_name": "copilot-chat",
+                        "litellm_params": {
+                            "model": "github_copilot/gpt-4o",
+                            "litellm_credential_name": "copilot-cred",
+                        },
+                    }
+                ]
+                if model_name == "copilot-chat"
+                else []
+            )
+        )
+        router.get_deployment = MagicMock(return_value=None)
+        data = {"model": "chat-alias", "secret_fields": {}}
+        await _resolve_user_provider_credentials_for_request(
+            data=data,
+            authenticated_user_id="user-a",
+            team_id=None,
+            llm_router=router,
+        )
+        table.find_many.assert_awaited()
+        assert data["secret_fields"]["user_provider_credentials_user_id"] == "user-a"
+
+    @pytest.mark.asyncio
+    async def test_team_router_settings_fallback_loads_per_user_tokens(self, monkeypatch):
+        """Team router_settings fallbacks (hierarchical Key > Team source in
+        _get_hierarchical_router_settings) must be part of discovery."""
+        from types import SimpleNamespace
+
+        from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
+        import litellm.proxy.auth.auth_checks as auth_checks
+
+        table = self._env(monkeypatch)
+        monkeypatch.setattr(
+            auth_checks,
+            "get_team_object",
+            AsyncMock(return_value=SimpleNamespace(router_settings={"fallbacks": [{"gpt-4o": ["copilot-chat"]}]})),
+        )
+        router = MagicMock()
+        router.fallbacks = []
+        router.context_window_fallbacks = []
+        router.content_policy_fallbacks = []
+        router.get_model_list = MagicMock(
+            side_effect=lambda model_name=None, team_id=None: (
+                [
+                    {
+                        "model_name": "copilot-chat",
+                        "litellm_params": {
+                            "model": "github_copilot/gpt-4o",
+                            "litellm_credential_name": "copilot-cred",
+                        },
+                    }
+                ]
+                if model_name == "copilot-chat"
+                else []
+            )
+        )
+        router.get_deployment = MagicMock(return_value=None)
+        data = {"model": "gpt-4o", "secret_fields": {}}
+        await _resolve_user_provider_credentials_for_request(
+            data=data,
+            authenticated_user_id="user-a",
+            team_id="team-1",
+            llm_router=router,
+        )
+        table.find_many.assert_awaited()
+        assert data["secret_fields"]["user_provider_credentials_user_id"] == "user-a"
+
+    @pytest.mark.asyncio
     async def test_team_public_model_name_resolves_per_user_deployments(self, monkeypatch):
         """A caller hitting a team's public model name must get the same per-user
         credentials routing resolves: get_model_list needs the caller's team_id."""

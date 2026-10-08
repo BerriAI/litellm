@@ -189,6 +189,13 @@ async def invalidate_user_provider_credential_cache(
     except Exception:  # noqa: BLE001  # caller decides whether a Redis outage aborts the disconnect
         verbose_proxy_logger.warning("invalidate_user_provider_credential_cache: Redis tombstone failed")
         return False
+    # async_set_cache swallows client errors internally, so a write that never
+    # landed looks identical to a success. The tombstone is only trusted when the
+    # key reads back as _NOT_CONNECTED; anything else means revoke failed.
+    readback: Final = await _try_cache_get(token_cache, _cache_key(user_id, credential_name))
+    if readback != _NOT_CONNECTED:
+        verbose_proxy_logger.warning("invalidate_user_provider_credential_cache: tombstone not visible after write")
+        return False
     return True
 
 

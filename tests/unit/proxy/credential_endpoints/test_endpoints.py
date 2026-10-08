@@ -2080,3 +2080,25 @@ def test_delete_user_connection_fails_closed_when_the_tombstone_write_fails(monk
     response = _call_as("DELETE", "/credentials/copilot-cred/user_connection", auth=_as_user())
     assert response.status_code == 503, response.text
     table.delete_many.assert_not_awaited()
+
+
+def test_delete_user_connection_fails_when_the_tombstone_write_silently_noops(monkeypatch):
+    """RedisCache.async_set_cache swallows client errors, so a set() that returns
+    without writing still looks successful. The disconnect must verify the
+    tombstone by reading the key back and refuse to delete the row."""
+    table = _patch_user_connection_env(monkeypatch, [_per_user_credential()], rows=[_connection_row()])
+    from types import SimpleNamespace
+
+    from litellm.proxy import proxy_server
+
+    store: dict = {}
+    silent_redis = SimpleNamespace(
+        async_set_cache=AsyncMock(return_value=None),  # reports success, writes nothing
+        async_get_cache=AsyncMock(side_effect=lambda key: store.get(key)),
+        async_delete_cache=AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache(redis_cache=silent_redis))
+
+    response = _call_as("DELETE", "/credentials/copilot-cred/user_connection", auth=_as_user())
+    assert response.status_code == 503, response.text
+    table.delete_many.assert_not_awaited()
