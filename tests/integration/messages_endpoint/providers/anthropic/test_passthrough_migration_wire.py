@@ -1,13 +1,15 @@
 import json
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Generator, Mapping
+from contextlib import contextmanager
+from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
 from integration._support.client import Gateway, JsonValue, eventually
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, wire_server
+from integration._support.wire import Reply, Request, Wire, wire_server
 
 _MODEL: Final = "claude-sonnet-4-5-20250929"
 _KEY: Final = "synthetic-anthropic-key"
@@ -97,18 +99,53 @@ def _messages_are_objects(body: Mapping[str, JsonValue]) -> bool:
     return isinstance(messages, list) and all(isinstance(message, dict) for message in messages)
 
 
+_SPEND_COLUMNS: Final = (
+    "SELECT request_id, status, call_type, prompt_tokens, completion_tokens, total_tokens, spend, request_tags, "
+    'end_user, api_base, custom_llm_provider, model, cache_hit, ("startTime" <= "endTime") AS times_ordered '
+    'FROM "LiteLLM_SpendLogs" '
+)
+
+
 def _spend_row(request_id: str) -> dict[str, JsonValue]:
     rows: Final = eventually(
+        lambda: read_rows(_SPEND_COLUMNS + "WHERE request_id=%s", (request_id,)),
+        lambda values: len(values) == 1,
+        seconds=90,
+    )
+    return rows[0]
+
+
+def _key_spend_row(key: str) -> dict[str, JsonValue]:
+    rows: Final = eventually(
         lambda: read_rows(
-            "SELECT status, call_type, prompt_tokens, completion_tokens, total_tokens, spend, request_tags, "
-            'end_user, api_base, custom_llm_provider, model, cache_hit, ("startTime" <= "endTime") AS times_ordered '
-            'FROM "LiteLLM_SpendLogs" WHERE request_id=%s',
-            (request_id,),
+            _SPEND_COLUMNS + "WHERE api_key=%s AND call_type=%s",
+            (sha256(key.encode()).hexdigest(), "pass_through_endpoint"),
         ),
         lambda values: len(values) == 1,
         seconds=90,
     )
     return rows[0]
+
+
+_MODEL_LIST_PROBE: Final = ("GET", "/v1/models")
+
+
+def _is_model_list_probe(request: Request) -> bool:
+    return (request.method, request.target) == _MODEL_LIST_PROBE
+
+
+@contextmanager
+def _upstream(respond: Callable[[Request], Reply]) -> Generator[Wire]:
+    with wire_server(
+        lambda request: (
+            Reply(body=b'{"object":"list","data":[]}') if _is_model_list_probe(request) else respond(request)
+        )
+    ) as wire:
+        yield wire
+
+
+def _provider_calls(wire: Wire) -> tuple[Request, ...]:
+    return tuple(request for request in wire.drain() if not _is_model_list_probe(request))
 
 
 def _tags(row: Mapping[str, JsonValue]) -> list[JsonValue]:
@@ -132,12 +169,12 @@ def _assert_usage_row(row: Mapping[str, JsonValue], call_type: str, tags: list[s
     assert row["times_ordered"] is True, row
 
 
-def _stream_text(gateway: Gateway, path: str, body: Mapping[str, JsonValue]) -> str:
+def _stream_text(gateway: Gateway, path: str, body: Mapping[str, JsonValue], key: str | None = None) -> str:
     with gateway.client.stream(
         "POST",
         f"{gateway.client.base_url}{path}",
         json=body,
-        headers={"Authorization": f"Bearer {gateway.key}"},
+        headers={"Authorization": f"Bearer {key or gateway.key}"},
     ) as stream:
         assert stream.status_code == 200, stream.read()
         return "".join(stream.iter_text())
@@ -162,7 +199,7 @@ def test_passthrough_basic_completion_spend_row_v1_messages(gateway: Gateway) ->
         assert "litellm_metadata" not in body
         return Reply(body=json.dumps(_message(f"msg_{marker}")).encode())
 
-    with wire_server(respond) as wire, gateway.scenario() as scenario:
+    with _upstream(respond) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_KEY)
         response: Final = gateway.request(
             "POST",
@@ -176,7 +213,7 @@ def test_passthrough_basic_completion_spend_row_v1_messages(gateway: Gateway) ->
         )
         assert response.status_code == 200, response.text
         assert response.json()["id"] == f"msg_{marker}"
-        assert len(wire.drain()) == 1
+        assert len(_provider_calls(wire)) == 1
         row: Final = _spend_row(f"msg_{marker}")
         _assert_usage_row(row, "anthropic_messages", [f"{marker}-1", f"{marker}-2"])
         assert row["end_user"] == f"end-user-{marker}", row
@@ -192,7 +229,7 @@ def test_passthrough_streaming_spend_row_v1_messages(gateway: Gateway) -> None:
         assert body["stream"] is True
         return Reply(content_type="text/event-stream", chunks=_stream_chunks(f"msg_{marker}"))
 
-    with wire_server(respond) as wire, gateway.scenario() as scenario:
+    with _upstream(respond) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_KEY)
         text: Final = _stream_text(
             gateway,
@@ -219,7 +256,7 @@ def test_passthrough_wildcard_model_strips_provider_prefix(gateway: Gateway) -> 
         assert body["model"] == "claude-haiku-4-5-20251001"
         return Reply(body=json.dumps(_message(f"msg_{marker}", "claude-haiku-4-5-20251001")).encode())
 
-    with wire_server(respond) as wire, gateway.scenario() as scenario:
+    with _upstream(respond) as wire, gateway.scenario() as scenario:
         created: Final = gateway.post(
             "/model/new",
             {
@@ -243,7 +280,7 @@ def test_passthrough_wildcard_model_strips_provider_prefix(gateway: Gateway) -> 
         )
         assert response.status_code == 200, response.text
         assert response.json()["content"][0]["text"] == "hello test"
-        assert len(wire.drain()) == 1
+        assert len(_provider_calls(wire)) == 1
 
 
 def test_passthrough_thinking_block_round_trips_v1_messages(gateway: Gateway) -> None:
@@ -254,7 +291,7 @@ def test_passthrough_thinking_block_round_trips_v1_messages(gateway: Gateway) ->
         assert body["max_tokens"] == 20000
         return Reply(body=json.dumps(_thinking_message("msg_" + uuid.uuid4().hex)).encode())
 
-    with wire_server(respond) as wire, gateway.scenario() as scenario:
+    with _upstream(respond) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model="anthropic/claude-haiku-4-5-20251001", api_base=wire.url, api_key=_KEY)
         response: Final = gateway.request(
             "POST",
@@ -278,7 +315,7 @@ def test_passthrough_bad_request_returns_400_v1_messages(gateway: Gateway) -> No
         assert not _messages_are_objects(body), body
         return _bad_request_reply()
 
-    with wire_server(respond) as wire, gateway.scenario() as scenario:
+    with _upstream(respond) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_KEY)
         responses: Final = tuple(
             gateway.request(
@@ -305,7 +342,7 @@ def test_native_anthropic_route_completion_stream_thinking_and_bad_request(gatew
         return Reply(body=json.dumps(_message("msg_" + uuid.uuid4().hex)).encode())
 
     with (
-        wire_server(respond) as wire,
+        _upstream(respond) as wire,
         owned_proxy(
             gateway,
             tmp_path,
@@ -368,14 +405,17 @@ def test_native_passthrough_spend_rows_record_usage_tags_and_spend(gateway: Gate
         return Reply(body=json.dumps(_message(completion_id)).encode())
 
     with (
-        wire_server(respond) as wire,
+        _upstream(respond) as wire,
         owned_proxy(
             gateway,
             tmp_path,
             {"ANTHROPIC_API_BASE": wire.url, "ANTHROPIC_API_KEY": _KEY},
             config=_owned_config(tmp_path, _PROXY_CONFIG),
         ) as candidate,
+        candidate.scenario() as scenario,
     ):
+        completion_key: Final = scenario.key()
+        stream_key: Final = scenario.key()
         response: Final = candidate.request(
             "POST",
             "/anthropic/v1/messages",
@@ -385,6 +425,7 @@ def test_native_passthrough_spend_rows_record_usage_tags_and_spend(gateway: Gate
                 "messages": [{"role": "user", "content": "Say 'hello test' and nothing else"}],
                 "litellm_metadata": {"tags": [f"{marker}-1", f"{marker}-2"]},
             },
+            key=completion_key,
         )
         assert response.status_code == 200, response.text
         assert response.json()["id"] == completion_id
@@ -398,10 +439,13 @@ def test_native_passthrough_spend_rows_record_usage_tags_and_spend(gateway: Gate
                 "messages": [{"role": "user", "content": "Say 'hello stream test' and nothing else"}],
                 "litellm_metadata": {"tags": [f"{marker}-s1", f"{marker}-s2"], "user": f"end-user-{marker}"},
             },
+            key=stream_key,
         )
         assert "hello stream" in text
-        completion_row: Final = _spend_row(completion_id)
-        stream_row: Final = _spend_row(stream_id)
+        completion_row: Final = _key_spend_row(completion_key)
+        stream_row: Final = _key_spend_row(stream_key)
+    assert completion_row["request_id"] == completion_id, completion_row
+    assert stream_row["request_id"] == stream_id, stream_row
     _assert_usage_row(completion_row, "pass_through_endpoint", [f"{marker}-1", f"{marker}-2"])
     assert completion_row["api_base"] == f"{wire.url}/v1/messages", completion_row
     assert "claude" in str(completion_row["model"]), completion_row
@@ -510,12 +554,12 @@ def test_streaming_cost_injected_into_usage_for_anthropic_and_openai_responses(
         return Reply(content_type="text/event-stream", chunks=_stream_chunks("msg_" + uuid.uuid4().hex))
 
     with (
-        wire_server(respond) as wire,
+        _upstream(respond) as wire,
         owned_proxy(gateway, tmp_path, {}, config=_owned_config(tmp_path, _cost_config(wire.url))) as candidate,
     ):
         _assert_cost_in_every_delta(candidate, "amsg")
         _assert_cost_in_every_delta(candidate, "omsg")
-        targets: Final = [request.target for request in wire.drain()]
+        targets: Final = [request.target for request in _provider_calls(wire)]
         assert targets == ["/v1/messages", "/responses"], targets
 
 
@@ -528,7 +572,7 @@ def test_streaming_cost_injected_into_usage_for_openai_chat_completions_bridge(
         return Reply(content_type="text/event-stream", chunks=_openai_chat_stream())
 
     with (
-        wire_server(respond) as wire,
+        _upstream(respond) as wire,
         owned_proxy(
             gateway,
             tmp_path,
@@ -537,4 +581,4 @@ def test_streaming_cost_injected_into_usage_for_openai_chat_completions_bridge(
         ) as candidate,
     ):
         _assert_cost_in_every_delta(candidate, "omsg")
-        assert len(wire.drain()) == 1
+        assert len(_provider_calls(wire)) == 1
