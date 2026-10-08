@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from collections.abc import Sequence
 from hashlib import sha256
@@ -70,7 +71,12 @@ def _spend_reaches(table: Literal["key", "team"], identity: str, amount: float) 
     )
 
 
-def _budget_refusal(gateway: Gateway, provider: SharedProvider, model: str, key: str) -> str:
+_COST_AND_LIMIT: Final = re.compile(r"Current cost: ([^\s,]+), Max budget: ([^\s,]+)")
+
+
+def _budget_refusal(
+    gateway: Gateway, provider: SharedProvider, model: str, key: str, *, spent: float, limit: float
+) -> str:
     refused: Final = _ask(gateway, model, key)
     assert refused.status_code == 422, f"{refused.status_code} {refused.text}"
     error: Final = object_value(JSON_OBJECT.validate_json(refused.content)["error"])
@@ -78,6 +84,10 @@ def _budget_refusal(gateway: Gateway, provider: SharedProvider, model: str, key:
     assert error["code"] == "422", refused.text
     message: Final = string_value(error["message"])
     assert "Budget has been exceeded!" in message, refused.text
+    figures: Final = _COST_AND_LIMIT.search(message)
+    assert figures is not None, message
+    assert float(figures[1]) == pytest.approx(spent), message
+    assert float(figures[2]) == pytest.approx(limit), message
     assert provider.received() == ()
     return message
 
@@ -94,7 +104,7 @@ def test_a_key_with_a_tiny_budget_serves_once_and_then_answers_budget_exceeded(
         key: Final = scenario.key(models=[model], max_budget=_TINY_BUDGET)
         _served(gateway, provider, model, key)
         _spend_reaches("key", _hashed(key), _CALL_COST)
-        _budget_refusal(gateway, provider, model, key)
+        _budget_refusal(gateway, provider, model, key, spent=_CALL_COST, limit=_TINY_BUDGET)
 
 
 def test_a_key_with_a_zero_budget_is_refused_before_the_provider_is_called(
@@ -103,7 +113,7 @@ def test_a_key_with_a_zero_budget_is_refused_before_the_provider_is_called(
     with gateway.scenario() as scenario:
         model: Final = _priced_model(scenario)
         key: Final = scenario.key(models=[model], max_budget=0)
-        _budget_refusal(gateway, provider, model, key)
+        _budget_refusal(gateway, provider, model, key, spent=0.0, limit=0.0)
 
 
 def test_a_key_with_room_for_two_calls_serves_both_before_answering_budget_exceeded(
@@ -111,12 +121,13 @@ def test_a_key_with_room_for_two_calls_serves_both_before_answering_budget_excee
 ) -> None:
     with gateway.scenario() as scenario:
         model: Final = _priced_model(scenario)
-        key: Final = scenario.key(models=[model], max_budget=_CALL_COST * 1.5)
+        limit: Final = _CALL_COST * 1.5
+        key: Final = scenario.key(models=[model], max_budget=limit)
         _served(gateway, provider, model, key)
         _spend_reaches("key", _hashed(key), _CALL_COST)
         _served(gateway, provider, model, key)
         _spend_reaches("key", _hashed(key), _CALL_COST * 2)
-        _budget_refusal(gateway, provider, model, key)
+        _budget_refusal(gateway, provider, model, key, spent=_CALL_COST * 2, limit=limit)
 
 
 def test_a_team_key_serves_once_and_then_answers_the_team_budget_envelope(
@@ -128,7 +139,7 @@ def test_a_team_key_serves_once_and_then_answers_the_team_budget_envelope(
         key: Final = scenario.key(team_id=team, models=[model])
         _served(gateway, provider, model, key)
         _spend_reaches("team", team, _CALL_COST)
-        message: Final = _budget_refusal(gateway, provider, model, key)
+        message: Final = _budget_refusal(gateway, provider, model, key, spent=_CALL_COST, limit=_TINY_BUDGET)
         assert f"Team={team}" in message, message
 
 

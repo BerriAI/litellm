@@ -21,6 +21,7 @@ from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
 _GOOD: Final = "prometheus-good-endpoint"
 _LIMITED: Final = "prometheus-rate-limited-endpoint"
+_FAILING: Final = "prometheus-failing-endpoint"
 _END_USER: Final = f"prometheus-end-user-{uuid.uuid4().hex}"
 
 
@@ -67,6 +68,7 @@ def _config(directory: Path, upstream: Wire) -> Path:
             },
         },
         {"model_name": _LIMITED, "litellm_params": {"model": "openai/429", **params}},
+        {"model_name": _FAILING, "litellm_params": {"model": "openai/429", **params}},
     ]
     configuration["litellm_settings"]["callbacks"] = ["prometheus"]
     configuration["litellm_settings"]["disable_end_user_cost_tracking_prometheus_only"] = True
@@ -109,9 +111,9 @@ def _until(rig: _Rig, name: str, **labels: str) -> tuple[Sample, ...]:
 
 
 def test_a_rate_limited_call_counts_as_a_failed_and_a_429_total_request(rig: _Rig) -> None:
-    response: Final = _ask(rig, _LIMITED)
+    response: Final = _ask(rig, _FAILING)
     assert response.status_code == 429, response.text
-    rig.upstream.drain()
+    assert len(rig.upstream.drain()) == 1
     failed: Final = _until(
         rig,
         "litellm_proxy_failed_requests_metric_total",
@@ -119,18 +121,18 @@ def test_a_rate_limited_call_counts_as_a_failed_and_a_429_total_request(rig: _Ri
         exception_class="Openai.RateLimitError",
         exception_status="429",
         hashed_api_key=LITELLM_PROXY_MASTER_KEY_ALIAS,
-        requested_model=_LIMITED,
+        requested_model=_FAILING,
         route="/chat/completions",
     )
-    assert sum(sample.value for sample in failed) >= 1
+    assert [sample.value for sample in failed] == [1.0]
     totals: Final = _until(
         rig,
         "litellm_proxy_total_requests_metric_total",
         hashed_api_key=LITELLM_PROXY_MASTER_KEY_ALIAS,
-        requested_model=_LIMITED,
+        requested_model=_FAILING,
         status_code="429",
     )
-    assert sum(sample.value for sample in totals) >= 1
+    assert [sample.value for sample in totals] == [1.0]
 
 
 def test_a_good_call_exports_latency_histograms_on_the_shared_buckets_without_the_end_user(rig: _Rig) -> None:
@@ -144,6 +146,8 @@ def test_a_good_call_exports_latency_histograms_on_the_shared_buckets_without_th
     }
     _until(rig, "litellm_request_total_latency_metric_bucket", le="0.005", **master)
     _until(rig, "litellm_llm_api_latency_metric_bucket", le="0.005", **master)
+    for name in ("litellm_request_total_latency_metric_count", "litellm_llm_api_latency_metric_count"):
+        assert [sample.value for sample in _until(rig, name, **master)] == [1.0], name
     samples: Final = scrape(rig.gateway)
     assert _END_USER not in label_values(samples)
     expected: Final = {str(bucket).replace("inf", "+Inf") for bucket in LATENCY_BUCKETS}
@@ -170,7 +174,7 @@ def test_client_side_fallbacks_count_one_success_and_one_failure(rig: _Rig) -> N
         "requested_model": _LIMITED,
     }
     succeeded: Final = _until(rig, "litellm_deployment_successful_fallbacks_total", fallback_model=_GOOD, **shared)
-    assert sum(sample.value for sample in succeeded) >= 1.0
+    assert [sample.value for sample in succeeded] == [1.0]
     lost: Final = _until(rig, "litellm_deployment_failed_fallbacks_total", fallback_model=missing, **shared)
     assert [sample.value for sample in lost] == [1.0]
 
@@ -255,8 +259,12 @@ def test_a_user_email_labels_the_spend_and_failed_request_series_of_its_keys(rig
         key: Final = scenario.key(user_id=user)
         assert _ask(rig, _GOOD, key).status_code == 200
         assert len(rig.upstream.drain()) == 1
-        _until(rig, "litellm_spend_metric_total", user_email=email)
+        spend: Final = _until(rig, "litellm_spend_metric_total", user_email=email)
+        assert [(sample.labels["user"], sample.value) for sample in spend] == [(user, pytest.approx(0.005))]
         assert email in label_values(scrape(rig.gateway))
-        assert _ask(rig, _LIMITED, key).status_code == 429
-        rig.upstream.drain()
-        _until(rig, "litellm_proxy_failed_requests_metric_total", user_email=email)
+        assert _ask(rig, _FAILING, key).status_code == 429
+        assert len(rig.upstream.drain()) == 1
+        failed: Final = _until(
+            rig, "litellm_proxy_failed_requests_metric_total", user_email=email, requested_model=_FAILING
+        )
+        assert [(sample.labels["user"], sample.value) for sample in failed] == [(user, 1.0)]

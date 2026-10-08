@@ -88,37 +88,47 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
         yield _Rig(owned, policy, upstream, scenario.model(api_base=f"{upstream.url}/v1", api_key="sk-fixture"))
 
 
-def _ask(rig: _Rig, key: str | None, text: str, guardrails: list[str] | None = None) -> httpx.Response:
-    body: Final = {"model": rig.model, "messages": [{"role": "user", "content": f"{text} {uuid.uuid4().hex}"}]}
+def _prompt(text: str) -> str:
+    return f"{text} {uuid.uuid4().hex}"
+
+
+def _ask(rig: _Rig, key: str | None, prompt: str, guardrails: list[str] | None = None) -> httpx.Response:
+    body: Final = {"model": rig.model, "messages": [{"role": "user", "content": prompt}]}
     return rig.gateway.request(
         "POST", "/v1/chat/completions", body if guardrails is None else {**body, "guardrails": guardrails}, key=key
     )
 
 
-def _served_without_guardrail(rig: _Rig, response: httpx.Response) -> None:
+def _served_without_guardrail(rig: _Rig, response: httpx.Response, prompt: str) -> None:
     assert response.status_code == 200, response.text
     assert _HEADER not in response.headers, dict(response.headers)
     assert rig.policy.drain() == ()
-    assert len(rig.upstream.drain()) == 1
+    forwarded: Final = rig.upstream.drain()
+    assert len(forwarded) == 1 and prompt in forwarded[0].body.decode(), forwarded
 
 
-def _served_with_attachable(rig: _Rig, response: httpx.Response) -> None:
+def _served_with_attachable(rig: _Rig, response: httpx.Response, prompt: str) -> None:
     assert response.status_code == 200, response.text
     assert response.headers[_HEADER] == _ATTACHABLE, dict(response.headers)
-    assert len(rig.policy.drain()) == 1
-    assert len(rig.upstream.drain()) == 1
+    inspected: Final = rig.policy.drain()
+    assert len(inspected) == 1 and prompt in inspected[0].body.decode(), inspected
+    forwarded: Final = rig.upstream.drain()
+    assert len(forwarded) == 1 and prompt in forwarded[0].body.decode(), forwarded
 
 
 def test_a_request_with_an_empty_guardrail_list_is_served_without_the_applied_header(rig: _Rig) -> None:
-    _served_without_guardrail(rig, _ask(rig, None, "no guardrails", []))
+    prompt: Final = _prompt("no guardrails")
+    _served_without_guardrail(rig, _ask(rig, None, prompt, []), prompt)
 
 
 def test_a_key_carrying_a_guardrail_applies_it_and_a_plain_key_does_not(rig: _Rig) -> None:
     with rig.gateway.scenario() as scenario:
         plain: Final = scenario.key()
         guarded: Final = scenario.key(guardrails=[_ATTACHABLE])
-        _served_without_guardrail(rig, _ask(rig, plain, "plain key"))
-        _served_with_attachable(rig, _ask(rig, guarded, "guarded key"))
+        plain_prompt: Final = _prompt("plain key")
+        _served_without_guardrail(rig, _ask(rig, plain, plain_prompt), plain_prompt)
+        guarded_prompt: Final = _prompt("guarded key")
+        _served_with_attachable(rig, _ask(rig, guarded, guarded_prompt), guarded_prompt)
 
 
 def test_a_team_carrying_a_guardrail_applies_it_to_its_keys_only(rig: _Rig) -> None:
@@ -126,12 +136,16 @@ def test_a_team_carrying_a_guardrail_applies_it_to_its_keys_only(rig: _Rig) -> N
         team: Final = scenario.team(guardrails=[_ATTACHABLE])
         outside: Final = scenario.key()
         member: Final = scenario.key(team_id=team)
-        _served_without_guardrail(rig, _ask(rig, outside, "outside team"))
-        _served_with_attachable(rig, _ask(rig, member, "team key"))
+        outside_prompt: Final = _prompt("outside team")
+        _served_without_guardrail(rig, _ask(rig, outside, outside_prompt), outside_prompt)
+        member_prompt: Final = _prompt("team key")
+        _served_with_attachable(rig, _ask(rig, member, member_prompt), member_prompt)
 
 
 def test_a_during_call_custom_guardrail_rejects_a_request_naming_the_banned_word(rig: _Rig) -> None:
-    refused: Final = _ask(rig, None, "what is litellm", [_WORDS])
+    unguarded_prompt: Final = _prompt("what is litellm")
+    _served_without_guardrail(rig, _ask(rig, None, unguarded_prompt), unguarded_prompt)
+    refused: Final = _ask(rig, None, _prompt("what is litellm"), [_WORDS])
     rig.upstream.drain()
     assert refused.status_code >= 400, refused.text
     error: Final = object_value(JSON_OBJECT.validate_json(refused.content)["error"])

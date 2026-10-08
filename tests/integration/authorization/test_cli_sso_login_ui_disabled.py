@@ -662,8 +662,9 @@ def test_cli_session_token_is_denied_once_its_team_budget_is_exhausted(
 ) -> None:
     proxy: Final = one_worker.owned.gateway
     subject: Final = f"cli-sso-team-budget-{uuid.uuid4().hex[:12]}"
+    budget: Final = 0.0000000005
     with proxy.scenario() as scenario:
-        team: Final = scenario.team(max_budget=0.0000000005, models=[MESSAGE_MODEL])
+        team: Final = scenario.team(max_budget=budget, models=[MESSAGE_MODEL])
         scenario.user(user_id=subject, user_email=f"{subject}@example.com", user_role="internal_user")
         added: Final = proxy.request(
             "POST", "/team/member_add", {"team_id": team, "member": {"user_id": subject, "role": "user"}}
@@ -685,7 +686,7 @@ def test_cli_session_token_is_denied_once_its_team_budget_is_exhausted(
         _send_message(proxy, provider, key)
         eventually(
             lambda: read_rows('SELECT spend FROM "LiteLLM_TeamTable" WHERE team_id = %s', (team,)),
-            lambda rows: len(rows) == 1 and float(str(rows[0]["spend"])) > 0.0000000005,
+            lambda rows: len(rows) == 1 and float(str(rows[0]["spend"])) > budget,
             seconds=70,
         )
         refused: Final = proxy.request(
@@ -697,5 +698,9 @@ def test_cli_session_token_is_denied_once_its_team_budget_is_exhausted(
         assert refused.status_code == 422, f"{refused.status_code} {refused.text}"
         error: Final = object_value(JSON_OBJECT.validate_json(refused.content)["error"])
         assert error["type"] == "budget_exceeded", refused.text
-        assert f"Team={team}" in string_value(error["message"]), refused.text
+        assert error["code"] == "422", refused.text
+        message: Final = string_value(error["message"])
+        assert "Budget has been exceeded!" in message, refused.text
+        assert f"Team={team}" in message, refused.text
+        assert "Current cost:" in message and f"Max budget: {budget}" in message, refused.text
         assert provider.received() == ()
