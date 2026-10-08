@@ -2,7 +2,7 @@ import asyncio
 import aiohttp
 import json
 import math
-from typing import Any
+from typing import Any, Final
 
 # Asynchronously fetch data from a given URL
 async def fetch_data(url):
@@ -242,12 +242,15 @@ def transform_vercel_ai_gateway_data(data):
             row.get("pricing", {}).get(k) is None for k in ("input", "output")
         ):
             continue
-        obj = {
+        limits: Final = {
             "max_tokens": row["context_window"],
+            "max_output_tokens": row["max_tokens"],
+            "max_input_tokens": row["context_window"],
+        }
+        obj = {
             "input_cost_per_token": float(row["pricing"]["input"]),
             "output_cost_per_token": float(row["pricing"]["output"]),
-            'max_output_tokens': row['max_tokens'],
-            'max_input_tokens': row["context_window"],
+            **{key: value for key, value in limits.items() if value > 0},
         }
 
         # Handle cache pricing if available
@@ -258,7 +261,8 @@ def transform_vercel_ai_gateway_data(data):
             if "input_cache_write" in row["pricing"] and row["pricing"]["input_cache_write"] is not None:
                 obj['cache_creation_input_token_cost'] = float(f"{float(row['pricing']['input_cache_write']):e}")
 
-        mode = "embedding" if "embedding" in row["id"].lower() else "chat"
+        is_embedding: Final = row.get("type") == "embedding" or "embed" in row["id"].lower()
+        mode = "embedding" if is_embedding else "chat"
         
         obj.update({"litellm_provider": "vercel_ai_gateway", "mode": mode})
 

@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
+from types import ModuleType
+from typing import Final
 
 import pytest
 
@@ -220,3 +223,74 @@ def test_transform_inherits_allowlisted_keys_from_base_model_entry(sync_module):
     assert entry["supports_pdf_input"] is True
     assert entry["supports_assistant_prefill"] is True
     assert entry["input_cost_per_token"] == 1.5e-07
+
+
+@pytest.mark.parametrize(
+    "row_id,row_type,expected_mode",
+    [
+        ("cohere/embed-v4.0", "embedding", "embedding"),
+        ("mistral/mistral-embed", "embedding", "embedding"),
+        ("some/vendor-vectors", "embedding", "embedding"),
+        ("amazon/titan-embed-text-v2", None, "embedding"),
+        ("openai/gpt-4o", "language", "chat"),
+    ],
+)
+def test_vercel_transform_marks_embedding_models_by_declared_type(
+    sync_module: ModuleType, row_id: str, row_type: str | None, expected_mode: str
+) -> None:
+    row: Final[dict[str, object]] = {
+        "id": row_id,
+        "context_window": 8192,
+        "max_tokens": 8192,
+        "pricing": {"input": "0.0000001", "output": "0"},
+        **({"type": row_type} if row_type is not None else {}),
+    }
+    transformed: Final = sync_module.transform_vercel_ai_gateway_data([row])
+    assert transformed[f"vercel_ai_gateway/{row_id}"]["mode"] == expected_mode
+
+
+def test_vercel_transform_omits_zero_token_limits(sync_module: ModuleType) -> None:
+    row: Final[dict[str, object]] = {
+        "id": "cohere/embed-v4.0",
+        "type": "embedding",
+        "context_window": 0,
+        "max_tokens": 0,
+        "pricing": {"input": "0.0000001", "output": "0"},
+    }
+    transformed: Final = sync_module.transform_vercel_ai_gateway_data([row])
+    entry: Final = transformed["vercel_ai_gateway/cohere/embed-v4.0"]
+    assert entry["mode"] == "embedding"
+    assert entry["input_cost_per_token"] == 1e-07
+    assert {"max_tokens", "max_input_tokens", "max_output_tokens"}.isdisjoint(entry)
+
+
+def test_vercel_transform_keeps_positive_token_limits(sync_module: ModuleType) -> None:
+    row: Final[dict[str, object]] = {
+        "id": "openai/gpt-4o",
+        "type": "language",
+        "context_window": 128000,
+        "max_tokens": 16384,
+        "pricing": {"input": "0.0000025", "output": "0.00001"},
+    }
+    transformed: Final = sync_module.transform_vercel_ai_gateway_data([row])
+    entry: Final = transformed["vercel_ai_gateway/openai/gpt-4o"]
+    assert entry["max_tokens"] == 128000
+    assert entry["max_input_tokens"] == 128000
+    assert entry["max_output_tokens"] == 16384
+
+
+def test_vercel_embedding_entries_in_cost_map_are_not_labeled_chat() -> None:
+    root: Final = Path(__file__).resolve().parents[2]
+    for name in (
+        "model_prices_and_context_window.json",
+        "litellm/model_prices_and_context_window_backup.json",
+    ):
+        cost_map: Final = json.loads((root / name).read_text())
+        mislabeled: Final = [
+            key
+            for key, entry in cost_map.items()
+            if key.startswith("vercel_ai_gateway/")
+            and "embed" in key.lower()
+            and entry.get("mode") != "embedding"
+        ]
+        assert mislabeled == [], f"{name}: {mislabeled}"
