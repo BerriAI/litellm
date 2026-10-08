@@ -25,6 +25,7 @@ from datetime import timedelta
 from types import FrameType, MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast
 
+import orjson
 from pydantic import TypeAdapter
 
 import litellm
@@ -653,6 +654,13 @@ def _redis_circuit_breaker_guard_sync(method: Callable[..., _RedisCallResult]) -
     )
 
 
+def _dumps_cache_value(value: object) -> str:
+    try:
+        return orjson.dumps(value, option=orjson.OPT_NON_STR_KEYS).decode()
+    except TypeError:
+        return json.dumps(value)
+
+
 class RedisCache(BaseCache):
     # if users don't provider one, use the default litellm cache
 
@@ -1230,7 +1238,7 @@ class RedisCache(BaseCache):
         for cache_key, cache_value in cache_list:
             cache_key = self.check_and_fix_namespace(key=cache_key)
             print_verbose(f"Set ASYNC Redis Cache PIPELINE: key: {cache_key}\nttl={ttl}")
-            json_cache_value = json.dumps(cache_value)
+            json_cache_value = _dumps_cache_value(cache_value)
             # Set the value with a TTL if it's provided.
             _td: timedelta | None = None
             if ttl is not None:
