@@ -5806,6 +5806,32 @@ def test_handle_anthropic_messages_response_logging_keeps_the_served_response_id
     assert result.service_tier == "flex"
 
 
+@pytest.mark.parametrize("as_model", [False, True], ids=["dict", "pydantic"])
+def test_handle_anthropic_messages_response_logging_keeps_the_message_id_of_a_parsed_message(as_model):
+    from litellm.types.llms.anthropic import AnthropicResponse
+
+    message: Final = {
+        "id": "msg_served",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5",
+        "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 3, "output_tokens": 1},
+    }
+    logging_obj = _anthropic_messages_logging_obj()
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+
+    result = logging_obj._handle_anthropic_messages_response_logging(
+        result=AnthropicResponse.model_validate(message) if as_model else message
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert result.id == "msg_served"
+    assert result.choices[0].message.content == "hi"  # type: ignore[union-attr]
+
+
 def test_handle_anthropic_messages_response_logging_passes_model_response_through():
     """Anthropic-native path already yields a ModelResponse; it must be returned unchanged."""
     logging_obj = _anthropic_messages_logging_obj()
