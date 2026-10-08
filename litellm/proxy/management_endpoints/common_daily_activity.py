@@ -883,30 +883,25 @@ async def _aggregate_grouping_sets_records(
     )
 
 
-async def get_daily_activity(
+async def get_daily_activity_for_scope(
     prisma_client: PrismaClient | None,
-    table_name: str,
-    entity_id_field: str,
-    entity_id: str | list[str] | None,
+    scope: DailyActivityScope,
+    *,
     entity_metadata_field: Mapping[str, dict[str, object]] | None,
-    start_date: str | None,
-    end_date: str | None,
-    model: str | None,
-    api_key: str | list[str] | None,
     page: int,
     page_size: int,
-    exclude_entity_ids: list[str] | None = None,
     metadata_metrics_func: Callable[[Sequence[DailySpendRecord]], SpendMetrics] | None = None,
-    timezone_offset_minutes: int | None = None,
-    include_current_utc_day: bool = False,
     resolve_entity_metadata: Callable[[Sequence[DailySpendRecord]], Awaitable[dict[str, dict[str, object]]]]
     | None = None,
 ) -> SpendAnalyticsPaginatedResponse:
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.db_not_connected_error.value})
-    date_range: Final = parse_canonical_date_range(start_date, end_date)
+    date_range: Final = parse_canonical_date_range(scope.start_date or None, scope.end_date or None)
     if isinstance(date_range, InvalidDateRange):
         raise_public(date_range)
+    canonical_scope: Final = replace(
+        scope, start_date=date_range.start.isoformat(), end_date=date_range.end.isoformat()
+    )
 
     if page < 1 or page_size < 1:
         raise HTTPException(
@@ -915,20 +910,8 @@ async def get_daily_activity(
         )
 
     try:
-        scope: Final = daily_activity_scope(
-            table_name,
-            entity_id_field,
-            entity_id,
-            exclude_entity_ids,
-            api_key,
-            date_range.start.isoformat(),
-            date_range.end.isoformat(),
-            model,
-            timezone_offset_minutes,
-            include_current_utc_day,
-        )
         repository: Final = daily_activity_repository(prisma_client)
-        page_data: Final = await repository.daily_rows(scope, page=page, page_size=page_size)
+        page_data: Final = await repository.daily_rows(canonical_scope, page=page, page_size=page_size)
         daily_spend_data: Final = page_data.rows
         resolved_entity_metadata = entity_metadata_field
         if resolve_entity_metadata is not None:
@@ -939,7 +922,7 @@ async def get_daily_activity(
         aggregated: Final = await _aggregate_spend_records(
             repository=repository,
             records=daily_spend_data,
-            entity_id_field=entity_id_field,
+            entity_id_field=canonical_scope.entity_id_field,
             entity_metadata_field=resolved_entity_metadata,
         )
         metadata_metrics = aggregated["totals"]
@@ -975,6 +958,53 @@ async def get_daily_activity(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={"error": f"Failed to fetch analytics: {exc}"}
         )
+
+
+async def get_daily_activity(
+    prisma_client: PrismaClient | None,
+    table_name: str,
+    entity_id_field: str,
+    entity_id: str | list[str] | None,
+    entity_metadata_field: Mapping[str, dict[str, object]] | None,
+    start_date: str | None,
+    end_date: str | None,
+    model: str | None,
+    api_key: str | list[str] | None,
+    page: int,
+    page_size: int,
+    exclude_entity_ids: list[str] | None = None,
+    metadata_metrics_func: Callable[[Sequence[DailySpendRecord]], SpendMetrics] | None = None,
+    timezone_offset_minutes: int | None = None,
+    include_current_utc_day: bool = False,
+    resolve_entity_metadata: Callable[[Sequence[DailySpendRecord]], Awaitable[dict[str, dict[str, object]]]]
+    | None = None,
+) -> SpendAnalyticsPaginatedResponse:
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.db_not_connected_error.value})
+    date_range: Final = parse_canonical_date_range(start_date, end_date)
+    if isinstance(date_range, InvalidDateRange):
+        raise_public(date_range)
+    scope: Final = daily_activity_scope(
+        table_name,
+        entity_id_field,
+        entity_id,
+        exclude_entity_ids,
+        api_key,
+        date_range.start.isoformat(),
+        date_range.end.isoformat(),
+        model,
+        timezone_offset_minutes,
+        include_current_utc_day,
+    )
+    return await get_daily_activity_for_scope(
+        prisma_client,
+        scope,
+        entity_metadata_field=entity_metadata_field,
+        page=page,
+        page_size=page_size,
+        metadata_metrics_func=metadata_metrics_func,
+        resolve_entity_metadata=resolve_entity_metadata,
+    )
 
 
 def _fold_entity_rollups_sync(

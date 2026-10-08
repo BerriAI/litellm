@@ -16,6 +16,7 @@ from integration.spend._daily_activity_fixtures import (
     seed_daily_tag_activity_fixture,
     seed_daily_tag_float_tie_fixture,
     seed_daily_team_exclusion_fixture,
+    seed_daily_team_tag_shared_fixture,
     seed_daily_team_unassigned_fixture,
 )
 from prisma import Prisma
@@ -93,6 +94,7 @@ async def _daily_activity_database(
     include_tag_float_tie_activity: bool = False,
     include_team_unassigned_activity: bool = False,
     include_team_exclusion_activity: bool = False,
+    include_team_tag_shared_activity: bool = False,
 ) -> AsyncIterator[Prisma]:
     schema: Final = f"integration_{uuid.uuid4().hex}"
     url: Final = os.environ["DATABASE_URL"]
@@ -115,6 +117,8 @@ async def _daily_activity_database(
                     )
                 if include_team_exclusion_activity:
                     seed_daily_team_exclusion_fixture(connection, schema=schema)
+                if include_team_tag_shared_activity:
+                    seed_daily_team_tag_shared_fixture(connection, schema=schema)
             database: Final = Prisma(datasource={"url": _scoped_url(url, schema)})
             await database.connect()
             try:
@@ -807,3 +811,92 @@ async def test_team_tag_intersections_across_real_repository_reads() -> None:
         assert (await repository.key_page(history, offset=0, limit=10)).rows[0].spend == 16
         overlapping: Final = replace(base, tags=None, exclude_tags=("shared",))
         assert sum(row.spend for row in (await repository.key_page(overlapping, offset=0, limit=10)).rows) == 33
+
+
+@pytest.mark.asyncio
+async def test_legacy_endpoints_filter_team_tag_intersections(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    import httpx
+    from fastapi import FastAPI
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.management_endpoints import tag_management_endpoints, team_endpoints
+
+    async with _daily_activity_database(include_team_tag_shared_activity=True) as database:
+        app: Final = FastAPI()
+        app.include_router(tag_management_endpoints.router)
+        app.include_router(team_endpoints.router)
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.prisma_client",
+            SimpleNamespace(db=database, writer_db=database),
+        )
+        date_window: Final = {"start_date": "2026-06-10", "end_date": "2026-06-11"}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            tag_response: Final = await client.get(
+                "/tag/daily/activity",
+                params={**date_window, "tags": "shared", "team_ids": "team-a", "group_by": "team"},
+            )
+            assert tag_response.status_code == 200, tag_response.text
+            tag_body: Final = tag_response.json()
+            assert tag_body["metadata"]["total_spend"] == 5.0
+            team_entities: Final = [
+                (entity, bucket)
+                for day in tag_body["results"]
+                for entity, bucket in day["breakdown"]["entities"].items()
+            ]
+            assert {entity for entity, _ in team_entities} == {"team-a"}
+            assert all(bucket["metadata"] == {"team_alias": "Team A"} for _, bucket in team_entities)
+            assert sum(bucket["metrics"]["spend"] for _, bucket in team_entities) == 5.0
+
+            team_response: Final = await client.get(
+                "/team/daily/activity",
+                params={**date_window, "team_ids": "team-a", "tags": "shared"},
+            )
+            assert team_response.status_code == 200, team_response.text
+            team_body: Final = team_response.json()
+            assert team_body["metadata"]["total_spend"] == 5.0
+            assert {
+                entity
+                for day in team_body["results"]
+                for entity in day["breakdown"]["entities"]
+            } == {"team-a"}
+
+            list_response: Final = await client.get(
+                "/tag/list",
+                params={"team_ids": "team-a", "usage_only": "true"},
+            )
+            assert list_response.status_code == 200, list_response.text
+            tags_by_name: Final = {tag["name"]: tag for tag in list_response.json()}
+            assert set(tags_by_name) == {"shared", "other"}
+            assert tags_by_name["shared"]["description"] == "stored shared tag"
+            assert tags_by_name["shared"]["models"] == ["model-a"]
+
+            page_spends: Final = []
+            page: Final = 1
+            first_page: Final = await client.get(
+                "/tag/daily/activity",
+                params={**date_window, "tags": "shared", "team_ids": "team-a", "page_size": 1, "page": page},
+            )
+            assert first_page.status_code == 200, first_page.text
+            page_spends.append(first_page.json()["metadata"]["total_spend"])
+            has_more: Final = first_page.json()["metadata"]["has_more"]
+            next_page: Final = await client.get(
+                "/tag/daily/activity",
+                params={**date_window, "tags": "shared", "team_ids": "team-a", "page_size": 1, "page": 2},
+            )
+            assert next_page.status_code == 200, next_page.text
+            page_spends.append(next_page.json()["metadata"]["total_spend"])
+            exhausted_page: Final = await client.get(
+                "/tag/daily/activity",
+                params={**date_window, "tags": "shared", "team_ids": "team-a", "page_size": 1, "page": 3},
+            )
+            assert exhausted_page.status_code == 200, exhausted_page.text
+            assert exhausted_page.json()["metadata"]["total_spend"] == 0
+            assert has_more is True
+            assert next_page.json()["metadata"]["has_more"] is False
+            assert sorted(page_spends) == [1.0, 4.0]

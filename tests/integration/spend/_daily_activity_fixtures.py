@@ -319,6 +319,61 @@ def seed_daily_team_unassigned_fixture(
     connection.commit()
 
 
+def seed_daily_team_tag_shared_fixture(connection: psycopg.Connection, *, schema: str) -> None:
+    tag_table: Final = sql.Identifier(schema, "LiteLLM_DailyTagSpend")
+    stored_tag_table: Final = sql.Identifier(schema, "LiteLLM_TagTable")
+    team_table: Final = sql.Identifier(schema, "LiteLLM_TeamTable")
+    tag_rows: Final = (
+        ("shared-a-1", "shared", "team-a", "2026-06-10", "key-a", "model-a", 1.0),
+        ("shared-a-2", "shared", "team-a", "2026-06-11", "key-b", "model-a", 4.0),
+        ("shared-b-1", "shared", "team-b", "2026-06-10", "key-a", "model-a", 8.0),
+        ("other-a-1", "other", "team-a", "2026-06-10", "key-a", "model-a", 1.0),
+    )
+    with connection.cursor() as cursor:
+        cursor.execute(
+            sql.SQL("CREATE TABLE {} (LIKE {} INCLUDING DEFAULTS INCLUDING CONSTRAINTS)").format(
+                tag_table,
+                sql.Identifier("LiteLLM_DailyTagSpend"),
+            )
+        )
+        cursor.execute(
+            sql.SQL("CREATE TABLE {} (LIKE {} INCLUDING DEFAULTS INCLUDING CONSTRAINTS)").format(
+                stored_tag_table,
+                sql.Identifier("LiteLLM_TagTable"),
+            )
+        )
+        cursor.executemany(
+            sql.SQL("""
+            INSERT INTO {}
+                (id, tag, team_id, date, api_key, model, model_group, custom_llm_provider,
+                 mcp_namespaced_tool_name, endpoint, prompt_tokens, completion_tokens, spend,
+                 api_requests, successful_requests, failed_requests, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, '', 'provider-a', NULL, '/v1/chat/completions',
+                    10, 10, %s, 1, 1, 0, NOW())
+            """).format(tag_table),
+            tag_rows,
+        )
+        cursor.executemany(
+            sql.SQL(
+                "INSERT INTO {} (team_id, team_alias, admins, members, models) VALUES (%s, %s, %s, %s, %s)"
+            ).format(team_table),
+            (
+                ("team-a", "Team A", [], [], []),
+                ("team-b", "Team B", [], [], []),
+            ),
+        )
+        cursor.executemany(
+            sql.SQL(
+                "INSERT INTO {} (tag_name, description, models, model_info, spend) VALUES (%s, %s, %s, %s::jsonb, %s)"
+            ).format(stored_tag_table),
+            (
+                ("shared", "stored shared tag", ["model-a"], "{}", 0.0),
+                ("stored-no-usage", "stored tag without usage", [], "{}", 0.0),
+            ),
+        )
+    connection.commit()
+
+
 def seed_daily_team_exclusion_fixture(connection: psycopg.Connection, *, schema: str) -> None:
     team_table: Final = sql.Identifier(schema, "LiteLLM_DailyTeamSpend")
     rows: Final = (

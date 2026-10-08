@@ -10221,6 +10221,9 @@ async def test_get_team_daily_activity_member_with_permission_sees_all_spend(
 
     # Setup mocks
     mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[mock_team])
+    team_table = _RecordingDailySpendTable()
+    mock_db_client.db.litellm_dailyteamspend = team_table
+    mock_db_client.db.litellm_dailytagspend = _RecordingDailySpendTable()
 
     # Mock get_user_object
     with patch(
@@ -10229,38 +10232,30 @@ async def test_get_team_daily_activity_member_with_permission_sees_all_spend(
     ) as mock_get_user_object:
         mock_get_user_object.return_value = mock_user_info
 
-        # Mock get_daily_activity to capture the api_key parameter
-        with patch(
-            "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity",
-            new_callable=AsyncMock,
-        ) as mock_get_daily_activity:
-            mock_get_daily_activity.return_value = MagicMock()
+        # Call the endpoint
+        await get_team_daily_activity(
+            team_ids=team_id,
+            start_date="2024-01-01",
+            end_date="2024-01-02",
+            model=None,
+            api_key=None,
+            page=1,
+            page_size=10,
+            exclude_team_ids=None,
+            user_api_key_dict=user_api_key_dict,
+        )
 
-            # Call the endpoint
-            await get_team_daily_activity(
-                team_ids=team_id,
-                start_date="2024-01-01",
-                end_date="2024-01-02",
-                model=None,
-                api_key=None,
-                page=1,
-                page_size=10,
-                exclude_team_ids=None,
-                user_api_key_dict=user_api_key_dict,
-            )
+        # Verify the team spend query carried NO API key filtering
+        where = team_table.calls[0]["where"]
+        assert "api_key" not in where
+        assert where["team_id"] == {"in": [team_id]}
 
-            # Verify get_daily_activity was called WITHOUT API key filtering
-            mock_get_daily_activity.assert_called_once()
-            call_kwargs = mock_get_daily_activity.call_args[1]
-            assert call_kwargs["api_key"] is None
-            assert call_kwargs["entity_id"] == [team_id]
-
-            # Verify user's API keys were NOT fetched
-            if (
-                hasattr(mock_db_client.db.litellm_verificationtoken, "find_many")
-                and mock_db_client.db.litellm_verificationtoken.find_many.called
-            ):
-                pytest.fail("API keys should not be fetched for members with /team/daily/activity permission")
+        # Verify user's API keys were NOT fetched
+        if (
+            hasattr(mock_db_client.db.litellm_verificationtoken, "find_many")
+            and mock_db_client.db.litellm_verificationtoken.find_many.called
+        ):
+            pytest.fail("API keys should not be fetched for members with /team/daily/activity permission")
 
 
 @pytest.mark.asyncio
@@ -10317,6 +10312,9 @@ async def test_get_team_daily_activity_member_without_permission_filters_by_keys
     mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(
         return_value=[user_api_key_1, user_api_key_2]
     )
+    team_table = _RecordingDailySpendTable()
+    mock_db_client.db.litellm_dailyteamspend = team_table
+    mock_db_client.db.litellm_dailytagspend = _RecordingDailySpendTable()
 
     # Mock get_user_object
     with patch(
@@ -10325,34 +10323,26 @@ async def test_get_team_daily_activity_member_without_permission_filters_by_keys
     ) as mock_get_user_object:
         mock_get_user_object.return_value = mock_user_info
 
-        # Mock get_daily_activity to capture the api_key parameter
-        with patch(
-            "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity",
-            new_callable=AsyncMock,
-        ) as mock_get_daily_activity:
-            mock_get_daily_activity.return_value = MagicMock()
+        # Call the endpoint
+        await get_team_daily_activity(
+            team_ids=team_id,
+            start_date="2024-01-01",
+            end_date="2024-01-02",
+            model=None,
+            api_key=None,
+            page=1,
+            page_size=10,
+            exclude_team_ids=None,
+            user_api_key_dict=user_api_key_dict,
+        )
 
-            # Call the endpoint
-            await get_team_daily_activity(
-                team_ids=team_id,
-                start_date="2024-01-01",
-                end_date="2024-01-02",
-                model=None,
-                api_key=None,
-                page=1,
-                page_size=10,
-                exclude_team_ids=None,
-                user_api_key_dict=user_api_key_dict,
-            )
+        # Verify the team spend query carried the user's API keys as filter
+        where = team_table.calls[0]["where"]
+        assert where["api_key"] == {"in": ["user_key_abc", "user_key_def"]}
+        assert where["team_id"] == {"in": [team_id]}
 
-            # Verify get_daily_activity was called WITH API key filtering
-            mock_get_daily_activity.assert_called_once()
-            call_kwargs = mock_get_daily_activity.call_args[1]
-            assert call_kwargs["api_key"] == ["user_key_abc", "user_key_def"]
-            assert call_kwargs["entity_id"] == [team_id]
-
-            # Verify user's API keys were fetched
-            mock_db_client.db.litellm_verificationtoken.find_many.assert_called_once()
+        # Verify user's API keys were fetched
+        mock_db_client.db.litellm_verificationtoken.find_many.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -10499,6 +10489,9 @@ async def test_get_team_daily_activity_non_admin_filters_by_user_api_keys(
     mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(
         return_value=[user_api_key_1, user_api_key_2]
     )
+    team_table = _RecordingDailySpendTable()
+    mock_db_client.db.litellm_dailyteamspend = team_table
+    mock_db_client.db.litellm_dailytagspend = _RecordingDailySpendTable()
 
     # Mock get_user_object
     with patch(
@@ -10507,38 +10500,30 @@ async def test_get_team_daily_activity_non_admin_filters_by_user_api_keys(
     ) as mock_get_user_object:
         mock_get_user_object.return_value = mock_user_info
 
-        # Mock get_daily_activity to capture the api_key parameter
-        with patch(
-            "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity",
-            new_callable=AsyncMock,
-        ) as mock_get_daily_activity:
-            mock_get_daily_activity.return_value = MagicMock()
+        # Call the endpoint
+        await get_team_daily_activity(
+            team_ids=team_id,
+            start_date="2024-01-01",
+            end_date="2024-01-02",
+            model=None,
+            api_key=None,
+            page=1,
+            page_size=10,
+            exclude_team_ids=None,
+            user_api_key_dict=user_api_key_dict,
+        )
 
-            # Call the endpoint
-            await get_team_daily_activity(
-                team_ids=team_id,
-                start_date="2024-01-01",
-                end_date="2024-01-02",
-                model=None,
-                api_key=None,
-                page=1,
-                page_size=10,
-                exclude_team_ids=None,
-                user_api_key_dict=user_api_key_dict,
-            )
+        # Verify the team spend query carried the user's API keys as filter
+        where = team_table.calls[0]["where"]
+        assert where["api_key"] == {"in": ["user_key_1", "user_key_2"]}
+        assert where["team_id"] == {"in": [team_id]}
 
-            # Verify get_daily_activity was called with user's API keys as filter
-            mock_get_daily_activity.assert_called_once()
-            call_kwargs = mock_get_daily_activity.call_args[1]
-            assert call_kwargs["api_key"] == ["user_key_1", "user_key_2"]
-            assert call_kwargs["entity_id"] == [team_id]
-
-            # Verify user's API keys were fetched
-            mock_db_client.db.litellm_verificationtoken.find_many.assert_called_once()
-            api_key_call_kwargs = (
-                mock_db_client.db.litellm_verificationtoken.find_many.call_args[1]
-            )
-            assert api_key_call_kwargs["where"] == {"user_id": user_id}
+        # Verify user's API keys were fetched
+        mock_db_client.db.litellm_verificationtoken.find_many.assert_called_once()
+        api_key_call_kwargs = (
+            mock_db_client.db.litellm_verificationtoken.find_many.call_args[1]
+        )
+        assert api_key_call_kwargs["where"] == {"user_id": user_id}
 
 
 @pytest.mark.asyncio
@@ -10582,6 +10567,9 @@ async def test_get_team_daily_activity_team_admin_sees_all_spend(mock_db_client)
 
     # Setup mocks
     mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[mock_team])
+    team_table = _RecordingDailySpendTable()
+    mock_db_client.db.litellm_dailyteamspend = team_table
+    mock_db_client.db.litellm_dailytagspend = _RecordingDailySpendTable()
 
     # Mock get_user_object
     with patch(
@@ -10590,39 +10578,31 @@ async def test_get_team_daily_activity_team_admin_sees_all_spend(mock_db_client)
     ) as mock_get_user_object:
         mock_get_user_object.return_value = mock_user_info
 
-        # Mock get_daily_activity to capture the api_key parameter
-        with patch(
-            "litellm.proxy.management_endpoints.team_endpoints.get_daily_activity",
-            new_callable=AsyncMock,
-        ) as mock_get_daily_activity:
-            mock_get_daily_activity.return_value = MagicMock()
+        # Call the endpoint
+        await get_team_daily_activity(
+            team_ids=team_id,
+            start_date="2024-01-01",
+            end_date="2024-01-02",
+            model=None,
+            api_key=None,
+            page=1,
+            page_size=10,
+            exclude_team_ids=None,
+            user_api_key_dict=user_api_key_dict,
+        )
 
-            # Call the endpoint
-            await get_team_daily_activity(
-                team_ids=team_id,
-                start_date="2024-01-01",
-                end_date="2024-01-02",
-                model=None,
-                api_key=None,
-                page=1,
-                page_size=10,
-                exclude_team_ids=None,
-                user_api_key_dict=user_api_key_dict,
-            )
+        # Verify the team spend query carried NO API key filtering
+        where = team_table.calls[0]["where"]
+        assert "api_key" not in where
+        assert where["team_id"] == {"in": [team_id]}
 
-            # Verify get_daily_activity was called WITHOUT API key filtering
-            mock_get_daily_activity.assert_called_once()
-            call_kwargs = mock_get_daily_activity.call_args[1]
-            assert call_kwargs["api_key"] is None
-            assert call_kwargs["entity_id"] == [team_id]
-
-            # Verify user's API keys were NOT fetched (since they're admin)
-            if (
-                hasattr(mock_db_client.db.litellm_verificationtoken, "find_many")
-                and mock_db_client.db.litellm_verificationtoken.find_many.called
-            ):
-                # If it was called, that's unexpected for admin users
-                pytest.fail("API keys should not be fetched for team admin users")
+        # Verify user's API keys were NOT fetched (since they're admin)
+        if (
+            hasattr(mock_db_client.db.litellm_verificationtoken, "find_many")
+            and mock_db_client.db.litellm_verificationtoken.find_many.called
+        ):
+            # If it was called, that's unexpected for admin users
+            pytest.fail("API keys should not be fetched for team admin users")
 
 
 @pytest.mark.asyncio
@@ -16852,3 +16832,199 @@ def test_aggregated_date_range_error_accepts_canonical_dates_and_keeps_range_che
     assert aggregated_date_range_error("2026-09-24", "2026-09-26") is None
     assert aggregated_date_range_error("2026-09-26", "2026-09-24") == "end_date must be on or after start_date"
     assert aggregated_date_range_error("2020-01-01", "2026-12-31") == "Date range must be at most 400 days"
+
+
+class _RecordingDailySpendTable:
+    """Records the kwargs prisma would receive and replays canned rows."""
+
+    def __init__(self, rows=()):
+        self._rows = list(rows)
+        self.calls = []
+
+    async def count(self, **kwargs):
+        self.calls.append({"method": "count", **kwargs})
+        return len(self._rows)
+
+    async def find_many(self, **kwargs):
+        self.calls.append({"method": "find_many", **kwargs})
+        return list(self._rows)
+
+
+def _daily_spend_row_for_team_tests(*, spend, team_id, tag=None):
+    return SimpleNamespace(
+        date="2026-06-01",
+        api_key="",
+        model="model-a",
+        model_group=None,
+        custom_llm_provider="provider-a",
+        mcp_namespaced_tool_name=None,
+        endpoint=None,
+        prompt_tokens=1,
+        completion_tokens=1,
+        spend=spend,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+        compression_saved_tokens=0,
+        compression_savings_spend=0.0,
+        prompt_caching_savings_spend=0.0,
+        gateway_injected_caching_savings_spend=0.0,
+        autorouter_savings_spend=0.0,
+        api_requests=1,
+        successful_requests=1,
+        failed_requests=0,
+        total_response_time_ms=0,
+        timed_requests=0,
+        ptu_flat_cost=0.0,
+        request_id=None,
+        tag=tag,
+        team_id=team_id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_team_daily_activity_with_tags_reads_tag_table(mock_db_client):
+    """
+    /team/daily/activity?team_ids=...&tags=... reads the daily tag spend table
+    restricted to the permitted teams instead of the team spend table.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        get_team_daily_activity,
+    )
+
+    tag_table = _RecordingDailySpendTable(
+        [_daily_spend_row_for_team_tests(spend=5.0, team_id="team-789", tag="shared")]
+    )
+    team_table = _RecordingDailySpendTable()
+    mock_db_client.db.litellm_dailytagspend = tag_table
+    mock_db_client.db.litellm_dailyteamspend = team_table
+    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(team_id="team-789", team_alias="Team 789")]
+    )
+
+    result = await get_team_daily_activity(
+        team_ids="team-789",
+        start_date="2026-06-01",
+        end_date="2026-06-02",
+        model=None,
+        api_key=None,
+        page=1,
+        page_size=10,
+        exclude_team_ids=None,
+        tags="shared",
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert team_table.calls == []
+    where = tag_table.calls[0]["where"]
+    assert {"team_id": {"in": ["team-789"]}} in where["AND"]
+    assert {"tag": {"in": ["shared"]}} in where["AND"]
+    entity = result.results[0].breakdown.entities["team-789"]
+    assert entity.metadata == {"team_alias": "Team 789"}
+    assert entity.metrics.spend == 5.0
+
+
+@pytest.mark.asyncio
+async def test_get_team_daily_activity_without_tags_reads_team_table(mock_db_client):
+    """
+    Without tag params the endpoint keeps reading the team spend table so
+    untagged team totals are preserved.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        get_team_daily_activity,
+    )
+
+    tag_table = _RecordingDailySpendTable()
+    team_table = _RecordingDailySpendTable(
+        [_daily_spend_row_for_team_tests(spend=9.0, team_id="team-789")]
+    )
+    mock_db_client.db.litellm_dailytagspend = tag_table
+    mock_db_client.db.litellm_dailyteamspend = team_table
+    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(team_id="team-789", team_alias="Team 789")]
+    )
+
+    result = await get_team_daily_activity(
+        team_ids="team-789",
+        start_date="2026-06-01",
+        end_date="2026-06-02",
+        model=None,
+        api_key=None,
+        page=1,
+        page_size=10,
+        exclude_team_ids=None,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert tag_table.calls == []
+    where = team_table.calls[0]["where"]
+    assert where["team_id"] == {"in": ["team-789"]}
+    assert "AND" not in where
+    entity = result.results[0].breakdown.entities["team-789"]
+    assert entity.metadata == {"team_alias": "Team 789"}
+    assert entity.metrics.spend == 9.0
+
+
+@pytest.mark.asyncio
+async def test_get_team_daily_activity_member_without_view_scoped_to_own_keys_on_tag_table(mock_db_client):
+    """
+    A member without team view who filters by tags gets the same own-key
+    restriction applied on the tag spend table.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        get_team_daily_activity,
+    )
+
+    user_id = "member-no-view"
+    team_id = "team-789"
+    user_api_key_dict = UserAPIKeyAuth(user_id=user_id, user_role=LitellmUserRoles.INTERNAL_USER)
+
+    mock_user_info = LiteLLM_UserTable(
+        user_id=user_id,
+        teams=[team_id],
+        max_budget=1000.0,
+        spend=0.0,
+        user_email="member@example.com",
+        user_role="internal_user",
+    )
+    mock_team_member = Member(user_id=user_id, role="user")
+    mock_team = MagicMock(spec=LiteLLM_TeamTable)
+    mock_team.team_id = team_id
+    mock_team.team_alias = "Team 789"
+    mock_team.members_with_roles = [mock_team_member]
+    mock_team.team_member_permissions = []
+    mock_team.model_dump.return_value = {
+        "team_id": team_id,
+        "team_alias": "Team 789",
+        "members_with_roles": [{"user_id": user_id, "role": "user"}],
+        "team_member_permissions": [],
+    }
+    owned_key = MagicMock()
+    owned_key.token = "key-mine"
+
+    tag_table = _RecordingDailySpendTable()
+    mock_db_client.db.litellm_dailytagspend = tag_table
+    mock_db_client.db.litellm_dailyteamspend = _RecordingDailySpendTable()
+    mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[mock_team])
+    mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[owned_key])
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+        new_callable=AsyncMock,
+    ) as mock_get_user_object:
+        mock_get_user_object.return_value = mock_user_info
+        await get_team_daily_activity(
+            team_ids=team_id,
+            start_date="2026-06-01",
+            end_date="2026-06-02",
+            model=None,
+            api_key=None,
+            page=1,
+            page_size=10,
+            exclude_team_ids=None,
+            tags="shared",
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    where = tag_table.calls[0]["where"]
+    assert where["api_key"] == {"in": ["key-mine"]}
+    assert {"team_id": {"in": [team_id]}} in where["AND"]

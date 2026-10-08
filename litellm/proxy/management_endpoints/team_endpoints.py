@@ -128,7 +128,10 @@ from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN, TeamRole, is
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.common_daily_activity import (
     InvalidDateRange,
+    ScopeDenied,
+    get_daily_activity_for_scope,
     parse_canonical_date_range,
+    raise_public,
 )
 from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
     _check_disable_global_guardrails_caller_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -153,9 +156,6 @@ from litellm.proxy.management_endpoints.organization_endpoints import (
     add_member_to_organization,
 )
 from litellm.proxy.management_endpoints.router_weights import validate_router_settings_weights
-from litellm.proxy.management_endpoints.tag_management_endpoints import (
-    get_daily_activity,
-)
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS,
     resolve_team_admin_editable_fields,
@@ -6669,6 +6669,9 @@ async def get_team_daily_activity(
     page: int = 1,
     page_size: int = 10,
     exclude_team_ids: str | None = None,
+    tags: str | None = None,
+    exclude_tags: str | None = None,
+    group_by: Literal["team", "tag"] | None = None,
 ):
     """
     Get daily activity for specific teams or all teams.
@@ -6682,39 +6685,38 @@ async def get_team_daily_activity(
         page (int): Page number for pagination.
         page_size (int): Number of items per page.
         exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
+        tags (Optional[str]): Comma-separated list of tags. When provided, activity is read from the
+            daily tag spend table restricted to the permitted teams.
+        exclude_tags (Optional[str]): Comma-separated list of tags to exclude.
+        group_by (Optional[Literal["team", "tag"]]): Entity the breakdown buckets key on. "tag" buckets by tag.
     Returns:
         SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
     """
-    from litellm.proxy.proxy_server import (
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
-    )
+    from litellm.proxy.management_endpoints.daily_activity_scopes import TEAM_RESOLVER
+    from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
 
-    scope: Final = await resolve_team_daily_activity_scope(
+    query: Final = TEAM_RESOLVER.query(
         team_ids=team_ids,
-        exclude_team_ids=exclude_team_ids,
-        api_key=api_key,
-        user_api_key_dict=user_api_key_dict,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-    )
-
-    return await get_daily_activity(
-        prisma_client=prisma_client,
-        table_name="litellm_dailyteamspend",
-        entity_id_field="team_id",
-        entity_id=scope.team_ids,
-        entity_metadata_field=scope.team_alias_metadata,
-        exclude_entity_ids=scope.exclude_team_ids,
         start_date=start_date,
         end_date=end_date,
         model=model,
-        api_key=scope.api_key_filter,
+        api_key=api_key,
+        exclude_team_ids=exclude_team_ids,
+        tags=tags,
+        exclude_tags=exclude_tags,
+        group_by=group_by,
+    )
+    resolved: Final = await TEAM_RESOLVER.resolve(user_api_key_dict, query, prisma_client)
+    if isinstance(resolved, ScopeDenied):
+        raise_public(resolved)
+
+    return await get_daily_activity_for_scope(
+        prisma_client,
+        resolved.scope,
+        entity_metadata_field=resolved.entity_metadata,
         page=page,
         page_size=page_size,
     )

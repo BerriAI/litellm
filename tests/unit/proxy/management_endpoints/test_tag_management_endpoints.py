@@ -952,13 +952,77 @@ async def test_list_tags_with_date_range_filters_dynamic_tags():
         app.dependency_overrides.clear()
 
 
+class _FakeDailySpendTable:
+    """Records the kwargs prisma would receive and replays canned rows."""
+
+    def __init__(self, rows: Sequence[object] = ()):
+        self._rows = list(rows)
+        self.calls: list[dict[str, object]] = []
+
+    async def count(self, **kwargs: object) -> int:
+        self.calls.append({"method": "count", **kwargs})
+        return len(self._rows)
+
+    async def find_many(self, **kwargs: object) -> list[object]:
+        self.calls.append({"method": "find_many", **kwargs})
+        return list(self._rows)
+
+    def where_clauses(self) -> list[Mapping[str, object]]:
+        return [call["where"] for call in self.calls if "where" in call]
+
+
+def _daily_tag_spend_row(
+    *, spend: float, tag: str | None, team_id: str, api_key: str = ""
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        date="2026-06-01",
+        api_key=api_key,
+        model="model-a",
+        model_group=None,
+        custom_llm_provider="provider-a",
+        mcp_namespaced_tool_name=None,
+        endpoint=None,
+        prompt_tokens=1,
+        completion_tokens=1,
+        spend=spend,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+        compression_saved_tokens=0,
+        compression_savings_spend=0.0,
+        prompt_caching_savings_spend=0.0,
+        gateway_injected_caching_savings_spend=0.0,
+        autorouter_savings_spend=0.0,
+        api_requests=1,
+        successful_requests=1,
+        failed_requests=0,
+        total_response_time_ms=0,
+        timed_requests=0,
+        ptu_flat_cost=0.0,
+        request_id=None,
+        tag=tag,
+        team_id=team_id,
+    )
+
+
+def _tag_activity_prisma(
+    *, tag_table: _FakeDailySpendTable, token_records: Sequence[Mock] = (), team_rows: Sequence[object] = ()
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_dailytagspend=tag_table,
+            litellm_verificationtoken=FakeVerificationTokenTable(token_records),
+            litellm_teamtable=SimpleNamespace(find_many=AsyncMock(return_value=list(team_rows))),
+        )
+    )
+
+
 @pytest.mark.asyncio
 async def test_internal_user_tag_daily_activity_is_scoped_to_their_keys():
     """
     Internal users must not receive proxy-wide tag spend rows when viewing tag
     usage daily activity.
     """
-    from unittest.mock import AsyncMock, Mock
+    from unittest.mock import Mock
 
     from litellm.proxy.management_endpoints.tag_management_endpoints import (
         get_tag_daily_activity,
@@ -969,32 +1033,21 @@ async def test_internal_user_tag_daily_activity_is_scoped_to_their_keys():
         user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
     )
 
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
-        patch(
-            "litellm.proxy.management_endpoints.tag_management_endpoints.get_daily_activity",
-            new_callable=AsyncMock,
-        ) as mock_get_daily_activity,
-    ):
-        mock_db = Mock()
-        mock_prisma.db = mock_db
+    owned_key_record = Mock()
+    owned_key_record.token = "owned-key"
+    tag_table = _FakeDailySpendTable()
+    mock_prisma = _tag_activity_prisma(tag_table=tag_table, token_records=[owned_key_record])
 
-        owned_key_record = Mock()
-        owned_key_record.token = "owned-key"
-        fake_token_table = FakeVerificationTokenTable([owned_key_record])
-        mock_db.litellm_verificationtoken = fake_token_table
-        mock_get_daily_activity.return_value = "daily-activity-response"
-
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
         result = await get_tag_daily_activity(
             start_date="2025-01-01",
             end_date="2025-01-31",
             user_api_key_dict=mock_user_auth,
         )
 
-        assert result == "daily-activity-response"
-        assert fake_token_table.calls == [{"where": {"user_id": "internal-user-123"}}]
-        mock_get_daily_activity.assert_awaited_once()
-        assert mock_get_daily_activity.await_args.kwargs["api_key"] == ["owned-key"]
+    assert result.results == []
+    where = tag_table.where_clauses()[0]
+    assert where["api_key"] == {"in": ["owned-key"]}
 
 
 @pytest.mark.asyncio
@@ -1004,7 +1057,7 @@ async def test_internal_user_tag_daily_activity_rejects_unowned_api_key_filter()
     endpoint should return an empty scoped filter instead of exposing that key's
     tag spend.
     """
-    from unittest.mock import AsyncMock, Mock
+    from unittest.mock import Mock
 
     from litellm.proxy.management_endpoints.tag_management_endpoints import (
         get_tag_daily_activity,
@@ -1015,20 +1068,12 @@ async def test_internal_user_tag_daily_activity_rejects_unowned_api_key_filter()
         user_role=LitellmUserRoles.INTERNAL_USER,
     )
 
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
-        patch(
-            "litellm.proxy.management_endpoints.tag_management_endpoints.get_daily_activity",
-            new_callable=AsyncMock,
-        ) as mock_get_daily_activity,
-    ):
-        mock_db = Mock()
-        mock_prisma.db = mock_db
+    owned_key_record = Mock()
+    owned_key_record.token = "owned-key"
+    tag_table = _FakeDailySpendTable()
+    mock_prisma = _tag_activity_prisma(tag_table=tag_table, token_records=[owned_key_record])
 
-        owned_key_record = Mock()
-        owned_key_record.token = "owned-key"
-        fake_token_table = FakeVerificationTokenTable([owned_key_record])
-        mock_db.litellm_verificationtoken = fake_token_table
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
         result = await get_tag_daily_activity(
             start_date="2025-01-01",
             end_date="2025-01-31",
@@ -1036,11 +1081,10 @@ async def test_internal_user_tag_daily_activity_rejects_unowned_api_key_filter()
             user_api_key_dict=mock_user_auth,
         )
 
-        assert fake_token_table.calls == [{"where": {"user_id": "internal-user-123"}}]
-        assert result.results == []
-        assert result.metadata.total_spend == 0
-        assert result.metadata.total_api_requests == 0
-        mock_get_daily_activity.assert_not_awaited()
+    assert result.results == []
+    assert result.metadata.total_spend == 0
+    assert result.metadata.total_api_requests == 0
+    assert tag_table.calls == []
 
 
 @pytest.mark.asyncio
@@ -1049,8 +1093,6 @@ async def test_internal_user_tag_daily_activity_scopes_to_current_key_without_us
     If an internal-user token has no user_id, it should still scope tag usage to
     the current request key instead of falling back to proxy-wide tag spend.
     """
-    from unittest.mock import AsyncMock, Mock
-
     from litellm.proxy.management_endpoints.tag_management_endpoints import (
         get_tag_daily_activity,
     )
@@ -1061,31 +1103,19 @@ async def test_internal_user_tag_daily_activity_scopes_to_current_key_without_us
         user_role=LitellmUserRoles.INTERNAL_USER,
     )
 
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
-        patch(
-            "litellm.proxy.management_endpoints.tag_management_endpoints.get_daily_activity",
-            new_callable=AsyncMock,
-        ) as mock_get_daily_activity,
-    ):
-        mock_db = Mock()
-        mock_prisma.db = mock_db
-        fake_token_table = FakeVerificationTokenTable([])
-        mock_db.litellm_verificationtoken = fake_token_table
-        mock_get_daily_activity.return_value = "daily-activity-response"
+    tag_table = _FakeDailySpendTable()
+    mock_prisma = _tag_activity_prisma(tag_table=tag_table)
 
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
         result = await get_tag_daily_activity(
             start_date="2025-01-01",
             end_date="2025-01-31",
             user_api_key_dict=mock_user_auth,
         )
 
-        assert result == "daily-activity-response"
-        assert fake_token_table.calls == []
-        mock_get_daily_activity.assert_awaited_once()
-        assert mock_get_daily_activity.await_args.kwargs["api_key"] == [
-            "current-owned-key"
-        ]
+    assert result.results == []
+    where = tag_table.where_clauses()[0]
+    assert where["api_key"] == {"in": ["current-owned-key"]}
 
 
 @pytest.mark.asyncio
@@ -1094,8 +1124,6 @@ async def test_internal_user_tag_daily_activity_without_any_scoped_keys_returns_
     If an internal-user token has neither user_id nor api_key, the endpoint must
     return an empty response instead of dropping the API key filter.
     """
-    from unittest.mock import AsyncMock, Mock
-
     from litellm.proxy.management_endpoints.tag_management_endpoints import (
         get_tag_daily_activity,
     )
@@ -1105,29 +1133,20 @@ async def test_internal_user_tag_daily_activity_without_any_scoped_keys_returns_
         user_role=LitellmUserRoles.INTERNAL_USER,
     )
 
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
-        patch(
-            "litellm.proxy.management_endpoints.tag_management_endpoints.get_daily_activity",
-            new_callable=AsyncMock,
-        ) as mock_get_daily_activity,
-    ):
-        mock_db = Mock()
-        mock_prisma.db = mock_db
-        fake_token_table = FakeVerificationTokenTable([])
-        mock_db.litellm_verificationtoken = fake_token_table
+    tag_table = _FakeDailySpendTable()
+    mock_prisma = _tag_activity_prisma(tag_table=tag_table)
 
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
         result = await get_tag_daily_activity(
             start_date="2025-01-01",
             end_date="2025-01-31",
             user_api_key_dict=mock_user_auth,
         )
 
-        assert result.results == []
-        assert result.metadata.total_spend == 0
-        assert result.metadata.total_api_requests == 0
-        assert fake_token_table.calls == []
-        mock_get_daily_activity.assert_not_awaited()
+    assert result.results == []
+    assert result.metadata.total_spend == 0
+    assert result.metadata.total_api_requests == 0
+    assert tag_table.calls == []
 
 
 @pytest.mark.asyncio
@@ -1586,3 +1605,416 @@ def test_tag_info_and_tag_list_return_the_stored_model_info_decoded(
     assert info_response.json()["routed-tag"]["model_info"] == returned_model_info
     assert list_response.status_code == 200
     assert [tag["model_info"] for tag in list_response.json()] == [returned_model_info]
+
+
+def _team_row_without_member_view(team_id: str, user_id: str):
+    """A team the user belongs to without the /team/daily/activity permission."""
+    team = Mock(spec=["team_id", "team_alias", "members_with_roles", "team_member_permissions", "model_dump"])
+    team.team_id = team_id
+    team.team_alias = f"Alias {team_id}"
+    team.model_dump.return_value = {
+        "team_id": team_id,
+        "team_alias": f"Alias {team_id}",
+        "members_with_roles": [{"user_id": user_id, "role": "user"}],
+        "team_member_permissions": [],
+    }
+    return team
+
+
+@pytest.mark.asyncio
+async def test_tag_daily_activity_team_grouping_filters_team_and_tag():
+    """
+    /tag/daily/activity?team_ids=...&tags=...&group_by=team must read the tag
+    spend table filtered to both the permitted teams and the requested tags,
+    with results bucketed by team_id carrying the team alias metadata.
+    """
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        get_tag_daily_activity,
+    )
+
+    tag_table = _FakeDailySpendTable([_daily_tag_spend_row(spend=5.0, tag="shared", team_id="team-a")])
+    team_row = SimpleNamespace(team_id="team-a", team_alias="Team A")
+    mock_prisma = _tag_activity_prisma(tag_table=tag_table, team_rows=[team_row])
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        result = await get_tag_daily_activity(
+            tags="shared",
+            team_ids="team-a",
+            group_by="team",
+            start_date="2026-06-01",
+            end_date="2026-06-02",
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert len(tag_table.where_clauses()) == 2
+    where = tag_table.where_clauses()[0]
+    assert {"team_id": {"in": ["team-a"]}} in where["AND"]
+    assert {"tag": {"in": ["shared"]}} in where["AND"]
+    entity = result.results[0].breakdown.entities["team-a"]
+    assert entity.metadata == {"team_alias": "Team A"}
+    assert entity.metrics.spend == 5.0
+
+
+@pytest.mark.asyncio
+async def test_tag_daily_activity_team_ids_denied_for_non_member():
+    """
+    An internal user asking for a team they are not a member of must get a 404,
+    the same contract /team/daily/activity enforces.
+    """
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        get_tag_daily_activity,
+    )
+
+    tag_table = _FakeDailySpendTable()
+    mock_prisma = _tag_activity_prisma(tag_table=tag_table)
+    member = LiteLLM_UserTable(
+        user_id="internal-user-1",
+        teams=["team-b"],
+        max_budget=None,
+        spend=0.0,
+        user_email=None,
+        user_role="internal_user",
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+            new=AsyncMock(return_value=member),
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await get_tag_daily_activity(
+            team_ids="team-a",
+            start_date="2026-06-01",
+            end_date="2026-06-02",
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="internal-user-1", user_role=LitellmUserRoles.INTERNAL_USER
+            ),
+        )
+
+    assert exc_info.value.status_code == 404
+    assert tag_table.calls == []
+
+
+@pytest.mark.asyncio
+async def test_tag_daily_activity_member_without_team_view_scoped_to_own_keys():
+    """
+    A member of a team who lacks the /team/daily/activity permission and is not
+    a team admin only sees usage produced by their own API keys.
+    """
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        get_tag_daily_activity,
+    )
+
+    owned_key_record = Mock()
+    owned_key_record.token = "key-owned-2"
+    tag_table = _FakeDailySpendTable()
+    mock_prisma = _tag_activity_prisma(
+        tag_table=tag_table,
+        token_records=[owned_key_record],
+        team_rows=[_team_row_without_member_view("team-a", "member-1")],
+    )
+    member = LiteLLM_UserTable(
+        user_id="member-1",
+        teams=["team-a"],
+        max_budget=None,
+        spend=0.0,
+        user_email=None,
+        user_role="internal_user",
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+            new=AsyncMock(return_value=member),
+        ),
+    ):
+        await get_tag_daily_activity(
+            tags="shared",
+            team_ids="team-a",
+            group_by="team",
+            start_date="2026-06-01",
+            end_date="2026-06-02",
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="key-owned-1", user_id="member-1", user_role=LitellmUserRoles.INTERNAL_USER
+            ),
+        )
+
+    where = tag_table.where_clauses()[0]
+    assert where["api_key"] == {"in": ["key-owned-2"]}
+    assert {"team_id": {"in": ["team-a"]}} in where["AND"]
+
+
+@pytest.mark.asyncio
+async def test_admin_tag_list_team_ids_scopes_dynamic_tags_to_team():
+    """
+    /tag/list?team_ids=team-a returns only tags used under that team and pushes
+    the team filter into the dynamic-tag group_by query.
+    """
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    group_by_mock = AsyncMock(
+        return_value=[
+            {
+                "tag": "team-tag",
+                "_min": {"created_at": "2026-06-01T00:00:00Z"},
+                "_max": {"updated_at": "2026-06-02T00:00:00Z"},
+            }
+        ]
+    )
+    mock_prisma = SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_dailytagspend=SimpleNamespace(group_by=group_by_mock),
+            litellm_tagtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+            litellm_teamtable=SimpleNamespace(
+                find_many=AsyncMock(return_value=[SimpleNamespace(team_id="team-a", team_alias="Team A")])
+            ),
+        )
+    )
+
+    try:
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+            response = client.get("/tag/list?team_ids=team-a", headers={"Authorization": "Bearer sk"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200, response.text
+    assert [tag["name"] for tag in response.json()] == ["team-tag"]
+    where = group_by_mock.await_args.kwargs["where"]
+    assert where["team_id"] == {"in": ["team-a"]}
+    assert "api_key" not in where
+
+
+@pytest.mark.asyncio
+async def test_internal_member_tag_list_team_ids_scoped_to_own_keys():
+    """
+    A team member without the daily-activity permission sees only tags produced
+    by their own keys inside the requested team.
+    """
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="key-m1", user_id="member-1", user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    group_by_mock = AsyncMock(
+        return_value=[
+            {
+                "tag": "member-tag",
+                "_min": {"created_at": "2026-06-01T00:00:00Z"},
+                "_max": {"updated_at": "2026-06-02T00:00:00Z"},
+            }
+        ]
+    )
+    token_record = Mock()
+    token_record.token = "key-m2"
+    mock_prisma = SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_dailytagspend=SimpleNamespace(group_by=group_by_mock),
+            litellm_tagtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+            litellm_teamtable=SimpleNamespace(
+                find_many=AsyncMock(return_value=[_team_row_without_member_view("team-a", "member-1")])
+            ),
+            litellm_verificationtoken=FakeVerificationTokenTable([token_record]),
+        )
+    )
+    member = LiteLLM_UserTable(
+        user_id="member-1",
+        teams=["team-a"],
+        max_budget=None,
+        spend=0.0,
+        user_email=None,
+        user_role="internal_user",
+    )
+
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch(
+                "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+                new=AsyncMock(return_value=member),
+            ),
+        ):
+            response = client.get("/tag/list?team_ids=team-a", headers={"Authorization": "Bearer sk"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200, response.text
+    assert [tag["name"] for tag in response.json()] == ["member-tag"]
+    where = group_by_mock.await_args.kwargs["where"]
+    assert where["team_id"] == {"in": ["team-a"]}
+    assert where["api_key"] == {"in": ["key-m2"]}
+
+
+@pytest.mark.asyncio
+async def test_tag_list_team_ids_non_member_gets_404():
+    """
+    /tag/list?team_ids=... applies the team daily-activity permission model:
+    a user who is not in the team gets 404, not an unfiltered list.
+    """
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="outsider-1", user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    group_by_mock = AsyncMock(return_value=[])
+    mock_prisma = SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_dailytagspend=SimpleNamespace(group_by=group_by_mock),
+            litellm_tagtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+            litellm_teamtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+            litellm_verificationtoken=FakeVerificationTokenTable([]),
+        )
+    )
+    outsider = LiteLLM_UserTable(
+        user_id="outsider-1",
+        teams=["team-b"],
+        max_budget=None,
+        spend=0.0,
+        user_email=None,
+        user_role="internal_user",
+    )
+
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch(
+                "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+                new=AsyncMock(return_value=outsider),
+            ),
+        ):
+            response = client.get("/tag/list?team_ids=team-a", headers={"Authorization": "Bearer sk"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 404, response.text
+    group_by_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_tag_list_team_ids_member_without_keys_returns_empty_without_querying():
+    """
+    A permitted member whose team resolver returns an empty key filter gets an
+    empty list and the spend table is never queried.
+    """
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="member-1", user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    group_by_mock = AsyncMock(return_value=[])
+    mock_prisma = SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_dailytagspend=SimpleNamespace(group_by=group_by_mock),
+            litellm_tagtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+            litellm_teamtable=SimpleNamespace(
+                find_many=AsyncMock(return_value=[_team_row_without_member_view("team-a", "member-1")])
+            ),
+            litellm_verificationtoken=FakeVerificationTokenTable([]),
+        )
+    )
+    member = LiteLLM_UserTable(
+        user_id="member-1",
+        teams=["team-a"],
+        max_budget=None,
+        spend=0.0,
+        user_email=None,
+        user_role="internal_user",
+    )
+
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch(
+                "litellm.proxy.management_endpoints.team_endpoints.get_user_object",
+                new=AsyncMock(return_value=member),
+            ),
+        ):
+            response = client.get("/tag/list?team_ids=team-a", headers={"Authorization": "Bearer sk"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200, response.text
+    assert response.json() == []
+    group_by_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_tag_list_usage_only_drops_stored_tags_without_usage():
+    """
+    usage_only=true drops stored tags that have no daily tag spend rows while
+    keeping the full stored config for the ones that do.
+    """
+    from datetime import datetime
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    used_stored_tag = Mock()
+    used_stored_tag.tag_name = "used-stored"
+    used_stored_tag.description = "stored config kept"
+    used_stored_tag.models = ["model-1"]
+    used_stored_tag.model_info = {}
+    used_stored_tag.spend = 0.0
+    used_stored_tag.budget_id = None
+    used_stored_tag.created_at = datetime(2026, 1, 1)
+    used_stored_tag.updated_at = datetime(2026, 1, 2)
+    used_stored_tag.created_by = "admin-1"
+    used_stored_tag.litellm_budget_table = None
+    tag_find_many = AsyncMock(return_value=[used_stored_tag])
+    group_by_mock = AsyncMock(
+        return_value=[
+            {
+                "tag": "used-stored",
+                "_min": {"created_at": "2026-06-01T00:00:00Z"},
+                "_max": {"updated_at": "2026-06-02T00:00:00Z"},
+            },
+            {
+                "tag": "dynamic-only",
+                "_min": {"created_at": "2026-06-03T00:00:00Z"},
+                "_max": {"updated_at": "2026-06-04T00:00:00Z"},
+            },
+        ]
+    )
+    mock_prisma = SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_dailytagspend=SimpleNamespace(group_by=group_by_mock),
+            litellm_tagtable=SimpleNamespace(find_many=tag_find_many),
+        )
+    )
+
+    try:
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+            response = client.get("/tag/list?usage_only=true", headers={"Authorization": "Bearer sk"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200, response.text
+    tag_find_many.assert_awaited_once_with(
+        where={"tag_name": {"in": ["used-stored", "dynamic-only"]}},
+        include={"litellm_budget_table": True},
+    )
+    by_name = {tag["name"]: tag for tag in response.json()}
+    assert set(by_name) == {"used-stored", "dynamic-only"}
+    assert by_name["used-stored"]["description"] == "stored config kept"
+    assert by_name["used-stored"]["models"] == ["model-1"]

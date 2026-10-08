@@ -14,7 +14,7 @@ import asyncio
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Final, Protocol, TypedDict, overload
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypedDict, overload
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import TypeAdapter
@@ -27,8 +27,10 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     tag_registry_cache_key,
 )
 from litellm.proxy.management_endpoints.common_daily_activity import (
+    ScopeDenied,
     SpendAnalyticsPaginatedResponse,
-    get_daily_activity,
+    get_daily_activity_for_scope,
+    raise_public,
 )
 from litellm.proxy.management_helpers.utils import handle_budget_for_entity
 from litellm.repositories.model_repository import ModelRepository
@@ -54,6 +56,9 @@ if TYPE_CHECKING:
     from prisma.models import LiteLLM_VerificationToken as PrismaVerificationToken
 
     from litellm import Router
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _TeamDailyActivityScope,
+    )
     from litellm.proxy.utils import PrismaClient
     from litellm.types.router import Deployment
 
@@ -575,6 +580,27 @@ def _validate_tag_list_date_range(start_date: str | None, end_date: str | None) 
         )
 
 
+async def _tag_list_team_scope(
+    team_ids: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: "PrismaClient",
+) -> "_TeamDailyActivityScope":
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        resolve_team_daily_activity_scope,
+    )
+    from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
+    return await resolve_team_daily_activity_scope(
+        team_ids=team_ids,
+        exclude_team_ids=None,
+        api_key=None,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
 @router.get(
     "/tag/list",
     tags=["tag management"],
@@ -594,6 +620,21 @@ async def list_tags(
         None,
         description="Optional end date (YYYY-MM-DD). Must be given with start_date.",
     ),
+    team_ids: str | None = Query(
+        None,
+        description=(
+            "Optional comma-separated team IDs. When provided, dynamic tags are "
+            "limited to usage recorded under those teams, subject to the caller's "
+            "team permissions, and stored tags are limited to names used in scope."
+        ),
+    ),
+    usage_only: bool = Query(
+        False,
+        description=(
+            "When true, only tag names with usage rows in the daily tag spend "
+            "table are returned. Stored tags without usage are omitted."
+        ),
+    ),
 ):
     """
     List all available tags with their budget information.
@@ -605,11 +646,22 @@ async def list_tags(
 
     _validate_tag_list_date_range(start_date, end_date)
 
+    team_scope: Final = await _tag_list_team_scope(team_ids, user_api_key_dict, prisma_client) if team_ids else None
+    permitted_teams: Final = tuple(team_scope.team_ids or ()) if team_scope is not None else ()
+    team_key_filter: Final = team_scope.api_key_filter if team_scope is not None else None
+    if team_scope is not None and (not permitted_teams or team_key_filter is not None and not team_key_filter):
+        return []
+
     try:
-        tag_scope: Final = await _get_tag_list_scope(
-            prisma_client=prisma_client,
-            user_api_key_dict=user_api_key_dict,
+        tag_scope: Final = (
+            await _get_tag_list_scope(
+                prisma_client=prisma_client,
+                user_api_key_dict=user_api_key_dict,
+            )
+            if team_scope is None
+            else None
         )
+        scoped_to_usage: Final = team_scope is not None or tag_scope is not None or usage_only
 
         ## QUERY DYNAMIC TAGS ##
         # Use group_by instead of find_many(distinct=["tag"]).
@@ -617,7 +669,13 @@ async def list_tags(
         # in application code, which is extremely slow on large tables.
         # See: https://www.prisma.io/docs/orm/prisma-client/queries/aggregation-grouping-summarizing#distinct-under-the-hood
         dynamic_tag_where: dict[str, object] = {"tag": {"not": None}}
-        if tag_scope:
+        if team_scope is not None:
+            dynamic_tag_where["team_id"] = {"in": list(permitted_teams)}
+            if team_key_filter is not None:
+                dynamic_tag_where["api_key"] = {
+                    "in": [team_key_filter] if isinstance(team_key_filter, str) else list(team_key_filter)
+                }
+        elif tag_scope:
             dynamic_tag_where = {**dynamic_tag_where, **tag_scope}
         if start_date is not None and end_date is not None:
             dynamic_tag_where["date"] = {"gte": start_date, "lte": end_date}
@@ -630,10 +688,10 @@ async def list_tags(
         )
 
         used_tag_names: Final = [row["tag"] for row in dynamic_tag_rows if row["tag"]]
-        if tag_scope is not None and not used_tag_names:
+        if scoped_to_usage and not used_tag_names:
             return []
 
-        stored_tag_where: Final = {"tag_name": {"in": used_tag_names}} if tag_scope is not None else None
+        stored_tag_where: Final = {"tag_name": {"in": used_tag_names}} if scoped_to_usage else None
 
         ## QUERY STORED TAGS ##
         tag_records: Final = await _table(TagRepository(prisma_client)).find_many(
@@ -736,6 +794,10 @@ async def get_tag_daily_activity(
     api_key: str | None = None,
     page: int = 1,
     page_size: int = 10,
+    team_ids: str | None = None,
+    exclude_team_ids: str | None = None,
+    exclude_tags: str | None = None,
+    group_by: Literal["tag", "team"] | None = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -749,35 +811,41 @@ async def get_tag_daily_activity(
         api_key (Optional[str]): Filter by API key.
         page (int): Page number for pagination.
         page_size (int): Number of items per page.
+        team_ids (Optional[str]): Comma-separated list of team IDs to restrict tag usage to.
+        exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
+        exclude_tags (Optional[str]): Comma-separated list of tags to exclude.
+        group_by (Optional[Literal["tag", "team"]]): Entity the breakdown buckets key on. "team" buckets by team_id.
 
     Returns:
         SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
     """
+    from litellm.proxy.management_endpoints.daily_activity_scopes import TAG_RESOLVER
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
 
-    # Convert comma-separated tags string to list if provided
-    tag_list: Final = tags.split(",") if tags else None
-    scoped_api_key_filter: Final = await get_tag_daily_activity_api_key_filter(
-        prisma_client=prisma_client,
-        user_api_key_dict=user_api_key_dict,
-        requested_api_key=api_key,
-    )
-    if scoped_api_key_filter == []:
-        return SpendAnalyticsPaginatedResponse(results=[])
-
-    return await get_daily_activity(
-        prisma_client=prisma_client,
-        table_name="litellm_dailytagspend",
-        entity_id_field="tag",
-        entity_id=tag_list,
-        entity_metadata_field=None,
+    query: Final = TAG_RESOLVER.query(
+        tags=tags,
         start_date=start_date,
         end_date=end_date,
         model=model,
-        api_key=scoped_api_key_filter,
+        api_key=api_key,
+        team_ids=team_ids,
+        exclude_team_ids=exclude_team_ids,
+        exclude_tags=exclude_tags,
+        group_by=group_by,
+    )
+    resolved: Final = await TAG_RESOLVER.resolve(user_api_key_dict, query, prisma_client)
+    if isinstance(resolved, ScopeDenied):
+        raise_public(resolved)
+    if resolved.scope.api_keys == ():
+        return SpendAnalyticsPaginatedResponse(results=[])
+
+    return await get_daily_activity_for_scope(
+        prisma_client,
+        resolved.scope,
+        entity_metadata_field=resolved.entity_metadata,
         page=page,
         page_size=page_size,
         # metadata_metrics_func=None because litellm_dailytagspend rows are
