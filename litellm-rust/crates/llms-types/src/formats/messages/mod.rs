@@ -7,10 +7,20 @@ mod tools;
 mod usage;
 
 pub use content::{
-    BlockContent, CharCitation, Citation, Citations, CitationsConfig, ContentBlockCitation,
-    ContentBlockPayload, ContentBlockSource, ContentSource, MessagesContentBlock, PageCitation,
-    PromptCacheBreakpoint, PromptCacheMode, SearchResultCitation, ToolCaller, WebSearchCitation,
-    WebSearchResultError, WebSearchResultErrorType,
+    AdvisorToolResultContent, BashCodeExecutionToolResultContent, BlockContent, BrowserStateBlock,
+    BrowserStateChange, BrowserTab, CharCitation, Citation, CitationsConfig, CodeExecutionOutput,
+    CodeExecutionResult, CodeExecutionToolResultContent, CompactionBlock, ContainerUploadBlock,
+    ContentBlockCitation, ContentSource, DocumentBlock, EncryptedCodeExecutionResult,
+    FallbackBlock, FallbackModel, FallbackTrigger, ImageBlock, McpListedTool, McpToolListingBlock,
+    McpToolResultBlock, McpToolUseBlock, MessagesContentPart, PageCitation, PromptCacheBreakpoint,
+    PromptCacheMode, RedactedThinkingBlock, SearchResultBlock, SearchResultCitation,
+    ServerToolError, ServerToolResultBlock, ServerToolUseBlock, TextBlock,
+    TextEditorCodeExecutionToolResultContent, TextEditorCreateResult, TextEditorFileType,
+    TextEditorStrReplaceResult, TextEditorViewResult, ThinkingBlock, ToolCaller, ToolChange,
+    ToolChangeBlock, ToolChangeTarget, ToolReferenceBlock, ToolResultBlock, ToolSearchResult,
+    ToolSearchToolResultContent, ToolUseBlock, WebFetchResult, WebFetchToolResultContent,
+    WebSearchCitation, WebSearchResult, WebSearchResultError, WebSearchResultErrorType,
+    WebSearchResultType, WebSearchToolResultContent,
 };
 pub use metadata::{
     AppliedEdit, CompactionType, ContainerReference, ContainerSkill, ContextManagementResponse,
@@ -26,8 +36,8 @@ pub use request::{
 };
 pub use response::MessagesResponse;
 pub use tools::{
-    BuiltinMessagesTool, CustomTool, CustomToolType, ToolChoice, ToolChoiceType, ToolDefinition,
-    UserLocationType, WebSearchUserLocation,
+    BuiltinMessagesTool, CustomTool, CustomToolType, MessagesToolParam, ToolChoice, ToolChoiceType,
+    ToolDefinition, UserLocationType, WebSearchUserLocation,
 };
 pub use usage::{
     CacheCreationUsage, MessagesOutputTokensDetails, MessagesUsage, ServerToolUsage,

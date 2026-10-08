@@ -40,6 +40,7 @@ pub struct MessagesUsage {
     pub cache_creation: Option<CacheCreationUsage>,
     pub output_tokens_details: Option<MessagesOutputTokensDetails>,
     pub service_tier: Option<String>,
+    pub inference_geo: Option<String>,
     pub speed: Option<super::Speed>,
     pub iterations: Option<Vec<UsageIteration>>,
     #[serde(flatten)]

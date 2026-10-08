@@ -23,26 +23,31 @@ pub struct MinimaxMediaBlock {
     pub extra: Map<String, Value>,
 }
 
+#[macro_rules_attribute::apply(wire_type)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MinimaxMediaSource {
+    Base64 {
+        media_type: String,
+        data: String,
+        #[serde(flatten)]
+        options: MinimaxMediaOptions,
+    },
+    Url {
+        url: String,
+        #[serde(flatten)]
+        options: MinimaxMediaOptions,
+    },
+}
+
 #[serde_with::skip_serializing_none]
 #[macro_rules_attribute::apply(wire_type)]
-pub struct MinimaxMediaSource {
-    #[serde(rename = "type")]
-    pub source_type: MinimaxMediaSourceType,
-    pub media_type: Option<String>,
-    pub data: Option<String>,
-    pub url: Option<String>,
+#[derive(Default)]
+pub struct MinimaxMediaOptions {
     pub detail: Option<MinimaxMediaDetail>,
     pub fps: Option<serde_json::Number>,
     pub max_long_side_pixel: Option<u64>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
-}
-
-#[macro_rules_attribute::apply(wire_type)]
-#[serde(rename_all = "snake_case")]
-pub enum MinimaxMediaSourceType {
-    Base64,
-    Url,
 }
 
 #[macro_rules_attribute::apply(wire_type)]

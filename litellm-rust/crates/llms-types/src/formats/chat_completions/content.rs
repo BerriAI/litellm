@@ -1,6 +1,6 @@
 use serde_json::{Map, Value};
 
-use crate::formats::messages::{CacheControl, Citations, ContentSource};
+use crate::formats::messages::{CacheControl, CitationsConfig, ContentSource};
 
 #[macro_rules_attribute::apply(wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -39,7 +39,7 @@ pub enum ChatContentPart {
         #[serde(skip_serializing_if = "Option::is_none")]
         context: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        citations: Option<Citations>,
+        citations: Option<CitationsConfig>,
         #[serde(flatten)]
         extra: Map<String, Value>,
     },
@@ -59,9 +59,8 @@ pub enum ChatMediaUrl {
 
 #[serde_with::skip_serializing_none]
 #[macro_rules_attribute::apply(wire_type)]
-#[derive(Default)]
 pub struct ChatMediaUrlParameters {
-    pub url: Option<String>,
+    pub url: String,
     pub detail: Option<String>,
     pub format: Option<String>,
     #[serde(flatten)]
@@ -70,10 +69,9 @@ pub struct ChatMediaUrlParameters {
 
 #[serde_with::skip_serializing_none]
 #[macro_rules_attribute::apply(wire_type)]
-#[derive(Default)]
 pub struct ChatInputAudio {
-    pub data: Option<String>,
-    pub format: Option<String>,
+    pub data: String,
+    pub format: String,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -115,10 +113,9 @@ pub struct ChatLogprobs {
 
 #[serde_with::skip_serializing_none]
 #[macro_rules_attribute::apply(wire_type)]
-#[derive(Default)]
 pub struct ChatTokenLogprob {
-    pub token: Option<String>,
-    pub logprob: Option<serde_json::Number>,
+    pub token: String,
+    pub logprob: serde_json::Number,
     pub bytes: Option<Vec<u8>>,
     pub top_logprobs: Option<Vec<ChatTopLogprob>>,
     #[serde(flatten)]
@@ -127,10 +124,9 @@ pub struct ChatTokenLogprob {
 
 #[serde_with::skip_serializing_none]
 #[macro_rules_attribute::apply(wire_type)]
-#[derive(Default)]
 pub struct ChatTopLogprob {
-    pub token: Option<String>,
-    pub logprob: Option<serde_json::Number>,
+    pub token: String,
+    pub logprob: serde_json::Number,
     pub bytes: Option<Vec<u8>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,

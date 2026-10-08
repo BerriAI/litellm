@@ -10,7 +10,8 @@ These links describe the provider-specific wire types in this directory. Shared 
 
 ## minimax.rs
 
-MiniMax's Messages reference documents its image, video, and mid-conversation system content extensions
+MiniMax's Messages reference documents its image, video, and mid-conversation system content extensions. Its cache reference documents `cache_control` on those blocks
 
 - https://platform.minimax.io/docs/api-reference/text-chat-anthropic
 - https://platform.minimax.io/docs/api-reference/text-chat-anthropic.md
+- https://platform.minimax.io/docs/api-reference/anthropic-api-compatible-cache.md

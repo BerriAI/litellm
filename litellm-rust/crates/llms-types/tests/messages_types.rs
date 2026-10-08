@@ -1,10 +1,13 @@
 use litellm_llms_types::formats::messages::{
-    AppliedEdit, BlockContent, BuiltinMessagesTool, Citation, Citations, ContainerReference,
-    ContentBlockPayload, ContentBlockSource, ContentSource, ContextManagementResponse,
-    ContextTrigger, CustomTool, CustomToolType, McpServer, MessageRole, MessageType,
-    MessagesCompaction, MessagesContainer, MessagesContentBlock, MessagesMetadata, MessagesUsage,
-    OutputFormat, PromptCacheBreakpoint, Safeguard, StopDetails, StopReason, ToolCaller,
-    ToolChoice, ToolDefinition, WebSearchResultError,
+    AdvisorToolResultContent, AppliedEdit, BlockContent, BrowserStateChange, BuiltinMessagesTool,
+    Citation, CodeExecutionOutput, CodeExecutionToolResultContent, ContainerReference,
+    ContentSource, ContextManagementResponse, ContextTrigger, CustomTool, CustomToolType,
+    McpServer, MessageRole, MessageType, MessagesCompaction, MessagesContainer,
+    MessagesContentPart, MessagesMetadata, MessagesToolParam, MessagesUsage, OutputFormat,
+    PromptCacheBreakpoint, Safeguard, StopDetails, StopReason,
+    TextEditorCodeExecutionToolResultContent, TextEditorFileType, ToolCaller, ToolChange,
+    ToolChangeTarget, ToolChoice, ToolDefinition, ToolSearchToolResultContent,
+    WebFetchToolResultContent, WebSearchToolResultContent,
 };
 use rstest::rstest;
 use serde::{Serialize, de::DeserializeOwned};
@@ -158,8 +161,10 @@ fn usage_contracts_round_trip() {
             {"type":"message","input_tokens":3,"output_tokens":3}
         ],
         "service_tier":"priority",
+        "inference_geo":"global",
         "speed":"fast"
     }));
+    assert_eq!(usage.inference_geo.as_deref(), Some("global"));
     assert_eq!(usage.input_tokens, Some(10));
     assert_eq!(usage.output_tokens, Some(4));
     let server = usage.server_tool_use.as_ref().unwrap();
@@ -208,96 +213,6 @@ fn content_sources_round_trip(#[case] wire: Value) {
 }
 
 #[rstest]
-fn content_block_and_tool_caller_round_trip() {
-    round_trip::<BlockContent>(json!("text"));
-    round_trip::<ToolCaller>(json!({"type":"code_execution_20250825","tool_id":"server_1"}));
-    round_trip::<ToolCaller>(json!({"type":"direct"}));
-}
-
-#[rstest]
-#[case::configuration(json!({"enabled":true,"future":null}))]
-#[case::page_citation(json!([{"type":"page_location","cited_text":"quote","document_index":0,"start_page_number":1}] ))]
-#[case::character_citation(json!([{"type":"char_location","cited_text":"quote","document_index":0,"start_char_index":1,"end_char_index":6}] ))]
-#[case::web_search_citation(json!([{"type":"web_search_result_location","url":"https://example.test","title":"result"}]))]
-#[case::content_block_citation(json!([{"type":"content_block_location","document_index":0,"start_block_index":1,"end_block_index":2}]))]
-#[case::search_result_citation(json!([{"type":"search_result_location","search_result_index":0,"source":"web"}]))]
-fn citation_forms_round_trip(#[case] wire: Value) {
-    let citations = round_trip::<Citations>(wire);
-    match citations {
-        Citations::Config(config) => {
-            assert_eq!(config.enabled, Some(true));
-            assert_eq!(config.extra.get("future"), Some(&Value::Null));
-        }
-        Citations::Results(results) => {
-            let [citation] = results.as_slice() else {
-                panic!("expected one citation");
-            };
-            match citation {
-                Citation::PageLocation(page) => {
-                    assert_eq!(page.cited_text.as_deref(), Some("quote"));
-                    assert_eq!(page.start_page_number, Some(1));
-                }
-                Citation::CharLocation(chars) => {
-                    assert_eq!(chars.start_char_index, Some(1));
-                    assert_eq!(chars.end_char_index, Some(6));
-                }
-                Citation::WebSearchResultLocation(search) => {
-                    assert_eq!(search.url.as_deref(), Some("https://example.test"));
-                    assert_eq!(search.title.as_deref(), Some("result"));
-                }
-                Citation::ContentBlockLocation(block) => {
-                    assert_eq!(block.start_block_index, Some(1));
-                    assert_eq!(block.end_block_index, Some(2));
-                }
-                Citation::SearchResultLocation(search) => {
-                    assert_eq!(search.search_result_index, Some(0));
-                    assert_eq!(search.source.as_deref(), Some("web"));
-                }
-            }
-        }
-    }
-}
-
-#[rstest]
-fn prompt_cache_and_search_error_round_trip() {
-    round_trip::<PromptCacheBreakpoint>(json!({"mode":"explicit"}));
-    round_trip::<WebSearchResultError>(
-        json!({"type":"web_search_tool_result_error","error_code":"unavailable"}),
-    );
-}
-
-#[rstest]
-fn custom_tool_exposes_schema_and_preserves_extensions() {
-    let wire = json!({
-        "name":"lookup",
-        "input_schema":{"type":"object","properties":{"query":{"type":"string"}}},
-        "strict":false,
-        "extension":{"nested":[1,null]}
-    });
-    let tool: CustomTool = serde_json::from_value(wire.clone()).unwrap();
-    assert_eq!(tool.definition.name.as_deref(), Some("lookup"));
-    assert_eq!(tool.definition.strict, Some(false));
-    let Some(litellm_llms_types::json_schema::JsonSchema::Object(schema)) =
-        &tool.definition.input_schema
-    else {
-        panic!("expected an object schema");
-    };
-    assert!(schema.properties.as_ref().unwrap().contains_key("query"));
-    assert_eq!(serde_json::to_value(tool).unwrap(), wire);
-}
-
-#[rstest]
-#[case::missing_name(json!({"input_schema":{}}))]
-#[case::null_name(json!({"name":null}))]
-#[case::wrong_name_shape(json!({"name":7}))]
-#[case::builtin_tool(json!({"name":"lookup","type":"bash_20250124"}))]
-#[case::unknown_discriminator(json!({"name":"lookup","type":"future_tool"}))]
-#[case::wrong_discriminator_shape(json!({"name":"lookup","type":7}))]
-fn custom_tool_rejects_invalid_shapes(#[case] wire: Value) {
-    assert!(serde_json::from_value::<CustomTool>(wire).is_err());
-}
-
-#[rstest]
 #[case::advisor("advisor_20260301", BuiltinMessagesTool::Advisor)]
 #[case::toolsearchregex(
     "tool_search_tool_regex_20251119",
@@ -334,6 +249,11 @@ fn custom_tool_rejects_invalid_shapes(#[case] wire: Value) {
 )]
 #[case::computer20251124("computer_20251124", BuiltinMessagesTool::Computer20251124)]
 #[case::texteditor20250429("text_editor_20250429", BuiltinMessagesTool::TextEditor20250429)]
+#[case::toolsearchregexlatest("tool_search_tool_regex", BuiltinMessagesTool::ToolSearchRegexLatest)]
+#[case::toolsearchbm25latest("tool_search_tool_bm25", BuiltinMessagesTool::ToolSearchBm25Latest)]
+#[case::browsertoolset("browser_toolset_20260801", BuiltinMessagesTool::BrowserToolset)]
+#[case::computertoolset("computer_toolset_20260801", BuiltinMessagesTool::ComputerToolset)]
+#[case::mcptoolset("mcp_toolset", BuiltinMessagesTool::McpToolset)]
 fn builtin_tools_decode_typed_definitions(
     #[case] tag: &str,
     #[case] constructor: fn(ToolDefinition) -> BuiltinMessagesTool,
@@ -388,69 +308,6 @@ fn token_threshold_requires_unsigned_integer(#[case] wire: Value) {
 }
 
 #[rstest]
-#[case::tool_result(json!({"content":[{"type":"text","text":"found"}],"is_error":false,"caller":{"type":"direct"}}))]
-#[case::web_search(json!({"url":"https://example.test","title":"result","page_age":"today","encrypted_content":"opaque","citations":[{"type":"web_search_result_location","url":"https://example.test"}]}))]
-#[case::code_execution(json!({"stdout":"done","stderr":"","return_code":0,"encrypted_stdout":"opaque"}))]
-#[case::text_editor(json!({"file_type":"text","num_lines":2,"start_line":1,"total_lines":2,"is_file_update":false,"lines":["a","b"],"new_lines":1,"new_start":2,"old_lines":1,"old_start":2}))]
-#[case::tool_reference(json!({"tool":{"type":"tool_use","name":"lookup","input":{"query":[1,null]}},"tool_references":[{"type":"tool_reference","tool_name":"lookup"}]}))]
-#[case::document(json!({"source":{"type":"text","media_type":"text/plain","data":"document"},"context":"context","prompt_cache_breakpoint":{"mode":"explicit"},"extension":{"nested":[1,null]}}))]
-fn content_payload_families_round_trip(#[case] wire: Value) {
-    round_trip::<ContentBlockPayload>(wire);
-}
-
-#[rstest]
-fn content_payload_exposes_sources_results_and_execution_fields() {
-    let wire = json!({
-        "source":{"type":"url","url":"https://example.test/document"},
-        "content":{"type":"web_search_tool_result_error","error_code":"unavailable"},
-        "caller":{"type":"code_execution_20250825","tool_id":"call_1"},
-        "return_code":-1,
-        "is_error":true
-    });
-    let payload: ContentBlockPayload = serde_json::from_value(wire.clone()).unwrap();
-    let Some(ContentBlockSource::Source(ContentSource::Url { url, .. })) = &payload.source else {
-        panic!("expected URL source");
-    };
-    assert_eq!(url, "https://example.test/document");
-    let Some(BlockContent::SearchError(error)) = &payload.content else {
-        panic!("expected search error");
-    };
-    assert_eq!(error.error_code.as_deref(), Some("unavailable"));
-    assert!(matches!(
-        payload.caller,
-        Some(ToolCaller::CodeExecution { .. })
-    ));
-    assert_eq!(payload.return_code, Some(-1));
-    assert_eq!(payload.is_error, Some(true));
-    assert_eq!(serde_json::to_value(payload).unwrap(), wire);
-}
-
-#[rstest]
-#[case::absent(json!({"name":"lookup"}))]
-#[case::null(json!({"name":"lookup","type":null}))]
-#[case::custom(json!({"name":"lookup","type":"custom"}))]
-fn custom_tool_accepts_optional_discriminator(#[case] wire: Value) {
-    let tool: CustomTool = serde_json::from_value(wire.clone()).unwrap();
-    assert_eq!(tool.definition.name.as_deref(), Some("lookup"));
-    assert!(tool.definition.description.is_none());
-    assert!(tool.definition.input_schema.is_none());
-    assert!(tool.definition.strict.is_none());
-    assert_eq!(
-        tool.tool_type,
-        wire.get("type")
-            .and_then(Value::as_str)
-            .map(|_| CustomToolType::Custom)
-    );
-    assert!(!tool.definition.extra.contains_key("type"));
-    let expected = if wire.get("type") == Some(&Value::Null) {
-        json!({"name":"lookup"})
-    } else {
-        wire
-    };
-    assert_eq!(serde_json::to_value(tool).unwrap(), expected);
-}
-
-#[rstest]
 #[case::missing_discriminator(json!({"name":"lookup"}))]
 #[case::unknown_discriminator(json!({"type":"future_tool"}))]
 #[case::null_discriminator(json!({"type":null}))]
@@ -476,127 +333,6 @@ fn builtin_tools_accept_partial_definitions() {
 }
 
 #[rstest]
-#[case::missing(json!({"extension":null}))]
-#[case::null(json!({"text":null,"content":null,"source":null,"citations":null,"return_code":null,"extension":null}))]
-fn content_payload_optional_fields_are_omitted(#[case] wire: Value) {
-    let payload: ContentBlockPayload = serde_json::from_value(wire).unwrap();
-    assert!(payload.text.is_none());
-    assert!(payload.content.is_none());
-    assert!(payload.source.is_none());
-    assert!(payload.citations.is_none());
-    assert!(payload.return_code.is_none());
-    assert_eq!(payload.extra.get("extension"), Some(&Value::Null));
-    assert_eq!(
-        serde_json::to_value(payload).unwrap(),
-        json!({"extension":null})
-    );
-}
-
-#[rstest]
-#[case::wrong_text(json!({"text":7}))]
-#[case::wrong_input(json!({"input":[]}))]
-#[case::wrong_content(json!({"content":7}))]
-#[case::malformed_source(json!({"source":{"url":"https://example.test"}}))]
-#[case::malformed_caller(json!({"caller":{"type":"code_execution_20250825"}}))]
-#[case::wrong_citations(json!({"citations":7}))]
-#[case::negative_lines(json!({"num_lines":-1}))]
-#[case::wrong_error_flag(json!({"is_error":"false"}))]
-fn content_payload_rejects_malformed_known_fields(#[case] wire: Value) {
-    assert!(serde_json::from_value::<ContentBlockPayload>(wire).is_err());
-}
-
-#[rstest]
-fn search_results_expose_typed_location_and_nested_blocks() {
-    let wire = json!({
-        "type":"search_result",
-        "source":"https://example.test/result",
-        "title":"result",
-        "content":[{"type":"text","text":"found","extension":null}],
-        "citations":{"enabled":true},
-        "extension":{"nested":[1,null]}
-    });
-    let block: MessagesContentBlock = serde_json::from_value(wire.clone()).unwrap();
-    let MessagesContentBlock::SearchResult(payload) = &block else {
-        panic!("expected search result");
-    };
-    let Some(ContentBlockSource::Location(location)) = &payload.source else {
-        panic!("expected search location");
-    };
-    assert_eq!(location, "https://example.test/result");
-    let Some(BlockContent::Blocks(blocks)) = &payload.content else {
-        panic!("expected nested blocks");
-    };
-    let [MessagesContentBlock::Text(text)] = blocks.as_slice() else {
-        panic!("expected text block");
-    };
-    assert_eq!(text.text.as_deref(), Some("found"));
-    assert_eq!(text.extra.get("extension"), Some(&Value::Null));
-    assert_eq!(serde_json::to_value(block).unwrap(), wire);
-}
-
-#[rstest]
-fn content_payload_exposes_recursive_tool_contracts() {
-    let wire = json!({
-        "tool":{"type":"tool_use","name":"lookup","input":{"query":[1,null]}},
-        "tool_references":[{"type":"tool_reference","tool_name":"lookup"}],
-        "content":{"type":"code_execution_result","stdout":"done","return_code":0},
-        "caller":{"type":"code_execution_20260120","tool_id":"call_1"}
-    });
-    let payload: ContentBlockPayload = serde_json::from_value(wire.clone()).unwrap();
-    let Some(MessagesContentBlock::ToolUse(tool)) = payload.tool.as_deref() else {
-        panic!("expected tool use");
-    };
-    assert_eq!(tool.name.as_deref(), Some("lookup"));
-    assert_eq!(
-        tool.input.as_ref().unwrap().get("query"),
-        Some(&json!([1, null]))
-    );
-    let Some(references) = &payload.tool_references else {
-        panic!("expected tool references");
-    };
-    let [MessagesContentBlock::ToolReference(reference)] = references.as_slice() else {
-        panic!("expected typed tool reference");
-    };
-    assert_eq!(reference.tool_name.as_deref(), Some("lookup"));
-    let Some(BlockContent::Block(result)) = &payload.content else {
-        panic!("expected single result block");
-    };
-    let MessagesContentBlock::CodeExecutionResult(result_payload) = result.as_ref() else {
-        panic!("expected execution result");
-    };
-    assert_eq!(result_payload.stdout.as_deref(), Some("done"));
-    assert_eq!(result_payload.return_code, Some(0));
-    let Some(ToolCaller::CodeExecution20260120 { tool_id, .. }) = &payload.caller else {
-        panic!("expected versioned tool caller");
-    };
-    assert_eq!(tool_id, "call_1");
-    assert_eq!(serde_json::to_value(payload).unwrap(), wire);
-}
-
-#[rstest]
-#[case::missing_tag(json!({"text":"hello"}))]
-#[case::unknown_tag(json!({"type":"future_block","text":"hello"}))]
-#[case::wrong_text(json!({"type":"text","text":7}))]
-#[case::malformed_recursive_tool(json!({"type":"tool_use","tool":{"name":"lookup"}}))]
-#[case::malformed_recursive_content(json!({"type":"tool_result","content":[{"type":"text","text":7}]}))]
-#[case::malformed_source(json!({"type":"document","source":{"type":"url","url":7}}))]
-fn typed_content_blocks_reject_malformed_known_fields(#[case] wire: Value) {
-    assert!(serde_json::from_value::<MessagesContentBlock>(wire).is_err());
-}
-
-#[rstest]
-fn typed_content_blocks_accept_partial_payloads() {
-    let wire = json!({"type":"text","extension":null});
-    let block: MessagesContentBlock = serde_json::from_value(wire.clone()).unwrap();
-    let MessagesContentBlock::Text(payload) = &block else {
-        panic!("expected text block");
-    };
-    assert!(payload.text.is_none());
-    assert_eq!(payload.extra.get("extension"), Some(&Value::Null));
-    assert_eq!(serde_json::to_value(block).unwrap(), wire);
-}
-
-#[rstest]
 fn existing_content_blocks_preserve_opaque_nested_fields() {
     let wire =
         json!({"type":"tool_result","content":[{"type":"text","text":7}],"source":{"url":7}});
@@ -605,4 +341,441 @@ fn existing_content_blocks_preserve_opaque_nested_fields() {
     assert_eq!(block.content.as_ref(), wire.get("content"));
     assert_eq!(block.extra.get("source"), wire.get("source"));
     assert_eq!(serde_json::to_value(block).unwrap(), wire);
+}
+
+fn part(wire: Value) -> MessagesContentPart {
+    round_trip::<MessagesContentPart>(wire)
+}
+
+#[rstest]
+fn text_blocks_expose_every_citation_location() {
+    let block = part(json!({
+        "type":"text",
+        "text":"cited",
+        "citations":[
+            {"type":"char_location","cited_text":"a","document_index":0,"start_char_index":1,"end_char_index":6,"file_id":"file_1"},
+            {"type":"page_location","cited_text":"b","document_index":1,"start_page_number":1,"end_page_number":2},
+            {"type":"content_block_location","cited_text":"c","document_index":2,"start_block_index":0,"end_block_index":1},
+            {"type":"web_search_result_location","cited_text":"d","url":"https://example.test","encrypted_index":"opaque","title":"result"},
+            {"type":"search_result_location","cited_text":"e","search_result_index":3,"source":"kb","start_block_index":0,"end_block_index":2}
+        ],
+        "cache_control":{"type":"ephemeral"}
+    }));
+    let MessagesContentPart::Text(text) = &block else {
+        panic!("expected text block");
+    };
+    assert_eq!(text.text, "cited");
+    let [
+        Citation::CharLocation(chars),
+        Citation::PageLocation(page),
+        Citation::ContentBlockLocation(blocks),
+        Citation::WebSearchResultLocation(search),
+        Citation::SearchResultLocation(result),
+    ] = text.citations.as_deref().unwrap()
+    else {
+        panic!("expected one citation of each location type");
+    };
+    assert_eq!((chars.start_char_index, chars.end_char_index), (1, 6));
+    assert_eq!(chars.file_id.as_deref(), Some("file_1"));
+    assert_eq!((page.start_page_number, page.end_page_number), (1, 2));
+    assert_eq!(blocks.document_index, 2);
+    assert_eq!(search.encrypted_index, "opaque");
+    assert_eq!(result.search_result_index, 3);
+    assert_eq!(result.source, "kb");
+}
+
+#[rstest]
+fn text_block_null_optionals_are_omitted() {
+    let block: MessagesContentPart = serde_json::from_value(
+        json!({"type":"text","text":"hi","citations":null,"cache_control":null,"future":null}),
+    )
+    .unwrap();
+    let MessagesContentPart::Text(text) = &block else {
+        panic!("expected text block");
+    };
+    assert!(text.citations.is_none());
+    assert!(text.cache_control.is_none());
+    assert_eq!(text.extra.get("future"), Some(&Value::Null));
+    assert_eq!(
+        serde_json::to_value(block).unwrap(),
+        json!({"type":"text","text":"hi","future":null})
+    );
+}
+
+#[rstest]
+fn request_media_blocks_expose_sources() {
+    let MessagesContentPart::Image(image) = part(json!({
+        "type":"image",
+        "source":{"type":"base64","media_type":"image/png","data":"AA=="},
+        "transformations":{"oversized_image":"error"}
+    })) else {
+        panic!("expected image block");
+    };
+    assert!(
+        matches!(&image.source, ContentSource::Base64 { media_type, .. } if media_type == "image/png")
+    );
+    assert_eq!(image.extra["transformations"]["oversized_image"], "error");
+    let MessagesContentPart::Document(document) = part(json!({
+        "type":"document",
+        "source":{"type":"content","content":[
+            {"type":"text","text":"Section 1"},
+            {"type":"image","source":{"type":"url","url":"https://example.test/chart.png"}}
+        ]},
+        "title":"Q3 report",
+        "context":"quarterly",
+        "citations":{"enabled":true}
+    })) else {
+        panic!("expected document block");
+    };
+    assert_eq!(document.title.as_deref(), Some("Q3 report"));
+    assert_eq!(document.citations.as_ref().unwrap().enabled, Some(true));
+    let ContentSource::Content {
+        content: BlockContent::Blocks(blocks),
+        ..
+    } = &document.source
+    else {
+        panic!("expected content-block source");
+    };
+    assert!(matches!(
+        blocks.as_slice(),
+        [MessagesContentPart::Text(_), MessagesContentPart::Image(_)]
+    ));
+    let MessagesContentPart::SearchResult(search) = part(json!({
+        "type":"search_result",
+        "source":"https://example.test/result",
+        "title":"result",
+        "content":[{"type":"text","text":"found"}],
+        "citations":{"enabled":false}
+    })) else {
+        panic!("expected search result block");
+    };
+    assert_eq!(search.source, "https://example.test/result");
+    assert!(
+        matches!(search.content.as_slice(), [MessagesContentPart::Text(text)] if text.text == "found")
+    );
+}
+
+#[rstest]
+fn reasoning_and_tool_blocks_expose_required_fields() {
+    let MessagesContentPart::Thinking(thinking) =
+        part(json!({"type":"thinking","thinking":"plan","signature":"sig"}))
+    else {
+        panic!("expected thinking block");
+    };
+    assert_eq!(
+        (thinking.thinking.as_str(), thinking.signature.as_str()),
+        ("plan", "sig")
+    );
+    let MessagesContentPart::RedactedThinking(redacted) =
+        part(json!({"type":"redacted_thinking","data":"opaque"}))
+    else {
+        panic!("expected redacted thinking block");
+    };
+    assert_eq!(redacted.data, "opaque");
+    let MessagesContentPart::ToolUse(tool_use) = part(json!({
+        "type":"tool_use",
+        "id":"toolu_1",
+        "name":"lookup",
+        "input":{"query":[1,null]},
+        "caller":{"type":"code_execution_20260120","tool_id":"srvtoolu_1"},
+        "toolset_name":"browser"
+    })) else {
+        panic!("expected tool use block");
+    };
+    assert_eq!(tool_use.input["query"], json!([1, null]));
+    assert!(
+        matches!(&tool_use.caller, Some(ToolCaller::CodeExecution20260120 { tool_id, .. }) if tool_id == "srvtoolu_1")
+    );
+    assert_eq!(tool_use.toolset_name.as_deref(), Some("browser"));
+    let MessagesContentPart::ToolResult(result) = part(json!({
+        "type":"tool_result",
+        "tool_use_id":"toolu_1",
+        "is_error":false,
+        "content":[
+            {"type":"tool_reference","tool_name":"lookup"},
+            {"type":"browser_state","tabs":[{"tab_id":"1","title":"","url":"","active":true}],
+             "state_changes":[{"type":"download_completed","download_id":"d1","url":"https://example.test/f","size_bytes":3}]}
+        ]
+    })) else {
+        panic!("expected tool result block");
+    };
+    let Some(BlockContent::Blocks(blocks)) = &result.content else {
+        panic!("expected nested result blocks");
+    };
+    let [
+        MessagesContentPart::ToolReference(reference),
+        MessagesContentPart::BrowserState(browser),
+    ] = blocks.as_slice()
+    else {
+        panic!("expected tool reference and browser state");
+    };
+    assert_eq!(reference.tool_name, "lookup");
+    assert_eq!(browser.tabs[0].active, Some(true));
+    assert!(matches!(
+        browser.state_changes.as_deref(),
+        Some([BrowserStateChange::DownloadCompleted {
+            size_bytes: Some(3),
+            path: None,
+            ..
+        }])
+    ));
+    let MessagesContentPart::ToolResult(text_result) =
+        part(json!({"type":"tool_result","tool_use_id":"toolu_2","content":"done"}))
+    else {
+        panic!("expected tool result block");
+    };
+    assert_eq!(text_result.content, Some(BlockContent::Text("done".into())));
+    assert!(text_result.is_error.is_none());
+}
+
+#[rstest]
+fn server_tool_results_expose_nested_result_unions() {
+    let MessagesContentPart::ServerToolUse(server) = part(
+        json!({"type":"server_tool_use","id":"srvtoolu_1","name":"web_search","input":{"query":"rust"}}),
+    ) else {
+        panic!("expected server tool use");
+    };
+    assert_eq!(server.name, "web_search");
+    let MessagesContentPart::WebSearchToolResult(search) = part(json!({
+        "type":"web_search_tool_result",
+        "tool_use_id":"srvtoolu_1",
+        "content":[{"type":"web_search_result","url":"https://example.test","title":"t","encrypted_content":"e","page_age":"1d"}]
+    })) else {
+        panic!("expected web search result");
+    };
+    let WebSearchToolResultContent::Results(results) = &search.content else {
+        panic!("expected search results");
+    };
+    assert_eq!(results[0].page_age.as_deref(), Some("1d"));
+    let MessagesContentPart::WebSearchToolResult(search_error) = part(json!({
+        "type":"web_search_tool_result",
+        "tool_use_id":"srvtoolu_1",
+        "content":{"type":"web_search_tool_result_error","error_code":"max_uses_exceeded"}
+    })) else {
+        panic!("expected web search error");
+    };
+    assert!(
+        matches!(&search_error.content, WebSearchToolResultContent::Error(error) if error.error_code == "max_uses_exceeded")
+    );
+    let MessagesContentPart::WebFetchToolResult(fetch) = part(json!({
+        "type":"web_fetch_tool_result",
+        "tool_use_id":"srvtoolu_2",
+        "content":{"type":"web_fetch_result","url":"https://example.test","retrieved_at":"2026-01-01T00:00:00Z",
+            "content":{"type":"document","source":{"type":"text","media_type":"text/plain","data":"page"}}}
+    })) else {
+        panic!("expected web fetch result");
+    };
+    let WebFetchToolResultContent::WebFetchResult(fetched) = &fetch.content else {
+        panic!("expected fetched page");
+    };
+    assert!(matches!(
+        fetched.content.as_ref(),
+        MessagesContentPart::Document(_)
+    ));
+    let MessagesContentPart::CodeExecutionToolResult(code) = part(json!({
+        "type":"code_execution_tool_result",
+        "tool_use_id":"srvtoolu_3",
+        "content":{"type":"encrypted_code_execution_result","encrypted_stdout":"opaque","stderr":"","return_code":-1,
+            "content":[{"type":"code_execution_output","file_id":"file_1"}]}
+    })) else {
+        panic!("expected code execution result");
+    };
+    let CodeExecutionToolResultContent::EncryptedCodeExecutionResult(encrypted) = &code.content
+    else {
+        panic!("expected encrypted execution result");
+    };
+    assert_eq!(encrypted.return_code, -1);
+    assert!(
+        matches!(encrypted.content.as_slice(), [CodeExecutionOutput::CodeExecutionOutput { file_id, .. }] if file_id == "file_1")
+    );
+    let MessagesContentPart::TextEditorCodeExecutionToolResult(editor) = part(json!({
+        "type":"text_editor_code_execution_tool_result",
+        "tool_use_id":"srvtoolu_4",
+        "content":{"type":"text_editor_code_execution_view_result","content":"fn main() {}","file_type":"text","num_lines":1}
+    })) else {
+        panic!("expected text editor result");
+    };
+    let TextEditorCodeExecutionToolResultContent::TextEditorCodeExecutionViewResult(view) =
+        &editor.content
+    else {
+        panic!("expected view result");
+    };
+    assert_eq!(view.file_type, TextEditorFileType::Text);
+    assert_eq!(view.num_lines, Some(1));
+    assert!(view.start_line.is_none());
+    let MessagesContentPart::ToolSearchToolResult(tool_search) = part(json!({
+        "type":"tool_search_tool_result",
+        "tool_use_id":"srvtoolu_5",
+        "content":{"type":"tool_search_tool_result_error","error_code":"unavailable","error_message":"down"}
+    })) else {
+        panic!("expected tool search result");
+    };
+    assert!(
+        matches!(&tool_search.content, ToolSearchToolResultContent::ToolSearchToolResultError(error) if error.error_message.as_deref() == Some("down"))
+    );
+    let MessagesContentPart::AdvisorToolResult(advisor) = part(json!({
+        "type":"advisor_tool_result",
+        "tool_use_id":"srvtoolu_6",
+        "content":{"type":"advisor_result","text":"advice"}
+    })) else {
+        panic!("expected advisor result");
+    };
+    assert!(
+        matches!(&advisor.content, AdvisorToolResultContent::AdvisorResult { text, stop_reason: None, .. } if text == "advice")
+    );
+}
+
+#[rstest]
+fn beta_blocks_expose_mcp_compaction_and_fallback_fields() {
+    let MessagesContentPart::McpToolUse(mcp) = part(
+        json!({"type":"mcp_tool_use","id":"mcptoolu_1","name":"search","server_name":"kb","input":{}}),
+    ) else {
+        panic!("expected MCP tool use");
+    };
+    assert_eq!(mcp.server_name, "kb");
+    let MessagesContentPart::McpToolResult(mcp_result) = part(
+        json!({"type":"mcp_tool_result","tool_use_id":"mcptoolu_1","is_error":true,"content":"failed"}),
+    ) else {
+        panic!("expected MCP tool result");
+    };
+    assert_eq!(mcp_result.is_error, Some(true));
+    let MessagesContentPart::McpToolListing(listing) = part(json!({
+        "type":"mcp_tool_listing",
+        "mcp_server_name":"kb",
+        "tools":[{"name":"search","input_schema":{"type":"object"}}]
+    })) else {
+        panic!("expected MCP tool listing");
+    };
+    assert!(listing.tools[0].description.is_none());
+    let MessagesContentPart::Compaction(compaction) = part(json!({
+        "type":"compaction",
+        "content":"summary",
+        "encrypted_content":"opaque",
+        "tool_changes":[
+            {"type":"tool_addition","tool":{"type":"tool_definition","definition":{"name":"lookup","input_schema":{"type":"object"}}}},
+            {"type":"tool_removal","tool":{"type":"mcp_tool_reference","server_name":"kb","name":"search"}}
+        ]
+    })) else {
+        panic!("expected compaction block");
+    };
+    let [
+        ToolChange::ToolAddition(addition),
+        ToolChange::ToolRemoval(removal),
+    ] = compaction.tool_changes.as_deref().unwrap()
+    else {
+        panic!("expected tool addition and removal");
+    };
+    let ToolChangeTarget::ToolDefinition { definition, .. } = &addition.tool else {
+        panic!("expected inline tool definition");
+    };
+    assert!(
+        matches!(definition.as_ref(), MessagesToolParam::Custom(tool) if tool.name == "lookup")
+    );
+    assert!(
+        matches!(&removal.tool, ToolChangeTarget::McpToolReference { server_name, .. } if server_name == "kb")
+    );
+    let failed: MessagesContentPart =
+        serde_json::from_value(json!({"type":"compaction","content":null})).unwrap();
+    assert_eq!(failed, MessagesContentPart::Compaction(Default::default()));
+    let MessagesContentPart::Fallback(fallback) = part(json!({
+        "type":"fallback",
+        "from":{"model":"claude-opus-5-5"},
+        "to":{"model":"claude-sonnet-5-5"},
+        "trigger":{"type":"refusal","category":"cyber"}
+    })) else {
+        panic!("expected fallback block");
+    };
+    assert_ne!(fallback.from.model, fallback.to.model);
+}
+
+#[rstest]
+#[case::missing_tag(json!({"text":"hello"}))]
+#[case::unknown_tag(json!({"type":"future_block","text":"hello"}))]
+#[case::text_without_text(json!({"type":"text"}))]
+#[case::wrong_text(json!({"type":"text","text":7}))]
+#[case::citation_missing_location(json!({"type":"text","text":"a","citations":[{"type":"char_location","cited_text":"a","document_index":0}]}))]
+#[case::unknown_citation(json!({"type":"text","text":"a","citations":[{"type":"future_location"}]}))]
+#[case::thinking_without_signature(json!({"type":"thinking","thinking":"plan"}))]
+#[case::tool_use_without_id(json!({"type":"tool_use","name":"lookup","input":{}}))]
+#[case::tool_use_array_input(json!({"type":"tool_use","id":"t","name":"lookup","input":[]}))]
+#[case::tool_result_without_id(json!({"type":"tool_result","content":"done"}))]
+#[case::malformed_nested_block(json!({"type":"tool_result","tool_use_id":"t","content":[{"type":"text","text":7}]}))]
+#[case::malformed_source(json!({"type":"document","source":{"type":"url","url":7}}))]
+#[case::image_without_source(json!({"type":"image"}))]
+#[case::search_result_without_title(json!({"type":"search_result","source":"s","content":[]}))]
+#[case::web_search_result_without_url(json!({"type":"web_search_tool_result","tool_use_id":"t","content":[{"type":"web_search_result","title":"t","encrypted_content":"e"}]}))]
+#[case::unknown_fetch_result(json!({"type":"web_fetch_tool_result","tool_use_id":"t","content":{"type":"future"}}))]
+#[case::fractional_return_code(json!({"type":"bash_code_execution_tool_result","tool_use_id":"t","content":{"type":"bash_code_execution_result","stdout":"","stderr":"","return_code":0.5,"content":[]}}))]
+#[case::unknown_file_type(json!({"type":"text_editor_code_execution_tool_result","tool_use_id":"t","content":{"type":"text_editor_code_execution_view_result","content":"","file_type":"video"}}))]
+#[case::negative_line_count(json!({"type":"text_editor_code_execution_tool_result","tool_use_id":"t","content":{"type":"text_editor_code_execution_str_replace_result","new_lines":-1}}))]
+#[case::unknown_tool_change(json!({"type":"compaction","tool_changes":[{"type":"tool_addition","tool":{"type":"future"}}]}))]
+#[case::unknown_state_change(json!({"type":"browser_state","tabs":[],"state_changes":[{"type":"tab_closed","tab_id":"1"}]}))]
+fn content_parts_reject_malformed_known_fields(#[case] wire: Value) {
+    assert!(serde_json::from_value::<MessagesContentPart>(wire).is_err());
+}
+
+#[rstest]
+fn custom_tool_exposes_schema_and_preserves_extensions() {
+    let tool = round_trip::<CustomTool>(json!({
+        "type":"custom",
+        "name":"lookup",
+        "input_schema":{"type":"object","properties":{"query":{"type":"string"}}},
+        "strict":false,
+        "defer_loading":true,
+        "extension":{"nested":[1,null]}
+    }));
+    assert_eq!(tool.tool_type, Some(CustomToolType::Custom));
+    assert_eq!(tool.name, "lookup");
+    assert_eq!((tool.strict, tool.defer_loading), (Some(false), Some(true)));
+    let litellm_llms_types::json_schema::JsonSchema::Object(schema) = &tool.input_schema else {
+        panic!("expected an object schema");
+    };
+    assert!(schema.properties.as_ref().unwrap().contains_key("query"));
+    assert_eq!(tool.extra["extension"], json!({"nested":[1,null]}));
+}
+
+#[rstest]
+fn custom_tool_omits_null_discriminator() {
+    let tool: CustomTool =
+        serde_json::from_value(json!({"type":null,"name":"lookup","input_schema":true})).unwrap();
+    assert!(tool.tool_type.is_none());
+    assert!(tool.description.is_none());
+    assert_eq!(
+        serde_json::to_value(tool).unwrap(),
+        json!({"name":"lookup","input_schema":true})
+    );
+}
+
+#[rstest]
+#[case::missing_name(json!({"input_schema":{}}))]
+#[case::missing_schema(json!({"name":"lookup"}))]
+#[case::wrong_name_shape(json!({"name":7,"input_schema":{}}))]
+#[case::builtin_tool(json!({"name":"lookup","input_schema":{},"type":"bash_20250124"}))]
+#[case::unknown_discriminator(json!({"name":"lookup","input_schema":{},"type":"future_tool"}))]
+fn custom_tool_rejects_invalid_shapes(#[case] wire: Value) {
+    assert!(serde_json::from_value::<CustomTool>(wire).is_err());
+}
+
+#[rstest]
+#[case::builtin(json!({"type":"web_search_20250305","name":"web_search","max_uses":2}), true)]
+#[case::custom(json!({"name":"lookup","input_schema":{"type":"object"}}), false)]
+fn tool_params_dispatch_on_discriminator(#[case] wire: Value, #[case] builtin: bool) {
+    let tool = round_trip::<MessagesToolParam>(wire);
+    assert_eq!(matches!(tool, MessagesToolParam::Builtin(_)), builtin);
+}
+
+#[rstest]
+fn tool_params_reject_unknown_tool_types() {
+    assert!(
+        serde_json::from_value::<MessagesToolParam>(
+            json!({"type":"future_tool","name":"lookup","input_schema":{}})
+        )
+        .is_err()
+    );
+}
+
+#[rstest]
+fn prompt_cache_breakpoint_round_trips() {
+    let breakpoint = round_trip::<PromptCacheBreakpoint>(json!({"mode":"explicit"}));
+    assert!(breakpoint.mode.is_some());
 }

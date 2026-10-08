@@ -70,42 +70,22 @@ pub enum ToolChoiceType {
     None,
 }
 
+#[serde_with::skip_serializing_none]
 #[macro_rules_attribute::apply(wire_type)]
-#[serde(try_from = "ToolDefinition")]
 pub struct CustomTool {
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "type")]
     pub tool_type: Option<CustomToolType>,
+    pub name: String,
+    pub input_schema: JsonSchema,
+    pub description: Option<String>,
+    pub strict: Option<bool>,
+    pub cache_control: Option<CacheControl>,
+    pub defer_loading: Option<bool>,
+    pub allowed_callers: Option<Vec<String>>,
+    pub input_examples: Option<Vec<Map<String, Value>>>,
+    pub eager_input_streaming: Option<bool>,
     #[serde(flatten)]
-    pub definition: ToolDefinition,
-}
-
-impl TryFrom<ToolDefinition> for CustomTool {
-    type Error = serde::de::value::Error;
-
-    fn try_from(definition: ToolDefinition) -> Result<Self, Self::Error> {
-        let tool_type = match definition.extra.get("type") {
-            None | Some(Value::Null) => None,
-            Some(Value::String(tag)) if tag == "custom" => Some(CustomToolType::Custom),
-            Some(_) => return Err(serde::de::Error::custom("expected an optional custom type")),
-        };
-        if definition.name.is_none() {
-            return Err(serde::de::Error::custom(
-                "expected a custom tool with a string name",
-            ));
-        }
-        let extra = definition
-            .extra
-            .into_iter()
-            .filter(|(key, _)| key != "type")
-            .collect();
-        Ok(Self {
-            tool_type,
-            definition: ToolDefinition {
-                extra,
-                ..definition
-            },
-        })
-    }
+    pub extra: Map<String, Value>,
 }
 
 #[macro_rules_attribute::apply(wire_type)]
@@ -165,4 +145,21 @@ pub enum BuiltinMessagesTool {
     Computer20251124(ToolDefinition),
     #[serde(rename = "text_editor_20250429")]
     TextEditor20250429(ToolDefinition),
+    #[serde(rename = "tool_search_tool_regex")]
+    ToolSearchRegexLatest(ToolDefinition),
+    #[serde(rename = "tool_search_tool_bm25")]
+    ToolSearchBm25Latest(ToolDefinition),
+    #[serde(rename = "browser_toolset_20260801")]
+    BrowserToolset(ToolDefinition),
+    #[serde(rename = "computer_toolset_20260801")]
+    ComputerToolset(ToolDefinition),
+    #[serde(rename = "mcp_toolset")]
+    McpToolset(ToolDefinition),
+}
+
+#[macro_rules_attribute::apply(wire_type)]
+#[serde(untagged)]
+pub enum MessagesToolParam {
+    Builtin(Box<BuiltinMessagesTool>),
+    Custom(Box<CustomTool>),
 }

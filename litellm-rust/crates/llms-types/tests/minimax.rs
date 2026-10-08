@@ -1,5 +1,5 @@
 use litellm_llms_types::providers::minimax::{
-    MinimaxMediaDetail, MinimaxMediaSourceType, MinimaxMessagesContentBlock,
+    MinimaxMediaDetail, MinimaxMediaSource, MinimaxMessagesContentBlock,
 };
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -12,20 +12,27 @@ fn provider_content_blocks_round_trip(#[case] wire: Value) {
     let block: MinimaxMessagesContentBlock = serde_json::from_value(wire.clone()).unwrap();
     match &block {
         MinimaxMessagesContentBlock::Image(image) => {
-            assert_eq!(image.source.source_type, MinimaxMediaSourceType::Base64);
-            assert_eq!(image.source.detail, Some(MinimaxMediaDetail::Low));
-            assert_eq!(image.source.data.as_deref(), Some("AA=="));
+            let MinimaxMediaSource::Base64 {
+                media_type,
+                data,
+                options,
+            } = &image.source
+            else {
+                panic!("expected base64 image source");
+            };
+            assert_eq!((media_type.as_str(), data.as_str()), ("image/png", "AA=="));
+            assert_eq!(options.detail, Some(MinimaxMediaDetail::Low));
+            assert!(options.extra.is_empty());
         }
         MinimaxMessagesContentBlock::Video(video) => {
-            assert_eq!(video.source.source_type, MinimaxMediaSourceType::Url);
-            assert_eq!(video.source.detail, Some(MinimaxMediaDetail::High));
-            assert_eq!(
-                video.source.url.as_deref(),
-                Some("https://example.test/video")
-            );
-            assert_eq!(video.source.fps, Some(1.into()));
-            assert_eq!(video.source.max_long_side_pixel, Some(1024));
-            assert_eq!(video.source.extra["future"], Value::Null);
+            let MinimaxMediaSource::Url { url, options } = &video.source else {
+                panic!("expected URL video source");
+            };
+            assert_eq!(url, "https://example.test/video");
+            assert_eq!(options.detail, Some(MinimaxMediaDetail::High));
+            assert_eq!(options.fps, Some(1.into()));
+            assert_eq!(options.max_long_side_pixel, Some(1024));
+            assert_eq!(options.extra["future"], Value::Null);
             assert_eq!(
                 video.cache_control.as_ref().unwrap().cache_type.as_deref(),
                 Some("ephemeral")
@@ -42,26 +49,34 @@ fn provider_content_blocks_round_trip(#[case] wire: Value) {
 #[rstest]
 #[case::missing_source(json!({"type":"video"}))]
 #[case::bad_source_tag(json!({"type":"image","source":{"type":"future"}}))]
-#[case::bad_detail(json!({"type":"image","source":{"type":"url","detail":7}}))]
-#[case::bad_fps(json!({"type":"video","source":{"type":"url","fps":"fast"}}))]
+#[case::url_without_url(json!({"type":"video","source":{"type":"url"}}))]
+#[case::base64_without_data(json!({"type":"image","source":{"type":"base64","media_type":"image/png"}}))]
+#[case::bad_detail(json!({"type":"image","source":{"type":"url","url":"u","detail":7}}))]
+#[case::bad_fps(json!({"type":"video","source":{"type":"url","url":"u","fps":"fast"}}))]
 #[case::missing_text(json!({"type":"mid_conv_system"}))]
 fn provider_content_rejects_malformed_fields(#[case] wire: Value) {
     assert!(serde_json::from_value::<MinimaxMessagesContentBlock>(wire).is_err());
 }
 
 #[rstest]
-fn partial_media_source_omits_null_optionals() {
-    let block: MinimaxMessagesContentBlock = serde_json::from_value(
-        json!({"type":"video","source":{"type":"url","url":null,"future":null}}),
-    )
+fn partial_media_options_omit_null_optionals() {
+    let block: MinimaxMessagesContentBlock = serde_json::from_value(json!({
+        "type":"video",
+        "source":{"type":"url","url":"u","detail":null,"fps":null,"future":null},
+        "cache_control":null
+    }))
     .unwrap();
     let MinimaxMessagesContentBlock::Video(video) = &block else {
         panic!("expected video")
     };
-    assert!(video.source.url.is_none());
+    let MinimaxMediaSource::Url { options, .. } = &video.source else {
+        panic!("expected URL source");
+    };
+    assert!(options.detail.is_none());
+    assert!(options.fps.is_none());
     assert!(video.cache_control.is_none());
     assert_eq!(
         serde_json::to_value(block).unwrap(),
-        json!({"type":"video","source":{"type":"url","future":null}})
+        json!({"type":"video","source":{"type":"url","url":"u","future":null}})
     );
 }
