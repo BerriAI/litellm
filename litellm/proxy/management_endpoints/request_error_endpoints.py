@@ -66,7 +66,7 @@ _ENTITY_SQL: Final = f"""
             SUM(t.api_requests)::bigint, SUM(t.failed_requests)::bigint AS failed_requests
         FROM "LiteLLM_DailyTeamSpend" t
         LEFT JOIN "LiteLLM_TeamTable" tt ON tt.team_id = t.team_id
-        WHERE t.date >= $1 AND t.date <= $2 AND t.team_id IS NOT NULL
+        WHERE t.date >= $1 AND t.date <= $2 AND t.team_id IS NOT NULL AND t.team_id <> ''
         GROUP BY t.team_id HAVING SUM(t.failed_requests) > 0
         ORDER BY failed_requests DESC LIMIT {_ENTITY_LIMIT}
     ) teams
