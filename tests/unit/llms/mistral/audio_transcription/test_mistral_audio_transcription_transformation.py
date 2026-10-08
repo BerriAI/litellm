@@ -215,11 +215,19 @@ def test_mistral_audio_transcription_response_uses_prompt_audio_seconds_for_cost
     assert getattr(response, "duration", None) is None
 
 
-def test_mistral_audio_transcription_response_without_usage_has_no_duration():
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {"prompt_audio_seconds": None},
+        {"prompt_audio_seconds": "not-a-number"},
+        "not-an-object",
+    ],
+)
+def test_mistral_audio_transcription_response_without_usable_usage_has_no_duration(usage):
     config = MistralAudioTranscriptionConfig()
 
     mock_response = MagicMock(spec=httpx.Response)
-    mock_response.json.return_value = {"text": "hello", "usage": {"prompt_audio_seconds": None}}
+    mock_response.json.return_value = {"text": "hello", "usage": usage}
 
     response = config.transform_audio_transcription_response(mock_response)
 

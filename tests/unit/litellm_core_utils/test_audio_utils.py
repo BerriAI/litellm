@@ -280,11 +280,11 @@ class TestCalculateRequestDuration:
         os.environ.get("SKIP_AUDIO_TESTS") == "true",
         reason="Skipping audio tests - soundfile may not be available",
     )
-    def test_flac_without_sample_count_returns_none(self):
+    def test_flac_without_sample_count_counts_decoded_frames(self):
         """
         A FLAC whose STREAMINFO has no total sample count (what ffmpeg writes to a
-        pipe) makes libsndfile report SF_COUNT_MAX frames. That must not turn into
-        a ~2^63 frame duration that gets billed
+        pipe) makes libsndfile report SF_COUNT_MAX frames. The duration must come
+        from the decoded audio, not a ~2^63 frame count and not a free 0 or None
         """
         np = pytest.importorskip("numpy")
         sf = pytest.importorskip("soundfile")
@@ -299,7 +299,7 @@ class TestCalculateRequestDuration:
         packed = int.from_bytes(unknown_length[18:26], "big") & ~((1 << 36) - 1)
         unknown_length[18:26] = packed.to_bytes(8, "big")
 
-        assert calculate_request_duration(bytes(unknown_length)) is None
+        assert calculate_request_duration(bytes(unknown_length)) == pytest.approx(0.1)
 
 
 class TestGetAudioFileContentHash:

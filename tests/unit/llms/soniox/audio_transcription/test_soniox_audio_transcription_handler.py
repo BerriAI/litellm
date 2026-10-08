@@ -1056,3 +1056,69 @@ class TestSpendTracking:
             litellm.model_cost = original_model_cost
             litellm.get_model_info.cache_clear()
 
+    @staticmethod
+    def _wav_bytes() -> bytes:
+        import os
+
+        wav_path = os.path.join(
+            os.path.dirname(__file__), "../../../../..", "tests", "llm_translation", "gettysburg.wav"
+        )
+        with open(wav_path, "rb") as f:
+            return f.read()
+
+    @staticmethod
+    def _responses_without_duration() -> Dict[str, List[httpx.Response]]:
+        # Soniox omits audio_duration_ms, so the handler stores a None duration
+        return {
+            "POST https://api.soniox.com/v1/files": [_make_response({"id": "file_1"})],
+            "POST https://api.soniox.com/v1/transcriptions": [_make_response({"id": "tx_1"})],
+            "GET https://api.soniox.com/v1/transcriptions/tx_1": [_make_response({"status": "completed"})],
+            "GET https://api.soniox.com/v1/transcriptions/tx_1/transcript": [
+                _make_response({"text": "four score", "tokens": []})
+            ],
+            "DELETE https://api.soniox.com/v1/transcriptions/tx_1": [_make_response({})],
+            "DELETE https://api.soniox.com/v1/files/file_1": [_make_response({})],
+        }
+
+    def test_should_fall_back_to_local_duration_when_soniox_omits_it(self, monkeypatch):
+        import litellm
+        from litellm.litellm_core_utils.audio_utils.utils import calculate_request_duration
+
+        monkeypatch.setattr("time.sleep", lambda *_: None)
+        audio = self._wav_bytes()
+        local_duration = calculate_request_duration(audio)
+        assert local_duration is not None and local_duration > 0
+
+        resp = litellm.transcription(
+            model="soniox/stt-async-v4",
+            file=("gettysburg.wav", audio, "audio/wav"),
+            api_key="sk-test",
+            client=_MockSyncClient(self._responses_without_duration()),
+        )
+
+        assert resp._hidden_params["audio_transcription_duration"] == pytest.approx(local_duration)
+        cost = litellm.completion_cost(completion_response=resp, model="soniox/stt-async-v4", call_type="transcription")
+        assert cost > 0
+
+    def test_should_fall_back_to_local_duration_when_soniox_omits_it_async(self, monkeypatch):
+        import litellm
+        from litellm.litellm_core_utils.audio_utils.utils import calculate_request_duration
+
+        async def _no_sleep(*_a, **_kw):
+            return None
+
+        monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+        audio = self._wav_bytes()
+        local_duration = calculate_request_duration(audio)
+        assert local_duration is not None and local_duration > 0
+
+        resp = asyncio.new_event_loop().run_until_complete(
+            litellm.atranscription(
+                model="soniox/stt-async-v4",
+                file=("gettysburg.wav", audio, "audio/wav"),
+                api_key="sk-test",
+                client=_MockAsyncClient(self._responses_without_duration()),
+            )
+        )
+
+        assert resp._hidden_params["audio_transcription_duration"] == pytest.approx(local_duration)
