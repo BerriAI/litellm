@@ -5,6 +5,7 @@ import os
 import uuid
 import wave
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
 from typing import Final
 
@@ -232,3 +233,21 @@ def test_any_shape_of_batch_parent_id_on_a_speech_request_is_still_tracked(
     gateway: Gateway, forged_value: JsonValue
 ) -> None:
     _assert_forged_request_bills_like_control(gateway, "openai/tts-1", _speech_reply, _speech, "aspeech", forged_value)
+
+
+def test_a_concurrent_burst_mixing_forged_and_plain_requests_bills_every_request(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        models: Final = tuple(
+            _scripted_model(gateway, scenario, "openai/omni-moderation-latest", _moderation_reply) for _ in range(20)
+        )
+        key: Final = scenario.key(models=list(models))
+        extras: Final = tuple({"batch_parent_id": FORGED_PARENT} if index % 2 else {} for index in range(20))
+
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            responses: Final = tuple(
+                pool.map(lambda pair: _moderation(gateway, pair[0], key, pair[1]), zip(models, extras))
+            )
+
+        assert [response.status_code for response in responses] == [200] * 20, [r.text for r in responses]
+        rows: Final = eventually(lambda: _spend_rows(key), lambda values: len(values) == 20, seconds=90)
+        assert {row["call_type"] for row in rows} == {"amoderation"}, rows
