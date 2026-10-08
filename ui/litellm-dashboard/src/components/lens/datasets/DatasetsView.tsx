@@ -10,6 +10,7 @@ import {
 import { ChevronRight, Database, Loader2, TriangleAlert } from "lucide-react";
 import { useMediaQuery } from "usehooks-ts";
 import { Inspector } from "@/components/shared/Inspector";
+import { Panel } from "../ui/Panel";
 import { InspectorTable } from "@/components/shared/InspectorTable";
 import { Button } from "@/components/ui/button";
 import { formatActivityTimestamp } from "@/utils/activityTimestamp";
@@ -138,9 +139,14 @@ function DatasetTable({ datasets, onOpen }: { datasets: readonly DatasetSummary[
       noun="dataset"
       storageKey={FINDING_PANEL_WIDTH_KEY}
     >
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-card">
+      <Panel
+        className="flex-1"
+        icon={Database}
+        title="Datasets"
+        subtitle="Saved conversations per agent, to replay against prompt and model changes"
+      >
         <InspectorTable.Root table={table}>
-          <InspectorTable.Grid aria-label="Datasets" className="text-xs md:min-w-[720px]">
+          <InspectorTable.Grid aria-label="Datasets" className="text-sm md:min-w-[720px]">
             <InspectorTable.Header />
             <InspectorTable.Body<DatasetSummary> rowHeight={() => (desktop ? DATASET_HEIGHT : 48)}>
               {(row) => (
@@ -158,7 +164,7 @@ function DatasetTable({ datasets, onOpen }: { datasets: readonly DatasetSummary[
         <footer className="flex h-9 shrink-0 items-center border-t px-3 text-xs text-muted-foreground">
           {datasets.length} {datasets.length === 1 ? "dataset" : "datasets"} · {cases} {cases === 1 ? "case" : "cases"}
         </footer>
-      </div>
+      </Panel>
     </Inspector.Root>
   );
 }
