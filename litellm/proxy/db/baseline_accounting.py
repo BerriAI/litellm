@@ -223,7 +223,8 @@ ON CONFLICT (request_id) DO NOTHING
 _MARK_CONFLICT: Final = """
 UPDATE "LiteLLM_AutoRouterBaselineObservation"
 SET conflicted = TRUE, revision = $4::bigint
-WHERE request_id = $1 AND scope = $2 AND data <> $3 AND NOT conflicted
+WHERE request_id = $1 AND scope = $2 AND NOT conflicted
+  AND (data::jsonb #- '{turn,turn_at}') <> ($3::jsonb #- '{turn,turn_at}')
 """
 _READ_PAGE: Final = """
 WITH times AS (

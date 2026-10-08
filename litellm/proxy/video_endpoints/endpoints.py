@@ -9,7 +9,10 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    read_request_body,
+)
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
     get_custom_llm_provider_from_request_headers,
@@ -84,9 +87,9 @@ async def video_generation(
     )
 
     # Read request body
-    data: Final = cast(  # cast-ok: _read_request_body is legacy-typed as bare dict
+    data: Final = cast(  # cast-ok: read_request_body is legacy-typed as bare dict
         dict[str, Any],
-        await _read_request_body(request=request),
+        await read_request_body(request=request),
     )
     if input_reference is not None:
         input_reference_file: Final = await batch_to_bytesio([input_reference])
@@ -116,7 +119,7 @@ async def video_generation(
         )
         encoded_response: Final = encode_video_id_in_response(generated, deployment_id_for_encoding(generated, data))
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -203,7 +206,7 @@ async def video_list(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -309,7 +312,7 @@ async def video_status(
             status, deployment_id_for_encoding(status, data, pinned_deployment_id)
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -419,7 +422,7 @@ async def video_content(
             headers={"Content-Disposition": f"attachment; filename=video_{video_id}.mp4"},
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -475,9 +478,9 @@ async def video_remix(
         version,
     )
 
-    data: Final = cast(  # cast-ok: _read_request_body is legacy-typed as bare dict
+    data: Final = cast(  # cast-ok: read_request_body is legacy-typed as bare dict
         dict[str, Any],
-        await _read_request_body(request=request),
+        await read_request_body(request=request),
     )
     data["video_id"] = video_id
 
@@ -529,7 +532,7 @@ async def video_remix(
             remixed, deployment_id_for_encoding(remixed, data, pinned_deployment_id)
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -586,9 +589,9 @@ async def video_create_character(
         version,
     )
 
-    data: Final = cast(  # cast-ok: _read_request_body is legacy-typed as bare dict
+    data: Final = cast(  # cast-ok: read_request_body is legacy-typed as bare dict
         dict[str, Any],
-        await _read_request_body(request=request),
+        await read_request_body(request=request),
     )
     video_file: Final = await batch_to_bytesio([video])
     if video_file:
@@ -637,7 +640,7 @@ async def video_create_character(
             )
         return response
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -747,7 +750,7 @@ async def video_get_character(
             )
         return response
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -800,9 +803,9 @@ async def video_edit(
         version,
     )
 
-    data: Final = cast(  # cast-ok: _read_request_body is legacy-typed as bare dict
+    data: Final = cast(  # cast-ok: read_request_body is legacy-typed as bare dict
         dict[str, Any],
-        await _read_request_body(request=request),
+        await read_request_body(request=request),
     )
     uploaded_video: Final = data.pop("video", None)
     if isinstance(uploaded_video, StarletteUploadFile):
@@ -858,7 +861,7 @@ async def video_edit(
             edited, deployment_id_for_encoding(edited, data, pinned_deployment_id)
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -913,9 +916,9 @@ async def video_extension(
         version,
     )
 
-    data: Final = cast(  # cast-ok: _read_request_body is legacy-typed as bare dict
+    data: Final = cast(  # cast-ok: read_request_body is legacy-typed as bare dict
         dict[str, Any],
-        await _read_request_body(request=request),
+        await read_request_body(request=request),
     )
     data["video_id"] = video_reference_to_id(data.pop("video", None))
 
@@ -964,7 +967,7 @@ async def video_extension(
             extended, deployment_id_for_encoding(extended, data, pinned_deployment_id)
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,

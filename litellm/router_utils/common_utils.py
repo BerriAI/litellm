@@ -2,7 +2,9 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, TypeVar
+
+from pydantic import TypeAdapter, ValidationError
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import OpenAIFileObject
@@ -15,6 +17,17 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.types.router import CredentialLiteLLMParams, RouterErrors
 from litellm.types.utils import LlmProviders
+
+_V = TypeVar("_V")
+_DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
+
+_STR_MAPPING: Final = TypeAdapter(Mapping[str, object])
+
+ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors"})
+
+
+def without_router_only_kwargs(kwargs: Mapping[str, _V]) -> dict[str, _V]:
+    return {key: value for key, value in kwargs.items() if key not in ROUTER_ONLY_CALL_KWARGS}
 
 
 def is_proxy_admin_request(request_kwargs: Mapping[str, object] | None) -> bool:
@@ -210,27 +223,34 @@ def filter_team_based_models(
     ]
 
 
+def _as_str_mapping(value: object) -> Mapping[str, object] | None:
+    try:
+        return _STR_MAPPING.validate_python(value)
+    except ValidationError:
+        return None
+
+
 def pinned_deployment_id(request_kwargs: Mapping[str, object] | None) -> str | None:
     """The deployment a follow-up call must reach, such as the one that created a video."""
     if request_kwargs is None:
         return None
     buckets: Final = (request_kwargs.get("metadata"), request_kwargs.get("litellm_metadata"))
-    pinned_ids: Final = [
-        bucket.get(PINNED_DEPLOYMENT_ID_METADATA_KEY) for bucket in buckets if isinstance(bucket, Mapping)
-    ]
+    pinned_ids: Final = [(_as_str_mapping(bucket) or {}).get(PINNED_DEPLOYMENT_ID_METADATA_KEY) for bucket in buckets]
     return next((pinned_id for pinned_id in pinned_ids if isinstance(pinned_id, str) and pinned_id), None)
 
 
 def filter_pinned_deployment(
     model: str,
-    healthy_deployments: list[dict] | dict,
+    healthy_deployments: list[_DeploymentT] | _DeploymentT,  # mutable-ok: same contract as the other filters here
     request_kwargs: Mapping[str, object] | None,
-) -> list[dict] | dict:
+) -> list[_DeploymentT] | _DeploymentT:  # mutable-ok: same contract as the other filters here
     """Keep only the pinned deployment, if the request has one."""
     pinned_id: Final = pinned_deployment_id(request_kwargs)
-    if pinned_id is None or isinstance(healthy_deployments, dict):
+    if pinned_id is None or isinstance(healthy_deployments, Mapping):
         return healthy_deployments
-    pinned: Final = [d for d in healthy_deployments if (d.get("model_info") or {}).get("id") == pinned_id]
+    pinned: Final = [
+        d for d in healthy_deployments if (_as_str_mapping(d.get("model_info")) or {}).get("id") == pinned_id
+    ]
     if not pinned:
         raise BadRequestError(
             message=f"You passed in model={model}. {RouterErrors.no_healthy_deployments.value}",

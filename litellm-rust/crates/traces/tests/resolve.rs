@@ -1,5 +1,5 @@
 use litellm_traces::{
-    AgentNode, SpanStatus, SpendMatch, iso_time, listed_summary,
+    AgentNode, RunSourceType, SpanStatus, SpendMatch, iso_time, listed_summary,
     query::named::{ListTracesRow, SpendByResponseIdsRow, TraceSpansRow},
     resolve_trace,
 };
@@ -33,6 +33,10 @@ fn row(span_id: &str, parent: &str, name: &str, kind: &str, agent: &str) -> Trac
         call_keys: Vec::new(),
         call_evidence: None,
         tool_call_id: String::new(),
+        source_type: String::new(),
+        source_url: String::new(),
+        source_title: String::new(),
+        source_user: String::new(),
         team_id: "team".into(),
         api_key_hash: "key".into(),
         user_id: String::new(),
@@ -171,6 +175,67 @@ fn summary_counts_model_calls_tools_and_agents() {
     assert_eq!(summary.duration_ms, 1000.0);
     assert_eq!(summary.start_time, "2026-09-30T04:36:29+00:00");
     assert_eq!(summary.spend, None);
+}
+
+fn sourced(mut span: TraceSpansRow, url: &str, title: &str) -> TraceSpansRow {
+    span.source_url = url.into();
+    span.source_title = title.into();
+    span
+}
+
+const THREAD: &str = "https://acme.slack.com/archives/C1/p1";
+
+#[rstest]
+#[case::root_wins(
+    vec![sourced(at(row("root", "", "agent", "agent", "agent"), 5, 10), THREAD, "root thread"),
+         sourced(at(row("tool", "root", "tool", "tool", "agent"), 0, 1), "https://other.example/", "child")],
+    Some((THREAD, "root thread")),
+)]
+#[case::earliest_child_when_root_has_none(
+    vec![at(row("root", "", "agent", "agent", "agent"), 0, 10),
+         sourced(at(row("late", "root", "tool", "tool", "agent"), 5, 1), "https://late.example/", "late"),
+         sourced(at(row("early", "root", "tool", "tool", "agent"), 2, 1), THREAD, "early")],
+    Some((THREAD, "early")),
+)]
+#[case::non_https_is_dropped(
+    vec![sourced(row("root", "", "agent", "agent", "agent"), "javascript:alert(1)", "x")],
+    None,
+)]
+#[case::absent(vec![row("root", "", "agent", "agent", "agent")], None)]
+fn summary_source_links_where_the_run_started(
+    #[case] rows: Vec<TraceSpansRow>,
+    #[case] expected: Option<(&str, &str)>,
+) {
+    let source = resolve_trace("t", "", &rows, &[]).unwrap().summary.source;
+    assert_eq!(
+        source
+            .as_ref()
+            .map(|source| (source.url.as_str(), source.title.as_str())),
+        expected
+    );
+}
+
+#[rstest]
+#[case::slack("slack", RunSourceType::Slack)]
+#[case::teams("teams", RunSourceType::Teams)]
+#[case::custom("custom", RunSourceType::Custom)]
+#[case::unknown_is_custom("my-bot", RunSourceType::Custom)]
+#[case::missing_is_custom("", RunSourceType::Custom)]
+fn summary_source_type_picks_the_app(#[case] source_type: &str, #[case] expected: RunSourceType) {
+    let mut root = sourced(row("root", "", "agent", "agent", "agent"), THREAD, "t");
+    root.source_type = source_type.into();
+    let source = resolve_trace("t", "", &[root], &[]).unwrap().summary.source;
+    assert_eq!(source.map(|source| source.kind), Some(expected));
+}
+
+#[rstest]
+#[case::set("tin@berri.ai")]
+#[case::missing("")]
+fn summary_source_carries_who_started_it(#[case] user: &str) {
+    let mut root = sourced(row("root", "", "agent", "agent", "agent"), THREAD, "t");
+    root.source_user = user.into();
+    let source = resolve_trace("t", "", &[root], &[]).unwrap().summary.source;
+    assert_eq!(source.map(|source| source.user), Some(user.to_owned()));
 }
 
 #[rstest]
@@ -429,21 +494,70 @@ fn model_calls_link_the_spend_log_they_were_priced_from() {
 }
 
 #[rstest]
-fn model_call_span_cost_agrees_with_the_run_total_when_priced_from_a_wrapper() {
+#[case::wrapper_without_leaf_id(false, litellm_traces::CallEvidenceKind::Unknown)]
+#[case::wrapper_with_partial_leaf(false, litellm_traces::CallEvidenceKind::Partial)]
+#[case::transport_without_leaf_id(true, litellm_traces::CallEvidenceKind::Unknown)]
+#[case::transport_with_partial_leaf(true, litellm_traces::CallEvidenceKind::Partial)]
+fn model_call_span_cost_agrees_with_the_run_total_when_priced_from_related_evidence(
+    #[case] transport: bool,
+    #[case] leaf_evidence: litellm_traces::CallEvidenceKind,
+) {
     let rows = [
         TraceSpansRow {
-            call_keys: vec![litellm_traces::CallKey::LiteLlmRequest("gateway".into())],
+            trace_id: "trace".into(),
+            parent_span_id: if transport { "call" } else { "" }.into(),
+            kind: if transport {
+                litellm_traces::ObservationType::Chain
+            } else {
+                litellm_traces::ObservationType::Llm
+            },
+            call_keys: vec![if transport {
+                litellm_traces::CallKey::Transport
+            } else {
+                litellm_traces::CallKey::LiteLlmRequest("gateway".into())
+            }],
             call_evidence: Some(litellm_traces::CallEvidenceKind::Complete),
-            ..llm("wrapper", "", "agent", "")
+            ..llm("evidence", "", "agent", "")
         },
-        llm("call", "wrapper", "agent", ""),
+        TraceSpansRow {
+            trace_id: "trace".into(),
+            call_evidence: Some(leaf_evidence),
+            ..llm(
+                "call",
+                if transport { "" } else { "evidence" },
+                "agent",
+                "chatcmpl-request",
+            )
+        },
     ];
+    let pending = resolve_trace("trace", "ref", &rows, &[]).unwrap();
+    assert_eq!(
+        pending.spans[1].spend_match,
+        Some(
+            if leaf_evidence == litellm_traces::CallEvidenceKind::Partial {
+                SpendMatch::IncompleteEvidence
+            } else {
+                SpendMatch::NoCallId
+            }
+        )
+    );
+    assert!(pending.gateway_spend_pending);
+    assert!(
+        serde_json::to_value(&pending)
+            .unwrap()
+            .get("gateway_spend_pending")
+            .is_none()
+    );
+    assert_eq!(pending.summary.spend, None);
     let logs = [SpendByResponseIdsRow {
+        trace_id: "trace".into(),
+        span_id: "evidence".into(),
         litellm_call_id: "gateway".into(),
         ..spend("request", "chatcmpl-request", 0.25)
     }];
     let trace = resolve_trace("trace", "ref", &rows, &logs).unwrap();
     assert_eq!(trace.summary.spend, Some(0.25));
+    assert!(!trace.gateway_spend_pending);
     assert_eq!(
         (
             trace.spans[1].spend,
@@ -1503,7 +1617,12 @@ fn complete_wrapper_reconciles_ambiguous_response(
         owned_spend("request-a", "response", "team", "", "key", 0.25),
         owned_spend("request-b", "response", "team", "", "key", 0.5),
         owned_spend("request-c", "other-response", "team", "", "key", 0.75),
+        owned_spend("request-d", "response", "team", "", "key", 0.0),
     ];
+    let pending = resolve_trace("trace", "ref", &rows, &logs[1..]).unwrap();
+    assert_eq!(pending.spans[1].spend_match, Some(SpendMatch::Ambiguous));
+    assert!(pending.gateway_spend_pending);
+    assert_eq!(pending.summary.spend, None);
     let trace = resolve_trace("trace", "ref", &rows, &logs).unwrap();
     assert_eq!(trace.summary.spend, expected);
     assert_eq!(trace.agents[0].spend, expected);

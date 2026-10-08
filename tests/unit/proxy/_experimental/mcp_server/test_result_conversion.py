@@ -1,5 +1,5 @@
 import json
-from typing import Final
+from typing import Final, Literal
 
 import pytest
 from mcp.types import CallToolResult, ImageContent, InputRequiredResult, TextContent, Tool
@@ -241,3 +241,30 @@ class TestToGatewayTool:
         assert renamed.input_schema == tool.input_schema and renamed.input_schema is not tool.input_schema
         assert renamed.meta == {"owner": "x"}
         assert renamed.description == "d"
+
+
+@pytest.mark.parametrize("elapsed,expected", [(0, 1000), (0.0001, 999), (0.5, 500), (1, 0), (2, 0), (-1, 1000)])
+def test_freshness_aging_preserves_content_and_scope(elapsed: float, expected: int) -> None:
+    from mcp.types import ListPromptsResult, Prompt
+    from litellm.proxy._experimental.mcp_server.result_conversion import age_freshness
+
+    result: Final = ListPromptsResult(prompts=[Prompt(name="kept")], ttl_ms=1000, cache_scope="public")
+    aged: Final = age_freshness(result, elapsed)
+    assert aged.ttl_ms == expected
+    assert aged.cache_scope == "public"
+    assert aged.prompts == result.prompts
+    assert result.ttl_ms == 1000
+
+
+@pytest.mark.parametrize(
+    "scopes,expected", [((), "private"), (("public", "public"), "public"), (("public", "private"), "private")]
+)
+def test_aggregate_freshness_never_broadens_sharing(
+    scopes: tuple[Literal["private", "public"], ...], expected: str
+) -> None:
+    from mcp.types import CacheableResult
+    from litellm.proxy._experimental.mcp_server.result_conversion import aggregate_freshness
+
+    result: Final = aggregate_freshness(tuple(CacheableResult(ttl_ms=1000, cache_scope=scope) for scope in scopes))
+    assert result.cache_scope == expected
+    assert result.ttl_ms == (1000 if scopes else 0)

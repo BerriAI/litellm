@@ -5,6 +5,8 @@ import traceback
 import types
 import uuid
 from collections.abc import Mapping, Sequence
+from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
 from typing import Any, Final, NoReturn, TypeAlias, overload
@@ -78,25 +80,34 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     AggregateToolListing,
     ServerListOk,
     ServerOutcome,
+    classify_list_exception,
     outcome_wire_value,
 )
-from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: F401  # legacy module exports
     MCPServerManager,
-    _caller_authorization_fans_out,
-    _client_forwarded_authorization_headers,
-    _resolve_openapi_tool_auth,
-    _should_strip_caller_authorization,
+    _caller_authorization_fans_out,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _client_forwarded_authorization_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _resolve_openapi_tool_auth,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _should_strip_caller_authorization,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    caller_authorization_fans_out,
+    client_forwarded_authorization_headers,
     global_mcp_server_manager,
     listed_tools_caller_for,
+    resolve_openapi_tool_auth,
+    should_strip_caller_authorization,
 )
-from litellm.proxy._experimental.mcp_server.oauth_utils import (
-    _redact_mcp_resource_url,
+from litellm.proxy._experimental.mcp_server.oauth_utils import (  # noqa: F401  # legacy module exports
+    _redact_mcp_resource_url,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     get_byok_www_authenticate,
+    redact_mcp_resource_url,
 )
-from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
-    _request_auth_header,
-    _request_extra_headers,
-    _request_resolved_auth_headers,
+from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (  # noqa: F401  # legacy module exports
+    _request_auth_header,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _request_extra_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _request_resolved_auth_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    request_auth_header,
+    request_extra_headers,
+    request_resolved_auth_headers,
 )
 from litellm.proxy._experimental.mcp_server.result_conversion import (
     WireCompat,
@@ -128,6 +139,7 @@ from litellm.proxy._types import (
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     publish_auth_cache_invalidation,
 )
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     get_chain_id_from_headers,
@@ -222,6 +234,65 @@ class ListMCPToolsRestAPIResponseObject(MCPTool):
 
     mcp_info: MCPInfo | None = Field(default=None, alias="mcp_info")
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+
+@dataclass(frozen=True, slots=True)
+class _MCPServerRateLimitAdmission:
+    admitted_servers: tuple[MCPServer, ...]
+    rejected_servers: tuple[tuple[MCPServer, ProxyRateLimitError], ...]
+
+
+_mcp_server_admission_memo: Final[ContextVar[dict[str, asyncio.Task[ProxyRateLimitError | None]] | None]] = ContextVar(
+    "mcp_server_admission_memo", default=None
+)
+
+
+async def _enforce_mcp_server_rate_limit(
+    user_api_key_auth: UserAPIKeyAuth | None,
+    server: MCPServer,
+) -> None:
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    if proxy_logging_obj is not None:
+        await proxy_logging_obj.enforce_mcp_server_rate_limits(user_api_key_auth, server)
+
+
+async def _admit_mcp_servers(
+    servers: Sequence[MCPServer],
+    user_api_key_auth: UserAPIKeyAuth | None,
+) -> _MCPServerRateLimitAdmission:
+    memo: Final = _mcp_server_admission_memo.get()
+
+    async def _server_rate_limit_error(server: MCPServer) -> ProxyRateLimitError | None:
+        try:
+            await _enforce_mcp_server_rate_limit(user_api_key_auth, server)
+        except ProxyRateLimitError as error:
+            return error
+        return None
+
+    async def _admit_server(server: MCPServer) -> tuple[MCPServer, ProxyRateLimitError | None]:
+        if memo is None:
+            return server, await _server_rate_limit_error(server)
+        admission_task: Final = memo.get(server.server_id)
+        if admission_task is not None:
+            return server, await admission_task
+        created_task: Final = asyncio.create_task(_server_rate_limit_error(server))
+        memo[server.server_id] = created_task
+        return server, await created_task
+
+    results: Final = await asyncio.gather(*(_admit_server(server) for server in servers))
+    return _MCPServerRateLimitAdmission(
+        admitted_servers=tuple(server for server, error in results if error is None),
+        rejected_servers=tuple((server, error) for server, error in results if error is not None),
+    )
+
+
+async def _mcp_server_rate_limit_rejection(
+    server: MCPServer,
+    user_api_key_auth: UserAPIKeyAuth | None,
+) -> ProxyRateLimitError | None:
+    admission: Final = await _admit_mcp_servers((server,), user_api_key_auth)
+    return admission.rejected_servers[0][1] if admission.rejected_servers else None
 
 
 async def _build_virtual_call_logging_obj(
@@ -460,7 +531,7 @@ async def _get_allowed_mcp_servers_from_mcp_server_names(
 
             if not server_name_matched:
                 try:
-                    access_group_server_ids = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+                    access_group_server_ids = await MCPRequestHandler.get_mcp_servers_from_access_groups(
                         [server_or_group]
                     )
                     # Only include servers that the user has access to
@@ -819,7 +890,7 @@ def _prepare_mcp_server_headers(
     # x-mcp-{alias}-authorization. The decision is computed once so BOTH the forwarding branch and
     # the extra_headers copy loop below honor it — otherwise a server that lists Authorization in
     # extra_headers would re-copy the withheld bearer from raw_headers and replay it anyway.
-    withhold_forwarded_authorization: Final = is_client_forwarded_mode and _caller_authorization_fans_out(
+    withhold_forwarded_authorization: Final = is_client_forwarded_mode and caller_authorization_fans_out(
         server, scope_servers
     )
     if server.auth_type == MCPAuth.oauth2:
@@ -834,7 +905,7 @@ def _prepare_mcp_server_headers(
             # token, so drop the caller-forwarded Authorization (apply-if-absent would
             # otherwise let it shadow the resolved token). Delegate keeps it. Centralized
             # via _should_strip_caller_authorization to match _call_regular_mcp_tool.
-            if extra_headers and _should_strip_caller_authorization(
+            if extra_headers and should_strip_caller_authorization(
                 mcp_server=server,
                 raw_headers=raw_headers,
                 user_api_key_auth=user_api_key_auth,
@@ -842,11 +913,13 @@ def _prepare_mcp_server_headers(
                 extra_headers = without_header(extra_headers, DEFAULT_CREDENTIAL_HEADER)
     elif is_client_forwarded_mode:
         if not withhold_forwarded_authorization:
-            extra_headers = _client_forwarded_authorization_headers(
-                mcp_server=server,
-                oauth2_headers=oauth2_headers,
-                raw_headers=raw_headers,
-                user_api_key_auth=user_api_key_auth,
+            extra_headers = (  # rebind-ok: pre-existing rebinding on a rename-only line
+                client_forwarded_authorization_headers(
+                    mcp_server=server,
+                    oauth2_headers=oauth2_headers,
+                    raw_headers=raw_headers,
+                    user_api_key_auth=user_api_key_auth,
+                )
             )
 
     if server.extra_headers and raw_headers:
@@ -859,7 +932,7 @@ def _prepare_mcp_server_headers(
         # ``MCPServerManager._call_regular_mcp_tool`` so the two
         # code paths cannot drift on this security-sensitive choice.
         # See ``_should_strip_caller_authorization`` for the rules.
-        strip_caller_authorization: Final = _should_strip_caller_authorization(
+        strip_caller_authorization: Final = should_strip_caller_authorization(
             mcp_server=server,
             raw_headers=raw_headers,
             user_api_key_auth=user_api_key_auth,
@@ -961,6 +1034,7 @@ async def _get_tools_from_mcp_servers(
     protocol_version: str | None = None,
     *,
     record_listing: bool = False,
+    enforce_rate_limits: bool = True,
 ) -> AggregateToolListing:
     """
     Helper method to fetch tools from MCP servers based on server filtering criteria.
@@ -1093,20 +1167,37 @@ async def _get_tools_from_mcp_servers(
             return page.tools, outcome
 
         if params is None:
+            server_admission: Final = (
+                await _admit_mcp_servers(allowed_mcp_servers, user_api_key_auth)
+                if enforce_rate_limits
+                else _MCPServerRateLimitAdmission(tuple(allowed_mcp_servers), ())
+            )
+            if not server_admission.admitted_servers and server_admission.rejected_servers:
+                raise server_admission.rejected_servers[0][1]
+            admitted_servers: Final = server_admission.admitted_servers
             results: Final = await asyncio.gather(
-                *(_fetch_and_filter_server_tools(server) for server in allowed_mcp_servers)
+                *(_fetch_and_filter_server_tools(server) for server in admitted_servers)
             )
             aggregated = AggregateToolListing(
                 tools=[tool for tools, _ in results for tool in tools],
                 outcomes={
-                    _aggregate_server_key(server): outcome for server, (_, outcome) in zip(allowed_mcp_servers, results)
+                    _aggregate_server_key(server): outcome for server, (_, outcome) in zip(admitted_servers, results)
+                }
+                | {
+                    _aggregate_server_key(server): classify_list_exception(error)
+                    for server, error in server_admission.rejected_servers
                 },
             )
         else:
             from litellm.proxy._experimental.mcp_server.catalog import aggregate_gateway_tools
 
             aggregated = await aggregate_gateway_tools(
-                context, params, allowed_mcp_servers, _prefetched_oauth_creds, record_listing=record_listing
+                context,
+                params,
+                allowed_mcp_servers,
+                _prefetched_oauth_creds,
+                record_listing=record_listing,
+                enforce_rate_limits=enforce_rate_limits,
             )
         all_tools: Final = aggregated.tools
         server_outcomes: Final = aggregated.outcomes
@@ -1706,7 +1797,7 @@ def _challenge_missing_token_exchange_subject(
         return
     if all(allowed.server_id != server.server_id for allowed in allowed_mcp_servers):
         return
-    if global_mcp_server_manager._extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth) is not None:
+    if global_mcp_server_manager.extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth) is not None:
         return
     from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415  # lazy: adapter pulls MCP subgraph
         raise_token_exchange_challenge,
@@ -1751,6 +1842,7 @@ async def _list_tools_before_first_call(
             raw_headers=raw_headers,
             client_ip=client_ip,
             record_listing=False,
+            enforce_rate_limits=False,
         )
     except Exception as e:  # noqa: BLE001  # best effort: resolution below answers as it did before
         verbose_logger.debug("MCP tools/call: listing %s before its first call failed: %s", server.name, e)
@@ -1896,10 +1988,12 @@ async def _execute_mcp_tool(
         original_tool_name = name
     else:
         # Resolve from tool name (MCP JSON-RPC or prefixed REST tool names).
-        mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+        mcp_server = global_mcp_server_manager.get_mcp_server_from_tool_name(  # rebind-ok: pre-existing rebinding on a rename-only line
+            name
+        )
         if mcp_server is None and requested_server is not None:
             for known_prefix in iter_known_server_prefixes(requested_server):
-                candidate = global_mcp_server_manager._get_mcp_server_from_tool_name(
+                candidate = global_mcp_server_manager.get_mcp_server_from_tool_name(
                     add_server_prefix_to_name(name, known_prefix)
                 )
                 if candidate is not None:
@@ -1952,7 +2046,9 @@ async def _execute_mcp_tool(
     # Resolve the MCP server early so BYOK checks and credential injection
     # apply to ALL dispatch paths (local tool registry AND managed MCP server).
     if mcp_server is None:
-        mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+        mcp_server = global_mcp_server_manager.get_mcp_server_from_tool_name(  # rebind-ok: pre-existing rebinding on a rename-only line
+            name
+        )
 
     client_auth_header: Final = mcp_auth_header
     if mcp_server:
@@ -2049,7 +2145,7 @@ async def _execute_mcp_tool(
         verbose_logger.debug("Executing local registry tool: %s", name)
         # The credential rides ContextVars because the tool function has its
         # headers baked into the closure at registration time.
-        auth_header_value, openapi_forwarded_headers, upstream_credential = _resolve_openapi_tool_auth(
+        auth_header_value, openapi_forwarded_headers, upstream_credential = resolve_openapi_tool_auth(
             mcp_server=mcp_server,
             mcp_auth_header=mcp_auth_header,
             mcp_server_auth_headers=mcp_server_auth_headers,
@@ -2068,15 +2164,15 @@ async def _execute_mcp_tool(
             forwarded_headers=openapi_forwarded_headers,
         )
 
-        _auth_token: Final = _request_auth_header.set(auth_header_value)
-        _extra_token: Final = _request_extra_headers.set(forwarded_headers)
-        _resolved_token: Final = _request_resolved_auth_headers.set(resolved_auth_headers)
+        _auth_token: Final = request_auth_header.set(auth_header_value)
+        _extra_token: Final = request_extra_headers.set(forwarded_headers)
+        _resolved_token: Final = request_resolved_auth_headers.set(resolved_auth_headers)
         try:
             response = await _handle_local_mcp_tool(name, arguments, wire_compat)
         finally:
-            _request_auth_header.reset(_auth_token)
-            _request_extra_headers.reset(_extra_token)
-            _request_resolved_auth_headers.reset(_resolved_token)
+            request_auth_header.reset(_auth_token)
+            request_extra_headers.reset(_extra_token)
+            request_resolved_auth_headers.reset(_resolved_token)
 
     # Try managed MCP server tool (the name is bare; the prefix boundary was
     # already resolved above against this server's registered prefixes)
@@ -2464,6 +2560,7 @@ async def mcp_get_prompt(
         user_api_key_auth=user_api_key_auth,
     )
 
+    await _enforce_mcp_server_rate_limit(user_api_key_auth, server)
     return await global_mcp_server_manager.get_prompt_from_server(
         server=server,
         user_api_key_auth=user_api_key_auth,
@@ -2517,6 +2614,7 @@ async def mcp_read_resource(
         user_api_key_auth=user_api_key_auth,
     )
 
+    await _enforce_mcp_server_rate_limit(user_api_key_auth, server)
     return await global_mcp_server_manager.read_resource_from_server(
         server=server,
         user_api_key_auth=user_api_key_auth,
@@ -2534,7 +2632,7 @@ def _get_standard_logging_mcp_tool_call(
     server_name: str | None,
     session_id: str | None = None,
 ) -> StandardLoggingMCPToolCall:
-    mcp_server: Final = global_mcp_server_manager._get_mcp_server_from_tool_name(
+    mcp_server: Final = global_mcp_server_manager.get_mcp_server_from_tool_name(
         add_server_prefix_to_name(name, server_name) if server_name else name
     )
     namespaced_tool_name: Final = f"{server_name}/{name}" if server_name else name
@@ -2548,7 +2646,7 @@ def _get_standard_logging_mcp_tool_call(
             namespaced_tool_name=namespaced_tool_name,
             mcp_session_id=session_id,
             mcp_auth_mode=mcp_server.auth_type,
-            mcp_server_resource=_redact_mcp_resource_url(mcp_server.url),
+            mcp_server_resource=redact_mcp_resource_url(mcp_server.url),
         )
     else:
         return StandardLoggingMCPToolCall(
@@ -3125,6 +3223,7 @@ class GatewayOperations:
                     if context.mcp_proxy_mode
                     else (ListPromptsRequest(), ListResourcesRequest(), ListResourceTemplatesRequest())
                 )
+                memo_token: Final = _mcp_server_admission_memo.set({})
                 tasks: Final = (
                     asyncio.create_task(
                         _execute_handle_list_tools(
@@ -3139,9 +3238,12 @@ class GatewayOperations:
                 try:
                     results: Final = await asyncio.gather(*tasks)
                 finally:
-                    for task in tasks:
-                        task.cancel()
-                    await asyncio.gather(*tasks, return_exceptions=True)
+                    try:
+                        for task in tasks:
+                            task.cancel()
+                        await asyncio.gather(*tasks, return_exceptions=True)
+                    finally:
+                        _mcp_server_admission_memo.reset(memo_token)
                 return build_discovery(
                     configured=configured_versions(),
                     revision=context.protocol_version or "2025-11-25",

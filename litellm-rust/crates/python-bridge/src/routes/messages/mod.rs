@@ -64,21 +64,13 @@ fn run_messages(
 }
 
 #[pyfunction]
-pub(crate) fn messages(
-    py: Python<'_>,
-    request: Bound<'_, PyAny>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Bound<'_, PyDict>,
-) -> PyResult<Py<PyAny>> {
-    run_messages(py, request, args, kwargs, false)
+pub(crate) fn messages(py: Python<'_>, call: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let call = super::NativeCall::extract(&call)?;
+    run_messages(py, call.bound.into_any(), call.args, call.kwargs, false)
 }
 
 #[pyfunction]
-pub(crate) fn amessages(
-    py: Python<'_>,
-    request: Bound<'_, PyAny>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Bound<'_, PyDict>,
-) -> PyResult<Py<PyAny>> {
-    run_messages(py, request, args, kwargs, true)
+pub(crate) fn amessages(py: Python<'_>, call: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    let call = super::NativeCall::extract(&call)?;
+    run_messages(py, call.bound.into_any(), call.args, call.kwargs, true)
 }

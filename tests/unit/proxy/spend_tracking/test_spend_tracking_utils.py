@@ -8,25 +8,21 @@ from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from typing_extensions import ReadOnly, TypedDict
+from pydantic import TypeAdapter
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
-from litellm.constants import (
-    LITELLM_TRUNCATED_PAYLOAD_FIELD,
-    LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
-    LITTELM_CLI_SERVICE_ACCOUNT_NAME,
-    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
-    MAX_SPEND_LOG_MODEL_NAME_LENGTH,
-    REDACTED_BY_LITELM_STRING,
-    SESSION_ID_OMITTED_METADATA_KEY,
-    UNKNOWN_MODEL_SPEND_LOG_MODEL,
-)
+import litellm.constants as litellm_constants
+import litellm.proxy.spend_tracking.spend_tracking_utils as spend_tracking_utils
+from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE, LITTELM_CLI_SERVICE_ACCOUNT_NAME, LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME, MAX_SPEND_LOG_MODEL_NAME_LENGTH, REDACTED_BY_LITELM_STRING, SESSION_ID_OMITTED_METADATA_KEY, UNKNOWN_MODEL_SPEND_LOG_MODEL
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.llms.base_llm.ocr.transformation import OCRResponse, OCRUsageInfo
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
+    _extract_usage_for_ocr_call,
     _get_messages_for_spend_logs_payload,
     _get_proxy_server_request_for_spend_logs_payload,
     _get_request_duration_ms,
@@ -34,10 +30,10 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_session_id_for_spend_log,
     _get_spend_logs_metadata,
     _get_vector_store_request_for_spend_logs_payload,
-    _is_master_key,
+    is_master_key,
     _redact_logged_api_key,
     _redact_prompt_leaks_in_error_string,
-    _sanitize_error_information_for_spend_logs,
+    sanitize_error_information_for_spend_logs,
     _sanitize_guardrail_information_for_spend_logs,
     _sanitize_request_body_for_spend_logs_payload,
     _scrub_raw_model_from_error_information,
@@ -517,6 +513,165 @@ def test_sanitize_request_body_for_spend_logs_payload_basic():
         "messages": [{"role": "user", "content": "Hello, how are you?"}],
     }
     assert _sanitize_request_body_for_spend_logs_payload(request_body) == request_body
+
+
+def test_large_request_no_truncation_threshold():
+    """
+    Test that MAX_STRING_LENGTH_PROMPT_IN_DB constant is used for request body sanitization
+    and that the new truncation logic keeps beginning (35%) and end (65%) of the string
+    """
+    from litellm.constants import (
+        MAX_STRING_LENGTH_PROMPT_IN_DB,
+        LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    )
+
+    # Create a large string that exceeds the threshold
+    # Use a pattern that allows us to verify beginning and end are preserved
+    start_pattern = "START" * 250  # 1250 chars
+    middle_pattern = "MIDDLE" * 200  # 1200 chars
+    end_pattern = "END" * 250  # 750 chars
+    large_content = start_pattern + middle_pattern + end_pattern
+
+    request_body = {
+        "messages": [{"role": "user", "content": large_content}],
+        "model": "gpt-5.5",
+    }
+
+    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+
+    # Verify the content was truncated
+    truncated_content = sanitized["messages"][0]["content"]
+
+    # Calculate expected character counts (35% start, 65% end)
+    expected_start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.35)
+    expected_end_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.65)
+
+    # Should keep first 35% of MAX_STRING_LENGTH_PROMPT_IN_DB chars
+    assert truncated_content.startswith(large_content[:expected_start_chars])
+
+    # Should keep last 65% of MAX_STRING_LENGTH_PROMPT_IN_DB chars
+    assert truncated_content.endswith(large_content[-expected_end_chars:])
+
+    # Should have truncation marker
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated_content
+    assert "skipped" in truncated_content
+
+
+def test_small_request_no_truncation():
+    """
+    Test that small strings are not truncated by MAX_STRING_LENGTH_PROMPT_IN_DB
+    """
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+
+    # Create a small string that's under the threshold
+    small_content = "x" * (MAX_STRING_LENGTH_PROMPT_IN_DB - 100)
+
+    request_body = {
+        "messages": [{"role": "user", "content": small_content}],
+        "model": "gpt-5.5",
+    }
+
+    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+
+    # Verify the content was NOT truncated
+    assert sanitized["messages"][0]["content"] == small_content
+    assert (
+        len(sanitized["messages"][0]["content"]) == MAX_STRING_LENGTH_PROMPT_IN_DB - 100
+    )
+
+
+def test_configurable_string_length_env_var(monkeypatch):
+    """
+    Test that MAX_STRING_LENGTH_PROMPT_IN_DB can be configured via environment variable
+    """
+    # Set environment variable to a custom value
+    monkeypatch.setenv("MAX_STRING_LENGTH_PROMPT_IN_DB", "1000")
+
+    # Import after setting env var to ensure it picks up the new value
+    import importlib
+    import litellm.constants
+    import litellm.proxy.spend_tracking.spend_tracking_utils
+
+    importlib.reload(litellm.constants)
+    importlib.reload(litellm.proxy.spend_tracking.spend_tracking_utils)
+
+    from litellm.constants import (
+        MAX_STRING_LENGTH_PROMPT_IN_DB,
+        LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    )
+    from litellm.proxy.spend_tracking.spend_tracking_utils import (
+        _sanitize_request_body_for_spend_logs_payload,
+    )
+
+    # Verify the constant was set to the env var value
+    assert MAX_STRING_LENGTH_PROMPT_IN_DB == 1000
+
+    # Test truncation with the custom value
+    large_content = "A" * 500 + "B" * 800 + "C" * 500  # 1800 chars total
+
+    request_body = {
+        "messages": [{"role": "user", "content": large_content}],
+        "model": "gpt-5.5",
+    }
+
+    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+
+    # Verify truncation occurred with 35% beginning and 65% end preserved
+    truncated_content = sanitized["messages"][0]["content"]
+    expected_start = int(1000 * 0.35)  # 350 chars from beginning
+    expected_end = int(1000 * 0.65)  # 650 chars from end
+
+    assert truncated_content.startswith(large_content[:expected_start])
+    assert truncated_content.endswith(large_content[-expected_end:])
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated_content
+    assert "skipped" in truncated_content
+    assert "800" in truncated_content  # Should mention skipped 800 chars
+
+
+def test_truncation_preserves_beginning_and_end():
+    """
+    Test that truncation preserves the beginning (35%) and end (65%) of content for better debugging
+    """
+    from litellm.constants import (
+        MAX_STRING_LENGTH_PROMPT_IN_DB,
+        LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    )
+
+    # Create content with distinct beginning, middle, and end
+    beginning = "BEGIN_" * 200  # 1200 chars
+    middle = "MIDDLE_" * 300  # 2100 chars
+    end = "_END" * 300  # 1200 chars
+    large_content = beginning + middle + end
+
+    request_body = {
+        "messages": [{"role": "user", "content": large_content}],
+        "model": "gpt-5.5",
+    }
+
+    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+    truncated_content = sanitized["messages"][0]["content"]
+
+    # Calculate expected splits (35% beginning, 65% end)
+    expected_start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.35)
+    expected_end_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.65)
+
+    # Check that beginning is preserved
+    expected_beginning = large_content[:expected_start_chars]
+    assert truncated_content.startswith(expected_beginning)
+
+    # Check that end is preserved
+    expected_end = large_content[-expected_end_chars:]
+    assert truncated_content.endswith(expected_end)
+
+    # Check truncation marker is present
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated_content
+    assert "skipped" in truncated_content
+
+    # Calculate expected skipped chars
+    total_chars = len(large_content)
+    kept_chars = expected_start_chars + expected_end_chars
+    expected_skipped = total_chars - kept_chars
+    assert str(expected_skipped) in truncated_content
 
 
 def test_sanitize_request_body_for_spend_logs_payload_long_string():
@@ -1324,7 +1479,7 @@ def test_get_logging_payload_persists_no_raw_model_for_a_prompt_shaped_moderatio
         model=_RAW_MODEL_WITH_PROMPT,
         llm_provider="openai",
     )
-    error_information: Final = _sanitize_error_information_for_spend_logs(
+    error_information: Final = sanitize_error_information_for_spend_logs(
         StandardLoggingPayloadSetup.get_error_information(
             original_exception=provider_rejection,
             traceback_str=(
@@ -1491,7 +1646,7 @@ async def test_api_key_preserved_through_failure_hook_to_database():
     If this test fails in CI/CD, the build MUST fail.
     """
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+    from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
     from litellm.proxy.utils import hash_token
 
     # Setup
@@ -1575,7 +1730,7 @@ async def test_api_key_preserved_through_failure_hook_to_database():
     exception = Exception("BadRequestError: Invalid parameter 'invalid_param'")
 
     # Execute the ACTUAL failure hook code path
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
         await logger.async_post_call_failure_hook(
@@ -2641,19 +2796,19 @@ class TestIsMasterKey:
 
     def test_none_api_key_returns_false(self):
         """Regression: _is_master_key(None, 'sk-master') should return False, not raise TypeError."""
-        assert _is_master_key(api_key=None, _master_key="sk-master-key") is False
+        assert is_master_key(api_key=None, _master_key="sk-master-key") is False
 
     def test_none_master_key_returns_false(self):
-        assert _is_master_key(api_key="sk-some-key", _master_key=None) is False
+        assert is_master_key(api_key="sk-some-key", _master_key=None) is False
 
     def test_both_none_returns_false(self):
-        assert _is_master_key(api_key=None, _master_key=None) is False
+        assert is_master_key(api_key=None, _master_key=None) is False
 
     def test_matching_key_returns_true(self):
-        assert _is_master_key(api_key="sk-master", _master_key="sk-master") is True
+        assert is_master_key(api_key="sk-master", _master_key="sk-master") is True
 
     def test_non_matching_key_returns_false(self):
-        assert _is_master_key(api_key="sk-other", _master_key="sk-master") is False
+        assert is_master_key(api_key="sk-other", _master_key="sk-master") is False
 
     def test_master_key_hash_is_rejected(self):
         """
@@ -2664,7 +2819,7 @@ class TestIsMasterKey:
 
         master = "sk-master-key-123"
         hashed = hash_token(master)
-        assert _is_master_key(api_key=hashed, _master_key=master) is False
+        assert is_master_key(api_key=hashed, _master_key=master) is False
 
 
 def test_sanitize_request_body_strips_secret_fields():
@@ -3047,7 +3202,7 @@ def test_sanitize_error_information_redacts_when_not_storing_prompts(
         ),
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     assert "leaked-prompt-content" not in sanitized["error_message"]
@@ -3072,7 +3227,7 @@ def test_sanitize_error_information_skips_redaction_when_storing_prompts(
         "error_message": ('OpenAIException - {"error":{"input":[{"role":"user","content":"kept"}]}}'),
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     # User opted in via store_prompts_in_spend_logs — no key-level redaction.
@@ -3099,7 +3254,7 @@ def test_sanitize_error_information_caps_size_regardless_of_prompt_flag(
         "error_message": huge_error,
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     assert len(sanitized["error_message"]) < len(huge_error)
@@ -3108,7 +3263,7 @@ def test_sanitize_error_information_caps_size_regardless_of_prompt_flag(
 
 
 def test_sanitize_error_information_none_passthrough():
-    assert _sanitize_error_information_for_spend_logs(None) is None
+    assert sanitize_error_information_for_spend_logs(None) is None
 
 
 @patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
@@ -3139,7 +3294,7 @@ def test_sanitize_error_information_reproduces_lit_2992(mock_should_store):
         "error_message": error_message,
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     assert huge_conversation_blob not in sanitized["error_message"]
@@ -3218,7 +3373,7 @@ def test_sanitize_error_information_redacts_traceback_when_not_storing_prompts(
         "error_message": "invalid request",
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     assert "tb-leaked-prompt" not in sanitized["traceback"]
@@ -3242,7 +3397,7 @@ def test_sanitize_error_information_skips_traceback_redaction_when_storing_promp
         "error_message": "invalid request",
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     assert "tb-kept" in sanitized["traceback"]
@@ -3358,7 +3513,7 @@ def test_sanitize_error_information_redacts_pydantic_assignment_form(
         ),
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     assert "leaked-via-pydantic-msg" not in sanitized["error_message"]
@@ -3383,7 +3538,7 @@ def test_sanitize_error_information_persists_no_raw_model_for_an_unknown_model_r
 ):
     error_information: Final = StandardLoggingPayloadSetup.get_error_information(original_exception=original_exception)
 
-    sanitized: Final = _sanitize_error_information_for_spend_logs(
+    sanitized: Final = sanitize_error_information_for_spend_logs(
         error_information, original_exception=original_exception
     )
 
@@ -5653,3 +5808,236 @@ def test_untrusted_agent_label_cannot_replace_verified_billing_identity(billing_
     )
     assert payload["agent_id"] == "header-selected-agent"
     assert payload["billing_agent_id"] == billing_agent
+
+
+class _OcrUsageInfoDict(TypedDict, total=False):
+    pages_processed: ReadOnly[int]
+    doc_size_bytes: ReadOnly[int]
+
+
+class _OcrResponseDict(TypedDict):
+    id: ReadOnly[str]
+    object: ReadOnly[str]
+    model: ReadOnly[str]
+    usage_info: ReadOnly[NotRequired[_OcrUsageInfoDict]]
+
+
+class _TokenUsageDict(TypedDict):
+    prompt_tokens: ReadOnly[int]
+    completion_tokens: ReadOnly[int]
+    total_tokens: ReadOnly[int]
+
+
+class _CompletionResponseDict(TypedDict):
+    id: ReadOnly[str]
+    object: ReadOnly[str]
+    model: ReadOnly[str]
+    usage: ReadOnly[_TokenUsageDict]
+
+
+class _LoggingMetadata(TypedDict, total=False):
+    user_api_key_user_id: ReadOnly[str]
+    user_api_key_team_id: ReadOnly[str]
+
+
+class _LoggingLitellmParams(TypedDict, total=False):
+    metadata: ReadOnly[_LoggingMetadata]
+
+
+class _LoggingKwargs(TypedDict):
+    model: ReadOnly[str]
+    call_type: ReadOnly[str]
+    litellm_params: ReadOnly[_LoggingLitellmParams]
+    response_cost: ReadOnly[float]
+
+
+class _AdditionalUsageValues(TypedDict, total=False):
+    pages_processed: ReadOnly[int | None]
+    doc_size_bytes: ReadOnly[int | None]
+
+
+class _SpendLogMetadata(TypedDict):
+    additional_usage_values: ReadOnly[_AdditionalUsageValues]
+
+
+_SPEND_LOG_METADATA: Final = TypeAdapter(_SpendLogMetadata)
+_OCR_LOGGED_AT: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+_OCR_RESPONSE_COST: Final = 0.05
+
+
+def _ocr_logging_kwargs(call_type: str = "ocr", metadata: _LoggingMetadata | None = None) -> _LoggingKwargs:
+    return _LoggingKwargs(
+        model="test-ocr-model",
+        call_type=call_type,
+        litellm_params=_LoggingLitellmParams() if metadata is None else _LoggingLitellmParams(metadata=metadata),
+        response_cost=_OCR_RESPONSE_COST,
+    )
+
+
+def _ocr_payload(
+    kwargs: _LoggingKwargs, response_obj: _OcrResponseDict | _CompletionResponseDict | OCRResponse
+) -> SpendLogsPayload:
+    return get_logging_payload(
+        kwargs=dict(kwargs),
+        response_obj=response_obj,
+        start_time=_OCR_LOGGED_AT,
+        end_time=_OCR_LOGGED_AT,
+    )
+
+
+def _additional_usage_values(payload: SpendLogsPayload) -> _AdditionalUsageValues:
+    return _SPEND_LOG_METADATA.validate_json(payload["metadata"])["additional_usage_values"]
+
+
+class TestExtractUsageForOCRCall:
+    def test_extract_usage_from_dict(self) -> None:
+        response_obj_dict: Final = {"usage_info": _OcrUsageInfoDict(pages_processed=5)}
+
+        usage: Final = _extract_usage_for_ocr_call(response_obj_dict, response_obj_dict)
+
+        assert usage == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "pages_processed": 5}
+
+    def test_extract_usage_from_pydantic_model(self) -> None:
+        response_obj: Final = OCRResponse(
+            pages=[],
+            model="test-ocr-model",
+            usage_info=OCRUsageInfo(pages_processed=10, doc_size_bytes=1024),
+        )
+
+        usage: Final = _extract_usage_for_ocr_call(response_obj, response_obj.model_dump())
+
+        assert usage["prompt_tokens"] == 0
+        assert usage["completion_tokens"] == 0
+        assert usage["total_tokens"] == 0
+        assert usage["pages_processed"] == 10
+        assert usage["doc_size_bytes"] == 1024
+
+    def test_extract_usage_with_object_attributes(self) -> None:
+        class _SimpleUsageInfo:
+            def __init__(self, pages_processed: int) -> None:
+                self.pages_processed = pages_processed
+
+        class _SimpleOCRResponse:
+            def __init__(self) -> None:
+                self.usage_info = _SimpleUsageInfo(pages_processed=3)
+
+        usage: Final = _extract_usage_for_ocr_call(_SimpleOCRResponse(), {})
+
+        assert usage == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "pages_processed": 3}
+
+    def test_extract_usage_missing_usage_info(self) -> None:
+        assert _extract_usage_for_ocr_call({}, {}) == {}
+
+    def test_extract_usage_empty_usage_info(self) -> None:
+        usage: Final = _extract_usage_for_ocr_call({"usage_info": {}}, {"usage_info": {}})
+
+        assert usage == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "pages_processed": 0}
+
+
+class TestGetLoggingPayloadOCR:
+    def test_ocr_call_with_dict_response(self) -> None:
+        payload: Final = _ocr_payload(
+            _ocr_logging_kwargs(),
+            {
+                "id": "ocr-test-123",
+                "object": "ocr",
+                "model": "test-ocr-model",
+                "usage_info": {"pages_processed": 7, "doc_size_bytes": 2048},
+            },
+        )
+
+        assert payload["call_type"] == "ocr"
+        assert payload["request_id"] == "ocr-test-123"
+        assert payload["prompt_tokens"] == 0
+        assert payload["completion_tokens"] == 0
+        assert payload["total_tokens"] == 0
+        assert payload["spend"] == _OCR_RESPONSE_COST
+        assert _additional_usage_values(payload)["pages_processed"] == 7
+        assert _additional_usage_values(payload)["doc_size_bytes"] == 2048
+
+    def test_aocr_call_with_pydantic_response(self) -> None:
+        payload: Final = _ocr_payload(
+            _ocr_logging_kwargs(call_type="aocr"),
+            OCRResponse(pages=[], model="test-ocr-model", usage_info=OCRUsageInfo(pages_processed=12)),
+        )
+
+        assert payload["call_type"] == "aocr"
+        assert payload["prompt_tokens"] == 0
+        assert payload["completion_tokens"] == 0
+        assert payload["total_tokens"] == 0
+        assert payload["spend"] == _OCR_RESPONSE_COST
+        assert _additional_usage_values(payload)["pages_processed"] == 12
+
+    def test_ocr_call_missing_usage_info(self) -> None:
+        payload: Final = _ocr_payload(
+            _ocr_logging_kwargs(),
+            {"id": "ocr-test-789", "object": "ocr", "model": "test-ocr-model"},
+        )
+
+        assert payload["call_type"] == "ocr"
+        assert payload["prompt_tokens"] == 0
+        assert payload["completion_tokens"] == 0
+        assert payload["total_tokens"] == 0
+        assert payload["spend"] == _OCR_RESPONSE_COST
+        assert "pages_processed" not in _additional_usage_values(payload)
+
+    def test_ocr_call_with_zero_pages(self) -> None:
+        payload: Final = _ocr_payload(
+            _ocr_logging_kwargs(),
+            {
+                "id": "ocr-test-000",
+                "object": "ocr",
+                "model": "test-ocr-model",
+                "usage_info": {"pages_processed": 0},
+            },
+        )
+
+        assert payload["call_type"] == "ocr"
+        assert payload["prompt_tokens"] == 0
+        assert payload["completion_tokens"] == 0
+        assert payload["total_tokens"] == 0
+        assert payload["spend"] == _OCR_RESPONSE_COST
+        assert _additional_usage_values(payload)["pages_processed"] == 0
+
+    def test_non_ocr_call_uses_token_based_usage(self) -> None:
+        payload: Final = _ocr_payload(
+            _LoggingKwargs(
+                model="gpt-5.5", call_type="completion", litellm_params=_LoggingLitellmParams(), response_cost=0.02
+            ),
+            {
+                "id": "completion-test-123",
+                "object": "chat.completion",
+                "model": "gpt-5.5",
+                "usage": {"prompt_tokens": 50, "completion_tokens": 100, "total_tokens": 150},
+            },
+        )
+
+        assert payload["call_type"] == "completion"
+        assert payload["prompt_tokens"] == 50
+        assert payload["completion_tokens"] == 100
+        assert payload["total_tokens"] == 150
+        assert payload["spend"] == 0.02
+        assert "pages_processed" not in _additional_usage_values(payload)
+
+    def test_ocr_with_metadata(self) -> None:
+        payload: Final = _ocr_payload(
+            _ocr_logging_kwargs(
+                metadata=_LoggingMetadata(user_api_key_user_id="test-user", user_api_key_team_id="test-team")
+            ),
+            {
+                "id": "ocr-metadata-test",
+                "object": "ocr",
+                "model": "test-ocr-model",
+                "usage_info": {"pages_processed": 5, "doc_size_bytes": 1024},
+            },
+        )
+
+        assert payload["call_type"] == "ocr"
+        assert payload["user"] == "test-user"
+        assert payload["team_id"] == "test-team"
+        assert payload["prompt_tokens"] == 0
+        assert payload["completion_tokens"] == 0
+        assert payload["total_tokens"] == 0
+        assert payload["spend"] == _OCR_RESPONSE_COST
+        assert _additional_usage_values(payload)["pages_processed"] == 5
+        assert _additional_usage_values(payload)["doc_size_bytes"] == 1024

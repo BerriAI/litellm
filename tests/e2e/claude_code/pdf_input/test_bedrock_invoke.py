@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import pytest
 
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
@@ -88,6 +89,16 @@ def _build_minimal_pdf(marker: str) -> bytes:
 
 
 @pytest.mark.covers("llm.messages.bedrock_invoke.pdf_input.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.BEDROCK,),
+        models=tuple(BEDROCK_INVOKE_MODELS),
+        capabilities=(Capability.PDF_INPUT,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_pdf_input_bedrock_invoke(compat_result, tmp_path):
     base_url, api_key = require_proxy(compat_result)
 

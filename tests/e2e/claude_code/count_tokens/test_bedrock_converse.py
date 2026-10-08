@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import pytest
 
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from claude_code._env import require_proxy_client
 from claude_code.http_probe import (
     assert_count_tokens_shape,
@@ -54,6 +55,15 @@ BEDROCK_CONVERSE_MODELS = [
 
 
 @pytest.mark.covers("llm.messages.bedrock_converse.count_tokens.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.COUNT_TOKENS,
+        providers=(Provider.BEDROCK,),
+        models=tuple(BEDROCK_CONVERSE_MODELS),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_count_tokens_bedrock_converse(compat_result):
     """Probe `/v1/messages/count_tokens` for each Bedrock (Converse) tier and
     assert the response shape."""

@@ -2,6 +2,7 @@ from collections.abc import Mapping
 from typing import Any, Final
 
 import orjson
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.router import Router
@@ -10,6 +11,8 @@ from litellm.types.videos.utils import (
     encode_character_id_with_provider,
     encode_video_id_with_provider,
 )
+
+_STR_MAPPING: Final = TypeAdapter(Mapping[str, object])
 
 
 def extract_model_from_target_model_names(target_model_names: Any) -> str | None:
@@ -54,12 +57,20 @@ def get_custom_provider_from_data(data: dict[str, Any]) -> str | None:
     return None
 
 
-def _hidden_param(response: object, key: str) -> str | None:
-    params: Final = getattr(response, "_hidden_params", None)
-    if not isinstance(params, dict):
+def _as_str_mapping(value: object) -> Mapping[str, object] | None:
+    try:
+        return _STR_MAPPING.validate_python(value)
+    except ValidationError:
         return None
-    value: Final = params.get(key)
+
+
+def _str_value(container: object, key: str) -> str | None:
+    value: Final = (_as_str_mapping(container) or {}).get(key)
     return value if isinstance(value, str) else None
+
+
+def _hidden_param(response: object, key: str) -> str | None:
+    return _str_value(getattr(response, "_hidden_params", None), key)
 
 
 def deployment_id_for_encoding(
@@ -72,12 +83,16 @@ def deployment_id_for_encoding(
     Encoding ``data["model"]`` there would embed the group, so a later status or
     content call could load-balance to a different deployment and fail to resolve.
     """
-    litellm_metadata: Final = data.get("litellm_metadata") or {}
-    model_info: Final = litellm_metadata.get("model_info") or {}
-    return _hidden_param(response, "model_id") or model_info.get("id") or pinned_deployment_id or data.get("model")
+    litellm_metadata: Final = _as_str_mapping(data.get("litellm_metadata")) or {}
+    routed_id: Final = _str_value(litellm_metadata.get("model_info"), "id")
+    return _hidden_param(response, "model_id") or routed_id or pinned_deployment_id or data.get("model")
 
 
-def route_to_encoded_deployment(llm_router: Router, model_id: str, data: dict[str, Any]) -> str | None:
+def route_to_encoded_deployment(
+    llm_router: Router,
+    model_id: str,
+    data: dict[str, Any],  # mutable-ok: sets the model group in the request body in place
+) -> str | None:
     """Route by the model group and return the deployment id to pin, if the id encodes one.
 
     ``data["model"]`` stays the group so guardrails, limits and budgets keyed on it apply.
@@ -85,7 +100,7 @@ def route_to_encoded_deployment(llm_router: Router, model_id: str, data: dict[st
     """
     resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id)
     if resolved_model:
-        data["model"] = resolved_model
+        data["model"] = resolved_model  # rebind-ok: the router routes by the model group in the request body
     if model_id in llm_router.model_names or not llm_router.has_model_id(model_id):
         return None
     return model_id
