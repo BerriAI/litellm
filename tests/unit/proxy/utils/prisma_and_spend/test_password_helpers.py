@@ -129,7 +129,7 @@ def test_hash_token_if_needed_handles_sk_prefix() -> None:
 
 def test_hash_token_if_needed_error_on_non_string() -> None:
     with pytest.raises(AttributeError):
-        hash_token_if_needed(None)  # type: ignore[arg-type]
+        hash_token_if_needed(None)  # pyright: ignore[reportArgumentType]  # intentional invalid input checks the error
 
 
 # ---------------------------------------------------------------------------
