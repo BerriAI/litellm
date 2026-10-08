@@ -1,5 +1,6 @@
 import base64
 import json
+import time
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Final, cast
@@ -2072,6 +2073,36 @@ async def test_store_batch_output_file_marks_fallback_after_four_transient_failu
     assert json.loads(managed_file_table.upsert_calls[0][1]["create"]["file_object"])[
         "litellm_details_fallback"
     ] is True
+
+
+@pytest.mark.asyncio
+async def test_store_batch_output_file_skips_lookup_for_fallback_written_moments_ago():
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = MagicMock()
+    router.get_deployment_credentials_with_provider.return_value = {"api_key": "key"}
+    proxy_managed_files, managed_file_table = _managed_files_with_fake_prisma(
+        _marked_fallback_file_row(created_at=int(time.time()))
+    )
+
+    with (
+        patch.object(proxy_server_module, "llm_router", router),
+        patch("litellm.afile_retrieve", new_callable=AsyncMock) as retrieve,
+    ):
+        await proxy_managed_files.store_batch_output_file(
+            unified_file_id="unified-output",
+            provider_file_id="provider-output",
+            model_id="model-123",
+            owner=UserAPIKeyAuth(user_id="user-123", team_id="team-123"),
+            litellm_parent_otel_span=None,
+            size_bytes=836,
+        )
+
+    retrieve.assert_not_awaited()
+    stored_object = managed_file_table.rows["unified-output"].file_object
+    assert stored_object is not None
+    assert (stored_object.bytes, stored_object.litellm_details_fallback) == (836, True)
 
 
 @pytest.mark.asyncio

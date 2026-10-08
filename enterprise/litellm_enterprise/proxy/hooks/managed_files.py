@@ -32,7 +32,11 @@ from litellm import Router, verbose_logger
 from litellm._internal_context import with_service_target
 from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
-from litellm.constants import BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS, MAX_FILE_LIST_LIMIT
+from litellm.constants import (
+    BATCH_OUTPUT_FILE_FALLBACK_RETRY_AFTER_SECONDS,
+    BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS,
+    MAX_FILE_LIST_LIMIT,
+)
 from litellm.files.types import FileRetrieveCallOptions, FileRetrieveProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
@@ -803,11 +807,19 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             model_id=model_id,
             model_name=model_name,
         )
-        provider_object: Final = await self._fetch_provider_file_object(
-            unified_file_id=unified_file_id,
-            provider_file_id=provider_file_id,
-            model_id=model_id,
-            model_name=model_name,
+        fallback_written_recently: Final = (
+            stored_object is not None
+            and time.time() - stored_object.created_at < BATCH_OUTPUT_FILE_FALLBACK_RETRY_AFTER_SECONDS
+        )
+        provider_object: Final = (
+            None
+            if fallback_written_recently
+            else await self._fetch_provider_file_object(
+                unified_file_id=unified_file_id,
+                provider_file_id=provider_file_id,
+                model_id=model_id,
+                model_name=model_name,
+            )
         )
         if stored_object is not None and provider_object is None and (
             size_bytes is None or stored_object.bytes == size_bytes
