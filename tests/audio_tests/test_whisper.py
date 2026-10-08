@@ -15,25 +15,19 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
 import litellm
-from litellm.integrations.custom_logger import CustomLogger
 
 # Get the current directory of the file being run
 pwd = os.path.dirname(os.path.realpath(__file__))
 print(pwd)
 
 file_path = os.path.join(pwd, "gettysburg.wav")
-file2_path = os.path.join(pwd, "eagle.wav")
 
 with open(file_path, "rb") as _f:
     _GETTYSBURG_BYTES = _f.read()
-with open(file2_path, "rb") as _f:
-    _EAGLE_BYTES = _f.read()
 
 
 def _audio_file():
     return ("gettysburg.wav", _GETTYSBURG_BYTES, "audio/wav")
-
-
 
 
 load_dotenv()
@@ -73,9 +67,3 @@ async def test_transcription_azure_whisper(response_format, timestamp_granularit
         response_format=response_format,
         timestamp_granularities=timestamp_granularities,
     )
-
-
-
-
-
-
