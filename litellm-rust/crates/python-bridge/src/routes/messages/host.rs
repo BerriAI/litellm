@@ -2,7 +2,7 @@ use crate::cache::{CacheCall, Cached, PythonCache, Selection};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
-use litellm_host_python::{InvokeError, PythonBinding, from_py, lookup, to_py};
+use litellm_host_python::{InvokeError, PythonBinding, from_py, present, to_py};
 use litellm_http::transport::Error as TransportError;
 use litellm_inference_messages::{
     Error, MessagesCall, MessagesSettings, MessagesShaping, messages_body,
@@ -89,12 +89,12 @@ fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
 /// The Python side of the Messages route: projects the prepared arguments and builds the
 /// public response, chunks and exceptions.
 pub(super) struct MessagesPythonHost {
-    request: Py<PyAny>,
+    request: Py<PyDict>,
     cache: PythonCache,
 }
 
 impl MessagesPythonHost {
-    pub(super) fn new(request: Py<PyAny>, asynchronous: bool) -> Self {
+    pub(super) fn new(request: Py<PyDict>, asynchronous: bool) -> Self {
         Self {
             request,
             cache: PythonCache::new(asynchronous),
@@ -107,9 +107,7 @@ impl MessagesPythonHost {
         arguments: &Bound<'_, PyDict>,
     ) -> PyResult<Result<MessagesCall, Error>> {
         let request = self.request.bind(py);
-        let argument = |name: &str| -> PyResult<Option<Bound<'_, PyAny>>> {
-            Ok(lookup(arguments, request, name)?.filter(|value| !value.is_none()))
-        };
+        let argument = |name: &str| present(arguments, request, name);
         let string = |name: &str| -> PyResult<Option<String>> {
             argument(name)?.map(|value| value.extract()).transpose()
         };
@@ -153,8 +151,7 @@ impl MessagesPythonHost {
     ) -> PyResult<Option<Map<String, Value>>> {
         let request = self.request.bind(py);
         let mapping = |name: &str| -> PyResult<Option<Map<String, Value>>> {
-            lookup(arguments, request, name)?
-                .filter(|value| !value.is_none())
+            present(arguments, request, name)?
                 .map(|value| from_py(&value))
                 .transpose()
         };
@@ -169,8 +166,7 @@ impl MessagesPythonHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> PyResult<Option<ProviderSpecificHeaders>> {
-        lookup(arguments, self.request.bind(py), "provider_specific_header")?
-            .filter(|value| !value.is_none())
+        present(arguments, self.request.bind(py), "provider_specific_header")?
             .map(|value| from_py(&value))
             .transpose()
     }
@@ -200,9 +196,9 @@ impl MessagesPythonHost {
         self.request
             .bind(py)
             .get_item("custom_llm_provider")
-            .and_then(|value| value.extract::<Option<String>>())
             .ok()
             .flatten()
+            .and_then(|value| value.extract::<Option<String>>().ok().flatten())
             .unwrap_or_else(|| "anthropic".into())
     }
 
