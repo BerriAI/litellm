@@ -1,4 +1,6 @@
-use litellm_llms_types::json_schema::{JsonSchema, JsonSchemaObject, JsonSchemaType};
+use litellm_llms_types::json_schema::{
+    JsonSchema, JsonSchemaItems, JsonSchemaObject, JsonSchemaType,
+};
 use rstest::rstest;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -36,7 +38,10 @@ fn recursive_schema_round_trips(#[case] wire: Value) {
             let JsonSchema::Object(nested) = &properties["nested"] else {
                 panic!("expected nested schema")
             };
-            let Some(JsonSchema::Object(items)) = nested.items.as_deref() else {
+            let Some(JsonSchemaItems::Schema(items)) = &nested.items else {
+                panic!("expected single items schema")
+            };
+            let JsonSchema::Object(items) = items.as_ref() else {
                 panic!("expected items schema")
             };
             assert_eq!(items.reference.as_deref(), Some("#/$defs/item"));
@@ -97,10 +102,35 @@ fn schema_object_round_trips_supported_keywords() {
 #[case::properties_shape(json!({"properties":[]}))]
 #[case::nested_schema(json!({"properties":{"name":7}}))]
 #[case::schema_type(json!({"type":["string",7]}))]
-#[case::items_shape(json!({"items":[]}))]
+#[case::items_shape(json!({"items":7}))]
+#[case::tuple_member(json!({"items":[{"type":"string"},7]}))]
+#[case::prefix_items_shape(json!({"prefixItems":{"type":"string"}}))]
 #[case::composite_shape(json!({"anyOf":["string"]}))]
 fn schemas_reject_malformed_known_keywords(#[case] wire: Value) {
     assert!(serde_json::from_value::<JsonSchema>(wire).is_err());
+}
+
+#[rstest]
+#[case::draft_07_tuple(json!({"type":"array","items":[{"type":"string"},true]}))]
+#[case::draft_2020_12_tuple(json!({"type":"array","prefixItems":[{"type":"string"},true],"items":false}))]
+fn tuple_schemas_expose_positional_members(#[case] wire: Value) {
+    let schema = round_trip::<JsonSchemaObject>(wire);
+    let members = match (&schema.items, &schema.prefix_items) {
+        (Some(JsonSchemaItems::Tuple(members)), None) => members,
+        (Some(JsonSchemaItems::Schema(rest)), Some(members)) => {
+            assert_eq!(rest.as_ref(), &JsonSchema::Boolean(false));
+            members
+        }
+        _ => panic!("expected positional members"),
+    };
+    let [JsonSchema::Object(first), JsonSchema::Boolean(true)] = members.as_slice() else {
+        panic!("expected string schema then true");
+    };
+    assert_eq!(
+        first.schema_type,
+        Some(JsonSchemaType::Name("string".into()))
+    );
+    assert!(schema.extra.is_empty());
 }
 
 #[rstest]

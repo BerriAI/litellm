@@ -15,6 +15,13 @@ pub enum JsonSchemaType {
     Names(Vec<String>),
 }
 
+#[macro_rules_attribute::apply(wire_type)]
+#[serde(untagged)]
+pub enum JsonSchemaItems {
+    Schema(Box<JsonSchema>),
+    Tuple(Vec<JsonSchema>),
+}
+
 #[serde_with::skip_serializing_none]
 #[macro_rules_attribute::apply(wire_type)]
 #[derive(Default)]
@@ -25,7 +32,9 @@ pub struct JsonSchemaObject {
     pub required: Option<Vec<String>>,
     #[serde(rename = "additionalProperties")]
     pub additional_properties: Option<Box<JsonSchema>>,
-    pub items: Option<Box<JsonSchema>>,
+    pub items: Option<JsonSchemaItems>,
+    #[serde(rename = "prefixItems")]
+    pub prefix_items: Option<Vec<JsonSchema>>,
     #[serde(rename = "$defs")]
     pub defs: Option<IndexMap<String, JsonSchema>>,
     #[serde(rename = "$ref")]

@@ -281,3 +281,51 @@ pub enum ContainerReference {
     Id(String),
     Parameters(Box<MessagesContainer>),
 }
+
+#[serde_with::skip_serializing_none]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
+pub struct MessagesDiagnosticsParam {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "::serde_with::rust::double_option"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
+    pub previous_message_id: Option<Option<String>>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[serde_with::skip_serializing_none]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
+pub struct MessagesDiagnostics {
+    pub cache_miss_reason: Option<Recognized<CacheMissReason>>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[macro_rules_attribute::apply(wire_type)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CacheMissReason {
+    ModelChanged(CacheMissedTokens),
+    SystemChanged(CacheMissedTokens),
+    ToolsChanged(CacheMissedTokens),
+    MessagesChanged(CacheMissedTokens),
+    PreviousMessageNotFound {
+        #[serde(flatten)]
+        extra: Map<String, Value>,
+    },
+    Unavailable {
+        #[serde(flatten)]
+        extra: Map<String, Value>,
+    },
+}
+
+#[macro_rules_attribute::apply(wire_type)]
+pub struct CacheMissedTokens {
+    pub cache_missed_input_tokens: u64,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}

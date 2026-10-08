@@ -590,11 +590,24 @@ pub struct McpToolUseBlock {
 #[macro_rules_attribute::apply(wire_type)]
 pub struct McpToolResultBlock {
     pub tool_use_id: String,
-    pub content: Option<BlockContent>,
+    pub content: Option<McpToolResultContent>,
     pub is_error: Option<bool>,
     pub cache_control: Option<CacheControl>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+#[macro_rules_attribute::apply(wire_type)]
+#[serde(untagged)]
+pub enum McpToolResultContent {
+    Text(String),
+    Blocks(Vec<McpToolResultText>),
+}
+
+#[macro_rules_attribute::apply(wire_type)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum McpToolResultText {
+    Text(TextBlock),
 }
 
 #[macro_rules_attribute::apply(wire_type)]

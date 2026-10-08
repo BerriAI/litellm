@@ -1,15 +1,16 @@
 use litellm_llms_types::formats::messages::{
     AdvisorToolResultContent, AllowedCaller, BashCodeExecutionOutput,
     BashCodeExecutionToolResultContent, BlockContent, BrowserStateChange, BuiltinMessagesTool,
-    Citation, CodeExecutionOutput, CodeExecutionToolResultContent, ContainerReference,
-    ContentSource, ContextManagementResponse, ContextTrigger, CustomTool, CustomToolType,
-    FallbackTrigger, McpServer, MessageRole, MessageType, MessagesCompaction, MessagesContainer,
-    MessagesContentPart, MessagesMetadata, MessagesToolParam, MessagesUsage, OutputFormat,
-    ResponseInclusion, Safeguard, SkillType, StopDetails, StopDetailsType, StopReason,
-    TextEditorCodeExecutionToolResultContent, TextEditorFileType, ToolCaller, ToolChange,
-    ToolChangeTarget, ToolChoice, ToolChoiceType, ToolResultUrlSource, ToolSearchReference,
-    ToolSearchToolResultContent, UrlSourceToolReference, UsageIterationType, UserInputUrlSource,
-    WebFetchDocument, WebFetchToolResultContent, WebSearchToolResultContent,
+    CacheMissReason, Citation, CodeExecutionOutput, CodeExecutionToolResultContent,
+    ContainerReference, ContentSource, ContextManagementResponse, ContextTrigger, CustomTool,
+    CustomToolType, FallbackTrigger, McpServer, McpToolResultContent, McpToolResultText,
+    MessageRole, MessageType, MessagesCompaction, MessagesContainer, MessagesContentPart,
+    MessagesDiagnostics, MessagesDiagnosticsParam, MessagesMetadata, MessagesToolParam,
+    MessagesUsage, OutputFormat, ResponseInclusion, Safeguard, SkillType, StopDetails,
+    StopDetailsType, StopReason, TextEditorCodeExecutionToolResultContent, TextEditorFileType,
+    ToolCaller, ToolChange, ToolChangeTarget, ToolChoice, ToolChoiceType, ToolResultUrlSource,
+    ToolSearchReference, ToolSearchToolResultContent, UrlSourceToolReference, UsageIterationType,
+    UserInputUrlSource, WebFetchDocument, WebFetchToolResultContent, WebSearchToolResultContent,
 };
 use litellm_llms_types::json_schema::JsonSchema;
 use litellm_llms_types::recognized::Recognized;
@@ -1022,8 +1023,22 @@ fn beta_blocks_expose_mcp_compaction_and_fallback_fields() {
     assert_eq!(mcp_result.is_error, Some(true));
     assert_eq!(
         mcp_result.content,
-        Some(BlockContent::Text("failed".into()))
+        Some(McpToolResultContent::Text("failed".into()))
     );
+    let MessagesContentPart::McpToolResult(text_result) = part(json!({
+        "type":"mcp_tool_result",
+        "tool_use_id":"mcptoolu_3",
+        "content":[{"type":"text","text":"found"}]
+    })) else {
+        panic!("expected MCP tool result");
+    };
+    let Some(McpToolResultContent::Blocks(blocks)) = &text_result.content else {
+        panic!("expected MCP text blocks");
+    };
+    let [McpToolResultText::Text(text)] = blocks.as_slice() else {
+        panic!("expected one text block");
+    };
+    assert_eq!(text.text, "found");
     let MessagesContentPart::McpToolResult(empty_result) =
         part(json!({"type":"mcp_tool_result","tool_use_id":"mcptoolu_2"}))
     else {
@@ -1187,6 +1202,109 @@ fn tool_params_reject_unknown_tool_types() {
     assert!(
         serde_json::from_value::<MessagesToolParam>(
             json!({"type":"future_tool","name":"lookup","input_schema":{}})
+        )
+        .is_err()
+    );
+}
+
+#[rstest]
+#[case::image(json!([{"type":"image","source":{"type":"url","url":"https://example.test/a.png"}}]))]
+#[case::tool_reference(json!([{"type":"tool_reference","tool_name":"lookup"}]))]
+#[case::untagged(json!([{"text":"found"}]))]
+fn mcp_tool_result_content_rejects_non_text_blocks(#[case] content: Value) {
+    assert!(
+        serde_json::from_value::<MessagesContentPart>(
+            json!({"type":"mcp_tool_result","tool_use_id":"mcptoolu_1","content":content})
+        )
+        .is_err()
+    );
+}
+
+#[rstest]
+#[case::model(json!({"type":"model_changed","cache_missed_input_tokens":12}), Some(12))]
+#[case::system(json!({"type":"system_changed","cache_missed_input_tokens":3}), Some(3))]
+#[case::tools(json!({"type":"tools_changed","cache_missed_input_tokens":0}), Some(0))]
+#[case::messages(json!({"type":"messages_changed","cache_missed_input_tokens":9}), Some(9))]
+#[case::not_found(json!({"type":"previous_message_not_found"}), None)]
+#[case::unavailable(json!({"type":"unavailable"}), None)]
+fn diagnostics_expose_cache_miss_reason(#[case] reason: Value, #[case] missed: Option<u64>) {
+    let diagnostics = round_trip::<MessagesDiagnostics>(json!({"cache_miss_reason":reason}));
+    let Some(Recognized::Known(reason)) = &diagnostics.cache_miss_reason else {
+        panic!("expected known cache miss reason");
+    };
+    let actual = match reason {
+        CacheMissReason::ModelChanged(tokens)
+        | CacheMissReason::SystemChanged(tokens)
+        | CacheMissReason::ToolsChanged(tokens)
+        | CacheMissReason::MessagesChanged(tokens) => {
+            assert!(tokens.extra.is_empty());
+            Some(tokens.cache_missed_input_tokens)
+        }
+        CacheMissReason::PreviousMessageNotFound { extra }
+        | CacheMissReason::Unavailable { extra } => {
+            assert!(extra.is_empty());
+            None
+        }
+    };
+    assert_eq!(actual, missed);
+    assert!(diagnostics.extra.is_empty());
+}
+
+#[rstest]
+#[case::model(json!({"type":"model_changed","cache_missed_input_tokens":12}), "model_changed")]
+#[case::system(json!({"type":"system_changed","cache_missed_input_tokens":12}), "system_changed")]
+#[case::tools(json!({"type":"tools_changed","cache_missed_input_tokens":12}), "tools_changed")]
+#[case::messages(json!({"type":"messages_changed","cache_missed_input_tokens":12}), "messages_changed")]
+fn cache_miss_reason_variants_keep_their_tags(#[case] reason: Value, #[case] tag: &str) {
+    let parsed: CacheMissReason = serde_json::from_value(reason).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap()["type"], json!(tag));
+}
+
+#[rstest]
+#[case::pending(json!({"cache_miss_reason":null}))]
+#[case::future_reason(json!({"cache_miss_reason":{"type":"future_changed","cache_missed_input_tokens":1}}))]
+#[case::missing_tokens(json!({"cache_miss_reason":{"type":"model_changed"}}))]
+fn diagnostics_keep_pending_and_unmodeled_reasons(#[case] wire: Value) {
+    let diagnostics: MessagesDiagnostics = serde_json::from_value(wire.clone()).unwrap();
+    match &diagnostics.cache_miss_reason {
+        None => assert_eq!(serde_json::to_value(&diagnostics).unwrap(), json!({})),
+        Some(Recognized::Unrecognized(kept)) => {
+            assert_eq!(kept, &wire["cache_miss_reason"]);
+            assert_eq!(serde_json::to_value(&diagnostics).unwrap(), wire);
+        }
+        Some(Recognized::Known(reason)) => panic!("unexpected known reason {reason:?}"),
+    }
+}
+
+#[rstest]
+#[case::previous(json!({"previous_message_id":"msg_1"}), Some(Some("msg_1")))]
+#[case::first_turn(json!({"previous_message_id":null}), Some(None))]
+#[case::absent(json!({}), None)]
+fn diagnostics_param_distinguishes_null_from_absent_previous_message(
+    #[case] wire: Value,
+    #[case] expected: Option<Option<&str>>,
+) {
+    let param = round_trip::<MessagesDiagnosticsParam>(wire);
+    assert_eq!(
+        param.previous_message_id.as_ref().map(Option::as_deref),
+        expected
+    );
+    assert!(param.extra.is_empty());
+}
+
+#[rstest]
+fn diagnostics_param_rejects_non_string_previous_message() {
+    assert!(
+        serde_json::from_value::<MessagesDiagnosticsParam>(json!({"previous_message_id":7}))
+            .is_err()
+    );
+}
+
+#[rstest]
+fn cache_miss_reason_rejects_non_numeric_tokens() {
+    assert!(
+        serde_json::from_value::<CacheMissReason>(
+            json!({"type":"model_changed","cache_missed_input_tokens":"many"})
         )
         .is_err()
     );

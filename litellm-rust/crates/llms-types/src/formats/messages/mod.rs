@@ -12,9 +12,10 @@ pub use content::{
     CitationsConfig, CodeExecutionOutput, CodeExecutionResult, CodeExecutionToolResultContent,
     CompactionBlock, ContainerUploadBlock, ContentBlockCitation, ContentSource, DocumentBlock,
     EncryptedCodeExecutionResult, FallbackBlock, FallbackModel, FallbackTrigger, ImageBlock,
-    McpListedTool, McpToolListingBlock, McpToolResultBlock, McpToolUseBlock, MessagesContentPart,
-    PageCitation, RedactedThinkingBlock, SearchResultBlock, SearchResultCitation, ServerToolError,
-    ServerToolResultBlock, ServerToolUseBlock, TextBlock, TextEditorCodeExecutionToolResultContent,
+    McpListedTool, McpToolListingBlock, McpToolResultBlock, McpToolResultContent,
+    McpToolResultText, McpToolUseBlock, MessagesContentPart, PageCitation, RedactedThinkingBlock,
+    SearchResultBlock, SearchResultCitation, ServerToolError, ServerToolResultBlock,
+    ServerToolUseBlock, TextBlock, TextEditorCodeExecutionToolResultContent,
     TextEditorCreateResult, TextEditorFileType, TextEditorStrReplaceResult, TextEditorViewResult,
     ThinkingBlock, ToolCaller, ToolChange, ToolChangeBlock, ToolChangeTarget, ToolReferenceBlock,
     ToolResultBlock, ToolSearchReference, ToolSearchResult, ToolSearchToolResultContent,
@@ -23,10 +24,11 @@ pub use content::{
     WebSearchToolResultContent,
 };
 pub use metadata::{
-    AppliedEdit, CompactionType, ContainerReference, ContainerSkill, ContextManagementResponse,
-    McpServer, McpServerType, McpToolConfiguration, MessageRole, MessageType, MessagesCompaction,
-    MessagesContainer, MessagesMetadata, OutputFormat, OutputFormatType, Safeguard, SkillType,
-    StopDetails, StopDetailsType, StopReason,
+    AppliedEdit, CacheMissReason, CacheMissedTokens, CompactionType, ContainerReference,
+    ContainerSkill, ContextManagementResponse, McpServer, McpServerType, McpToolConfiguration,
+    MessageRole, MessageType, MessagesCompaction, MessagesContainer, MessagesDiagnostics,
+    MessagesDiagnosticsParam, MessagesMetadata, OutputFormat, OutputFormatType, Safeguard,
+    SkillType, StopDetails, StopDetailsType, StopReason,
 };
 pub use request::{
     AdaptiveThinking, CacheControl, ContentBlock, ContentBlockType, ContextEdit, ContextManagement,
