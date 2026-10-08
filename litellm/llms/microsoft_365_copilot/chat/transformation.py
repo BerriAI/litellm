@@ -1,5 +1,10 @@
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Final, Literal, cast
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Literal,
+    cast,  # noqa: TID251  # AllMessageValues variants are read-only TypedDict mappings
+)
 
 import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError

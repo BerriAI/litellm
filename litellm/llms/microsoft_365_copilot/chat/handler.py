@@ -1,6 +1,10 @@
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Final, Protocol, cast
+from typing import (
+    Final,
+    Protocol,
+    cast,  # noqa: TID251  # adapter protocols cover pluggable logging and untyped HTTP methods
+)
 from urllib.parse import quote
 
 import httpx
