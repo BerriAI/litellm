@@ -5041,7 +5041,7 @@ def test_eager_input_streaming_tool_reaches_bedrock_converse_as_beta():
 
 
 def test_translate_anthropic_messages_preserves_tool_result_is_error():
-    messages = [
+    messages: Final = [
         AnthropicMessagesUserMessageParam(
             role="user",
             content=[
@@ -5055,18 +5055,22 @@ def test_translate_anthropic_messages_preserves_tool_result_is_error():
         ),
     ]
 
-    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(messages=messages)
+    result: Final = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(messages=messages)
 
-    tool_messages = [m for m in result if isinstance(m, dict) and m.get("role") == "tool"]
+    tool_messages: Final = [m for m in result if isinstance(m, dict) and m.get("role") == "tool"]
     assert len(tool_messages) == 1
     # the error bit must survive the first hop so downstream provider
     # translations (e.g. Gemini's functionResponse error) can restore it
-    assert tool_messages[0]["is_error"] is True
-    assert tool_messages[0]["tool_call_id"] == "toolu_error"
+    assert tool_messages[0] == {
+        "role": "tool",
+        "tool_call_id": "toolu_error",
+        "content": "ToolNotFound: get_weather is not available",
+        "is_error": True,
+    }
 
 
 def test_translate_anthropic_messages_omits_is_error_for_plain_tool_results():
-    messages = [
+    messages: Final = [
         AnthropicMessagesUserMessageParam(
             role="user",
             content=[
@@ -5079,9 +5083,13 @@ def test_translate_anthropic_messages_omits_is_error_for_plain_tool_results():
         ),
     ]
 
-    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(messages=messages)
+    result: Final = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(messages=messages)
 
-    tool_messages = [m for m in result if isinstance(m, dict) and m.get("role") == "tool"]
+    tool_messages: Final = [m for m in result if isinstance(m, dict) and m.get("role") == "tool"]
     assert len(tool_messages) == 1
     # non-error tool results keep their existing shape byte-for-byte
-    assert "is_error" not in tool_messages[0]
+    assert tool_messages[0] == {
+        "role": "tool",
+        "tool_call_id": "toolu_ok",
+        "content": "Sunny, 75°F",
+    }

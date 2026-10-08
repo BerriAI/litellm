@@ -529,11 +529,8 @@ class LiteLLMAnthropicMessagesAdapter:
                                 role="tool",
                                 tool_call_id=content.get("tool_use_id", ""),
                                 content=self._tool_result_content(content.get("content")),
+                                **({"is_error": True} if content.get("is_error") is True else {}),
                             )
-                            if content.get("is_error") is True:
-                                # carry the error bit on the intermediate tool
-                                # message; downstream translations restore it
-                                tool_result["is_error"] = True
                             self._add_cache_control_if_applicable(content, tool_result, model)
                             tool_message_list.append(tool_result)
 
