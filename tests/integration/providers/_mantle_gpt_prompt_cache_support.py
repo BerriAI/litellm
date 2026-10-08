@@ -920,6 +920,7 @@ MALFORMED_POINTS: Final[dict[str, JsonValue]] = {
     "string-list": ["system"],
     "no-location": [{"role": "system"}],
 }
+MIXED_POINTS: Final[list[JsonValue]] = ["system", *SYSTEM_POINT, 3]
 
 
 Step = tuple[Endpoint, bool, str]

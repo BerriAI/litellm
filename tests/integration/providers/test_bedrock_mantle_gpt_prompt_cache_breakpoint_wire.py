@@ -5,7 +5,7 @@ from urllib.parse import urlsplit
 
 import pytest
 from integration._support.client import Gateway, eventually
-from integration._support.wire import wire_server
+from integration._support.wire import Request, wire_server
 from integration.providers._mantle_gpt_prompt_cache_support import (
     ANTHROPIC_PATH,
     AZURE,
@@ -24,6 +24,7 @@ from integration.providers._mantle_gpt_prompt_cache_support import (
     ITEMS,
     MALFORMED_POINTS,
     MAX_TOKENS,
+    MIXED_POINTS,
     NO_CACHE,
     ODD_FLAGS,
     SYSTEM,
@@ -137,6 +138,17 @@ def test_b15_to_b17_a_bare_deployment_name_with_its_provider_reads_the_provider_
         assert_priced_row(success_row(name, marker), GPT)
 
 
+def assert_anthropic_marked_wire(received: Request, marker: str) -> None:
+    body: Final = body_of(received)
+    assert urlsplit(received.target).path == ANTHROPIC_PATH, received.target
+    assert body["system"] == [{"type": "text", "text": SYSTEM, "cache_control": EPHEMERAL}], received.body
+    assert body["messages"] == [{"role": "user", "content": [{"type": "text", "text": prompt_text(marker)}]}], (
+        received.body
+    )
+    assert "prompt_cache_options" not in body, received.body
+    assert "prompt_cache_breakpoint" not in received.body.decode(), received.body
+
+
 @pytest.mark.parametrize("endpoint", ["messages", "chat"])
 def test_b5_b6_claude_on_mantle_keeps_the_anthropic_dialect(gateway: Gateway, endpoint: Endpoint) -> None:
     marker: Final = fresh_marker()
@@ -144,14 +156,7 @@ def test_b5_b6_claude_on_mantle_keeps_the_anthropic_dialect(gateway: Gateway, en
         name: Final = mantle_deployment(gateway, scenario, wire, CLAUDE)
         outcome, received = observe(gateway, wire, endpoint, request_body(endpoint, name, prompt_text(marker)))
         assert_answered(outcome, marker)
-        body: Final = body_of(received)
-        assert urlsplit(received.target).path == ANTHROPIC_PATH, received.target
-        assert body["system"] == [{"type": "text", "text": SYSTEM, "cache_control": EPHEMERAL}], received.body
-        assert body["messages"] == [{"role": "user", "content": [{"type": "text", "text": prompt_text(marker)}]}], (
-            received.body
-        )
-        assert "prompt_cache_options" not in body, received.body
-        assert "prompt_cache_breakpoint" not in received.body.decode(), received.body
+        assert_anthropic_marked_wire(received, marker)
         success_row(name, marker, outcome.response_id)
 
 
@@ -379,6 +384,19 @@ def test_d13_an_odd_typed_deployment_flag_never_opts_a_mantle_row_in(
         assert breakpoint_count(body) == 0, (label, received.body)
         assert "prompt_cache_options" not in body, (label, received.body)
         success_row(name, marker)
+
+
+@pytest.mark.parametrize("endpoint", ENDPOINTS)
+def test_d14_a_point_beside_junk_entries_still_marks_the_anthropic_dialect(
+    gateway: Gateway, endpoint: Endpoint
+) -> None:
+    marker: Final = fresh_marker()
+    with wire_server(mantle_peer()) as wire, gateway.scenario() as scenario:
+        name: Final = mantle_deployment(gateway, scenario, wire, CLAUDE, points=MIXED_POINTS)
+        outcome, received = observe(gateway, wire, endpoint, request_body(endpoint, name, prompt_text(marker)))
+        assert_answered(outcome, marker)
+        assert_anthropic_marked_wire(received, marker)
+        success_row(name, marker, outcome.response_id)
 
 
 def test_e1_client_breakpoint_prompt_cache_key_and_explicit_mode_pass_through_with_no_second_breakpoint(
