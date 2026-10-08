@@ -1,4 +1,5 @@
 import json
+from itertools import chain
 from typing import Final, Mapping, cast
 
 import httpx
@@ -336,11 +337,8 @@ def test_anthropic_thinking_output_stream(case: _Case, respx_mock: MockRouter) -
         and delta.thinking_blocks
         and isinstance(getattr(delta, "reasoning_content", None), str)
     )
-    signatures: Final = tuple(
-        cast(Mapping[str, JsonValue], block).get("signature")
-        for delta in thinking_deltas
-        for block in cast(list[object], delta.thinking_blocks)
-    )
+    blocks: Final = chain.from_iterable(cast(list[object], delta.thinking_blocks) for delta in thinking_deltas)
+    signatures: Final = tuple(cast(Mapping[str, JsonValue], block).get("signature") for block in blocks)
     assert _thinking_param(case, _request_body(route)) == _THINKING
     assert not any(delta.tool_calls for delta in deltas)
     assert "".join(cast(str, delta.reasoning_content) for delta in thinking_deltas) == _REASONING
