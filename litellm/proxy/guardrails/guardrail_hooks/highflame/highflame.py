@@ -160,9 +160,13 @@ class HighflameGuardrail(CustomGuardrail):
         self._token_lock: asyncio.Lock = asyncio.Lock()
 
         if "supported_event_hooks" not in kwargs:
-            kwargs["supported_event_hooks"] = list(_SUPPORTED_EVENT_HOOKS)  # rebind-ok: per-call kwargs dict
+            kwargs["supported_event_hooks"] = self.get_supported_event_hooks()  # rebind-ok: per-call kwargs dict
 
         super().__init__(timeout=timeout if timeout is not None else _DEFAULT_TIMEOUT_SECONDS, **kwargs)
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:  # mutable-ok: parent's signature
+        return list(_SUPPORTED_EVENT_HOOKS)
 
     @log_guardrail_information
     async def apply_guardrail(
