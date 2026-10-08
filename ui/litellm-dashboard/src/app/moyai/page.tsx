@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useMemo, useSyncExternalStore } from "react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import Navbar from "@/components/navbar";
@@ -15,32 +15,41 @@ function MoyaiPageContent() {
   const { accessToken, userRole } = useAuthorized();
   const { data: uiSettings, isLoading, refetch } = useUISettings();
 
-  const [connectedParams, setConnectedParams] = useState<{ keyAlias: string | null; models: number | null } | null>(
-    null,
+  const parsed = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false,
   );
-  const [parsed, setParsed] = useState(false);
+  const connectedParams = useMemo(() => {
+    if (!parsed) {
+      return null;
+    }
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("moyai_connected") !== "1") {
+      return null;
+    }
+    const models = Number(params.get("models"));
+    return {
+      keyAlias: params.get("key_alias"),
+      models: Number.isFinite(models) && params.get("models") !== null ? models : null,
+    };
+  }, [parsed]);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("moyai_connected") === "1") {
-      const models = Number(params.get("models"));
-      setConnectedParams({
-        keyAlias: params.get("key_alias"),
-        models: Number.isFinite(models) && params.get("models") !== null ? models : null,
-      });
+    if (connectedParams) {
       window.history.replaceState(null, "", window.location.pathname);
       refetch();
     }
-    setParsed(true);
-  }, [refetch]);
+  }, [connectedParams, refetch]);
 
   const moyaiUrl = (uiSettings?.values?.moyai_url as string | undefined) ?? null;
 
+  const shouldOpenMoyai = parsed && !connectedParams && !isLoading && moyaiUrl;
   useEffect(() => {
-    if (parsed && !connectedParams && !isLoading && moyaiUrl) {
-      window.location.replace(moyaiUrl);
+    if (shouldOpenMoyai) {
+      window.location.replace(moyaiUrl as string);
     }
-  }, [parsed, connectedParams, isLoading, moyaiUrl]);
+  }, [shouldOpenMoyai, moyaiUrl]);
 
   const onQuickConnect = async (url: string) => {
     const response = await startMoyaiQuickConnect(accessToken ?? "", url, window.location.origin + uiHref("moyai"));

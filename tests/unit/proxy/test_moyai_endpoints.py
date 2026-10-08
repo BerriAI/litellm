@@ -29,7 +29,9 @@ async def test_start_rejects_non_admin(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with pytest.raises(HTTPException) as exc:
         await moyai_connect_start(
-            _request(), MoyaiConnectStartRequest(moyai_url="https://moyai.example.com", return_to="http://localhost:3000/ui/moyai"), actor
+            _request(),
+            MoyaiConnectStartRequest(moyai_url="https://moyai.example.com", return_to="http://localhost:3000/ui/moyai"),
+            actor,
         )
     assert exc.value.status_code == 403
 
@@ -44,7 +46,9 @@ async def test_start_requires_master_key(monkeypatch: pytest.MonkeyPatch) -> Non
 
     with pytest.raises(HTTPException) as exc:
         await moyai_connect_start(
-            _request(), MoyaiConnectStartRequest(moyai_url="https://moyai.example.com", return_to="http://localhost:3000/ui/moyai"), _admin()
+            _request(),
+            MoyaiConnectStartRequest(moyai_url="https://moyai.example.com", return_to="http://localhost:3000/ui/moyai"),
+            _admin(),
         )
     assert exc.value.status_code == 400
     assert "LITELLM_MASTER_KEY" in exc.value.detail
@@ -85,7 +89,9 @@ async def _exchange_env(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(proxy_server, "master_key", "sk-master")
     monkeypatch.setattr(proxy_server, "llm_router", None)
-    user_api_key_cache = SimpleNamespace(async_get_cache=AsyncMock(side_effect=_get), async_set_cache=AsyncMock(side_effect=_set))
+    user_api_key_cache = SimpleNamespace(
+        async_get_cache=AsyncMock(side_effect=_get), async_set_cache=AsyncMock(side_effect=_set)
+    )
     monkeypatch.setattr(proxy_server, "user_api_key_cache", user_api_key_cache)
 
     prisma = MagicMock()
@@ -183,8 +189,14 @@ async def test_exchange_rejects_expired_code(monkeypatch: pytest.MonkeyPatch) ->
 
     await _exchange_env(monkeypatch)
     payload = json.dumps(
-        {"moyai_origin": "https://moyai.example.com", "user_id": "admin-user", "exp": int(time.time()) - 10, "nonce": "n"},
-        separators=(",", ":"), sort_keys=True,
+        {
+            "moyai_origin": "https://moyai.example.com",
+            "user_id": "admin-user",
+            "exp": int(time.time()) - 10,
+            "nonce": "n",
+        },
+        separators=(",", ":"),
+        sort_keys=True,
     ).encode()
     sig = hmac_mod.new(_master_key_hmac_key("sk-master"), payload, hashlib.sha256).digest()
     code = f"{_b64url(payload)}.{_b64url(sig)}"

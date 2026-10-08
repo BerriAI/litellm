@@ -176,7 +176,9 @@ async def _persist_moyai_url(prisma_client, moyai_url: str) -> None:
     from litellm.proxy.proxy_server import user_api_key_cache
 
     existing: dict = {}
-    db_existing: Final = await _ui_settings_db(UISettingsRepository(prisma_client)).find_unique(where={"id": "ui_settings"})
+    db_existing: Final = await _ui_settings_db(UISettingsRepository(prisma_client)).find_unique(
+        where={"id": "ui_settings"}
+    )
     if db_existing and db_existing.ui_settings:
         raw: Final = db_existing.ui_settings
         existing = json.loads(raw) if isinstance(raw, str) else dict(raw)
@@ -219,9 +221,7 @@ async def moyai_connect_exchange(request: Request, body: MoyaiConnectExchangeReq
     nonce_key: Final = f"{_MOYAI_NONCE_CACHE_PREFIX}{payload['nonce']}"
     if await user_api_key_cache.async_get_cache(key=nonce_key) is not None:
         raise HTTPException(status_code=400, detail="Invalid Moyai connect code")
-    await user_api_key_cache.async_set_cache(
-        key=nonce_key, value=True, ttl=max(payload["exp"] - int(time.time()), 1)
-    )
+    await user_api_key_cache.async_set_cache(key=nonce_key, value=True, ttl=max(payload["exp"] - int(time.time()), 1))
 
     alias: Final = await _moyai_key_alias(prisma_client, moyai_url)
     key_response: Final = await generate_key_helper_fn(
