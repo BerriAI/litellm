@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use crate::{
     ReadError, Snapshot, SnapshotCache, SnapshotKey, StoreError, TraceStore,
-    cache::{Freshness, ListCache},
+    cache::{CachedSpan, Freshness, ListCache, SpanCache},
     cursor::{
         ErrorPosition, SpanPosition, decode_cursor, encode_cursor, error_position, trace_position,
     },
@@ -12,8 +12,8 @@ use crate::{
 use litellm_traces::{
     SpanDetail, SpanErrorPage, Trace, TracePage,
     query::named::{
-        ListTracesParams, ReadAccessParams, SpanDetailParams, SpanErrorParams, TraceIdentityParams,
-        TraceSpansParams,
+        ListTracesParams, ReadAccessParams, SpanDetailParams, SpanDetailRow, SpanErrorParams,
+        TraceIdentityParams, TraceSpansParams,
     },
     request::{TRACE_PAGE_SIZE_MAX, TRACE_PAGE_SIZE_MIN},
     resolve_trace, to_ui_content,
@@ -50,6 +50,7 @@ fn settle<T, E>(result: Result<T, Arc<Miss<E>>>) -> Result<Option<T>, ReadError<
 pub struct TraceReader {
     snapshots: SnapshotCache,
     pub(super) lists: ListCache,
+    spans: SpanCache,
     response_bytes: usize,
 }
 
@@ -58,6 +59,7 @@ impl TraceReader {
         Self {
             snapshots: SnapshotCache::new(MAX_GRAPH_BYTES, SNAPSHOT_IDLE),
             lists: ListCache::new(),
+            spans: SpanCache::new(),
             response_bytes,
         }
     }
@@ -116,7 +118,7 @@ impl TraceReader {
         trace_id: &str,
         trace_ref: &str,
     ) -> Result<Option<Trace>, ReadError<S::Error>> {
-        let Some(trace_ref) = reference(store, access, trace_id, trace_ref).await? else {
+        let Some(trace_ref) = self.reference(store, access, trace_id, trace_ref).await? else {
             return Ok(None);
         };
         Ok(self
@@ -137,7 +139,7 @@ impl TraceReader {
         if !(u32::from(TRACE_PAGE_SIZE_MIN)..=u32::from(TRACE_PAGE_SIZE_MAX)).contains(&page_size) {
             return Err(ReadError::InvalidParameters);
         }
-        let Some(trace_ref) = reference(store, access, trace_id, trace_ref).await? else {
+        let Some(trace_ref) = self.reference(store, access, trace_id, trace_ref).await? else {
             return Ok(None);
         };
         let Some(cursor) = cursor else {
@@ -232,17 +234,17 @@ impl TraceReader {
         span_id: &str,
         trace_ref: &str,
     ) -> Result<Option<SpanDetail>, ReadError<S::Error>> {
-        let Some(trace_ref) = reference(store, access, trace_id, trace_ref).await? else {
+        let Some(trace_ref) = self.reference(store, access, trace_id, trace_ref).await? else {
             return Ok(None);
         };
-        let params = SpanDetailParams {
-            access: access.clone(),
-            trace_id: trace_id.to_owned(),
-            trace_ref,
-            span_id: span_id.to_owned(),
+        let Some(row) = settle(
+            self.span_row(store, access, trace_id, &trace_ref, span_id)
+                .await,
+        )?
+        else {
+            return Ok(None);
         };
-        let row = store.span_detail(&params).await.map_err(map_store_error)?;
-        Ok(row.map(|row| SpanDetail {
+        Ok(Some(SpanDetail {
             input_ui: to_ui_content(&row.input),
             output_ui: to_ui_content(&row.output),
             span_id: row.span_id,
@@ -250,6 +252,76 @@ impl TraceReader {
             output: row.output,
             attributes: row.attributes,
         }))
+    }
+
+    async fn span_row<S: TraceStore>(
+        &self,
+        store: &S,
+        access: &ReadAccessParams,
+        trace_id: &str,
+        trace_ref: &str,
+        span_id: &str,
+    ) -> Result<SpanDetailRow, Arc<Miss<S::Error>>> {
+        let latest = SnapshotKey::latest(store.source(), access, trace_id, trace_ref)
+            .map_err(|error| Arc::new(error.into()))?;
+        let served = self.snapshots.served(&latest).await;
+        let key =
+            SnapshotKey::span(&latest, served, span_id).map_err(|error| Arc::new(error.into()))?;
+        let cached = self
+            .spans
+            .details
+            .try_get_with(key, async {
+                let params = SpanDetailParams {
+                    access: access.clone(),
+                    trace_id: trace_id.to_owned(),
+                    trace_ref: trace_ref.to_owned(),
+                    span_id: span_id.to_owned(),
+                };
+                let row = store
+                    .span_detail(&params)
+                    .await
+                    .map_err(|error| Miss::Read(map_store_error(error)))?
+                    .ok_or(Miss::Absent)?;
+                Ok::<_, Miss<S::Error>>(CachedSpan {
+                    row,
+                    freshness: served.map_or(Freshness::Live, |served| served.freshness()),
+                })
+            })
+            .await?;
+        Ok(cached.row)
+    }
+
+    async fn reference<S: TraceStore>(
+        &self,
+        store: &S,
+        access: &ReadAccessParams,
+        trace_id: &str,
+        trace_ref: &str,
+    ) -> Result<Option<String>, ReadError<S::Error>> {
+        if !trace_ref.is_empty() {
+            return Ok(Some(trace_ref.to_owned()));
+        }
+        let key = SnapshotKey::identity(store.source(), access, trace_id)?;
+        settle(
+            self.spans
+                .identities
+                .try_get_with(key, async {
+                    let params = TraceIdentityParams {
+                        access: access.clone(),
+                        trace_id: trace_id.to_owned(),
+                    };
+                    let identities = store
+                        .trace_refs(&params)
+                        .await
+                        .map_err(|error| Miss::Read(map_store_error(error)))?;
+                    match <[String; 1]>::try_from(identities) {
+                        Ok([only]) => Ok(only),
+                        Err(identities) if identities.is_empty() => Err(Miss::Absent),
+                        Err(_) => Err(Miss::Read(ReadError::AmbiguousTrace)),
+                    }
+                })
+                .await,
+        )
     }
 
     pub async fn get_span_error<S: TraceStore>(
@@ -262,7 +334,7 @@ impl TraceReader {
         cursor: Option<&str>,
     ) -> Result<Option<SpanErrorPage>, ReadError<S::Error>> {
         let position = error_position(cursor)?;
-        let Some(trace_ref) = reference(store, access, trace_id, trace_ref).await? else {
+        let Some(trace_ref) = self.reference(store, access, trace_id, trace_ref).await? else {
             return Ok(None);
         };
         let offset = position.as_ref().map_or(0, |position| position.offset);
@@ -293,26 +365,6 @@ impl TraceReader {
             next_cursor,
         }))
     }
-}
-
-async fn reference<S: TraceStore>(
-    store: &S,
-    access: &ReadAccessParams,
-    trace_id: &str,
-    trace_ref: &str,
-) -> Result<Option<String>, ReadError<S::Error>> {
-    if !trace_ref.is_empty() {
-        return Ok(Some(trace_ref.to_owned()));
-    }
-    let params = TraceIdentityParams {
-        access: access.clone(),
-        trace_id: trace_id.to_owned(),
-    };
-    let identities = store.trace_refs(&params).await.map_err(map_store_error)?;
-    if identities.len() > 1 {
-        return Err(ReadError::AmbiguousTrace);
-    }
-    Ok(identities.into_iter().next())
 }
 
 fn page<E>(
