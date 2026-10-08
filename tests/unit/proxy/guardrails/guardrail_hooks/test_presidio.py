@@ -4602,7 +4602,7 @@ _CARD_AND_EMAIL_TEXT: Final = (
 
 
 def _blocked_entities_guardrail():
-    guardrail: Final = _OPTIONAL_PresidioPIIMasking(
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         pii_entities_config={
             PiiEntityType.CREDIT_CARD: PiiAction.BLOCK,
@@ -4694,7 +4694,7 @@ async def test_legacy_pii_masking_config_registers_logging_only_guardrail(monkey
     assert len(litellm.guardrail_name_config_map) == 1
 
     pii_masking_obj: Final = next(
-        (c for c in litellm.callbacks if isinstance(c, _OPTIONAL_PresidioPIIMasking)),
+        (c for c in litellm.callbacks if isinstance(c, OPTIONAL_PresidioPIIMasking)),
         None,
     )
     assert pii_masking_obj is not None
