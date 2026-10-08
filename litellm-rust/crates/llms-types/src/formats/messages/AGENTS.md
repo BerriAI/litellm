@@ -6,7 +6,22 @@ Represent web-search results, encrypted-content fields, and thinking configurati
 
 # references
 
+These upstream contracts document fields and discriminators. They are documentation links, not saved golden snapshots; provider capability, authentication, and request adaptation remain outside this crate
+
+## Messages bodies, content, tools, and streaming
+
 - https://platform.claude.com/docs/en/api/http/messages/create
 - https://platform.claude.com/docs/en/api/messages/create.md
 - https://platform.claude.com/docs/en/build-with-claude/streaming.md
 - https://platform.claude.com/docs/en/build-with-claude/context-editing
+
+## SDK wire definitions
+
+The SDK definitions clarify the string `source` on search-result blocks, the optional `custom` tool discriminator, versioned tool callers, and recursive content-block unions
+
+- https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/types/search_result_block_param.py
+- https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/types/tool_param.py
+- https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/types/server_tool_caller_20260120_param.py
+- https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/types/tool_use_block_param.py
+- https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/types/content_block_param.py
+- https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/types/tool_result_block_param.py

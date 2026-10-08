@@ -73,6 +73,8 @@ pub enum ToolChoiceType {
 #[macro_rules_attribute::apply(wire_type)]
 #[serde(try_from = "ToolDefinition")]
 pub struct CustomTool {
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub tool_type: Option<CustomToolType>,
     #[serde(flatten)]
     pub definition: ToolDefinition,
 }
@@ -81,13 +83,35 @@ impl TryFrom<ToolDefinition> for CustomTool {
     type Error = serde::de::value::Error;
 
     fn try_from(definition: ToolDefinition) -> Result<Self, Self::Error> {
-        if definition.extra.contains_key("type") || definition.name.is_none() {
+        let tool_type = match definition.extra.get("type") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(tag)) if tag == "custom" => Some(CustomToolType::Custom),
+            Some(_) => return Err(serde::de::Error::custom("expected an optional custom type")),
+        };
+        if definition.name.is_none() {
             return Err(serde::de::Error::custom(
-                "expected a custom tool with a string name and no type",
+                "expected a custom tool with a string name",
             ));
         }
-        Ok(Self { definition })
+        let extra = definition
+            .extra
+            .into_iter()
+            .filter(|(key, _)| key != "type")
+            .collect();
+        Ok(Self {
+            tool_type,
+            definition: ToolDefinition {
+                extra,
+                ..definition
+            },
+        })
     }
+}
+
+#[macro_rules_attribute::apply(wire_type)]
+#[serde(rename_all = "snake_case")]
+pub enum CustomToolType {
+    Custom,
 }
 
 #[macro_rules_attribute::apply(wire_type)]
@@ -99,8 +123,6 @@ pub enum BuiltinMessagesTool {
     ToolSearchRegex(ToolDefinition),
     #[serde(rename = "tool_search_tool_bm25_20251119")]
     ToolSearchBm25(ToolDefinition),
-    #[serde(rename = "custom")]
-    Custom(ToolDefinition),
     #[serde(rename = "web_search_20250305")]
     WebSearch(ToolDefinition),
     #[serde(rename = "computer_20250124")]

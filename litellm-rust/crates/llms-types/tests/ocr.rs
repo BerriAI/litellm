@@ -2,16 +2,7 @@ use litellm_llms_types::formats::ocr::{
     LiteLLMOcrResponse, OcrBoundingBox, OcrDocument, OcrKeyValuePair, OcrPage, OcrTable,
 };
 use rstest::rstest;
-use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
-
-fn round_trip<T>(wire: Value)
-where
-    T: DeserializeOwned + Serialize,
-{
-    let parsed: T = serde_json::from_value(wire.clone()).unwrap();
-    assert_eq!(serde_json::to_value(parsed).unwrap(), wire);
-}
 
 #[rstest]
 #[case::missing_page_fields(json!({"pages": [{}]}))]
@@ -116,26 +107,78 @@ fn response_serialization_preserves_extensions_and_native_presence(
 
 #[rstest]
 fn bounding_box_round_trips() {
-    round_trip::<OcrBoundingBox>(json!({"x":1.5,"y":2,"width":3,"height":4,"future":true}));
+    let wire = json!({"x":1.5,"y":2,"width":3,"height":4,"future":true});
+    let bounds: OcrBoundingBox = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(
+        bounds.x.as_ref().and_then(serde_json::Number::as_f64),
+        Some(1.5)
+    );
+    assert_eq!(bounds.width, Some(3.into()));
+    assert_eq!(bounds.extra["future"], json!(true));
+    assert_eq!(serde_json::to_value(bounds).unwrap(), wire);
 }
 
 #[rstest]
 fn table_round_trips_nested_cells_and_regions() {
-    round_trip::<OcrTable>(json!({
+    let wire = json!({
         "rowCount":1,
         "columnCount":1,
         "cells":[{"rowIndex":0,"columnIndex":0,"content":"value","spans":[{"offset":0,"length":5}]}],
         "boundingRegions":[{"pageNumber":1,"polygon":[0,0,10,10]}],
         "spans":[{"offset":0,"length":5}],
         "content":"value"
-    }));
+    });
+    let table: OcrTable = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(table.row_count, Some(1));
+    assert_eq!(table.column_count, Some(1));
+    let cell = &table.cells.as_ref().unwrap()[0];
+    assert_eq!(cell.row_index, Some(0));
+    assert_eq!(cell.column_index, Some(0));
+    assert_eq!(cell.content.as_deref(), Some("value"));
+    assert_eq!(cell.spans.as_ref().unwrap()[0].length, Some(5));
+    let region = &table.bounding_regions.as_ref().unwrap()[0];
+    assert_eq!(region.page_number, Some(1));
+    assert_eq!(
+        region.polygon.as_ref().unwrap(),
+        &vec![0.into(), 0.into(), 10.into(), 10.into()]
+    );
+    assert_eq!(serde_json::to_value(table).unwrap(), wire);
 }
 
 #[rstest]
 fn key_value_pair_round_trips_nested_elements() {
-    round_trip::<OcrKeyValuePair>(json!({
+    let wire = json!({
         "key":{"content":"Name","boundingRegions":[{"pageNumber":1,"polygon":[0,0,1,1]}]},
         "value":{"content":"Ada","spans":[{"offset":5,"length":3}]},
         "confidence":0.99
-    }));
+    });
+    let pair: OcrKeyValuePair = serde_json::from_value(wire.clone()).unwrap();
+    let key = pair.key.as_ref().unwrap();
+    let value = pair.value.as_ref().unwrap();
+    assert_eq!(key.content.as_deref(), Some("Name"));
+    assert_eq!(
+        key.bounding_regions.as_ref().unwrap()[0].page_number,
+        Some(1)
+    );
+    assert_eq!(value.content.as_deref(), Some("Ada"));
+    assert_eq!(value.spans.as_ref().unwrap()[0].offset, Some(5));
+    assert_eq!(serde_json::to_value(pair).unwrap(), wire);
+}
+
+#[rstest]
+#[case::bad_cell(json!({"cells":[{"rowIndex":"first"}]}))]
+#[case::negative_count(json!({"rowCount":-1}))]
+#[case::bad_polygon(json!({"boundingRegions":[{"polygon":["zero"]}]}))]
+#[case::bad_span(json!({"spans":[{"length":-1}]}))]
+fn typed_tables_reject_malformed_nested_fields(#[case] wire: Value) {
+    assert!(serde_json::from_value::<OcrTable>(wire).is_err());
+}
+
+#[rstest]
+fn partial_table_omits_null_optionals_and_keeps_extensions() {
+    let table: OcrTable =
+        serde_json::from_value(json!({"cells":null,"rowCount":null,"future":null})).unwrap();
+    assert!(table.cells.is_none());
+    assert!(table.row_count.is_none());
+    assert_eq!(serde_json::to_value(table).unwrap(), json!({"future":null}));
 }

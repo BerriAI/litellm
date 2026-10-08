@@ -12,6 +12,7 @@ pub enum ResponsesOutputItem {
     ImageGenerationCall(ResponsesImageGenerationCall),
     CodeInterpreterCall(ResponsesCodeInterpreterCall),
     McpCall(ResponsesMcpCall),
+    McpListTools(ResponsesMcpListTools),
 }
 
 #[macro_rules_attribute::apply(wire_type)]
@@ -190,7 +191,7 @@ pub struct ResponsesMcpCall {
     pub server_label: Option<String>,
     pub arguments: Option<String>,
     pub output: Option<String>,
-    pub error: Option<String>,
+    pub error: Option<ResponsesMcpError>,
     pub approval_request_id: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -257,4 +258,57 @@ pub struct ResponsesWebSearchSource {
     pub url: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+#[serde_with::skip_serializing_none]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
+pub struct ResponsesMcpListTools {
+    pub id: Option<String>,
+    pub server_label: Option<String>,
+    pub tools: Option<Vec<ResponsesMcpTool>>,
+    pub error: Option<String>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[serde_with::skip_serializing_none]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
+pub struct ResponsesMcpTool {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub input_schema: Option<crate::json_schema::JsonSchema>,
+    pub annotations: Option<Value>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[macro_rules_attribute::apply(wire_type)]
+#[serde(untagged)]
+pub enum ResponsesMcpError {
+    Message(String),
+    Detail(ResponsesMcpErrorDetail),
+}
+
+#[macro_rules_attribute::apply(wire_type)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ResponsesMcpErrorDetail {
+    McpProtocolError {
+        code: i64,
+        message: String,
+        #[serde(flatten)]
+        extra: Map<String, Value>,
+    },
+    HttpError {
+        code: i64,
+        message: String,
+        #[serde(flatten)]
+        extra: Map<String, Value>,
+    },
+    McpToolExecutionError {
+        content: Value,
+        #[serde(flatten)]
+        extra: Map<String, Value>,
+    },
 }

@@ -35,66 +35,12 @@ pub enum AnthropicBeta {
     PerTurnControl20260701,
     #[strum(serialize = "dangerous-tool-use-2026-09-03")]
     DangerousToolUse20260903,
-    #[strum(serialize = "bash_20241022")]
-    Bash20241022,
-    #[strum(serialize = "bash_20250124")]
-    Bash20250124,
-    #[strum(serialize = "claude-code-20250219")]
-    ClaudeCode20250219,
-    #[strum(serialize = "code-execution-2025-08-25")]
-    CodeExecution20250825,
-    #[strum(serialize = "computer-use-2025-01-24")]
-    ComputerUse20250124,
-    #[strum(serialize = "computer-use-2025-11-24")]
-    ComputerUse20251124,
-    #[strum(serialize = "context-1m-2025-08-07")]
-    Context1m20250807,
-    #[strum(serialize = "effort-2025-11-24")]
-    Effort20251124,
-    #[strum(serialize = "files-api-2025-04-14")]
-    FilesApi20250414,
-    #[strum(serialize = "fine-grained-tool-streaming-2025-05-14")]
-    FineGrainedToolStreaming20250514,
-    #[strum(serialize = "interleaved-thinking-2025-05-14")]
-    InterleavedThinking20250514,
-    #[strum(serialize = "mcp-client-2025-04-04")]
-    McpClient20250404,
-    #[strum(serialize = "mcp-client-2025-11-20")]
-    McpClient20251120,
-    #[strum(serialize = "mcp-servers-2025-12-04")]
-    McpServers20251204,
-    #[strum(serialize = "mid-conversation-output-config-2026-07-01")]
-    MidConversationOutputConfig20260701,
-    #[strum(serialize = "mid-conversation-tool-changes-2026-07-01")]
-    MidConversationToolChanges20260701,
-    #[strum(serialize = "output-128k-2025-02-19")]
-    Output128k20250219,
-    #[strum(serialize = "prompt-caching-scope-2026-01-05")]
-    PromptCachingScope20260105,
-    #[strum(serialize = "skills-2025-10-02")]
-    Skills20251002,
-    #[strum(serialize = "structured-output-2024-03-01")]
-    StructuredOutput20240301,
-    #[strum(serialize = "text_editor_20241022")]
-    TextEditor20241022,
-    #[strum(serialize = "text_editor_20250124")]
-    TextEditor20250124,
-    #[strum(serialize = "thinking-binding-controls-2026-08-01")]
-    ThinkingBindingControls20260801,
-    #[strum(serialize = "thinking-display-updates-2026-08-18")]
-    ThinkingDisplayUpdates20260818,
-    #[strum(serialize = "token-efficient-tools-2025-02-19")]
-    TokenEfficientTools20250219,
-    #[strum(serialize = "tool-examples-2025-10-29")]
-    ToolExamples20251029,
-    #[strum(serialize = "tool-search-tool-2025-10-19")]
-    ToolSearchTool20251019,
     #[strum(default, transparent)]
     Other(String),
 }
 
 impl AnthropicBeta {
-    pub const KNOWN: [Self; 39] = [
+    pub const KNOWN: [Self; 12] = [
         Self::Oauth20250420,
         Self::WebFetch20250910,
         Self::WebSearch20250305,
@@ -107,33 +53,6 @@ impl AnthropicBeta {
         Self::AdvisorTool20260301,
         Self::PerTurnControl20260701,
         Self::DangerousToolUse20260903,
-        Self::Bash20241022,
-        Self::Bash20250124,
-        Self::ClaudeCode20250219,
-        Self::CodeExecution20250825,
-        Self::ComputerUse20250124,
-        Self::ComputerUse20251124,
-        Self::Context1m20250807,
-        Self::Effort20251124,
-        Self::FilesApi20250414,
-        Self::FineGrainedToolStreaming20250514,
-        Self::InterleavedThinking20250514,
-        Self::McpClient20250404,
-        Self::McpClient20251120,
-        Self::McpServers20251204,
-        Self::MidConversationOutputConfig20260701,
-        Self::MidConversationToolChanges20260701,
-        Self::Output128k20250219,
-        Self::PromptCachingScope20260105,
-        Self::Skills20251002,
-        Self::StructuredOutput20240301,
-        Self::TextEditor20241022,
-        Self::TextEditor20250124,
-        Self::ThinkingBindingControls20260801,
-        Self::ThinkingDisplayUpdates20260818,
-        Self::TokenEfficientTools20250219,
-        Self::ToolExamples20251029,
-        Self::ToolSearchTool20251019,
     ];
 
     pub fn as_str(&self) -> &str {
@@ -252,10 +171,7 @@ mod tests {
             AnthropicBeta::FastMode20260201,
             AnthropicBeta::AdvisorTool20260301,
             AnthropicBeta::PerTurnControl20260701,
-            AnthropicBeta::DangerousToolUse20260903,
-            AnthropicBeta::ClaudeCode20250219,
-            AnthropicBeta::Bash20241022,
-            AnthropicBeta::ToolSearchTool20251019
+            AnthropicBeta::DangerousToolUse20260903
         )]
         beta: AnthropicBeta,
     ) {
@@ -267,12 +183,12 @@ mod tests {
 
     #[test]
     fn unknown_values_are_kept_verbatim() {
-        let parsed: AnthropicBeta = "example-beta-2099-01-01".parse().unwrap();
+        let parsed: AnthropicBeta = "claude-code-20250219".parse().unwrap();
         assert_eq!(
             parsed,
-            AnthropicBeta::Other("example-beta-2099-01-01".to_string())
+            AnthropicBeta::Other("claude-code-20250219".to_string())
         );
-        assert_eq!(parsed.to_string(), "example-beta-2099-01-01");
+        assert_eq!(parsed.to_string(), "claude-code-20250219");
     }
 
     #[test]
@@ -297,8 +213,8 @@ mod tests {
     #[case::trimmed_and_deduplicated("b, a ,b", "a,b")]
     #[case::blank_pieces_skipped("a,,b", "a,b")]
     #[case::known_and_unknown_sort_together(
-        "web-search-2025-03-05,example-beta-2099-01-01,fast-mode-2026-02-01",
-        "example-beta-2099-01-01,fast-mode-2026-02-01,web-search-2025-03-05"
+        "web-search-2025-03-05,claude-code-20250219,fast-mode-2026-02-01",
+        "claude-code-20250219,fast-mode-2026-02-01,web-search-2025-03-05"
     )]
     fn header_values_round_trip_sorted_and_deduplicated(#[case] header: &str, #[case] wire: &str) {
         assert_eq!(set(header).to_string(), wire);
@@ -316,9 +232,9 @@ mod tests {
 
     #[test]
     fn contains_matches_by_wire_value() {
-        let betas = set("oauth-2025-04-20,example-beta-2099-01-01");
+        let betas = set("oauth-2025-04-20,claude-code-20250219");
         assert!(betas.contains(&AnthropicBeta::Oauth20250420));
-        assert!(betas.contains(&AnthropicBeta::Other("example-beta-2099-01-01".into())));
+        assert!(betas.contains(&AnthropicBeta::Other("claude-code-20250219".into())));
         assert!(!betas.contains(&AnthropicBeta::FastMode20260201));
     }
 }

@@ -41,39 +41,6 @@ pub enum ContentBlockType {
     Compaction,
     AdvisorToolResult,
     WebSearchToolResult,
-    Image,
-    Document,
-    ContainerUpload,
-    ToolReference,
-    SearchResult,
-    WebSearchResult,
-    WebFetchResult,
-    WebFetchToolResult,
-    WebFetchToolResultError,
-    CodeExecutionToolResult,
-    CodeExecutionToolResultError,
-    CodeExecutionResult,
-    CodeExecutionOutput,
-    EncryptedCodeExecutionResult,
-    BashCodeExecutionToolResult,
-    BashCodeExecutionToolResultError,
-    BashCodeExecutionResult,
-    BashCodeExecutionOutput,
-    TextEditorCodeExecutionToolResult,
-    TextEditorCodeExecutionToolResultError,
-    TextEditorCodeExecutionViewResult,
-    TextEditorCodeExecutionCreateResult,
-    TextEditorCodeExecutionStrReplaceResult,
-    ToolSearchToolResult,
-    ToolSearchToolResultError,
-    ToolSearchToolSearchResult,
-    McpToolUse,
-    McpToolResult,
-    AdvisorResult,
-    AdvisorRedactedResult,
-    WebSearchToolResultError,
-    ToolAddition,
-    ToolRemoval,
     #[strum(default, transparent)]
     Other(String),
 }
@@ -227,6 +194,11 @@ pub enum MessagesTool {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContextTrigger {
     InputTokens {
+        value: u64,
+        #[serde(flatten)]
+        extra: Map<String, Value>,
+    },
+    ToolUses {
         value: u64,
         #[serde(flatten)]
         extra: Map<String, Value>,

@@ -1,6 +1,6 @@
 use serde_json::{Map, Value};
 
-use super::ContentBlock;
+use super::CacheControl;
 
 #[macro_rules_attribute::apply(wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -38,9 +38,9 @@ pub enum ContentSource {
 #[serde(untagged)]
 pub enum BlockContent {
     Text(String),
-    Blocks(Vec<ContentBlock>),
+    Blocks(Vec<MessagesContentBlock>),
     SearchError(WebSearchResultError),
-    Block(Box<ContentBlock>),
+    Block(Box<MessagesContentBlock>),
 }
 
 #[macro_rules_attribute::apply(wire_type)]
@@ -52,6 +52,12 @@ pub enum ToolCaller {
     },
     #[serde(rename = "code_execution_20250825")]
     CodeExecution {
+        tool_id: String,
+        #[serde(flatten)]
+        extra: Map<String, Value>,
+    },
+    #[serde(rename = "code_execution_20260120")]
+    CodeExecution20260120 {
         tool_id: String,
         #[serde(flatten)]
         extra: Map<String, Value>,
@@ -184,7 +190,7 @@ pub struct SearchResultCitation {
 #[macro_rules_attribute::apply(wire_type)]
 #[derive(Default)]
 pub struct ContentBlockPayload {
-    pub tool: Option<Box<ContentBlock>>,
+    pub tool: Option<Box<MessagesContentBlock>>,
     pub text: Option<String>,
     pub thinking: Option<String>,
     pub signature: Option<String>,
@@ -194,7 +200,7 @@ pub struct ContentBlockPayload {
     pub input: Option<Map<String, Value>>,
     pub content: Option<BlockContent>,
     pub provider_specific_fields: Option<Map<String, Value>>,
-    pub source: Option<ContentSource>,
+    pub source: Option<ContentBlockSource>,
     pub citations: Option<Citations>,
     pub caller: Option<ToolCaller>,
     pub is_error: Option<bool>,
@@ -202,6 +208,8 @@ pub struct ContentBlockPayload {
     pub title: Option<String>,
     pub context: Option<String>,
     pub tool_name: Option<String>,
+    pub tool_use_id: Option<String>,
+    pub cache_control: Option<CacheControl>,
     pub url: Option<String>,
     pub page_age: Option<String>,
     pub encrypted_content: Option<String>,
@@ -215,7 +223,7 @@ pub struct ContentBlockPayload {
     pub error_message: Option<String>,
     pub retrieved_at: Option<String>,
     pub server_name: Option<String>,
-    pub tool_references: Option<Vec<super::ContentBlock>>,
+    pub tool_references: Option<Vec<MessagesContentBlock>>,
     pub file_type: Option<String>,
     pub num_lines: Option<u64>,
     pub start_line: Option<u64>,
@@ -228,4 +236,58 @@ pub struct ContentBlockPayload {
     pub old_start: Option<u64>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+#[macro_rules_attribute::apply(wire_type)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MessagesContentBlock {
+    Text(ContentBlockPayload),
+    Thinking(ContentBlockPayload),
+    RedactedThinking(ContentBlockPayload),
+    ToolUse(ContentBlockPayload),
+    ServerToolUse(ContentBlockPayload),
+    ToolResult(ContentBlockPayload),
+    Compaction(ContentBlockPayload),
+    AdvisorToolResult(ContentBlockPayload),
+    WebSearchToolResult(ContentBlockPayload),
+    Image(ContentBlockPayload),
+    Document(ContentBlockPayload),
+    ContainerUpload(ContentBlockPayload),
+    ToolReference(ContentBlockPayload),
+    SearchResult(ContentBlockPayload),
+    WebSearchResult(ContentBlockPayload),
+    WebFetchResult(ContentBlockPayload),
+    WebFetchToolResult(ContentBlockPayload),
+    WebFetchToolResultError(ContentBlockPayload),
+    CodeExecutionToolResult(ContentBlockPayload),
+    CodeExecutionToolResultError(ContentBlockPayload),
+    CodeExecutionResult(ContentBlockPayload),
+    CodeExecutionOutput(ContentBlockPayload),
+    EncryptedCodeExecutionResult(ContentBlockPayload),
+    BashCodeExecutionToolResult(ContentBlockPayload),
+    BashCodeExecutionToolResultError(ContentBlockPayload),
+    BashCodeExecutionResult(ContentBlockPayload),
+    BashCodeExecutionOutput(ContentBlockPayload),
+    TextEditorCodeExecutionToolResult(ContentBlockPayload),
+    TextEditorCodeExecutionToolResultError(ContentBlockPayload),
+    TextEditorCodeExecutionViewResult(ContentBlockPayload),
+    TextEditorCodeExecutionCreateResult(ContentBlockPayload),
+    TextEditorCodeExecutionStrReplaceResult(ContentBlockPayload),
+    ToolSearchToolResult(ContentBlockPayload),
+    ToolSearchToolResultError(ContentBlockPayload),
+    ToolSearchToolSearchResult(ContentBlockPayload),
+    McpToolUse(ContentBlockPayload),
+    McpToolResult(ContentBlockPayload),
+    AdvisorResult(ContentBlockPayload),
+    AdvisorRedactedResult(ContentBlockPayload),
+    WebSearchToolResultError(ContentBlockPayload),
+    ToolAddition(ContentBlockPayload),
+    ToolRemoval(ContentBlockPayload),
+}
+
+#[macro_rules_attribute::apply(wire_type)]
+#[serde(untagged)]
+pub enum ContentBlockSource {
+    Location(String),
+    Source(ContentSource),
 }
