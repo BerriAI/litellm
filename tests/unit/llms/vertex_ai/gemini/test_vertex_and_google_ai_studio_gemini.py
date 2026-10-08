@@ -2096,6 +2096,38 @@ def test_vertex_ai_penalty_parameters_validation():
     assert result["max_output_tokens"] == 100
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gemini-3.1-pro-preview",
+        "gemini/gemini-3.1-pro-preview",
+        "vertex_ai/gemini-3.1-pro-preview",
+    ],
+)
+def test_vertex_ai_gemini_3_does_not_inject_default_temperature(model: str):
+    """
+    Regression test for litellm#45333.
+
+    Gemini 3 models must not get temperature=1.0 force-added when the caller
+    did not pass one. Google is removing temperature/top_p/top_k support on
+    upcoming Gemini models (they already have no effect since Gemini 3.6), and
+    callers cannot strip the value because it is injected after the drop
+    filter runs.
+    """
+    configs: Final = (
+        VertexGeminiConfig(),
+        GoogleAIStudioGeminiConfig(),
+    )
+    for v in configs:
+        result: Final = v.map_openai_params(
+            non_default_params={},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+        assert "temperature" not in result
+
+
 def test_vertex_ai_gemini_3_penalty_parameters_unsupported():
     """
     Test that penalty parameters are not supported for Gemini 3 models.
@@ -2485,7 +2517,7 @@ def test_is_gemini_3_or_newer():
     ],
 )
 def test_gemini_3_reasoning_effort_maps_to_thinking_level(model: str):
-    """Test that reasoning_effort maps to thinkingLevel and default temperature=1.0"""
+    """Test that reasoning_effort maps to thinkingLevel without forcing temperature"""
     from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
@@ -2510,7 +2542,7 @@ def test_gemini_3_reasoning_effort_maps_to_thinking_level(model: str):
             "thinkingLevel": effort,
             "includeThoughts": True,
         }
-        assert mapped["temperature"] == 1.0
+        assert "temperature" not in mapped
         assert "thinkingBudget" not in mapped["thinkingConfig"]
 
 
@@ -2945,30 +2977,6 @@ def test_reasoning_effort_dict_format_gemini_3():
     assert "thinkingConfig" not in result
 
 
-def test_temperature_default_for_gemini_3():
-    """Test that temperature defaults to 1.0 for Gemini 3+ models when not specified"""
-    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-        VertexGeminiConfig,
-    )
-
-    v = VertexGeminiConfig()
-    model = "gemini-3-pro-preview"
-    optional_params = {}
-
-    # No temperature specified
-    non_default_params = {}
-    result = v.map_openai_params(
-        non_default_params=non_default_params,
-        optional_params=optional_params,
-        model=model,
-        drop_params=False,
-    )
-
-    # Should default to 1.0
-    assert "temperature" in result
-    assert result["temperature"] == 1.0
-
-
 def test_media_resolution_from_detail_parameter():
     """Test that OpenAI's detail parameter is correctly mapped to media_resolution"""
     from litellm.llms.vertex_ai.gemini.transformation import (
@@ -3216,8 +3224,7 @@ def test_gemini_3_image_models_no_thinking_config():
 
     # Should NOT have thinkingConfig automatically added
     assert "thinkingConfig" not in result
-    # But should still get temperature=1.0 for Gemini 3
-    assert result["temperature"] == 1.0
+    assert "temperature" not in result
 
 
 def test_gemini_3_text_models_get_thinking_config():
@@ -3245,7 +3252,7 @@ def test_gemini_3_text_models_get_thinking_config():
 
     # Should NOT have thinkingConfig automatically added when user provides no reasoning_effort
     assert "thinkingConfig" not in result
-    assert result["temperature"] == 1.0
+    assert "temperature" not in result
 
 
 def test_gemini_image_models_excluded_from_thinking():
