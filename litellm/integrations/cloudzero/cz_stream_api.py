@@ -209,7 +209,7 @@ class CloudZeroStreamer:
 
         return payload
 
-    def _convert_cbf_to_api_format(self, row: dict[str, object]) -> dict[str, Any] | None:
+    def _convert_cbf_to_api_format(self, row: dict[str, object]) -> dict[str, object] | None:
         """Convert CBF row to CloudZero API format - keeping CBF field names as CloudZero expects them."""
         try:
             # CloudZero expects CBF format field names directly, not converted names

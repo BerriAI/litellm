@@ -5904,7 +5904,7 @@ class MCPServerManager:
             server=server,
         )
 
-        hook_result: Final[dict[str, Any]] = {}
+        hook_result: Final[dict[str, object]] = {}
         if proxy_logging_obj is None:
             return hook_result
 

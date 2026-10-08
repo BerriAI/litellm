@@ -146,7 +146,7 @@ def iter_message_text(data: Mapping[str, object]) -> Iterator[str]:
         yield from _iter_text_parts_in_content(message.get("content"))
 
 
-def walk_user_text(data: dict[str, Any], visit: Callable[[str], str]) -> int:
+def walk_user_text(data: dict[str, object], visit: Callable[[str], str]) -> int:
     """Rewrite every text fragment in place via ``visit``.
 
     Mutates ``data["messages"]`` and ``data["input"]``. Returns the number
@@ -286,7 +286,7 @@ def has_non_string_content(data: Mapping[str, object]) -> bool:
     return False
 
 
-def build_inspection_messages(data: dict[str, Any]) -> list[dict[str, str]]:
+def build_inspection_messages(data: dict[str, object]) -> list[dict[str, str]]:
     """Synthesize a chat-style messages list for posting to a guardrail API.
 
     Each returned message has a plain-string ``content`` — multimodal text
