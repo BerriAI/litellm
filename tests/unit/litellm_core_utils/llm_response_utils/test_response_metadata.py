@@ -7,10 +7,14 @@ through _hidden_params to the x-litellm-callback-duration-ms response header.
 
 import asyncio
 import datetime
+import time
+from collections.abc import Iterator
+from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
 
+import litellm
 import litellm.litellm_core_utils.llm_response_utils.response_metadata as response_metadata_mod
 import litellm.proxy.common_request_processing as common_request_processing_mod
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -22,7 +26,7 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ModelResponse, Usage
 
 
 class TestCallbackDurationMs:
@@ -74,7 +78,7 @@ class TestCallbackDurationMs:
         """End-to-end: update_response_metadata should propagate callback_duration_ms."""
         result = ModelResponse()
         logging_obj = self._make_logging_obj(callback_duration_ms=5.5, llm_api_duration_ms=800.0)
-        logging_obj._response_cost_calculator = MagicMock(return_value=0.001)
+        logging_obj.response_cost_calculator = MagicMock(return_value=0.001)
         logging_obj.litellm_call_id = "test-call-id"
 
         start = datetime.datetime(2025, 1, 1, 0, 0, 0)
@@ -124,7 +128,7 @@ class TestDictResultsSkipMetadataUpdate:
             end_time=datetime.datetime(2025, 1, 1, 0, 0, 1),
         )
 
-        logging_obj._response_cost_calculator.assert_not_called()
+        logging_obj.response_cost_calculator.assert_not_called()
         assert "_hidden_params" not in anthropic_response
 
     def test_update_response_metadata_keeps_timing_on_logging_obj_for_dict_results(self):
@@ -148,7 +152,7 @@ class TestDictResultsSkipMetadataUpdate:
         logging_obj.set_response_timing_metrics.assert_called_once_with(
             {"_response_ms": 1000.0, "litellm_overhead_time_ms": 100.0}
         )
-        logging_obj._response_cost_calculator.assert_not_called()
+        logging_obj.response_cost_calculator.assert_not_called()
         assert "_hidden_params" not in anthropic_response
 
     def test_update_response_metadata_keeps_timing_for_stream_wrapper_without_hidden_params(self):
@@ -179,7 +183,7 @@ class TestDictResultsSkipMetadataUpdate:
         asyncio.run(drive())
 
         logging_obj.set_response_timing_metrics.assert_called_once_with({"_response_ms": 250.0})
-        logging_obj._response_cost_calculator.assert_not_called()
+        logging_obj.response_cost_calculator.assert_not_called()
 
     def test_update_response_metadata_leaves_logging_obj_alone_for_objects_with_hidden_params(self):
         """ModelResponse keeps carrying its own timing; the logging-object carrier is not written."""
@@ -187,7 +191,7 @@ class TestDictResultsSkipMetadataUpdate:
         logging_obj = MagicMock()
         logging_obj.model_call_details = {"llm_api_duration_ms": 900.0}
         logging_obj.caching_details = None
-        logging_obj._response_cost_calculator = MagicMock(return_value=0.001)
+        logging_obj.response_cost_calculator = MagicMock(return_value=0.001)
         logging_obj.litellm_call_id = "test-call-id"
 
         update_response_metadata(
@@ -209,7 +213,7 @@ class TestDictResultsSkipMetadataUpdate:
         logging_obj = MagicMock()
         logging_obj.model_call_details = {"llm_api_duration_ms": 200.0}
         logging_obj.caching_details = None
-        logging_obj._response_cost_calculator = MagicMock(return_value=0.001)
+        logging_obj.response_cost_calculator = MagicMock(return_value=0.001)
         logging_obj.litellm_call_id = "test-call-id"
 
         update_response_metadata(
@@ -425,6 +429,15 @@ class TestCallbackDurationInCustomHeaders:
         assert "x-litellm-callback-duration-ms" not in headers
 
 
+@pytest.fixture(params=["UTC", "Asia/Kolkata", "America/Los_Angeles"])
+def process_timezone(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    monkeypatch.setenv("TZ", request.param)
+    time.tzset()
+    yield request.param
+    monkeypatch.undo()
+    time.tzset()
+
+
 class TestDetailedTiming:
     """Tests for detailed per-phase timing headers behind LITELLM_DETAILED_TIMING."""
 
@@ -470,13 +483,14 @@ class TestDetailedTiming:
         assert hidden.get("timing_pre_processing_ms") == 20.0
         assert hidden.get("timing_post_processing_ms") == 10.0  # 530 - 20 - 500
 
-    def test_detailed_timing_pre_processing_uses_receive_anchor(self, monkeypatch):
+    @pytest.mark.skipif(not hasattr(time, "tzset"), reason="switching the process timezone needs time.tzset()")
+    def test_detailed_timing_pre_processing_uses_receive_anchor(self, monkeypatch, process_timezone: str):
         monkeypatch.setattr(response_metadata_mod, "LITELLM_DETAILED_TIMING", True)
 
         result = ModelResponse()
         received_at = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
         start = received_at + datetime.timedelta(milliseconds=200)
-        api_call_start = start.replace(tzinfo=None)
+        api_call_start = start.astimezone().replace(tzinfo=None)
         end = start + datetime.timedelta(milliseconds=530)
         logging_obj = self._make_logging_obj(
             llm_api_duration_ms=500.0,
@@ -583,3 +597,55 @@ class TestLoggingInitCallbackDuration:
         # Should still be set (deep copy of None is essentially a no-op)
         assert hasattr(obj, "callback_duration_ms")
         assert obj.callback_duration_ms >= 0
+
+
+def test_update_response_metadata_prices_per_second_deployment_from_its_stamped_duration(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    deployment_id: Final = "per-second-deployment-response-metadata"
+    litellm.register_model(
+        model_cost={
+            deployment_id: {
+                "cost_per_second": 0.02,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            }
+        }
+    )
+    start_time: Final = datetime.datetime(2026, 9, 21, 12, 0, 0)
+    logging_obj: Final = Logging(
+        model="gpt-5.4-nano",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=start_time,
+        litellm_call_id="per-second-response-metadata",
+        function_id="f",
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-5.4-nano",
+        litellm_params={
+            "cost_per_second": 0.02,
+            "metadata": {"model_info": {"id": deployment_id}},
+        },
+        optional_params={},
+        custom_llm_provider="openai",
+    )
+    logging_obj.model_call_details["end_time"] = start_time + datetime.timedelta(seconds=10)
+    result: Final = ModelResponse(
+        model="gpt-5.4-nano",
+        usage=Usage(prompt_tokens=11, completion_tokens=7, total_tokens=18),
+    )
+
+    update_response_metadata(
+        result=result,
+        logging_obj=logging_obj,
+        model="gpt-5.4-nano",
+        kwargs={"model_info": {"id": deployment_id}},
+        start_time=start_time,
+        end_time=start_time + datetime.timedelta(seconds=2),
+    )
+
+    assert result._response_ms == pytest.approx(2000)
+    assert result._hidden_params["response_cost"] == pytest.approx(0.02 * 2)

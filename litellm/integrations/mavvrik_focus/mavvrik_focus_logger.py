@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -33,17 +33,6 @@ if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 else:
     AsyncIOScheduler = Any
-
-
-class _PodLockManager(Protocol):
-    """The subset of PodLockManager this logger drives to serialize the export across pods."""
-
-    @property
-    def redis_cache(self) -> object: ...
-
-    async def acquire_lock(self, cronjob_id: str) -> bool | None: ...
-
-    async def release_lock(self, cronjob_id: str) -> None: ...
 
 
 def _parse_metrics_marker(
@@ -127,7 +116,7 @@ class MavvrikFocusLogger(FocusLogger):
         """Export with Mavvrik row cap applied when no explicit limit is passed."""
         effective_limit: Final = limit if limit is not None else self._max_rows
         engine: Final = self._ensure_engine()
-        data: Final = await engine._database.get_usage_data(
+        data: Final = await engine.database.get_usage_data(
             limit=effective_limit,
             start_time_utc=window.start_time,
             end_time_utc=window.end_time,
@@ -145,13 +134,13 @@ class MavvrikFocusLogger(FocusLogger):
         if data.is_empty():
             verbose_proxy_logger.debug("Mavvrik FOCUS export: no usage data for window %s", window)
         else:
-            normalized: Final = engine._transformer.transform(data)
+            normalized: Final = engine.transformer.transform(data)
             if not normalized.is_empty():
-                payload = engine._serializer.serialize(normalized)
-        await engine._destination.deliver(
+                payload = engine.serializer.serialize(normalized)
+        await engine.destination.deliver(
             content=payload or b"",
             time_window=window,
-            filename=engine._build_filename(window),
+            filename=engine.build_filename(window),
         )
 
     # Maximum number of days to catch up in a single run. Prevents runaway
@@ -176,7 +165,7 @@ class MavvrikFocusLogger(FocusLogger):
             FocusMavvrikDestination,
         )
 
-        destination: Final = engine._destination
+        destination: Final = engine.destination
         if not isinstance(destination, FocusMavvrikDestination):
             await super()._run_scheduled_export()
             return
@@ -237,13 +226,10 @@ class MavvrikFocusLogger(FocusLogger):
         """Scheduler entry point — uses Mavvrik-specific pod-lock key."""
         from litellm.proxy.proxy_server import proxy_logging_obj  # noqa: PLC0415
 
-        pod_lock_manager: _PodLockManager | None = None
-        if proxy_logging_obj is not None:
-            writer: Final[object] = getattr(proxy_logging_obj, "db_spend_update_writer", None)
-            if writer is not None:
-                pod_lock_manager = getattr(writer, "pod_lock_manager", None)
-
-        if pod_lock_manager and pod_lock_manager.redis_cache:
+        pod_lock_manager: Final = (
+            proxy_logging_obj.db_spend_update_writer.pod_lock_manager if proxy_logging_obj is not None else None
+        )
+        if pod_lock_manager is not None and pod_lock_manager.redis_cache:
             acquired: Final = await pod_lock_manager.acquire_lock(cronjob_id=MAVVRIK_FOCUS_EXPORT_JOB_NAME)
             if not acquired:
                 verbose_proxy_logger.debug("Mavvrik FOCUS export: unable to acquire pod lock")

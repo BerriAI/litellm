@@ -11,11 +11,12 @@ from pydantic import BaseModel
 
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-    _handle_invalid_parallel_tool_calls,
-    _should_convert_tool_call_to_json_mode,
+    handle_invalid_parallel_tool_calls,
+    should_convert_tool_call_to_json_mode,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    _extract_reasoning_content,  # pyright: ignore[reportPrivateUsage]  # same import as the OpenAI transformation
+    extract_reasoning_content,
+    merge_consecutive_system_messages,
     strip_litellm_internal_message_fields,
     strip_name_from_message,
 )
@@ -148,9 +149,8 @@ def _split_parallel_tool_calls(messages: list[AllMessageValues]) -> list[AllMess
 
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -188,7 +188,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         return "databricks"
 
     @classmethod
-    def get_config(cls):
+    def get_config(cls, *, model: str | None = None):
         return super().get_config()
 
     def get_required_params(self) -> list[ProviderField]:
@@ -465,7 +465,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             new_messages.append(_message)
 
         if "claude" not in model:
-            new_messages = _split_parallel_tool_calls(cast(list[AllMessageValues], new_messages))
+            new_messages = _split_parallel_tool_calls(
+                merge_consecutive_system_messages(cast(list[AllMessageValues], new_messages))
+            )
 
         if is_async:
             return super()._transform_messages(messages=new_messages, model=model, is_async=cast(Literal[True], True))
@@ -559,7 +561,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         content_str: Final = DatabricksConfig.extract_content_str(message["content"])
         if block_reasoning_content is not None:
             return block_reasoning_content, content_str
-        return _extract_reasoning_content({**message, "content": content_str})
+        return extract_reasoning_content({**message, "content": content_str})
 
     @staticmethod
     def extract_citations(
@@ -586,14 +588,14 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 for _tc in tool_calls:
                     _openai_tc = ChatCompletionMessageToolCall(**_tc)
                     _openai_tool_calls.append(_openai_tc)
-                fixed_tool_calls = _handle_invalid_parallel_tool_calls(_openai_tool_calls)
+                fixed_tool_calls = handle_invalid_parallel_tool_calls(_openai_tool_calls)
 
                 if fixed_tool_calls is not None:
                     tool_calls = fixed_tool_calls
 
             translated_message: Message | None = None
             finish_reason: str | None = None
-            if tool_calls and _should_convert_tool_call_to_json_mode(
+            if tool_calls and should_convert_tool_call_to_json_mode(
                 tool_calls=tool_calls,
                 convert_tool_call_to_json_mode=json_mode,
             ):
@@ -648,7 +650,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -727,7 +729,7 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                     # 6. Set tool_calls to None
                     from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
                     from litellm.llms.base_llm.base_utils import (
-                        _convert_tool_response_to_message,
+                        convert_tool_response_to_message,
                     )
 
                     # Check if this chunk has a function name
@@ -742,7 +744,7 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                         or function_name == RESPONSE_FORMAT_TOOL_NAME
                     ):
                         # Convert tool calls to message format
-                        message = _convert_tool_response_to_message(tool_calls)
+                        message = convert_tool_response_to_message(tool_calls)
                         if message is not None:
                             if message.content == "{}":  # empty json
                                 message.content = ""
@@ -776,6 +778,17 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                 )
                 choice["delta"]["thinking_blocks"] = thinking_blocks
                 translated_choices.append(choice)
+            service_tier: Final = chunk.get("service_tier")
+            if isinstance(service_tier, str) and service_tier:
+                return ModelResponseStream(
+                    id=chunk["id"],
+                    object="chat.completion.chunk",
+                    created=chunk["created"],
+                    model=chunk["model"],
+                    choices=translated_choices,
+                    usage=chunk.get("usage"),
+                    service_tier=service_tier,
+                )
             return ModelResponseStream(
                 id=chunk["id"],
                 object="chat.completion.chunk",

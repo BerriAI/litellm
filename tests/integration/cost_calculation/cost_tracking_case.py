@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
@@ -8,6 +9,7 @@ from typing import Annotated, Final, Literal, TypeAlias
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
 CASES_PATH: Final = Path(__file__).resolve().parent / "cost_tracking_cases.json"
+PRIOR_RESPONSE_ID_MARKER: Final = "$PRIOR_RESPONSE_ID"
 
 
 class SearchContextCostPerQuery(BaseModel):
@@ -47,6 +49,7 @@ class CostMapEntry(BaseModel):
     output_cost_per_token: float | None = None
     input_cost_per_token_batches: float | None = None
     output_cost_per_token_batches: float | None = None
+    output_cost_per_image_token_batches: float | None = None
     input_cost_per_token_above_128k_tokens: float | None = None
     output_cost_per_token_above_128k_tokens: float | None = None
     output_vector_size: int | None = None
@@ -168,6 +171,9 @@ class RealtimeResponse(BaseModel):
     content_type: Literal["application/x-realtime"]
     events: tuple[dict[str, JsonValue], ...]
     session_model: str | None = None
+    session_type: str | None = None
+    created_event: Literal["session.created", "transcription_session.created"] = "session.created"
+    created_repeats: int = 1
 
 
 StoredResponse: TypeAlias = Annotated[
@@ -244,6 +250,7 @@ class CostTrackingTestCase(BaseModel):
             "/v1/audio/speech",
             "/v1/images/generations",
             "/v1/images/edits",
+            "/v1/decisions",
         ]
         | Annotated[str, Field(pattern=r"^/(gemini|anthropic|bedrock)/")]
     ) = "/v1/chat/completions"
@@ -311,6 +318,21 @@ class CostTrackingTestCase(BaseModel):
             return False
         usage: Final = self.response.body.get("usage")
         return isinstance(usage, dict) and isinstance(usage.get("cost"), (int, float))
+
+    @property
+    def chains_prior_response(self) -> bool:
+        return self.request.get("previous_response_id") == PRIOR_RESPONSE_ID_MARKER
+
+    @property
+    def can_chain_prior_response(self) -> bool:
+        return (
+            self.chains_prior_response
+            and self.endpoint == "/v1/responses"
+            and isinstance(self.response, JsonResponse)
+            and isinstance(self.response.body.get("id"), str)
+            and not isinstance(self.expected, FailureExpected)
+            and not (isinstance(self.expected, ExactExpected) and self.expected.rollups)
+        )
 
 
 class BatchOutputLine(BaseModel):
@@ -565,14 +587,24 @@ def data_errors() -> tuple[str, ...]:
         name for name in {case.name for case in _ALL_CASES} if sum(case.name == name for case in _ALL_CASES) > 1
     )
     input_rates: Final = tuple(
-        (entry.input_cost_per_token, model)
+        (entry.litellm_provider, entry.input_cost_per_token, model)
         for model, entry in COST_MAP.items()
         if entry.mode != "realtime"
     )
+    shared_input_rate_details: Final = tuple(
+        (
+            provider,
+            rate,
+            tuple(
+                model
+                for candidate_provider, value, model in input_rates
+                if candidate_provider == provider and value == rate
+            ),
+        )
+        for provider, rate in frozenset((provider, rate) for provider, rate, _ in input_rates if rate is not None)
+    )
     shared_input_rates: Final = sorted(
-        f"{rate}: {tuple(model for value, model in input_rates if value == rate)}"
-        for rate in {value for value, _ in input_rates if value is not None}
-        if sum(value == rate for value, _ in input_rates) > 1
+        f"{rate}: {models}" for _, rate, models in shared_input_rate_details if len(models) > 1
     )
     recount_mismatches: Final = sorted(
         case.name
@@ -681,6 +713,11 @@ def data_errors() -> tuple[str, ...]:
             for marker in ('"id": "call_$REQUEST_ID"', '"id": "toolu_$REQUEST_ID"')
         )
     )
+    invalid_prior_response_chains: Final = sorted(
+        case.name
+        for case in CASES
+        if PRIOR_RESPONSE_ID_MARKER in json.dumps(case.request) and not case.can_chain_prior_response
+    )
     return tuple(
         message
         for message in (
@@ -699,6 +736,10 @@ def data_errors() -> tuple[str, ...]:
             f"rollup responses lack $UNIQUE_ID: {invalid_rollup_ids}" if invalid_rollup_ids else None,
             f"pinned tool IDs contain $REQUEST_ID: {invalid_pinned_tool_ids}"
             if invalid_pinned_tool_ids
+            else None,
+            f"{PRIOR_RESPONSE_ID_MARKER} needs a non-rollup, non-failure /v1/responses JSON response with a string id"
+            f" as previous_response_id: {invalid_prior_response_chains}"
+            if invalid_prior_response_chains
             else None,
         )
         if message is not None

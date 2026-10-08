@@ -25,9 +25,8 @@ from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import get_base64_str
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -68,7 +67,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
                 optional_params["responseFormat"] = self._normalize_response_format(value)
         return optional_params
 
-    def _normalize_response_format(self, value: Any) -> Any:
+    def _normalize_response_format(self, value: Any) -> object:
         """Normalize response_format to TwelveLabs format.
 
         TwelveLabs expects:
@@ -190,7 +189,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

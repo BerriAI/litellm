@@ -6,7 +6,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+futures-util.workspace = true
 litellm-auth.workspace = true
+litellm-coroutine.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 

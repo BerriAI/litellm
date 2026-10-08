@@ -9,6 +9,6 @@ repository.workspace = true
 litellm-cache.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
+litellm-cache-testing.workspace = true
 rstest.workspace = true
 tokio.workspace = true

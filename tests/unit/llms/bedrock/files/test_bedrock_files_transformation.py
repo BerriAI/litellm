@@ -6,6 +6,7 @@ import json
 import os
 from collections.abc import Mapping
 from contextlib import AsyncExitStack, closing
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import MagicMock
 from urllib.parse import unquote, urlparse
@@ -15,6 +16,7 @@ from botocore.auth import S3SigV4Auth, SigV4Auth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
 
+from litellm.constants import DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
 from litellm.llms.bedrock.files.transformation import BedrockJsonlFilesTransformation
 
 
@@ -44,43 +46,54 @@ class TestBedrockFilesTransformation:
                     openai_jsonl_content.append(json.loads(line))
 
         # Transform the content
-        bedrock_jsonl_content = (
-            transformation._transform_openai_jsonl_content_to_bedrock_jsonl_content(
-                openai_jsonl_content=openai_jsonl_content
-            )
+        bedrock_jsonl_content = transformation._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            openai_jsonl_content=openai_jsonl_content
         )
 
         # Basic validation
-        assert len(bedrock_jsonl_content) == len(
-            openai_jsonl_content
-        ), "Should have same number of records"
+        assert len(bedrock_jsonl_content) == len(openai_jsonl_content), "Should have same number of records"
 
         # Check structure of transformed records
         for i, record in enumerate(bedrock_jsonl_content):
-            assert "recordId" in record, f"Record {i+1} should have recordId"
-            assert "modelInput" in record, f"Record {i+1} should have modelInput"
+            assert "recordId" in record, f"Record {i + 1} should have recordId"
+            assert "modelInput" in record, f"Record {i + 1} should have modelInput"
 
             # Check recordId matches custom_id from input
             expected_custom_id = openai_jsonl_content[i].get("custom_id")
-            assert (
-                record["recordId"] == expected_custom_id
-            ), f"Record {i+1} recordId should match custom_id"
+            assert record["recordId"] == expected_custom_id, f"Record {i + 1} recordId should match custom_id"
 
             # Check modelInput has expected structure
             model_input = record["modelInput"]
-            assert isinstance(
-                model_input, dict
-            ), f"Record {i+1} modelInput should be a dictionary"
+            assert isinstance(model_input, dict), f"Record {i + 1} modelInput should be a dictionary"
 
             # For Anthropic models, should have anthropic_version and messages
             if "anthropic.claude" in openai_jsonl_content[i]["body"]["model"]:
-                assert (
-                    "anthropic_version" in model_input
-                ), f"Record {i+1} should have anthropic_version"
-                assert "messages" in model_input, f"Record {i+1} should have messages"
-                assert (
-                    "max_tokens" in model_input
-                ), f"Record {i+1} should have max_tokens"
+                assert "anthropic_version" in model_input, f"Record {i + 1} should have anthropic_version"
+                assert "messages" in model_input, f"Record {i + 1} should have messages"
+                assert "max_tokens" in model_input, f"Record {i + 1} should have max_tokens"
+
+    def test_batch_keeps_an_internal_prefixed_key_out_of_the_bedrock_model_input(self):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [
+                {
+                    "custom_id": "internal-key-1",
+                    "method": "POST",
+                    "url": "/v1/chat/completions",
+                    "body": {
+                        "model": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "max_tokens": 10,
+                        "_litellm_undeclared_sentinel": "internal",
+                    },
+                }
+            ]
+        )
+
+        model_input: Final = json.dumps(result[0]["modelInput"])
+        assert "_litellm_undeclared_sentinel" not in model_input, model_input
+        assert result[0]["modelInput"]["max_tokens"] == 10
 
     def test_nova_text_only_uses_converse_format(self):
         """
@@ -102,18 +115,14 @@ class TestBedrockFilesTransformation:
                 "url": "/v1/chat/completions",
                 "body": {
                     "model": "us.amazon.nova-pro-v1:0",
-                    "messages": [
-                        {"role": "user", "content": "What is the capital of France?"}
-                    ],
+                    "messages": [{"role": "user", "content": "What is the capital of France?"}],
                     "max_tokens": 50,
                     "temperature": 0.7,
                 },
             }
         ]
 
-        result = config._transform_openai_jsonl_content_to_bedrock_jsonl_content(
-            openai_jsonl_content
-        )
+        result = config.transform_openai_jsonl_content_to_bedrock_jsonl_content(openai_jsonl_content)
 
         assert len(result) == 1
         record = result[0]
@@ -173,29 +182,24 @@ class TestBedrockFilesTransformation:
             }
         ]
 
-        result = config._transform_openai_jsonl_content_to_bedrock_jsonl_content(
-            openai_jsonl_content
-        )
+        result = config.transform_openai_jsonl_content_to_bedrock_jsonl_content(openai_jsonl_content)
 
         assert len(result) == 1
         model_input = result[0]["modelInput"]
 
-        assert (
-            "additionalModelRequestFields" not in model_input
-            or model_input["additionalModelRequestFields"]
-        ), "additionalModelRequestFields must be absent or non-empty — Nova rejects {}"
-        assert (
-            "system" not in model_input or model_input["system"]
-        ), "system must be absent or non-empty — Nova rejects []"
+        assert "additionalModelRequestFields" not in model_input or model_input["additionalModelRequestFields"], (
+            "additionalModelRequestFields must be absent or non-empty — Nova rejects {}"
+        )
+        assert "system" not in model_input or model_input["system"], (
+            "system must be absent or non-empty — Nova rejects []"
+        )
 
         # Validate the exact shape AWS accepts
         assert model_input == {
             "messages": [
                 {
                     "role": "user",
-                    "content": [
-                        {"text": "What is 1 + 1? Answer with just the number."}
-                    ],
+                    "content": [{"text": "What is 1 + 1? Answer with just the number."}],
                 }
             ],
             "inferenceConfig": {"maxTokens": 16},
@@ -247,9 +251,7 @@ class TestBedrockFilesTransformation:
             }
         ]
 
-        result = config._transform_openai_jsonl_content_to_bedrock_jsonl_content(
-            openai_jsonl_content
-        )
+        result = config.transform_openai_jsonl_content_to_bedrock_jsonl_content(openai_jsonl_content)
 
         assert len(result) == 1
         model_input = result[0]["modelInput"]
@@ -314,9 +316,7 @@ class TestBedrockFilesTransformation:
             }
         ]
 
-        result = config._transform_openai_jsonl_content_to_bedrock_jsonl_content(
-            openai_jsonl_content
-        )
+        result = config.transform_openai_jsonl_content_to_bedrock_jsonl_content(openai_jsonl_content)
 
         assert len(result) == 1
         model_input = result[0]["modelInput"]
@@ -666,9 +666,7 @@ class TestBedrockFilesTransformation:
             }
         ]
 
-        result = config._transform_openai_jsonl_content_to_bedrock_jsonl_content(
-            openai_jsonl_content
-        )
+        result = config.transform_openai_jsonl_content_to_bedrock_jsonl_content(openai_jsonl_content)
 
         assert len(result) == 1
         model_input = result[0]["modelInput"]
@@ -688,7 +686,7 @@ class TestBedrockFilesTransformation:
             "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
         )
 
-        result = BedrockFilesConfig()._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+        result = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
             [
                 {
                     "custom_id": "req-1",
@@ -722,7 +720,7 @@ class TestBedrockFilesTransformation:
             "bedrock/amazon.titan-embed-text-v2:0",
         )
 
-        result = BedrockFilesConfig()._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+        result = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
             [
                 {
                     "custom_id": "embedding-1",
@@ -745,7 +743,7 @@ class TestBedrockFilesTransformation:
     def test_unmapped_alias_falls_back_to_target_model(self):
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
-        result = BedrockFilesConfig()._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+        result = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
             [
                 {
                     "custom_id": "req-1",
@@ -779,7 +777,7 @@ class TestBedrockFilesTransformation:
     def test_record_provider_wins_over_target_model(self):
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
-        result = BedrockFilesConfig()._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+        result = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
             [
                 {
                     "custom_id": "openai-1",
@@ -807,7 +805,7 @@ class TestBedrockFilesTransformation:
     def test_embedding_alias_falls_back_to_target_model(self):
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
-        result = BedrockFilesConfig()._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+        result = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
             [
                 {
                     "custom_id": "embedding-1",
@@ -897,9 +895,7 @@ class TestBedrockFilesEmbeddingTransformation:
         with open(os.path.join(here, "expected_bedrock_batch_embeddings.jsonl")) as f:
             expected = [json.loads(line) for line in f if line.strip()]
 
-        result = config._transform_openai_jsonl_content_to_bedrock_jsonl_content(
-            openai_jsonl
-        )
+        result = config.transform_openai_jsonl_content_to_bedrock_jsonl_content(openai_jsonl)
 
         assert result == expected
 
@@ -908,7 +904,7 @@ class TestBedrockFilesEmbeddingTransformation:
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
         config = BedrockFilesConfig()
-        result = config._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+        result = config.transform_openai_jsonl_content_to_bedrock_jsonl_content(
             [
                 {
                     "custom_id": "e1",
@@ -929,7 +925,7 @@ class TestBedrockFilesEmbeddingTransformation:
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
         config = BedrockFilesConfig()
-        result = config._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+        result = config.transform_openai_jsonl_content_to_bedrock_jsonl_content(
             [
                 {
                     "custom_id": "e1",
@@ -955,7 +951,7 @@ class TestBedrockFilesEmbeddingTransformation:
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
         config = BedrockFilesConfig()
-        result = config._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+        result = config.transform_openai_jsonl_content_to_bedrock_jsonl_content(
             [
                 {
                     "custom_id": "e1",
@@ -974,7 +970,7 @@ class TestBedrockFilesEmbeddingTransformation:
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
         config = BedrockFilesConfig()
-        result = config._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+        result = config.transform_openai_jsonl_content_to_bedrock_jsonl_content(
             [
                 {
                     "custom_id": "e1",
@@ -998,7 +994,7 @@ class TestBedrockFilesEmbeddingTransformation:
 
         config = BedrockFilesConfig()
         with pytest.raises(ValueError, match="one input per JSONL record"):
-            config._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            config.transform_openai_jsonl_content_to_bedrock_jsonl_content(
                 [
                     {
                         "custom_id": "e1",
@@ -1020,7 +1016,7 @@ class TestBedrockFilesEmbeddingTransformation:
 
         config = BedrockFilesConfig()
         with pytest.raises(ValueError, match="missing required `input`"):
-            config._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            config.transform_openai_jsonl_content_to_bedrock_jsonl_content(
                 [
                     {
                         "custom_id": "e1",
@@ -1036,7 +1032,7 @@ class TestBedrockFilesEmbeddingTransformation:
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
         config = BedrockFilesConfig()
-        result = config._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+        result = config.transform_openai_jsonl_content_to_bedrock_jsonl_content(
             [
                 {
                     "custom_id": "chat-1",
@@ -1081,7 +1077,7 @@ class TestBedrockFilesEmbeddingTransformation:
             "bedrock/amazon.nova-2-multimodal-embeddings-v1:0",
         ):
             with pytest.raises(NotImplementedError, match="titan-embed-text-v2"):
-                config._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+                config.transform_openai_jsonl_content_to_bedrock_jsonl_content(
                     [
                         {
                             "custom_id": "e1",
@@ -1103,7 +1099,7 @@ class TestBedrockFilesEmbeddingTransformation:
             "us.amazon.titan-embed-text-v2:0",
             "bedrock/us.amazon.titan-embed-text-v2:0",
         ):
-            result = config._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            result = config.transform_openai_jsonl_content_to_bedrock_jsonl_content(
                 [
                     {
                         "custom_id": "e1",
@@ -1124,10 +1120,8 @@ class TestBedrockFilesEmbeddingTransformation:
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
         config = BedrockFilesConfig()
-        with pytest.raises(
-            (NotImplementedError, ValueError), match=r"pre-tokenized|one input per"
-        ):
-            config._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+        with pytest.raises((NotImplementedError, ValueError), match=r"pre-tokenized|one input per"):
+            config.transform_openai_jsonl_content_to_bedrock_jsonl_content(
                 [
                     {
                         "custom_id": "e1",
@@ -1149,7 +1143,7 @@ class TestBedrockFilesEmbeddingTransformation:
 
         config = BedrockFilesConfig()
         with pytest.raises(NotImplementedError, match="pre-tokenized"):
-            config._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            config.transform_openai_jsonl_content_to_bedrock_jsonl_content(
                 [
                     {
                         "custom_id": "e1",
@@ -1168,7 +1162,7 @@ class TestBedrockFilesEmbeddingTransformation:
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
         config = BedrockFilesConfig()
-        result = config._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+        result = config.transform_openai_jsonl_content_to_bedrock_jsonl_content(
             [
                 {
                     "custom_id": "ambiguous-1",
@@ -1464,7 +1458,7 @@ class TestBedrockFilesEmbeddingTransformation:
         # just need to make sure we DON'T silently produce an inputText
         # body and call it a chat completion.
         config = BedrockFilesConfig()
-        result = config._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+        result = config.transform_openai_jsonl_content_to_bedrock_jsonl_content(
             [
                 {
                     "custom_id": "explicit-chat-with-input",
@@ -1560,7 +1554,7 @@ class TestBedrockBatchNonChatEndpointRecords:
     def _transform(self, record: dict) -> dict:
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
-        result = BedrockFilesConfig()._transform_openai_jsonl_content_to_bedrock_jsonl_content([record])
+        result = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content([record])
         assert len(result) == 1
         assert result[0]["recordId"] == record["custom_id"]
         return result[0]["modelInput"]
@@ -1671,6 +1665,49 @@ class TestBedrockBatchNonChatEndpointRecords:
         assert "input" not in model_input
         assert "max_output_tokens" not in model_input
 
+    def test_anthropic_responses_record_accepts_a_function_tool_without_strict(self):
+        """Clients omit the SDK's required `strict`; the record is forwarded like real time, not validated."""
+        parameters = {"type": "object", "properties": {"city": {"type": "string"}}}
+        model_input = self._transform(
+            {
+                "custom_id": "4a",
+                "method": "POST",
+                "url": "/v1/responses",
+                "body": {
+                    "model": self.ANTHROPIC_MODEL,
+                    "input": "Weather in Paris?",
+                    "tools": [{"type": "function", "name": "get_weather", "parameters": parameters}],
+                },
+            }
+        )
+
+        assert model_input["messages"][0]["content"] == [{"type": "text", "text": "Weather in Paris?"}]
+        tool = model_input["tools"][0]
+        function = tool.get("function", tool)
+        assert (function["name"], function.get("parameters", function.get("input_schema"))) == ("get_weather", parameters)
+
+    @pytest.mark.parametrize(
+        ("url", "body"),
+        [
+            (
+                "/v1/responses",
+                {"input": [{"role": "developer", "content": "be terse"}, {"role": "user", "content": "ping"}]},
+            ),
+            (
+                "/v1/chat/completions",
+                {"messages": [{"role": "developer", "content": "be terse"}, {"role": "user", "content": "ping"}]},
+            ),
+        ],
+        ids=["responses", "chat"],
+    )
+    def test_anthropic_developer_role_becomes_the_system_prompt_like_real_time(self, url, body):
+        model_input = self._transform(
+            {"custom_id": "4c", "method": "POST", "url": url, "body": {"model": self.ANTHROPIC_MODEL, **body}}
+        )
+
+        assert model_input["system"] == [{"type": "text", "text": "be terse"}]
+        assert [message["role"] for message in model_input["messages"]] == ["user"]
+
     def test_responses_record_keeps_metadata(self):
         """`metadata` reaches the bridge, which reads it as its own kwarg."""
         model_input = self._transform(
@@ -1769,7 +1806,7 @@ class TestBedrockBatchNonChatEndpointRecords:
     def test_mixed_endpoints_in_one_file_keep_their_own_shapes(self):
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
-        result = BedrockFilesConfig()._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+        result = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
             [
                 {
                     "custom_id": "chat",
@@ -1855,6 +1892,177 @@ class TestBedrockBatchNonChatEndpointRecords:
         assert model_input["messages"] == [
             {"role": "user", "content": [{"type": "text", "text": "from messages"}]}
         ]
+
+
+class TestBedrockBatchAnthropicRowParams:
+    """Anthropic batch rows get the OpenAI-to-Anthropic param mapping a real-time request gets.
+
+    Bedrock batch `modelInput` is the InvokeModel body, so a row's OpenAI params
+    (`tools`, `reasoning_effort`, `max_tokens`, ...) have to be mapped the way
+    `get_optional_params` maps them for `bedrock/invoke/...` at request time.
+    Before that, the Anthropic branch wrote the row params into the body as
+    sent, and Bedrock failed every record carrying a function tool
+    (`tool type 'function' is not supported`) or a reasoning tier
+    (`reasoning_effort: Extra inputs are not permitted`).
+    """
+
+    MODEL = "bedrock/us.anthropic.claude-sonnet-4-6"
+    PARAMETERS = {"type": "object", "properties": {"city": {"type": "string"}}}
+
+    def _transform(self, url: str, body: dict, model: str = MODEL, target_model: str = "") -> dict:
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        record = {"custom_id": "row-1", "method": "POST", "url": url, "body": {"model": model, **body}}
+        result = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [record], target_model=target_model
+        )
+        assert len(result) == 1
+        return result[0]["modelInput"]
+
+    @pytest.mark.parametrize(
+        ("url", "body"),
+        [
+            (
+                "/v1/chat/completions",
+                {
+                    "messages": [{"role": "user", "content": "Weather in Paris?"}],
+                    "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": PARAMETERS}}],
+                },
+            ),
+            (
+                "/v1/responses",
+                {
+                    "input": "Weather in Paris?",
+                    "tools": [{"type": "function", "name": "get_weather", "parameters": PARAMETERS}],
+                },
+            ),
+        ],
+        ids=["chat", "responses"],
+    )
+    def test_function_tools_become_anthropic_tools(self, url, body):
+        model_input = self._transform(url, body)
+
+        (tool,) = model_input["tools"]
+        assert (tool["name"], tool["input_schema"]) == ("get_weather", self.PARAMETERS)
+        assert "function" not in tool
+        assert tool.get("type") != "function"
+
+    @pytest.mark.parametrize("route_prefix", ["converse/", "invoke/"])
+    @pytest.mark.parametrize(
+        "deployment_model",
+        ["bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", "bedrock/us.anthropic.claude-sonnet-4-6"],
+        ids=["budget", "adaptive"],
+    )
+    def test_route_prefixed_deployment_maps_like_the_plain_one(self, route_prefix, deployment_model):
+        body = {
+            "messages": [{"role": "user", "content": "Weather in Paris?"}],
+            "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": self.PARAMETERS}}],
+            "reasoning_effort": "low",
+            "max_tokens": 2048,
+        }
+        prefixed_model = deployment_model.replace("bedrock/", f"bedrock/{route_prefix}", 1)
+
+        plain = self._transform("/v1/chat/completions", body, model="claude-batch", target_model=deployment_model)
+        prefixed = self._transform("/v1/chat/completions", body, model="claude-batch", target_model=prefixed_model)
+
+        assert prefixed == plain
+        assert "input_schema" in prefixed["tools"][0]
+        assert "reasoning_effort" not in prefixed
+
+    @pytest.mark.parametrize(
+        ("url", "body"),
+        [
+            ("/v1/chat/completions", {"messages": [{"role": "user", "content": "17 * 23?"}], "reasoning_effort": "low"}),
+            ("/v1/responses", {"input": "17 * 23?", "reasoning": {"effort": "low"}}),
+        ],
+        ids=["chat", "responses"],
+    )
+    @pytest.mark.parametrize(
+        ("model", "expected_tier"),
+        [
+            (
+                "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                {"thinking": {"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET}},
+            ),
+            ("bedrock/us.anthropic.claude-sonnet-4-6", {"output_config": {"effort": "low"}}),
+        ],
+        ids=["budget", "adaptive"],
+    )
+    def test_reasoning_effort_becomes_thinking(self, model, expected_tier, url, body):
+        from litellm.utils import get_optional_params
+
+        model_input = self._transform(url, body, model=model)
+        real_time = get_optional_params(
+            model=model.removeprefix("bedrock/"),
+            custom_llm_provider="bedrock",
+            messages=[{"role": "user", "content": "17 * 23?"}],
+            reasoning_effort="low",
+        )
+
+        assert "reasoning_effort" not in model_input
+        assert {k: model_input[k] for k in expected_tier} == expected_tier
+        assert (model_input["thinking"], model_input.get("output_config")) == (
+            real_time["thinking"],
+            real_time.get("output_config"),
+        )
+
+    @pytest.mark.parametrize(
+        "response_format",
+        [
+            {"type": "json_object"},
+            {"type": "json_schema", "json_schema": {"name": "weather", "schema": PARAMETERS}},
+        ],
+        ids=["json_object", "json_schema"],
+    )
+    def test_response_format_rows_keep_json_mode_out_of_the_body(self, response_format):
+        model_input = self._transform(
+            "/v1/chat/completions",
+            {"messages": [{"role": "user", "content": "Weather in Paris?"}], "response_format": response_format},
+        )
+
+        assert "json_mode" not in model_input
+        assert "response_format" not in model_input
+        assert ("output_config" in model_input) == (response_format["type"] == "json_schema")
+
+    def test_provider_native_params_still_pass_through(self):
+        model_input = self._transform(
+            "/v1/chat/completions",
+            {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 20, "top_k": 5},
+        )
+
+        assert (model_input["top_k"], model_input["max_tokens"]) == (5, 20)
+
+    def test_unsupported_openai_param_fails_the_row_like_real_time(self):
+        from litellm.exceptions import UnsupportedParamsError
+
+        with pytest.raises(UnsupportedParamsError, match="logprobs"):
+            self._transform("/v1/chat/completions", {"messages": [{"role": "user", "content": "hi"}], "logprobs": True})
+
+    def test_row_level_drop_params_drops_the_unsupported_param(self):
+        model_input = self._transform(
+            "/v1/chat/completions",
+            {"messages": [{"role": "user", "content": "hi"}], "logprobs": True, "drop_params": True},
+        )
+
+        assert "logprobs" not in model_input
+        assert "drop_params" not in model_input
+
+    def test_row_level_allowed_openai_params_keeps_the_param(self):
+        model_input = self._transform(
+            "/v1/chat/completions",
+            {"messages": [{"role": "user", "content": "hi"}], "logprobs": True, "allowed_openai_params": ["logprobs"]},
+        )
+
+        assert model_input["logprobs"] is True
+        assert "allowed_openai_params" not in model_input
+
+    def test_chat_record_metadata_stays_out_of_the_body(self):
+        model_input = self._transform(
+            "/v1/chat/completions",
+            {"messages": [{"role": "user", "content": "hi"}], "metadata": {"tenant": "acct-1"}},
+        )
+
+        assert "metadata" not in model_input
 
 
 class TestBedrockFileDeletion:
@@ -3789,3 +3997,82 @@ class TestBedrockFileListTransformation:
 
         assert denied.value.status_code == 403
         assert "AccessDenied" in denied.value.message
+
+
+_SPLIT_IDENTITY_PARAMS: Final = {
+    "aws_region_name": "us-east-1",
+    "aws_access_key_id": "AKIABEDROCKONLY",
+    "aws_secret_access_key": "bedrock-only-secret",
+    "s3_access_key_id": "AKIAS3ONLY",
+    "s3_secret_access_key": "s3-only-secret",
+    "s3_bucket_name": "safe-bucket",
+}
+
+
+def _authorization(headers: Mapping[str, str]) -> str:
+    return {key.lower(): value for key, value in headers.items()}["authorization"]
+
+
+def test_sign_s3_request_uses_the_s3_pair_when_it_differs_from_the_aws_identity():
+    from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+    signed_headers, _signed_body = BedrockFilesConfig()._sign_s3_request(
+        content='{"custom_id": "req-1"}',
+        api_base="https://s3.us-east-1.amazonaws.com/safe-bucket/litellm-bedrock-files-model-id-abc.jsonl",
+        optional_params=dict(_SPLIT_IDENTITY_PARAMS),
+    )
+
+    assert _authorization(signed_headers).startswith("AWS4-HMAC-SHA256 Credential=AKIAS3ONLY/"), (
+        "the S3 PutObject must be signed by s3_access_key_id, not the Bedrock aws_access_key_id"
+    )
+
+
+def test_sign_s3_request_with_the_s3_pair_ignores_ambient_aws_session_token_role_and_profile(monkeypatch):
+    from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "pod-token")
+    monkeypatch.setenv("AWS_ROLE_NAME", "arn:aws:iam::123456789012:role/pod")
+    monkeypatch.setenv("AWS_PROFILE_NAME", "pod-profile")
+    signed_headers, _signed_body = BedrockFilesConfig()._sign_s3_request(
+        content='{"custom_id": "req-1"}',
+        api_base="https://s3.us-east-1.amazonaws.com/safe-bucket/litellm-bedrock-files-model-id-abc.jsonl",
+        optional_params=dict(_SPLIT_IDENTITY_PARAMS),
+    )
+
+    lowered: Final = {key.lower(): value for key, value in signed_headers.items()}
+    assert lowered["authorization"].startswith("AWS4-HMAC-SHA256 Credential=AKIAS3ONLY/")
+    assert "x-amz-security-token" not in lowered, "an ambient AWS_SESSION_TOKEN must not be mixed into the s3_* pair"
+
+
+@pytest.mark.parametrize("method", ["GET", "DELETE"])
+def test_sign_s3_request_without_body_uses_the_s3_pair_when_it_differs_from_the_aws_identity(method):
+    from litellm.llms.bedrock.files.transformation import BedrockFilesConfig, _BedrockS3RequestParams
+
+    signed_headers = BedrockFilesConfig()._sign_s3_request_without_body(
+        method=method,
+        api_base="https://s3.us-east-1.amazonaws.com/safe-bucket/litellm-bedrock-files-model-id-abc.jsonl",
+        aws_region_name="us-east-1",
+        request_params=_BedrockS3RequestParams.model_validate(_SPLIT_IDENTITY_PARAMS),
+    )
+
+    assert _authorization(signed_headers).startswith("AWS4-HMAC-SHA256 Credential=AKIAS3ONLY/"), (
+        f"the S3 {method} must be signed by s3_access_key_id, not the Bedrock aws_access_key_id"
+    )
+
+
+def test_transform_file_content_request_signs_with_the_s3_pair_from_litellm_params():
+    from litellm.llms.bedrock.files.transformation import S3_SIGNED_REQUEST_HEADERS_PARAM, BedrockFilesConfig
+
+    litellm_params = {
+        **_SPLIT_IDENTITY_PARAMS,
+        "_litellm_internal_model_credentials": MappingProxyType({"s3_bucket_name": "safe-bucket"}),
+    }
+    BedrockFilesConfig().transform_file_content_request(
+        file_content_request={"file_id": "s3://safe-bucket/litellm-bedrock-files-model-id-abc.jsonl"},
+        optional_params={},
+        litellm_params=litellm_params,
+    )
+
+    assert _authorization(litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM]).startswith(
+        "AWS4-HMAC-SHA256 Credential=AKIAS3ONLY/"
+    )
