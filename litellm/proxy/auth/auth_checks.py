@@ -3248,7 +3248,7 @@ async def delete_cache_key_objects(
     that many evictions would leave the dropped keys authenticating on every other worker until
     their TTL.
     """
-    evict_local(cache_keys=hashed_tokens, user_api_key_cache=user_api_key_cache)
+    await evict_local(cache_keys=hashed_tokens, user_api_key_cache=user_api_key_cache)
     for start in range(0, len(hashed_tokens), PUBLISH_BACKLOG_SLICE):
         await await_publish_backlog()
         await _delete_cache_key_slice(

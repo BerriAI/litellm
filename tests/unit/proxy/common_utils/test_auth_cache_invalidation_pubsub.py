@@ -16,6 +16,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     AuthCacheInvalidationSubscriber,
     await_publish_backlog,
     evict_and_broadcast,
+    evict_local,
     publish_auth_cache_invalidation,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -100,6 +101,24 @@ class _FakeRedisCache:
 
     def init_pubsub_client(self) -> object:
         return self._client
+
+
+class _StoreRedisCache:
+    def __init__(self) -> None:
+        self._store: dict[str, object] = {}
+
+    def set_cache(self, key: str, value: object, **kwargs: object) -> None:
+        self._store[key] = value
+
+    def get_cache(self, key: str, **kwargs: object) -> object | None:
+        return self._store.get(key)
+
+    def delete_cache(self, key: str) -> None:
+        self._store.pop(key, None)
+
+    async def delete_cache_keys(self, keys: Iterable[str]) -> None:
+        for key in keys:
+            self._store.pop(key, None)
 
 
 def _invalidation_message(cache_key: str) -> dict:
@@ -252,6 +271,25 @@ async def test_subscriber_ignores_malformed_messages() -> None:
     subscriber._apply_message(None)
 
     assert cache.in_memory_cache.get_cache("project_id:p-1") is not None
+
+
+@pytest.mark.asyncio
+async def test_evict_local_drops_redis_so_get_cache_cannot_refill_this_worker() -> None:
+    redis = _StoreRedisCache()
+    cache = UserApiKeyCache(redis_cache=redis)
+    hashed_token = hashlib.sha256(b"sk-deleted-team-key").hexdigest()
+    user_id = "member-removed"
+    cache.set_cache(hashed_token, {"token": hashed_token, "team_id": "t-1"})
+    cache.set_cache(user_id, {"user_id": user_id, "teams": ["t-1"]})
+    cache.in_memory_cache_for(hashed_token).delete_cache(hashed_token)
+    cache.in_memory_cache_for(user_id).delete_cache(user_id)
+    assert cache.get_cache(hashed_token) == {"token": hashed_token, "team_id": "t-1"}
+    assert cache.get_cache(user_id) == {"user_id": user_id, "teams": ["t-1"]}
+
+    await evict_local(cache_keys=(hashed_token, user_id), user_api_key_cache=cache)
+
+    assert cache.get_cache(hashed_token) is None
+    assert cache.get_cache(user_id) is None
 
 
 @pytest.mark.asyncio

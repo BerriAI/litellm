@@ -145,16 +145,24 @@ async def await_publish_backlog() -> None:
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)
-def evict_local(cache_keys: Sequence[str], user_api_key_cache: "UserApiKeyCache") -> None:
+async def evict_local(cache_keys: Sequence[str], user_api_key_cache: "UserApiKeyCache") -> None:
     """
-    Drop cached objects from this worker's memory alone, ahead of a paced broadcast.
+    Drop cached objects from this worker and Redis, ahead of a paced broadcast.
 
-    A bulk eviction waits for the publish backlog between its slices, so every local copy is
-    dropped up front: a deleted key must stop authenticating on the handling worker the instant
-    its rows are gone, whatever Redis is doing.
+    A bulk eviction waits for the publish backlog between its slices, so every copy this
+    worker can serve is dropped up front: a deleted key must stop authenticating here the
+    instant its rows are gone. Memory-only eviction is not enough because get_cache
+    refills from Redis on a miss and writes the stale object back into memory.
     """
     for cache_key in cache_keys:
         user_api_key_cache.in_memory_cache_for(cache_key).delete_cache(cache_key)
+    try:
+        await user_api_key_cache.async_delete_cache_keys(cache_keys)
+    except Exception as e:  # noqa: BLE001  # best-effort: a cache error must not fail a committed write
+        verbose_proxy_logger.warning(
+            "Failed to evict cached entries from redis; a stale object may be served until its TTL expires: %s",
+            e,
+        )
 
 
 async def evict_and_broadcast(cache_keys: Sequence[str], user_api_key_cache: "UserApiKeyCache") -> None:

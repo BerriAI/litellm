@@ -279,7 +279,7 @@ async def _settle_caches(
     proxy_logging_obj: ProxyLogging | None,
 ) -> None:
     deleted_tokens: Final = tuple(key.token for key in removal.deleted_keys)
-    evict_local(
+    await evict_local(
         cache_keys=deleted_tokens
         + removal.jwt_mapping_cache_keys
         + tuple(_member_cache_keys(team.team_id, changed_user_ids)),
