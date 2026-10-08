@@ -11,8 +11,9 @@ If given, generate a unique model_id for the deployment.
 Ensures cooldowns are applied correctly.
 """
 
-from collections.abc import MutableMapping
+from collections.abc import Mapping, MutableMapping
 from typing import Final, cast  # noqa: TID251  # narrows the untyped request dict for mutation
+
 
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.credential_accessor import sends_api_key_secret_reference
@@ -84,11 +85,34 @@ def _admin_config_fields_to_clear_on_base_override() -> list[str]:
 _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE: Final = _admin_config_fields_to_clear_on_base_override()
 
 
-def is_clientside_credential(request_kwargs: dict) -> bool:
+CLIENTSIDE_CREDENTIAL_HEADER_NAMES: Final = frozenset(
+    {
+        "x-api-key",
+        "authorization",
+        "x-goog-api-key",
+        "api-key",
+        "ocp-apim-subscription-key",
+    }
+)
+
+
+def is_clientside_credential(request_kwargs: Mapping[str, object] | dict) -> bool:
     """
     Check if the credential is a clientside credential.
     """
-    return any(key in request_kwargs for key in clientside_credential_keys)
+    if not isinstance(request_kwargs, Mapping):
+        return False
+    if any(key in request_kwargs for key in clientside_credential_keys):
+        return True
+    if request_kwargs.get("has_forwarded_client_auth") is True:
+        return True
+    for header_slot in ("headers", "extra_headers", "default_headers"):
+        headers_val = request_kwargs.get(header_slot)
+        if isinstance(headers_val, Mapping):
+            for h in headers_val:
+                if str(h).lower() in CLIENTSIDE_CREDENTIAL_HEADER_NAMES:
+                    return True
+    return False
 
 
 def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> dict:
@@ -104,6 +128,13 @@ def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> di
     for key in clientside_credential_keys:
         if key in request_kwargs:
             litellm_params[key] = request_kwargs[key]
+
+    for header_slot in ("headers", "extra_headers", "default_headers"):
+        headers_val = request_kwargs.get(header_slot)
+        if isinstance(headers_val, Mapping):
+            for h, v in headers_val.items():
+                if str(h).lower() in CLIENTSIDE_CREDENTIAL_HEADER_NAMES:
+                    litellm_params.setdefault(header_slot, {})[h] = v
 
     # If the caller redirected api_base/base_url to a client-controlled value,
     # don't forward the admin's organization / extra_body / region / token /
