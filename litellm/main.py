@@ -7458,6 +7458,7 @@ async def atext_completion(*args, **kwargs) -> TextCompletionResponse | TextComp
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 stream_options=kwargs.get("stream_options"),
+                usage_injected_by_proxy=kwargs.get("_litellm_strip_stream_usage") is True,
             )
         else:
             ## OpenAI / Azure Text Completion Returns here
@@ -7703,6 +7704,7 @@ def text_completion(
             model=model,
             stream_options=stream_options,
             custom_llm_provider=custom_llm_provider,
+            usage_injected_by_proxy=kwargs.get("_litellm_strip_stream_usage") is True,
         )
         return response
     elif isinstance(response, TextCompletionStreamWrapper):
