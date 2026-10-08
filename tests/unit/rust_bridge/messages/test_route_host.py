@@ -81,7 +81,7 @@ def test_native_request_rejections_map_to_the_public_400() -> None:
     request: Final = NativeCall(
         args=(),
         kwargs=MappingProxyType({}),
-        bound={
+        base={
             "model": "anthropic/claude-sonnet-5",
             "messages": (),
             "max_tokens": 8,
@@ -95,14 +95,14 @@ def test_native_request_rejections_map_to_the_public_400() -> None:
     rejected: Final = ValueError("claude-sonnet-5 does not support top_k=5")
     rejected.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
 
-    mapped: Final = route_host.map_failure(rejected, request.bound, "anthropic")
+    mapped: Final = route_host.map_failure(rejected, request.resolved, "anthropic")
 
     assert isinstance(mapped, litellm.BadRequestError)
     assert mapped.status_code == 400
     assert "does not support top_k=5" in mapped.message
     assert mapped.model == "claude-sonnet-5"
     assert not isinstance(
-        route_host.map_failure(ValueError("plain"), request.bound, "anthropic"), litellm.BadRequestError
+        route_host.map_failure(ValueError("plain"), request.resolved, "anthropic"), litellm.BadRequestError
     )
 
 
