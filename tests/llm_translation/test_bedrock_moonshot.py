@@ -12,7 +12,6 @@ This test suite verifies:
 """
 
 from base_llm_unit_tests import BaseLLMChatTest
-import json
 
 import litellm
 
@@ -37,7 +36,3 @@ class TestBedrockMoonshotInvoke(BaseLLMChatTest):
         return {
             "model": "bedrock/invoke/moonshot.kimi-k2-thinking",
         }
-
-
-class TestBedrockMoonshotToolCalling:
-    """Unit tests for tool calling functionality."""
