@@ -11,12 +11,12 @@ If given, generate a unique model_id for the deployment.
 Ensures cooldowns are applied correctly.
 """
 
-import hashlib
 from collections.abc import Iterable, Mapping
 from typing import Annotated, Final, NamedTuple
 
 from pydantic import Field, TypeAdapter
 
+from litellm.proxy._types import hash_token
 from litellm.router_utils.auto_router_model_naming import classify_strategy_router_model
 from litellm.router_utils.common_utils import provider_for_generic_call
 from litellm.types.router import LiteLLM_Params
@@ -145,10 +145,6 @@ class ForwardedApiKeyScope(NamedTuple):
     key_sha256: str
 
 
-def _sha256(value: str) -> str:
-    return hashlib.sha256(value.encode()).hexdigest()
-
-
 def deployment_audience(litellm_params: Mapping[str, object] | LiteLLM_Params) -> tuple[str, str] | None:
     params: Final = (
         litellm_params
@@ -183,7 +179,7 @@ def forwarded_api_key_scope(
         return None
     return ForwardedApiKeyScope(
         audiences=tuple(sorted({audience for audience in audiences if audience is not None})),
-        key_sha256=_sha256(api_key),
+        key_sha256=hash_token(api_key),
     )
 
 
@@ -202,7 +198,7 @@ def stamped_forwarded_api_key_scope(request_kwargs: Mapping[str, object]) -> For
 
 
 def is_forwarded_api_key(value: object, scope: ForwardedApiKeyScope) -> bool:
-    return isinstance(value, str) and _sha256(value) == scope.key_sha256
+    return isinstance(value, str) and hash_token(value) == scope.key_sha256
 
 
 def _without_forwarded_x_api_key(headers: Mapping[str, object], scope: ForwardedApiKeyScope) -> Mapping[str, object]:
