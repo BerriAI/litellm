@@ -9659,6 +9659,39 @@ class TestSessionBearerEgressScrub:
         assert raw is not None
         assert raw["x-litellm-api-key"] == f"Basic {caller_key}"
 
+    @pytest.mark.parametrize(
+        "per_server_value",
+        (
+            "BEARER sk-caller-admission-key-123",
+            "Bearer  sk-caller-admission-key-123",
+            "Basic sk-caller-admission-key-123",
+        ),
+    )
+    async def test_process_scrubs_case_and_whitespace_variants_of_caller_key(self, per_server_value: str) -> None:
+        caller_key: Final = "sk-caller-admission-key-123"
+        scope: Final = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/",
+            "headers": [
+                (b"x-litellm-api-key", f"Bearer {caller_key}".encode()),
+                (b"x-mcp-echo_srv-authorization", per_server_value.encode()),
+            ],
+        }
+        caller_auth: Final = UserAPIKeyAuth(api_key="stored-key-hash")
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+            new_callable=AsyncMock,
+            return_value=caller_auth,
+        ):
+            auth, _mcp_auth, _servers, mcp_server_auth, _oauth2, raw = await MCPRequestHandler.process_mcp_request(scope)
+
+        assert auth is caller_auth
+        assert not mcp_server_auth
+        assert raw is not None
+        assert raw["x-litellm-api-key"] == f"Bearer {caller_key}"
+
     async def test_process_scrubs_custom_header_admission_key_from_per_server_auth(self) -> None:
         caller_key: Final = "sk-caller-admission-key-123"
         scope: Final = {
@@ -9683,13 +9716,48 @@ class TestSessionBearerEgressScrub:
                 return_value=caller_auth,
             ) as mock_auth,
         ):
-            auth, _mcp_auth, _servers, mcp_server_auth, _oauth2, raw = await MCPRequestHandler.process_mcp_request(scope)
+            auth, _mcp_auth, _servers, mcp_server_auth, _oauth2, raw = await MCPRequestHandler.process_mcp_request(
+                scope
+            )
 
         mock_auth.assert_awaited_once()
         assert auth is caller_auth
         assert not mcp_server_auth
         assert raw is not None
         assert "x-custom-api-key" not in raw
+
+    async def test_process_does_not_use_standard_key_when_custom_admission_header_is_absent(self) -> None:
+        caller_key: Final = "sk-caller-admission-key-123"
+        scope: Final = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/",
+            "headers": [
+                (b"x-litellm-api-key", f"Bearer {caller_key}".encode()),
+                (b"x-mcp-echo_srv-authorization", f"Bearer {caller_key}".encode()),
+            ],
+        }
+        caller_auth: Final = UserAPIKeyAuth(api_key="authenticated-by-other-means")
+
+        with (
+            patch(
+                "litellm.proxy.proxy_server.general_settings",
+                {"litellm_key_header_name": "x-custom-api-key"},
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                new_callable=AsyncMock,
+                return_value=caller_auth,
+            ),
+        ):
+            auth, _mcp_auth, _servers, mcp_server_auth, _oauth2, raw = await MCPRequestHandler.process_mcp_request(
+                scope
+            )
+
+        assert auth is caller_auth
+        assert mcp_server_auth == {"echo_srv": {"Authorization": f"Bearer {caller_key}"}}
+        assert raw is not None
+        assert raw["x-litellm-api-key"] == f"Bearer {caller_key}"
 
 
 # ---------------------------------------------------------------------------

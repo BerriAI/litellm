@@ -18,6 +18,7 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_ALL_TOOLS_WILDCARD
+from litellm.experimental_mcp_client.client import strip_auth_scheme
 from litellm.proxy._experimental.mcp_server.catalog import global_manager
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_passthrough_resource_metadata_url,
@@ -87,6 +88,10 @@ if TYPE_CHECKING:
 
 _EMPTY_TOOLSET_GRANTS: Final[Mapping[str, Sequence[str]]] = MappingProxyType({})
 _OPTIONAL_STRING_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
+
+
+def _normalize_caller_admission_credential(value: str) -> str:
+    return _get_bearer_token_or_received_api_key(strip_auth_scheme(value, "Bearer")).strip()
 
 
 def _as_list(values: Sequence[str] | None) -> list[str] | None:  # mutable-ok: resolver returns a list
@@ -665,11 +670,12 @@ class MCPRequestHandler:
     def _is_caller_admission_key(value: str | None, admitted_credential: str | None) -> bool:
         if value is None or admitted_credential is None:
             return False
-        stripped_value: Final = _get_bearer_token_or_received_api_key(value)
+        normalized_value: Final = _normalize_caller_admission_credential(value)
+        normalized_admitted_credential: Final = _normalize_caller_admission_credential(admitted_credential)
         return bool(
-            stripped_value
-            and admitted_credential
-            and secrets.compare_digest(stripped_value.encode(), admitted_credential.encode())
+            normalized_value
+            and normalized_admitted_credential
+            and secrets.compare_digest(normalized_value.encode(), normalized_admitted_credential.encode())
         )
 
     @staticmethod
@@ -1596,8 +1602,8 @@ class MCPRequestHandler:
         )
         if litellm_api_key is None:
             return None
-        admitted_credential: Final = _get_bearer_token_or_received_api_key(litellm_api_key)
-        return admitted_credential if admitted_credential.strip() else None
+        admitted_credential: Final = _normalize_caller_admission_credential(litellm_api_key)
+        return admitted_credential or None
 
     @staticmethod
     def safe_get_headers_from_scope(scope: Scope) -> Headers:
