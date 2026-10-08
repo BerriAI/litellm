@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict
 import litellm
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
+    configured_injection_points,
     supports_openai_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -3738,6 +3739,14 @@ class TestPromptCacheBreakpointCapability:
         )
         assert supports_openai_prompt_cache_breakpoint("gpt-5.6") is False
 
+    @pytest.mark.parametrize("model", ["gpt-4.1", "gpt-5.6"])
+    @pytest.mark.parametrize("flag", ["true", 1, "false", 0])
+    def test_listed_model_with_an_odd_typed_flag_is_not_eligible(self, monkeypatch, model, flag):
+        monkeypatch.setitem(
+            litellm.model_cost, model, {**litellm.model_cost[model], "supports_prompt_cache_breakpoint": flag}
+        )
+        assert supports_openai_prompt_cache_breakpoint(model) is False
+
 
     def test_published_map_without_the_flag_still_injects_on_gpt_5_6(self, monkeypatch):
         unflagged = {k: v for k, v in litellm.model_cost["gpt-5.6"].items() if k != "supports_prompt_cache_breakpoint"}
@@ -3768,6 +3777,277 @@ class TestPromptCacheBreakpointCapability:
     def test_unlisted_model_falls_back_to_the_version_rule(self, model, expected):
         assert model not in litellm.model_cost
         assert supports_openai_prompt_cache_breakpoint(model) is expected
+
+    def test_a_null_prompt_cache_options_takes_the_implicit_default_on_both_paths(self):
+        points = [{"location": "message", "role": "system"}]
+
+        _, _, chat_params = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model="openai/gpt-5.6",
+            messages=[{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+            non_default_params={"cache_control_injection_points": copy.deepcopy(points), "prompt_cache_options": None},
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert chat_params["prompt_cache_options"] == {"mode": "implicit"}
+
+        kwargs = {"cache_control_injection_points": copy.deepcopy(points), "prompt_cache_options": None}
+        AnthropicCacheControlHook.maybe_inject_cache_control(
+            [{"role": "user", "content": "hi"}], "sys", kwargs, model="gpt-5.6", custom_llm_provider="openai"
+        )
+        assert kwargs["prompt_cache_options"] == {"mode": "implicit"}
+
+
+class TestHostedOpenAIDialectFlag:
+    """#38666: an OpenAI-shaped model served by another provider can opt in through its own
+    model-map entry, instead of being excluded by the openai-only provider check."""
+
+    MANTLE_MODEL = "bedrock_mantle/openai.gpt-5.6-sol"
+
+    def _register(self, monkeypatch, key, provider, flag=True, **extra):
+        entry = {"litellm_provider": provider, "mode": "chat", **extra}
+        if flag is not None:
+            entry["supports_prompt_cache_breakpoint"] = flag
+        monkeypatch.setitem(litellm.model_cost, key, entry)
+
+    def test_flagged_non_openai_deployment_is_eligible(self, monkeypatch):
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
+        assert (
+            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "bedrock_mantle")
+            is True
+        )
+
+    def test_bedrock_api_base_does_not_veto_the_explicit_flag(self, monkeypatch):
+        """The api_base check exists to sniff for api.openai.com, which a Bedrock host never is."""
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
+        assert (
+            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(
+                self.MANTLE_MODEL,
+                "bedrock_mantle",
+                api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
+            )
+            is True
+        )
+
+    def test_flag_set_false_keeps_the_deployment_ineligible(self, monkeypatch):
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle", flag=False)
+        assert (
+            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "bedrock_mantle")
+            is False
+        )
+
+    @pytest.mark.parametrize("flag", ["true", 1, "false", 0])
+    def test_an_odd_typed_flag_keeps_the_deployment_ineligible(self, monkeypatch, flag):
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle", flag=flag)
+        assert (
+            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "bedrock_mantle")
+            is False
+        )
+
+    def test_unflagged_non_openai_deployment_stays_ineligible(self, monkeypatch):
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle", flag=None)
+        assert (
+            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "bedrock_mantle")
+            is False
+        )
+
+    def test_entry_provider_must_match_the_request_provider(self, monkeypatch):
+        """A flagged entry does not license a different provider serving the same model string."""
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
+        assert (
+            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "azure") is False
+        )
+
+    def test_openai_entries_still_go_through_the_api_base_check(self, monkeypatch):
+        """gpt-5.6 is flagged and openai-provided, so it must not bypass the host gate."""
+        assert litellm.model_cost["gpt-5.6"]["supports_prompt_cache_breakpoint"] is True
+        assert litellm.model_cost["gpt-5.6"]["litellm_provider"] == "openai"
+        assert (
+            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(
+                "gpt-5.6", "openai", api_base="https://some-compatible-host.example.com"
+            )
+            is False
+        )
+
+    def test_azure_hosted_gpt_5_6_remains_ineligible(self):
+        """Regression guard: the openai entry's flag must not leak to another provider."""
+        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("gpt-5.6", "azure") is False
+        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("azure/gpt-5.6", None) is False
+
+    REGIONAL_MODEL = "bedrock_mantle/us-east-1/openai.gpt-5.6-sol"
+
+    def test_region_prefixed_deployment_reads_its_region_free_entry(self, monkeypatch):
+        """``bedrock_mantle/<region>/<model>`` is a documented routing form the map keys without the region."""
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
+        assert (
+            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.REGIONAL_MODEL, "bedrock_mantle")
+            is True
+        )
+        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.REGIONAL_MODEL, None) is True
+
+    def test_region_prefixed_deployment_honors_a_flag_set_false(self, monkeypatch):
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle", flag=False)
+        assert (
+            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.REGIONAL_MODEL, "bedrock_mantle")
+            is False
+        )
+
+    def test_region_prefixed_entry_outranks_the_region_free_one(self, monkeypatch):
+        """A row keyed with the region states that deployment's own dialect; GovCloud rows carry no flag."""
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
+        gov_model = "bedrock_mantle/us-gov-west-1/openai.gpt-5.6-sol"
+        self._register(monkeypatch, gov_model, "bedrock_mantle", flag=None)
+        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(gov_model, "bedrock_mantle") is False
+
+    def test_region_free_entry_does_not_license_another_provider(self, monkeypatch):
+        """The candidate keys are built for the request's provider, so a flagged Mantle row stays Mantle's."""
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
+        assert (
+            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("us-east-1/openai.gpt-5.6-sol", "azure")
+            is False
+        )
+
+    def test_unmapped_deployment_name_stays_ineligible(self):
+        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("azure/my-deployment", None) is False
+        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("my-deployment", "azure") is False
+
+    def test_bare_name_colliding_with_an_openai_row_reads_its_own_provider_entry(self, monkeypatch):
+        """The Responses layer hands the hook a bare deployment name plus its provider. The openai row keyed by
+        that bare name neither answers for the deployment nor stops the lookup of the provider's own entry."""
+        self._register(monkeypatch, "gpt-collide", "openai")
+        self._register(monkeypatch, "azure_ai/gpt-collide", "azure_ai")
+        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("gpt-collide", "azure_ai") is True
+
+    def test_bare_name_colliding_with_an_openai_row_stays_ineligible_without_its_own_flag(self, monkeypatch):
+        self._register(monkeypatch, "gpt-collide", "openai")
+        self._register(monkeypatch, "azure_ai/gpt-collide", "azure_ai", flag=None)
+        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("gpt-collide", "azure_ai") is False
+
+
+class TestBedrockMantleGptShipsTheOpenAIDialect:
+    """The shipped cost map flags Bedrock Mantle's GPT-5.6 and newer OpenAI rows, so a configured injection point
+    on one of them reaches the wire as prompt_cache_breakpoint instead of an Anthropic cache_control the Mantle
+    bridge strips (verified live against bedrock-mantle.us-east-1 on 2026-10-07: cache_write_tokens then
+    cached_tokens on the repeat call)."""
+
+    MANTLE_MODEL = "bedrock_mantle/openai.gpt-5.6-sol"
+
+    @pytest.fixture(autouse=True)
+    def _bundled_model_map(self, monkeypatch):
+        bundled = os.path.join(os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json")
+        with open(bundled) as handle:
+            monkeypatch.setattr(litellm, "model_cost", json.load(handle))
+        litellm.utils.cached_get_model_info_helper.cache_clear()
+        yield
+        litellm.utils.cached_get_model_info_helper.cache_clear()
+
+    def test_shipped_entry_makes_the_deployment_eligible(self):
+        assert supports_openai_prompt_cache_breakpoint(self.MANTLE_MODEL) is True
+        assert (
+            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "bedrock_mantle")
+            is True
+        )
+
+    def test_every_flagged_mantle_row_is_an_openai_gpt_5_6_or_newer_model(self):
+        flagged = {
+            key for key, entry in litellm.model_cost.items()
+            if key.startswith("bedrock_mantle/") and entry.get("supports_prompt_cache_breakpoint") is True
+        }
+        assert self.MANTLE_MODEL in flagged
+        for key in flagged:
+            bare = key.rsplit("/", 1)[-1].removeprefix("openai.")
+            assert supports_openai_prompt_cache_breakpoint(bare) is True, key
+
+    def test_seeding_stamps_the_openai_dialect_for_a_configured_point(self):
+        non_default_params = {"cache_control_injection_points": [{"location": "message", "role": "system"}]}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=non_default_params,
+            messages=[{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+            model=self.MANTLE_MODEL,
+            custom_llm_provider=None,
+        )
+        assert non_default_params["cache_control_injection_points"][0]["_litellm_openai_dialect"] is True
+
+    def test_configured_point_emits_the_openai_marker_and_default_options(self):
+        _, messages, params = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model=self.MANTLE_MODEL,
+            messages=[{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+            non_default_params={"cache_control_injection_points": [{"location": "message", "role": "system"}]},
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert messages[0]["content"] == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}]
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
+        assert AnthropicCacheControlHook.count_request_cache_breakpoints(messages) == 1
+
+    def test_region_prefixed_deployment_emits_the_openai_marker(self):
+        """The region-prefixed routing form documented for Mantle lands on the same shipped row."""
+        _, messages, params = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model="bedrock_mantle/us-east-1/openai.gpt-5.6-sol",
+            messages=[{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+            non_default_params={"cache_control_injection_points": [{"location": "message", "role": "system"}]},
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert messages[0]["content"] == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}]
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
+
+    BARE_MODEL = "openai.gpt-5.6-sol"
+    POINTS = [{"location": "message", "role": "system"}]
+    MESSAGES = [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
+    MARKED_SYSTEM = [{"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}]
+
+    def test_a_bare_deployment_name_with_its_provider_is_stamped_on_the_openai_dialect(self):
+        """A deployment written as ``model: openai.gpt-5.6-sol`` plus ``custom_llm_provider: bedrock_mantle``
+        has no row of its own and no openai row of the same name, so only the provider-keyed row can
+        answer; the stamp must read it the way the dialect resolution does."""
+        stamped = AnthropicCacheControlHook._stamped_with_dialect(
+            copy.deepcopy(self.POINTS), self.BARE_MODEL, "bedrock_mantle", None, None
+        )
+        assert stamped[0]["_litellm_openai_dialect"] is True
+
+    def test_a_bare_deployment_name_without_its_provider_keeps_its_points_and_costs_no_lookup(self):
+        points = copy.deepcopy(self.POINTS)
+        with patch.object(AnthropicCacheControlHook, "_resolve_provider") as resolve:
+            assert AnthropicCacheControlHook._stamped_with_dialect(points, self.BARE_MODEL, None, None, None) is points
+        resolve.assert_not_called()
+
+    def test_the_chat_seed_carries_the_resolved_provider_for_a_bare_deployment_name(self):
+        params: dict = {"cache_control_injection_points": copy.deepcopy(self.POINTS)}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(self.MESSAGES),
+            model=self.BARE_MODEL,
+            custom_llm_provider="bedrock_mantle",
+        )
+        _, messages, out = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model=self.BARE_MODEL,
+            messages=copy.deepcopy(self.MESSAGES),
+            non_default_params=params,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert messages[0]["content"] == self.MARKED_SYSTEM
+        assert out["prompt_cache_options"] == {"mode": "implicit"}
+
+    def test_the_responses_stamp_carries_the_resolved_provider_for_a_bare_deployment_name(self):
+        from litellm.responses.main import _stamp_injection_points_with_dialect
+
+        kwargs: dict = {"cache_control_injection_points": copy.deepcopy(self.POINTS)}
+        _stamp_injection_points_with_dialect(kwargs, self.BARE_MODEL, "bedrock_mantle")
+        _, messages, out = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model=self.BARE_MODEL,
+            messages=copy.deepcopy(self.MESSAGES),
+            non_default_params=kwargs,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert messages[0]["content"] == self.MARKED_SYSTEM
+        assert out["prompt_cache_options"] == {"mode": "implicit"}
 
 
 class TestRecordGatewayInjection:
@@ -3901,3 +4181,83 @@ class TestRecordGatewayInjection:
             custom_llm_provider="anthropic",
         )
         assert self.KEY not in kwargs["litellm_metadata"]
+
+
+class TestMalformedInjectionPointsAreIgnored:
+    """A ``cache_control_injection_points`` value that is not a list of points (a string, an int, a bare
+    dict, a list of strings) raised inside the hook and turned every request to that deployment into a 500.
+    Every entry point now reads it as no configured points, the way ``null`` already read."""
+
+    SHAPES = ("system", 5, {"location": "message", "role": "system"}, ["system"], None)
+    MIXED = ["system", {"location": "message", "role": "system"}, 3]
+    MESSAGES = [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
+
+    @pytest.mark.parametrize("value", SHAPES)
+    def test_reads_as_no_points(self, value):
+        assert configured_injection_points(value) == ()
+
+    def test_keeps_the_point_entries_of_a_mixed_list(self):
+        assert configured_injection_points(self.MIXED) == ({"location": "message", "role": "system"},)
+
+    def test_the_point_beside_junk_entries_survives_the_chat_seed_on_an_unstamped_deployment(self):
+        params: dict = {"cache_control_injection_points": copy.deepcopy(self.MIXED)}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(self.MESSAGES),
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+        _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model="claude-sonnet-4-5",
+            messages=copy.deepcopy(self.MESSAGES),
+            non_default_params=params,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert processed[0] == {"role": "system", "content": "sys", "cache_control": {"type": "ephemeral"}}
+
+    @pytest.mark.parametrize("value", SHAPES)
+    def test_chat_prompt_hook_leaves_the_request_untouched(self, value):
+        _, processed, params = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model="openai/gpt-5.6",
+            messages=copy.deepcopy(self.MESSAGES),
+            non_default_params={"cache_control_injection_points": copy.deepcopy(value)},
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert processed == self.MESSAGES
+        assert "cache_control_injection_points" not in params
+        assert "prompt_cache_options" not in params
+
+    @pytest.mark.parametrize("value", SHAPES)
+    def test_chat_seeding_falls_through_to_the_defaults(self, monkeypatch, value):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        params: dict = {"cache_control_injection_points": copy.deepcopy(value)}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(self.MESSAGES),
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+        seeded = params["cache_control_injection_points"]
+        assert seeded and all(isinstance(point, dict) and "location" in point for point in seeded)
+
+    @pytest.mark.parametrize("value", SHAPES)
+    def test_messages_path_leaves_the_request_untouched(self, value):
+        kwargs: dict = {"cache_control_injection_points": copy.deepcopy(value)}
+        messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(
+            [{"role": "user", "content": "hi"}], "sys", kwargs, model="gpt-5.6", custom_llm_provider="openai"
+        )
+        assert (messages, system) == ([{"role": "user", "content": "hi"}], "sys")
+        assert "cache_control_injection_points" not in kwargs
+        assert "prompt_cache_options" not in kwargs
+
+    @pytest.mark.parametrize("value", SHAPES)
+    def test_responses_dialect_stamp_leaves_the_request_untouched(self, value):
+        from litellm.responses.main import _stamp_injection_points_with_dialect
+
+        kwargs: dict = {"cache_control_injection_points": copy.deepcopy(value)}
+        _stamp_injection_points_with_dialect(kwargs, "gpt-5.6", "openai")
+        assert kwargs == {"cache_control_injection_points": value}
