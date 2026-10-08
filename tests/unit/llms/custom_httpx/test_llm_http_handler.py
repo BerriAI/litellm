@@ -4925,3 +4925,55 @@ async def test_lookup_handlers_raise_the_provider_error_status(name: str, is_asy
 
     assert error.value.status_code == status_code
     assert "No such object" in error.value.message
+
+
+@pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_keeps_the_preset_cache_key_set_by_the_client_wrapper():
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.llms.anthropic.pass_through.messages.transformation import AnthropicMessagesConfig
+
+    upstream_response: Final = httpx.Response(
+        200,
+        json={
+            "id": "msg_123",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "hi"}],
+            "model": "claude-sonnet-4-5",
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        },
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+    )
+    mock_client: Final = AsyncMock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(return_value=upstream_response)
+    messages: Final = [{"role": "user", "content": "hi"}]
+    logging_obj: Final = Logging(
+        model="claude-sonnet-4-5",
+        messages=messages,
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="preset-key",
+        function_id="preset-key",
+    )
+    logging_obj.litellm_params["preset_cache_key"] = "cache-key-from-the-client-wrapper"
+
+    await BaseLLMHTTPHandler().async_anthropic_messages_handler(
+        model="claude-sonnet-4-5",
+        messages=messages,
+        anthropic_messages_provider_config=AnthropicMessagesConfig(),
+        anthropic_messages_optional_request_params={"max_tokens": 16},
+        custom_llm_provider="anthropic",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=logging_obj,
+        client=mock_client,
+        api_key="test-key",
+        stream=False,
+        kwargs={},
+    )
+
+    assert logging_obj.litellm_params["preset_cache_key"] == "cache-key-from-the-client-wrapper"

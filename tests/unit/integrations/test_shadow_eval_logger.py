@@ -4,6 +4,7 @@ the detached pipeline's single attempt-row write, and the cache-first job lookup
 import asyncio
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
 
@@ -26,6 +27,7 @@ from litellm.integrations.shadow_eval_logger import (
     _sample_hits,
     _unmask_preference,
     request_guardrail_fingerprint,
+    shadow_eval_snapshot_needed,
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
@@ -2521,3 +2523,26 @@ class TestSamplingFunnel:
 
         assert logger._test_funnel == []
         prisma.db.litellm_shadowevalattempt.create.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("jobs_by_target", "needed"),
+    [
+        pytest.param(None, True, id="jobs_not_read_yet_fails_open"),
+        pytest.param(MappingProxyType({}), False, id="no_active_job_skips_the_copy"),
+        pytest.param(MappingProxyType({("key", "key-hash"): (_job(),)}), True, id="active_job_keeps_the_copy"),
+    ],
+)
+def test_snapshot_needed_until_the_jobs_cache_proves_no_job_is_active(jobs_by_target, needed) -> None:
+    logger: Final = _logger(jobs_by_target=jobs_by_target)
+    assert shadow_eval_snapshot_needed(jobs_cache=logger._jobs_cache) is needed
+
+
+@pytest.mark.asyncio
+async def test_snapshot_not_needed_after_the_db_reports_no_active_job() -> None:
+    prisma: Final = MagicMock()
+    prisma.db.litellm_shadowevaljob.find_many = AsyncMock(return_value=[])
+    logger: Final = _logger(prisma=prisma)
+    assert shadow_eval_snapshot_needed(jobs_cache=logger._jobs_cache) is True
+    await logger._active_jobs()
+    assert shadow_eval_snapshot_needed(jobs_cache=logger._jobs_cache) is False
