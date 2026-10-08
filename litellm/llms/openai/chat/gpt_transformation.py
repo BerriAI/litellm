@@ -418,10 +418,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 # litellm's anthropic adapter carries tool_result.is_error on
                 # the intermediate tool message so error-aware translations
                 # can restore it; real OpenAI has no such field (#44979).
-                messages[i] = cast(
-                    AllMessageValues,
-                    filter_value_from_dict(message, "is_error"),
-                )
+                # filter_value_from_dict mutates the message dict in place, so
+                # the list slot keeps referencing the updated message.
+                filter_value_from_dict(message, "is_error")
         if tools is not None:
             for i, tool in enumerate(tools):
                 tools[i] = cast(
