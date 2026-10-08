@@ -1469,10 +1469,18 @@ def attach_tenant_fan_out(
             TenantFanOutSpanProcessor(
                 operator_sinks=operator_sink_scopes(*configs),
                 excluded_db_systems=excluded_db_systems,
-                default_capture=capture_message_content_from_env(),
+                default_capture=_operator_capture_mode(configs),
                 default_capture_by_backend=MappingProxyType(dict(_owned_capture_modes(configs))),
             )
         )
+
+
+def _operator_capture_mode(configs: Sequence[OpenTelemetryV2Config]) -> CaptureMessageContent:
+    """The mode of the operator's generic ``otel`` callback, so ``callback_settings.otel`` counts as the global default"""
+    return next(
+        (config.capture_message_content for config in configs if any(spec.owner is None for spec in config.exporters)),
+        capture_message_content_from_env(),
+    )
 
 
 def _owned_capture_modes(

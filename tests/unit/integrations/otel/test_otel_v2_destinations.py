@@ -4647,6 +4647,26 @@ class TestCaptureMessageContent:
 
         assert carries_content(by_name(tenant)["chat gpt-4o"])
 
+    def test_an_omitted_setting_follows_the_capture_mode_set_in_callback_settings_otel(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", raising=False)
+        tenant: Final = InMemorySpanExporter()
+        monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, "otlp_http", lambda _spec: tenant)
+        operator: Final = OpenTelemetryV2Config(**{"capture_message_content": "span_only", "exporter": "in_memory"})
+        provider: Final = TracerProvider()
+        attach_tenant_fan_out(provider, operator)
+        destination: Final = OtelDestination(
+            endpoint="http://team.local/api/public/otel",
+            headers=MappingProxyType({"Authorization": "Basic dA=="}),
+            callback_name="langfuse_otel",
+        )
+
+        self._run(provider, (destination,), mapped(_MODEL_CALL_WITH_CONTENT))
+        provider.force_flush()
+
+        assert carries_content(by_name(tenant)["chat gpt-4o"]), "the YAML value is the global default, not only the env"
+
     @pytest.mark.usefixtures("allow_test_hosts")
     @pytest.mark.parametrize("setting", ["no_content", "span_only", "event_only", "span_and_event", None])
     def test_the_setting_rides_the_teams_destination_and_omission_stays_omitted(

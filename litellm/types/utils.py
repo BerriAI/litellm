@@ -3661,6 +3661,9 @@ class CaptureMessageContent(str, Enum):
     EVENT_ONLY = "event_only"
     SPAN_AND_EVENT = "span_and_event"
 
+    def __str__(self) -> str:
+        return self.value
+
     @property
     def captures_span(self) -> bool:
         return self in (self.SPAN_ONLY, self.SPAN_AND_EVENT)
