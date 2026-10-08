@@ -202,7 +202,7 @@ def _proxy_config_lines() -> tuple[str, ...]:
     from litellm.proxy import proxy_server
 
     return safe_config_lines(
-        proxy_server.proxy_config.config,
+        proxy_server.proxy_config.get_config_state().to_mapping(),
         _object_map(proxy_server.general_settings),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # bare dict global, validated by _object_map
     )
 
