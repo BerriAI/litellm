@@ -1,5 +1,6 @@
 import base64
 import json
+import logging
 import time
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
@@ -12,7 +13,10 @@ import pytest
 from fastapi import HTTPException
 from openai import APIConnectionError
 
-from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
+from litellm_enterprise.proxy.hooks.managed_files import (
+    PROXY_LiteLLMManagedFiles,
+    _provider_file_retrieve_credentials,
+)
 from litellm.caching import DualCache
 from litellm.proxy._types import CallTypes, LiteLLM_ManagedFileTable
 from litellm.proxy.openai_files_endpoints.common_utils import (
@@ -228,6 +232,34 @@ async def _resolve_batch_for_output_listing(
         unified_id_by_raw_id={},
         user_api_key_dict=UserAPIKeyAuth(user_id="user-123", team_id="team-123"),
     )
+
+
+def test_provider_credentials_warning_sanitizes_newlines(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    model_id: Final = "deployment-123\nforged warning"
+    router: Final = MagicMock()
+    router.get_deployment_credentials_with_provider.side_effect = RuntimeError(
+        "credential lookup failed\nforged warning"
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        credentials: Final = _provider_file_retrieve_credentials(
+            llm_router=router,
+            model_id=model_id,
+        )
+
+    warnings: Final = tuple(
+        record.getMessage()
+        for record in caplog.records
+        if "Failed to retrieve credentials for provider file" in record.getMessage()
+    )
+    assert credentials is None
+    assert warnings == (
+        "Failed to retrieve credentials for provider file "
+        "model_id=deployment-123forged warning: credential lookup failedforged warning",
+    )
+    assert all("\n" not in warning and "\r" not in warning for warning in warnings)
 
 
 def test_get_file_ids_from_messages():

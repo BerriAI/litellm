@@ -61,7 +61,10 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.litellm_pre_call_utils import (
+    LiteLLMProxyRequestSetup,
+    _sanitize_for_log,
+)
 from litellm.proxy.openai_files_endpoints.common_utils import (
     BATCH_CREATE_HIDDEN_PARAM,
     FILE_LIST_CONTINUATION_CHUNK_SIZE,
@@ -207,7 +210,8 @@ def _provider_file_retrieve_credentials(
         credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id)
     except Exception as error:
         verbose_logger.warning(
-            f"Failed to retrieve credentials for provider file model_id={model_id}: {error}"
+            "Failed to retrieve credentials for provider file "
+            f"model_id={_sanitize_for_log(model_id)}: {_sanitize_for_log(error)}"
         )
         return None
     return cast(Mapping[str, object], credentials) if credentials else None
@@ -822,8 +826,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             return None, False
         except Exception as error:
             verbose_logger.warning(
-                f"Failed to retrieve batch file object for provider_file_id={provider_file_id}: "
-                f"{type(error).__name__} {error}"
+                "Failed to retrieve batch file object for "
+                f"provider_file_id={_sanitize_for_log(provider_file_id)}: "
+                f"{type(error).__name__} {_sanitize_for_log(error)}"
             )
             if raise_on_failure:
                 if isinstance(error, TimeoutError) and not str(error):
@@ -1968,7 +1973,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     await self._save_refreshed_file_object(stored_file_object, refreshed_file_object)
                     return _public_file_object(refreshed_file_object, file_id)
                 except Exception as error:
-                    verbose_logger.warning(f"Failed to refresh batch file object for file_id={file_id}: {error}")
+                    verbose_logger.warning(
+                        "Failed to refresh batch file object for "
+                        f"file_id={_sanitize_for_log(file_id)}: {_sanitize_for_log(error)}"
+                    )
             return _public_file_object(file_object, file_id)
 
         # Case 3: Managed file exists in the database but not the file object (for. e.g the batch task might not have run)
