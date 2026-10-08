@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, Type
 
 from openai.types.chat import ChatCompletionToolParam
 from openai.types.responses.function_tool_param import FunctionToolParam
-from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
@@ -61,7 +60,6 @@ class MCPToolResult(TypedDict):
 
 LITELLM_PROXY_MCP_SERVER_URL: Final = "litellm_proxy"
 LITELLM_PROXY_MCP_SERVER_URL_PREFIX: Final = f"{LITELLM_PROXY_MCP_SERVER_URL}/mcp/"
-_CHAT_MESSAGE_INPUT_ADAPTER: Final = TypeAdapter(list[Message | Mapping[str, object]])
 
 _PROXY_MCP_PATH_RE: Final = re.compile(r"^https?://.+/mcp/([^/]+)$")
 
@@ -1017,8 +1015,7 @@ class LiteLLM_Proxy_MCP_Handler:
 
         from litellm.utils import convert_list_message_to_dict
 
-        copied_messages: Final = _CHAT_MESSAGE_INPUT_ADAPTER.validate_python(deepcopy(original_messages))
-        follow_up_messages: list[dict[str, object]] = convert_list_message_to_dict(copied_messages)
+        follow_up_messages: list[dict[str, object]] = convert_list_message_to_dict(deepcopy(original_messages))
 
         if not follow_up_messages:
             follow_up_messages = []

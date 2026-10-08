@@ -3,6 +3,7 @@ from typing import (
     TYPE_CHECKING,
     Final,
     Literal,
+    Protocol,
     cast,  # noqa: TID251  # AllMessageValues variants are read-only TypedDict mappings
 )
 
@@ -17,6 +18,22 @@ from litellm.llms.microsoft_365_copilot.common_utils import Microsoft365CopilotE
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 from litellm.utils import token_counter
+
+
+class _TokenCounter(Protocol):
+    def __call__(
+        self,
+        model: str = "",
+        *,
+        messages: Sequence[AllMessageValues | Message] | None = None,
+        text: str | None = None,
+        count_response_tokens: bool | None = False,
+    ) -> int: ...
+
+
+_TOKEN_COUNTER: Final = cast(  # cast-ok: only the typed token-counter arguments used here are narrowed locally
+    _TokenCounter, token_counter
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -45,7 +62,7 @@ class _GraphMessage(BaseModel):
 class _GraphConversationResponse(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
-    messages: list[_GraphMessage] | None = None
+    messages: Sequence[_GraphMessage] | None = None
 
 
 class _GraphError(BaseModel):
@@ -76,7 +93,7 @@ class _GraphLocationHint(TypedDict):
 class GraphChatRequest(TypedDict):
     message: ReadOnly[_GraphRequestMessage]
     locationHint: ReadOnly[_GraphLocationHint]
-    additionalContext: NotRequired[ReadOnly[list[_GraphAdditionalContext]]]
+    additionalContext: NotRequired[ReadOnly[Sequence[_GraphAdditionalContext]]]
 
 
 _TEXT_PART_ADAPTER: Final = TypeAdapter(_TextPart)
@@ -235,8 +252,8 @@ def map_graph_response(
             status_code=502,
             message="Microsoft Graph returned a Copilot response without reply text",
         )
-    prompt_tokens: Final = token_counter(model=model, messages=messages)
-    completion_tokens: Final = token_counter(
+    prompt_tokens: Final = _TOKEN_COUNTER(model=model, messages=messages)
+    completion_tokens: Final = _TOKEN_COUNTER(
         model=model,
         text=reply,
         count_response_tokens=True,
