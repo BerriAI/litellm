@@ -16,7 +16,6 @@ from typing import Annotated, Final, NamedTuple
 
 from pydantic import Field, TypeAdapter
 
-from litellm.proxy._types import hash_token
 from litellm.router_utils.auto_router_model_naming import classify_strategy_router_model
 from litellm.router_utils.common_utils import provider_for_generic_call
 from litellm.types.router import LiteLLM_Params
@@ -177,6 +176,8 @@ def forwarded_api_key_scope(
     audiences: Final = tuple(deployment_audience(litellm_params) for litellm_params in params)
     if None in audiences:
         return None
+    from litellm.proxy._types import hash_token
+
     return ForwardedApiKeyScope(
         audiences=tuple(sorted({audience for audience in audiences if audience is not None})),
         key_sha256=hash_token(api_key),
@@ -198,6 +199,8 @@ def stamped_forwarded_api_key_scope(request_kwargs: Mapping[str, object]) -> For
 
 
 def is_forwarded_api_key(value: object, scope: ForwardedApiKeyScope) -> bool:
+    from litellm.proxy._types import hash_token
+
     return isinstance(value, str) and hash_token(value) == scope.key_sha256
 
 
