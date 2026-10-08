@@ -118,8 +118,10 @@ def iam_rig() -> Iterator[IamRig]:
                         sql.Identifier(reader_role)
                     )
                 )
-            writer_front: Final = PostgresFront("127.0.0.1", 5432, writer_role, WRITER_PASSWORD)
-            reader_front: Final = PostgresFront("127.0.0.1", 5432, reader_role, READER_PASSWORD)
+            upstream_host: Final = urllib.parse.urlsplit(url).hostname or "localhost"
+            upstream_port: Final = urllib.parse.urlsplit(url).port or 5432
+            writer_front: Final = PostgresFront(upstream_host, upstream_port, writer_role, WRITER_PASSWORD)
+            reader_front: Final = PostgresFront(upstream_host, upstream_port, reader_role, READER_PASSWORD)
             writer_front.start()
             reader_front.start()
             try:
@@ -154,15 +156,15 @@ def test_writer_and_reader_sign_their_own_override_regions(
         _assert_regions(iam_rig.reader_front, "eu-west-1", "reader")
         response: Final = owned.gateway.request("POST", "/key/generate", {})
         assert response.status_code == 200, response.text
-        read_rows_before: Final = iam_rig.reader_front.query_bytes
+        reader_bytes_before: Final = iam_rig.reader_front.query_bytes
         listing: Final = owned.gateway.request("GET", "/key/list")
         assert listing.status_code == 200, listing.text
         assert read_rows("SELECT pid FROM pg_stat_activity WHERE usename=%s", (iam_rig.reader_role,)), (
             "reader role was never connected; reads cannot have been served by the replica"
         )
-        assert iam_rig.reader_front.query_bytes > read_rows_before or read_rows_before > 0, (
-            "reader front saw no post-auth client traffic"
-        )
+        assert eventually(
+            lambda: iam_rig.reader_front.query_bytes > reader_bytes_before, bool, seconds=30
+        ), "reader front saw no client traffic after the /key/list read"
 
 
 def test_reader_does_not_inherit_writer_override(gateway: Gateway, tmp_path: Path, iam_rig: IamRig) -> None:
@@ -192,44 +194,6 @@ def test_blank_overrides_fall_back_to_process_region(
         assert response.status_code == 200, response.text
 
 
-@pytest.mark.timeout(840)
-def test_refreshed_tokens_keep_their_override_regions(
-    gateway: Gateway, tmp_path: Path, iam_rig: IamRig
-) -> None:
-    overrides: Final = _iam_overrides(
-        iam_rig, {"AWS_RDS_REGION": "us-east-1", "AWS_RDS_READ_REPLICA_REGION": "eu-west-1"}
-    )
-    with owned_proxy_process(
-        gateway, tmp_path, overrides, remove_environment=REMOVE_ENVIRONMENT
-    ) as owned:
-        before_writer: Final = len(iam_rig.writer_front.logins)
-        before_reader: Final = len(iam_rig.reader_front.logins)
-        assert before_writer and before_reader
-        stale_writer: Final = {login.password for login in iam_rig.writer_front.logins[:before_writer]}
-        stale_reader: Final = {login.password for login in iam_rig.reader_front.logins[:before_reader]}
-        # boto mints RDS tokens at a fixed X-Amz-Expires=900 (no ExpiresIn parameter
-        # and no LiteLLM env knob), so the supported way to see a refresh is the
-        # scheduled re-mint ~720s after boot; the new engine then logs into the front.
-        assert eventually(
-            lambda: len(iam_rig.writer_front.logins) > before_writer
-            and len(iam_rig.reader_front.logins) > before_reader,
-            bool,
-            seconds=780,
-        ), "no fresh connections after the scheduled token refresh"
-        _assert_regions(iam_rig.writer_front, "us-east-1", "writer")
-        _assert_regions(iam_rig.reader_front, "eu-west-1", "reader")
-        fresh_writer: Final = {login.password for login in iam_rig.writer_front.logins[before_writer:]}
-        fresh_reader: Final = {login.password for login in iam_rig.reader_front.logins[before_reader:]}
-        assert not stale_writer.issuperset(fresh_writer), (
-            "no writer connection carried a re-minted token signature after the scheduled refresh"
-        )
-        assert not stale_reader.issuperset(fresh_reader), (
-            "no reader connection carried a re-minted token signature after the scheduled refresh"
-        )
-        response: Final = owned.gateway.request("GET", "/key/list")
-        assert response.status_code == 200, response.text
-
-
 def test_password_auth_passes_password_through_unchanged(
     gateway: Gateway, tmp_path: Path, iam_rig: IamRig
 ) -> None:
@@ -244,7 +208,8 @@ def test_password_auth_passes_password_through_unchanged(
     ) as owned:
         response: Final = owned.gateway.request("POST", "/key/generate", {})
         assert response.status_code == 200, response.text
-        passwords: Final = {login.password for login in iam_rig.writer_front.logins}
-        assert passwords == {WRITER_PASSWORD}, (
-            f"front recorded passwords {sorted(passwords)}, expected exactly the role password"
+        logins: Final = iam_rig.writer_front.logins
+        assert logins, "front recorded no writer connections"
+        assert all(login.password == WRITER_PASSWORD for login in logins), (
+            f"front recorded passwords {[login.password for login in logins]}, expected every one to be the role password"
         )

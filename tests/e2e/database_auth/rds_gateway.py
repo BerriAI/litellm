@@ -1,10 +1,4 @@
-"""An owned, source-built proxy against a real RDS writer and cross-region replica.
-
-Only this child process carries the IAM env, so the shared e2e stack stays
-untouched. The proxy's own AWS_REGION is a third region, distinct from both the
-writer's and the replica's, so a boot that succeeds proves each connection was
-signed in its own region rather than the ambient one.
-"""
+"""An owned, source-built proxy against a real RDS writer and cross-region replica."""
 
 from __future__ import annotations
 
@@ -16,6 +10,7 @@ import time
 from collections.abc import Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Final, Protocol, cast
 
@@ -38,6 +33,10 @@ class ReplicaConnectionRow(BaseModel):
     state: str
 
 
+class ReplicaNowRow(BaseModel):
+    now: datetime
+
+
 def hostname_region(hostname: str) -> str:
     match: Final = RDS_HOSTNAME_PATTERN.search(hostname)
     assert match, f"{hostname} is not an RDS hostname"
@@ -48,17 +47,36 @@ class RdsTokenClient(Protocol):
     def generate_db_auth_token(self, DBHostname: str, Port: int, DBUsername: str) -> str: ...
 
 
-def replica_connections(reader_host: str, reader_region: str, user: str, database: str) -> list[ReplicaConnectionRow]:
+def _replica_token(reader_host: str, reader_region: str, user: str) -> str:
     client: Final = cast(RdsTokenClient, boto3.client("rds", region_name=reader_region))  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # rds has no installed stub, so the boto3 overload returns Unknown
-    token: Final = client.generate_db_auth_token(reader_host, 5432, user)
+    return client.generate_db_auth_token(reader_host, 5432, user)
+
+
+def replica_now(reader_host: str, reader_region: str, user: str, database: str) -> datetime:
+    with psycopg.Connection[ReplicaNowRow].connect(
+        f"host={reader_host} port=5432 user={user} "
+        f"password={_replica_token(reader_host, reader_region, user)} dbname={database} "
+        "sslmode=require connect_timeout=15",
+        row_factory=class_row(ReplicaNowRow),
+    ) as conn:
+        row: Final = conn.execute("SELECT now() AS now").fetchone()
+    assert row is not None, "replica did not answer SELECT now()"
+    return row.now
+
+
+def replica_connections(
+    reader_host: str, reader_region: str, user: str, database: str, since: datetime
+) -> list[ReplicaConnectionRow]:
     with psycopg.Connection[ReplicaConnectionRow].connect(
-        f"host={reader_host} port=5432 user={user} password={token} dbname={database} "
+        f"host={reader_host} port=5432 user={user} "
+        f"password={_replica_token(reader_host, reader_region, user)} dbname={database} "
         "sslmode=require connect_timeout=15",
         row_factory=class_row(ReplicaConnectionRow),
     ) as conn:
         rows: Final = conn.execute(
-            "SELECT pid, state FROM pg_stat_activity WHERE usename = %s AND pid <> pg_backend_pid()",
-            (user,),
+            "SELECT pid, state FROM pg_stat_activity "
+            "WHERE usename = %s AND pid <> pg_backend_pid() AND backend_start >= %s",
+            (user, since),
         ).fetchall()
     return list(rows)
 

@@ -1,16 +1,4 @@
-"""A recording Postgres front: speaks enough of the protocol to capture the
-password a client presents, then authenticates upstream to the real server as a
-fixed test role and relays bytes both ways.
-
-Used to observe the literal credential a client (Prisma query engine, psql,
-psycopg) sends: it answers the client ``AuthenticationCleartextPassword`` and
-records ``(user, password)``. Upstream it performs whatever handshake the real
-server asks for (trust, cleartext, MD5, SCRAM-SHA-256) with the role's real
-password, then relays everything after ReadyForQuery verbatim.
-
-The front answers SSLRequest and GSSENCRequest with 'N', so it only fronts
-clients that tolerate plaintext (libpq/prisma ``sslmode=prefer`` or unset).
-"""
+"""A recording Postgres front: captures the client's password, then authenticates upstream as a fixed role and relays bytes."""
 
 import asyncio
 import base64
@@ -109,8 +97,7 @@ class RecordedLogin:
 
 
 class PostgresFront:
-    """Listens on 127.0.0.1:<port>; records each client's (user, password);
-    serves queries by relaying to the real upstream as ``upstream_user``."""
+    """Records each client's (user, password) and relays to upstream as ``upstream_user``."""
 
     def __init__(
         self,

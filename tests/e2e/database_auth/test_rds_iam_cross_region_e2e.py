@@ -1,13 +1,9 @@
-"""Real RDS IAM cross-region proof: writer and replica each signed in its own region.
-
-The proxy's AWS_REGION is a third region, so no override-driven connection can
-succeed by inheriting the ambient region. Requires the opt-in env plus the four
-E2E_RDS_* inputs; see tests/e2e/AGENTS.md.
-"""
+"""Real RDS IAM cross-region proof: writer and replica each signed in its own region."""
 
 import os
 from collections.abc import Iterator
 from contextlib import ExitStack
+from datetime import datetime
 from pathlib import Path
 from typing import Final
 
@@ -16,7 +12,14 @@ from e2e_config import unique_marker
 from e2e_http import unwrap
 from models import ChatBody, ChatMessage, ChatResponse, KeyGenerateBody
 
-from rds_gateway import NOVA_MICRO_MODEL, RdsGateway, hostname_region, owned_rds_gateway, replica_connections
+from rds_gateway import (
+    NOVA_MICRO_MODEL,
+    RdsGateway,
+    hostname_region,
+    owned_rds_gateway,
+    replica_connections,
+    replica_now,
+)
 
 pytestmark = [pytest.mark.rds_iam, pytest.mark.timeout(600)]
 
@@ -36,7 +39,16 @@ def _chat_once(gateway: RdsGateway, key: str) -> ChatResponse:
 
 class TestRdsIamCrossRegionReplica:
     @pytest.fixture
-    def gateway(self, tmp_path: Path) -> Iterator[RdsGateway]:
+    def replica_since(self) -> datetime:
+        return replica_now(
+            os.environ["E2E_RDS_READER_HOST"],
+            hostname_region(os.environ["E2E_RDS_READER_HOST"]),
+            os.environ["E2E_RDS_USER"],
+            os.environ["E2E_RDS_DATABASE"],
+        )
+
+    @pytest.fixture
+    def gateway(self, tmp_path: Path, replica_since: datetime) -> Iterator[RdsGateway]:
         with ExitStack() as cleanup:
             yield owned_rds_gateway(tmp_path, cleanup, {})
 
@@ -49,7 +61,9 @@ class TestRdsIamCrossRegionReplica:
                 {"AWS_RDS_READ_REPLICA_REGION": hostname_region(os.environ["E2E_RDS_WRITER_HOST"])},
             )
 
-    def test_cross_region_writer_and_replica_serve_with_no_overrides(self, gateway: RdsGateway) -> None:
+    def test_cross_region_writer_and_replica_serve_with_no_overrides(
+        self, gateway: RdsGateway, replica_since: datetime
+    ) -> None:
         key: Final = gateway.proxy.generate_key(KeyGenerateBody())
         try:
             response: Final = _chat_once(gateway, key)
@@ -64,9 +78,11 @@ class TestRdsIamCrossRegionReplica:
                 gateway.reader_region,
                 os.environ["E2E_RDS_USER"],
                 os.environ["E2E_RDS_DATABASE"],
+                replica_since,
             )
             assert connections, (
-                f"no open connections for {os.environ['E2E_RDS_USER']} on the replica; reads were not served by it"
+                f"no post-boot connections for {os.environ['E2E_RDS_USER']} on the replica; "
+                "reads were not served by it"
             )
         finally:
             gateway.proxy.delete_key(key)
