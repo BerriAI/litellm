@@ -214,98 +214,141 @@ def test_get_projected_spend_over_limit_raises_when_today_missing(monkeypatch):
         get_projected_spend_over_limit(current_spend=1.0, soft_budget_limit=1.0)
 
 
-def test_get_projected_spend_over_limit_daily_budget_projects_to_reset_not_month_end(monkeypatch):
-    _freeze_today(monkeypatch, date(2024, 1, 15))
+UTC_RESET_JAN_16: Final = datetime(2024, 1, 16, tzinfo=timezone.utc)
+
+
+def test_daily_budget_projects_pace_to_the_reset_not_month_end():
     result: Final = get_projected_spend_over_limit(
         current_spend=8.0,
         soft_budget_limit=10.0,
         budget_duration="1d",
-        budget_reset_at=datetime(2024, 1, 16, 0, 0, 0),
+        budget_reset_at=UTC_RESET_JAN_16,
+        now=datetime(2024, 1, 15, 12, tzinfo=timezone.utc),
     )
-    assert result is not None
-    projected, exceed_date = result
-    assert projected == 16.0
-    assert exceed_date <= date(2024, 1, 16)
+    assert result == (16.0, date(2024, 1, 15))
 
 
-def test_get_projected_spend_over_limit_weekly_budget_uses_window_daily_rate(monkeypatch):
-    _freeze_today(monkeypatch, date(2024, 1, 15))
-    result: Final = get_projected_spend_over_limit(
-        current_spend=8.0,
-        soft_budget_limit=10.0,
-        budget_duration="7d",
-        budget_reset_at=datetime(2024, 1, 18, 0, 0, 0),
-    )
-    assert result is not None
-    projected, exceed_date = result
-    assert projected == 14.0
-    assert exceed_date == date(2024, 1, 16)
-
-
-def test_get_projected_spend_over_limit_daily_budget_under_limit_no_false_alert(monkeypatch):
-    _freeze_today(monkeypatch, date(2024, 1, 15))
+def test_daily_budget_late_in_the_day_does_not_double_todays_spend():
     assert (
         get_projected_spend_over_limit(
-            current_spend=4.0,
+            current_spend=6.0,
             soft_budget_limit=10.0,
             budget_duration="1d",
-            budget_reset_at=datetime(2024, 1, 16, 0, 0, 0),
+            budget_reset_at=UTC_RESET_JAN_16,
+            now=datetime(2024, 1, 15, 23, tzinfo=timezone.utc),
         )
         is None
     )
 
 
-def test_is_projected_spend_over_limit_daily_budget_under_limit(monkeypatch):
-    _freeze_today(monkeypatch, date(2024, 1, 15))
-    assert (
-        is_projected_spend_over_limit(
-            current_spend=4.0,
-            soft_budget_limit=10.0,
-            budget_duration="1d",
-            budget_reset_at=datetime(2024, 1, 16, 0, 0, 0),
-        )
-        is False
-    )
-
-
-def test_get_projected_spend_over_limit_without_duration_keeps_month_end_behavior(monkeypatch):
-    _freeze_today(monkeypatch, date(2024, 1, 15))
-    result: Final = get_projected_spend_over_limit(current_spend=8.0, soft_budget_limit=10.0)
-    assert result is not None
-    projected, _ = result
-    assert projected == pytest.approx(8.0 + (8.0 / 14) * 16)
-
-
-def test_get_projected_spend_over_limit_uses_reset_timezone_not_host_timezone(monkeypatch):
-    _freeze_today(monkeypatch, date(2024, 1, 16))
-
-    class _FrozenDatetime(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return datetime(2024, 1, 15, 23, 30, tzinfo=tz)
-
-    monkeypatch.setattr("litellm.proxy.utils.datetime", _FrozenDatetime)
+def test_naive_reset_time_is_read_as_utc():
     result: Final = get_projected_spend_over_limit(
         current_spend=8.0,
         soft_budget_limit=10.0,
         budget_duration="1d",
-        budget_reset_at=datetime(2024, 1, 16, 0, 0, 0, tzinfo=timezone.utc),
+        budget_reset_at=datetime(2024, 1, 16),
+        now=datetime(2024, 1, 15, 12),
+    )
+    assert result == (16.0, date(2024, 1, 15))
+
+
+def test_weekly_budget_measures_pace_from_the_previous_reset():
+    result: Final = get_projected_spend_over_limit(
+        current_spend=8.0,
+        soft_budget_limit=10.0,
+        budget_duration="7d",
+        budget_reset_at=datetime(2024, 1, 18, tzinfo=timezone.utc),
+        now=datetime(2024, 1, 15, tzinfo=timezone.utc),
+    )
+    assert result == (14.0, date(2024, 1, 16))
+
+
+def test_monthly_budget_window_starts_on_the_previous_reset_day():
+    result: Final = get_projected_spend_over_limit(
+        current_spend=8.0,
+        soft_budget_limit=10.0,
+        budget_duration="1mo",
+        budget_reset_at=datetime(2024, 3, 1, tzinfo=timezone.utc),
+        now=datetime(2024, 2, 5, tzinfo=timezone.utc),
+    )
+    assert result == (pytest.approx(58.0), date(2024, 2, 6))
+
+
+def test_sub_day_budget_is_measured_in_hours_not_days():
+    result: Final = get_projected_spend_over_limit(
+        current_spend=3.0,
+        soft_budget_limit=5.0,
+        budget_duration="4h",
+        budget_reset_at=datetime(2024, 1, 15, 12, tzinfo=timezone.utc),
+        now=datetime(2024, 1, 15, 10, tzinfo=timezone.utc),
+    )
+    assert result == (pytest.approx(6.0), date(2024, 1, 15))
+
+
+def test_first_minutes_after_a_reset_do_not_project_a_burst_across_the_window():
+    assert (
+        get_projected_spend_over_limit(
+            current_spend=0.10,
+            soft_budget_limit=10.0,
+            budget_duration="1d",
+            budget_reset_at=UTC_RESET_JAN_16,
+            now=datetime(2024, 1, 15, 0, 1, tzinfo=timezone.utc),
+        )
+        is None
+    )
+
+
+def test_exceed_date_is_reported_in_the_reset_timezone():
+    result: Final = get_projected_spend_over_limit(
+        current_spend=9.5,
+        soft_budget_limit=10.0,
+        budget_duration="1d",
+        budget_reset_at=datetime(2024, 1, 17, tzinfo=timezone(timedelta(hours=2))),
+        now=datetime(2024, 1, 15, 22, 10, tzinfo=timezone.utc),
     )
     assert result is not None
-    projected, exceed_date = result
-    assert projected == 16.0
-    assert exceed_date <= date(2024, 1, 16)
+    assert result[1] == date(2024, 1, 16)
 
 
-def test_get_projected_spend_over_limit_exceed_date_never_past_reset(monkeypatch):
-    _freeze_today(monkeypatch, date(2024, 1, 15))
-    for spend, soft in [(8.0, 9.99), (8.0, 13.9), (8.0, 13.99)]:
-        result = get_projected_spend_over_limit(
-            current_spend=spend,
-            soft_budget_limit=soft,
-            budget_duration="7d",
-            budget_reset_at=datetime(2024, 1, 18, 0, 0, 0),
+@pytest.mark.parametrize("soft_budget_limit", [9.99, 13.9, 13.99])
+def test_exceed_date_never_lands_after_the_reset(soft_budget_limit):
+    result: Final = get_projected_spend_over_limit(
+        current_spend=8.0,
+        soft_budget_limit=soft_budget_limit,
+        budget_duration="7d",
+        budget_reset_at=datetime(2024, 1, 18, tzinfo=timezone.utc),
+        now=datetime(2024, 1, 15, tzinfo=timezone.utc),
+    )
+    assert result is not None
+    assert result[1] <= date(2024, 1, 18)
+
+
+@pytest.mark.parametrize("current_spend, expected", [(4.0, False), (8.0, True)])
+def test_is_projected_spend_over_limit_follows_the_reset_window(current_spend, expected):
+    assert (
+        is_projected_spend_over_limit(
+            current_spend=current_spend,
+            soft_budget_limit=10.0,
+            budget_duration="1d",
+            budget_reset_at=UTC_RESET_JAN_16,
+            now=datetime(2024, 1, 15, 12, tzinfo=timezone.utc),
         )
-        assert result is not None
-        _, exceed_date = result
-        assert exceed_date <= date(2024, 1, 18)
+        is expected
+    )
+
+
+def test_without_duration_keeps_month_end_behavior(monkeypatch):
+    _freeze_today(monkeypatch, date(2024, 1, 15))
+    result: Final = get_projected_spend_over_limit(current_spend=8.0, soft_budget_limit=10.0)
+    assert result is not None
+    assert result[0] == pytest.approx(8.0 + (8.0 / 14) * 16)
+
+
+def test_unparseable_duration_falls_back_to_month_end(monkeypatch):
+    _freeze_today(monkeypatch, date(2024, 1, 15))
+    assert get_projected_spend_over_limit(
+        current_spend=8.0,
+        soft_budget_limit=10.0,
+        budget_duration="fortnightly",
+        budget_reset_at=UTC_RESET_JAN_16,
+    ) == get_projected_spend_over_limit(current_spend=8.0, soft_budget_limit=10.0)

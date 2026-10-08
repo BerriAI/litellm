@@ -147,7 +147,7 @@ from litellm.litellm_core_utils.core_helpers import (
     independent_snapshot,
     is_expected_client_error,
 )
-from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.litellm_core_utils.duration_parser import subtract_duration
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -8102,20 +8102,54 @@ def _get_month_end_date(today: date) -> date:
     return date(today.year, today.month + 1, 1) - timedelta(days=1)
 
 
-def _get_budget_window(
-    today: date,
-    budget_duration: str | None,
-    budget_reset_at: datetime | None,
-) -> tuple[date, int]:
-    if budget_duration is None or budget_reset_at is None:
-        return _get_month_end_date(today), max(today.day - 1, 1)
+MIN_ELAPSED_WINDOW_FRACTION: Final = 1 / 24
+
+
+def _as_aware(moment: datetime) -> datetime:
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
+
+
+def _reset_window(budget_duration: str, budget_reset_at: datetime) -> tuple[datetime, datetime] | None:
+    window_end: Final = _as_aware(budget_reset_at)
     try:
-        window_days: Final = max(duration_in_seconds(duration=budget_duration) // 86400, 1)
+        window_start: Final = subtract_duration(window_end, budget_duration)
     except ValueError:
-        return _get_month_end_date(today), max(today.day - 1, 1)
-    window_end: Final = budget_reset_at.date()
-    window_start: Final = window_end - timedelta(days=window_days)
-    return window_end, max((today - window_start).days, 1)
+        return None
+    return (window_start, window_end) if window_start < window_end else None
+
+
+def _project_within_window(
+    current_spend: float,
+    soft_budget_limit: float,
+    window: tuple[datetime, datetime],
+    now: datetime | None,
+) -> tuple[float, date] | None:
+    window_start, window_end = window
+    moment: Final = (_as_aware(now) if now is not None else datetime.now(timezone.utc)).astimezone(window_end.tzinfo)
+    elapsed: Final = max(moment - window_start, (window_end - window_start) * MIN_ELAPSED_WINDOW_FRACTION)
+    remaining: Final = max(window_end - moment, timedelta(0))
+    spend_per_second: Final = current_spend / elapsed.total_seconds()
+    projected_spend: Final = current_spend + spend_per_second * remaining.total_seconds()
+    if projected_spend <= soft_budget_limit:
+        return None
+    remaining_budget: Final = soft_budget_limit - current_spend
+    if spend_per_second <= 0 or remaining_budget <= 0:
+        return projected_spend, moment.date()
+    exceed_at: Final = min(moment + timedelta(seconds=remaining_budget / spend_per_second), window_end)
+    return projected_spend, exceed_at.date()
+
+
+def _project_to_month_end(current_spend: float, soft_budget_limit: float) -> tuple[float, date] | None:
+    today: Final = date.today()
+    remaining_days: Final = (_get_month_end_date(today) - today).days
+    daily_spend: Final = current_spend / max(today.day - 1, 1)
+    projected_spend: Final = current_spend + daily_spend * remaining_days
+    if projected_spend <= soft_budget_limit:
+        return None
+    remaining_budget: Final = soft_budget_limit - current_spend
+    if daily_spend <= 0 or remaining_budget <= 0:
+        return projected_spend, today
+    return projected_spend, today + timedelta(days=remaining_budget / daily_spend)
 
 
 def is_projected_spend_over_limit(
@@ -8123,6 +8157,7 @@ def is_projected_spend_over_limit(
     soft_budget_limit: float | None,
     budget_duration: str | None = None,
     budget_reset_at: datetime | None = None,
+    now: datetime | None = None,
 ) -> bool:
     return (
         get_projected_spend_over_limit(
@@ -8130,6 +8165,7 @@ def is_projected_spend_over_limit(
             soft_budget_limit=soft_budget_limit,
             budget_duration=budget_duration,
             budget_reset_at=budget_reset_at,
+            now=now,
         )
         is not None
     )
@@ -8143,27 +8179,18 @@ def get_projected_spend_over_limit(
     soft_budget_limit: float | None,
     budget_duration: str | None = None,
     budget_reset_at: datetime | None = None,
+    now: datetime | None = None,
 ) -> tuple[float, date] | None:
     if soft_budget_limit is None:
         return None
-
-    today: Final = (
-        datetime.now(budget_reset_at.tzinfo).date()
-        if budget_reset_at is not None and budget_reset_at.tzinfo is not None
-        else date.today()
+    window: Final = (
+        _reset_window(budget_duration, budget_reset_at)
+        if budget_duration is not None and budget_reset_at is not None
+        else None
     )
-    window_end, elapsed_days = _get_budget_window(today, budget_duration, budget_reset_at)
-    remaining_days: Final = max((window_end - today).days, 0)
-    daily_spend: Final = current_spend / elapsed_days
-    projected_spend: Final = current_spend + (daily_spend * remaining_days)
-
-    if projected_spend <= soft_budget_limit:
-        return None
-
-    remaining_budget: Final = soft_budget_limit - current_spend
-    if daily_spend <= 0 or remaining_budget <= 0:
-        return projected_spend, today
-    return projected_spend, min(today + timedelta(days=remaining_budget / daily_spend), window_end)
+    if window is None:
+        return _project_to_month_end(current_spend, soft_budget_limit)
+    return _project_within_window(current_spend, soft_budget_limit, window, now)
 
 
 _get_projected_spend_over_limit: Final = get_projected_spend_over_limit

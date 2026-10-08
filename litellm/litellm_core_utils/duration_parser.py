@@ -106,6 +106,17 @@ def duration_in_seconds(duration: str) -> int:
         raise ValueError(f"Unsupported duration unit, passed duration: {duration}")
 
 
+def subtract_duration(moment: datetime, duration: str) -> datetime:
+    """Step `moment` back by one budget duration; `Nmo` steps back whole calendar months."""
+    value, unit = _extract_from_regex(duration=_normalize_duration(duration))
+    if unit != "mo":
+        return moment - timedelta(seconds=duration_in_seconds(duration))
+    total_months: Final = moment.year * 12 + moment.month - 1 - value
+    year, month_index = divmod(total_months, 12)
+    month: Final = month_index + 1
+    return moment.replace(year=year, month=month, day=min(moment.day, get_last_day_of_month(year, month)))
+
+
 def get_next_standardized_reset_time(
     duration: str,
     current_time: datetime,
