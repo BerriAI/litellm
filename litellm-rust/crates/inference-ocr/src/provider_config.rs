@@ -106,10 +106,6 @@ impl OcrConfigKind {
         }
     }
 
-    pub(crate) fn get_supported_ocr_params(self, model: &str) -> &'static [&'static str] {
-        with_config!(self, config => config.get_supported_ocr_params(model))
-    }
-
     pub(crate) fn get_api_key_env_var(self) -> Option<&'static str> {
         with_config!(self, config => config.get_api_key_env_var())
     }

@@ -31,12 +31,6 @@ pub fn parse_options<T: DeserializeOwned>(arguments: &CallArguments) -> Result<T
     })
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ArgumentSpec {
-    pub name: &'static str,
-    pub secret: bool,
-}
-
 pub fn compose_body<B: Serialize>(
     arguments: &CallArguments,
     body: &B,
