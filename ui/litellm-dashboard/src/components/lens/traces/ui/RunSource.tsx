@@ -1,6 +1,6 @@
 "use client";
 
-import { MessagesSquare } from "lucide-react";
+import { ArrowUpRight, MessagesSquare, UserRound } from "lucide-react";
 
 import githubLogo from "../../../../../public/assets/logos/github.svg";
 import jiraLogo from "../../../../../public/assets/logos/jira.svg";
@@ -52,25 +52,36 @@ function AppMark({ app, className }: { app: SourceApp; className: string }) {
   );
 }
 
-/** Links a run back to the conversation that started it, e.g. a Slack thread. */
+const chip =
+  "inline-flex h-6 min-w-0 shrink items-center gap-1.5 rounded-full border border-border px-2 text-xs text-foreground";
+
+/** Who started the run, e.g. the person who asked in Slack. */
+export function RunUser({ user }: { user: string }) {
+  return (
+    <span className={chip} title={user} data-testid="run-user">
+      <UserRound aria-hidden className="size-3 shrink-0 text-muted-foreground" />
+      <span className="truncate">{user}</span>
+    </span>
+  );
+}
+
+/** Links a run back to the conversation that started it, e.g. a Slack thread; hover previews its title. */
 export function RunSourceLink({ source }: { source: Source }) {
   const app = sourceApp(source);
   if (!app) return null;
   return (
     <HoverCard>
-      <span className="inline-flex items-center gap-1">
-        Source
-        <HoverCardTrigger
-          href={source.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label={`Source: ${app.label}`}
-          className="inline-flex items-center gap-1 font-medium text-foreground underline-offset-2 hover:underline"
-        >
-          <AppMark app={app} className="size-3 shrink-0" />
-          {app.label}
-        </HoverCardTrigger>
-      </span>
+      <HoverCardTrigger
+        href={source.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label={`Open ${app.label} thread`}
+        className={`${chip} shrink-0 transition-colors hover:bg-muted`}
+      >
+        <AppMark app={app} className="size-3 shrink-0" />
+        <span className="truncate">{app.label} thread</span>
+        <ArrowUpRight aria-hidden className="size-3 shrink-0 text-muted-foreground" />
+      </HoverCardTrigger>
       <HoverCardContent align="start" className="w-72 p-3">
         <a href={source.url} target="_blank" rel="noopener noreferrer" className="flex flex-col gap-1.5">
           <span className="line-clamp-2 text-sm font-medium text-foreground">
@@ -78,7 +89,7 @@ export function RunSourceLink({ source }: { source: Source }) {
           </span>
           <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
             <AppMark app={app} className="size-3 shrink-0" />
-            {app.label}
+            {source.user ? `${app.label} · ${source.user}` : app.label}
           </span>
         </a>
       </HoverCardContent>

@@ -158,7 +158,7 @@ def _deployment(scenario: Scenario, handle: ScenarioHandle, provider: _Provider)
 
 def _decide(gateway: Gateway, model: str, *, key: str | None = None, **extra: JsonValue) -> httpx.Response:
     return gateway.request(
-        "POST", "/v1/decisions", {"model": model, "state": _STATE, "questions": _QUESTIONS, **extra}, key=key
+        "POST", "/v1/systemone", {"model": model, "state": _STATE, "questions": _QUESTIONS, **extra}, key=key
     )
 
 
@@ -310,7 +310,7 @@ def test_invalid_bodies_are_refused_at_the_gateway_without_an_upstream_call(gate
         handle: Final = _register(scenario, _answer_body(_PERPLEXITY))
         model: Final = _deployment(scenario, handle, _PERPLEXITY)
         for label, body in _INVALID_BODIES:
-            response: Final = gateway.request("POST", "/v1/decisions", {"model": model, **body})
+            response: Final = gateway.request("POST", "/v1/systemone", {"model": model, **body})
             assert response.status_code == 400, (label, response.text)
             assert "Invalid Decisions request" in response.text, (label, response.text)
         assert _upstream_calls(gateway, handle) == []
@@ -329,7 +329,7 @@ def test_key_checks_match_chat(gateway: Gateway) -> None:
         handle: Final = _register(scenario, _answer_body(_PERPLEXITY))
         model: Final = _deployment(scenario, handle, _PERPLEXITY)
         anonymous: Final = gateway.client.post(
-            "/v1/decisions", json={"model": model, "state": _STATE, "questions": _QUESTIONS}
+            "/v1/systemone", json={"model": model, "state": _STATE, "questions": _QUESTIONS}
         )
         assert anonymous.status_code == 401, anonymous.text
         restricted: Final = scenario.key(models=[f"other-{uuid.uuid4().hex}"])
@@ -395,7 +395,7 @@ def test_a_deployment_opted_into_client_api_base_sends_decisions_and_chat_to_the
         assert _calls_to(observed, configured) == []
 
 
-def test_a_config_pass_through_at_v1_decisions_keeps_answering_and_the_native_api_serves_decisions(
+def test_a_config_pass_through_at_v1_decisions_keeps_answering_and_the_native_api_serves_system_one(
     gateway: Gateway, tmp_path: Path
 ) -> None:
     with gateway.scenario() as scenario:
@@ -407,9 +407,11 @@ def test_a_config_pass_through_at_v1_decisions_keeps_answering_and_the_native_ap
             tmp_path, f"{pass_through_target.api_base()}/v1/decisions", native_target.api_base()
         )
         with owned_proxy_process(gateway, tmp_path, {}, config=config) as owned:
-            through: Final = _decide(owned.gateway, _PASS_THROUGH_MODEL)
+            through: Final = owned.gateway.request(
+                "POST", "/v1/decisions", {"model": _PASS_THROUGH_MODEL, "state": _STATE, "questions": _QUESTIONS}
+            )
             native: Final = owned.gateway.request(
-                "POST", "/decisions", {"model": _PASS_THROUGH_NEIGHBOUR, "state": _STATE, "questions": _QUESTIONS}
+                "POST", "/systemone", {"model": _PASS_THROUGH_NEIGHBOUR, "state": _STATE, "questions": _QUESTIONS}
             )
         assert through.status_code == 200, through.text
         assert through.json() == {"model": _PASS_THROUGH_MODEL, "answers": _ANSWERS, "usage": _USAGE}

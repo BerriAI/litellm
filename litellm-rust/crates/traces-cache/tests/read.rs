@@ -289,6 +289,7 @@ fn span(index: usize) -> TraceSpansRow {
         source_type: String::new(),
         source_url: String::new(),
         source_title: String::new(),
+        source_user: String::new(),
         team_id: "team".into(),
         api_key_hash: "key".into(),
         user_id: "user".into(),
