@@ -15,27 +15,28 @@ interface RankedRow extends Record<string, unknown> {
   tokens: number;
 }
 
+const EMPTY_RANKED = { spend: 0, requests: 0, successful_requests: 0, failed_requests: 0, tokens: 0 } as const;
+
 /** Sums one breakdown dimension across every day, highest spend first. */
 export const rollUpBreakdown = (results: readonly DailyData[], dimension: BreakdownDimension): RankedRow[] => {
-  const totals = new Map<string, RankedRow>();
-  for (const day of results) {
-    for (const [key, entry] of Object.entries(day.breakdown[dimension] ?? {})) {
-      const row = totals.get(key) ?? {
+  const entries = results.flatMap((day) => Object.entries(day.breakdown[dimension] ?? {}));
+  const totals = entries.reduce<ReadonlyMap<string, RankedRow>>((acc, [key, entry]) => {
+    const row = acc.get(key) ?? { key, ...EMPTY_RANKED };
+    return new Map([
+      ...acc,
+      [
         key,
-        spend: 0,
-        requests: 0,
-        successful_requests: 0,
-        failed_requests: 0,
-        tokens: 0,
-      };
-      row.spend += entry.metrics.spend;
-      row.requests += entry.metrics.api_requests;
-      row.successful_requests += entry.metrics.successful_requests || 0;
-      row.failed_requests += entry.metrics.failed_requests || 0;
-      row.tokens += entry.metrics.total_tokens;
-      totals.set(key, row);
-    }
-  }
+        {
+          ...row,
+          spend: row.spend + entry.metrics.spend,
+          requests: row.requests + entry.metrics.api_requests,
+          successful_requests: row.successful_requests + (entry.metrics.successful_requests || 0),
+          failed_requests: row.failed_requests + (entry.metrics.failed_requests || 0),
+          tokens: row.tokens + entry.metrics.total_tokens,
+        },
+      ],
+    ]);
+  }, new Map());
   return [...totals.values()].sort((a, b) => b.spend - a.spend);
 };
 
@@ -43,15 +44,23 @@ export const OTHER_COLOR = "#94a3b8";
 const OTHER_SERIES = "Other";
 
 export interface SeriesDay extends Record<string, unknown> {
+  /** ISO date, the chart's category key: unique across years, unlike its display label. */
   date: string;
   label: string;
 }
 
+/**
+ * `keys` are internal (`s0`, `s1`, ...) so a series named `date`, `label` or `Other` cannot
+ * collide with the day's own fields; `labels` carry the display names in the same order.
+ */
 export interface Series {
   data: SeriesDay[];
   keys: string[];
+  labels: string[];
   colors: string[];
 }
+
+const seriesKey = (index: number) => `s${index}`;
 
 const formatDayLabel = (date: string): string => {
   const parsed = new Date(`${date}T00:00:00`);
@@ -76,9 +85,6 @@ export const rankValue = (row: RankedRow, metric: UsageMetric): number => {
   return row.requests;
 };
 
-const seriesColor = (key: string, index: number): string =>
-  key === OTHER_SERIES ? OTHER_COLOR : stackedUsageColor(index);
-
 /**
  * Daily `metric` stacked by the top `top` keys of a dimension, the rest folded
  * into "Other" so every bar still sums to the day's total.
@@ -94,26 +100,28 @@ export const seriesBy = (
     .sort((a, b) => rankValue(b, metric) - rankValue(a, metric))
     .slice(0, top)
     .map((row) => row.key);
-  const leaderSet = new Set(leaders);
-  let hasOther = false;
-  const data = sortByDate(results).map((day) => {
-    const point: SeriesDay = { date: day.date, label: formatDayLabel(day.date) };
-    for (const key of leaders) point[key] = 0;
-    let other = metricOf(day.metrics, metric);
-    for (const [key, entry] of Object.entries(day.breakdown[dimension] ?? {})) {
-      if (!leaderSet.has(key)) continue;
-      const value = metricOf(entry.metrics, metric);
-      point[key] = value;
-      other -= value;
-    }
+  const days = sortByDate(results).map((day) => {
+    const values = leaders.map((leader) => {
+      const entry = day.breakdown[dimension]?.[leader];
+      return entry ? metricOf(entry.metrics, metric) : 0;
+    });
+    const named = values.reduce((sum, value) => sum + value, 0);
     // Rounding in the per-key sums leaves dust; only a real remainder earns a segment.
-    const remainder = other > 1e-6 ? other : 0;
-    point[OTHER_SERIES] = remainder;
-    if (remainder > 0) hasOther = true;
-    return point;
+    const remainder = metricOf(day.metrics, metric) - named;
+    return { day, values, other: remainder > 1e-6 ? remainder : 0 };
   });
-  const keys = hasOther || leaders.length === 0 ? [...leaders, OTHER_SERIES] : leaders;
-  return { data, keys, colors: keys.map((key, i) => seriesColor(key, i)) };
+  const hasOther = days.some(({ other }) => other > 0) || leaders.length === 0;
+  const labels = hasOther ? [...leaders, OTHER_SERIES] : leaders;
+  const keys = labels.map((_, index) => seriesKey(index));
+  const data = days.map(({ day, values, other }) => ({
+    date: day.date,
+    label: formatDayLabel(day.date),
+    ...Object.fromEntries((hasOther ? [...values, other] : values).map((value, index) => [keys[index], value])),
+  }));
+  const colors = labels.map((label, index) =>
+    hasOther && index === labels.length - 1 ? OTHER_COLOR : stackedUsageColor(index),
+  );
+  return { data, keys, labels, colors };
 };
 
 export type Granularity = "day" | "week";
@@ -124,26 +132,43 @@ const DAY_MS = 86_400_000;
 export const bucketSeries = (series: Series, granularity: Granularity): Series => {
   if (granularity === "day" || series.data.length === 0) return series;
   const origin = Date.parse(`${series.data[0].date}T00:00:00Z`);
-  const buckets = new Map<number, SeriesDay>();
-  for (const day of series.data) {
-    const index = Math.floor((Date.parse(`${day.date}T00:00:00Z`) - origin) / (7 * DAY_MS));
-    const start = new Date(origin + index * 7 * DAY_MS).toISOString().slice(0, 10);
-    const bucket = buckets.get(index) ?? { date: start, label: `Wk of ${formatDayLabel(start)}` };
-    for (const key of series.keys) bucket[key] = Number(bucket[key] ?? 0) + Number(day[key] ?? 0);
-    buckets.set(index, bucket);
-  }
-  return { ...series, data: [...buckets.values()] };
+  const bucketStart = (date: string) => {
+    const index = Math.floor((Date.parse(`${date}T00:00:00Z`) - origin) / (7 * DAY_MS));
+    return new Date(origin + index * 7 * DAY_MS).toISOString().slice(0, 10);
+  };
+  const starts = [...new Set(series.data.map((day) => bucketStart(day.date)))];
+  const data = starts.map((start) => {
+    const members = series.data.filter((day) => bucketStart(day.date) === start);
+    return {
+      date: start,
+      label: `Wk of ${formatDayLabel(start)}`,
+      ...Object.fromEntries(
+        series.keys.map((key) => [key, members.reduce((sum, day) => sum + Number(day[key] ?? 0), 0)]),
+      ),
+    };
+  });
+  return { ...series, data };
 };
 
-/** Bar totals per bucket label, for the "· Total" tooltip header. */
-export const bucketTotals = (series: Series): Map<string, number> =>
-  new Map(series.data.map((day) => [day.label, series.keys.reduce((sum, key) => sum + Number(day[key] ?? 0), 0)]));
+/** Bar totals keyed by ISO date, so two years' "Jan 1" in one range never overwrite each other. */
+export const bucketTotals = (series: Series): ReadonlyMap<string, number> =>
+  new Map(series.data.map((day) => [day.date, series.keys.reduce((sum, key) => sum + Number(day[key] ?? 0), 0)]));
+
+/** Display label for a bucket's ISO date, for chart ticks and tooltip headers. */
+export const labelForDate = (series: Series, date: string): string =>
+  series.data.find((day) => day.date === date)?.label ?? date;
 
 export interface LeaderRow extends RankedRow {
   share: number;
   /** Share in the later half of the range minus share in the earlier half, in points. */
   delta: number | null;
 }
+
+const shareIn = (rows: readonly RankedRow[], metric: UsageMetric) => {
+  const total = rows.reduce((sum, row) => sum + rankValue(row, metric), 0);
+  const byKey = new Map(rows.map((row) => [row.key, rankValue(row, metric)]));
+  return { total, of: (key: string) => (total > 0 ? ((byKey.get(key) ?? 0) / total) * 100 : 0) };
+};
 
 /** Share of `metric` per key, plus how that share moved between the two halves of the range. */
 export const leaderboard = (
@@ -155,14 +180,8 @@ export const leaderboard = (
   const rows = rollUpBreakdown(days, dimension).sort((a, b) => rankValue(b, metric) - rankValue(a, metric));
   const grand = rows.reduce((sum, row) => sum + rankValue(row, metric), 0);
   const half = Math.floor(days.length / 2);
-  const shareIn = (slice: readonly DailyData[]) => {
-    const sliceRows = rollUpBreakdown(slice, dimension);
-    const total = sliceRows.reduce((sum, row) => sum + rankValue(row, metric), 0);
-    const byKey = new Map(sliceRows.map((row) => [row.key, rankValue(row, metric)]));
-    return { total, of: (key: string) => (total > 0 ? ((byKey.get(key) ?? 0) / total) * 100 : 0) };
-  };
-  const earlier = shareIn(days.slice(0, half));
-  const later = shareIn(days.slice(half));
+  const earlier = shareIn(rollUpBreakdown(days.slice(0, half), dimension), metric);
+  const later = shareIn(rollUpBreakdown(days.slice(half), dimension), metric);
   const comparable = half > 0 && earlier.total > 0 && later.total > 0;
   return rows
     .filter((row) => rankValue(row, metric) > 0)

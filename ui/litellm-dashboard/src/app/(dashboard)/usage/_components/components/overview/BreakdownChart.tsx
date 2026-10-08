@@ -123,8 +123,8 @@ export function Leaderboard({
   columns?: 1 | 2;
   dense?: boolean;
 }) {
-  const colorOf = (key: string) => {
-    const index = series.keys.indexOf(key);
+  const colorOf = (name: string) => {
+    const index = series.labels.indexOf(name);
     return index === -1 ? OTHER_COLOR : series.colors[index];
   };
   const value = (row: LeaderRow) => rankValue(row, metric);

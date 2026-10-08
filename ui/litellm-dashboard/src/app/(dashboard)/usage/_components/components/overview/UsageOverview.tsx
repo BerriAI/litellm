@@ -13,6 +13,7 @@ import { StackedUsageChart, type StackedUsageScale } from "@/components/shared/c
 import {
   bucketSeries,
   bucketTotals,
+  labelForDate,
   dailyTotals,
   formatCompact,
   formatLatency,
@@ -32,13 +33,9 @@ interface UsageOverviewProps {
   loading: boolean;
   requestCountsPending: boolean;
   budget: number | null;
-  /** The existing Top Virtual Keys table, rendered as-is so key drill-in keeps working. */
   topKeys: ReactNode;
-  /** The gateway-by-endpoint chart, only present for admins with gateway counts. */
   gatewayByEndpoint: ReactNode;
-  /** Top agents read from User-Agent tags; rendered after the models, the next thing people look for. */
   topAgents: ReactNode;
-  /** Spend by provider with its zero/unknown filters. */
   providerBreakdown: ReactNode;
 }
 
@@ -139,7 +136,6 @@ export default function UsageOverview({
         }
         bodyClassName="px-0 pt-4 pb-0"
       >
-        {/* The chart's axis gutter supplies the rest of the inset, so its plot edge lines up with the title. */}
         <div className="px-2 pb-2">
           {loading ? (
             <ChartSkeleton className="mx-3 h-[380px] w-auto" />
@@ -147,11 +143,13 @@ export default function UsageOverview({
             <StackedUsageChart
               data={series.data}
               series={series.keys}
+              labels={series.labels}
               colors={series.colors}
-              xKey="label"
+              xKey="date"
+              xLabel={(date) => labelForDate(series, date)}
               scale={scale}
               format={format}
-              totalFor={(label) => totalsByBucket.get(label)}
+              totalFor={(date) => totalsByBucket.get(date)}
             />
           )}
         </div>

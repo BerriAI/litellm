@@ -55,7 +55,6 @@ export const ResponseTimeTooltip = ({ active, payload, label }: ChartTooltipProp
   />
 );
 
-/** Quiet series key for a panel header: small swatch and readable name. */
 const SeriesKey = ({ categories, colors }: { categories: readonly string[]; colors: readonly ChartColor[] }) => (
   <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
     {categories.map((category, idx) => (

@@ -59,7 +59,6 @@ export function EndpointUsageLineChart({ dailyData }: EndpointUsageLineChartProp
     return keys;
   }, [chartData]);
 
-  // Same palette as the Overview / Model Leaderboard stacked chart
   const colors = useMemo(() => categories.map((_, i) => stackedUsageColor(i)), [categories]);
 
   return (

@@ -132,14 +132,24 @@ describe("topAgents", () => {
     expect(agent.users).toBe(8);
   });
 
-  it("records every raw tag an agent was built from, for the drill-in filter", () => {
+  it("drills in on exactly the tags it counted, so a request carrying bare and versioned tags is not counted twice", () => {
     const [agent] = topAgents([
       row("User-Agent: claude-cli", 10, 100),
       row("User-Agent: claude-cli/2.1.263 (external, cli)", 10, 100),
+      row("User-Agent: claude-code", 2, 20),
+    ]);
+    expect([...agent.tags].sort()).toEqual(["User-Agent: claude-cli", "User-Agent: claude-code"]);
+    expect(agent).toMatchObject({ spend: 12, tokens: 120 });
+  });
+
+  it("drills in on every versioned tag when a product has no bare rollup", () => {
+    const [agent] = topAgents([
+      row("User-Agent: opencode/1.18.29 ai-sdk", 5, 50),
+      row("User-Agent: opencode/1.18.30 ai-sdk", 7, 70),
     ]);
     expect([...agent.tags].sort()).toEqual([
-      "User-Agent: claude-cli",
-      "User-Agent: claude-cli/2.1.263 (external, cli)",
+      "User-Agent: opencode/1.18.29 ai-sdk",
+      "User-Agent: opencode/1.18.30 ai-sdk",
     ]);
   });
 });

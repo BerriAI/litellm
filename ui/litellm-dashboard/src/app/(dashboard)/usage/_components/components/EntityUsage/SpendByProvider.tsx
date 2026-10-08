@@ -26,7 +26,6 @@ interface SpendByProviderProps {
   providerSpend: ProviderSpendData[];
 }
 
-/** Quiet headers: muted, regular weight, so the rows carry the emphasis. */
 const QUIET_HEADER = { headerClassName: "font-normal" };
 
 const columns: ColumnDef<ProviderSpendData>[] = [
