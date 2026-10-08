@@ -259,11 +259,12 @@ class ConfigSyncSubscriber:
             if message is None:
                 continue
             await self._sleep(self._debounce_seconds + self._rng.uniform(0.0, self._jitter_max_seconds))
-            await self._drain_pending(pubsub)
-            await self._resync()
+            await self._resync(pubsub)
 
-    async def _resync(self) -> None:
+    async def _resync(self, pubsub: ConfigSyncPubSub | None = None) -> None:
         await self._wait_for_min_resync_interval()
+        if pubsub is not None:
+            await self._drain_pending(pubsub)
         await self._run_resync_callbacks()
         self._last_resync_at = self._monotonic()
 

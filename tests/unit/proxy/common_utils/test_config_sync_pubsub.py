@@ -433,6 +433,52 @@ async def test_writes_during_the_throttle_wait_collapse_into_the_next_resync() -
     assert pubsub.queue.empty()
 
 
+async def test_write_arriving_during_throttle_wait_does_not_trigger_an_extra_resync() -> None:
+    pubsub = _QueuePubSub()
+    cache = _FakeRedisCache(_ScriptedPubSubRedisClient([pubsub]))
+    clock = _FakeClock()
+    first_resync = asyncio.Event()
+    second_resync = asyncio.Event()
+    inserted_during_wait = asyncio.Event()
+    resyncs: List[str] = []
+
+    async def recording_sleep(seconds: float) -> None:
+        if seconds > 0 and not inserted_during_wait.is_set():
+            inserted_during_wait.set()
+            pubsub.queue.put_nowait("change-during-wait")
+        await asyncio.sleep(0)
+
+    async def resync() -> None:
+        resyncs.append("resync")
+        if len(resyncs) == 1:
+            first_resync.set()
+        if len(resyncs) == 2:
+            second_resync.set()
+
+    subscriber = ConfigSyncSubscriber(
+        redis_cache=cache,
+        resync_callbacks=(resync,),
+        debounce_seconds=0.0,
+        jitter_max_seconds=0.0,
+        min_resync_interval_seconds=10.0,
+        sleep=recording_sleep,
+        monotonic=clock,
+    )
+
+    subscriber.start()
+    pubsub.queue.put_nowait("first-change")
+    await asyncio.wait_for(first_resync.wait(), timeout=5)
+    clock.now += 4.0
+    pubsub.queue.put_nowait("second-change")
+    await asyncio.wait_for(second_resync.wait(), timeout=5)
+    await asyncio.sleep(0.05)
+    await subscriber.stop()
+
+    assert inserted_during_wait.is_set()
+    assert resyncs == ["resync", "resync"]
+    assert pubsub.queue.empty()
+
+
 async def test_polls_without_messages_do_not_trigger_resyncs() -> None:
     pubsub = _EmptyPollsThenMessagePubSub(empty_polls=3, initial_messages=["change"])
     cache = _FakeRedisCache(_ScriptedPubSubRedisClient([pubsub]))
