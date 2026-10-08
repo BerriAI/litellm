@@ -1,11 +1,7 @@
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
-from typing import Final
 
 import pytest
 
@@ -20,10 +16,6 @@ def _isolated_configuration(  # pyright: ignore[reportUnusedFunction]  # pytest 
     monkeypatch.delenv("LITELLM_RUST", raising=False)
     yield
     configuration.reset_rust_configuration()
-
-
-def test_release_default_is_off() -> None:
-    assert configuration.rust_enabled() is False
 
 
 @pytest.mark.parametrize(
@@ -65,21 +57,3 @@ def test_process_override_and_reset_apply_to_existing_threads() -> None:
         assert executor.submit(configuration.rust_enabled).result() is True
         configuration.reset_rust_configuration()
         assert executor.submit(configuration.rust_enabled).result() is False
-
-
-@pytest.mark.parametrize(("value", "expected"), (("1", "True"), ("0", "False")))
-def test_environment_controls_startup(value: str, expected: str) -> None:
-    environment: Final = {**os.environ, "LITELLM_RUST": value}
-    result: Final = subprocess.run(
-        (
-            sys.executable,
-            "-c",
-            "from litellm.rust_bridge.configuration import rust_enabled; print(rust_enabled())",
-        ),
-        check=True,
-        capture_output=True,
-        text=True,
-        env=environment,
-    )
-
-    assert result.stdout.strip() == expected

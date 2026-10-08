@@ -1,18 +1,18 @@
 """Which implementation serves a call.
 
-``decide`` is the whole rollout policy: one branch per route, each naming the gap
-that keeps a call on Python. A required Rust route has no Python implementation.
-An optional one follows the global switch in ``configuration``.
+``POLICIES`` is the rollout: one policy per ported route, free to read the context and process
+state, returning ``Rust(required=True)`` where no Python implementation exists, ``optional()``
+where the global switch decides, or ``Python(reason)`` naming the gap that keeps a call on
+Python. ``decide`` only looks the route up; a route without a policy is not ported.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import TypeAlias
-
-from typing_extensions import assert_never
+from types import MappingProxyType
+from typing import Final, TypeAlias
 
 from litellm.rust_bridge.configuration import rust_enabled
 
@@ -53,22 +53,36 @@ def optional() -> Decision:
     return Rust() if rust_enabled() else Python("Rust is switched off")
 
 
-def decide(context: RouteContext) -> Decision:
-    match context.route:
-        case Route.OCR:
-            return Rust(required=True)
-        case Route.TRANSCRIPTION:
-            if context.provider != "bedrock":
-                return Python("only Bedrock transcription is ported")
-            return Rust(required=True)
-        case Route.MESSAGES:
-            if context.provider != "anthropic":
-                return Python("only Anthropic Messages is ported")
-            return optional()
-        case Route.CHAT_COMPLETIONS | Route.EMBEDDINGS | Route.RESPONSES | Route.TOKEN_COUNTER | Route.TOKENIZER:
-            return Python(f"{context.route.value} is not ported")
-        case _:
-            assert_never(context.route)
+def required(context: RouteContext) -> Decision:
+    return Rust(required=True)
+
+
+def _transcription(context: RouteContext) -> Decision:
+    if context.provider != "bedrock":
+        return Python("only Bedrock transcription is ported")
+    return Rust(required=True)
+
+
+def _messages(context: RouteContext) -> Decision:
+    if context.provider != "anthropic":
+        return Python("only Anthropic Messages is ported")
+    return optional()
+
+
+POLICIES: Final[Mapping[Route, Policy]] = MappingProxyType(
+    {
+        Route.OCR: required,
+        Route.TRANSCRIPTION: _transcription,
+        Route.MESSAGES: _messages,
+    }
+)
+
+
+def decide(context: RouteContext, policies: Mapping[Route, Policy] = POLICIES) -> Decision:
+    policy: Final = policies.get(context.route)
+    if policy is None:
+        return Python(f"{context.route.value} is not ported")
+    return policy(context)
 
 
 def logger() -> Decision:

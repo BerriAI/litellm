@@ -93,8 +93,8 @@ GIL handling to `litellm-host-python`.
   raises when the bridge is unavailable, with no fallback.
   - Declare it with `NativeDispatch` (`litellm.rust_bridge.dispatch`) or
     `runtime.run_native`/`arun_native`, never a stand-in Python callable that
-    raises, and have `catalog.decide` return `Rust(required=True)` for every
-    context of it. `NativeDispatch` has no Python-only path at all: no field
+    raises, and register `catalog.required` as its policy in `catalog.POLICIES`
+    so every context of it selects required Rust. `NativeDispatch` has no Python-only path at all: no field
     guard, no internal async hop, and its binder raises the public `TypeError`
     instead of returning `None`, so native validation sees every bound call
   - A decision other than required Rust raises `NoPythonImplementationError`

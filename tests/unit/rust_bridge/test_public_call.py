@@ -59,3 +59,17 @@ def test_native_call_keeps_extra_option_objects_without_nested_kwargs() -> None:
     }
     assert call.bound["metadata"] is metadata
     assert supplied == {"metadata": metadata}
+
+
+@pytest.mark.parametrize(
+    ("args", "kwargs"),
+    (
+        ((128, (), "model"), {"model": "duplicate"}),
+        ((128,), {}),
+        ((), {"unknown": True}),
+    ),
+)
+def test_binder_returns_none_when_the_call_does_not_fit_the_signature(
+    args: tuple[object, ...], kwargs: Mapping[str, object]
+) -> None:
+    assert binder(_messages)(args, kwargs) is None
