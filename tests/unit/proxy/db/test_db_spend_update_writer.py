@@ -552,8 +552,8 @@ async def test_update_daily_spend_retries_lock_timeout_errors(monkeypatch: pytes
 
     outcomes: Final = iter([_lock_timeout_error(), None])
 
-    def first_attempt_locks_out():
-        outcome = next(outcomes)
+    def first_attempt_locks_out() -> int:
+        outcome: Final = next(outcomes)
         if outcome is not None:
             raise outcome
         return 1
