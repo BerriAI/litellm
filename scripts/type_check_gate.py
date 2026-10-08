@@ -279,15 +279,7 @@ def cmd_check(head: Mapping[str, int], base_ref: str) -> None:
         )
         raise SystemExit(1)
     base_point: Final = resolve_base_point(base_ref)
-    base: Final = base_counts_cached(checker_identity(), base_point, base_counts)
-    if not base:
-        print(
-            f"FAIL: basedpyright produced no errors for the base tree at {base_point[:12]}, "
-            "so every rule would look freshly added. The base pass almost certainly "
-            "crashed; refusing to blame this change for it."
-        )
-        raise SystemExit(1)
-    judge(head, base, base_point)
+    judge(head, base_counts_cached(checker_identity(), base_point, base_counts), base_point)
 
 
 def judge(head: Mapping[str, int], base: Mapping[str, int], base_point: str) -> None:

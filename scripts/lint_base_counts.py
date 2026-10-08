@@ -276,8 +276,9 @@ def base_counts_cached(
 ) -> Counts:
     """`compute` memoized on disk. The base tree at a given commit is immutable,
     so its counts are a pure function of the merge-base plus the checker's
-    fingerprints in the cache key; an empty result is never stored because it is
-    the signature of a crashed pass, not a clean tree. On a disk miss the counts
+    fingerprints in the cache key. An empty local result fails the gate instead of
+    being returned, because it is the signature of a crashed pass, not a clean
+    tree, and would make every existing violation look new. On a disk miss the counts
     CI already published for the merge-base are fetched before the expensive
     local base scan; a fetch miss of any kind computes locally."""
     directory: Final = default_cache_dir() if cache_dir is None else cache_dir
@@ -289,8 +290,14 @@ def base_counts_cached(
         store_counts(directory, checker, base_point, fetched)
         return fetched
     counts: Final = compute(base_point)
-    if counts:
-        store_counts(directory, checker, base_point, counts)
+    if not counts:
+        print(
+            f"FAIL: {checker.name} produced no violations for the base tree at {base_point[:12]}, "
+            "so every rule would look freshly added. The base pass almost certainly "
+            "crashed; refusing to blame this change for it."
+        )
+        raise SystemExit(1)
+    store_counts(directory, checker, base_point, counts)
     return counts
 
 
