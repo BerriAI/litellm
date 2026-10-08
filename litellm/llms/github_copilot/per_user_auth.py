@@ -15,7 +15,7 @@ from typing import Final, Literal, TypeAlias
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, with_config
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -168,7 +168,7 @@ def _cached_session(cache_key: str) -> GithubCopilotUserSession | None:
     cached: Final[object] = _SESSION_CACHE.get_cache(cache_key)
     try:
         token, api_base, expires_at = _CACHED_SESSION_ENTRY.validate_python(cached)
-    except Exception:
+    except ValidationError:
         return None
     if expires_at - GITHUB_COPILOT_USER_TOKEN_SAFETY_MARGIN_SECONDS <= time.time():
         return None

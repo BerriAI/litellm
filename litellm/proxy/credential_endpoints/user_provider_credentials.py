@@ -11,7 +11,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
@@ -74,7 +74,7 @@ def decode_user_provider_credential(stored: str) -> GithubCopilotUserConnectionP
         return None
     try:
         return GithubCopilotUserConnectionPayload.model_validate_json(decrypted)
-    except Exception:
+    except ValidationError:
         return None
 
 
@@ -195,7 +195,7 @@ async def aget_user_provider_tokens(
             misses,
             where={"user_id": user_id},
         )
-    except Exception:
+    except Exception:  # noqa: BLE001  # a DB outage reads as not connected so the caller gets a 401, never a 500
         verbose_proxy_logger.exception("aget_user_provider_tokens: DB read failed for user_id=%s", user_id)
         return {}
     found: dict[str, str] = {}  # mutable-ok: accumulates rows
