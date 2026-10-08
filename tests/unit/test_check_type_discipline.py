@@ -580,6 +580,162 @@ def test_writable_ok_without_reason_is_lit005_and_does_not_suppress(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# Unfrozen pydantic models (LIT015)
+# --------------------------------------------------------------------------- #
+
+
+def test_unfrozen_basemodel_is_flagged(tmp_path):
+    src = "from pydantic import BaseModel\nclass P(BaseModel):\n    a: int\n"
+    assert "LIT015" in _codes(tmp_path, src)
+
+
+def test_configdict_frozen_true_is_clean(tmp_path):
+    src = (
+        "from pydantic import BaseModel, ConfigDict\n"
+        "class P(BaseModel):\n"
+        "    model_config = ConfigDict(extra='allow', frozen=True)\n"
+    )
+    assert "LIT015" not in _codes(tmp_path, src)
+
+
+def test_dict_literal_model_config_frozen_true_is_clean(tmp_path):
+    src = "from pydantic import BaseModel\nclass P(BaseModel):\n    model_config = {'frozen': True, 'extra': 'allow'}\n"
+    assert "LIT015" not in _codes(tmp_path, src)
+
+
+def test_subclass_of_in_file_frozen_model_is_clean(tmp_path):
+    src = (
+        "from pydantic import BaseModel, ConfigDict\n"
+        "class Base(BaseModel):\n"
+        "    model_config = ConfigDict(frozen=True)\n"
+        "class Child(Base):\n"
+        "    a: int\n"
+    )
+    assert "LIT015" not in _codes(tmp_path, src)
+
+
+def test_subclass_of_in_file_unfrozen_model_flags_both(tmp_path):
+    src = "from pydantic import BaseModel\nclass Base(BaseModel):\n    pass\nclass Child(Base):\n    a: int\n"
+    assert _codes(tmp_path, src).count("LIT015") == 2
+
+
+def test_litellm_pydantic_object_base_without_frozen_is_flagged(tmp_path):
+    src = "class P(LiteLLMPydanticObjectBase):\n    a: int\n"
+    assert "LIT015" in _codes(tmp_path, src)
+
+
+def test_inner_config_class_frozen_true_is_clean(tmp_path):
+    src = "from pydantic import BaseModel\nclass P(BaseModel):\n    class Config:\n        frozen = True\n"
+    assert "LIT015" not in _codes(tmp_path, src)
+
+
+def test_frozen_false_is_flagged(tmp_path):
+    src = (
+        "from pydantic import BaseModel, ConfigDict\nclass P(BaseModel):\n    model_config = ConfigDict(frozen=False)\n"
+    )
+    assert "LIT015" in _codes(tmp_path, src)
+
+
+def test_later_model_config_frozen_false_overrides_earlier_frozen_true(tmp_path):
+    src = (
+        "from pydantic import BaseModel, ConfigDict\n"
+        "class P(BaseModel):\n"
+        "    model_config = ConfigDict(frozen=True)\n"
+        "    model_config = ConfigDict(frozen=False)\n"
+    )
+    assert "LIT015" in _codes(tmp_path, src)
+
+
+def test_subclass_frozen_false_overrides_frozen_parent(tmp_path):
+    src = (
+        "from pydantic import BaseModel, ConfigDict\n"
+        "class Base(BaseModel):\n"
+        "    model_config = ConfigDict(frozen=True)\n"
+        "class Writable(Base):\n"
+        "    model_config = ConfigDict(frozen=False)\n"
+        "class StillFrozen(Base):\n"
+        "    model_config = ConfigDict(extra='allow')\n"
+    )
+    assert _codes(tmp_path, src).count("LIT015") == 1
+
+
+def test_root_model_without_frozen_is_flagged(tmp_path):
+    src = "from pydantic import RootModel\nclass P(RootModel):\n    root: int\n"
+    assert "LIT015" in _codes(tmp_path, src)
+
+
+def test_qualified_pydantic_basemodel_is_flagged(tmp_path):
+    src = "import pydantic\nclass P(pydantic.BaseModel):\n    a: int\n"
+    assert "LIT015" in _codes(tmp_path, src)
+
+
+def test_keyword_frozen_model_is_clean(tmp_path):
+    src = "from pydantic import BaseModel\nclass M(BaseModel, frozen=True):\n    a: int\n"
+    assert "LIT015" not in _codes(tmp_path, src)
+
+
+def test_subclass_of_keyword_frozen_model_is_clean(tmp_path):
+    src = (
+        "from pydantic import BaseModel\n"
+        "class Parent(BaseModel, frozen=True):\n"
+        "    pass\n"
+        "class Child(Parent):\n"
+        "    a: int\n"
+    )
+    assert "LIT015" not in _codes(tmp_path, src)
+
+
+def test_frozen_false_keyword_overrides_body_frozen_config(tmp_path):
+    src = (
+        "from pydantic import BaseModel, ConfigDict\n"
+        "class M(BaseModel, frozen=False):\n"
+        "    model_config = ConfigDict(frozen=True)\n"
+    )
+    assert "LIT015" in _codes(tmp_path, src)
+
+
+def test_frozen_ok_with_reason_suppresses_and_is_not_lit013(tmp_path):
+    src = (
+        "from pydantic import BaseModel\n"
+        "class P(BaseModel):  # frozen-ok: mutated during build before handoff\n"
+        "    a: int\n"
+    )
+    codes = _codes(tmp_path, src)
+    assert "LIT015" not in codes
+    assert "LIT013" not in codes
+
+
+def test_frozen_ok_on_frozen_model_is_lit013(tmp_path):
+    src = (
+        "from pydantic import BaseModel\n"
+        "class P(BaseModel, frozen=True):  # frozen-ok: mutable during construction\n"
+        "    a: int\n"
+    )
+    assert _codes(tmp_path, src) == ["LIT013"]
+
+
+def test_frozen_ok_without_reason_is_lit005_and_does_not_suppress(tmp_path):
+    src = "from pydantic import BaseModel\nclass P(BaseModel):  # frozen-ok\n    a: int\n"
+    codes = _codes(tmp_path, src)
+    assert "LIT005" in codes
+    assert "LIT015" in codes
+
+
+def test_typeddict_and_plain_classes_are_not_models(tmp_path):
+    src = "from typing import TypedDict\nclass T(TypedDict):\n    a: int\nclass C:\n    a: int\n"
+    assert "LIT015" not in _codes(tmp_path, src)
+
+
+def test_extra_allow_does_not_exempt(tmp_path):
+    src = (
+        "from pydantic import BaseModel, ConfigDict\n"
+        "class P(BaseModel):\n"
+        "    model_config = ConfigDict(extra='allow')\n"
+    )
+    assert "LIT015" in _codes(tmp_path, src)
+
+
+# --------------------------------------------------------------------------- #
 # Stacked comprehension clauses (LIT014)
 # --------------------------------------------------------------------------- #
 
@@ -619,23 +775,12 @@ def test_comprehension_ok_with_reason_suppresses_lit014(tmp_path: Path):
 
 
 def test_comprehension_ok_on_any_spanned_line_suppresses_lit014(tmp_path: Path):
-    src = (
-        "y = [\n"
-        "    x for a in xs\n"
-        "    for x in a\n"
-        "]  # comprehension-ok: cartesian product is the clearest form\n"
-    )
+    src = "y = [\n    x for a in xs\n    for x in a\n]  # comprehension-ok: cartesian product is the clearest form\n"
     assert "LIT014" not in _codes(tmp_path, src)
 
 
 def test_comprehension_ok_after_the_closing_line_does_not_suppress(tmp_path: Path):
-    src = (
-        "y = [\n"
-        "    x for a in xs\n"
-        "    for x in a\n"
-        "]\n"
-        "# comprehension-ok: cartesian product is the clearest form\n"
-    )
+    src = "y = [\n    x for a in xs\n    for x in a\n]\n# comprehension-ok: cartesian product is the clearest form\n"
     f = tmp_path / "snippet.py"
     f.write_text(src, encoding="utf-8")
     violations = checker.check_file(f)
