@@ -793,13 +793,16 @@ def set_response_cost_in_hidden_params(response: _CarriesHiddenParams, cost: flo
     hidden_params["additional_headers"] = merged
 
 
+BATCH_PARENT_ID_KEY: Final = "batch_parent_id"
+
+
 def is_batch_line_item_event(kwargs: object) -> bool:
     if not isinstance(kwargs, Mapping):
         return False
     litellm_params: Final[object] = kwargs.get("litellm_params")
     if not isinstance(litellm_params, Mapping):
         return False
-    return bool(litellm_params.get("batch_parent_id"))
+    return bool(litellm_params.get(BATCH_PARENT_ID_KEY))
 
 
 _HIDDEN_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])

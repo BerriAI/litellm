@@ -358,13 +358,13 @@ async def _emit_line_event(
     child.update_environment_variables(  # pyright: ignore[reportUnknownMemberType]  # Logging.update_environment_variables is untyped upstream
         litellm_params={
             **parent_params,
-            "batch_parent_id": batch.id,
             "metadata": _metadata_copy(parent_params),
         },
         optional_params=_optional_params_for_body(request_body),
         model=child.model,
         custom_llm_provider=custom_llm_provider,
     )
+    child.mark_batch_line_item(batch.id)
     for secret_key in _SECRET_PARAM_KEYS:
         child.litellm_params.pop(secret_key, None)  # pyright: ignore[reportUnknownMemberType]  # Logging.litellm_params is untyped upstream
 

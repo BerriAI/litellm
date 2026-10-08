@@ -32,6 +32,7 @@ from litellm.caching.caching import DualCache
 from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE, REDACTED_BY_LITELLM, SENTRY_PII_DENYLIST
 from litellm.cost_calculator import ocr_batch_cost
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import BATCH_PARENT_ID_KEY, is_batch_line_item_event
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import (
     Logging,
@@ -9769,6 +9770,41 @@ def test_caller_supplied_litellm_params_cannot_forge_logging_markers(logging_obj
     assert not is_batch_line_item_event(logging_obj.model_call_details)
 
 
+def test_a_top_level_batch_parent_id_request_field_is_not_a_line_item_marker(logging_obj):
+    """moderation, transcription and speech build litellm_params from every request kwarg,
+    so a body field named batch_parent_id lands in the litellm_params argument itself"""
+    logging_obj.update_environment_variables(
+        litellm_params={"metadata": {"model_group": "tts-1"}, BATCH_PARENT_ID_KEY: "batch_forged_by_caller"},
+        optional_params={},
+    )
+
+    assert BATCH_PARENT_ID_KEY not in logging_obj.model_call_details["litellm_params"]
+    assert logging_obj.model_call_details["litellm_params"]["metadata"] == {"model_group": "tts-1"}
+    assert not is_batch_line_item_event(logging_obj.model_call_details)
+
+
+def test_a_marked_batch_line_item_keeps_its_batch_through_later_updates(logging_obj):
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+    logging_obj.mark_batch_line_item("batch_abc")
+
+    logging_obj.update_environment_variables(
+        litellm_params={BATCH_PARENT_ID_KEY: "batch_forged_by_caller"}, optional_params={}
+    )
+
+    assert logging_obj.model_call_details["litellm_params"][BATCH_PARENT_ID_KEY] == "batch_abc"
+    assert is_batch_line_item_event(logging_obj.model_call_details)
+
+
+def test_hidden_params_carry_batch_line_fields_only_for_batch_line_items():
+    plain: Final = StandardLoggingPayloadSetup.get_hidden_params({"model_id": "m"})
+    line: Final = StandardLoggingPayloadSetup.get_hidden_params(
+        {"batch_id": "batch_abc", "batch_custom_id": "r1", "batch_line_status_code": 200}
+    )
+
+    assert {"batch_id", "batch_custom_id", "batch_line_status_code"}.isdisjoint(plain)
+    assert (line["batch_id"], line["batch_custom_id"], line["batch_line_status_code"]) == ("batch_abc", "r1", 200)
+
+
 def test_enterprise_alerting_loggers_resolves_real_classes():
     from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import PagerDutyAlerting
     from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import ResendEmailLogger
@@ -10388,8 +10424,8 @@ def test_get_hidden_params():
     assert result["response_cost"] is None
     assert result["additional_headers"] is None
 
-    # assert all fields in StandardLoggingHiddenParams are present
-    assert all(field in result for field in StandardLoggingHiddenParams.__annotations__)
+    # assert all required fields in StandardLoggingHiddenParams are present
+    assert all(field in result for field in StandardLoggingHiddenParams.__required_keys__)
 
     # Test with valid params
     hidden_params = {
@@ -10409,8 +10445,8 @@ def test_get_hidden_params():
     assert result["response_cost"] == 0.001
     assert result["additional_headers"] is not None
     assert result["additional_headers"]["x_ratelimit_limit_requests"] == 2000
-    # assert all fields in StandardLoggingHiddenParams are present
-    assert all(field in result for field in StandardLoggingHiddenParams.__annotations__)
+    # assert all required fields in StandardLoggingHiddenParams are present
+    assert all(field in result for field in StandardLoggingHiddenParams.__required_keys__)
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 def test_get_final_response_obj():

@@ -75,6 +75,7 @@ from litellm.litellm_core_utils.classifier_logging import (
     is_classifier_call,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    BATCH_PARENT_ID_KEY,
     get_provider_response_headers_from_hidden_params,
     is_expected_client_error,
     proxy_stamped_used_client_oauth_token,
@@ -962,10 +963,17 @@ class Logging(LiteLLMLoggingBaseClass):
         if model is not None:
             self.model = model
         self.user = user
+        marked_batch_parent_id: Final[object] = self.litellm_params.get(BATCH_PARENT_ID_KEY)
         self.litellm_params = {
             **self.litellm_params,
             **scrub_sensitive_keys_in_metadata(litellm_params),
         }
+        # Every spend, budget and metering hook skips an event carrying batch_parent_id, so only
+        # mark_batch_line_item may set it; the incoming params can hold caller request fields
+        if marked_batch_parent_id is None:
+            self.litellm_params.pop(BATCH_PARENT_ID_KEY, None)
+        else:
+            self.litellm_params[BATCH_PARENT_ID_KEY] = marked_batch_parent_id
         self.litellm_request_debug = litellm_params.get("litellm_request_debug", False)
         self.logger_fn = litellm_params.get("logger_fn", None)
         if is_debugging_on() or self.litellm_request_debug:
@@ -1002,6 +1010,10 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if "custom_llm_provider" in self.model_call_details:
             self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
+
+    def mark_batch_line_item(self, batch_id: str) -> None:
+        """Mark this logging object as one JSONL line of the completed batch ``batch_id``"""
+        self.litellm_params[BATCH_PARENT_ID_KEY] = batch_id
 
     def update_from_kwargs(
         self,
@@ -6148,9 +6160,6 @@ class StandardLoggingPayloadSetup:
             batch_failed_requests=None,
             litellm_model_name=None,
             usage_object=None,
-            batch_id=None,
-            batch_custom_id=None,
-            batch_line_status_code=None,
         )
         if hidden_params is not None:
             for key in StandardLoggingHiddenParams.__annotations__:

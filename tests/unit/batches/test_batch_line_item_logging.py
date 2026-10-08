@@ -214,7 +214,7 @@ async def test_line_items_emitted_alongside_aggregate(recorder):
 
     aggregate = next(e for e in recorder.success_events if _hidden(e).get("batch_custom_id") is None)
     assert _payload(aggregate)["response_cost"] == 1.5
-    assert _hidden(aggregate)["batch_custom_id"] is None
+    assert "batch_custom_id" not in _hidden(aggregate)
 
     line = next(e for e in recorder.success_events if _hidden(e).get("batch_custom_id") == "a")
     hidden = _hidden(line)
@@ -265,7 +265,7 @@ async def test_line_items_skipped_for_unsupported_provider(recorder):
     file_mock.assert_not_awaited()
     assert len(recorder.success_events) == 1
     assert _payload(recorder.success_events[0])["response_cost"] == 1.5
-    assert _hidden(recorder.success_events[0])["batch_custom_id"] is None
+    assert "batch_custom_id" not in _hidden(recorder.success_events[0])
     assert len(recorder.failure_events) == 0
 
 
