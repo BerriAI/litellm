@@ -284,7 +284,10 @@ async def test_native_projection_preserves_provider_extensions(
     )
     assert len(recording_server.requests) == 1
     body: Final = _OBJECT.validate_python(recording_server.requests[0].body)
-    assert body["provider_extension"] == extension
+    if extension is None:
+        assert "provider_extension" not in body
+    else:
+        assert body["provider_extension"] == extension
     assert body["provider_override"] == extension
     assert body["temperature"] == 0.75
     assert "extra_body" not in body
