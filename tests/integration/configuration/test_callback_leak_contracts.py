@@ -38,18 +38,39 @@ def _sample(candidate: Gateway) -> tuple[Counter[str], int]:
     return Counter(_callback_type(str(callback)) for callback in callbacks), alerting
 
 
-def _leaking(samples: list[Counter[str]]) -> dict[str, list[int]]:
-    leaks: Final[dict[str, list[int]]] = {}
-    for kind in set().union(*samples):
-        series: list[int] = [sample.get(kind, 0) for sample in samples]
-        deltas: list[int] = [after - before for before, after in zip(series, series[1:])]
-        if (
-            all(delta >= 0 for delta in deltas)
-            and series[-1] - series[0] >= LEAK_MIN_NET_GROWTH
-            and sum(1 for delta in deltas if delta > 0) >= LEAK_MIN_GROWING_INTERVALS
-        ):
-            leaks[kind] = series
-    return leaks
+Samples = tuple[Counter[str], ...]
+
+
+def _kinds(samples: Samples) -> frozenset[str]:
+    return frozenset(kind for sample in samples for kind in sample)
+
+
+def _series(samples: Samples, kind: str) -> tuple[int, ...]:
+    return tuple(sample.get(kind, 0) for sample in samples)
+
+
+def _deltas(series: tuple[int, ...]) -> tuple[int, ...]:
+    return tuple(after - before for before, after in zip(series, series[1:]))
+
+
+def _grows(series: tuple[int, ...]) -> bool:
+    deltas: Final = _deltas(series)
+    return (
+        all(delta >= 0 for delta in deltas)
+        and series[-1] - series[0] >= LEAK_MIN_NET_GROWTH
+        and sum(1 for delta in deltas if delta > 0) >= LEAK_MIN_GROWING_INTERVALS
+    )
+
+
+def _grows_only_in_last_interval(series: tuple[int, ...]) -> bool:
+    deltas: Final = _deltas(series)
+    return all(delta >= 0 for delta in deltas) and [
+        index for index, delta in enumerate(deltas) if delta > 0
+    ] == [len(deltas) - 1]
+
+
+def _leaking(samples: Samples) -> dict[str, tuple[int, ...]]:
+    return {kind: _series(samples, kind) for kind in sorted(_kinds(samples)) if _grows(_series(samples, kind))}
 
 
 def _config(directory: Path, upstream_url: str, model: str, extra: dict[str, JsonValue]) -> Path:
@@ -80,16 +101,18 @@ def _config(directory: Path, upstream_url: str, model: str, extra: dict[str, Jso
     return config
 
 
-def _sample_under_traffic(candidate: Gateway, model: str) -> tuple[list[Counter[str]], list[int]]:
-    samples: Final[list[Counter[str]]] = []
-    alerts: Final[list[int]] = []
-    for index in range(SAMPLES):
-        for request in range(REQUESTS_PER_INTERVAL if index else 0):
-            assert candidate.chat(model, text=f"leak probe {index} {request}")["model"] == model
-        callbacks, alerting = _sample(candidate)
-        samples.append(callbacks)
-        alerts.append(alerting)
-    return samples, alerts
+def _interval(candidate: Gateway, model: str, index: int) -> tuple[Counter[str], int]:
+    for request in range(REQUESTS_PER_INTERVAL if index else 0):
+        assert candidate.chat(model, text=f"leak probe {index} {request}")["model"] == model
+    return _sample(candidate)
+
+
+def _sample_under_traffic(candidate: Gateway, model: str) -> tuple[Samples, tuple[int, ...]]:
+    taken: Final = tuple(_interval(candidate, model, index) for index in range(SAMPLES))
+    callbacks: Final = tuple(sample for sample, _ in taken)
+    late_growth: Final = any(_grows_only_in_last_interval(_series(callbacks, kind)) for kind in _kinds(callbacks))
+    confirmed: Final = taken + ((_interval(candidate, model, SAMPLES),) if late_growth else ())
+    return tuple(sample for sample, _ in confirmed), tuple(alerting for _, alerting in confirmed)
 
 
 def test_callback_registry_does_not_grow_with_traffic(gateway: Gateway, tmp_path: Path) -> None:

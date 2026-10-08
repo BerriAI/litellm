@@ -6,6 +6,7 @@ from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
+from opentelemetry.sdk.trace import TracerProvider
 
 from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
@@ -1048,13 +1049,24 @@ def test_langfuse_otel_dynamic_headers_carry_v4_ingestion_and_basic_auth() -> No
 
 
 def test_langfuse_otel_does_not_start_proxy_request_span() -> None:
+    langfuse_provider: Final = TracerProvider()
+    generic_provider: Final = TracerProvider()
     with patch.dict(os.environ, LANGFUSE_ENV_ONLY, clear=True):
-        langfuse_logger: Final = LangfuseOtelLogger()
-        generic_logger: Final = OpenTelemetry(config=OpenTelemetryConfig(exporter="console", skip_set_global=True))
+        langfuse_logger: Final = LangfuseOtelLogger(tracer_provider=langfuse_provider)
+        generic_logger: Final = OpenTelemetry(
+            config=OpenTelemetryConfig(exporter="console", skip_set_global=True), tracer_provider=generic_provider
+        )
     started_at: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
     request_headers: Final = {"Authorization": "Bearer test"}
-    assert langfuse_logger.create_litellm_proxy_request_started_span(start_time=started_at, headers=request_headers) is None
-    assert (
-        generic_logger.create_litellm_proxy_request_started_span(start_time=started_at, headers=request_headers)
-        is not None
-    )
+    try:
+        assert (
+            langfuse_logger.create_litellm_proxy_request_started_span(start_time=started_at, headers=request_headers)
+            is None
+        )
+        assert (
+            generic_logger.create_litellm_proxy_request_started_span(start_time=started_at, headers=request_headers)
+            is not None
+        )
+    finally:
+        langfuse_provider.shutdown()
+        generic_provider.shutdown()

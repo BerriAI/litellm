@@ -8,8 +8,8 @@ import copy
 import json
 import os
 import re
-import threading
 from collections.abc import Iterable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Final, Literal
 from unittest.mock import MagicMock, patch
@@ -4802,29 +4802,31 @@ async def test_legacy_pii_masking_config_registers_logging_only_guardrail(monkey
     )
 
 
+async def _one_session(guardrail: OPTIONAL_PresidioPIIMasking) -> aiohttp.ClientSession:
+    async with guardrail._get_session_iterator() as session:
+        return session
+
+
 @pytest.mark.asyncio
-async def test_get_session_iterator_reuses_one_session_on_main_thread(presidio_guardrail):
-    sessions: Final[list[aiohttp.ClientSession]] = []
-    for _ in range(10):
-        async with presidio_guardrail._get_session_iterator() as session:
-            sessions.append(session)
+async def test_get_session_iterator_reuses_one_session_on_main_thread(
+    presidio_guardrail: OPTIONAL_PresidioPIIMasking,
+) -> None:
+    sessions: Final = tuple([await _one_session(presidio_guardrail) for _ in range(10)])
     assert all(session is sessions[0] for session in sessions)
     assert sessions[0] is presidio_guardrail._http_session
     await presidio_guardrail._close_http_session()
 
 
-def test_get_session_iterator_reuses_one_session_per_background_loop(presidio_guardrail):
-    sessions: Final[list[aiohttp.ClientSession]] = []
+def test_get_session_iterator_reuses_one_session_per_background_loop(
+    presidio_guardrail: OPTIONAL_PresidioPIIMasking,
+) -> None:
+    async def collect_and_close() -> tuple[aiohttp.ClientSession, ...]:
+        collected: Final = tuple([await _one_session(presidio_guardrail) for _ in range(10)])
+        await collected[0].close()
+        return collected
 
-    async def collect_and_close() -> None:
-        for _ in range(10):
-            async with presidio_guardrail._get_session_iterator() as session:
-                sessions.append(session)
-        await sessions[0].close()
-
-    worker: Final = threading.Thread(target=lambda: asyncio.run(collect_and_close()))
-    worker.start()
-    worker.join()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        sessions: Final = pool.submit(asyncio.run, collect_and_close()).result()
     assert len(sessions) == 10
     assert all(session is sessions[0] for session in sessions)
     assert presidio_guardrail._http_session is None

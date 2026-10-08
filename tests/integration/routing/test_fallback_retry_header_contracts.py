@@ -174,12 +174,14 @@ def test_failing_model_traffic_does_not_starve_concurrent_good_requests(gateway:
         good: Final = scenario.model()
         for _ in range(2):
             with ThreadPoolExecutor(max_workers=CONCURRENT_REQUESTS * 2) as pool:
-                bad_calls: list[int] = list(
-                    pool.map(lambda _: _chat(gateway, {"model": bad}).status_code, range(CONCURRENT_REQUESTS))
-                )
-                good_calls: list[int] = list(
-                    pool.map(lambda _: _chat(gateway, {"model": good}).status_code, range(CONCURRENT_REQUESTS))
-                )
+                bad_futures: Final = [
+                    pool.submit(lambda: _chat(gateway, {"model": bad}).status_code) for _ in range(CONCURRENT_REQUESTS)
+                ]
+                good_futures: Final = [
+                    pool.submit(lambda: _chat(gateway, {"model": good}).status_code) for _ in range(CONCURRENT_REQUESTS)
+                ]
+                bad_calls: Final = [future.result() for future in bad_futures]
+                good_calls: Final = [future.result() for future in good_futures]
             assert good_calls == [200] * CONCURRENT_REQUESTS
             assert 200 not in bad_calls
 

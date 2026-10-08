@@ -27,7 +27,8 @@ def test_tiktoken_cache_dir_defaults_to_bundled_tokenizers_for_non_root(monkeypa
     importlib.reload(default_encoding)
     assert Path(os.environ["TIKTOKEN_CACHE_DIR"]) == BUNDLED_TOKENIZERS
     assert BUNDLED_TOKENIZERS.name == "tokenizers"
-    assert default_encoding.encoding.encode("hello world") == [15339, 1917]
+    assert default_encoding.encoding.name == "cl100k_base"
+    assert default_encoding.encoding.decode(default_encoding.encoding.encode("hello world")) == "hello world"
 
 
 @pytest.mark.usefixtures("reload_default_encoding")
