@@ -2,6 +2,7 @@ import ast
 import os
 
 IGNORE_FUNCTIONS = [
+    "_json_cost",  # bounded at depth 32 and consumed under byte/node limits.
     "_format_type",
     "remove_additional_properties",
     "remove_strict_from_schema",
@@ -13,7 +14,7 @@ IGNORE_FUNCTIONS = [
     "convert_anyof_null_to_nullable",  # has a set max depth
     "add_object_type",
     "strip_field",
-    "_transform_prompt",
+    "transform_prompt",
     "mask_dict",
     "_serialize",  # we now set a max depth for this
     "_sanitize_request_body_for_spend_logs_payload",  # testing added for circular reference

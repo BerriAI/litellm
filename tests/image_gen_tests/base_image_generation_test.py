@@ -1,17 +1,18 @@
 import asyncio
-import httpx
 import json
-import pytest
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, Mock, patch
 
+import httpx
+import pytest
+from openai.types.image import Image
+
 import litellm
 from litellm.exceptions import BadRequestError
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.utils import CustomStreamWrapper
-from openai.types.image import Image
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.utils import StandardLoggingPayload
+from litellm.utils import CustomStreamWrapper
 
 
 class TestCustomLogger(CustomLogger):
@@ -92,28 +93,3 @@ class BaseImageGenTest(ABC):
                 pass  # Azure model deployment has been deprecated - skip
             else:
                 pytest.fail(f"An exception occurred - {str(e)}")
-
-
-@pytest.mark.skip(reason="Skipping image edit test, image file not in ci/cd")
-def test_openai_gpt_image_1():
-    from litellm import image_edit
-    from PIL import Image
-    import io
-
-    # Create a simple mask image with alpha channel
-    # Create a 512x512 black image with alpha channel
-    try:
-        response = image_edit(
-            model="openai/gpt-image-1",
-            image=open("test_image_edit.png", "rb"),
-            mask=open("test_image_edit.png", "rb"),
-            prompt="Add a red hat to the person in the image",
-            n=1,
-            size="1024x1024",
-        )
-        print("response: ", response)
-    except Exception as e:
-        if "mask image missing alpha channel" in str(e):
-            pass
-        else:
-            raise e

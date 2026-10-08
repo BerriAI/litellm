@@ -82,6 +82,18 @@ pub fn schemas() -> BTreeMap<&'static str, Schema> {
         ("LensContentParams", received::<lens::LensContentParams>()),
         ("LensEvidenceParams", received::<lens::LensEvidenceParams>()),
         (
+            "LensFeedbackTargetParams",
+            received::<lens::LensFeedbackTargetParams>(),
+        ),
+        ("LensFeedbackParams", received::<lens::LensFeedbackParams>()),
+        (
+            "LensFeedbackSummaryParams",
+            received::<lens::LensFeedbackSummaryParams>(),
+        ),
+        ("FeedbackTargetRow", received::<lens::LensFeedbackTargetRow>()),
+        ("FeedbackRow", received::<lens::LensFeedbackRow>()),
+        ("FeedbackSummaryRow", received::<lens::LensFeedbackSummaryRow>()),
+        (
             "ActivityAvailability",
             received::<lens::LensAvailabilityRow>(),
         ),
@@ -89,6 +101,8 @@ pub fn schemas() -> BTreeMap<&'static str, Schema> {
         ("PartRow", received::<lens::LensContentRow>()),
         ("CountRow", received::<lens::LensEvidenceRow>()),
         ("AgentRow", received::<lens::LensAgentsRow>()),
+        ("TraceAgentsParams", received::<lens::TraceAgentsParams>()),
+        ("TraceAgentRow", received::<lens::TraceAgentsRow>()),
         ("TraceQueryHelp", crate::query::help_schema()),
     ])
 }

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType, ModuleType
 from typing import TYPE_CHECKING, Any
@@ -59,10 +59,10 @@ _MODEL_NODE = "model"
 class DeepAgentsDeps:
     """The optional-dependency entrypoints this handler uses."""
 
-    create_deep_agent: Any
-    chat_litellm: Any
-    checkpointer_cls: Any
-    command_cls: Any
+    create_deep_agent: Callable[..., CompiledStateGraph]
+    chat_litellm: Callable[..., BaseChatModel]
+    checkpointer_cls: Callable[[], BaseCheckpointSaver]
+    command_cls: Callable[..., Command]
     subagent_defaults: Mapping[str, object]
     convert_to_openai_messages: Any
     backend: ModuleType
@@ -112,7 +112,7 @@ class DeepAgentsHandler(BaseHarnessHandler):
     def __init__(self, config: BaseHarnessConfig) -> None:
         super().__init__(config)
         self._deps: DeepAgentsDeps | None = None
-        self._agent: Any = None
+        self._agent: CompiledStateGraph | None = None
         self._thread_id: str | None = None
         self._skip_tools: frozenset[str] = frozenset()
 
@@ -221,7 +221,7 @@ class DeepAgentsHandler(BaseHarnessHandler):
         if ctx.output is not None:
             ctx.output_json = structured_json(values.get("structured_response"))
 
-    def _require_agent(self) -> tuple[Any, DeepAgentsDeps]:
+    def _require_agent(self) -> tuple[CompiledStateGraph, DeepAgentsDeps]:
         if self._agent is None or self._deps is None:
             raise HarnessError("Deep Agents session is not started")
         return self._agent, self._deps

@@ -631,7 +631,7 @@ async def test_health_check_reaches_servers_without_forwarding_per_user_env_vars
     manager: Final = MCPServerManager()
     manager.registry[mock_server.server_id] = mock_server
     create_client: Final = AsyncMock()
-    monkeypatch.setattr(manager, "_create_mcp_client", create_client)
+    monkeypatch.setattr(manager, "create_mcp_client", create_client)
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     route: Final = respx_mock.get(mock_server.url).respond(401)
 

@@ -136,7 +136,7 @@ class SemanticMCPToolFilter:
         finally:
             self.startup_index_ready = True
 
-    def _extract_tool_info(self, tool) -> tuple[str, str]:
+    def extract_tool_info(self, tool) -> tuple[str, str]:
         """Extract name and description from MCP tool or OpenAI function dict."""
         name: str
         description: str
@@ -152,6 +152,8 @@ class SemanticMCPToolFilter:
 
         return name, description
 
+    _extract_tool_info = extract_tool_info
+
     def _new_encoder(self) -> "LiteLLMRouterEncoder":
         from litellm.router_strategy.auto_router.litellm_encoder import (
             LiteLLMRouterEncoder,
@@ -166,7 +168,7 @@ class SemanticMCPToolFilter:
     def _tools_to_routes_and_map(self, tools: Sequence[object]) -> tuple[list["Route"], dict[str, object]]:
         from semantic_router.routers.base import Route
 
-        extracted: Final = tuple((self._extract_tool_info(tool), tool) for tool in tools)
+        extracted: Final = tuple((self.extract_tool_info(tool), tool) for tool in tools)
         tool_map: Final = {name: tool for (name, _), tool in extracted}
         routes: Final = [
             Route(
@@ -262,13 +264,13 @@ class SemanticMCPToolFilter:
 
     def _has_tools_missing_from_index(self, tools: Sequence[object]) -> bool:
         """Allocation-free check for any named tool not yet in the semantic index."""
-        return any(name and name not in self._tool_map for name in (self._extract_tool_info(t)[0] for t in tools))
+        return any(name and name not in self._tool_map for name in (self.extract_tool_info(t)[0] for t in tools))
 
     def _tools_missing_from_index(self, tools: Sequence[object]) -> Mapping[str, object]:
         """Map name -> tool for every named tool not yet in the semantic index."""
         return {
             name: tool
-            for name, tool in ((self._extract_tool_info(t)[0], t) for t in tools)
+            for name, tool in ((self.extract_tool_info(t)[0], t) for t in tools)
             if name and name not in self._tool_map
         }
 
@@ -303,7 +305,7 @@ class SemanticMCPToolFilter:
             if not missing:
                 return
 
-            descriptions: Final = {name: self._extract_tool_info(tool)[1] for name, tool in missing.items()}
+            descriptions: Final = {name: self.extract_tool_info(tool)[1] for name, tool in missing.items()}
             routes: Final = [
                 Route(
                     name=name,
@@ -380,7 +382,7 @@ class SemanticMCPToolFilter:
                 verbose_logger.warning("Semantic router could not be built from the request's tools")
                 return available_tools
 
-            available_names: Final = [name for name in (self._extract_tool_info(t)[0] for t in available_tools) if name]
+            available_names: Final = [name for name in (self.extract_tool_info(t)[0] for t in available_tools) if name]
             if not available_names:
                 return available_tools
 
@@ -484,7 +486,7 @@ class SemanticMCPToolFilter:
         # names happen to be tail-compatible with the same incoming name.
         available_by_name: Final[dict[str, object]] = {}
         for tool in available_tools:
-            client_name, _ = self._extract_tool_info(tool)
+            client_name, _ = self.extract_tool_info(tool)
             if client_name and client_name not in available_by_name:
                 available_by_name[client_name] = tool
 

@@ -773,12 +773,18 @@ _NO_HEADERS: Final[Mapping[str, object]] = MappingProxyType({})
 class _CarriesHiddenParams(Protocol):
     _hidden_params: dict[str, object]  # mutable-ok: the responses billed here keep hidden params in a plain dict
 
+    @property
+    def hidden_params(self) -> dict[str, object]: ...  # mutable-ok: API requires mutation
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None: ...  # mutable-ok: API requires mutation
+
 
 def set_response_cost_in_hidden_params(response: _CarriesHiddenParams, cost: float | None) -> None:
     """Record a provider-reported cost where the cost calculator looks before the price map."""
     if cost is None:
         return
-    hidden_params: Final = response._hidden_params  # pyright: ignore[reportPrivateUsage]  # no public accessor
+    hidden_params: Final = response.hidden_params
     additional_headers: Final[object] = hidden_params.get("additional_headers")
     merged: Final[dict[str, object]] = {  # mutable-ok: assigned into the plain-dict hidden params
         **(additional_headers if isinstance(additional_headers, Mapping) else _NO_HEADERS),
@@ -794,7 +800,7 @@ _PROVIDER_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
 def set_provider_response_headers_in_hidden_params(
     response: _CarriesHiddenParams, headers: httpx.Headers | Mapping[str, str]
 ) -> None:
-    hidden_params: Final = response._hidden_params  # pyright: ignore[reportPrivateUsage]  # no public accessor
+    hidden_params: Final = response.hidden_params
     existing_additional_headers: Final[object] = hidden_params.get("additional_headers")
     raw_headers: Final[dict[str, str]] = dict(headers)  # mutable-ok: stored as the plain-dict hidden param
     additional_headers: Final[dict[str, object]] = {  # mutable-ok: assigned into the plain-dict hidden params
