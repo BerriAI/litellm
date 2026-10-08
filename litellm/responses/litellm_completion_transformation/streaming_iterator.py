@@ -1024,6 +1024,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         return False
 
     def common_done_event_logic(self, sync_mode: bool = True) -> BaseLiteLLMOpenAIResponseObject:
+        self._close_reasoning_run()
+        if self._pending_response_events:
+            return self._pending_response_events.pop(0)
         if not self.litellm_model_response or isinstance(self.litellm_model_response, TextCompletionResponse):
             self.litellm_model_response = self.create_litellm_model_response()
         if self.litellm_model_response:

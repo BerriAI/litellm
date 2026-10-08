@@ -11,6 +11,7 @@ spend tracking stores, so a follow-up previous_response_id still finds the conve
 """
 
 import json
+from collections.abc import Callable
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -1304,15 +1305,22 @@ def _item_lifecycle(events: list[BaseLiteLLMOpenAIResponseObject]) -> list[tuple
     ]
 
 
+def _items_announced_before(
+    events: list[BaseLiteLLMOpenAIResponseObject], position: int
+) -> frozenset[tuple[str, int]]:
+    return frozenset(
+        (event.item.id, event.output_index)
+        for event in events[:position]
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+    )
+
+
 def _announced_before_each_reasoning_delta(events: list[BaseLiteLLMOpenAIResponseObject]) -> bool:
-    announced: set[tuple[str, int]] = set()
-    for event in events:
-        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED:
-            announced.add((event.item.id, event.output_index))
-        if getattr(event, "type", None) == ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA:
-            if (event.item_id, event.output_index) not in announced:
-                return False
-    return True
+    return all(
+        (event.item_id, event.output_index) in _items_announced_before(events, position)
+        for position, event in enumerate(events)
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA
+    )
 
 
 def _completed_output(events: list[BaseLiteLLMOpenAIResponseObject]) -> list:
@@ -1432,3 +1440,35 @@ async def test_reasoning_after_text_is_announced_and_closed(sync_mode: bool):
         (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, "reasoning", 1, reasoning_id),
     ]
     assert [(item.type, item.id) for item in _completed_output(events)][1] == ("reasoning", reasoning_id)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "build_chunks",
+    [
+        pytest.param(lambda: [_chunk("Hello"), _reasoning_chunk("thinking at the end", finish_reason="stop")], id="text_then_reasoning"),
+        pytest.param(lambda: [_reasoning_chunk("only thinking", finish_reason="stop")], id="reasoning_only"),
+        pytest.param(lambda: [_tool_call_chunk(), _reasoning_chunk("thinking after the tool", finish_reason="stop")], id="tool_then_reasoning"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_reasoning_in_the_final_chunk_is_closed_before_response_completed(
+    sync_mode: bool, build_chunks: Callable[[], list[ModelResponseStream]]
+):
+    events: Final = await _collect_events(_build_iterator(build_chunks()), sync_mode)
+
+    types: Final = [getattr(event, "type", None) for event in events]
+    last_delta: Final = max(
+        position for position, kind in enumerate(types) if kind == ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA
+    )
+    summary_done: Final = types.index(ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE)
+    reasoning_done: Final = next(
+        position
+        for position, event in enumerate(events)
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE and event.item.type == "reasoning"
+    )
+    completed: Final = types.index(ResponsesAPIStreamEvents.RESPONSE_COMPLETED)
+
+    assert last_delta < summary_done < reasoning_done < completed
+    assert events[reasoning_done].item.id == events[last_delta].item_id
+    assert [item.id for item in _completed_output(events) if item.type == "reasoning"] == [events[last_delta].item_id]
