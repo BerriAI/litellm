@@ -6,3 +6,4 @@
 - Bound insert time and encoded bytes; preserve shared values and explicit retry deduplication
 - Test storage behavior through the public API against ClickHouse
 - Expose one top-level `Error` enum in `src/error.rs`; own trace failures and wrap storage errors with `#[from]` or `#[source]`
+- Keep `tests/load.rs` and the read-queue tests in `crates/lens/src/lib.rs` passing at their committed budgets on every change to this crate or to the Lens read path: `cargo nextest run -p litellm-traces-clickhouse --test load` and `cargo test -p litellm-lens`. The budgets are the measured Lens performance floor (span batch queries and rows read for a 20,000 span trace, rows read per trace list page, 32 concurrent reads without a 503), so never loosen one to land a change; if a change legitimately moves one, re-measure and justify the new number in the PR

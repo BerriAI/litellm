@@ -288,7 +288,11 @@ pub async fn provision(state: Arc<State>) {
 #[cfg(test)]
 mod tests {
     use super::{Error, READ_QUEUE_WAIT, wait_for_read_slot};
-    use std::sync::Arc;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use std::time::Duration;
     use tokio::sync::Semaphore;
 
     #[tokio::test]
@@ -318,5 +322,32 @@ mod tests {
             waiting.await.expect("joined read"),
             Err(Error::Unavailable)
         ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn thirty_two_concurrent_reads_all_get_a_slot() {
+        let slots = Arc::new(Semaphore::new(8));
+        let held = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let reads = (0..32)
+            .map(|_| {
+                let slots = slots.clone();
+                let held = held.clone();
+                let peak = peak.clone();
+                tokio::spawn(async move {
+                    let permit = wait_for_read_slot(slots.acquire_owned()).await?;
+                    peak.fetch_max(held.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    held.fetch_sub(1, Ordering::SeqCst);
+                    drop(permit);
+                    Ok::<(), Error>(())
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for read in reads {
+            assert!(read.await.expect("joined read").is_ok());
+        }
+        assert!(peak.load(Ordering::SeqCst) <= 8);
     }
 }
