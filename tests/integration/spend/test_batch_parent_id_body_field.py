@@ -51,6 +51,89 @@ def _transcription_reply() -> JsonResponse:
     return JsonResponse(content_type="application/json", body={"text": "hello"})
 
 
+def _chat_reply() -> JsonResponse:
+    return JsonResponse(
+        content_type="application/json",
+        body={
+            "id": f"chatcmpl-{uuid.uuid4().hex}",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gpt-4o-mini",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 9, "completion_tokens": 3, "total_tokens": 12},
+        },
+    )
+
+
+def _embedding_reply() -> JsonResponse:
+    return JsonResponse(
+        content_type="application/json",
+        body={
+            "object": "list",
+            "data": [{"object": "embedding", "embedding": [0.1, 0.2], "index": 0}],
+            "model": "text-embedding-3-small",
+            "usage": {"prompt_tokens": 7, "total_tokens": 7},
+        },
+    )
+
+
+def _responses_reply() -> JsonResponse:
+    return JsonResponse(
+        content_type="application/json",
+        body={
+            "id": f"resp_{uuid.uuid4().hex}",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "gpt-4o-mini",
+            "output": [],
+            "usage": {"input_tokens": 9, "output_tokens": 3, "total_tokens": 12},
+        },
+    )
+
+
+def _messages_reply() -> JsonResponse:
+    return JsonResponse(
+        content_type="application/json",
+        body={
+            "id": f"msg_{uuid.uuid4().hex}",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-4-5",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 9, "output_tokens": 3},
+        },
+    )
+
+
+def _chat(gateway: Gateway, model: str, key: str, extra: dict[str, JsonValue]) -> httpx.Response:
+    return gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": model, "messages": [{"role": "user", "content": "hi"}], **extra},
+        key=key,
+    )
+
+
+def _embedding(gateway: Gateway, model: str, key: str, extra: dict[str, JsonValue]) -> httpx.Response:
+    return gateway.request("POST", "/v1/embeddings", {"model": model, "input": "hi", **extra}, key=key)
+
+
+def _responses(gateway: Gateway, model: str, key: str, extra: dict[str, JsonValue]) -> httpx.Response:
+    return gateway.request("POST", "/v1/responses", {"model": model, "input": "hi", **extra}, key=key)
+
+
+def _messages(gateway: Gateway, model: str, key: str, extra: dict[str, JsonValue]) -> httpx.Response:
+    return gateway.request(
+        "POST",
+        "/v1/messages",
+        {"model": model, "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}], **extra},
+        key=key,
+    )
+
+
 def _moderation(gateway: Gateway, model: str, key: str, extra: dict[str, JsonValue]) -> httpx.Response:
     return gateway.request("POST", "/v1/moderations", {"model": model, "input": "safe text", **extra}, key=key)
 
@@ -72,6 +155,17 @@ ROUTES: Final = (
     pytest.param("openai/omni-moderation-latest", _moderation_reply, _moderation, "amoderation", id="moderations"),
     pytest.param("openai/tts-1", _speech_reply, _speech, "aspeech", id="audio-speech"),
     pytest.param("openai/whisper-1", _transcription_reply, _transcription, "atranscription", id="audio-transcriptions"),
+    pytest.param("openai/gpt-4o-mini", _chat_reply, _chat, "acompletion", id="chat-completions"),
+    pytest.param("openai/text-embedding-3-small", _embedding_reply, _embedding, "aembedding", id="embeddings"),
+    pytest.param("openai/gpt-4o-mini", _responses_reply, _responses, "aresponses", id="responses"),
+    pytest.param("anthropic/claude-haiku-4-5", _messages_reply, _messages, "anthropic_messages", id="messages"),
+)
+FORGED_VALUES: Final = (
+    pytest.param("", id="empty-string"),
+    pytest.param(5, id="int"),
+    pytest.param(["batch_forged_by_caller"], id="list"),
+    pytest.param({"id": "batch_forged_by_caller"}, id="object"),
+    pytest.param("b" * 5000, id="5kb-string"),
 )
 
 
@@ -99,13 +193,8 @@ def _key_spend(key: str) -> float:
     return float(str(rows[0]["spend"]))
 
 
-@pytest.mark.parametrize(("provider_model", "reply", "send", "call_type"), ROUTES)
-def test_a_caller_supplied_batch_parent_id_is_still_tracked_like_any_request(
-    gateway: Gateway,
-    provider_model: str,
-    reply: _Reply,
-    send: _Send,
-    call_type: str,
+def _assert_forged_request_bills_like_control(
+    gateway: Gateway, provider_model: str, reply: _Reply, send: _Send, call_type: str, forged_value: JsonValue
 ) -> None:
     with gateway.scenario() as scenario:
         control_model: Final = _scripted_model(gateway, scenario, provider_model, reply)
@@ -119,9 +208,27 @@ def test_a_caller_supplied_batch_parent_id_is_still_tracked_like_any_request(
         control_spend: Final = float(str(control_rows[0]["spend"]))
         eventually(lambda: _key_spend(key), lambda value: value == pytest.approx(control_spend), seconds=70)
 
-        forged: Final = send(gateway, forged_model, key, {"batch_parent_id": FORGED_PARENT})
+        forged: Final = send(gateway, forged_model, key, {"batch_parent_id": forged_value})
         assert forged.status_code == 200, forged.text
         rows: Final = eventually(lambda: _spend_rows(key), lambda values: len(values) == 2, seconds=70)
         assert [row["call_type"] for row in rows] == [call_type, call_type], rows
         assert float(str(rows[1]["spend"])) == pytest.approx(control_spend), rows
         eventually(lambda: _key_spend(key), lambda value: value == pytest.approx(2 * control_spend), seconds=70)
+
+
+@pytest.mark.parametrize(("provider_model", "reply", "send", "call_type"), ROUTES)
+def test_a_caller_supplied_batch_parent_id_is_still_tracked_like_any_request(
+    gateway: Gateway,
+    provider_model: str,
+    reply: _Reply,
+    send: _Send,
+    call_type: str,
+) -> None:
+    _assert_forged_request_bills_like_control(gateway, provider_model, reply, send, call_type, FORGED_PARENT)
+
+
+@pytest.mark.parametrize("forged_value", FORGED_VALUES)
+def test_any_shape_of_batch_parent_id_on_a_speech_request_is_still_tracked(
+    gateway: Gateway, forged_value: JsonValue
+) -> None:
+    _assert_forged_request_bills_like_control(gateway, "openai/tts-1", _speech_reply, _speech, "aspeech", forged_value)
