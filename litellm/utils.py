@@ -8976,6 +8976,8 @@ class ProviderConfigManager:
             return litellm.StrandsDeciderDecisionsConfig()
         if provider == LlmProviders.OPENAI:
             return litellm.OpenAIDecisionsConfig()
+        if provider == LlmProviders.OPENAI_LIKE:
+            return litellm.OpenAILikeDecisionsConfig()
         return None
 
     @staticmethod
