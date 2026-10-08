@@ -10748,12 +10748,14 @@ async def test_validate_and_populate_member_user_info_accepts_owner_of_the_email
         ("solo-user", "shared@example.com"),
         ("dup-user-1", "unused@example.com"),
         ("brand-new-user", "solo@example.com"),
+        ("no-email-user", "solo@example.com"),
     ],
     ids=[
         "new_user_id_with_shared_email",
         "existing_user_id_with_shared_email",
         "existing_user_id_with_unused_email",
         "new_user_id_with_taken_email",
+        "existing_user_without_email_with_taken_email",
     ],
 )
 async def test_validate_and_populate_member_user_info_rejects_non_owner_of_the_email(
@@ -13922,6 +13924,42 @@ async def test_team_member_add_rejects_without_writing(
         )
 
     assert _rejection(exc_info.value) == expected
+    assert _write_calls(prisma) == ()
+
+
+@pytest.mark.asyncio
+async def test_team_member_add_self_join_cannot_claim_another_users_email(monkeypatch):
+    from litellm.proxy._types import TeamMemberAddRequest
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_add
+
+    team_id: Final = f"team-{uuid.uuid4().hex}"
+    prisma: Final = _prisma_with_users(
+        ("no-email-user", None),
+        ("victim-user", "victim@example.com"),
+        team=LiteLLM_TeamTable(team_id=team_id, members_with_roles=[]),
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id")
+    monkeypatch.setattr("litellm.default_internal_user_params", {"available_teams": [team_id]})
+
+    with pytest.raises((HTTPException, ProxyException)) as exc_info:
+        await team_member_add(
+            data=TeamMemberAddRequest(
+                team_id=team_id,
+                member=Member(user_id="no-email-user", user_email="victim@example.com", role="user"),
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="no-email-user"),
+        )
+
+    assert _rejection(exc_info.value) == (
+        "http",
+        400,
+        "user_email 'victim@example.com' and user_id 'no-email-user' do not belong to the same user.",
+    )
     assert _write_calls(prisma) == ()
 
 

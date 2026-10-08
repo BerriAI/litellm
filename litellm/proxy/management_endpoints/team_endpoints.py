@@ -3282,7 +3282,7 @@ async def _validate_and_populate_member_user_info(
 
     Logic:
     1. If both user_email and user_id are provided, the user_id decides: an existing user with an email on record
-       must have that email, and a new user_id must not take an email another user already has
+       must have that email, and any other user_id must not take an email another user already has
     2. If only user_email is provided, populate user_id from DB
     3. If only user_id is provided, populate user_email from DB (if user exists)
     4. If only user_id is provided and doesn't exist, allow it to pass with user_email as None (will be upserted later)
@@ -3306,8 +3306,8 @@ async def _validate_and_populate_member_user_info(
             },
         )
         existing_user: Final = await _user_db(prisma_client).find_unique(where={"user_id": member.user_id})
-        if existing_user is not None:
-            if existing_user.user_email is not None and existing_user.user_email != member.user_email:
+        if existing_user is not None and existing_user.user_email is not None:
+            if existing_user.user_email != member.user_email:
                 raise mismatch_error
             return member
 
