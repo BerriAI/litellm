@@ -52,8 +52,7 @@ fn map_error_ref(error: &Error) -> PyErr {
         | Error::InvalidParameters
         | Error::InvalidScope => PyValueError::new_err(error.to_string()),
         Error::Task
-        | Error::SchemaFailed(_)
-        | Error::SchemaTransport
+        | Error::Migration(_)
         | Error::MissingSecret
         | Error::Busy
         | Error::ProvisionFailed(_)
@@ -187,12 +186,14 @@ impl NativeTraceStorage {
         )
     }
 
+    #[pyo3(signature = (payload, content_type, tenant, logs=false))]
     fn ingest<'py>(
         &self,
         py: Python<'py>,
         payload: &[u8],
         content_type: Option<String>,
         #[pyo3(from_py_with = litellm_host_python::from_py_argument)] tenant: Tenant,
+        logs: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let payload = payload.to_vec();
         let max_value_bytes = self.config.max_attribute_value_bytes();
@@ -203,7 +204,12 @@ impl NativeTraceStorage {
             py,
             async move {
                 let rows = tokio::task::spawn_blocking(move || {
-                    litellm_traces::decode_otlp(&payload, content_type.as_deref()).map(|spans| {
+                    let decode = if logs {
+                        litellm_traces::decode_otlp_logs
+                    } else {
+                        litellm_traces::decode_otlp
+                    };
+                    decode(&payload, content_type.as_deref()).map(|spans| {
                         litellm_traces_clickhouse::span_rows(spans, &tenant, max_value_bytes)
                     })
                 })
@@ -452,7 +458,14 @@ mod tests {
     )]
     #[case::insert_budget(Error::InsertTooLarge, "OverflowError")]
     #[case::scope(Error::InvalidScope, "ValueError")]
-    #[case::schema(Error::SchemaFailed(503), "RuntimeError")]
+    #[case::schema(
+        Error::Storage(litellm_storage_clickhouse::Error::SchemaFailed(503)),
+        "RuntimeError"
+    )]
+    #[case::migration(
+        Error::Migration(sqlx::migrate::MigrateError::VersionMismatch(1)),
+        "RuntimeError"
+    )]
     #[case::reader(Error::MissingSecret, "RuntimeError")]
     #[case::storage(
         Error::Storage(litellm_storage_clickhouse::Error::InvalidUrl),

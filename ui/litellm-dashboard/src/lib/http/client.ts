@@ -27,6 +27,7 @@ export interface RequestOptions {
   signal?: AbortSignal;
   /** Send browser cookies with the request; needed for cookie-authenticated proxy routes. */
   credentials?: RequestCredentials;
+  redirect?: RequestRedirect;
 }
 
 export class ApiError extends Error {
@@ -152,7 +153,7 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
   const doFetch: typeof fetch = (input, init) => (fetchImpl ?? fetch)(input, init);
 
   async function fetchChecked(method: HttpMethod, path: string, options: RequestOptions = {}): Promise<Response> {
-    const { accessToken, body, rawBody, query, headers: extraHeaders, signal, credentials } = options;
+    const { accessToken, body, rawBody, query, headers: extraHeaders, signal, credentials, redirect } = options;
 
     const url = appendQuery(`${getBaseUrl()}${path}`, query);
 
@@ -168,7 +169,7 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
       Object.assign(headers, extraHeaders);
     }
 
-    const init: RequestInit = { method, headers, signal, credentials };
+    const init: RequestInit = { method, headers, signal, credentials, redirect };
     if (rawBody !== undefined) {
       init.body = rawBody;
     } else if (body !== undefined) {

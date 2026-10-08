@@ -24,6 +24,7 @@ from litellm.types.guardrails import (
     DynamicGuardrailParams,
     GuardrailEventHooks,
     LitellmParams,
+    LoggingOnlyScope,
     Mode,
 )
 from litellm.types.llms.openai import AllMessageValues
@@ -180,6 +181,7 @@ class CustomGuardrail(CustomLogger):
     use_native_lifecycle_hooks: ClassVar[bool] = False
 
     records_own_guardrail_information: ClassVar[bool] = False
+    logging_only_scope: LoggingOnlyScope | None
 
     timeout: float | httpx.Timeout | None = None
 
@@ -256,6 +258,7 @@ class CustomGuardrail(CustomLogger):
         self.run_in_parallel: bool = run_in_parallel
         self.scan_raw_request: bool = scan_raw_request
         self.only_scan_new_messages: bool = only_scan_new_messages
+        self.logging_only_scope = None
         if timeout is not None:
             self.timeout = timeout
 
@@ -817,6 +820,13 @@ class CustomGuardrail(CustomLogger):
     def uses_apply_guardrail_interface(self) -> bool:
         return type(self).apply_guardrail is not CustomGuardrail.apply_guardrail
 
+    @classmethod
+    def supports_logging_only_scope(cls) -> bool:
+        return (
+            cls.apply_guardrail is not CustomGuardrail.apply_guardrail
+            and cls.async_logging_hook is CustomGuardrail.async_logging_hook
+        )
+
     def _deployment_hook_target(self) -> "CustomLogger":
         if not self.uses_apply_guardrail_interface() or self.use_native_lifecycle_hooks:
             return self
@@ -948,7 +958,7 @@ class CustomGuardrail(CustomLogger):
         result: object,
         call_type: str,
     ) -> tuple[dict, object]:  # mutable-ok: CustomLogger.async_logging_hook contract
-        """logging_only: run apply_guardrail on copies of the logged request/response and record the verdict."""
+        """logging_only: scan copies of the logged request and/or response according to logging_only_scope."""
         from litellm.llms import get_guardrail_translation_mapping
 
         if not self.uses_apply_guardrail_interface():
@@ -995,6 +1005,28 @@ class CustomGuardrail(CustomLogger):
             "standard_logging_object": {**standard_logging_object, "guardrail_information": [*existing, *entries]},
         }, result
 
+    def _copy_scratch_request_fields(
+        self,
+        kwargs: Mapping[str, object],
+    ) -> tuple[object, object] | None:
+        optional_params: Final = kwargs.get("optional_params")
+        try:
+            return (
+                copy.deepcopy(kwargs.get("messages") or kwargs.get("input")),
+                copy.deepcopy(optional_params.get("tools") if isinstance(optional_params, Mapping) else None),
+            )
+        except Exception as e:
+            if self.logging_only_scope == "output":
+                return None
+            if self.logging_only_scope == "both":
+                verbose_logger.warning(
+                    "Guardrail %s: logging_only request copy failed, skipping request scan: %s",
+                    self.guardrail_name,
+                    e,
+                )
+                return None
+            raise
+
     async def _scan_logged_call(
         self,
         kwargs: dict,  # mutable-ok: CustomLogger.async_logging_hook contract
@@ -1003,18 +1035,25 @@ class CustomGuardrail(CustomLogger):
         output_translation: "BaseTranslation",
         scratch_metadata: dict,  # mutable-ok: apply_guardrail records its verdict into request metadata
     ) -> None:
-        optional_params: Final = kwargs.get("optional_params") or {}
-        scratch_input: Final = copy.deepcopy(kwargs.get("messages") or kwargs.get("input"))
+        scratch_fields: Final = self._copy_scratch_request_fields(kwargs)
+        scratch_input, scratch_tools = scratch_fields or (None, None)
         scratch_request: Final = {
             "model": kwargs.get("model"),
             "messages": scratch_input,
             "input": scratch_input,
-            "tools": copy.deepcopy(optional_params.get("tools")),
+            "tools": scratch_tools,
             "litellm_call_id": kwargs.get("litellm_call_id"),
             "metadata": scratch_metadata,
         }
-        await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
-        if response is None:
+        if self.logging_only_scope != "output" and scratch_fields is not None:
+            if self.logging_only_scope == "both":
+                try:
+                    await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
+                except Exception as e:  # noqa: BLE001  # one direction's scan failure must not drop the other direction's verdict
+                    verbose_logger.warning("Guardrail %s: logging_only scan raised: %s", self.guardrail_name, e)
+            else:
+                await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
+        if response is None or self.logging_only_scope == "input":
             return
         await output_translation.process_output_response(
             response=copy.deepcopy(response), guardrail_to_apply=self, request_data=scratch_request
