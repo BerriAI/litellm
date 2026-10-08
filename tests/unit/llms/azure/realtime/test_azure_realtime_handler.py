@@ -1,4 +1,5 @@
 import os
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -659,7 +660,7 @@ async def test_arealtime_prefers_deployment_api_key_over_global_azure_key(monkey
     import litellm
     from litellm.realtime_api import main as realtime_main
 
-    mock_async_realtime = AsyncMock()
+    mock_async_realtime: Final = AsyncMock()
     monkeypatch.setattr(realtime_main, "azure_realtime", MagicMock(async_realtime=mock_async_realtime))
     monkeypatch.setattr(litellm, "api_key", "sk-global-key")
     monkeypatch.delenv("AZURE_API_KEY", raising=False)
