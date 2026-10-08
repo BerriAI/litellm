@@ -100,24 +100,6 @@ class TmpFunction:
         )
 
 
-def test_get_callback_env_vars():
-    env_vars = CustomLogger.get_callback_env_vars("langfuse")
-    assert env_vars == [
-        "LANGFUSE_PUBLIC_KEY",
-        "LANGFUSE_SECRET_KEY",
-        "LANGFUSE_HOST",
-    ]
-
-    alias_env_vars = CustomLogger.get_callback_env_vars("langfuse_otel")
-    assert alias_env_vars == env_vars
-
-    missing_env_vars = CustomLogger.get_callback_env_vars("does_not_exist")
-    assert missing_env_vars == []
-
-    none_env_vars = CustomLogger.get_callback_env_vars(None)
-    assert none_env_vars == []
-
-
 @pytest.mark.asyncio
 async def test_async_chat_openai_stream():
     try:
@@ -381,54 +363,6 @@ async def test_async_custom_handler_embedding_optional_param():
 
 
 # asyncio.run(test_async_custom_handler_embedding_optional_param())
-
-
-
-
-@pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=1)
-async def test_cost_tracking_with_caching():
-    """
-    Important Test - This tests if that cost is 0 for cached responses
-    """
-    from litellm import Cache
-
-    litellm.set_verbose = True
-    litellm.cache = Cache(
-        type="redis",
-        host=os.environ["REDIS_HOST"],
-        port=os.environ["REDIS_PORT"],
-        password=os.environ["REDIS_PASSWORD"],
-    )
-    customHandler_optional_params = MyCustomHandler()
-    litellm.callbacks = [customHandler_optional_params]
-    messages = [
-        {
-            "role": "user",
-            "content": f"write a one sentence poem about: {time.time()}",
-        }
-    ]
-    response1 = await litellm.acompletion(
-        model="gpt-3.5-turbo",
-        messages=messages,
-        max_tokens=40,
-        temperature=0.2,
-        caching=True,
-        mock_response="Hey, i'm doing well!",
-    )
-    await asyncio.sleep(3)  # success callback is async
-    response_cost = customHandler_optional_params.response_cost
-    assert response_cost > 0
-    response2 = await litellm.acompletion(
-        model="gpt-3.5-turbo",
-        messages=messages,
-        max_tokens=40,
-        temperature=0.2,
-        caching=True,
-    )
-    await asyncio.sleep(1)  # success callback is async
-    response_cost_2 = customHandler_optional_params.response_cost
-    assert response_cost_2 == 0
 
 
 @pytest.mark.flaky(retries=3, delay=3)

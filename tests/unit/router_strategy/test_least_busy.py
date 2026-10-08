@@ -233,3 +233,39 @@ async def test_batch_line_item_success_does_not_release_in_flight_slots(monkeypa
     await worker.async_log_success_event(line_item_kwargs, None, None, None)
 
     assert shared.count(f"{GROUP}_request_count:dep-a") == 1
+
+
+def test_model_added():
+    test_cache = DualCache()
+    least_busy_logger = LeastBusyLoggingHandler(router_cache=test_cache)
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "gpt-3.5-turbo",
+                "deployment": "azure/gpt-4.1-mini",
+            },
+            "model_info": {"id": "1234"},
+        }
+    }
+    least_busy_logger.log_pre_api_call(model="test", messages=[], kwargs=kwargs)
+    request_count_api_key = "gpt-3.5-turbo_request_count:1234"
+    assert test_cache.get_cache(key=request_count_api_key) == 1
+
+
+def test_get_available_deployments():
+    test_cache = DualCache()
+    least_busy_logger = LeastBusyLoggingHandler(router_cache=test_cache)
+    model_group = "gpt-3.5-turbo"
+    deployment = "azure/gpt-4.1-mini"
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": model_group,
+                "deployment": deployment,
+            },
+            "model_info": {"id": "1234"},
+        }
+    }
+    least_busy_logger.log_pre_api_call(model="test", messages=[], kwargs=kwargs)
+    request_count_api_key = f"{model_group}_request_count:1234"
+    assert test_cache.get_cache(key=request_count_api_key) == 1

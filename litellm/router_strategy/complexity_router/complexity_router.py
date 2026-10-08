@@ -49,6 +49,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_parent_otel_span_from_kwargs,
     is_codex_user_agent,
 )
+from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     as_openai_image_part,
@@ -413,9 +414,9 @@ def _parent_session_kwargs(request_kwargs: Mapping[str, object] | None) -> Mappi
     return {k: kwargs[k] for k in ("litellm_session_id", "litellm_trace_id") if kwargs.get(k) is not None}
 
 
-def _response_cost_or_none(response: ModelResponse | ResponsesAPIResponse) -> float | None:
-    hidden_params: Final = response._hidden_params
-    if not isinstance(hidden_params, dict):
+def _response_cost_or_none(response: object) -> float | None:
+    hidden_params: Final = get_hidden_params(response)
+    if hidden_params is None:
         return None
     cost: Final = hidden_params.get("response_cost")
     if isinstance(cost, bool) or not isinstance(cost, (int, float)):

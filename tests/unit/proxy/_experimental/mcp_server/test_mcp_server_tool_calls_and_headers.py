@@ -826,7 +826,7 @@ async def test_call_tool_m2m_skips_authorization_headers():
     mock_client = MagicMock()
     mock_client.call_tool = AsyncMock(return_value=MagicMock())
 
-    with patch.object(manager, "_create_mcp_client", new=AsyncMock(return_value=mock_client)) as create_client_mock:
+    with patch.object(manager, "create_mcp_client", new=AsyncMock(return_value=mock_client)) as create_client_mock:
         await manager._call_regular_mcp_tool(
             mcp_server=server,
             original_tool_name="echo",
@@ -1302,7 +1302,7 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
             # Failing server raises an exception
             raise Exception("Server connection failed")
 
-    mock_manager._get_tools_from_server = mock_get_tools_from_server
+    mock_manager.get_tools_from_server = mock_get_tools_from_server
 
     with patch(
         "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager",
@@ -1398,7 +1398,7 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
         # All servers fail
         raise Exception(f"Server {server.name} connection failed")
 
-    mock_manager._get_tools_from_server = mock_get_tools_from_server
+    mock_manager.get_tools_from_server = mock_get_tools_from_server
 
     with patch(
         "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager",
@@ -1704,6 +1704,56 @@ async def test_handle_list_tools_converts_permission_httpexception_to_mcp_error(
 
     assert exc_info.value.error.code == INVALID_REQUEST
     assert exc_info.value.error.message == denial_message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "handler_name",
+    [
+        "list_prompts",
+        "list_resources",
+        "list_resource_templates",
+    ],
+)
+async def test_rate_limited_catalog_lists_return_mcp_errors(handler_name):
+    from mcp.shared.exceptions import MCPError
+
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+    user_api_key_auth: Final = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+    server_config: Final = MCPServer(
+        server_id="rate-limited",
+        name="rate-limited",
+        server_name="rate-limited",
+        transport=MCPTransport.http,
+        rpm=1,
+    )
+    rate_limit_error: Final = ProxyRateLimitError(detail="server RPM exceeded")
+    enforce_rate_limit: Final = AsyncMock(side_effect=rate_limit_error)
+    proxy_logging: Final = MagicMock(enforce_mcp_server_rate_limits=enforce_rate_limit)
+    execute_list: Final = {
+        "list_prompts": mcp_operations._execute_list_prompts,
+        "list_resources": mcp_operations._execute_list_resources,
+        "list_resource_templates": mcp_operations._execute_list_resource_templates,
+    }[handler_name]
+    context: Final = mcp_operations.prepare_context(
+        user_api_key_auth,
+        mcp_servers=[server_config.server_id],
+    )
+
+    with (
+        patch.object(mcp_operations, "_get_allowed_mcp_servers", new=AsyncMock(return_value=[server_config])),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", new=proxy_logging),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+    ):
+        with pytest.raises(MCPError) as exc_info:
+            await execute_list(context, _paged_params())
+
+    assert exc_info.value.error.code == INVALID_REQUEST
+    assert exc_info.value.error.message == "server RPM exceeded"
+    assert enforce_rate_limit.await_count == 1
+    assert enforce_rate_limit.await_args.args[0].api_key == user_api_key_auth.api_key
+    assert enforce_rate_limit.await_args.args[1] is server_config
 
 
 @pytest.mark.asyncio
@@ -4187,11 +4237,11 @@ async def test_mcp_routing_with_conflicting_alias_and_group_name():
             mock_get_allowed,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler._get_mcp_servers_from_access_groups",
+            "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.get_mcp_servers_from_access_groups",
             mock_db_lookup,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager._get_tools_from_server",
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_tools_from_server",
             mock_get_tools_spy,
         ),
     ):
@@ -4291,7 +4341,7 @@ async def test_oauth2_caller_headers_not_forwarded_for_migrated_server():
     with (
         patch.object(
             global_mcp_server_manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             side_effect=mock_create_mcp_client,
         ) as mock_create_client,
         patch.object(
@@ -4388,7 +4438,7 @@ async def test_list_tools_single_server_unprefixed_names():
         tool.input_schema = {}
         return [tool]
 
-    mock_manager._get_tools_from_server = mock_get_tools_from_server
+    mock_manager.get_tools_from_server = mock_get_tools_from_server
 
     with patch(
         "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager",
@@ -4467,7 +4517,7 @@ async def test_list_tools_multiple_servers_prefixed_names():
         tool.input_schema = {}
         return [tool]
 
-    mock_manager._get_tools_from_server = mock_get_tools_from_server
+    mock_manager.get_tools_from_server = mock_get_tools_from_server
 
     with patch(
         "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager",
@@ -4507,7 +4557,7 @@ async def test_mcp_manager_allows_public_servers_without_permissions():
 
     with (
         patch(
-            "litellm.proxy.management_endpoints.common_utils._user_has_admin_view",
+            "litellm.proxy.management_endpoints.common_utils.user_api_key_has_admin_view",
             return_value=False,
         ),
         patch(
@@ -4542,7 +4592,7 @@ async def test_mcp_manager_returns_public_when_permission_lookup_fails():
 
     with (
         patch(
-            "litellm.proxy.management_endpoints.common_utils._user_has_admin_view",
+            "litellm.proxy.management_endpoints.common_utils.user_api_key_has_admin_view",
             return_value=False,
         ),
         patch(
@@ -4586,7 +4636,7 @@ async def test_mcp_manager_merges_public_and_restricted_servers():
 
     with (
         patch(
-            "litellm.proxy.management_endpoints.common_utils._user_has_admin_view",
+            "litellm.proxy.management_endpoints.common_utils.user_api_key_has_admin_view",
             return_value=False,
         ),
         patch(
@@ -4896,7 +4946,7 @@ async def test_list_tools_filters_by_key_team_permissions():
 
         return [tool1, tool2, tool3, tool4]
 
-    mock_manager._get_tools_from_server = mock_get_tools_from_server
+    mock_manager.get_tools_from_server = mock_get_tools_from_server
 
     with patch(
         "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager",
@@ -5007,7 +5057,7 @@ async def test_list_tools_with_team_tool_permissions_inheritance():
 
         return [tool1, tool2, tool3, tool4]
 
-    mock_manager._get_tools_from_server = mock_get_tools_from_server
+    mock_manager.get_tools_from_server = mock_get_tools_from_server
 
     with patch(
         "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager",
@@ -5099,7 +5149,7 @@ async def test_list_tools_with_no_tool_permissions_shows_all():
 
         return [tool1, tool2, tool3]
 
-    mock_manager._get_tools_from_server = mock_get_tools_from_server
+    mock_manager.get_tools_from_server = mock_get_tools_from_server
 
     with patch(
         "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager",
@@ -5205,7 +5255,7 @@ async def test_list_tools_strips_prefix_when_matching_permissions():
 
         return [tool1, tool2, tool3, tool4]
 
-    mock_manager._get_tools_from_server = mock_get_tools_from_server
+    mock_manager.get_tools_from_server = mock_get_tools_from_server
 
     with patch(
         "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager",
@@ -5746,7 +5796,7 @@ async def test_get_tools_from_mcp_servers_logs_list_tools_to_spendlogs_when_enab
             side_effect=_capture_function_setup,
         ),
     ):
-        mock_manager._get_tools_from_server = AsyncMock(return_value=[tool_1])
+        mock_manager.get_tools_from_server = AsyncMock(return_value=[tool_1])
 
         listing = await _get_tools_from_mcp_servers(
             user_api_key_auth=user_auth,
@@ -5828,7 +5878,7 @@ async def test_get_tools_from_mcp_servers_returns_tools_when_success_logging_fai
             return_value=(dummy_logging_obj, None),
         ),
     ):
-        mock_manager._get_tools_from_server = AsyncMock(return_value=[tool_1])
+        mock_manager.get_tools_from_server = AsyncMock(return_value=[tool_1])
 
         listing = await _get_tools_from_mcp_servers(
             user_api_key_auth=user_auth,
@@ -6145,7 +6195,7 @@ async def test_get_tools_from_mcp_servers_injects_stored_oauth2_token():
             new=AsyncMock(side_effect=lambda tools, **_: tools),
         ),
     ):
-        mock_manager._get_tools_from_server = AsyncMock(return_value=[tool_1])
+        mock_manager.get_tools_from_server = AsyncMock(return_value=[tool_1])
 
         listing = await _get_tools_from_mcp_servers(
             user_api_key_auth=user_auth,
@@ -6159,8 +6209,8 @@ async def test_get_tools_from_mcp_servers_injects_stored_oauth2_token():
     mock_prefetch.assert_awaited_once_with(user_auth)
 
     # The stored token was forwarded to the MCP transport layer as extra_headers
-    mock_manager._get_tools_from_server.assert_awaited_once()
-    call_kwargs = mock_manager._get_tools_from_server.await_args.kwargs
+    mock_manager.get_tools_from_server.assert_awaited_once()
+    call_kwargs = mock_manager.get_tools_from_server.await_args.kwargs
     assert call_kwargs["extra_headers"] == {"Authorization": f"Bearer {STORED_TOKEN}"}
 
     assert listing.tools == [tool_1]
@@ -6301,7 +6351,7 @@ class TestEnsureUpstreamInitializeInstructionsCached:
         )
 
         server = _make_instruction_server(server_id="yaml-only", instructions="from yaml")
-        with patch.object(global_mcp_server_manager, "_create_mcp_client", AsyncMock()) as mock_create:
+        with patch.object(global_mcp_server_manager, "create_mcp_client", AsyncMock()) as mock_create:
             await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(server)
         mock_create.assert_not_awaited()
 
@@ -6316,7 +6366,7 @@ class TestEnsureUpstreamInitializeInstructionsCached:
         server = _make_instruction_server(server_id="cached-only", instructions=None)
         global_mcp_server_manager._upstream_initialize_instructions_by_server_id["cached-only"] = "warm"
         try:
-            with patch.object(global_mcp_server_manager, "_create_mcp_client", AsyncMock()) as mock_create:
+            with patch.object(global_mcp_server_manager, "create_mcp_client", AsyncMock()) as mock_create:
                 await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(server)
             mock_create.assert_not_awaited()
         finally:
@@ -6331,7 +6381,7 @@ class TestEnsureUpstreamInitializeInstructionsCached:
         )
 
         server = _make_instruction_server(server_id="openapi-spec", spec_path="/openapi.json", url=None)
-        with patch.object(global_mcp_server_manager, "_create_mcp_client", AsyncMock()) as mock_create:
+        with patch.object(global_mcp_server_manager, "create_mcp_client", AsyncMock()) as mock_create:
             await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(server)
         mock_create.assert_not_awaited()
 
@@ -6350,7 +6400,7 @@ class TestEnsureUpstreamInitializeInstructionsCached:
 
         with patch.object(
             global_mcp_server_manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             AsyncMock(return_value=fake_client),
         ):
             try:
@@ -6378,7 +6428,7 @@ class TestEnsureUpstreamInitializeInstructionsCached:
         fake_client._last_initialize_instructions = None  # upstream sent nothing
 
         create = AsyncMock(return_value=fake_client)
-        with patch.object(global_mcp_server_manager, "_create_mcp_client", create):
+        with patch.object(global_mcp_server_manager, "create_mcp_client", create):
             try:
                 await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(server)
                 await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(server)
@@ -6403,7 +6453,7 @@ class TestEnsureUpstreamInitializeInstructionsCached:
         fake_client._last_initialize_instructions = None
 
         create = AsyncMock(return_value=fake_client)
-        with patch.object(global_mcp_server_manager, "_create_mcp_client", create):
+        with patch.object(global_mcp_server_manager, "create_mcp_client", create):
             try:
                 await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(server)
                 await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(server)
@@ -6435,22 +6485,22 @@ class TestGatewayCreateInitializationOptions:
         """When ContextVar is None, instructions are absent."""
         try:
             from litellm.proxy._experimental.mcp_server.mcp_context import (
-                _mcp_gateway_initialize_instructions,
-                _mcp_gateway_server_name,
+                mcp_gateway_initialize_instructions,
+                mcp_gateway_server_name,
             )
             from litellm.proxy._experimental.mcp_server.server import server
         except ImportError:
             pytest.skip("MCP server not available")
 
-        instructions_token = _mcp_gateway_initialize_instructions.set(None)
-        server_name_token = _mcp_gateway_server_name.set(None)
+        instructions_token = mcp_gateway_initialize_instructions.set(None)
+        server_name_token = mcp_gateway_server_name.set(None)
         try:
             opts = server.create_initialization_options()
             assert getattr(opts, "instructions", None) is None
             assert opts.server_name == "litellm-mcp-server"
         finally:
-            _mcp_gateway_initialize_instructions.reset(instructions_token)
-            _mcp_gateway_server_name.reset(server_name_token)
+            mcp_gateway_initialize_instructions.reset(instructions_token)
+            mcp_gateway_server_name.reset(server_name_token)
 
     @pytest.mark.asyncio
     async def test_scoped_request_uses_configured_server_alias(self):
@@ -6479,7 +6529,7 @@ class TestGatewayCreateInitializationOptions:
             ),
             patch.object(
                 global_mcp_server_manager,
-                "_ensure_upstream_initialize_instructions_cached",
+                "ensure_upstream_initialize_instructions_cached",
                 new_callable=AsyncMock,
             ),
         ):
@@ -6549,7 +6599,7 @@ class TestGatewayCreateInitializationOptions:
     async def test_non_initialize_request_with_no_granted_servers_is_not_rejected_here(self):
         from litellm.proxy._experimental.mcp_server.server import (
             _gateway_initialize_instructions_request_scope,
-            _mcp_gateway_initialize_instructions,
+            mcp_gateway_initialize_instructions,
         )
         from litellm.proxy._types import UserAPIKeyAuth
 
@@ -6563,7 +6613,7 @@ class TestGatewayCreateInitializationOptions:
                 mcp_servers=None,
                 client_ip=None,
             ):
-                assert _mcp_gateway_initialize_instructions.get() is None
+                assert mcp_gateway_initialize_instructions.get() is None
 
     @pytest.mark.asyncio
     async def test_sse_handler_scopes_server_name_from_single_server_path(self):
@@ -6628,7 +6678,7 @@ class TestGatewayCreateInitializationOptions:
             ),
             patch.object(
                 global_mcp_server_manager,
-                "_ensure_upstream_initialize_instructions_cached",
+                "ensure_upstream_initialize_instructions_cached",
                 new_callable=AsyncMock,
             ),
             patch(
@@ -6658,31 +6708,31 @@ class TestGatewayCreateInitializationOptions:
         """When ContextVar has a value, it appears in InitializationOptions."""
         try:
             from litellm.proxy._experimental.mcp_server.mcp_context import (
-                _mcp_gateway_initialize_instructions,
+                mcp_gateway_initialize_instructions,
             )
             from litellm.proxy._experimental.mcp_server.server import server
         except ImportError:
             pytest.skip("MCP server not available")
 
-        tok = _mcp_gateway_initialize_instructions.set("hello from merge")
+        tok = mcp_gateway_initialize_instructions.set("hello from merge")
         try:
             opts = server.create_initialization_options()
             assert opts.instructions == "hello from merge"
         finally:
-            _mcp_gateway_initialize_instructions.reset(tok)
+            mcp_gateway_initialize_instructions.reset(tok)
 
     def test_contextvar_reset_removes_instructions(self):
         """After resetting the ContextVar, instructions disappear."""
         try:
             from litellm.proxy._experimental.mcp_server.mcp_context import (
-                _mcp_gateway_initialize_instructions,
+                mcp_gateway_initialize_instructions,
             )
             from litellm.proxy._experimental.mcp_server.server import server
         except ImportError:
             pytest.skip("MCP server not available")
 
-        tok = _mcp_gateway_initialize_instructions.set("temporary")
-        _mcp_gateway_initialize_instructions.reset(tok)
+        tok = mcp_gateway_initialize_instructions.set("temporary")
+        mcp_gateway_initialize_instructions.reset(tok)
         opts = server.create_initialization_options()
         assert getattr(opts, "instructions", None) is None
 
@@ -6771,7 +6821,7 @@ async def test_list_tools_with_legacy_db_m2m_server_resolves_oauth2_flow():
         mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["legacy-m2m-id"])
         mock_manager.get_mcp_server_by_id = MagicMock(return_value=legacy_server)
         mock_manager.filter_server_ids_by_ip_with_info = MagicMock(return_value=(["legacy-m2m-id"], 0))
-        mock_manager._get_tools_from_server = AsyncMock(side_effect=capture_extra_headers)
+        mock_manager.get_tools_from_server = AsyncMock(side_effect=capture_extra_headers)
 
         listing = await _get_tools_from_mcp_servers(
             user_api_key_auth=user_auth,
@@ -6841,7 +6891,7 @@ async def test_call_tool_empty_extra_headers_returns_none():
     with (
         patch.object(
             manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             side_effect=capture_create_mcp_client,
         ),
         patch.object(
@@ -7438,7 +7488,7 @@ async def test_execute_mcp_tool_rest_server_id_authoritative_for_unprefixed_tool
         ),
         patch.object(
             mcp_operations.global_mcp_server_manager,
-            "_get_mcp_server_from_tool_name",
+            "get_mcp_server_from_tool_name",
             return_value=oauth_server,
         ),
         patch.object(
@@ -7503,7 +7553,7 @@ def _worker_that_never_listed(server: MCPServer, upstream_tools: tuple[str, ...]
     with (
         patch.object(  # test-quality-ok: the upstream MCP session is the boundary; a real one needs an initialize handshake over a live server
             mcp_operations.global_mcp_server_manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             new=AsyncMock(return_value=MagicMock()),
         ) as create_client,
         patch.object(  # test-quality-ok: same boundary, this is the tools/list answer the upstream would give
@@ -7685,7 +7735,7 @@ async def test_execute_mcp_tool_strips_a_prefix_that_contains_the_separator():
     with (
         patch.object(
             mcp_operations.global_mcp_server_manager,
-            "_get_mcp_server_from_tool_name",
+            "get_mcp_server_from_tool_name",
             return_value=alias_less_server,
         ),
         patch.object(
@@ -7771,7 +7821,7 @@ async def test_execute_mcp_tool_rest_server_id_injects_requested_server_credenti
         ),
         patch.object(
             mcp_operations.global_mcp_server_manager,
-            "_create_mcp_client",
+            "create_mcp_client",
             new=fake_create_mcp_client,
         ),
         patch.object(
@@ -7838,7 +7888,7 @@ async def test_execute_mcp_tool_rest_prefixed_tool_still_validates_server_id():
         ),
         patch.object(
             mcp_operations.global_mcp_server_manager,
-            "_get_mcp_server_from_tool_name",
+            "get_mcp_server_from_tool_name",
             return_value=oauth_server,
         ),
         patch.object(
@@ -7900,7 +7950,7 @@ async def test_execute_mcp_tool_rest_unauthorized_prefix_still_mismatches():
         ),
         patch.object(
             mcp_operations.global_mcp_server_manager,
-            "_get_mcp_server_from_tool_name",
+            "get_mcp_server_from_tool_name",
             return_value=restricted_server,
         ),
         patch.object(
@@ -7961,7 +8011,7 @@ async def test_execute_mcp_tool_rest_hyphenated_upstream_tool_name_routes_to_req
         ),
         patch.object(
             mcp_operations.global_mcp_server_manager,
-            "_get_mcp_server_from_tool_name",
+            "get_mcp_server_from_tool_name",
             return_value=None,
         ),
         patch.object(
@@ -8044,7 +8094,7 @@ async def test_execute_mcp_tool_sets_model_in_model_call_details():
     with (
         patch.object(
             mcp_operations.global_mcp_server_manager,
-            "_get_mcp_server_from_tool_name",
+            "get_mcp_server_from_tool_name",
             return_value=fake_server,
         ),
         patch.object(
@@ -8120,7 +8170,7 @@ async def test_execute_mcp_tool_hands_openapi_hooks_the_listed_entry_and_nothing
 
     try:
         with (
-            patch.object(manager, "_get_mcp_server_from_tool_name", return_value=petstore),
+            patch.object(manager, "get_mcp_server_from_tool_name", return_value=petstore),
             patch.object(manager, "pre_call_tool_check", new=pre_call_tool_check),
             patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
         ):
@@ -8175,7 +8225,7 @@ async def test_execute_mcp_tool_hands_openapi_hooks_the_guarded_catalog_entry_cl
 
     try:
         with (
-            patch.object(manager, "_get_mcp_server_from_tool_name", return_value=petstore),
+            patch.object(manager, "get_mcp_server_from_tool_name", return_value=petstore),
             patch.object(manager, "pre_call_tool_check", new=pre_call_tool_check),
         ):
             await mcp_module.execute_mcp_tool(
@@ -8230,7 +8280,7 @@ async def test_execute_mcp_tool_hands_openapi_hooks_each_callers_own_listed_entr
 
     try:
         with (
-            patch.object(manager, "_get_mcp_server_from_tool_name", return_value=petstore),
+            patch.object(manager, "get_mcp_server_from_tool_name", return_value=petstore),
             patch.object(manager, "pre_call_tool_check", new=pre_call_tool_check),
         ):
             for caller in (guarded, opted_out):
@@ -8278,7 +8328,7 @@ async def test_execute_mcp_tool_runs_the_longer_colliding_operation_and_hands_ho
 
     try:
         with (
-            patch.object(manager, "_get_mcp_server_from_tool_name", return_value=petstore),
+            patch.object(manager, "get_mcp_server_from_tool_name", return_value=petstore),
             patch.object(manager, "pre_call_tool_check", new=pre_call_tool_check),
         ):
             result = await mcp_module.execute_mcp_tool(
@@ -8324,7 +8374,7 @@ async def test_execute_mcp_tool_hands_hooks_nothing_for_a_never_listed_operation
 
     try:
         with (
-            patch.object(manager, "_get_mcp_server_from_tool_name", return_value=petstore),
+            patch.object(manager, "get_mcp_server_from_tool_name", return_value=petstore),
             patch.object(manager, "pre_call_tool_check", new=pre_call_tool_check),
         ):
             result = await mcp_module.execute_mcp_tool(
@@ -8354,7 +8404,7 @@ async def test_execute_mcp_tool_implicit_listing_before_the_first_call_hands_hoo
     upstream = AsyncMock()
     upstream.call_tool.return_value = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
     proxy_logging = _mock_mcp_proxy_logging()
-    proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
+    proxy_logging.create_mcp_request_object_from_kwargs = MagicMock(return_value={})
     proxy_logging._convert_mcp_to_llm_format = MagicMock(return_value={})
     proxy_logging.pre_call_hook = AsyncMock(return_value={})
     proxy_logging.during_call_hook = AsyncMock(return_value=None)
@@ -8363,7 +8413,7 @@ async def test_execute_mcp_tool_implicit_listing_before_the_first_call_hands_hoo
     )
 
     with (
-        patch.object(manager, "_create_mcp_client", new=AsyncMock(return_value=upstream)),
+        patch.object(manager, "create_mcp_client", new=AsyncMock(return_value=upstream)),
         patch.object(manager, "_fetch_tools_with_timeout", new=fetch_tools),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
     ):
@@ -8379,7 +8429,7 @@ async def test_execute_mcp_tool_implicit_listing_before_the_first_call_hands_hoo
     assert fetch_tools.await_count == 1
     assert upstream.call_tool.await_count == 1
     assert result.content[0].text == "ok"
-    hook_kwargs = proxy_logging._create_mcp_request_object_from_kwargs.call_args.args[0]
+    hook_kwargs = proxy_logging.create_mcp_request_object_from_kwargs.call_args.args[0]
     assert (hook_kwargs["tool_description"], hook_kwargs["tool_input_schema"]) == (None, None)
     assert server.server_id not in manager._listed_tools_by_server_id
 
@@ -8410,7 +8460,7 @@ async def test_fetch_pinnable_tool_catalog_records_no_listed_catalog_for_the_adm
     )
 
     with (
-        patch.object(manager, "_create_mcp_client", new=AsyncMock(return_value=MagicMock())),
+        patch.object(manager, "create_mcp_client", new=AsyncMock(return_value=MagicMock())),
         patch.object(manager, "_fetch_tools_with_timeout", new=fetch_tools),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())),
     ):
@@ -8473,7 +8523,7 @@ async def test_execute_mcp_tool_rest_unresolved_prefixed_name_routes_to_requeste
         ),
         patch.object(
             mcp_operations.global_mcp_server_manager,
-            "_get_mcp_server_from_tool_name",
+            "get_mcp_server_from_tool_name",
             return_value=None,
         ),
         patch.object(
@@ -8553,7 +8603,7 @@ async def test_execute_mcp_tool_rest_prefix_retry_resolution_still_enforces_serv
         ),
         patch.object(
             mcp_operations.global_mcp_server_manager,
-            "_get_mcp_server_from_tool_name",
+            "get_mcp_server_from_tool_name",
             side_effect=resolve_only_when_requested_prefix_added,
         ),
         patch.object(
@@ -8621,7 +8671,7 @@ async def test_get_allowed_mcp_servers_from_mcp_server_names_unknown_name_fails_
 
     with patch(
         "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
-        "MCPRequestHandler._get_mcp_servers_from_access_groups",
+        "MCPRequestHandler.get_mcp_servers_from_access_groups",
         new_callable=AsyncMock,
         return_value=[],
     ):
@@ -8680,7 +8730,7 @@ async def test_get_allowed_mcp_servers_from_mcp_server_names_known_alias_returns
 
     with patch(
         "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
-        "MCPRequestHandler._get_mcp_servers_from_access_groups",
+        "MCPRequestHandler.get_mcp_servers_from_access_groups",
         new_callable=AsyncMock,
         return_value=[],
     ):
@@ -8713,7 +8763,7 @@ async def test_get_allowed_mcp_servers_from_mcp_server_names_mixed_known_and_unk
 
     with patch(
         "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
-        "MCPRequestHandler._get_mcp_servers_from_access_groups",
+        "MCPRequestHandler.get_mcp_servers_from_access_groups",
         new_callable=AsyncMock,
         return_value=[],
     ):
@@ -8746,7 +8796,7 @@ async def test_get_allowed_mcp_servers_from_mcp_server_names_access_group_resolv
 
     with patch(
         "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
-        "MCPRequestHandler._get_mcp_servers_from_access_groups",
+        "MCPRequestHandler.get_mcp_servers_from_access_groups",
         new_callable=AsyncMock,
         return_value=["id-b"],
     ):
@@ -9150,6 +9200,7 @@ def _mock_mcp_logging_obj() -> MagicMock:
 def _mock_mcp_proxy_logging() -> MagicMock:
     """ProxyLogging stand-in whose post_mcp_call_hook passes the result through."""
     proxy_logging_mock = MagicMock()
+    proxy_logging_mock.enforce_mcp_server_rate_limits = AsyncMock()
     proxy_logging_mock.post_call_failure_hook = AsyncMock()
     proxy_logging_mock.post_mcp_call_hook = AsyncMock(side_effect=lambda response, **_: response)
     return proxy_logging_mock
@@ -9579,9 +9630,9 @@ def test_redact_mcp_resource_url_strips_credentials(url, expected):
     """The MCP tool-call log records the upstream resource, so the URL must be redacted to
     scheme+host+path: userinfo, query string, and fragment (which can carry embedded tokens or
     secret parameters) must never reach spend-log metadata or logging callbacks."""
-    from litellm.proxy._experimental.mcp_server.server import _redact_mcp_resource_url
+    from litellm.proxy._experimental.mcp_server.server import redact_mcp_resource_url
 
-    assert _redact_mcp_resource_url(url) == expected
+    assert redact_mcp_resource_url(url) == expected
 
 
 @pytest.mark.asyncio
@@ -9670,7 +9721,7 @@ def _managed_tool_returning(server, upstream_result, proxy_logging_mock):
             return_value=[server.server_id],
         ),
         patch.object(global_mcp_server_manager, "get_mcp_server_by_id", return_value=server),
-        patch.object(global_mcp_server_manager, "_get_mcp_server_from_tool_name", return_value=server),
+        patch.object(global_mcp_server_manager, "get_mcp_server_from_tool_name", return_value=server),
         patch.object(global_mcp_server_manager, "server_owning_tool_name_prefix", return_value=server),
         patch(
             "litellm.proxy._experimental.mcp_server.operations._get_allowed_mcp_servers_from_mcp_server_names",
@@ -9847,7 +9898,7 @@ async def test_aggregate_listing_reports_per_server_outcomes():
             return [tool1]
         raise MCPServerListError(ServerListFault(tag="upstream_error", status_code=500), server.name)
 
-    mock_manager._get_tools_from_server = mock_get_tools_from_server
+    mock_manager.get_tools_from_server = mock_get_tools_from_server
 
     with patch(
         "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager",
@@ -10696,7 +10747,7 @@ async def test_list_tools_injects_byok_credential_for_non_oauth2_auth_types(auth
     mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=[server.server_id])
     mock_manager.get_mcp_server_by_id = MagicMock(return_value=server)
     mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
-    mock_manager._get_tools_from_server = mock_get_tools_from_server
+    mock_manager.get_tools_from_server = mock_get_tools_from_server
 
     with (
         patch(
@@ -10898,7 +10949,7 @@ async def test_tool_listing_preserves_permission_denial_when_failure_logging_fai
         patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(side_effect=denial)),
         patch.object(operations, "function_setup", return_value=(None, None)),
         patch.object(proxy_server, "proxy_logging_obj", logger),
-        patch.object(operations.global_mcp_server_manager, "_get_tools_from_server", upstream),
+        patch.object(operations.global_mcp_server_manager, "get_tools_from_server", upstream),
     ):
         with pytest.raises(HTTPException) as rejected:
             await operations._get_tools_from_mcp_servers(

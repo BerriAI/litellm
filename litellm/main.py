@@ -96,6 +96,7 @@ from litellm.litellm_core_utils.health_check_utils import (
     _filter_model_params,
     create_health_check_response,
 )
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.mock_functions import (
     mock_embedding,
@@ -117,6 +118,7 @@ from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
     convert_model_response_to_streaming,
 )
+from litellm.llms.base_llm.chat.transformation import with_attribution_headers
 from litellm.llms.bedrock.common_utils import (
     BedrockModelInfo,
     bedrock_route_for_request,
@@ -210,7 +212,7 @@ from .litellm_core_utils.prompt_templates.factory import (
 from .litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
-from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
+from .llms.azure.azure import AzureChatCompletion, check_dynamic_azure_params
 from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
 from .llms.azure.completion.handler import AzureTextCompletion
 from .llms.azure_ai.anthropic.handler import AzureAnthropicChatCompletion
@@ -1036,11 +1038,11 @@ def mock_completion(
         )
 
         if custom_llm_provider is not None:
-            model_response._hidden_params["custom_llm_provider"] = custom_llm_provider
+            model_response.hidden_params["custom_llm_provider"] = custom_llm_provider
         else:
             try:
                 _, inferred_provider, _, _ = litellm.utils.get_llm_provider(model=model)
-                model_response._hidden_params["custom_llm_provider"] = inferred_provider
+                model_response.hidden_params["custom_llm_provider"] = inferred_provider
             except Exception:
                 # dont let setting a hidden param block a mock_respose
                 pass
@@ -1360,7 +1362,7 @@ def _complete_azure(ctx: CompletionDispatchContext) -> _CompletionDispatchResult
 
     dynamic_params = False
     if client is not None and (isinstance(client, openai.AzureOpenAI) or isinstance(client, openai.AsyncAzureOpenAI)):
-        dynamic_params = _check_dynamic_azure_params(
+        dynamic_params = check_dynamic_azure_params(
             azure_client_params={"api_version": api_version},
             azure_client=client,
         )
@@ -2633,6 +2635,11 @@ def _complete_custom_openai(
     )
 
     headers = headers or litellm.headers
+    outbound_headers: Final = (
+        headers
+        if provider_config is None
+        else with_attribution_headers(provider_config.get_attribution_headers(), headers)
+    )
 
     # Add GitHub Copilot headers (same as /responses endpoint does)
     if custom_llm_provider == "github_copilot":
@@ -2684,7 +2691,7 @@ def _complete_custom_openai(
                 acompletion=acompletion,
                 stream=stream,
                 api_key=api_key,
-                headers=headers,
+                headers=outbound_headers,
                 client=client,
                 provider_config=provider_config,
             )
@@ -2692,7 +2699,7 @@ def _complete_custom_openai(
             response = openai_chat_completions.completion(
                 model=model,
                 messages=messages,
-                headers=headers,
+                headers=outbound_headers,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 api_key=api_key,
@@ -2715,7 +2722,7 @@ def _complete_custom_openai(
             input=messages,
             api_key=api_key,
             original_response=str(e),
-            additional_args={"headers": headers},
+            additional_args={"headers": outbound_headers},
         )
         raise e
 
@@ -2725,7 +2732,7 @@ def _complete_custom_openai(
             input=messages,
             api_key=api_key,
             original_response=response,
-            additional_args={"headers": headers},
+            additional_args={"headers": outbound_headers},
         )
 
     return response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch contract
@@ -5067,7 +5074,7 @@ def _complete_langgraph(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
     (
         api_base,
         api_key,
-    ) = LangGraphConfig()._get_openai_compatible_provider_info(
+    ) = LangGraphConfig().get_openai_compatible_provider_info(
         api_base=api_base or litellm.api_base,
         api_key=api_key or litellm.api_key,
     )
@@ -5116,7 +5123,7 @@ def _complete_langflow(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
     (
         api_base,
         api_key,
-    ) = LangFlowConfig()._get_openai_compatible_provider_info(
+    ) = LangFlowConfig().get_openai_compatible_provider_info(
         api_base=api_base or litellm.api_base,
         api_key=api_key or litellm.api_key,
     )
@@ -5516,9 +5523,12 @@ def completion(
                 )
             )
 
-        if model_response is not None and hasattr(model_response, "_hidden_params"):
-            model_response._hidden_params["custom_llm_provider"] = custom_llm_provider
-            model_response._hidden_params["region_name"] = kwargs.get(
+        if model_response is not None and hasattr(model_response, HIDDEN_PARAMS_ATTR):
+            model_response_hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior
+                dict[str, object], getattr(model_response, HIDDEN_PARAMS_ATTR)
+            )
+            model_response_hidden_params["custom_llm_provider"] = custom_llm_provider
+            model_response_hidden_params["region_name"] = kwargs.get(
                 "aws_region_name", None
             )  # support region-based pricing for bedrock
 
@@ -5727,6 +5737,7 @@ def completion(
                     *ANTHROPIC_WIF_KWARGS_KEYS,
                     *OPENAI_WIF_KWARGS_KEYS,
                     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
+                    "fireworks_forward_user_id",
                 )
                 if key in kwargs
             },
@@ -6247,7 +6258,9 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
         elif asyncio.iscoroutine(init_response):
             response = await init_response
         if response is not None and isinstance(response, EmbeddingResponse) and hasattr(response, "_hidden_params"):
-            response._hidden_params["custom_llm_provider"] = custom_llm_provider
+            response_hidden_params: Final = get_hidden_params(response)
+            if response_hidden_params is not None:
+                response_hidden_params["custom_llm_provider"] = custom_llm_provider
 
         if response is None:
             raise ValueError("Unable to get Embedding Response. Please pass a valid llm_provider.")
@@ -7364,7 +7377,9 @@ def embedding(
         else:
             raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
         if response is not None and hasattr(response, "_hidden_params") and isinstance(response, EmbeddingResponse):
-            response._hidden_params["custom_llm_provider"] = custom_llm_provider
+            response_hidden_params: Final = get_hidden_params(response)
+            if response_hidden_params is not None:
+                response_hidden_params["custom_llm_provider"] = custom_llm_provider
 
         if response is None:
             raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
@@ -7838,7 +7853,7 @@ async def amoderation(
     if openai_client is None or not isinstance(openai_client, AsyncOpenAI):
         # call helper to get OpenAI client
         # _get_openai_client maintains in-memory caching logic for OpenAI clients
-        _openai_client: AsyncOpenAI = openai_chat_completions._get_openai_client(
+        _openai_client: AsyncOpenAI = openai_chat_completions.get_openai_client(
             is_async=True,
             api_key=api_key,
             api_base=optional_params.api_base or _dynamic_api_base,
@@ -7929,7 +7944,7 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
             if existing_duration is None:
                 calculated_duration: Final = calculate_request_duration(file)
                 if calculated_duration is not None:
-                    response._hidden_params["audio_transcription_duration"] = calculated_duration
+                    response.hidden_params["audio_transcription_duration"] = calculated_duration
 
         return response
     except Exception as e:
@@ -8202,7 +8217,10 @@ def transcription(
         if existing_duration is None:
             calculated_duration: Final = calculate_request_duration(file)
             if calculated_duration is not None:
-                response._hidden_params["audio_transcription_duration"] = calculated_duration
+                response_hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior
+                    dict[str, object], getattr(response, HIDDEN_PARAMS_ATTR)
+                )
+                response_hidden_params["audio_transcription_duration"] = calculated_duration
 
     if response is None:
         raise ValueError("Unmapped provider passed in. Unable to get the response.")
@@ -8816,8 +8834,9 @@ async def ahealth_check(
 
         if mode in mode_handlers:
             _response: Final = await mode_handlers[mode]()
-            # Only process headers for chat mode
-            _response_headers: Final[dict] = getattr(_response, "_hidden_params", {}).get("headers", {}) or {}
+            _response_headers: Final = cast(  # cast-ok: provider headers are stored as a string-keyed mapping
+                Mapping[str, object], (get_hidden_params(_response) or {}).get("headers", {}) or {}
+            )
             return create_health_check_response(_response_headers)
         else:
             raise Exception(f"Mode {mode} not supported. See modes here: https://docs.litellm.ai/docs/proxy/health")
@@ -9076,9 +9095,9 @@ def stream_chunk_builder(
                 if isinstance(chunk, dict):
                     hidden = chunk.get("_hidden_params")
                 else:
-                    hidden = getattr(chunk, "_hidden_params", None)
+                    hidden = getattr(chunk, HIDDEN_PARAMS_ATTR, None)
                 if isinstance(hidden, dict) and "provider_specific_fields" in hidden:
-                    response._hidden_params.setdefault("provider_specific_fields", {}).update(
+                    response.hidden_params.setdefault("provider_specific_fields", {}).update(
                         hidden["provider_specific_fields"]
                     )
                     break
@@ -9255,9 +9274,9 @@ def stream_chunk_builder(
             if isinstance(chunk, dict):
                 hidden = chunk.get("_hidden_params")
             else:
-                hidden = getattr(chunk, "_hidden_params", None)
+                hidden = getattr(chunk, HIDDEN_PARAMS_ATTR, None)
             if isinstance(hidden, dict) and "provider_specific_fields" in hidden:
-                response._hidden_params.setdefault("provider_specific_fields", {}).update(
+                response.hidden_params.setdefault("provider_specific_fields", {}).update(
                     hidden["provider_specific_fields"]
                 )
                 break

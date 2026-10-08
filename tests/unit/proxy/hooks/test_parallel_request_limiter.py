@@ -9,7 +9,7 @@ import pytest
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter import (
-    _PROXY_MaxParallelRequestsHandler,
+    PROXY_MaxParallelRequestsHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
 from litellm.types.utils import EmbeddingResponse, TextCompletionResponse, Usage
@@ -17,7 +17,7 @@ from litellm.types.utils import EmbeddingResponse, TextCompletionResponse, Usage
 
 @pytest.mark.asyncio
 async def test_pre_call_hook_counts_a_cli_session_under_the_per_user_alias_not_the_login_token():
-    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    handler = PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
     session = UserAPIKeyAuth(
         api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa",
         user_id="alice",
@@ -62,7 +62,7 @@ async def test_async_log_success_event_counts_non_chat_response_tokens(response_
     team_id = "litellm-team"
     end_user_id = "customer-1"
 
-    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+    parallel_request_handler = PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(DualCache())
     )
 
@@ -113,7 +113,7 @@ async def test_async_log_success_event_counts_non_chat_response_tokens(response_
 async def test_async_log_failure_event_skips_batch_line_item_events():
     """Failed line children were never admitted by the limiter, so the failure
     hook must not decrement request counters they never incremented."""
-    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+    parallel_request_handler = PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(DualCache())
     )
     local_cache = parallel_request_handler.internal_usage_cache.dual_cache.in_memory_cache

@@ -729,7 +729,7 @@ class TestCheckBatchCost:
         let the original bug ship undetected.
         """
         import litellm
-        from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+        from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
 
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
         mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
@@ -773,7 +773,7 @@ class TestCheckBatchCost:
 
         decoded_id = "llm_model_id,model-123;llm_batch_id,batch-456;"
 
-        db_logger = _ProxyDBLogger()
+        db_logger = ProxyDBLogger()
         mock_update_database = AsyncMock()
 
         # Unlike the other tests in this file, this one runs the real
@@ -1253,6 +1253,7 @@ class TestCheckBatchCost:
         mock_response = MagicMock()
         mock_response.status = terminal_status
         mock_response.output_file_id = "file-output-123"
+        mock_response.error_file_id = None
         mock_response.model_dump_json.return_value = f'{{"id":"batch-1","status":"{terminal_status}"}}'
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
@@ -2276,13 +2277,13 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
     @pytest.mark.asyncio
     async def test_target_model_names_comes_from_input_file_not_provider_model(self):
         from litellm.proxy.openai_files_endpoints.common_utils import (
-            _is_base64_encoded_unified_file_id,
+            is_base64_encoded_unified_file_id,
             get_models_from_unified_file_id,
         )
 
         output_file_id = await self._run(self._job(self._managed_input_file_id(self._PUBLIC_MODEL_GROUP)))
 
-        decoded = _is_base64_encoded_unified_file_id(output_file_id)
+        decoded = is_base64_encoded_unified_file_id(output_file_id)
         assert get_models_from_unified_file_id(decoded) == [self._PUBLIC_MODEL_GROUP]
         assert "gpt-5.5" not in decoded
 
@@ -2311,13 +2312,13 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
     @pytest.mark.asyncio
     async def test_falls_back_to_deployment_model_group_without_managed_input_file(self):
         from litellm.proxy.openai_files_endpoints.common_utils import (
-            _is_base64_encoded_unified_file_id,
+            is_base64_encoded_unified_file_id,
             get_models_from_unified_file_id,
         )
 
         output_file_id = await self._run(self._job("file-raw-provider-input"))
 
-        decoded = _is_base64_encoded_unified_file_id(output_file_id)
+        decoded = is_base64_encoded_unified_file_id(output_file_id)
         assert get_models_from_unified_file_id(decoded) == [self._PUBLIC_MODEL_GROUP]
 
 

@@ -1086,3 +1086,73 @@ async def test_execute_search_registered_tool_without_provider_follows_unregiste
             await logger._execute_search("what is litellm", kwargs=kwargs)
         assert exc_info.value.code == "403"
         mock_asearch.assert_not_awaited()
+
+
+def test_is_web_search_tool_detection():
+    """
+    PRIORITY TEST #3: Unit test for is_web_search_tool() utility.
+
+    Validates detection of all supported formats including future versions.
+    """
+    print("\n" + "=" * 80)
+    print("UNIT TEST: Web Search Tool Detection")
+    print("=" * 80)
+
+    from litellm.integrations.websearch_interception import is_web_search_tool
+
+    test_cases = [
+        ({"name": "litellm_web_search"}, True, "LiteLLM standard tool"),
+        (
+            {"type": "web_search_20250305", "name": "web_search", "max_uses": 8},
+            True,
+            "Current Anthropic native (2025)",
+        ),
+        (
+            {"type": "web_search_2026", "name": "web_search"},
+            True,
+            "Future Anthropic native (2026)",
+        ),
+        (
+            {"type": "web_search_20270615", "name": "web_search"},
+            True,
+            "Future Anthropic native (2027)",
+        ),
+        (
+            {"name": "web_search", "type": "web_search_20250305"},
+            True,
+            "Claude Code format",
+        ),
+        ({"name": "WebSearch"}, True, "Legacy WebSearch"),
+        ({"name": "calculator"}, False, "Non-web-search tool"),
+        ({"name": "some_tool", "type": "function"}, False, "Other tool with type"),
+        ({"type": "custom_tool"}, False, "Custom tool type"),
+    ]
+
+    passed = 0
+    failed = 0
+
+    for tool, expected, description in test_cases:
+        result = is_web_search_tool(tool)
+        if result == expected:
+            print(f"   ✅ PASS: {description}")
+            passed += 1
+        else:
+            print(f"   ❌ FAIL: {description}")
+            print(f"      Tool: {tool}")
+            print(f"      Expected: {expected}, Got: {result}")
+            failed += 1
+
+    print(f"\n📊 Results: {passed} passed, {failed} failed")
+    assert failed == 0
+
+    if failed == 0:
+        print("\n" + "=" * 80)
+        print("✅ ALL DETECTION TESTS PASSED!")
+        print("=" * 80)
+        print("✅ Detects all current formats")
+        print("✅ Future-proof for new web_search_* versions")
+        print("=" * 80)
+        return True
+    else:
+        print("\n❌ Some detection tests failed")
+        return False

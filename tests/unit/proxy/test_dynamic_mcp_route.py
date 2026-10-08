@@ -33,7 +33,7 @@ _IS_ACCESS_GROUP = "litellm.proxy.proxy_server._is_mcp_access_group_cached"
 _USER_API_KEY_CACHE = "litellm.proxy.proxy_server.user_api_key_cache"
 _GET_ACCESS_GROUP_SERVERS = (
     "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
-    "MCPRequestHandler._get_mcp_servers_from_access_groups"
+    "MCPRequestHandler.get_mcp_servers_from_access_groups"
 )
 _FORWARD = "litellm.proxy.proxy_server._mcp_forward_as_path"
 _RESOLVE_CSV = "litellm.proxy.proxy_server._resolve_mcp_csv_tokens"
@@ -286,10 +286,10 @@ async def test_dynamic_mcp_route_resolves_toolset():
     async def fake_stream(fn, scope, receive):
         nonlocal captured_toolset_id
         from litellm.proxy._experimental.mcp_server.server import (
-            _mcp_active_toolset_id,
+            mcp_active_toolset_id,
         )
 
-        captured_toolset_id = _mcp_active_toolset_id.get()
+        captured_toolset_id = mcp_active_toolset_id.get()
         captured_scope.update(scope)
 
     with (
