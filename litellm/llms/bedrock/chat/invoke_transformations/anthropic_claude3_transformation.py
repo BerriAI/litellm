@@ -294,6 +294,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         if self.is_eager_input_streaming_used(tools):
             beta_set.add(ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER)
 
+        if is_mid_conversation_output_config_used:
+            beta_set.add("per-turn-control-2026-07-01")
+
         auto_beta_list: Final = filter_and_transform_beta_headers(
             beta_headers=list(beta_set - user_beta_set),
             provider="bedrock",
