@@ -4,7 +4,7 @@ use crate::json_schema::JsonSchema;
 use crate::recognized::Recognized;
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct MessagesMetadata {
     pub user_id: Option<String>,
@@ -13,7 +13,7 @@ pub struct MessagesMetadata {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct OutputFormat {
     #[serde(rename = "type")]
     pub format_type: OutputFormatType,
@@ -23,14 +23,14 @@ pub struct OutputFormat {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(rename_all = "snake_case")]
 pub enum OutputFormatType {
     JsonSchema,
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct MessagesCompaction {
     #[serde(rename = "type")]
     pub compaction_type: CompactionType,
@@ -39,14 +39,14 @@ pub struct MessagesCompaction {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(rename_all = "snake_case")]
 pub enum CompactionType {
     Summarize,
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct MessagesContainer {
     pub id: Option<String>,
@@ -57,7 +57,7 @@ pub struct MessagesContainer {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ContainerSkill {
     #[serde(rename = "type")]
     pub skill_type: SkillType,
@@ -67,7 +67,7 @@ pub struct ContainerSkill {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(rename_all = "snake_case")]
 pub enum SkillType {
     Anthropic,
@@ -75,7 +75,7 @@ pub enum SkillType {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct McpServer {
     #[serde(rename = "type")]
     pub server_type: McpServerType,
@@ -87,14 +87,14 @@ pub struct McpServer {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(rename_all = "snake_case")]
 pub enum McpServerType {
     Url,
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct McpToolConfiguration {
     pub allowed_tools: Option<Vec<String>>,
@@ -104,7 +104,7 @@ pub struct McpToolConfiguration {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct StopDetails {
     #[serde(rename = "type")]
     pub detail_type: Recognized<StopDetailsType>,
@@ -114,14 +114,14 @@ pub struct StopDetails {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(rename_all = "snake_case")]
 pub enum StopDetailsType {
     Refusal,
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ContextManagementResponse {
     pub applied_edits: Option<Vec<AppliedEdit>>,
@@ -130,7 +130,7 @@ pub struct ContextManagementResponse {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct AppliedEdit {
     #[serde(rename = "type")]
@@ -143,7 +143,7 @@ pub struct AppliedEdit {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct Safeguard {
     #[serde(rename = "type")]
     pub safeguard_type: String,
@@ -275,7 +275,7 @@ impl From<StopReason> for String {
     }
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(untagged)]
 pub enum ContainerReference {
     Id(String),
@@ -283,7 +283,7 @@ pub enum ContainerReference {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct MessagesDiagnosticsParam {
     #[serde(
@@ -298,7 +298,7 @@ pub struct MessagesDiagnosticsParam {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct MessagesDiagnostics {
     pub cache_miss_reason: Option<Recognized<CacheMissReason>>,
@@ -306,7 +306,7 @@ pub struct MessagesDiagnostics {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CacheMissReason {
     ModelChanged(CacheMissedTokens),
@@ -323,7 +323,7 @@ pub enum CacheMissReason {
     },
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct CacheMissedTokens {
     pub cache_missed_input_tokens: u64,
     #[serde(flatten)]
