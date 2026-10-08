@@ -1,12 +1,11 @@
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from typing import Final
 
 from pydantic import TypeAdapter
 from typing_extensions import assert_never
 
 import litellm
-from litellm.llms.base_llm.decisions.transformation import decisions_text
+from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig, decisions_text
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import (
     DecisionsIRAnswer,
@@ -291,40 +290,31 @@ def ir_to_openai_response(
     )
 
 
-@dataclass(frozen=True, slots=True)
-class OpenAIDecisionsEndpoint:
-    api_key_required: bool = True
+class OpenAIDecisionsConfig(BaseDecisionsConfig):
+    path = "/v1/decisions"
 
-    def configured_api_key(self) -> str | None:
-        return litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
+    def get_default_api_base(self) -> str | None:
+        return "https://api.openai.com"
 
-    def configured_api_base(self) -> str | None:
+    def resolve_api_base(self, api_base: str | None) -> str | None:
         return (
-            litellm.api_base
+            api_base
+            or litellm.api_base
             or get_secret_str("OPENAI_BASE_URL")
             or get_secret_str("OPENAI_API_BASE")
-            or "https://api.openai.com"
+            or self.get_default_api_base()
         )
 
-    def missing_api_base_message(self, provider: str) -> str:
-        return f"api_base is required for Decisions provider '{provider}'"
+    def resolve_api_key(self, api_key: str | None) -> str | None:
+        return api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
 
-    def canonical_model(self, model: str) -> str:
-        return model
-
-    def request_model(self, model: str) -> str:
-        return model
-
-    def endpoint_url(self, api_base: str, model: str) -> str:
-        return f"{api_base.rstrip('/').removesuffix('/v1')}/v1/decisions"
-
-    def request_body(
-        self, model: str, request: DecisionsIRRequest
+    def transform_decisions_request(
+        self,
+        model: str,
+        request: DecisionsIRRequest,
+        custom_llm_provider: str,
     ) -> Mapping[str, object] | UnsupportedDecisionsRequest:
-        return ir_to_openai_request(model, request)
+        return ir_to_openai_request(self.request_model(model), request)
 
     def parse_response(self, payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
         return openai_response_to_ir(_OPENAI_RESPONSE_ADAPTER.validate_python(payload), request)
-
-
-OPENAI_DECISIONS_ENDPOINT: Final[OpenAIDecisionsEndpoint] = OpenAIDecisionsEndpoint()

@@ -1,6 +1,5 @@
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from types import MappingProxyType
 from typing import Final, TypeAlias
 
 import httpx
@@ -9,22 +8,14 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
-    DecisionsProviderConfig,
+    BaseDecisionsConfig,
     ir_to_systemone_response,
     systemone_request_to_ir,
 )
-from litellm.llms.cloudflare.decisions.transformation import CLOUDFLARE_DECISIONS_ENDPOINT
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client, get_httpx_client
-from litellm.llms.openai.decisions.transformation import (
-    OPENAI_DECISIONS_ENDPOINT,
-    ir_to_openai_response,
-    openai_request_to_ir,
-)
-from litellm.llms.openrouter.decisions.transformation import OPENROUTER_DECISIONS_ENDPOINT
-from litellm.llms.perplexity.decisions.transformation import PERPLEXITY_DECISIONS_ENDPOINT
-from litellm.llms.strands_decider.decisions.transformation import STRANDS_DECIDER_DECISIONS_ENDPOINT
-from litellm.llms.typesafe.decisions.transformation import TYPESAFE_DECISIONS_ENDPOINT
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.openai.decisions.transformation import ir_to_openai_response, openai_request_to_ir
 from litellm.types.decisions import (
     DecisionQuestion,
     DecisionsIRRequest,
@@ -38,18 +29,8 @@ from litellm.types.decisions import (
     OpenAIDecisionResponse,
     UnsupportedDecisionsRequest,
 )
-from litellm.utils import client
-
-DECISIONS_ENDPOINTS: Final[Mapping[str, DecisionsProviderConfig]] = MappingProxyType(
-    {
-        "perplexity": PERPLEXITY_DECISIONS_ENDPOINT,
-        "typesafe": TYPESAFE_DECISIONS_ENDPOINT,
-        "openrouter": OPENROUTER_DECISIONS_ENDPOINT,
-        "cloudflare": CLOUDFLARE_DECISIONS_ENDPOINT,
-        "strands_decider": STRANDS_DECIDER_DECISIONS_ENDPOINT,
-        "openai": OPENAI_DECISIONS_ENDPOINT,
-    }
-)
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager, client
 
 DecisionsQuestions: TypeAlias = (
     Mapping[str, DecisionQuestion | Mapping[str, object]] | Sequence[OpenAIDecisionQuestion | Mapping[str, object]]
@@ -58,60 +39,46 @@ DecisionsRequestFormat: TypeAlias = DecisionsRequestBody | OpenAIDecisionRequest
 
 _SYSTEMONE_REQUEST_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
 _OPENAI_REQUEST_ADAPTER: Final[TypeAdapter[OpenAIDecisionRequestBody]] = TypeAdapter(OpenAIDecisionRequestBody)
-_DECISIONS_PAYLOAD_ADAPTER: Final[TypeAdapter[object]] = TypeAdapter(object)
+_HANDLER: Final = BaseLLMHTTPHandler()
 
 
 @dataclass(frozen=True, slots=True, repr=False)
-class _PreparedDecisionsRequest:
-    config: DecisionsProviderConfig
-    provider: str
-    upstream_model: str
-    url: str
-    api_key: str | None = field(repr=False)
-    headers: Mapping[str, str] = field(repr=False)
+class _DecisionsCall:
+    model: str
+    requested_model: str
+    custom_llm_provider: str
+    provider_config: BaseDecisionsConfig
+    request: DecisionsRequestFormat
+    ir_request: DecisionsIRRequest
     body: Mapping[str, object] = field(repr=False)
-    request: DecisionsRequestFormat = field(repr=False)
-    ir_request: DecisionsIRRequest = field(repr=False)
+    api_base: str
+    api_key: str | None = field(repr=False)
+    logging_obj: LiteLLMLoggingObj | None
+    headers: Mapping[str, str]
+    timeout: float | httpx.Timeout | None
 
 
-def _resolve_provider_model(model: str, custom_llm_provider: str | None) -> tuple[str, str]:
-    provider: Final = model.partition("/")[0] if custom_llm_provider is None else custom_llm_provider
-    if provider not in DECISIONS_ENDPOINTS:
-        supported: Final = ", ".join(DECISIONS_ENDPOINTS)
-        raise litellm.BadRequestError(
-            message=f"Unknown Decisions provider '{provider}'. Supported providers: {supported}",
-            model=model,
-            llm_provider=provider,
-        )
-    upstream_model: Final = model.removeprefix(f"{provider}/")
-    if not upstream_model:
-        raise litellm.BadRequestError(
-            message="A model name is required for the Decisions API",
-            model=model,
-            llm_provider=provider,
-        )
-    return provider, upstream_model
-
-
-def _resolve_api_key(
-    *,
-    provider: str,
-    model: str,
-    endpoint: DecisionsProviderConfig,
-    api_key: str | None,
-) -> str | None:
-    if api_key is not None:
-        return api_key
-    configured_api_key: Final = endpoint.configured_api_key()
-    if configured_api_key:
-        return configured_api_key
-    if not endpoint.api_key_required:
-        return None
-    raise litellm.AuthenticationError(
-        message=f"Missing API key for Decisions provider '{provider}'",
-        model=model,
-        llm_provider=provider,
+def _supported_providers() -> tuple[str, ...]:
+    return tuple(
+        provider.value
+        for provider in LlmProviders
+        if ProviderConfigManager.get_provider_decisions_config(model="", provider=provider) is not None
     )
+
+
+def _provider_config(model: str, custom_llm_provider: str) -> BaseDecisionsConfig:
+    provider: Final = next((member for member in LlmProviders if member.value == custom_llm_provider), None)
+    provider_config: Final = (
+        None if provider is None else ProviderConfigManager.get_provider_decisions_config(model, provider)
+    )
+    if provider_config is None:
+        supported: Final = ", ".join(_supported_providers())
+        raise litellm.BadRequestError(
+            message=f"Unknown Decisions provider '{custom_llm_provider}'. Supported providers: {supported}",
+            model=model,
+            llm_provider=custom_llm_provider,
+        )
+    return provider_config
 
 
 def _validate_request(
@@ -138,7 +105,7 @@ def _ir_request(request: DecisionsRequestFormat) -> DecisionsIRRequest:
             assert_never(request)
 
 
-def _prepare_request(
+def _prepare_call(
     *,
     model: str,
     state: DecisionsJSON | None,
@@ -147,10 +114,25 @@ def _prepare_request(
     safety_identifier: str | None,
     api_key: str | None,
     api_base: str | None,
+    timeout: float | httpx.Timeout | None,
     custom_llm_provider: str | None,
     extra_headers: Mapping[str, str] | None,
-) -> _PreparedDecisionsRequest:
-    provider, upstream_model = _resolve_provider_model(model, custom_llm_provider)
+    kwargs: Mapping[str, object],
+) -> _DecisionsCall:
+    upstream_model, provider, dynamic_api_key, dynamic_api_base = litellm.get_llm_provider(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        api_key=api_key,
+    )
+    provider_config: Final = _provider_config(upstream_model, provider)
+    canonical_model: Final = provider_config.canonical_model(upstream_model)
+    if not upstream_model:
+        raise litellm.BadRequestError(
+            message="A model name is required for the Decisions API",
+            model=model,
+            llm_provider=provider,
+        )
     if state is not None and decision_input is not None:
         raise litellm.BadRequestError(
             message="Pass either state (System One format) or input (OpenAI format) to the Decisions API, not both",
@@ -158,7 +140,7 @@ def _prepare_request(
             llm_provider=provider,
         )
     try:
-        validated_request: Final = _validate_request(
+        request: Final = _validate_request(
             state=state, questions=questions, decision_input=decision_input, safety_identifier=safety_identifier
         )
     except ValidationError as error:
@@ -168,120 +150,94 @@ def _prepare_request(
             llm_provider=provider,
         ) from error
 
-    endpoint: Final = DECISIONS_ENDPOINTS[provider]
-    resolved_api_base: Final = api_base or endpoint.configured_api_base()
+    resolved_api_base: Final = provider_config.resolve_api_base(dynamic_api_base or api_base)
     if resolved_api_base is None:
         raise litellm.BadRequestError(
-            message=endpoint.missing_api_base_message(provider),
+            message=provider_config.missing_api_base_message(provider),
+            model=model,
+            llm_provider=provider,
+        )
+    resolved_api_key: Final = provider_config.resolve_api_key(dynamic_api_key or api_key)
+    if resolved_api_key is None and provider_config.api_key_required:
+        raise litellm.AuthenticationError(
+            message=f"Missing API key for Decisions provider '{provider}'",
             model=model,
             llm_provider=provider,
         )
 
-    resolved_api_key: Final = _resolve_api_key(
-        provider=provider,
-        model=model,
-        endpoint=endpoint,
-        api_key=api_key,
+    ir_request: Final = _ir_request(request)
+    body: Final = provider_config.transform_decisions_request(
+        model=canonical_model, request=ir_request, custom_llm_provider=provider
     )
-
-    canonical_model: Final = endpoint.canonical_model(upstream_model)
-    outbound_headers: Final = MappingProxyType(
-        {
-            **{
-                name: value
-                for name, value in (extra_headers or {}).items()
-                if name.lower() not in {"authorization", "content-type"}
-            },
-            **({"Authorization": f"Bearer {resolved_api_key}"} if resolved_api_key is not None else {}),
-            "Content-Type": "application/json",
-        }
-    )
-    ir_request: Final = _ir_request(validated_request)
-    body: Final = endpoint.request_body(endpoint.request_model(canonical_model), ir_request)
     if isinstance(body, UnsupportedDecisionsRequest):
         raise litellm.BadRequestError(
             message=f"Decisions provider '{provider}' cannot serve this request: {body.reason}",
             model=model,
             llm_provider=provider,
         )
-    return _PreparedDecisionsRequest(
-        config=endpoint,
-        provider=provider,
-        upstream_model=canonical_model,
-        url=endpoint.endpoint_url(resolved_api_base, canonical_model),
-        api_key=resolved_api_key,
-        headers=outbound_headers,
-        body=MappingProxyType(body),
-        request=validated_request,
-        ir_request=ir_request,
-    )
 
-
-def _log_request(
-    prepared: _PreparedDecisionsRequest,
-    kwargs: Mapping[str, object],
-) -> LiteLLMLoggingObj | None:
     logging_obj: Final = kwargs.get("litellm_logging_obj")
-    if not isinstance(logging_obj, LiteLLMLoggingObj):
-        return None
-    logging_obj.update_from_kwargs(
-        kwargs=dict(kwargs),
-        model=prepared.upstream_model,
-        litellm_params={
-            "litellm_call_id": kwargs.get("litellm_call_id"),
-            "api_base": prepared.url,
-        },
-        custom_llm_provider=prepared.provider,
+    if isinstance(logging_obj, LiteLLMLoggingObj):
+        logging_obj.update_from_kwargs(
+            kwargs=dict(kwargs),
+            model=canonical_model,
+            litellm_params={
+                "litellm_call_id": kwargs.get("litellm_call_id"),
+                "api_base": provider_config.get_complete_url(resolved_api_base, canonical_model),
+            },
+            custom_llm_provider=provider,
+        )
+    return _DecisionsCall(
+        model=canonical_model,
+        requested_model=model,
+        custom_llm_provider=provider,
+        provider_config=provider_config,
+        request=request,
+        ir_request=ir_request,
+        body=body,
+        api_base=resolved_api_base,
+        api_key=resolved_api_key,
+        logging_obj=logging_obj if isinstance(logging_obj, LiteLLMLoggingObj) else None,
+        headers=extra_headers or {},
+        timeout=timeout,
     )
-    request_body: Final = dict(prepared.body)
-    request_headers: Final = dict(prepared.headers)
-    logging_obj.pre_call(
-        input=request_body,
-        api_key=prepared.api_key,
-        model=prepared.upstream_model,
-        additional_args={
-            "api_base": prepared.url,
-            "complete_input_dict": request_body,
-            "headers": request_headers,
-        },
-    )
-    return logging_obj
 
 
-def _format_response(
-    response: DecisionsIRResponse, prepared: _PreparedDecisionsRequest, model: str
-) -> DecisionsResponse | OpenAIDecisionResponse:
-    match prepared.request:
-        case DecisionsRequestBody():
-            return ir_to_systemone_response(response, prepared.ir_request)
-        case OpenAIDecisionRequestBody():
-            return ir_to_openai_response(response, prepared.ir_request, model)
-        case _:
-            assert_never(prepared.request)
-
-
-def _parse_response(
-    response: httpx.Response,
-    prepared: _PreparedDecisionsRequest,
-    model: str,
-) -> DecisionsResponse | OpenAIDecisionResponse:
-    response.raise_for_status()
-    payload: Final[object] = _DECISIONS_PAYLOAD_ADAPTER.validate_json(response.content)
-    result: Final = _format_response(prepared.config.parse_response(payload, prepared.ir_request), prepared, model)
-    result.hidden_params.update(
+def _format_response(response: DecisionsIRResponse, call: _DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
+    formatted: Final = _formatted_response(response, call)
+    formatted.set_hidden_params(
         {
-            "model": f"{prepared.provider}/{prepared.upstream_model}",
-            "custom_llm_provider": prepared.provider,
-            "provider_response_model": f"{prepared.provider}/{prepared.upstream_model}",
+            "model": f"{call.custom_llm_provider}/{call.model}",
+            "custom_llm_provider": call.custom_llm_provider,
+            "provider_response_model": f"{call.custom_llm_provider}/{call.model}",
         }
     )
-    return result
+    return formatted
 
 
-def _map_upstream_exception(error: Exception, prepared: _PreparedDecisionsRequest) -> Exception:
+def _formatted_response(
+    response: DecisionsIRResponse, call: _DecisionsCall
+) -> DecisionsResponse | OpenAIDecisionResponse:
+    match call.request:
+        case DecisionsRequestBody():
+            return ir_to_systemone_response(response, call.ir_request)
+        case OpenAIDecisionRequestBody():
+            return ir_to_openai_response(response, call.ir_request, call.requested_model)
+        case _:
+            assert_never(call.request)
+
+
+def _map_upstream_exception(error: Exception, call: _DecisionsCall) -> Exception:
+    if isinstance(error, BaseLLMException) and error.status_code_is_synthesized:
+        provider_label: Final = f"{call.custom_llm_provider[0].upper()}{call.custom_llm_provider[1:]}Exception"
+        return litellm.APIConnectionError(
+            message=f"{provider_label} - {error.message}",
+            llm_provider=call.custom_llm_provider,
+            model=f"{call.custom_llm_provider}/{call.model}",
+        )
     return litellm.exception_type(
-        model=f"{prepared.provider}/{prepared.upstream_model}",
-        custom_llm_provider=prepared.provider,
+        model=f"{call.custom_llm_provider}/{call.model}",
+        custom_llm_provider=call.custom_llm_provider,
         original_exception=error,
     )
 
@@ -300,7 +256,7 @@ async def adecisions(
     safety_identifier: str | None = None,
     **kwargs: object,
 ) -> DecisionsResponse | OpenAIDecisionResponse:
-    prepared: Final = _prepare_request(
+    call: Final = _prepare_call(
         model=model,
         state=state,
         questions=questions,
@@ -308,22 +264,27 @@ async def adecisions(
         safety_identifier=safety_identifier,
         api_key=api_key,
         api_base=api_base,
+        timeout=timeout,
         custom_llm_provider=custom_llm_provider,
         extra_headers=extra_headers,
+        kwargs=kwargs,
     )
-    logging_obj: Final = _log_request(prepared, kwargs)
     try:
-        handler: Final = get_async_httpx_client(llm_provider=prepared.provider)
-        response: Final = await handler.post(
-            prepared.url,
-            json=dict(prepared.body),
-            headers=dict(prepared.headers),
-            timeout=timeout,
-            logging_obj=logging_obj,
+        response: Final = await _HANDLER.adecisions(
+            model=call.model,
+            custom_llm_provider=call.custom_llm_provider,
+            logging_obj=call.logging_obj,
+            provider_config=call.provider_config,
+            request=call.ir_request,
+            body=call.body,
+            api_base=call.api_base,
+            api_key=call.api_key,
+            headers=call.headers,
+            timeout=call.timeout,
         )
-        return _parse_response(response=response, prepared=prepared, model=model)
     except Exception as error:
-        raise _map_upstream_exception(error, prepared) from error
+        raise _map_upstream_exception(error, call) from error
+    return _format_response(response, call)
 
 
 @client
@@ -340,7 +301,7 @@ def decisions(
     safety_identifier: str | None = None,
     **kwargs: object,
 ) -> DecisionsResponse | OpenAIDecisionResponse:
-    prepared: Final = _prepare_request(
+    call: Final = _prepare_call(
         model=model,
         state=state,
         questions=questions,
@@ -348,22 +309,27 @@ def decisions(
         safety_identifier=safety_identifier,
         api_key=api_key,
         api_base=api_base,
+        timeout=timeout,
         custom_llm_provider=custom_llm_provider,
         extra_headers=extra_headers,
+        kwargs=kwargs,
     )
-    logging_obj: Final = _log_request(prepared, kwargs)
     try:
-        handler: Final = get_httpx_client()
-        response: Final = handler.post(
-            prepared.url,
-            json=dict(prepared.body),
-            headers=dict(prepared.headers),
-            timeout=timeout,
-            logging_obj=logging_obj,
+        response: Final = _HANDLER.decisions(
+            model=call.model,
+            custom_llm_provider=call.custom_llm_provider,
+            logging_obj=call.logging_obj,
+            provider_config=call.provider_config,
+            request=call.ir_request,
+            body=call.body,
+            api_base=call.api_base,
+            api_key=call.api_key,
+            headers=call.headers,
+            timeout=call.timeout,
         )
-        return _parse_response(response=response, prepared=prepared, model=model)
     except Exception as error:
-        raise _map_upstream_exception(error, prepared) from error
+        raise _map_upstream_exception(error, call) from error
+    return _format_response(response, call)
 
 
-__all__ = ["DECISIONS_ENDPOINTS", "adecisions", "decisions"]
+__all__ = ["adecisions", "decisions"]
