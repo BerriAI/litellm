@@ -30,6 +30,21 @@ def test_function_call_output_list_input_text_parts_reach_the_tool_message_on_se
     assert msg["content"] == "Paris: 22 degrees\nclear skies"
 
 
+def test_function_call_output_text_part_whitespace_survives_the_join():
+    out = LiteLLMCompletionResponsesConfig._transform_responses_api_tool_call_output_to_chat_completion_message(
+        tool_call_output={
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": [
+                {"type": "input_text", "text": "hello"},
+                {"type": "input_text", "text": " world"},
+            ],
+        }
+    )
+
+    assert out[0]["content"] == "hello\n world"
+
+
 def test_function_call_output_string_passthrough():
     out = LiteLLMCompletionResponsesConfig._transform_responses_api_tool_call_output_to_chat_completion_message(
         tool_call_output={
