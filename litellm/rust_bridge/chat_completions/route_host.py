@@ -4,27 +4,9 @@ from collections.abc import Mapping
 from typing import Final
 
 import litellm
-from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
 from litellm.rust_bridge import failures
 from litellm.rust_bridge.public_call import optional_str
 from litellm.types.utils import ModelResponse
-
-_TRANSPORT_PARAMETERS: Final = frozenset(
-    {
-        "api_base",
-        "api_key",
-        "api_version",
-        "deployment_id",
-        "organization",
-        "base_url",
-        "default_headers",
-        "timeout",
-        "request_timeout",
-        "max_retries",
-        "extra_headers",
-    }
-)
-PARAMETERS: Final = tuple(name for name in OPENAI_CHAT_COMPLETION_PARAMS if name not in _TRANSPORT_PARAMETERS)
 
 
 def connection_defaults(provider: str) -> tuple[str | None, str | None]:

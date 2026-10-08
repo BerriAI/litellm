@@ -61,11 +61,7 @@ pub fn compose_body<B: Serialize>(
             .chain(
                 extensions
                     .chain(overrides.into_iter().flatten())
-                    .filter(|(name, _)| {
-                        name.as_str() != "model"
-                            && name.as_str() != "extra_body"
-                            && !crate::params::is_control_param(name)
-                    })
+                    .filter(|(name, _)| !crate::params::is_control_param(name))
                     .map(|(name, value)| (name.clone(), value.clone())),
             )
             .collect(),

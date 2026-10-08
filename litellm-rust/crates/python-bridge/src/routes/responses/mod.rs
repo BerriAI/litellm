@@ -15,15 +15,12 @@ use crate::errors::RustBridgeDeclined;
 
 fn run_responses(
     py: Python<'_>,
-    request: Bound<'_, PyAny>,
+    request: Bound<'_, PyDict>,
     args: Bound<'_, PyTuple>,
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
-    let host = InferenceHost::new(
-        request.clone().unbind(),
-        "litellm.rust_bridge.responses.route_host",
-    );
+    let host = InferenceHost::new(request.clone(), "litellm.rust_bridge.responses.route_host");
     if let Some(reason) = py
         .import("litellm.rust_bridge.responses.route_host")?
         .getattr("decline_reason")?
@@ -32,12 +29,10 @@ fn run_responses(
     {
         return Err(RustBridgeDeclined::new_err(reason));
     }
-    let model = host
-        .argument(py, &kwargs, "model")?
+    let model = super::parameters::field(&request, "model")?
         .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("model is required"))?
         .extract::<String>()?;
-    let provider = host
-        .argument(py, &kwargs, "custom_llm_provider")?
+    let provider = super::parameters::field(&request, "custom_llm_provider")?
         .map(|value| value.extract::<String>())
         .transpose()?;
     if provider
@@ -52,8 +47,7 @@ fn run_responses(
             "native HTTP responses provider",
         ));
     }
-    if host
-        .argument(py, &kwargs, "stream")?
+    if super::parameters::field(&request, "stream")?
         .map(|value| litellm_host_python::from_py::<Value>(&value))
         .transpose()?
         .is_some_and(|value| value == Value::Bool(true))
@@ -71,7 +65,7 @@ fn run_responses(
     let (arguments, hooks) = crate::routes::call_hooks(
         py,
         LoggingOperation::Responses,
-        &request,
+        request.as_any(),
         &args,
         &kwargs,
         asynchronous,
@@ -106,11 +100,11 @@ fn run_responses(
 #[pyfunction]
 pub(crate) fn responses(py: Python<'_>, call: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     let call = super::NativeCall::extract(&call)?;
-    run_responses(py, call.bound.into_any(), call.args, call.kwargs, false)
+    run_responses(py, call.bound, call.args, call.kwargs, false)
 }
 
 #[pyfunction]
 pub(crate) fn aresponses(py: Python<'_>, call: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     let call = super::NativeCall::extract(&call)?;
-    run_responses(py, call.bound.into_any(), call.args, call.kwargs, true)
+    run_responses(py, call.bound, call.args, call.kwargs, true)
 }

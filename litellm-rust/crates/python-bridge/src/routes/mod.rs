@@ -4,6 +4,7 @@ pub(crate) mod embeddings;
 mod inference;
 pub(crate) mod messages;
 pub(crate) mod ocr;
+mod parameters;
 pub(crate) mod responses;
 pub(crate) mod token_counter;
 pub(crate) mod traces;

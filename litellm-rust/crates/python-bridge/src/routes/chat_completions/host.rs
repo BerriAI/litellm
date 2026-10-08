@@ -1,6 +1,6 @@
 use std::convert::Infallible;
 
-use crate::routes::inference::InferenceHost;
+use crate::routes::inference::{InferenceHost, ProjectedCall};
 use litellm_host_python::{InvokeError, PythonBinding, PythonHostCalls, PythonOwned};
 use litellm_inference_chat::{Error, route::ChatCompletions, types::ChatCompletionsCall};
 use pyo3::{
@@ -11,22 +11,19 @@ use pyo3::{
 
 pub(super) struct ChatCompletionsPythonHost(pub InferenceHost);
 
-pub(super) fn project(
-    host: &InferenceHost,
-    py: Python<'_>,
-    arguments: &Bound<'_, PyDict>,
-) -> PyResult<ChatCompletionsCall> {
-    let call = host.project(py, arguments, "messages")?;
-    Ok(ChatCompletionsCall {
-        model: call.options.model,
-        messages: call.input,
-        optional_params: call.params,
-        api_key: call.options.api_key,
-        api_base: call.options.api_base,
-        custom_llm_provider: call.options.custom_llm_provider,
-        extra_headers: call.options.extra_headers,
-        timeout: call.options.timeout,
-    })
+impl From<ProjectedCall> for ChatCompletionsCall {
+    fn from(call: ProjectedCall) -> Self {
+        Self {
+            model: call.options.model,
+            messages: call.input,
+            optional_params: call.params,
+            api_key: call.options.api_key,
+            api_base: call.options.api_base,
+            custom_llm_provider: call.options.custom_llm_provider,
+            extra_headers: call.options.extra_headers,
+            timeout: call.options.timeout,
+        }
+    }
 }
 
 impl PythonBinding for ChatCompletionsPythonHost {
@@ -38,17 +35,16 @@ impl PythonBinding for ChatCompletionsPythonHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> Result<ChatCompletionsCall, InvokeError<Error>> {
-        let call = project(&self.0, py, arguments).map_err(InvokeError::Python)?;
-        if call
-            .optional_params
-            .get("stream")
-            .is_some_and(|value| value == &serde_json::Value::Bool(true))
-        {
+        let call = self
+            .0
+            .project(py, arguments, "messages")
+            .map_err(InvokeError::Python)?;
+        if call.streams() {
             return Err(InvokeError::Native(Error::Unsupported(
                 "native Python chat_completions streaming",
             )));
         }
-        Ok(call)
+        Ok(call.into())
     }
 
     fn encode_response(
@@ -96,6 +92,6 @@ impl PythonHostCalls<ChatCompletions> for ChatCompletionsPythonHost {
 impl PythonOwned for ChatCompletionsPythonHost {
     fn close(&mut self, _: Python<'_>) {}
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-        visit.call(&self.0.request)
+        visit.call(&self.0.bound)
     }
 }

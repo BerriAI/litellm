@@ -18,7 +18,18 @@ pub struct OpaqueParams(Map<String, Value>);
 pub fn is_control_param(name: &str) -> bool {
     matches!(
         name,
-        "api_key"
+        "model"
+            | "extra_body"
+            | "base_url"
+            | "default_headers"
+            | "organization"
+            | "deployment_id"
+            | "callbacks"
+            | "success_callback"
+            | "failure_callback"
+            | "drop_params"
+            | "additional_drop_params"
+            | "api_key"
             | "api_base"
             | "custom_llm_provider"
             | "extra_headers"
