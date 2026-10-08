@@ -916,3 +916,116 @@ def test_mistral_transform_request_hoists_tool_message_image():
         {"type": "text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
         {"type": "image_url", "image_url": {"url": data_uri}},
     ]
+
+
+class TestMistralContentListConversion:
+    """
+    Mistral content-as-list must keep every text chunk and expose citation chunks.
+
+    Issue #45378: the non-streaming conversion overwrote the content per text
+    block (only the last chunk survived — an answer closed by a citation was
+    flattened to "."), and reference chunks were dropped on both the
+    non-streaming and streaming paths.
+    """
+
+    CITATION_CONTENT = [
+        {"type": "text", "text": "The sky is blue during the day"},
+        {"type": "reference", "reference_ids": ["doc1"]},
+        {"type": "text", "text": "."},
+    ]
+
+    def test_non_streaming_concatenates_all_text_chunks(self):
+        response_data = {"choices": [{"message": {"role": "assistant", "content": self.CITATION_CONTENT}}]}
+
+        MistralConfig._handle_content_list_to_str_conversion(response_data)
+
+        message = response_data["choices"][0]["message"]
+        assert message["content"] == "The sky is blue during the day."
+
+    def test_non_streaming_exposes_reference_chunks_in_provider_specific_fields(self):
+        response_data = {"choices": [{"message": {"role": "assistant", "content": self.CITATION_CONTENT}}]}
+
+        MistralConfig._handle_content_list_to_str_conversion(response_data)
+
+        message = response_data["choices"][0]["message"]
+        assert message["mistral_content_blocks"] == self.CITATION_CONTENT
+
+    def test_non_streaming_adds_no_content_blocks_key_without_citations(self):
+        content = [{"type": "text", "text": "plain answer"}]
+        response_data = {"choices": [{"message": {"role": "assistant", "content": content}}]}
+
+        MistralConfig._handle_content_list_to_str_conversion(response_data)
+
+        message = response_data["choices"][0]["message"]
+        assert message["content"] == "plain answer"
+        assert "mistral_content_blocks" not in message
+
+    def test_non_streaming_thinking_blocks_still_extracted(self):
+        response_data = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "thinking", "thinking": [{"type": "text", "text": "reasoning"}]},
+                            {"type": "text", "text": "answer part one"},
+                            {"type": "text", "text": " and two"},
+                        ],
+                    }
+                }
+            ]
+        }
+
+        MistralConfig._handle_content_list_to_str_conversion(response_data)
+
+        message = response_data["choices"][0]["message"]
+        assert message["content"] == "answer part one and two"
+        assert message["reasoning_content"] == "reasoning"
+
+    def test_non_streaming_reference_blocks_reach_model_response_provider_specific_fields(self):
+        # the exposed key must survive convert_to_model_response_object so
+        # callers actually receive the citation chunks
+        from litellm.utils import convert_to_model_response_object
+
+        response_data = {
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "mistral-medium-2604",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": self.CITATION_CONTENT},
+                }
+            ],
+        }
+
+        response_data = MistralConfig._handle_content_list_to_str_conversion(response_data)
+        model_response = convert_to_model_response_object(
+            response_object=response_data, model_response_object=ModelResponse()
+        )
+
+        provider_specific_fields = model_response.choices[0].message.provider_specific_fields
+        assert provider_specific_fields["mistral_content_blocks"] == self.CITATION_CONTENT
+
+    def test_streaming_mixed_blocks_concatenate_and_expose_references(self):
+        iterator = MistralChatResponseIterator(streaming_response=iter([]), sync_stream=True)
+        chunk = {"id": "x", "choices": [{"delta": {"content": self.CITATION_CONTENT}}]}
+
+        result = iterator.chunk_parser(chunk)
+
+        delta = result.choices[0].delta
+        assert delta.content == "The sky is blue during the day."
+        assert delta.provider_specific_fields["mistral_content_blocks"] == self.CITATION_CONTENT
+
+    def test_streaming_reference_only_delta_exposes_references(self):
+        iterator = MistralChatResponseIterator(streaming_response=iter([]), sync_stream=True)
+        content = [{"type": "reference", "reference_ids": ["doc1"]}]
+        chunk = {"id": "x", "choices": [{"delta": {"content": content}}]}
+
+        result = iterator.chunk_parser(chunk)
+
+        delta = result.choices[0].delta
+        assert not delta.content
+        assert delta.provider_specific_fields["mistral_content_blocks"] == content
