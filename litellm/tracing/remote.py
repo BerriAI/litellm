@@ -15,6 +15,8 @@ from litellm.rust_bridge.trace.errors import TraceChanged
 from litellm.rust_bridge.trace.generated.types import QueryScope, ReadQueryName, TraceScope
 
 MAX_RESPONSE_BYTES: Final = 64 * 1024 * 1024
+READ_CLASS_HEADER: Final = "x-lens-read-class"
+BACKGROUND_READ_CONNECTIONS: Final = 4
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
@@ -59,6 +61,17 @@ class LensConnection:
             headers=self.headers,
             timeout=httpx.Timeout(35, connect=3),
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=10),
+            follow_redirects=False,
+        )
+
+    def background_client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            base_url=self.url,
+            headers={**self.headers, READ_CLASS_HEADER: "background"},
+            timeout=httpx.Timeout(35, connect=3),
+            limits=httpx.Limits(
+                max_connections=BACKGROUND_READ_CONNECTIONS, max_keepalive_connections=BACKGROUND_READ_CONNECTIONS
+            ),
             follow_redirects=False,
         )
 
