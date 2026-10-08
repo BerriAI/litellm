@@ -3,13 +3,13 @@ from __future__ import annotations
 import ssl
 import threading
 import time
-from collections.abc import Callable, Generator, Mapping
+from collections.abc import Callable, Generator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from queue import SimpleQueue
 from types import MappingProxyType
-from typing import Final
+from typing import BinaryIO, Final
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +18,23 @@ class Request:
     target: str
     headers: Mapping[str, str]
     body: bytes
+
+
+def chunked_body(stream: BinaryIO) -> Iterator[bytes]:
+    while True:
+        size: Final = int(stream.readline().split(b";")[0].strip() or b"0", 16)
+        if size == 0:
+            while stream.readline().strip():
+                pass
+            return
+        yield stream.read(size)
+        stream.readline()
+
+
+def read_body(headers: Mapping[str, str], stream: BinaryIO) -> bytes:
+    if headers.get("transfer-encoding", "").lower() == "chunked":
+        return b"".join(chunked_body(stream))
+    return stream.read(int(headers.get("content-length", "0")))
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,12 +95,8 @@ def wire_server(
             connected.put(f"{self.client_address[0]}:{self.client_address[1]}")
 
         def respond(self) -> None:
-            request: Final = Request(
-                self.command,
-                self.path,
-                {name.lower(): value for name, value in self.headers.items()},
-                self.rfile.read(int(self.headers.get("content-length", "0"))),
-            )
+            headers: Final = {name.lower(): value for name, value in self.headers.items()}
+            request: Final = Request(self.command, self.path, headers, read_body(headers, self.rfile))
             received.put(request)
             try:
                 reply = respond(request)
