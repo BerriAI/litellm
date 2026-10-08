@@ -8,17 +8,19 @@ otherwise record its own duration instead of the call's.
 import json
 import logging
 import threading
+import time
 import uuid
 from base64 import b64encode
 from datetime import datetime, timedelta, timezone
 from time import monotonic, sleep
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 
 import httpx
 import opentelemetry.trace as otel_trace
 import pytest
 from langfuse import LangfuseOtelSpanAttributes as A
+from langfuse.api.core import http_client as langfuse_http_client
 from langfuse.api.core.api_error import ApiError
 from langfuse.api.core.request_options import RequestOptions
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
@@ -1042,28 +1044,35 @@ def test_auth_check_fails_when_the_keys_reach_no_project():
 
 
 @pytest.mark.parametrize("status", [500, 503, 429], ids=["http-500", "http-503", "http-429"])
-def test_auth_check_and_project_id_make_one_round_trip_when_langfuse_is_down(status):
+def test_auth_check_and_project_id_make_one_round_trip_when_langfuse_is_down(
+    status: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Both run on the event loop; the generated client's default retries sleep for seconds, or for Retry-After."""
-    requests: list[httpx.Request] = []
+    requests: Final[list[httpx.Request]] = []
+    sleeps: Final[list[float]] = []
+    monkeypatch.setattr(
+        langfuse_http_client,
+        "time",
+        SimpleNamespace(sleep=sleeps.append, time=time.time),
+    )
 
     def fail(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         return httpx.Response(status, request=request, headers={"retry-after": "20"}, json={"message": "down"})
 
-    client = build_langfuse_client(
+    client: Final = build_langfuse_client(
         public_key="pk",
         secret_key="sk",
         base_url="http://127.0.0.1:1",
         httpx_client=httpx.Client(transport=httpx.MockTransport(fail)),
     )
 
-    started = monotonic()
-    failure = client.auth_check()
+    failure: Final = client.auth_check()
     with pytest.raises(ApiError):
         client.project_id()
     assert failure is not None and f"status_code: {status}" in failure.reason
     assert len(requests) == 2
-    assert monotonic() - started < 0.5
+    assert sleeps == [], "failed auth checks should not sleep for REST retries"
 
 
 @pytest.mark.parametrize(
