@@ -375,15 +375,6 @@ if MCP_AVAILABLE:
             virtual_raw_headers,
             virtual_oauth2_headers,
         ) = _extract_mcp_headers_from_request(request, user_api_key_dict)
-        virtual_mcp_server_auth_headers_for_call: Final = (
-            {alias: dict(server_auth_headers) for alias, server_auth_headers in virtual_mcp_server_auth_headers.items()}
-            if virtual_mcp_server_auth_headers is not None
-            else None
-        )
-        virtual_raw_headers_for_call: Final = dict(virtual_raw_headers)
-        virtual_oauth2_headers_for_call: Final = (
-            dict(virtual_oauth2_headers) if virtual_oauth2_headers is not None else None
-        )
         if tool_name == MCP_TOOL_SEARCH_TOOL_NAME:
             return await handle_mcp_tool_search(
                 query=tool_arguments.get("query", ""),
@@ -391,9 +382,9 @@ if MCP_AVAILABLE:
                 user_api_key_dict=user_api_key_dict,
                 client_ip=rest_client_ip,
                 mcp_auth_header=virtual_mcp_auth_header,
-                mcp_server_auth_headers=virtual_mcp_server_auth_headers_for_call,
-                oauth2_headers=virtual_oauth2_headers_for_call,
-                raw_headers=virtual_raw_headers_for_call,
+                mcp_server_auth_headers=virtual_mcp_server_auth_headers,
+                oauth2_headers=virtual_oauth2_headers,
+                raw_headers=virtual_raw_headers,
             )
         # MCP_TOOL_CALL_TOOL_NAME: run the same pre-call pipeline as the normal path so the tool
         # execution is spend-logged and guardrail-checked.
@@ -415,9 +406,9 @@ if MCP_AVAILABLE:
                 user_api_key_dict=user_api_key_dict,
                 client_ip=rest_client_ip,
                 mcp_auth_header=virtual_mcp_auth_header,
-                mcp_server_auth_headers=virtual_mcp_server_auth_headers_for_call,
-                oauth2_headers=virtual_oauth2_headers_for_call,
-                raw_headers=virtual_raw_headers_for_call,
+                mcp_server_auth_headers=virtual_mcp_server_auth_headers,
+                oauth2_headers=virtual_oauth2_headers,
+                raw_headers=virtual_raw_headers,
                 litellm_logging_obj=virtual_logging_obj,
                 guardrail_context=MCPRequestContext.resolve_guardrail_context(virtual_data),
             )
@@ -442,7 +433,7 @@ if MCP_AVAILABLE:
 
     def _get_server_auth_header(
         server: MCPServer,
-        mcp_server_auth_headers: Mapping[str, Mapping[str, str]] | None,
+        mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         mcp_auth_header: str | None,
     ) -> dict[str, str] | str | None:
         """Helper function to get server-specific auth header with case-insensitive matching."""
@@ -451,11 +442,8 @@ if MCP_AVAILABLE:
         )
 
         if mcp_server_auth_headers:
-            mcp_server_auth_headers_for_lookup: Final = {
-                alias: dict(server_auth_headers) for alias, server_auth_headers in mcp_server_auth_headers.items()
-            }
             server_auth: Final = lookup_mcp_server_auth_in_headers(
-                mcp_server_auth_headers_for_lookup,
+                mcp_server_auth_headers,
                 alias=server.alias,
                 server_name=server.server_name,
                 access_groups=server.access_groups,
@@ -597,11 +585,11 @@ if MCP_AVAILABLE:
     def _extract_mcp_headers_from_request(
         request: Request,
         user_api_key_dict: UserAPIKeyAuth,
-    ) -> tuple[
+    ) -> tuple[  # mutable-ok: preserve the existing plain-dict header contract for MCP helpers
         str | None,
-        Mapping[str, Mapping[str, str]] | None,
-        Mapping[str, str],
-        Mapping[str, str] | None,
+        dict[str, dict[str, str]] | None,
+        dict[str, str],
+        dict[str, str] | None,
     ]:
         """
         Extract MCP auth headers from HTTP request.
@@ -823,11 +811,10 @@ if MCP_AVAILABLE:
         mcp_auth_header, mcp_server_auth_headers, raw_headers, _ = _extract_mcp_headers_from_request(
             request, user_api_key_dict
         )
-        raw_headers_for_request: Final = dict(raw_headers)
         upstream: Final = await _list_server_tools(
             server.model_copy(update={"pinned_tools": None, "tool_name_to_description": None}),
             _get_server_auth_header(server, mcp_server_auth_headers, mcp_auth_header),
-            raw_headers_for_request,
+            raw_headers,
             user_api_key_dict,
             await _get_user_oauth_extra_headers(server, user_api_key_dict),
             IPAddressUtils.get_mcp_client_ip(request),
@@ -839,7 +826,7 @@ if MCP_AVAILABLE:
             server,
             proxy_logging_obj,
             user_api_key_dict,
-            raw_headers_for_request,
+            raw_headers,
         )
         pinnable: Final = frozenset(tool.name for tool in scan.served)
         return {
@@ -877,9 +864,9 @@ if MCP_AVAILABLE:
         server_id: str,
         allowed_server_ids: list[str],
         rest_client_ip: str | None,
-        mcp_server_auth_headers: Mapping[str, Mapping[str, str]],
+        mcp_server_auth_headers: dict,
         mcp_auth_header: str | None,
-        raw_headers_from_request: Mapping[str, str],
+        raw_headers_from_request: dict,
         user_api_key_dict: UserAPIKeyAuth,
         apply_tool_filters: bool = True,
     ) -> dict:
@@ -932,7 +919,7 @@ if MCP_AVAILABLE:
             list_tools_result: Final = await _get_tools_for_single_server(
                 server,
                 server_auth_header,
-                dict(raw_headers_from_request),
+                raw_headers_from_request,
                 user_api_key_dict,
                 extra_headers=user_oauth_extra_headers,
                 apply_tool_filters=apply_tool_filters,
@@ -1070,7 +1057,6 @@ if MCP_AVAILABLE:
             mcp_auth_header, mcp_server_auth_headers, raw_headers_from_request, _ = _extract_mcp_headers_from_request(
                 request, user_api_key_dict
             )
-            raw_headers_for_request: Final = dict(raw_headers_from_request)
 
             auth_contexts: Final = await build_effective_auth_contexts(user_api_key_dict)
 
@@ -1098,7 +1084,7 @@ if MCP_AVAILABLE:
                     rest_client_ip=_rest_client_ip,
                     mcp_server_auth_headers=mcp_server_auth_headers or {},
                     mcp_auth_header=mcp_auth_header,
-                    raw_headers_from_request=raw_headers_for_request,
+                    raw_headers_from_request=raw_headers_from_request,
                     user_api_key_dict=user_api_key_dict,
                     apply_tool_filters=apply_tool_filters,
                 )
@@ -1148,7 +1134,7 @@ if MCP_AVAILABLE:
                         tools_result: Final = await _get_tools_for_single_server(
                             server,
                             server_auth_header,
-                            raw_headers_for_request,
+                            raw_headers_from_request,
                             user_api_key_dict,
                             extra_headers=user_oauth_extra_headers,
                             apply_tool_filters=apply_tool_filters,
@@ -1326,12 +1312,8 @@ if MCP_AVAILABLE:
                 if target_server is not None:
                     user_oauth_extra_headers = await _get_user_oauth_extra_headers(target_server, user_api_key_dict)
                 caller_oauth2_headers: Final = (
-                    dict(caller_oauth2_headers_from_request)
-                    if (
-                        target_server is not None
-                        and target_server.auth_type in _CLIENT_FORWARDED_TOKEN_AUTH_TYPES
-                        and caller_oauth2_headers_from_request is not None
-                    )
+                    caller_oauth2_headers_from_request
+                    if target_server is not None and target_server.auth_type in _CLIENT_FORWARDED_TOKEN_AUTH_TYPES
                     else None
                 )
 
