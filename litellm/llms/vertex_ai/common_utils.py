@@ -30,6 +30,9 @@ GEMINI_VIDEO_METADATA_KEYS: Final = MappingProxyType(
 )
 
 
+GEMINI_FILES_API_URI_PREFIX: Final = "https://generativelanguage.googleapis.com/v1beta/files/"
+
+
 def gemini_video_metadata_from_openai(video_metadata: Mapping[str, object]) -> dict[str, object]:
     return {
         gemini_key: video_metadata[openai_key]

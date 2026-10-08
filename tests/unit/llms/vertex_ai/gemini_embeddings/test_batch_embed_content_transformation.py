@@ -8,6 +8,8 @@ Covers:
 - Response processing with correct indices
 """
 
+from typing import Final
+
 import pytest
 
 import litellm
@@ -15,6 +17,7 @@ from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
     _build_part_for_input,
+    file_reference_name,
     _is_multimodal_input,
     process_embed_content_response,
     process_response,
@@ -58,6 +61,7 @@ class TestIsMultimodalInput:
 
     def test_file_reference(self):
         assert _is_multimodal_input(["files/abc123"]) is True
+        assert _is_multimodal_input([FILES_URI]) is True
 
     def test_mixed_text_and_image(self):
         assert _is_multimodal_input(["hello", IMAGE_DATA_URI]) is True
@@ -93,9 +97,7 @@ class TestBuildPartForInput:
         assert part["file_data"]["file_uri"] == GCS_URL
 
     def test_file_reference_resolved(self):
-        resolved = {
-            "files/abc": {"mime_type": "image/jpeg", "uri": "https://example.com/abc"}
-        }
+        resolved = {"files/abc": {"mime_type": "image/jpeg", "uri": "https://example.com/abc"}}
         part = _build_part_for_input("files/abc", resolved_files=resolved)
         assert part["file_data"] is not None
         assert part["file_data"]["mime_type"] == "image/jpeg"
@@ -134,10 +136,7 @@ class TestTransformOpenaiInputGeminiContent:
         )
         assert len(result["requests"]) == 2
         # First request is text
-        assert (
-            result["requests"][0]["content"]["parts"][0]["text"]
-            == "The food was delicious"
-        )
+        assert result["requests"][0]["content"]["parts"][0]["text"] == "The food was delicious"
         # Second request is image
         assert result["requests"][1]["content"]["parts"][0]["inline_data"] is not None
 
@@ -236,9 +235,7 @@ class TestProcessResponse:
     """Test that process_response sets correct indices."""
 
     def test_single_embedding_index(self):
-        predictions: VertexAIBatchEmbeddingsResponseObject = {
-            "embeddings": [{"values": [0.1, 0.2]}]
-        }
+        predictions: VertexAIBatchEmbeddingsResponseObject = {"embeddings": [{"values": [0.1, 0.2]}]}
         model_response = EmbeddingResponse()
         result = process_response(
             input="hello",
@@ -289,9 +286,7 @@ class TestProcessResponse:
 
     def test_nested_input_token_counting(self):
         """Nested list: only plain-text sub-elements should be counted."""
-        predictions: VertexAIBatchEmbeddingsResponseObject = {
-            "embeddings": [{"values": [0.1, 0.2]}]
-        }
+        predictions: VertexAIBatchEmbeddingsResponseObject = {"embeddings": [{"values": [0.1, 0.2]}]}
         result = process_response(
             input=[["a red shoe", IMAGE_DATA_URI]],
             model_response=EmbeddingResponse(),
@@ -418,8 +413,6 @@ class TestProcessEmbedContentResponseUsage:
         assert result.usage.prompt_tokens > 0
 
 
-
-
 class TestFileContentBlocks:
     MODEL = "gemini-embedding-2-preview"
     CLIP_METADATA = {"fps": 2, "start_offset": "3s", "end_offset": "6s"}
@@ -457,6 +450,21 @@ class TestFileContentBlocks:
             "file_data": {"mime_type": "video/mp4", "file_uri": FILES_URI},
             "video_metadata": {"fps": 1.0},
         }
+
+    def test_files_api_uri_block_uses_the_resolved_file(self):
+        resolved_files: Final = {FILES_URI: {"mime_type": "video/mp4", "uri": FILES_URI}}
+        part: Final = _build_part_for_input(
+            _file_block(file_id=FILES_URI, video_metadata={"start_offset": "0s", "end_offset": "3s"}),
+            resolved_files=resolved_files,
+        )
+        assert part == {
+            "file_data": {"mime_type": "video/mp4", "file_uri": FILES_URI},
+            "video_metadata": {"startOffset": "0s", "endOffset": "3s"},
+        }
+
+    @pytest.mark.parametrize("reference", ["files/clip123", FILES_URI])
+    def test_file_reference_name_is_the_files_name_for_both_forms(self, reference: str) -> None:
+        assert file_reference_name(reference) == "files/clip123"
 
     def test_block_without_video_metadata_sends_no_video_metadata_key(self):
         part = _build_part_for_input(_file_block(file_data=IMAGE_DATA_URI, filename="dot.png"))
@@ -524,7 +532,10 @@ class TestFileContentBlocks:
             (_file_block(file_data=VIDEO_DATA_URI, detail="high"), "file.detail"),
             (_file_block(file_id="gs://my-bucket/clip.mp4", file_data=VIDEO_DATA_URI), "not both"),
             (_file_block(), "needs file.file_id or file.file_data"),
-            (_file_block(file_id="https://example.com/clip.mp4"), "a data: URI, a gs:// URL, or a files/ reference"),
+            (
+                _file_block(file_id="https://example.com/clip.mp4"),
+                "a data: URI, a gs:// URL, a files/ reference, or a Gemini Files API URI",
+            ),
             ({"type": "image_url", "image_url": {"url": IMAGE_DATA_URI}}, "Input should be 'file'"),
         ],
     )

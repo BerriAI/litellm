@@ -57,6 +57,7 @@ from litellm.types.llms.vertex_ai import (
 from litellm.types.utils import GenericImageParsingChunk, LlmProviders
 
 from ..common_utils import (
+    GEMINI_FILES_API_URI_PREFIX,
     check_text_in_content,
     gemini_video_metadata_from_openai,
     get_supports_response_schema,
@@ -70,7 +71,6 @@ _GCS_METADATA_VERTEX_BASE: object | None = None
 # Shared sync client for GCS JSON API metadata reads so proxy/SSL settings
 # from litellm's HTTP stack apply (see Greptile review on PR #27278).
 _GCS_METADATA_HTTP_HANDLER: HTTPHandler | None = None
-GEMINI_FILES_API_URI_PREFIX: Final = "https://generativelanguage.googleapis.com/v1beta/files/"
 _GEMINI_MIME_TYPE_ALIASES: Final[dict[str, str]] = {
     "image/jpg": "image/jpeg",
 }

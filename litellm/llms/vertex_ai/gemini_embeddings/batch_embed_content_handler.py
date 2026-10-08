@@ -22,6 +22,7 @@ from litellm.types.utils import EmbeddingResponse
 
 from ..gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from .batch_embed_content_transformation import (
+    file_reference_name,
     flatten_media_sources,
     is_file_reference,
     process_embed_content_response,
@@ -66,7 +67,7 @@ class GoogleBatchEmbeddings(VertexLLM):
 
         for element in input_list:
             if isinstance(element, str) and is_file_reference(element):
-                url = f"https://generativelanguage.googleapis.com/v1beta/{element}"
+                url = f"https://generativelanguage.googleapis.com/v1beta/{file_reference_name(element)}"
                 headers = {"x-goog-api-key": api_key}
                 response = sync_handler.get(url=url, headers=headers)
 
@@ -103,7 +104,7 @@ class GoogleBatchEmbeddings(VertexLLM):
 
         for element in input_list:
             if isinstance(element, str) and is_file_reference(element):
-                url = f"https://generativelanguage.googleapis.com/v1beta/{element}"
+                url = f"https://generativelanguage.googleapis.com/v1beta/{file_reference_name(element)}"
                 headers = {"x-goog-api-key": api_key}
                 response = await async_handler.get(url=url, headers=headers)
 

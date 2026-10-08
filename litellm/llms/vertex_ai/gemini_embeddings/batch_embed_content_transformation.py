@@ -10,7 +10,7 @@ from typing import Final, Literal
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm.exceptions import BadRequestError
-from litellm.llms.vertex_ai.common_utils import gemini_video_metadata_from_openai
+from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIX, gemini_video_metadata_from_openai
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.vertex_ai import (
     BlobType,
@@ -45,9 +45,16 @@ SUPPORTED_EMBEDDING_MIME_TYPES: Final = {
 }
 
 
+_GEMINI_API_V1BETA: Final = GEMINI_FILES_API_URI_PREFIX.removesuffix("files/")
+
+
 def is_file_reference(s: str) -> bool:
-    """Check if string is a Gemini file reference (files/...)."""
-    return isinstance(s, str) and s.startswith("files/")
+    """A `files/...` name or the Files API URI that `/v1/files` returns as the file id."""
+    return isinstance(s, str) and (s.startswith("files/") or s.startswith(GEMINI_FILES_API_URI_PREFIX))
+
+
+def file_reference_name(reference: str) -> str:
+    return reference.removeprefix(_GEMINI_API_V1BETA)
 
 
 _is_file_reference = is_file_reference
@@ -161,7 +168,7 @@ class _EmbeddingFileBlock(LiteLLMBaseModel):
 
 _file_block_adapter: Final = TypeAdapter(_EmbeddingFileBlock)
 _video_metadata_adapter: Final = TypeAdapter(VideoMetadataType)
-_FILE_SOURCE_FORMS: Final = "a data: URI, a gs:// URL, or a files/ reference"
+_FILE_SOURCE_FORMS: Final = "a data: URI, a gs:// URL, a files/ reference, or a Gemini Files API URI"
 
 
 def _invalid_input(message: str) -> BadRequestError:
