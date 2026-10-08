@@ -922,3 +922,84 @@ async def test_requests_a_provider_cannot_serve_are_rejected_before_http(
         await litellm.adecisions(model=model, api_key="caller-key", **request_kwargs)
 
     assert len(respx_mock.calls) == 0
+
+
+_SAFETY_IDENTIFIER: Final = "end-user-7"
+_PREDICATE_QUESTIONS: Final[tuple[Mapping[str, object], ...]] = (
+    {"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"},
+)
+
+
+def test_safety_identifier_is_refused_before_http_when_the_provider_cannot_take_it(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"safety_identifier.*drop_params") as caught:
+        litellm.decisions(
+            model="perplexity/pplx-decider-v1-27b",
+            input="review",
+            questions=_PREDICATE_QUESTIONS,
+            safety_identifier=_SAFETY_IDENTIFIER,
+            api_key="caller-key",
+        )
+
+    assert caught.value.status_code == 400
+    assert not route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ("call", "global"))
+async def test_safety_identifier_is_dropped_from_the_wire_under_drop_params(
+    scope: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", scope == "global")
+    route: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model="perplexity/pplx-decider-v1-27b",
+        input="review",
+        questions=_PREDICATE_QUESTIONS,
+        safety_identifier=_SAFETY_IDENTIFIER,
+        api_key="caller-key",
+        **({"drop_params": True} if scope == "call" else {}),
+    )
+
+    assert route.called
+    assert json.loads(respx_mock.calls[0].request.content) == {
+        "model": "pplx-decider-v1-27b",
+        "state": "review",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert isinstance(response, OpenAIDecisionResponse)
+    assert [answer.model_dump(mode="json") for answer in response.answers] == [
+        {"type": "predicate", "name": "is_defect", "probability": 0.9}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_safety_identifier_reaches_openai_without_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+
+    await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        input="review",
+        questions=_PREDICATE_QUESTIONS,
+        safety_identifier=_SAFETY_IDENTIFIER,
+        api_key="caller-key",
+    )
+
+    assert route.called
+    assert json.loads(respx_mock.calls[0].request.content) == {
+        "model": "gpt-6-luna",
+        "input": "review",
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        "safety_identifier": _SAFETY_IDENTIFIER,
+    }

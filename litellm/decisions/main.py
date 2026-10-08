@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Final, TypeAlias
 
 import httpx
@@ -7,6 +7,7 @@ from pydantic import TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
@@ -105,6 +106,33 @@ def _ir_request(request: DecisionsRequestFormat) -> DecisionsIRRequest:
             assert_never(request)
 
 
+def _drops_params(kwargs: Mapping[str, object]) -> bool:
+    return litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True
+
+
+def _provider_ir_request(
+    request: DecisionsRequestFormat,
+    *,
+    model: str,
+    provider: str,
+    provider_config: BaseDecisionsConfig,
+    kwargs: Mapping[str, object],
+) -> DecisionsIRRequest:
+    ir_request: Final = _ir_request(request)
+    if ir_request.safety_identifier is None or provider_config.supports_safety_identifier:
+        return ir_request
+    if _drops_params(kwargs):
+        return replace(ir_request, safety_identifier=None)
+    raise litellm.UnsupportedParamsError(
+        message=(
+            f"{provider} does not support parameters: ['safety_identifier'], for model={model}. "
+            "To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+        ),
+        model=model,
+        llm_provider=provider,
+    )
+
+
 def _prepare_call(
     *,
     model: str,
@@ -165,7 +193,9 @@ def _prepare_call(
             llm_provider=provider,
         )
 
-    ir_request: Final = _ir_request(request)
+    ir_request: Final = _provider_ir_request(
+        request, model=model, provider=provider, provider_config=provider_config, kwargs=kwargs
+    )
     body: Final = provider_config.transform_decisions_request(
         model=canonical_model, request=ir_request, custom_llm_provider=provider
     )

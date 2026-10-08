@@ -2,10 +2,15 @@ import pytest
 from integration._support.client import Gateway
 from integration._support.provider import SharedProvider
 from integration.translation.case import TranslationTestCase
-from integration.translation.decisions.bases.openrouter import TYPESAFE_JEV_1_13_TEST_CASE
+from integration.translation.decisions.bases.openrouter import (
+    TYPESAFE_JEV_1_13_TEST_CASE,
+    TYPESAFE_JEV_1_13_SYSTEMONE_TEST_CASE,
+)
 from integration.translation.runner import assert_translation
 
 
-@pytest.mark.parametrize("case", [TYPESAFE_JEV_1_13_TEST_CASE], ids=lambda case: case.id)
+@pytest.mark.parametrize(
+    "case", [TYPESAFE_JEV_1_13_TEST_CASE, TYPESAFE_JEV_1_13_SYSTEMONE_TEST_CASE], ids=lambda case: case.id
+)
 def test_decisions_basic_openrouter(case: TranslationTestCase, gateway: Gateway, provider: SharedProvider) -> None:
     assert_translation(case, gateway, provider)
