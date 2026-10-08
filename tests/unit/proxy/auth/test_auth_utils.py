@@ -4,6 +4,7 @@ Unit tests for auth_utils functions related to rate limiting and customer ID ext
 
 import base64
 import logging
+from collections.abc import Callable
 from typing import Final, Optional
 from unittest.mock import MagicMock, patch
 
@@ -2876,6 +2877,40 @@ class TestIsRequestBodySafeBlocksClaudePlatformWorkspaceOverride:
             )
             is True
         )
+
+
+class TestIsRequestBodySafeBlocksFireworksForwardUserId:
+    @pytest.mark.parametrize("value", [True, False])
+    @pytest.mark.parametrize(
+        "body_for",
+        [
+            pytest.param(lambda value: {"fireworks_forward_user_id": value}, id="root"),
+            pytest.param(lambda value: {"extra_body": {"fireworks_forward_user_id": value}}, id="extra_body"),
+            pytest.param(lambda value: {"metadata": {"fireworks_forward_user_id": value}}, id="metadata"),
+        ],
+    )
+    def test_fireworks_forward_user_id_in_request_body_is_rejected(
+        self, body_for: Callable[[bool], dict[str, object]], value: bool
+    ) -> None:
+        with pytest.raises(ValueError, match="fireworks_forward_user_id"):
+            is_request_body_safe(
+                request_body={"model": "fireworks-model", "user": "someone-else", **body_for(value)},
+                general_settings={},
+                llm_router=None,
+                model="fireworks-model",
+            )
+
+    def test_admin_opt_in_proxy_wide_allows_fireworks_forward_user_id(self) -> None:
+        assert (
+            is_request_body_safe(
+                request_body={"model": "fireworks-model", "fireworks_forward_user_id": False},
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="fireworks-model",
+            )
+            is True
+        )
+
 
 class TestIsRequestBodySafeBlocksRustOptIn:
     """``rust`` hands the whole call to the Rust core, which signs and sends

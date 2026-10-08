@@ -379,7 +379,8 @@ async def test_managed_registration_is_atomic_and_keeps_the_original_worker_id(l
 
 @pytest.mark.asyncio
 async def test_claim_pages_only_yield_work_the_worker_can_claim(lens_db: Prisma) -> None:
-    now: Final = datetime.now(timezone.utc)
+    clock: Final = datetime.now(timezone.utc)
+    now: Final = clock.replace(microsecond=clock.microsecond // 1000 * 1000)
     scope: Final = Scope(team_id=uuid4().hex)
     repo: Final = LensRepository(WriterDatabase(PrismaWrapper(lens_db)))
     prefix: Final = uuid4().hex

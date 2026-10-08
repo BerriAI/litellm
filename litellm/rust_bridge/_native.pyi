@@ -110,12 +110,6 @@ def messages(
 def amessages(
     call: NativeCall,
 ) -> Coroutine[object, object, AnthropicMessagesResponse | AsyncIterator[bytes]]: ...
-def chat_completions(
-    call: NativeCall,
-) -> dict[str, object]: ...
-def achat_completions(
-    call: NativeCall,
-) -> Future[dict[str, object]]: ...
 
 @final
 class ResponsesWebSocketConnection:
@@ -251,14 +245,12 @@ __all__ = [
     "RustUpstreamError",
     "TokenCounter",
     "Tokenizer",
-    "achat_completions",
     "acompletion",
     "aembedding",
     "amessages",
     "aocr",
     "aresponses",
     "atranscription",
-    "chat_completions",
     "completion",
     "embedding",
     "gil_stats",
