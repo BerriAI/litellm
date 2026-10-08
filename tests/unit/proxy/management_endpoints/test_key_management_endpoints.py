@@ -2,7 +2,9 @@ from collections.abc import Mapping
 from contextlib import ExitStack
 from typing import Final
 from types import SimpleNamespace
+import asyncio
 import json
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import litellm
@@ -18,6 +20,7 @@ import inspect
 
 from litellm.proxy._types import (
     GenerateKeyRequest,
+    hash_token,
     KeyManagementRoutes,
     NewUserRequest,
     LiteLLM_BudgetTable,
@@ -31,6 +34,7 @@ from litellm.proxy._types import (
     LiteLLMKeyType,
     LitellmUserRoles,
     Member,
+    ProxyErrorTypes,
     ProxyException,
     RegenerateKeyRequest,
     ResetSpendRequest,
@@ -39,9 +43,11 @@ from litellm.proxy._types import (
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.proxy.auth.auth_checks import (
     delete_cache_key_object,
+    get_key_object,
     jwt_key_mapping_cache_key,
 )
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheInvalidationSubscriber
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, project_cache_key
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -21248,3 +21254,88 @@ async def test_rotate_master_key_reencrypts_guardrail_params(monkeypatch):
         "guardrail": "bedrock",
         "aws_secret_access_key": "aws-secret",
     }
+
+
+class _PeerWorkerCoordinationRedis:
+    """Coordination Redis shared by two workers: a publish lands on the peer worker's subscriber at once."""
+
+    namespace = None
+
+    def __init__(self, peer_worker_cache: UserApiKeyCache) -> None:
+        self._peer_subscriber = AuthCacheInvalidationSubscriber(redis_cache=self, user_api_key_cache=peer_worker_cache)
+        self.published: list[str] = []
+
+    def init_pubsub_client(self) -> "_PeerWorkerCoordinationRedis":
+        return self
+
+    async def publish(self, channel: str, message: str) -> int:
+        self.published.append(message)
+        self._peer_subscriber._apply_message({"type": "message", "data": message.encode()})
+        return 1
+
+
+@pytest.mark.asyncio
+async def test_delete_verification_tokens_stops_the_key_on_a_peer_worker_before_its_ttl(monkeypatch):
+    """/key/delete must broadcast the eviction like every other key mutation: a peer worker that
+    still holds the key object in memory has to answer 401 on its next request instead of serving
+    the deleted key until the in-memory TTL expires."""
+    raw_key = "sk-" + uuid.uuid4().hex
+    hashed_token = hash_token(raw_key)
+    deleting_worker_cache = UserApiKeyCache()
+    peer_worker_cache = UserApiKeyCache()
+    for cache in (deleting_worker_cache, peer_worker_cache):
+        cache.set_cache(hashed_token, UserAPIKeyAuth(token=hashed_token, user_id="user-123"), model_type=UserAPIKeyAuth)
+    coordination_redis = _PeerWorkerCoordinationRedis(peer_worker_cache=peer_worker_cache)
+
+    key_row = LiteLLM_VerificationToken(
+        token=hashed_token,
+        user_id="user-123",
+        team_id=None,
+        key_alias="peer-worker-key",
+        spend=0.0,
+        max_budget=None,
+        models=[],
+        aliases={},
+        config={},
+        permissions={},
+        metadata={},
+        model_max_budget={},
+        model_spend={},
+        soft_budget_cooldown=False,
+        allowed_routes=[],
+    )
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[key_row])
+    mock_prisma_client.db.litellm_jwtkeymapping = _CascadingJWTMappingTable([])
+    mock_prisma_client.db.litellm_deletedverificationtoken.create_many = AsyncMock()
+    mock_prisma_client.delete_data = AsyncMock(return_value=[hashed_token])
+    mock_prisma_client.get_data = AsyncMock(return_value=None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    with patch(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+        return_value=coordination_redis,
+    ):
+        await delete_verification_tokens(
+            tokens=[raw_key],
+            user_api_key_cache=deleting_worker_cache,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="admin-user",
+                api_key="sk-admin",
+                user_role=LitellmUserRoles.PROXY_ADMIN.value,
+            ),
+        )
+        for _ in range(200):
+            if peer_worker_cache.get_cache(hashed_token, model_type=UserAPIKeyAuth) is None:
+                break
+            await asyncio.sleep(0.01)
+
+    with pytest.raises(ProxyException) as denied:
+        await get_key_object(
+            hashed_token=hashed_token,
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=peer_worker_cache,
+        )
+    assert denied.value.code == "401"
+    assert denied.value.type == ProxyErrorTypes.token_not_found_in_db
+    assert json.dumps({"cache_key": hashed_token}) in coordination_redis.published
