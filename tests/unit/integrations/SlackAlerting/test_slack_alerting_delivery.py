@@ -128,9 +128,8 @@ async def test_a_queued_alert_is_posted_by_the_periodic_flush_without_a_manual_f
         return httpx.Response(200, text="ok")
 
     route: Final = respx_mock.post(_WEBHOOK).mock(side_effect=deliver)
-    slack_alerting: Final = SlackAlerting(
-        alerting_threshold=1, internal_usage_cache=DualCache(), alerting=["slack"], flush_interval=0.01
-    )
+    slack_alerting: Final = SlackAlerting(alerting_threshold=1, internal_usage_cache=DualCache(), alerting=["slack"])
+    slack_alerting.flush_interval = 0
     slack_alerting.update_values(alerting=["slack"])
     flush_task: Final = slack_alerting._periodic_flush_task
     assert flush_task is not None
