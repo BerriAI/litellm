@@ -1,12 +1,17 @@
+import base64
 import json
 import os
+from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
+from opentelemetry.sdk.trace import TracerProvider
 
 from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
-from litellm.integrations.opentelemetry import OpenTelemetryConfig
+from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.utils import StandardCallbackDynamicParams
 
 
 class TestLangfuseOtelIntegration:
@@ -1006,5 +1011,58 @@ class TestLangfuseOtelResponsesAPI:
             assert output_data[0]["arguments"] == {}
 
 
-if __name__ == "__main__":
-    pytest.main([__file__])
+LANGFUSE_ENV_ONLY: Final = {
+    key: value
+    for key, value in os.environ.items()
+    if not key.startswith(("LANGFUSE_", "OTEL_"))
+}
+
+
+def _decoded_basic_auth(header: str) -> str:
+    assert header.startswith("Basic ")
+    return base64.b64decode(header.removeprefix("Basic ")).decode()
+
+
+def test_langfuse_otel_env_config_headers_carry_v4_ingestion_and_basic_auth() -> None:
+    with patch.dict(
+        os.environ, {**LANGFUSE_ENV_ONLY, "LANGFUSE_PUBLIC_KEY": "pk-lf-123", "LANGFUSE_SECRET_KEY": "sk-lf-123"}, clear=True
+    ):
+        logger: Final = LangfuseOtelLogger()
+    headers: Final = OpenTelemetry._get_headers_dictionary(logger.config.headers)
+    assert headers["x-langfuse-ingestion-version"] == "4"
+    assert _decoded_basic_auth(headers["Authorization"]) == "pk-lf-123:sk-lf-123"
+
+
+def test_langfuse_otel_dynamic_headers_carry_v4_ingestion_and_basic_auth() -> None:
+    with patch.dict(os.environ, LANGFUSE_ENV_ONLY, clear=True):
+        logger: Final = LangfuseOtelLogger()
+    headers: Final = logger.construct_dynamic_otel_headers(
+        StandardCallbackDynamicParams(langfuse_public_key="pk-lf-dynamic", langfuse_secret_key="sk-lf-dynamic")
+    )
+    assert headers is not None
+    assert headers["x-langfuse-ingestion-version"] == "4"
+    assert _decoded_basic_auth(headers["Authorization"]) == "pk-lf-dynamic:sk-lf-dynamic"
+
+
+def test_langfuse_otel_does_not_start_proxy_request_span() -> None:
+    langfuse_provider: Final = TracerProvider()
+    generic_provider: Final = TracerProvider()
+    with patch.dict(os.environ, LANGFUSE_ENV_ONLY, clear=True):
+        langfuse_logger: Final = LangfuseOtelLogger(tracer_provider=langfuse_provider)
+        generic_logger: Final = OpenTelemetry(
+            config=OpenTelemetryConfig(exporter="console", skip_set_global=True), tracer_provider=generic_provider
+        )
+    started_at: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    request_headers: Final = {"Authorization": "Bearer test"}
+    try:
+        assert (
+            langfuse_logger.create_litellm_proxy_request_started_span(start_time=started_at, headers=request_headers)
+            is None
+        )
+        assert (
+            generic_logger.create_litellm_proxy_request_started_span(start_time=started_at, headers=request_headers)
+            is not None
+        )
+    finally:
+        langfuse_provider.shutdown()
+        generic_provider.shutdown()
