@@ -1,3 +1,5 @@
+from typing import Final
+
 from litellm.litellm_core_utils.served_output_texts import (
     SERVED_OUTPUT_TEXTS_KEY,
     overlay_served_output_texts,
@@ -89,7 +91,7 @@ def test_blanked_output_is_served_as_empty_text_and_overlaid():
 
 
 def test_tool_only_stream_served_as_empty_text_keeps_the_rebuilt_null_content():
-    rebuilt = {
+    rebuilt: Final = {
         "id": "x",
         "choices": [
             {
@@ -103,7 +105,7 @@ def test_tool_only_stream_served_as_empty_text_keeps_the_rebuilt_null_content():
             }
         ],
     }
-    served = served_stream_output_texts([_stream_chunk("")])
+    served: Final = served_stream_output_texts([_stream_chunk("")])
     assert overlay_served_output_texts(rebuilt, served) == rebuilt
 
 
