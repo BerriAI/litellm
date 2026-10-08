@@ -742,13 +742,668 @@ def test_violation_message_names_the_clause_counts(tmp_path: Path):
     assert "2 `for` clauses and 1 `if` clause" in messages[0]
 
 
+@pytest.mark.parametrize(
+    ("configuration", "mutable"),
+    (
+        ("model_config = ConfigDict(frozen=SETTING)", True),
+        ("model_config = {'frozen': SETTING}", True),
+        ("model_config = {'frozen': None}", True),
+        ("model_config = {'frozen': 0}", True),
+        ("model_config = make_config()", True),
+        ("model_config = OPTIONS", True),
+        ("model_config = {'frozen': True, **OPTIONS}", True),
+        ("model_config = {'frozen': True, KEY: False}", True),
+        ("model_config = ConfigDict(**OPTIONS)", True),
+        ("model_config = ConfigDict(frozen=True, **OPTIONS)", True),
+        ("class Config:\n        frozen = SETTING", True),
+        ("model_config = ConfigDict(extra='forbid')", False),
+        ("model_config = {}", False),
+        ("model_config: ConfigDict", False),
+        ("model_config = {**OPTIONS, 'frozen': True}", False),
+        ("model_config = {KEY: False, 'frozen': True}", False),
+        ("model_config = {'frozen': False, 'frozen': True}", False),
+        ("model_config = {'frozen': True, 'frozen': False}", True),
+        ("model_config = ConfigDict(**{'frozen': True})", False),
+        ("model_config = dict(frozen=True)", False),
+        ("model_config: ConfigDict = ConfigDict(frozen=True)", False),
+        ("model_config = unused = ConfigDict(frozen=True)", False),
+        ("class Config:\n        frozen: bool = True", False),
+        ("class Config:\n        frozen = True\n        frozen = False", True),
+        ("class Config:\n        frozen = False\n        frozen = True", False),
+    ),
+)
+def test_frozen_explicit_unknown_config_does_not_inherit_true(tmp_path, configuration, mutable):
+    source = (
+        "from pydantic import BaseModel, ConfigDict\n"
+        "class Parent(BaseModel):\n"
+        "    model_config = ConfigDict(frozen=True)\n"
+        "class Child(Parent):\n"
+        f"    {configuration}\n"
+        "class Grandchild(Child):\n"
+        "    pass\n"
+    )
+    assert _codes(tmp_path, source).count("LIT015") == (2 if mutable else 0)
+
+
+@pytest.mark.parametrize(
+    ("source", "flagged_lines"),
+    (
+        (
+            "def first():\n"
+            "    class Payload(BaseModel):\n"
+            "        pass\n"
+            "    class Child(Payload):\n"
+            "        pass\n"
+            "def second():\n"
+            "    class Payload(BaseModel, frozen=True):\n"
+            "        pass\n"
+            "    class Child(Payload):\n"
+            "        pass\n",
+            (2, 4),
+        ),
+        (
+            "def first():\n"
+            "    class Payload(BaseModel):\n"
+            "        pass\n"
+            "def second():\n"
+            "    class Payload:\n"
+            "        pass\n"
+            "    class Child(Payload):\n"
+            "        pass\n",
+            (2,),
+        ),
+        (
+            "class Parent(BaseModel):\n"
+            "    pass\n"
+            "def factory():\n"
+            "    class Parent(BaseModel, frozen=True):\n"
+            "        pass\n"
+            "    class Child(Parent):\n"
+            "        pass\n"
+            "class Child(Parent):\n"
+            "    pass\n",
+            (1, 8),
+        ),
+        (
+            "def first():\n"
+            "    from pydantic import BaseModel as Model\n"
+            "    class Payload(Model):\n"
+            "        pass\n"
+            "def second():\n"
+            "    class Model:\n"
+            "        pass\n"
+            "    class Payload(Model):\n"
+            "        pass\n",
+            (3,),
+        ),
+        (
+            "class Left:\n"
+            "    class Parent(BaseModel, frozen=True):\n"
+            "        pass\n"
+            "    class Child(Parent):\n"
+            "        pass\n"
+            "class Right:\n"
+            "    class Parent(BaseModel):\n"
+            "        pass\n"
+            "    class Child(Parent):\n"
+            "        pass\n",
+            (7, 9),
+        ),
+        (
+            "class Parent(BaseModel):\n"
+            "    pass\n"
+            "class Container:\n"
+            "    class Parent(BaseModel, frozen=True):\n"
+            "        pass\n"
+            "    def factory():\n"
+            "        class Child(Parent):\n"
+            "            pass\n",
+            (1, 7),
+        ),
+        (
+            "class Parent(BaseModel):\n"
+            "    pass\n"
+            "class Child(Parent):\n"
+            "    pass\n"
+            "class Parent(BaseModel, frozen=True):\n"
+            "    pass\n"
+            "class Later(Parent):\n"
+            "    pass\n",
+            (1, 3),
+        ),
+        (
+            "class Parent(BaseModel, frozen=True):\n"
+            "    pass\n"
+            "class NotLocal(external.Parent):\n"
+            "    pass\n",
+            (),
+        ),
+        (
+            "class BaseModel:\n"
+            "    pass\n"
+            "class Plain(BaseModel):\n"
+            "    pass\n",
+            (),
+        ),
+        (
+            "class Parent(BaseModel):\n"
+            "    pass\n"
+            "class Outer:\n"
+            "    class Parent(BaseModel, frozen=True):\n"
+            "        pass\n"
+            "    class Inner:\n"
+            "        class Child(Parent):\n"
+            "            pass\n",
+            (1, 7),
+        ),
+        (
+            "def factory():\n"
+            "    class Parent(BaseModel):\n"
+            "        pass\n"
+            "    class Outer:\n"
+            "        class Parent(BaseModel, frozen=True):\n"
+            "            pass\n"
+            "        class Inner:\n"
+            "            class Child(Parent):\n"
+            "                pass\n",
+            (2, 8),
+        ),
+    ),
+)
+def test_frozen_model_detection_preserves_lexical_scope(tmp_path, source, flagged_lines):
+    snippet = tmp_path / "snippet.py"
+    snippet.write_text(source, encoding="utf-8")
+    assert tuple(v.line for v in checker.check_file(snippet) if v.code == "LIT015") == flagged_lines
+
+
+@pytest.mark.parametrize(
+    ("imports", "base", "config"),
+    (
+        ("from pydantic import RootModel as Root", "Root[int]", "model_config = {}"),
+        ("import pydantic as p", "p.RootModel[int]", "model_config = {}"),
+        ("from pydantic import BaseModel as Model, ConfigDict as Cfg", "Model", "model_config = Cfg(frozen=False)"),
+        ("import pydantic as p", "p.BaseModel", "model_config = p.ConfigDict(frozen=False)"),
+        ("from pydantic.v1 import BaseModel as Model", "Model", "model_config = {'frozen': True}"),
+        ("import pydantic.v1 as legacy", "legacy.BaseModel", "model_config = {'frozen': True}"),
+        ("from pydantic import v1 as legacy", "legacy.BaseModel", "model_config = {'frozen': True}"),
+        ("import pydantic.v1", "pydantic.v1.BaseModel", "model_config = {'frozen': True}"),
+        ("from pydantic.v1.main import BaseModel", "BaseModel", "model_config = {'frozen': True}"),
+    ),
+)
+def test_frozen_import_aliases_and_legacy_model_config(tmp_path, imports, base, config):
+    source = f"{imports}\nclass P({base}):\n    {config}\nclass Child(P):\n    pass\n"
+    assert _codes(tmp_path, source).count("LIT015") == 2
+
+
+@pytest.mark.parametrize(("keyword", "codes"), (("", ["LIT015"]), (", frozen=True", [])))
+def test_frozen_v1_ignores_model_config_but_honors_class_keywords(tmp_path, keyword, codes):
+    source = (
+        "from pydantic.v1 import BaseModel\n"
+        f"class P(BaseModel{keyword}):\n"
+        "    model_config = {'frozen': True}\n"
+    )
+    assert _codes(tmp_path, source) == codes
+
+
+@pytest.mark.parametrize("frozen", (True, False))
+def test_frozen_v1_keyword_matches_runtime_and_overrides_parent(tmp_path, frozen):
+    source = (
+        "from pydantic.v1 import BaseModel\n"
+        "class Parent(BaseModel):\n"
+        "    class Config:\n"
+        "        frozen = True\n"
+        f"class P(Parent, frozen={frozen}):\n"
+        "    value: int = 1\n"
+    )
+    namespace = {}
+    exec(source, namespace)
+    instance = namespace["P"]()
+    if frozen:
+        with pytest.raises(TypeError):
+            instance.value = 2
+    else:
+        instance.value = 2
+        assert instance.value == 2
+    assert _codes(tmp_path, source).count("LIT015") == (0 if frozen else 1)
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        "model_config = ConfigDict(frozen=True)",
+        "pass",
+    ),
+)
+def test_frozen_unknown_class_keyword_overrides_body_and_parent(tmp_path, body):
+    source = (
+        "class Parent(BaseModel, frozen=True):\n"
+        "    pass\n"
+        "class Child(Parent, frozen=SETTING):\n"
+        f"    {body}\n"
+    )
+    assert _codes(tmp_path, source) == ["LIT015"]
+
+
+@pytest.mark.parametrize(
+    ("source", "codes"),
+    (
+        ("class P(BaseModel):  # frozen-ok: builder mutates until handoff\n    pass\n", []),
+        ("class P(BaseModel, frozen=True):  # frozen-ok: stale reason\n    pass\n", ["LIT013"]),
+        ("class P:  # frozen-ok: stale reason\n    pass\n", ["LIT013"]),
+        ("class P(BaseModel):  # frozen-ok\n    pass\n", ["LIT005", "LIT015"]),
+        ("class P(BaseModel):  # frozen-ok: no\n    pass\n", ["LIT005", "LIT015"]),
+        ("class P(BaseModel):\n    pass  # frozen-ok: wrong line\n", ["LIT015", "LIT013"]),
+        ("class P(BaseModel):\n    text: str = '# frozen-ok: not a comment'\n", ["LIT015"]),
+    ),
+)
+def test_frozen_suppressions_use_the_central_rule_engine(tmp_path, source, codes):
+    assert _codes(tmp_path, source) == codes
+
+
+@pytest.mark.parametrize(
+    ("parents", "configuration", "keyword"),
+    (
+        ("BaseModel", "model_config = ConfigDict(frozen=True)", ""),
+        ("Frozen, Mutable", "pass", ""),
+        ("Mutable, Frozen", "pass", ""),
+        ("Frozen, Unconfigured", "pass", ""),
+        ("Frozen, Descendant", "pass", ""),
+        ("Frozen", "model_config = {'frozen': None}", ""),
+        ("Frozen", "model_config = ConfigDict(frozen=False)\n    model_config = {}", ""),
+        ("BaseModel", "model_config = ConfigDict(frozen=True)\n    model_config = {}", ""),
+        ("BaseModel", "model_config = ConfigDict(frozen=False)", ", frozen=True"),
+        ("Frozen", "pass", ", frozen=False"),
+        ("BaseModel", "class Config:\n        frozen = True", ""),
+    ),
+)
+def test_frozen_v2_matches_runtime_configuration(tmp_path, parents, configuration, keyword):
+    source = (
+        "from pydantic import BaseModel, ConfigDict\n"
+        "class Frozen(BaseModel):\n"
+        "    model_config = ConfigDict(frozen=True)\n"
+        "class Mutable(BaseModel):\n"
+        "    model_config = ConfigDict(frozen=False)\n"
+        "class Unconfigured(BaseModel):\n"
+        "    pass\n"
+        "class Descendant(Mutable):\n"
+        "    pass\n"
+        f"class P({parents}{keyword}):\n"
+        f"    {configuration}\n"
+        "    value: int = 1\n"
+    )
+    namespace = {}
+    exec(source, namespace)
+    instance = namespace["P"]()
+    try:
+        instance.value = 2
+        mutable = True
+    except ValueError:
+        mutable = False
+    snippet = tmp_path / "snippet.py"
+    snippet.write_text(source, encoding="utf-8")
+    assert any(v.code == "LIT015" and "`P`" in v.message for v in checker.check_file(snippet)) is mutable
+
+
+@pytest.mark.parametrize(
+    ("parents", "body"),
+    (
+        ("Frozen, Mutable", "pass"),
+        ("Mutable, Frozen", "pass"),
+        ("Unconfigured, Frozen", "pass"),
+        ("Frozen, Unconfigured", "pass"),
+        ("BaseModel", "class Config:\n        frozen = True"),
+        ("Frozen", "class Config:\n        frozen = False"),
+        ("Frozen", "model_config = {'frozen': False}"),
+    ),
+)
+def test_frozen_v1_legacy_config_matches_runtime(tmp_path, parents, body):
+    source = (
+        "from pydantic.v1 import BaseModel\n"
+        "class Frozen(BaseModel):\n"
+        "    class Config:\n"
+        "        frozen = True\n"
+        "class Mutable(BaseModel):\n"
+        "    class Config:\n"
+        "        frozen = False\n"
+        "class Unconfigured(BaseModel):\n"
+        "    pass\n"
+        f"class P({parents}):\n"
+        f"    {body}\n"
+        "    value: int = 1\n"
+    )
+    namespace = {}
+    exec(source, namespace)
+    instance = namespace["P"]()
+    try:
+        instance.value = 2
+        mutable = True
+    except TypeError:
+        mutable = False
+    snippet = tmp_path / "snippet.py"
+    snippet.write_text(source, encoding="utf-8")
+    assert any(v.code == "LIT015" and "`P`" in v.message for v in checker.check_file(snippet)) is mutable
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "from pydantic import BaseModel as Model, ConfigDict as Cfg\n"
+        "class P(Model):\n"
+        "    model_config = Cfg(frozen=True)\n",
+        "class Container:\n"
+        "    class Base(BaseModel, frozen=True):\n"
+        "        pass\n"
+        "class P(Container.Base):\n"
+        "    pass\n",
+        "class Parent(BaseModel):\n"
+        "    pass\n"
+        "class P(Parent, frozen=True):\n"
+        "    pass\n",
+    ),
+)
+def test_frozen_clean_descendants_and_aliased_config(tmp_path, source):
+    snippet = tmp_path / "snippet.py"
+    snippet.write_text(source, encoding="utf-8")
+    assert not any(v.code == "LIT015" and "`P`" in v.message for v in checker.check_file(snippet))
+
+
+def test_frozen_qualified_same_module_bases_keep_their_namespaces(tmp_path):
+    source = (
+        "class Left:\n"
+        "    class Base(BaseModel, frozen=True):\n"
+        "        pass\n"
+        "class Right:\n"
+        "    class Base(BaseModel):\n"
+        "        pass\n"
+        "class Mutable(Right.Base):\n"
+        "    pass\n"
+        "class Frozen(Left.Base):\n"
+        "    pass\n"
+    )
+    snippet = tmp_path / "snippet.py"
+    snippet.write_text(source, encoding="utf-8")
+    assert tuple(v.line for v in checker.check_file(snippet) if v.code == "LIT015") == (5, 7)
+
+
+def test_frozen_unknown_rightmost_parent_cannot_inherit_true(tmp_path):
+    source = (
+        "class Frozen(BaseModel, frozen=True):\n"
+        "    pass\n"
+        "class Unknown(BaseModel):\n"
+        "    model_config = {'frozen': SETTING}\n"
+        "class Child(Frozen, Unknown):\n"
+        "    pass\n"
+    )
+    assert _codes(tmp_path, source).count("LIT015") == 2
+
+
+def test_frozen_does_not_import_or_execute_checked_code(tmp_path):
+    source = (
+        "import unavailable_dependency\n"
+        "raise RuntimeError('must not execute')\n"
+        "class P(BaseModel):\n"
+        "    pass\n"
+    )
+    assert _codes(tmp_path, source) == ["LIT015"]
+
+
+def test_unfrozen_basemodel_is_flagged(tmp_path):
+    src = "from pydantic import BaseModel\nclass P(BaseModel):\n    a: int\n"
+    assert "LIT015" in _codes(tmp_path, src)
+
+
+def test_configdict_frozen_true_is_clean(tmp_path):
+    src = (
+        "from pydantic import BaseModel, ConfigDict\n"
+        "class P(BaseModel):\n"
+        "    model_config = ConfigDict(extra='allow', frozen=True)\n"
+    )
+    assert "LIT015" not in _codes(tmp_path, src)
+
+
+def test_dict_literal_model_config_frozen_true_is_clean(tmp_path):
+    src = (
+        "from pydantic import BaseModel\n"
+        "class P(BaseModel):\n"
+        "    model_config = {'frozen': True, 'extra': 'allow'}\n"
+    )
+    assert "LIT015" not in _codes(tmp_path, src)
+
+
+def test_subclass_of_in_file_frozen_model_is_clean(tmp_path):
+    src = (
+        "from pydantic import BaseModel, ConfigDict\n"
+        "class Base(BaseModel):\n"
+        "    model_config = ConfigDict(frozen=True)\n"
+        "class Child(Base):\n"
+        "    a: int\n"
+    )
+    assert "LIT015" not in _codes(tmp_path, src)
+
+
+def test_subclass_of_in_file_unfrozen_model_flags_both(tmp_path):
+    src = (
+        "from pydantic import BaseModel\n"
+        "class Base(BaseModel):\n"
+        "    pass\n"
+        "class Child(Base):\n"
+        "    a: int\n"
+    )
+    assert _codes(tmp_path, src).count("LIT015") == 2
+
+
+def test_litellm_pydantic_object_base_without_frozen_is_flagged(tmp_path):
+    src = "class P(LiteLLMPydanticObjectBase):\n    a: int\n"
+    assert "LIT015" in _codes(tmp_path, src)
+
+
+def test_inner_config_class_frozen_true_is_clean(tmp_path):
+    src = (
+        "from pydantic import BaseModel\n"
+        "class P(BaseModel):\n"
+        "    class Config:\n"
+        "        frozen = True\n"
+    )
+    assert "LIT015" not in _codes(tmp_path, src)
+
+
+def test_frozen_false_is_flagged(tmp_path):
+    src = (
+        "from pydantic import BaseModel, ConfigDict\n"
+        "class P(BaseModel):\n"
+        "    model_config = ConfigDict(frozen=False)\n"
+    )
+    assert "LIT015" in _codes(tmp_path, src)
+
+
+def test_later_model_config_frozen_false_overrides_earlier_frozen_true(tmp_path):
+    src = (
+        "from pydantic import BaseModel, ConfigDict\n"
+        "class P(BaseModel):\n"
+        "    model_config = ConfigDict(frozen=True)\n"
+        "    model_config = ConfigDict(frozen=False)\n"
+    )
+    assert "LIT015" in _codes(tmp_path, src)
+
+
+def test_subclass_frozen_false_overrides_frozen_parent(tmp_path):
+    src = (
+        "from pydantic import BaseModel, ConfigDict\n"
+        "class Base(BaseModel):\n"
+        "    model_config = ConfigDict(frozen=True)\n"
+        "class Writable(Base):\n"
+        "    model_config = ConfigDict(frozen=False)\n"
+        "class StillFrozen(Base):\n"
+        "    model_config = ConfigDict(extra='allow')\n"
+    )
+    assert _codes(tmp_path, src).count("LIT015") == 1
+
+
+def test_root_model_without_frozen_is_flagged(tmp_path):
+    src = "from pydantic import RootModel\nclass P(RootModel):\n    root: int\n"
+    assert "LIT015" in _codes(tmp_path, src)
+
+
+def test_qualified_pydantic_basemodel_is_flagged(tmp_path):
+    src = "import pydantic\nclass P(pydantic.BaseModel):\n    a: int\n"
+    assert "LIT015" in _codes(tmp_path, src)
+
+
+def test_frozen_ok_with_reason_suppresses_lit015(tmp_path):
+    src = (
+        "from pydantic import BaseModel\n"
+        "class P(BaseModel):  # frozen-ok: mutated during build before handoff\n"
+        "    a: int\n"
+    )
+    assert "LIT015" not in _codes(tmp_path, src)
+
+
+def test_frozen_ok_without_reason_is_lit005_and_does_not_suppress(tmp_path):
+    src = (
+        "from pydantic import BaseModel\n"
+        "class P(BaseModel):  # frozen-ok\n"
+        "    a: int\n"
+    )
+    codes = _codes(tmp_path, src)
+    assert "LIT005" in codes
+    assert "LIT015" in codes
+
+
+def test_typeddict_and_plain_classes_are_not_models(tmp_path):
+    src = (
+        "from typing import TypedDict\n"
+        "class T(TypedDict):\n"
+        "    a: int\n"
+        "class C:\n"
+        "    a: int\n"
+    )
+    assert "LIT015" not in _codes(tmp_path, src)
+
+
+@pytest.mark.parametrize(
+    ("source", "mutable"),
+    (
+        pytest.param(
+            "class P(BaseModel):\n"
+            "    model_config = ConfigDict(frozen=True)\n"
+            "    model_config = ConfigDict(extra='forbid')\n",
+            True,
+            id="later-config-replaces-frozen-flag",
+        ),
+        pytest.param(
+            "class Parent(BaseModel):\n"
+            "    model_config = ConfigDict(frozen=True)\n"
+            "class P(Parent):\n"
+            "    model_config = ConfigDict(frozen=False)\n"
+            "    model_config = ConfigDict(extra='forbid')\n",
+            False,
+            id="replaced-config-still-inherits-parent",
+        ),
+        pytest.param(
+            "class Frozen(BaseModel):\n"
+            "    model_config = ConfigDict(frozen=True)\n"
+            "class Mutable(BaseModel):\n"
+            "    model_config = ConfigDict(frozen=False)\n"
+            "class P(Frozen, Mutable):\n"
+            "    pass\n",
+            True,
+            id="rightmost-explicit-parent-wins",
+        ),
+        pytest.param(
+            "class Frozen(BaseModel):\n"
+            "    model_config = ConfigDict(frozen=True)\n"
+            "class Unconfigured(BaseModel):\n"
+            "    pass\n"
+            "class P(Frozen, Unconfigured):\n"
+            "    pass\n",
+            False,
+            id="unconfigured-parent-does-not-unfreeze",
+        ),
+        pytest.param(
+            "class Mutable(BaseModel):\n"
+            "    model_config = ConfigDict(frozen=False)\n"
+            "class Frozen(BaseModel):\n"
+            "    model_config = ConfigDict(frozen=True)\n"
+            "class P(Mutable, Frozen):\n"
+            "    pass\n",
+            False,
+            id="rightmost-frozen-parent-wins",
+        ),
+        pytest.param(
+            "class Parent(BaseModel):\n"
+            "    model_config = ConfigDict(frozen=True)\n"
+            "class P(Parent, frozen=False):\n"
+            "    pass\n",
+            True,
+            id="class-keyword-unfreezes-parent",
+        ),
+        pytest.param(
+            "class P(BaseModel, frozen=True):\n"
+            "    pass\n",
+            False,
+            id="class-keyword-freezes-model",
+        ),
+        pytest.param(
+            "class P(BaseModel, frozen=True):\n"
+            "    model_config = ConfigDict(frozen=False)\n",
+            False,
+            id="class-keyword-overrides-model-config",
+        ),
+        pytest.param(
+            "from pydantic import BaseModel as Model\n"
+            "class P(Model):\n"
+            "    pass\n",
+            True,
+            id="import-alias-is-a-model",
+        ),
+        pytest.param(
+            "from pydantic import BaseModel as Model\n"
+            "class P(Model):\n"
+            "    model_config = ConfigDict(frozen=True)\n",
+            False,
+            id="frozen-import-alias-is-clean",
+        ),
+        pytest.param(
+            "class P(BaseModel):\n"
+            "    class Config:\n"
+            "        frozen = True\n"
+            "    class Config:\n"
+            "        extra = 'forbid'\n",
+            True,
+            id="later-config-class-replaces-frozen-flag",
+        ),
+    ),
+)
+def test_frozen_rule_respects_pydantic_config_precedence(tmp_path: Path, source: str, mutable: bool) -> None:
+    snippet = tmp_path / "snippet.py"
+    snippet.write_text("from pydantic import BaseModel, ConfigDict\n" + source, encoding="utf-8")
+    model_violations = tuple(
+        violation for violation in checker.check_file(snippet)
+        if violation.code == "LIT015" and "`P`" in violation.message
+    )
+    assert bool(model_violations) is mutable
+
+
+def test_extra_allow_does_not_exempt(tmp_path):
+    src = (
+        "from pydantic import BaseModel, ConfigDict\n"
+        "class P(BaseModel):\n"
+        "    model_config = ConfigDict(extra='allow')\n"
+    )
+    assert "LIT015" in _codes(tmp_path, src)
+
+
 # --------------------------------------------------------------------------- #
 # Budget integrity: every emittable LIT rule (bar the LIT000 read/parse error) is gated
 # --------------------------------------------------------------------------- #
 
 
 def test_budget_covers_exactly_the_checker_rules():
-    budget = json.loads((_REPO_ROOT / "type-discipline-budget.json").read_text())
+    gate_spec = importlib.util.spec_from_file_location("type_discipline_gate", _REPO_ROOT / "scripts/type_discipline_gate.py")
+    gate = importlib.util.module_from_spec(gate_spec)
+    sys.modules[gate_spec.name] = gate
+    gate_spec.loader.exec_module(gate)
+    budget = gate.effective_budget(json.loads((_REPO_ROOT / "type-discipline-budget.json").read_text()))
     emitted = set(re.findall(r"LIT\d{3}", _MODULE_PATH.read_text(encoding="utf-8"))) - {"LIT000"}
     assert set(budget) == emitted
     for spec in budget.values():

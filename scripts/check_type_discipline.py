@@ -18,7 +18,7 @@ LIT003  noqa suppression without rule codes or without a reason.
 LIT004  pyright/mypy ignore without bracketed codes or without a reason.
         Required shape: `# pyright: ignore[reportArgumentType]  # <reason>`
 LIT005  A `# mutable-ok` / `# cast-ok` / `# guard-ok` / `# kwargs-ok` /
-        `# rebind-ok` / `# writable-ok` / `# comprehension-ok` suppression
+        `# rebind-ok` / `# writable-ok` / `# comprehension-ok` / `# frozen-ok` suppression
         without a reason.
 LIT006  `cast(...)` call. typing.cast is an unchecked assertion (the moral equivalent
         of TypeScript's `as`); it lies to the type checker with zero runtime guarantee.
@@ -92,6 +92,20 @@ LIT014  Comprehension with more than one `for` clause or more than one `if` clau
         marker belongs to the innermost violating comprehension spanning that
         line, and also to any single-line violating comprehension on that line.
 
+LIT015  Pydantic model class that is not provably frozen. Set `model_config =
+        ConfigDict(frozen=True)`, a dict literal with `frozen=True`, an inner
+        `class Config` with `frozen = True`, or the `frozen=True` class keyword.
+        In v2, class keywords override body configuration; the last body config
+        replaces earlier ones. Subclasses inherit the rightmost explicitly
+        configured parent's flag. For pydantic.v1, use legacy Config or class
+        keywords (not model_config), with leftmost parent precedence.
+        Unknown explicit flags/configurations cannot inherit a proven True.
+        Detection tracks BaseModel, RootModel (including generics),
+        LiteLLMPydanticObjectBase, direct import aliases, and source-order
+        same-module descendants in their lexical scopes. Imported custom bases,
+        dynamic configuration, and control-flow resolution are out of scope.
+        Suppress with `# frozen-ok: <reason>` on the class line.
+
 LIT000  Setup failure: a target file could not be read, or contains a syntax error.
         Reported as a violation rather than crashing the run.
 
@@ -115,7 +129,7 @@ from multiprocessing import Pool
 from pathlib import Path
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import NamedTuple
+from typing import Final, NamedTuple
 
 # Mutable collection types, banned in *every* annotation. Name-based, so `dict`,
 # `typing.Dict`, `collections.deque`, and `collections.abc.MutableMapping` all match
@@ -149,6 +163,7 @@ READONLY_QUALIFIER = "ReadOnly"
 # first argument is type syntax, the rest is metadata and never qualifies the field.
 FIELD_QUALIFIER_WRAPPERS = frozenset(("Required", "NotRequired", "Annotated"))
 TYPEDDICT_BASE = "TypedDict"
+PYDANTIC_BASES: Final = frozenset(("BaseModel", "LiteLLMPydanticObjectBase", "RootModel"))
 MIN_REASON_LEN = 3
 
 NOQA_RE = re.compile(
@@ -166,6 +181,7 @@ KWARGS_OK_RE = re.compile(r"#\s*kwargs-ok(?::\s*(?P<reason>.*))?")
 REBIND_OK_RE = re.compile(r"#\s*rebind-ok(?::\s*(?P<reason>.*))?")
 WRITABLE_OK_RE = re.compile(r"#\s*writable-ok(?::\s*(?P<reason>.*))?")
 COMPREHENSION_OK_RE = re.compile(r"#\s*comprehension-ok(?::\s*(?P<reason>.*))?")
+FROZEN_OK_RE: Final = re.compile(r"#\s*frozen-ok(?::\s*(?P<reason>.*))?")
 
 @dataclass(frozen=True, slots=True)
 class _OkToken:
@@ -185,6 +201,7 @@ OK_SUPPRESSIONS: Final[tuple[_OkToken, ...]] = (
     _OkToken("rebind-ok", REBIND_OK_RE, frozenset(("LIT010", "LIT011"))),
     _OkToken("writable-ok", WRITABLE_OK_RE, frozenset(("LIT012",))),
     _OkToken("comprehension-ok", COMPREHENSION_OK_RE, frozenset(("LIT014",))),
+    _OkToken("frozen-ok", FROZEN_OK_RE, frozenset(("LIT015",))),
 )
 
 
@@ -833,6 +850,184 @@ def iter_typeddict_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
         )
 
 
+class _ModelBase(NamedTuple):
+    kind: str
+    frozen: bool | None
+    members: Mapping[str, _ModelBase] = MappingProxyType({})
+
+
+def _imported_name(node: ast.expr, bindings: Mapping[str, _ModelBase | str | None]) -> str | None:
+    if isinstance(node, ast.Name):
+        bound: Final = bindings.get(node.id, node.id)
+        return bound if isinstance(bound, str) else None
+    if isinstance(node, ast.Attribute):
+        prefix: Final = _imported_name(node.value, bindings)
+        return f"{prefix}.{node.attr}" if prefix is not None else None
+    return None
+
+
+def _pydantic_base(node: ast.expr, bindings: Mapping[str, _ModelBase | str | None]) -> _ModelBase | None:
+    base: Final = node.value if isinstance(node, ast.Subscript) else node
+    if isinstance(base, ast.Name) and isinstance(bound := bindings.get(base.id), _ModelBase):
+        return bound
+    if isinstance(base, ast.Attribute) and (owner := _pydantic_base(base.value, bindings)) is not None:
+        return owner.members.get(base.attr)
+    name: Final = _imported_name(base, bindings)
+    if name is None:
+        return None
+    if name.rsplit(".", 1)[-1] == TYPEDDICT_BASE:
+        return _ModelBase("typeddict", None)
+    if name.rsplit(".", 1)[-1] not in PYDANTIC_BASES:
+        return None
+    return _ModelBase("v1" if name.startswith("pydantic.v1.") else "v2", None)
+
+
+def _assigns_name(stmt: ast.stmt, name: str) -> ast.expr | None:
+    value: Final = stmt.value if isinstance(stmt, (ast.Assign, ast.AnnAssign)) else None
+    targets: Final = (
+        stmt.targets if isinstance(stmt, ast.Assign) else (stmt.target,) if isinstance(stmt, ast.AnnAssign) else ()
+    )
+    return value if any(isinstance(target, ast.Name) and target.id == name for target in targets) else None
+
+
+def _literal_true(value: ast.expr) -> bool:
+    return isinstance(value, ast.Constant) and value.value is True
+
+
+def _model_config_frozen(value: ast.expr, bindings: Mapping[str, _ModelBase | str | None]) -> bool | None:
+    """None means absent; an explicit but unknown value cannot prove freezing."""
+    if isinstance(value, ast.Dict):
+        flags: Final = tuple(
+            _model_config_frozen(item, bindings)
+            if key is None
+            else _literal_true(item) if isinstance(key, ast.Constant) else False
+            for key, item in zip(value.keys, value.values)
+            if not isinstance(key, ast.Constant) or key.value == "frozen"
+        )
+    elif isinstance(value, ast.Call) and (_imported_name(value.func, bindings) or "").rsplit(".", 1)[-1] in (
+        "ConfigDict", "dict"
+    ):
+        flags = (
+            *(_model_config_frozen(arg, bindings) for arg in value.args),
+            *(
+                _model_config_frozen(kw.value, bindings) if kw.arg is None else _literal_true(kw.value)
+                for kw in value.keywords if kw.arg in (None, "frozen")
+            ),
+        )
+    else:
+        return False
+    return next((flag for flag in reversed(flags) if flag is not None), None)
+
+
+def _config_class_frozen(node: ast.ClassDef) -> bool | None:
+    flags: Final = tuple(
+        _literal_true(value)
+        for stmt in node.body
+        if (value := _assigns_name(stmt, "frozen")) is not None
+    )
+    return flags[-1] if flags else False if node.bases else None
+
+
+def _class_frozen_override(
+    cls: ast.ClassDef, kind: str, bindings: Mapping[str, _ModelBase | str | None]
+) -> bool | None:
+    keyword_flags: Final = tuple(
+        kw.arg == "frozen" and _literal_true(kw.value) for kw in cls.keywords if kw.arg in (None, "frozen")
+    )
+    if keyword_flags:
+        return keyword_flags[-1]
+    for stmt in reversed(cls.body):
+        config: Final = _assigns_name(stmt, "model_config")
+        if kind == "v2" and config is not None:
+            return _model_config_frozen(config, bindings)
+        if isinstance(stmt, ast.ClassDef) and stmt.name == "Config":
+            return _config_class_frozen(stmt)
+        if _assigns_name(stmt, "Config") is not None:
+            return False
+    return None
+
+
+def _model_base(cls: ast.ClassDef, bindings: Mapping[str, _ModelBase | str | None]) -> _ModelBase | None:
+    parents: Final = tuple(
+        parent for base in cls.bases
+        if (parent := _pydantic_base(base, bindings)) is not None and parent.kind != "plain"
+    )
+    if not parents:
+        return None
+    if any(parent.kind == "typeddict" for parent in parents):
+        return _ModelBase("typeddict", None)
+    kind: Final = parents[0].kind
+    override: Final = _class_frozen_override(cls, kind, bindings)
+    if override is not None:
+        return _ModelBase(kind, override)
+    inherited: Final = next(
+        (parent.frozen for parent in (parents if kind == "v1" else reversed(parents)) if parent.frozen is not None),
+        None,
+    )
+    return _ModelBase(kind, inherited)
+
+
+def _scoped_model_classes(
+    scope: ast.AST,
+    bindings: Mapping[str, _ModelBase | str | None] = MappingProxyType({}),
+    closure: Mapping[str, _ModelBase | str | None] = MappingProxyType({}),
+) -> Iterator[tuple[ast.ClassDef, _ModelBase]]:
+    """Track source-order bindings per lexical scope, never key classes globally by name.
+
+    Bases see the enclosing namespace; nested bodies skip enclosing class namespaces.
+    Control-flow and dynamically constructed bases/configurations are not evaluated.
+    """
+    visible = bindings  # rebind-ok: advance the lexical namespace as definitions are encountered
+    for node, _in_loop in _walk_scope(scope):
+        enclosing: Final = closure if isinstance(scope, ast.ClassDef) else visible
+        if isinstance(node, ast.ClassDef):
+            model: Final = _model_base(node, visible) or _ModelBase("plain", None)
+            nested: Final = tuple(_scoped_model_classes(node, enclosing, enclosing))
+            members: Final = MappingProxyType({cls.name: info for cls, info in nested if cls in node.body})
+            resolved: Final = model._replace(members=members)
+            yield node, resolved
+            yield from nested
+            visible = {**visible, node.name: resolved}
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            local: Final = {**enclosing, **{name: None for name in _function_params(node)}}
+            yield from _scoped_model_classes(node, local, local)
+            visible = {**visible, node.name: None}
+        elif isinstance(node, ast.ImportFrom):
+            imports: Final = {
+                alias.asname or alias.name: f"{node.module}.{alias.name}" for alias in node.names if alias.name != "*"
+            }
+            visible = {**visible, **imports}
+        elif isinstance(node, ast.Import):
+            modules: Final = {
+                alias.asname or alias.name.split(".")[0]: alias.name if alias.asname else alias.name.split(".")[0]
+                for alias in node.names
+            }
+            visible = {**visible, **modules}
+        else:
+            rebound: Final = tuple(_node_bindings(node, False))
+            if rebound:
+                visible = {**visible, **{b.name: None for b in rebound}}
+
+
+def _pydantic_classes(tree: ast.AST) -> Iterator[tuple[ast.ClassDef, _ModelBase]]:
+    return ((cls, info) for cls, info in _scoped_model_classes(tree) if info.kind in ("v1", "v2"))
+
+
+def iter_pydantic_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
+    for cls, model in _pydantic_classes(tree):
+        if model.frozen is True:
+            continue
+        yield Violation(
+            path,
+            cls.lineno,
+            "LIT015",
+            f"pydantic model `{cls.name}` is not provably frozen: any holder may rewrite its "
+            f"fields after validation. Set `model_config = ConfigDict(frozen=True)` "
+            f"(or `class Config: frozen = True` for pydantic.v1; inherited by subclasses) "
+            f"(suppress: `# frozen-ok: <reason>`)",
+        )
+
+
 # --------------------------------------------------------------------------- #
 # Stacked comprehension clauses (LIT014)
 # --------------------------------------------------------------------------- #
@@ -978,6 +1173,7 @@ def check_file(path: Path) -> tuple[Violation, ...]:
                 *iter_final_violations(path, tree),
                 *iter_param_violations(path, tree),
                 *iter_typeddict_violations(path, tree),
+                *iter_pydantic_violations(path, tree),
                 *(v for v, owned in comprehension_violations if owned),
             ),
             suppressions,

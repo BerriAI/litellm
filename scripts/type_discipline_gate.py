@@ -7,8 +7,12 @@ across the whole `litellm` tree and fails when a rule is both over its limit and
 higher than the base it merges into, so a change is blamed for the violations it
 adds, never for drift that already exists in the base.
 
-Rules not present in the budget are ignored, but today every rule the checker
-emits is gated: LIT001 (mutable collection in any annotation), LIT003/LIT004
+Rules not present in the budget are ignored except LIT015 (non-frozen Pydantic
+model), which defaults to limit zero. The current checker counts both the head
+and merge-base trees, so existing models are grandfathered by aggregate count:
+unchanged or lower totals pass, but a net increase fails. Removals can offset
+additions; this does not ban every individual new non-frozen model.
+LIT001 (mutable collection in any annotation), LIT003/LIT004
 (noqa / pyright-mypy ignore without codes or reason), LIT006 (cast), LIT008 (`**kwargs`), LIT009 (inert
 `# type: ignore`, dead syntax while enableTypeIgnoreComments is false), LIT010
 (assignment without a Final declaration; suppress deliberate rebinding with
@@ -31,6 +35,8 @@ to its branch point (the merge-base). A rule absent from the budget at the
 merge-base was seeded on this branch; ``--update`` leaves its limit untouched,
 because the base tree predates the rule and its whole grandfathered count would
 otherwise be misread as "fixed", collapsing the deliberate headroom to zero.
+If LIT015 is missing, ``--update`` seeds its limit at the current actual count;
+subsequent updates ratchet it down just like the other budgeted rules.
 """
 
 import argparse
@@ -41,6 +47,7 @@ import subprocess
 import sys
 import tempfile
 from collections import Counter
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final, NamedTuple
 
@@ -140,18 +147,24 @@ def base_counts(ref: str) -> dict:
         shutil.rmtree(parent, ignore_errors=True)
 
 
-def over_ceiling(head: dict, budget: dict) -> frozenset:
+def effective_budget(budget: Mapping[str, Mapping[str, int]]) -> dict[str, Mapping[str, int]]:
+    return {"LIT015": {"limit": 0}, **budget}
+
+
+def over_ceiling(head: Mapping[str, int], budget: Mapping[str, Mapping[str, int]]) -> frozenset[str]:
     """Rules whose head count already exceeds their limit.
 
     A rule can only breach when it is over its limit, so when none are the base
     comparison cannot change the verdict and the base worktree scan can be skipped.
     """
-    return frozenset(rule for rule, spec in budget.items() if head.get(rule, 0) > spec["limit"])
+    return frozenset(rule for rule, spec in effective_budget(budget).items() if head.get(rule, 0) > spec["limit"])
 
 
-def evaluate(head: dict, base: dict, budget: dict) -> list:
+def evaluate(
+    head: Mapping[str, int], base: Mapping[str, int], budget: Mapping[str, Mapping[str, int]]
+) -> list[Breach]:
     breaches = []
-    for rule, spec in budget.items():
+    for rule, spec in effective_budget(budget).items():
         cap = spec["limit"]
         total = head.get(rule, 0)
         if total > cap and total > base.get(rule, 0):
@@ -202,14 +215,25 @@ def cmd_check(base: str) -> None:
         "`# pyright: ignore[rule]  # <reason>`, `# mutable-ok: <reason>`, "
         "`# cast-ok: <reason>`, `# guard-ok: <reason>`, `# kwargs-ok: <reason>`, "
         "`# rebind-ok: <reason>`, `# writable-ok: <reason>`, "
-        "`# comprehension-ok: <reason>`), or remove an equal "
+        "`# comprehension-ok: <reason>`, `# frozen-ok: <reason>`), or remove an equal "
         "number elsewhere; the ceiling "
-        "is the limit in type-discipline-budget.json."
+        "is the limit in type-discipline-budget.json (LIT015 defaults to zero when absent)."
     )
     raise SystemExit(1)
 
 
-def ratcheted_budget(budget: dict, current: dict, base: dict, seeded: frozenset = frozenset()) -> dict:
+def seed_frozen_model_budget(
+    budget: Mapping[str, Mapping[str, int]], current: Mapping[str, int]
+) -> dict[str, Mapping[str, int]]:
+    return {"LIT015": {"limit": current.get("LIT015", 0)}, **budget}
+
+
+def ratcheted_budget(
+    budget: Mapping[str, Mapping[str, int]],
+    current: Mapping[str, int],
+    base: Mapping[str, int],
+    seeded: frozenset[str] = frozenset(),
+) -> dict[str, dict[str, int]]:
     """Each rule's limit lowered by the violations `current` fixed vs `base`.
 
     `base` is the count at the branch point (the commit this branch diverged
@@ -248,10 +272,11 @@ def cmd_update(base_ref: str) -> None:
     worktree at the branch point (the merge-base with `base_ref`), so a branch's
     fixes tighten its own ceilings by exactly what they cleared since it diverged.
     """
-    budget = json.loads(BUDGET_PATH.read_text())
-    base_point = resolve_base_point(base_ref)
-    seeded = frozenset(budget) - _base_budget_rules(base_point)
-    updated = ratcheted_budget(budget, count_by_rule(head_violations()), base_counts(base_point), seeded)
+    current: Final = count_by_rule(head_violations())
+    budget: Final = seed_frozen_model_budget(json.loads(BUDGET_PATH.read_text()), current)
+    base_point: Final = resolve_base_point(base_ref)
+    seeded: Final = frozenset(budget) - _base_budget_rules(base_point)
+    updated: Final = ratcheted_budget(budget, current, base_counts(base_point), seeded)
     BUDGET_PATH.write_text(json.dumps(updated, indent=2, sort_keys=True) + "\n")
     cleared = sum(budget[rule]["limit"] - updated[rule]["limit"] for rule in updated)
     print(f"Ratcheted LIT-rule limits down by {cleared} violations this branch fixed")
