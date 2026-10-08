@@ -65,7 +65,7 @@ async def handle_elicitation_request(
             _relay_elicitation_to_downstream(params, downstream_session, downstream_capabilities, related_request_id),
             timeout=timeout,
         )
-    except TimeoutError:
+    except asyncio.TimeoutError:
         return ErrorData(code=REQUEST_TIMEOUT, message="MCP elicitation timed out waiting for the downstream client")
     except Exception:
         verbose_logger.warning("MCP elicitation: downstream relay failed")
