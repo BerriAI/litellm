@@ -147,7 +147,7 @@ from litellm.litellm_core_utils.core_helpers import (
     independent_snapshot,
     is_expected_client_error,
 )
-from litellm.litellm_core_utils.duration_parser import subtract_duration
+from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -8111,10 +8111,7 @@ def _as_aware(moment: datetime) -> datetime:
 
 def _reset_window(budget_duration: str, budget_reset_at: datetime) -> tuple[datetime, datetime] | None:
     window_end: Final = _as_aware(budget_reset_at)
-    try:
-        window_start: Final = subtract_duration(window_end, budget_duration)
-    except ValueError:
-        return None
+    window_start: Final = get_budget_window_start(budget_duration, window_end)
     return (window_start, window_end) if window_start < window_end else None
 
 
@@ -8126,6 +8123,8 @@ def _project_within_window(
 ) -> tuple[float, date] | None:
     window_start, window_end = window
     moment: Final = (_as_aware(now) if now is not None else datetime.now(timezone.utc)).astimezone(window_end.tzinfo)
+    if moment < window_start:
+        return None
     elapsed: Final = max(moment - window_start, (window_end - window_start) * MIN_ELAPSED_WINDOW_FRACTION)
     remaining: Final = max(window_end - moment, timedelta(0))
     spend_per_second: Final = current_spend / elapsed.total_seconds()

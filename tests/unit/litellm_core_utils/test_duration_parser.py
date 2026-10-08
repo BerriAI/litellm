@@ -1,13 +1,14 @@
 import unittest
 from datetime import datetime, time, timezone
+from typing import Final
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import litellm.litellm_core_utils.duration_parser as duration_parser
 from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds,
+    get_budget_window_start,
     get_next_standardized_reset_time,
-    subtract_duration,
 )
 
 
@@ -342,40 +343,34 @@ class TestWordFormBudgetDurations(unittest.TestCase):
         self.assertIn("garbage", mock_warning.call_args.args)
 
 
-class TestSubtractDuration(unittest.TestCase):
-    def test_fixed_units_step_back_by_their_length(self):
-        self.assertEqual(
-            subtract_duration(datetime(2024, 1, 18, tzinfo=timezone.utc), "7d"),
-            datetime(2024, 1, 11, tzinfo=timezone.utc),
-        )
-        self.assertEqual(
-            subtract_duration(datetime(2024, 1, 18, tzinfo=timezone.utc), "4h"),
-            datetime(2024, 1, 17, 20, tzinfo=timezone.utc),
-        )
-        self.assertEqual(
-            subtract_duration(datetime(2024, 1, 18, tzinfo=timezone.utc), "weekly"),
-            datetime(2024, 1, 11, tzinfo=timezone.utc),
-        )
+class TestGetBudgetWindowStart(unittest.TestCase):
+    def test_window_start_is_the_previous_reset_on_the_same_schedule(self):
+        created_at: Final = datetime(2024, 10, 1, 0, 30, tzinfo=timezone.utc)
+        durations: Final = "1d 24h daily 7d weekly 2w 10d 30d monthly 1mo 4h 5h 30m 45s 1hr fortnightly".split()
+        for duration in durations:
+            with self.subTest(duration=duration):
+                reset_at = get_next_standardized_reset_time(duration, created_at, "UTC")
+                window_start = get_budget_window_start(duration, reset_at)
+                self.assertLessEqual(window_start, created_at)
+                self.assertEqual(get_next_standardized_reset_time(duration, window_start, "UTC"), reset_at)
 
-    def test_months_step_back_whole_calendar_months(self):
+    def test_thirty_days_spans_the_calendar_month_it_resets_on(self):
         self.assertEqual(
-            subtract_duration(datetime(2024, 3, 1, 9, tzinfo=timezone.utc), "1mo"),
-            datetime(2024, 2, 1, 9, tzinfo=timezone.utc),
-        )
-        self.assertEqual(
-            subtract_duration(datetime(2024, 1, 15, tzinfo=timezone.utc), "2mo"),
-            datetime(2023, 11, 15, tzinfo=timezone.utc),
+            get_budget_window_start("30d", datetime(2024, 3, 1, tzinfo=timezone.utc)),
+            datetime(2024, 2, 1, tzinfo=timezone.utc),
         )
 
     def test_months_clamp_to_the_shorter_month(self):
         self.assertEqual(
-            subtract_duration(datetime(2024, 3, 31, tzinfo=timezone.utc), "1mo"),
+            get_budget_window_start("1mo", datetime(2024, 3, 31, tzinfo=timezone.utc)),
             datetime(2024, 2, 29, tzinfo=timezone.utc),
         )
 
-    def test_invalid_duration_raises(self):
-        with self.assertRaises(ValueError):
-            subtract_duration(datetime(2024, 1, 18, tzinfo=timezone.utc), "fortnightly")
+    def test_unrecognized_duration_is_the_one_day_window_the_scheduler_falls_back_to(self):
+        self.assertEqual(
+            get_budget_window_start("1hr", datetime(2024, 1, 16, tzinfo=timezone.utc)),
+            datetime(2024, 1, 15, tzinfo=timezone.utc),
+        )
 
 
 if __name__ == "__main__":

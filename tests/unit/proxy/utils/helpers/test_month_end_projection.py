@@ -344,11 +344,49 @@ def test_without_duration_keeps_month_end_behavior(monkeypatch):
     assert result[0] == pytest.approx(8.0 + (8.0 / 14) * 16)
 
 
-def test_unparseable_duration_falls_back_to_month_end(monkeypatch):
-    _freeze_today(monkeypatch, date(2024, 1, 15))
-    assert get_projected_spend_over_limit(
+def test_thirty_day_budget_measures_pace_from_the_first_of_the_month():
+    result: Final = get_projected_spend_over_limit(
+        current_spend=1.0,
+        soft_budget_limit=10.0,
+        budget_duration="30d",
+        budget_reset_at=datetime(2024, 11, 1, tzinfo=timezone.utc),
+        now=datetime(2024, 10, 4, tzinfo=timezone.utc),
+    )
+    assert result == (pytest.approx(1.0 + 672 / 72), date(2024, 10, 31))
+
+
+def test_hour_spelling_the_scheduler_resets_at_midnight_does_not_alert_before_midnight():
+    assert (
+        get_projected_spend_over_limit(
+            current_spend=1.0,
+            soft_budget_limit=10.0,
+            budget_duration="1hr",
+            budget_reset_at=UTC_RESET_JAN_16,
+            now=datetime(2024, 1, 15, 22, tzinfo=timezone.utc),
+        )
+        is None
+    )
+
+
+def test_unrecognized_duration_projects_within_the_daily_window_it_resets_on():
+    result: Final = get_projected_spend_over_limit(
         current_spend=8.0,
         soft_budget_limit=10.0,
         budget_duration="fortnightly",
         budget_reset_at=UTC_RESET_JAN_16,
-    ) == get_projected_spend_over_limit(current_spend=8.0, soft_budget_limit=10.0)
+        now=datetime(2024, 1, 15, 12, tzinfo=timezone.utc),
+    )
+    assert result == (16.0, date(2024, 1, 15))
+
+
+def test_reset_more_than_one_window_ahead_does_not_project():
+    assert (
+        get_projected_spend_over_limit(
+            current_spend=9.0,
+            soft_budget_limit=10.0,
+            budget_duration="1d",
+            budget_reset_at=UTC_RESET_JAN_16,
+            now=datetime(2024, 1, 14, 12, tzinfo=timezone.utc),
+        )
+        is None
+    )
