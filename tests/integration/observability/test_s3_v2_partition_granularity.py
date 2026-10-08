@@ -608,6 +608,13 @@ def test_s3_v2_hour_cold_storage_rebuilds_previous_response_id_history_from_the_
     assert len(histories) == 2, histories
     assert f"{marker}-first" in histories[0] and f"{marker}-second" not in histories[0], histories[0]
     assert f"{marker}-first" in histories[1] and f"{marker}-second" in histories[1], histories[1]
+    second_history: Final = object_value(json.loads(histories[1]))
+    messages: Final = second_history["messages"]
+    assert isinstance(messages, list)
+    assert any(
+        isinstance(message, dict) and message.get("role") == "assistant" and "ok" in json.dumps(message.get("content"))
+        for message in messages
+    ), histories[1]
 
 
 def test_s3_v2_audit_logs_follow_the_audit_params_granularity_not_the_request_logs(

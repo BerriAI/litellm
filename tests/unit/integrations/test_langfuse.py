@@ -2197,6 +2197,42 @@ def test_log_event_returns_the_v2_dict_shape_for_the_alerting_trace_id_cache():
     assert returned["generation_id"]
 
 
+@pytest.mark.parametrize(
+    ("metadata", "litellm_trace_id", "expected_trace_id"),
+    [
+        ({"existing_trace_id": "a" * 32, "trace_id": "b" * 32}, "c" * 32, "a" * 32),
+        ({"trace_id": "b" * 32}, "c" * 32, "b" * 32),
+        ({}, "c" * 32, "c" * 32),
+    ],
+)
+def test_langfuse_trace_id_uses_existing_then_metadata_then_litellm(
+    metadata: dict[str, str],
+    litellm_trace_id: str,
+    expected_trace_id: str,
+) -> None:
+    logger, exporter = _steering_logger()
+    fixed_time: Final = datetime.datetime(2025, 1, 1)
+    kwargs: Final = {
+        "call_type": "completion",
+        "litellm_call_id": "trace-precedence-call",
+        "litellm_trace_id": litellm_trace_id,
+        "litellm_params": {"metadata": metadata},
+        "messages": [{"role": "user", "content": "trace precedence"}],
+        "optional_params": {},
+    }
+    response: Final = litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "ok"}}])
+
+    logged: Final = logger.log_event_on_langfuse(
+        kwargs=kwargs,
+        response_obj=response,
+        start_time=fixed_time,
+        end_time=fixed_time,
+    )
+
+    assert logged["trace_id"] == resolve_trace_id(expected_trace_id)
+    assert _span_trace_id(_exported_span(logger, exporter)) == resolve_trace_id(expected_trace_id)
+
+
 def test_parse_langfuse_debug_only_enables_on_true_strings():
     """v4 treats any truthy value as debug=on, so the raw env string "false" would enable debug."""
     assert langfuse_module.parse_langfuse_debug("true") is True
