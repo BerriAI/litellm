@@ -26,6 +26,7 @@ from litellm.proxy._types import (
 from litellm.proxy.management_endpoints.scim.scim_v2 import (
     SCIMRosterSyncError,
     UserProvisionerHelpers,
+    _accounts_named_by_member_values,
     _apply_group_patch_updates,
     _create_user_if_not_exists,
     _extract_group_member_ids,
@@ -52,6 +53,7 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import (
     update_user,
     user_api_key_auth,
 )
+from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
 from litellm.proxy.management_helpers.team_roster_sync import (
     MembersMissing,
     RosterDelta,
@@ -4859,6 +4861,32 @@ def _identity_lookup(*values: str) -> object:
             ]
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_a_push_past_the_chunk_size_reads_accounts_in_slices_and_merges_them(mocker):
+    """Each read binds one parameter per value, so a push over the chunk size reads in
+    slices, and a member named only in the last slice still resolves."""
+    values: Final = tuple(f"member-{index:05d}" for index in range(IN_LIST_CHUNK_SIZE + 1))
+    slice_sizes: list[int] = []
+
+    async def rows_in_slice(where: Mapping[str, object]) -> tuple[LiteLLM_UserTable, ...]:
+        clauses = where["OR"]
+        assert isinstance(clauses, list)
+        criterion = clauses[0]["user_id"]
+        assert isinstance(criterion, dict)
+        user_ids = tuple(criterion["in"])
+        slice_sizes.append(len(user_ids))
+        return tuple(LiteLLM_UserTable(user_id=user_id) for user_id in user_ids)
+
+    prisma_client = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.find_many = AsyncMock(side_effect=rows_in_slice)
+
+    accounts = await _accounts_named_by_member_values(values, prisma_client)
+
+    assert slice_sizes == [IN_LIST_CHUNK_SIZE, 1]
+    assert accounts.named_by(values[0]) == (values[0],)
+    assert accounts.named_by(values[-1]) == (values[-1],)
 
 
 @pytest.mark.asyncio

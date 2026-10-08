@@ -72,6 +72,7 @@ from litellm.proxy.utils import (
     _premium_user_check,
     handle_exception_on_proxy,
 )
+from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE, find_many_in, update_many_in
 from litellm.repositories.table_repositories import (
     InvitationLinkRepository,
     OrganizationMembershipRepository,
@@ -485,13 +486,9 @@ async def _recompute_scim_member_roles(prisma_client: PrismaClient, user_ids: It
     if not ids:
         return
     users: Final = _table(UserRepository(prisma_client))
-    rows: Final = await users.find_many(where={"user_id": {"in": list(ids)}})
+    rows: Final = await find_many_in(users, "user_id", ids)
     team_ids: Final = tuple(dict.fromkeys(chain.from_iterable(row.teams or [] for row in rows)))
-    teams: Final = (
-        await _table(TeamRepository(prisma_client)).find_many(where={"team_id": {"in": list(team_ids)}})
-        if team_ids
-        else ()
-    )
+    teams: Final = await find_many_in(_table(TeamRepository(prisma_client)), "team_id", team_ids)
     alias_of: Final = MappingProxyType({team.team_id: team.team_alias for team in teams})
     default_role: Final = _default_scim_user_role()
     resolved: Final = tuple(
@@ -506,9 +503,12 @@ async def _recompute_scim_member_roles(prisma_client: PrismaClient, user_ids: It
         for row in rows
     )
     for role in dict.fromkeys(role for _, role in resolved):
-        await users.update_many(
-            where={"user_id": {"in": [user_id for user_id, user_role in resolved if user_role == role]}},
+        await update_many_in(
+            users,
+            "user_id",
+            tuple(user_id for user_id, user_role in resolved if user_role == role),
             data={"user_role": role},
+            atomicity="per_chunk_ok",
         )
 
 
@@ -664,28 +664,35 @@ async def _accounts_named_by_member_values(values: Sequence[str], prisma_client:
     """One read of every account the given member values name, by user id, SSO identity or email.
 
     A group push used to look each member up on its own, so a 500-member group was
-    500 scans of an unindexed column before a single row was written.
+    500 scans of an unindexed column before a single row was written. Each read binds
+    one parameter per value in each of its three lists and Postgres caps a statement at
+    32,767 binds, so a push past ``IN_LIST_CHUNK_SIZE`` members reads in slices.
     """
-    if not values:
-        return _NamedAccounts.of(())
-    subjects: Final = list(dict.fromkeys(value.strip() for value in values))
-    rows: Final = await _table(UserRepository(prisma_client)).find_many(
-        where={
-            "OR": [
-                {"user_id": {"in": list(values)}},
-                {"sso_user_id": {"in": subjects}},
-                {"user_email": {"in": subjects, "mode": "insensitive"}},
-            ],
-        },
+    users: Final = _table(UserRepository(prisma_client))
+    starts: Final = range(0, len(values), IN_LIST_CHUNK_SIZE)
+    pages: Final = tuple(
+        [
+            await users.find_many(where=_named_accounts_filter(values[start : start + IN_LIST_CHUNK_SIZE]))
+            for start in starts
+        ]
     )
-    return _NamedAccounts.of(rows)
+    return _NamedAccounts.of(chain.from_iterable(pages))
+
+
+def _named_accounts_filter(values: Sequence[str]) -> Mapping[str, object]:
+    subjects: Final = list(dict.fromkeys(value.strip() for value in values))
+    return {
+        "OR": [
+            {"user_id": {"in": list(values)}},  # bounded-ok: at most IN_LIST_CHUNK_SIZE values
+            {"sso_user_id": {"in": subjects}},  # bounded-ok: at most IN_LIST_CHUNK_SIZE values
+            {"user_email": {"in": subjects, "mode": "insensitive"}},  # bounded-ok: at most IN_LIST_CHUNK_SIZE values
+        ],
+    }
 
 
 async def _scim_managed_team_ids(team_ids: Sequence[str], prisma_client: PrismaClient) -> frozenset[str]:
     """The given ids that name a team the identity provider writes."""
-    if not team_ids:
-        return frozenset()
-    teams: Final = await _table(TeamRepository(prisma_client)).find_many(where={"team_id": {"in": list(team_ids)}})
+    teams: Final = await find_many_in(_table(TeamRepository(prisma_client)), "team_id", team_ids)
     return frozenset(team.team_id for team in teams if _team_metadata_has_scim_provenance(team.metadata))
 
 
@@ -1033,7 +1040,7 @@ async def _get_team_members_display(member_ids: list[str]) -> list[SCIMMember]:
     prisma_client: Final = await _get_prisma_client_or_raise_exception()
     if not member_ids:
         return []
-    rows: Final = await _table(UserRepository(prisma_client)).find_many(where={"user_id": {"in": member_ids}})
+    rows: Final = await find_many_in(_table(UserRepository(prisma_client)), "user_id", member_ids)
     user_of: Final = MappingProxyType({row.user_id: row for row in rows})
     return [
         SCIMMember(value=user.user_id, display=user.user_email or user.user_id, type="User")

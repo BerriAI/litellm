@@ -57,6 +57,8 @@ class _Ledger:
 def _clause_matches(row: Mapping[str, object], field: str, clause: object) -> bool:
     if field == "OR":
         return any(_matches(row, inner) for inner in _FILTERS.validate_python(clause))
+    if field == "AND":
+        return all(_matches(row, inner) for inner in _FILTERS.validate_python(clause))
     if field == "NOT":
         return not _matches(row, _FILTER.validate_python(clause))
     if not isinstance(clause, dict):
