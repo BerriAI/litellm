@@ -36,6 +36,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (
 )
 from litellm.proxy.management_helpers.access_group_team_sync import TEAM_ADVISORY_LOCK_SQL
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.repositories.chunked_in import delete_many_in, find_many_in, update_many_in
 
 if TYPE_CHECKING:
     from prisma import Prisma
@@ -206,7 +207,7 @@ async def _add_members(
 ) -> tuple[Member, ...] | MembersMissing:
     if not user_ids:
         return ()
-    rows: Final = await _user_tx_db(tx).find_many(where={"user_id": {"in": user_ids}})
+    rows: Final = await find_many_in(_user_tx_db(tx), "user_id", user_ids)
     email_of: Final = MappingProxyType({row.user_id: row.user_email for row in rows})
     missing: Final = tuple(user_id for user_id in user_ids if user_id not in email_of)
     if missing:
@@ -219,9 +220,13 @@ async def _add_members(
         ),
         skip_duplicates=True,
     )
-    await _user_tx_db(tx).update_many(
-        where={"user_id": {"in": user_ids}, "NOT": {"teams": {"has": team.team_id}}},
+    await update_many_in(
+        _user_tx_db(tx),
+        "user_id",
+        user_ids,
         data={"teams": {"push": [team.team_id]}},
+        atomicity="caller_transaction",
+        where={"NOT": {"teams": {"has": team.team_id}}},
     )
     return tuple(Member(user_id=user_id, user_email=email_of[user_id], role="user") for user_id in user_ids)
 
@@ -235,13 +240,14 @@ async def _remove_members(
 ) -> _Removal:
     if not user_ids:
         return _Removal(deleted_keys=(), jwt_mapping_cache_keys=())
-    team_rows_of_users: Final[Mapping[str, object]] = {"team_id": team_id, "user_id": {"in": user_ids}}
-    keys: Final = tuple(await _token_tx_db(tx).find_many(where=team_rows_of_users))
+    keys: Final = await find_many_in(_token_tx_db(tx), "user_id", user_ids, where={"team_id": team_id})
     jwt_mapping_cache_keys: Final = await get_jwt_key_mapping_cache_keys_for_tokens(
         hashed_tokens=tuple(key.token for key in keys), prisma_client=prisma_client
     )
     await tx.execute_raw(_DETACH_TEAM_SQL, team_id, list(user_ids))
-    await _membership_tx_db(tx).delete_many(where=team_rows_of_users)
+    await delete_many_in(
+        _membership_tx_db(tx), "user_id", user_ids, atomicity="caller_transaction", where={"team_id": team_id}
+    )
     if keys:
         await _persist_deleted_verification_tokens(
             keys=keys,  # pyright: ignore[reportArgumentType]  # generated row model carries the same columns as LiteLLM_VerificationToken
@@ -250,7 +256,9 @@ async def _remove_members(
             litellm_changed_by=None,
             tx=tx,
         )
-        await _token_tx_db(tx).delete_many(where=team_rows_of_users)
+        await delete_many_in(
+            _token_tx_db(tx), "user_id", user_ids, atomicity="caller_transaction", where={"team_id": team_id}
+        )
     return _Removal(deleted_keys=keys, jwt_mapping_cache_keys=jwt_mapping_cache_keys)
 
 

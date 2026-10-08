@@ -22,7 +22,6 @@ load_dotenv()
 import litellm
 from litellm import (
     AuthenticationError,
-    BadRequestError,
     ModelResponse,
     RateLimitError,
     acompletion,
@@ -818,20 +817,6 @@ def test_openai_chat_completion_call():
     print(f"complete response: {complete_response}")
 
 
-def test_openai_chat_completion_complete_response_call():
-    try:
-        complete_response = completion(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            stream=True,
-            complete_response=True,
-        )
-        print(f"complete response: {complete_response}")
-    except Exception:
-        print(f"error occurred: {traceback.format_exc()}")
-        pass
-
-
 @pytest.mark.parametrize(
     "model",
     [
@@ -925,90 +910,6 @@ def test_openai_stream_options_call_text_completion() -> None:
     assert any(chunk.choices[0].text for chunk in chunks)
 
 
-def test_openai_text_completion_call():
-    try:
-        litellm.set_verbose = True
-        response = completion(
-            model="gpt-3.5-turbo-instruct", messages=messages, stream=True
-        )
-        complete_response = ""
-        start_time = time.time()
-        for idx, chunk in enumerate(response):
-            chunk, finished = streaming_format_tests(idx, chunk)
-            print(f"chunk: {chunk}")
-            complete_response += chunk
-            if finished:
-                break
-            # print(f'complete_chunk: {complete_response}')
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
-        print(f"complete response: {complete_response}")
-    except Exception:
-        print(f"error occurred: {traceback.format_exc()}")
-        pass
-
-
-# # test on together ai completion call - starcoder
-def test_together_ai_completion_call_mistral():
-    try:
-        litellm.set_verbose = False
-        start_time = time.time()
-        response = completion(
-            model="together_ai/mistralai/Mistral-7B-Instruct-v0.2",
-            messages=messages,
-            logger_fn=logger_fn,
-            stream=True,
-        )
-        complete_response = ""
-        print(f"returned response object: {response}")
-        has_finish_reason = False
-        for idx, chunk in enumerate(response):
-            chunk, finished = streaming_format_tests(idx, chunk)
-            has_finish_reason = finished
-            if finished:
-                break
-            complete_response += chunk
-        if has_finish_reason is False:
-            raise Exception("Finish reason not set for last chunk")
-        if complete_response == "":
-            raise Exception("Empty response received")
-        print(f"complete response: {complete_response}")
-    except Exception:
-        print(f"error occurred: {traceback.format_exc()}")
-        pass
-
-
-# # test on together ai completion call - starcoder
-
-
-def test_together_ai_completion_call_starcoder_bad_key():
-    try:
-        api_key = "bad-key"
-        start_time = time.time()
-        response = completion(
-            model="together_ai/bigcode/starcoder",
-            messages=messages,
-            stream=True,
-            api_key=api_key,
-        )
-        complete_response = ""
-        has_finish_reason = False
-        for idx, chunk in enumerate(response):
-            chunk, finished = streaming_format_tests(idx, chunk)
-            has_finish_reason = finished
-            if finished:
-                break
-            complete_response += chunk
-        if has_finish_reason is False:
-            raise Exception("Finish reason not set for last chunk")
-        if complete_response == "":
-            raise Exception("Empty response received")
-        print(f"complete response: {complete_response}")
-    except BadRequestError as e:
-        pass
-    except Exception:
-        print(f"error occurred: {traceback.format_exc()}")
-        pass
 
 
 #### Test Function calling + streaming ####

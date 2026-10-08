@@ -11,7 +11,7 @@ from litellm.caching import DualCache
 from litellm.proxy._types import CallTypes
 from litellm.proxy.openai_files_endpoints.common_utils import (
     BATCH_CREATE_HIDDEN_PARAM,
-    _is_base64_encoded_unified_file_id,
+    is_base64_encoded_unified_file_id,
     encode_file_id_with_model,
 )
 
@@ -365,7 +365,7 @@ async def test_async_post_call_success_hook_for_unified_finetuning_job():
     )
 
     assert isinstance(response, LiteLLMFineTuningJob)
-    assert _is_base64_encoded_unified_file_id(response.id)
+    assert is_base64_encoded_unified_file_id(response.id)
 
 
 @pytest.mark.asyncio
@@ -603,7 +603,7 @@ async def test_output_file_id_preserves_target_model_names_when_model_name_missi
             response=batch,
         )
 
-    decoded_output_file_id = _is_base64_encoded_unified_file_id(
+    decoded_output_file_id = is_base64_encoded_unified_file_id(
         cast(LiteLLMBatch, response).output_file_id
     )
     assert decoded_output_file_id
@@ -691,7 +691,7 @@ async def test_error_file_id_for_failed_batch():
     assert cast(LiteLLMBatch, response).error_file_id is not None
     assert not cast(LiteLLMBatch, response).error_file_id.startswith("error-")
     # Verify it's a base64 encoded managed file ID
-    assert _is_base64_encoded_unified_file_id(
+    assert is_base64_encoded_unified_file_id(
         cast(LiteLLMBatch, response).error_file_id
     )
 
@@ -754,7 +754,7 @@ async def test_async_post_call_success_hook_twice_assert_no_unique_violation():
                 assert task.exception() is None, f"Error: {task.exception()}"
 
             assert isinstance(response, LiteLLMBatch)
-            assert _is_base64_encoded_unified_file_id(response.id)
+            assert is_base64_encoded_unified_file_id(response.id)
 
     # second retrieve batch
     tasks = []
@@ -2762,7 +2762,7 @@ async def test_return_unified_file_id_includes_expires_at():
     assert result.filename == "test.jsonl"
     assert result.bytes == 1234
     assert result.created_at == 1234567890
-    assert _is_base64_encoded_unified_file_id(result.id)
+    assert is_base64_encoded_unified_file_id(result.id)
 
 
 # ============================================================================

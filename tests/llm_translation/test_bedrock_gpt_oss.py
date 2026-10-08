@@ -9,10 +9,6 @@ class TestBedrockGPTOSS(BaseLLMChatTest):
             "model": "bedrock/converse/openai.gpt-oss-20b-1:0",
         }
 
-    def test_tool_call_no_arguments(self, tool_call_no_arguments):
-        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        pass
-
     def test_function_calling_with_tool_response(self):
         """Bedrock GPT-OSS intermittently emits truncated toolUse.input deltas on
         the live endpoint, which makes the inherited live integration test flaky.
@@ -20,13 +16,6 @@ class TestBedrockGPTOSS(BaseLLMChatTest):
         tests/unit/llms/bedrock/chat/test_invoke_handler.py::test_transform_tool_calls_index;
         the GPT-OSS-specific request-body transformation is covered by
         test_function_calling_request_body_gpt_oss below.
-        """
-        pass
-
-
-    def test_prompt_caching(self):
-        """
-        Remove override once we have access to Bedrock prompt caching
         """
         pass
 
