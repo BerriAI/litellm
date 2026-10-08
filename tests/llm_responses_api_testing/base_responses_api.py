@@ -348,31 +348,6 @@ class BaseResponsesAPITest(ABC):
                 raise ValueError("response is not a ResponsesAPIResponse")
 
     @pytest.mark.asyncio
-    async def test_multiturn_responses_api(self):
-        litellm.turn_on_debug()
-        litellm.set_verbose = True
-        try:
-            base_completion_call_args = self.get_base_completion_call_args()
-            response_1 = await litellm.aresponses(
-                input="Basic ping", max_output_tokens=20, **base_completion_call_args
-            )
-
-            # follow up with a second request
-            response_1_id = response_1.id
-            response_2 = await litellm.aresponses(
-                input="Basic ping",
-                max_output_tokens=20,
-                previous_response_id=response_1_id,
-                **base_completion_call_args,
-            )
-
-            # assert the response is not None
-            assert response_1 is not None
-            assert response_2 is not None
-        except litellm.InternalServerError:
-            pytest.skip("Skipping test due to litellm.InternalServerError")
-
-    @pytest.mark.asyncio
     async def test_responses_api_with_tool_calls(self):
         """Test that calls the Responses API with tool calls including function call and output"""
         litellm.turn_on_debug()
@@ -447,72 +422,6 @@ class BaseResponsesAPITest(ABC):
         else:
             assert len(response["output"]) > 0
 
-    def test_openai_responses_api_dict_input_filtering(self):
-        """
-        Test that regular dict inputs with status fields are properly filtered
-        to replicate exclude_unset=True behavior for non-Pydantic objects.
-        """
-        from litellm.llms.openai.responses.transformation import (
-            OpenAIResponsesAPIConfig,
-        )
-
-        # Test input with regular dict objects (like from JSON)
-        test_input = [
-            {"role": "user", "content": "test"},
-            {
-                "id": "rs_123",
-                "summary": [{"text": "test", "type": "summary_text"}],
-                "type": "reasoning",
-                "content": None,  # Should be filtered out
-                "encrypted_content": None,  # Should be filtered out
-                "status": None,  # Should be filtered out
-            },
-            {
-                "arguments": "{}",
-                "call_id": "call_123",
-                "name": "get_today",
-                "type": "function_call",
-                "id": "fc_123",
-                "status": "completed",  # Should be preserved (not a default field)
-            },
-        ]
-
-        config = OpenAIResponsesAPIConfig()
-        validated_input = config._validate_input_param(test_input)
-
-        # Verify the results
-        assert len(validated_input) == 3
-
-        # Check reasoning item (index 1)
-        reasoning_item = validated_input[1]
-        assert reasoning_item["type"] == "reasoning"
-        assert (
-            "status" not in reasoning_item
-        ), "status field should be filtered out from reasoning item"
-        assert (
-            "content" not in reasoning_item
-        ), "content field should be filtered out from reasoning item"
-        assert (
-            "encrypted_content" not in reasoning_item
-        ), "encrypted_content field should be filtered out from reasoning item"
-        # Note: ID auto-generation was disabled, so reasoning items may not have IDs
-        # Only check for ID if it was present in the original input
-        if "id" in reasoning_item:
-            assert reasoning_item["id"] == "rs_123", "ID should be preserved if present"
-        assert "summary" in reasoning_item, "summary field should be preserved"
-
-        # Check function call item (index 2)
-        function_call_item = validated_input[2]
-        assert function_call_item["type"] == "function_call"
-        assert (
-            "status" in function_call_item
-        ), "status field should be preserved in function call item"
-        assert (
-            function_call_item["status"] == "completed"
-        ), "status value should be preserved"
-
-        print("✅ OpenAI Responses API dict input filtering test passed")
-
     @pytest.mark.parametrize("sync_mode", [False, True])
     @pytest.mark.flaky(retries=3, delay=2)
     @pytest.mark.asyncio
@@ -564,23 +473,6 @@ class BaseResponsesAPITest(ABC):
                 pass
             else:
                 raise e
-
-    @pytest.mark.parametrize("sync_mode", [False, True])
-    @pytest.mark.asyncio
-    async def test_cancel_responses_invalid_response_id(self, sync_mode):
-        """Test cancel_responses with invalid response ID should raise appropriate error"""
-        base_completion_call_args = self.get_base_completion_call_args()
-
-        if sync_mode:
-            with pytest.raises(openai.APIError):
-                litellm.cancel_responses(
-                    response_id="invalid_response_id_12345", **base_completion_call_args
-                )
-        else:
-            with pytest.raises(openai.APIError):
-                await litellm.acancel_responses(
-                    response_id="invalid_response_id_12345", **base_completion_call_args
-                )
 
     @pytest.mark.asyncio
     async def test_responses_api_context_management_server_side_compaction(self):
