@@ -238,6 +238,7 @@ class CheckResponsesCost:
         # Mark completed jobs in the database
         if len(completed_jobs) > 0:
             await _managed_object_table(self.prisma_client).update_many(
+                # bounded-ok: at most MAX_OBJECTS_PER_POLL_CYCLE rows per cycle, the find_many take above
                 where={"id": {"in": [job.id for job in completed_jobs]}},
                 data={"status": "completed"},
             )
@@ -247,6 +248,7 @@ class CheckResponsesCost:
 
         if len(expired_jobs) > 0:
             await _managed_object_table(self.prisma_client).update_many(
+                # bounded-ok: at most MAX_OBJECTS_PER_POLL_CYCLE rows per cycle, the find_many take above
                 where={"id": {"in": [job.id for job in expired_jobs]}},
                 data={"status": "stale_expired"},
             )
