@@ -14,7 +14,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import _is_api_route_allowed
-from litellm.proxy.auth.auth_checks_organization import _user_is_org_admin
+from litellm.proxy.auth.auth_checks_organization import user_is_org_admin
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import router as llm_passthrough_router
 
@@ -2946,7 +2946,7 @@ def test_available_roles_accessible_to_non_admin_users(user_role):
     )
 
 
-# ── _user_is_org_admin tests ──────────────────────────────────────────────────
+# ── user_is_org_admin tests ──────────────────────────────────────────────────
 
 
 def _make_org_admin_user(org_id: str) -> LiteLLM_UserTable:
@@ -2967,25 +2967,25 @@ def _make_org_admin_user(org_id: str) -> LiteLLM_UserTable:
 def test_user_is_org_admin_with_organizations_list():
     """Org admin can be identified via the `organizations` list field (used by /user/new)."""
     user_obj = _make_org_admin_user("org-1")
-    assert _user_is_org_admin({"organizations": ["org-1"]}, user_obj) is True
+    assert user_is_org_admin({"organizations": ["org-1"]}, user_obj) is True
 
 
 def test_user_is_org_admin_with_singular_organization_id():
     """Backward-compat: org admin can still be identified via singular `organization_id`."""
     user_obj = _make_org_admin_user("org-1")
-    assert _user_is_org_admin({"organization_id": "org-1"}, user_obj) is True
+    assert user_is_org_admin({"organization_id": "org-1"}, user_obj) is True
 
 
 def test_user_is_org_admin_organizations_list_wrong_org():
     """Non-member of the requested org is not considered an org admin for it."""
     user_obj = _make_org_admin_user("org-2")
-    assert _user_is_org_admin({"organizations": ["org-1"]}, user_obj) is False
+    assert user_is_org_admin({"organizations": ["org-1"]}, user_obj) is False
 
 
 def test_user_is_org_admin_no_org_fields():
     """Returns False when neither `organization_id` nor `organizations` is in the request."""
     user_obj = _make_org_admin_user("org-1")
-    assert _user_is_org_admin({}, user_obj) is False
+    assert user_is_org_admin({}, user_obj) is False
 
 
 def test_non_org_admin_with_organizations_list():
@@ -3002,13 +3002,13 @@ def test_non_org_admin_with_organizations_list():
         user_role=LitellmUserRoles.INTERNAL_USER.value,
         organization_memberships=[membership],
     )
-    assert _user_is_org_admin({"organizations": ["org-1"]}, user_obj) is False
+    assert user_is_org_admin({"organizations": ["org-1"]}, user_obj) is False
 
 
 def test_org_admin_cannot_escalate_to_other_org():
     """Regression: admin of org-A requesting [org-A, org-B] must be rejected."""
     user_obj = _make_org_admin_user("org-A")
-    assert _user_is_org_admin({"organizations": ["org-A", "org-B"]}, user_obj) is False
+    assert user_is_org_admin({"organizations": ["org-A", "org-B"]}, user_obj) is False
 
 
 def test_org_admin_of_multiple_orgs_can_operate_on_both():
@@ -3034,7 +3034,7 @@ def test_org_admin_of_multiple_orgs_can_operate_on_both():
         user_role=LitellmUserRoles.INTERNAL_USER.value,
         organization_memberships=memberships,
     )
-    assert _user_is_org_admin({"organizations": ["org-A", "org-B"]}, user_obj) is True
+    assert user_is_org_admin({"organizations": ["org-A", "org-B"]}, user_obj) is True
 
 
 # ── LIT-4221: /team/update org-context resolution from team_id ────────────────
@@ -3742,7 +3742,7 @@ def test_organization_daily_activity_not_granted_by_org_admin_request_data_branc
     self_managed_routes entry is load-bearing rather than redundant.
 
     Query params do reach request_data, so the reason is not body-vs-query: it
-    is the key name. _user_is_org_admin reads ``organization_id`` (singular) and
+    is the key name. user_is_org_admin reads ``organization_id`` (singular) and
     ``organizations``, while this endpoint's filter is ``organization_ids``
     (plural), and the dashboard's first page load sends no organization filter
     at all. Both shapes are pinned below because renaming the query param would
@@ -3764,11 +3764,11 @@ def test_organization_daily_activity_not_granted_by_org_admin_request_data_branc
     )
 
     # The dashboard's default page load: no organization filter at all.
-    assert not _user_is_org_admin(request_data={}, user_object=user_obj)
+    assert not user_is_org_admin(request_data={}, user_object=user_obj)
     # The filtered load, naming an org this user really does administer.
-    assert not _user_is_org_admin(request_data={"organization_ids": "org-a"}, user_object=user_obj)
+    assert not user_is_org_admin(request_data={"organization_ids": "org-a"}, user_object=user_obj)
     # The key name the helper would have had to see to grant it.
-    assert _user_is_org_admin(request_data={"organization_id": "org-a"}, user_object=user_obj)
+    assert user_is_org_admin(request_data={"organization_id": "org-a"}, user_object=user_obj)
     assert not RouteChecks.check_route_access(
         route="/organization/daily/activity",
         allowed_routes=LiteLLMRoutes.org_admin_only_routes.value,

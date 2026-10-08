@@ -426,7 +426,7 @@ async def test_test_model_connection_loads_config_from_router():
             mock_run_with_timeout,
         ),
         patch(
-            "litellm.proxy.health_endpoints._health_endpoints._update_litellm_params_for_health_check",
+            "litellm.proxy.health_endpoints._health_endpoints.update_litellm_params_for_health_check",
             mock_update_params,
         ),
         patch(
@@ -575,7 +575,7 @@ async def test_test_model_connection_uses_model_info_id_to_disambiguate_duplicat
             mock_run_with_timeout,
         ),
         patch(
-            "litellm.proxy.health_endpoints._health_endpoints._update_litellm_params_for_health_check",
+            "litellm.proxy.health_endpoints._health_endpoints.update_litellm_params_for_health_check",
             mock_update_params,
         ),
         patch(
@@ -677,7 +677,7 @@ async def test_test_model_connection_falls_back_to_deployments_zero_without_id()
             mock_run_with_timeout,
         ),
         patch(
-            "litellm.proxy.health_endpoints._health_endpoints._update_litellm_params_for_health_check",
+            "litellm.proxy.health_endpoints._health_endpoints.update_litellm_params_for_health_check",
             mock_update_params,
         ),
         patch(
@@ -2566,13 +2566,13 @@ def test_no_federation_field_reaches_a_non_admin_health_entry(federation_field: 
     deployment is healthy must learn neither. Both lists that enforce that are derived from the
     same key sets this runs over, so a field added to the funnel without joining either one shows
     up here as a value a non-admin could read."""
-    from litellm.proxy.health_check import _clean_endpoint_data
+    from litellm.proxy.health_check import clean_endpoint_data
     from litellm.proxy.health_endpoints._health_endpoints import (
         _strip_admin_only_fields_from_health_result,
     )
 
     canary = f"CANARY-{federation_field}-VALUE"
-    cleaned = _clean_endpoint_data(
+    cleaned = clean_endpoint_data(
         {"model": "anthropic/claude-sonnet-5", federation_field: canary},
         details=True,
     )
@@ -2591,10 +2591,10 @@ def test_no_federation_secret_reaches_even_an_admin_health_entry(secret_field: s
     token, key, or reference it federates with, so these fields drop at the health-check layer
     ahead of any per-caller stripping. Reading the same set the drop list is built from is what
     catches a new secret-bearing field that was only ever added to the admin-gated half."""
-    from litellm.proxy.health_check import _clean_endpoint_data
+    from litellm.proxy.health_check import clean_endpoint_data
 
     canary = f"CANARY-{secret_field}-VALUE"
-    cleaned = _clean_endpoint_data(
+    cleaned = clean_endpoint_data(
         {"model": "anthropic/claude-sonnet-5", secret_field: canary},
         details=True,
     )
@@ -3364,7 +3364,7 @@ def test_clean_endpoint_data_strips_credentials_keeps_routing_fields():
     layer based on user role, not in the cleaning helper. This guarantees
     proxy admins continue to see those fields in the /health response.
     """
-    from litellm.proxy.health_check import _clean_endpoint_data
+    from litellm.proxy.health_check import clean_endpoint_data
 
     raw = {
         "model": "openai/gpt-4o",
@@ -3374,7 +3374,7 @@ def test_clean_endpoint_data_strips_credentials_keeps_routing_fields():
         "aws_access_key_id": "AKIAEXAMPLE",
     }
 
-    cleaned = _clean_endpoint_data(raw, details=True)
+    cleaned = clean_endpoint_data(raw, details=True)
 
     assert "api_key" not in cleaned
     assert "aws_access_key_id" not in cleaned
@@ -3388,7 +3388,7 @@ def test_clean_endpoint_data_strips_extra_headers_and_aws_session_token():
     `extra_headers` / `headers` / `aws_session_token`. Before the fix these
     were returned in plaintext (api_key was stripped, but these were not).
     """
-    from litellm.proxy.health_check import _clean_endpoint_data
+    from litellm.proxy.health_check import clean_endpoint_data
 
     raw = {
         "model": "openai/gpt-4o",
@@ -3402,7 +3402,7 @@ def test_clean_endpoint_data_strips_extra_headers_and_aws_session_token():
         "aws_session_token": "CANARY_AWS_SESSION_TOKEN_VALUE",
     }
 
-    cleaned = _clean_endpoint_data(raw, details=True)
+    cleaned = clean_endpoint_data(raw, details=True)
 
     assert "extra_headers" not in cleaned
     assert "headers" not in cleaned
@@ -3439,10 +3439,10 @@ def test_clean_endpoint_data_never_displays_credential_fields(credential_field, 
     LIT-6239 / gh-36898: /health entries, healthy and unhealthy alike, must never
     carry credential-bearing litellm_params, with or without details.
     """
-    from litellm.proxy.health_check import _clean_endpoint_data
+    from litellm.proxy.health_check import clean_endpoint_data
 
     canary = f"CANARY-{credential_field}-VALUE"
-    cleaned = _clean_endpoint_data(
+    cleaned = clean_endpoint_data(
         {
             "model": "azure/gpt-5-mini",
             "api_base": "https://example.test/v1",
@@ -4063,9 +4063,9 @@ def test_clean_endpoint_data_keeps_only_json_safe_diagnostics():
     """
     from fastapi.encoders import jsonable_encoder
 
-    from litellm.proxy.health_check import _clean_endpoint_data
+    from litellm.proxy.health_check import clean_endpoint_data
 
-    cleaned = _clean_endpoint_data(
+    cleaned = clean_endpoint_data(
         {
             "model": "bedrock/us.amazon.nova-2-lite-v1:0",
             "custom_llm_provider": "bedrock",

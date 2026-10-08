@@ -678,7 +678,7 @@ def _patch_logging_flags(monkeypatch, needs_wrap=False, needs_per_chunk=False):
     # touching real logging globals.
     monkeypatch.setattr(
         ps.ProxyLogging,
-        "_fire_deferred_stream_logging",
+        "fire_deferred_stream_logging",
         staticmethod(lambda request_data: None),
     )
 

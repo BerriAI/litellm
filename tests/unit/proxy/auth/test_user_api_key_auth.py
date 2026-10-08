@@ -572,7 +572,7 @@ def test_allowed_route_inside_route(user_role, auth_user_id, requested_user_id, 
 
 
 def test_read_request_body():
-    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+    from litellm.proxy.common_utils.http_parsing_utils import read_request_body
     from fastapi import Request
 
     payload = "()" * 1000000
@@ -582,7 +582,7 @@ def test_read_request_body():
         return payload
 
     request.body = return_body
-    result = _read_request_body(request)
+    result = read_request_body(request)
     assert result is not None
 
 
@@ -814,9 +814,9 @@ def test_is_allowed_route():
     ],
 )
 def test_is_user_proxy_admin(user_obj, expected_result):
-    from litellm.proxy.auth.auth_checks import _is_user_proxy_admin
+    from litellm.proxy.auth.auth_checks import is_user_proxy_admin
 
-    assert _is_user_proxy_admin(user_obj) == expected_result
+    assert is_user_proxy_admin(user_obj) == expected_result
 
 
 @pytest.mark.parametrize(
@@ -846,9 +846,9 @@ def test_is_user_proxy_admin(user_obj, expected_result):
     ],
 )
 def test_get_user_role(user_obj, expected_role):
-    from litellm.proxy.auth.user_api_key_auth import _get_user_role
+    from litellm.proxy.auth.auth_checks import get_user_role
 
-    assert _get_user_role(user_obj) == expected_role
+    assert get_user_role(user_obj) == expected_role
 
 
 @pytest.mark.asyncio

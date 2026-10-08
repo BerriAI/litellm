@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import litellm
 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
-    _OPTIONAL_PresidioPIIMasking,
+    OPTIONAL_PresidioPIIMasking,
     PresidioPerRequestConfig,
 )
 from litellm.types.guardrails import PiiEntityType, PiiAction
@@ -24,7 +24,7 @@ async def test_presidio_with_blocked_entities():
         PiiEntityType.EMAIL_ADDRESS: PiiAction.MASK,  # This entity should be masked
     }
 
-    presidio_guardrail = _OPTIONAL_PresidioPIIMasking(
+    presidio_guardrail = OPTIONAL_PresidioPIIMasking(
         pii_entities_config=pii_entities_config,
         presidio_analyzer_api_base=os.environ.get("PRESIDIO_ANALYZER_API_BASE"),
         presidio_anonymizer_api_base=os.environ.get("PRESIDIO_ANONYMIZER_API_BASE"),
@@ -64,7 +64,7 @@ async def test_presidio_pre_call_hook_with_blocked_entities():
         PiiEntityType.EMAIL_ADDRESS: PiiAction.MASK,  # This entity should be masked
     }
 
-    presidio_guardrail = _OPTIONAL_PresidioPIIMasking(
+    presidio_guardrail = OPTIONAL_PresidioPIIMasking(
         pii_entities_config=pii_entities_config,
         presidio_analyzer_api_base=os.environ.get("PRESIDIO_ANALYZER_API_BASE"),
         presidio_anonymizer_api_base=os.environ.get("PRESIDIO_ANONYMIZER_API_BASE"),
@@ -195,10 +195,10 @@ async def test_presidio_pii_masking_logging_output_only_logged_response_guardrai
 
     assert len(litellm.guardrail_name_config_map) == 1
 
-    pii_masking_obj: Optional[_OPTIONAL_PresidioPIIMasking] = None
+    pii_masking_obj: Optional[OPTIONAL_PresidioPIIMasking] = None
     for callback in litellm.callbacks:
         print(f"CALLBACK: {callback}")
-        if isinstance(callback, _OPTIONAL_PresidioPIIMasking):
+        if isinstance(callback, OPTIONAL_PresidioPIIMasking):
             pii_masking_obj = callback
 
     assert pii_masking_obj is not None

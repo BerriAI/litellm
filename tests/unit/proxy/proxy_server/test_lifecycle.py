@@ -33,7 +33,7 @@ from typing_extensions import TypedDict
 import litellm.proxy.proxy_server as ps
 from litellm.proxy.proxy_server import (
     ProxyStartupEvent,
-    _initialize_shared_aiohttp_session,
+    initialize_shared_aiohttp_session,
     _resolve_pydantic_type,
     _resolve_typed_dict_type,
     cleanup_router_config_variables,
@@ -349,7 +349,7 @@ async def test_flush_spend_counters_on_shutdown_logs_and_swallows_commit_errors(
 async def test_initialize_shared_aiohttp_session_returns_client_session():
     from aiohttp import ClientSession
 
-    session = await _initialize_shared_aiohttp_session()
+    session = await initialize_shared_aiohttp_session()
     try:
         observed = {
             "is_client_session": isinstance(session, ClientSession),
@@ -381,7 +381,7 @@ async def test_initialize_shared_aiohttp_session_aiohttp_missing_returns_none_on
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", _raise_for_aiohttp)
-    result = await _initialize_shared_aiohttp_session()
+    result = await initialize_shared_aiohttp_session()
     assert result is None
 
 
@@ -914,7 +914,7 @@ def test_otel_global_provider_published_after_callback_init():
     """
     wrapped = getattr(proxy_startup_event, "__wrapped__", proxy_startup_event)
     source = inspect.getsource(wrapped)
-    init_pos = source.find("_initialize_startup_logging(")
+    init_pos = source.find("ProxyStartupEvent.initialize_startup_logging(")
     publish_pos = source.find("publish_global_otel_v2_provider(")
     assert init_pos != -1, "callback init call not found in proxy_startup_event"
     assert publish_pos != -1, "OTEL global publish not found in proxy_startup_event"
@@ -927,7 +927,7 @@ def test_otel_global_provider_published_after_callback_init():
 
 def test_startup_warns_for_global_budget_without_database(caplog):
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        ProxyStartupEvent._warn_budget_without_db(max_budget=100.0, prisma_client=None)
+        ProxyStartupEvent.warn_budget_without_db(max_budget=100.0, prisma_client=None)
 
     assert "litellm.max_budget=100.0" in caplog.text
     assert "will NOT be enforced" in caplog.text
@@ -936,7 +936,7 @@ def test_startup_warns_for_global_budget_without_database(caplog):
 
 def test_startup_does_not_warn_for_global_budget_with_database(caplog):
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        ProxyStartupEvent._warn_budget_without_db(max_budget=100.0, prisma_client=MagicMock())
+        ProxyStartupEvent.warn_budget_without_db(max_budget=100.0, prisma_client=MagicMock())
 
     assert "litellm.max_budget" not in caplog.text
 
@@ -944,7 +944,7 @@ def test_startup_does_not_warn_for_global_budget_with_database(caplog):
 @pytest.mark.parametrize("max_budget", [0, None])
 def test_startup_does_not_warn_without_global_budget(caplog, max_budget):
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        ProxyStartupEvent._warn_budget_without_db(max_budget=max_budget, prisma_client=None)
+        ProxyStartupEvent.warn_budget_without_db(max_budget=max_budget, prisma_client=None)
 
     assert "litellm.max_budget" not in caplog.text
 
@@ -1001,7 +1001,7 @@ def test_proxy_startup_event_warns_for_global_budget_without_database():
     wrapped = getattr(proxy_startup_event, "__wrapped__", proxy_startup_event)
     source = inspect.getsource(wrapped)
     budget_check_pos = source.find("if prisma_client is not None and litellm.max_budget > 0:")
-    warn_pos = source.find("_warn_budget_without_db(")
+    warn_pos = source.find("warn_budget_without_db(")
     next_startup_section_pos = source.find(
         "await ProxyStartupEvent.initialize_scheduled_background_jobs(",
         budget_check_pos,
@@ -1089,7 +1089,7 @@ async def test_scorer_baseline_upgrade_preserves_existing_routers_and_is_not_ref
 @pytest.mark.asyncio
 async def test_tuning_baseline_waits_for_a_complete_db_model_census(monkeypatch):
     prisma_client = MagicMock()
-    monkeypatch.setattr(ps.proxy_config, "_get_models_from_db", AsyncMock(return_value=None))
+    monkeypatch.setattr(ps.proxy_config, "get_models_from_db", AsyncMock(return_value=None))
 
     result = await ProxyStartupEvent.enforce_heuristic_v1_tuning_baseline(
         prisma_client=prisma_client,

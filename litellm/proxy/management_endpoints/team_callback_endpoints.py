@@ -34,19 +34,24 @@ from litellm.proxy.common_utils.callback_config_validation import (
     conflicting_span_scope_error,
     cross_entry_family_error,
 )
-from litellm.proxy.common_utils.callback_utils import (
-    _CALLBACK_VAR_ENCRYPTED_PREFIX,
+from litellm.proxy.common_utils.callback_utils import (  # noqa: F401  # legacy module exports
+    _CALLBACK_VAR_ENCRYPTED_PREFIX,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    CALLBACK_VAR_ENCRYPTED_PREFIX,
     decrypt_callback_vars,
     encrypt_callback_vars,
     is_sensitive_callback_key,
 )
-from litellm.proxy.litellm_pre_call_utils import (
-    _get_validated_callback_metadata,
+from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy module exports
+    _get_validated_callback_metadata,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     convert_key_logging_metadata_to_callback,
+    get_validated_callback_metadata,
 )
 from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN, team_access_denied
 from litellm.proxy.management.teams.dependencies import get_team_access
-from litellm.proxy.management_endpoints.team_endpoints import _refresh_cached_team
+from litellm.proxy.management_endpoints.team_endpoints import (  # noqa: F401  # legacy module exports
+    _refresh_cached_team,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    refresh_cached_team,
+)
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.repositories.team_repository import TeamRepository
 
@@ -114,7 +119,7 @@ def _mask_sensitive_callback_vars(callbacks: TeamCallbackMetadata) -> None:
         return
     for key in tuple(callbacks.callback_vars):
         value = callbacks.callback_vars[key]
-        if is_sensitive_callback_key(key) or str(value).startswith(_CALLBACK_VAR_ENCRYPTED_PREFIX):
+        if is_sensitive_callback_key(key) or str(value).startswith(CALLBACK_VAR_ENCRYPTED_PREFIX):
             callbacks.callback_vars[key] = _CALLBACK_VARS_REDACTED
 
 
@@ -147,7 +152,7 @@ def _resolve_team_callbacks(team_metadata: object) -> TeamCallbackMetadata:
         for entry in logging_entries if isinstance(logging_entries, list) else ():
             if not isinstance(entry, dict):
                 continue
-            callback = _get_validated_callback_metadata(item=entry, source="team-level read")
+            callback = get_validated_callback_metadata(item=entry, source="team-level read")
             if callback is None:
                 continue
             resolved = convert_key_logging_metadata_to_callback(data=callback, team_callback_settings_obj=resolved)
@@ -399,7 +404,7 @@ async def add_team_callbacks(
             raise _callback_error(400, f"Team id = {team_id} does not exist. Please use a different team id.")
 
         # Without this a newly registered callback stays dormant for existing keys.
-        await _refresh_cached_team(
+        await refresh_cached_team(
             team_row=new_team_row,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
@@ -529,7 +534,7 @@ async def delete_team_callback(
 
         # Request-time callback resolution reads the cached team, so without this
         # the removed callback keeps firing for live keys until the cache expires.
-        await _refresh_cached_team(
+        await refresh_cached_team(
             team_row=updated_team,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
@@ -671,7 +676,7 @@ async def disable_team_logging(
 
         # Request-time callback resolution reads the cached team, so without this
         # the DB says logging is off while live keys keep sending until it expires.
-        await _refresh_cached_team(
+        await refresh_cached_team(
             team_row=updated_team,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,

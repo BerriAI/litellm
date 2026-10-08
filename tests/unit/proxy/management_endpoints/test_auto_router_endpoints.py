@@ -3465,7 +3465,7 @@ async def test_member_billable_preview_checks_and_charges_destination_team(
             raise litellm.BudgetExceededError(current_cost=2, max_budget=1)
 
     checks: Final = AsyncMock(side_effect=check_and_tag)
-    monkeypatch.setattr(auth_module, "_run_centralized_common_checks", checks)
+    monkeypatch.setattr(auth_module, "run_centralized_common_checks", checks)
     http_request: Final = Request(
         {
             "type": "http",

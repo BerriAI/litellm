@@ -580,7 +580,7 @@ async def test_custom_passthrough_predict_path_logs_via_generic_handler():
     )
 
     handler = PassThroughEndpointLogging()
-    handler._handle_logging = AsyncMock()
+    handler.handle_logging = AsyncMock()
 
     mock_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
     mock_logging_obj.model_call_details = {}
@@ -612,8 +612,8 @@ async def test_custom_passthrough_predict_path_logs_via_generic_handler():
         )
 
     mock_vertex_handler.assert_not_called()
-    handler._handle_logging.assert_awaited_once()
-    logged_object = handler._handle_logging.call_args.kwargs["standard_logging_response_object"]
+    handler.handle_logging.assert_awaited_once()
+    logged_object = handler.handle_logging.call_args.kwargs["standard_logging_response_object"]
     assert logged_object == {"response": '{"forecast": [1, 2, 3]}'}
 
 
@@ -1073,7 +1073,7 @@ async def test_pass_through_success_handler_with_cost_per_request():
     mock_logging_obj.model_call_details = {}
 
     # Mock the _handle_logging method to capture the call
-    handler._handle_logging = AsyncMock()
+    handler.handle_logging = AsyncMock()
 
     # Mock httpx response
     mock_response = MagicMock(spec=httpx.Response)
@@ -1108,8 +1108,8 @@ async def test_pass_through_success_handler_with_cost_per_request():
     assert mock_logging_obj.model_call_details["response_cost"] == 1.25
 
     # Verify that _handle_logging was called with the correct kwargs
-    handler._handle_logging.assert_called_once()
-    call_kwargs = handler._handle_logging.call_args[1]
+    handler.handle_logging.assert_called_once()
+    call_kwargs = handler.handle_logging.call_args[1]
     assert call_kwargs["response_cost"] == 1.25
 
 
@@ -3913,11 +3913,11 @@ async def _drive_pass_through_block(raised_exception):
         patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
         patch(f"{_PT_MODULE}.verbose_proxy_logger", logger),
         patch(
-            f"{_PT_MODULE}._read_request_body",
+            f"{_PT_MODULE}.read_request_body",
             new_callable=AsyncMock,
             return_value={},
         ),
-        patch(f"{_PT_MODULE}._safe_get_request_headers", return_value={}),
+        patch(f"{_PT_MODULE}.safe_get_request_headers", return_value={}),
         patch(
             "litellm.proxy.pass_through_endpoints.passthrough_guardrails."
             "PassthroughGuardrailHandler.collect_guardrails",
@@ -6708,7 +6708,7 @@ def _passthrough_kwargs_for_reservation(
 async def _track_cost_for_passthrough_kwargs(kwargs: dict) -> AsyncMock:
     from datetime import datetime
 
-    from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+    from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
 
     callback_kwargs = {
         **kwargs,
@@ -6731,7 +6731,7 @@ async def _track_cost_for_passthrough_kwargs(kwargs: dict) -> AsyncMock:
         mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
         mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
 
-        await _ProxyDBLogger()._PROXY_track_cost_callback(
+        await ProxyDBLogger()._PROXY_track_cost_callback(
             kwargs=callback_kwargs,
             completion_response=None,
             start_time=datetime.now(),
@@ -7033,10 +7033,10 @@ async def test_user_defined_passthrough_is_neither_tracked_nor_enforced(metadata
 
     from litellm.caching.caching import DualCache
     from litellm.proxy.auth.auth_utils import get_model_from_request
-    from litellm.proxy.hooks.model_max_budget_limiter import _PROXY_VirtualKeyModelMaxBudgetLimiter
+    from litellm.proxy.hooks.model_max_budget_limiter import PROXY_VirtualKeyModelMaxBudgetLimiter
 
     budget: Final = {"managed-model": {"budget_limit": 0.1, "time_period": "1d"}}
-    limiter: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(DualCache())
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(DualCache())
     auth: Final = UserAPIKeyAuth(
         api_key="custom-key", token="custom-key", team_id="shared-team", team_model_max_budget=budget,
     )

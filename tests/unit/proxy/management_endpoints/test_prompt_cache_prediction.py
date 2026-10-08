@@ -13,8 +13,8 @@ import litellm
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body, _safe_set_request_parsed_body
-from litellm.proxy.hooks.parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
+from litellm.proxy.common_utils.http_parsing_utils import read_request_body, safe_set_request_parsed_body
+from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.llms.anthropic.prompt_cache_prediction import PromptPrefix, cache_scope, parse_prompt
 from litellm.proxy.hooks.prompt_cache_prediction import (
     CacheObservation,
@@ -224,7 +224,7 @@ def _app(
     if caller is not None:
         usage_cache: Final = InternalUsageCache(cache)
         configured_limiter: Final = (
-            _PROXY_MaxParallelRequestsHandler_v3(usage_cache) if isinstance(limiter, str) else limiter
+            PROXY_MaxParallelRequestsHandler_v3(usage_cache) if isinstance(limiter, str) else limiter
         )
         monkeypatch.setattr(proxy_server, "proxy_logging_obj", _ProxyLogging(usage_cache, configured_limiter))
         app.dependency_overrides[endpoint.user_api_key_auth] = lambda: caller
@@ -384,7 +384,7 @@ async def test_missing_or_unsupported_limiter_returns_unknown_before_counting(
 @pytest.mark.asyncio
 async def test_occupied_parallel_capacity_rejects_before_provider_count(monkeypatch: pytest.MonkeyPatch) -> None:
     cache: Final = DualCache()
-    limiter: Final = _PROXY_MaxParallelRequestsHandler_v3(InternalUsageCache(cache))
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(InternalUsageCache(cache))
     caller: Final = UserAPIKeyAuth(api_key=_CALLER, max_parallel_requests=1)
     app: Final = _app(monkeypatch, cache, caller=caller, counts=_unexpected_count, limiter=limiter)
     async with limiter.request_capacity(caller, "opus"):
@@ -428,8 +428,8 @@ async def test_each_count_preserves_auth_cached_request_tag_limits(
         return await Counts()(model, api_key, body)
 
     async def authenticated_request(request: Request) -> UserAPIKeyAuth:
-        data: Final = await _read_request_body(request)
-        _safe_set_request_parsed_body(request, {**data, metadata_key: {"tags": ["cache-cost"]}})
+        data: Final = await read_request_body(request)
+        safe_set_request_parsed_body(request, {**data, metadata_key: {"tags": ["cache-cost"]}})
         return caller
 
     app: Final = _app(monkeypatch, DualCache(), caller=caller, counts=count)

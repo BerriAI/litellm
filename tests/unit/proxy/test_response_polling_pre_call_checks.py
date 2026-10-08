@@ -35,9 +35,7 @@ class TestSkipPreCallLogic:
         mock_proxy_logging.during_call_hook = AsyncMock()
 
         with (
-            patch.object(
-                processor, "common_processing_pre_call_logic", new_callable=AsyncMock
-            ) as mock_pre_call,
+            patch.object(processor, "common_processing_pre_call_logic", new_callable=AsyncMock) as mock_pre_call,
             patch(
                 "litellm.proxy.common_request_processing.route_request",
                 new_callable=AsyncMock,
@@ -119,7 +117,7 @@ class TestPollingEndpointPreCallGuard:
         generate_polling_id_mock = MagicMock(return_value="litellm_poll_test")
 
         proxy_server_patches = {
-            "litellm.proxy.proxy_server._read_request_body": AsyncMock(
+            "litellm.proxy.proxy_server.read_request_body": AsyncMock(
                 return_value={"model": "gpt-4", "background": True}
             ),
             "litellm.proxy.proxy_server.general_settings": {},
@@ -155,15 +153,11 @@ class TestPollingEndpointPreCallGuard:
             ),
             patch.object(
                 ProxyBaseLLMRequestProcessing,
-                "_handle_llm_api_exception",
+                "handle_llm_api_exception",
                 new_callable=AsyncMock,
-                return_value=HTTPException(
-                    status_code=429, detail="Rate limit exceeded"
-                ),
+                return_value=HTTPException(status_code=429, detail="Rate limit exceeded"),
             ),
-            patch.object(
-                ResponsePollingHandler, "generate_polling_id", generate_polling_id_mock
-            ),
+            patch.object(ResponsePollingHandler, "generate_polling_id", generate_polling_id_mock),
             # Prevent background task from running (avoids noise from incomplete mocks)
             patch("asyncio.create_task"),
             patch.object(

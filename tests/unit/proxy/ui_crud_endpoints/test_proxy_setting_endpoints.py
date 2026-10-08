@@ -445,7 +445,7 @@ class TestProxySettingEndpoints:
 
         monkeypatch.setattr(
             proxy_config,
-            "_decrypt_and_set_db_env_variables",
+            "decrypt_and_set_db_env_variables",
             lambda environment_variables: environment_variables,
         )
 
@@ -655,7 +655,7 @@ class TestProxySettingEndpoints:
 
         monkeypatch.setattr(
             proxy_config,
-            "_encrypt_env_variables",
+            "encrypt_env_variables",
             lambda environment_variables: environment_variables,
         )
 
@@ -739,7 +739,7 @@ class TestProxySettingEndpoints:
 
         monkeypatch.setattr(
             proxy_config,
-            "_encrypt_env_variables",
+            "encrypt_env_variables",
             lambda environment_variables: environment_variables,
         )
 
@@ -806,7 +806,7 @@ class TestProxySettingEndpoints:
 
         monkeypatch.setattr(
             proxy_config,
-            "_encrypt_env_variables",
+            "encrypt_env_variables",
             lambda environment_variables: environment_variables,
         )
 
@@ -874,7 +874,7 @@ class TestProxySettingEndpoints:
 
         monkeypatch.setattr(
             proxy_config,
-            "_encrypt_env_variables",
+            "encrypt_env_variables",
             lambda environment_variables: environment_variables,
         )
 
@@ -953,7 +953,7 @@ class TestProxySettingEndpoints:
 
         monkeypatch.setattr(
             proxy_config,
-            "_encrypt_env_variables",
+            "encrypt_env_variables",
             lambda environment_variables: environment_variables,
         )
 
@@ -1024,7 +1024,7 @@ class TestProxySettingEndpoints:
 
         monkeypatch.setattr(
             proxy_config,
-            "_encrypt_env_variables",
+            "encrypt_env_variables",
             lambda environment_variables: environment_variables,
         )
 
@@ -1092,7 +1092,7 @@ class TestProxySettingEndpoints:
 
         monkeypatch.setattr(
             proxy_config,
-            "_encrypt_env_variables",
+            "encrypt_env_variables",
             lambda environment_variables: environment_variables,
         )
 
@@ -1964,7 +1964,7 @@ class TestProxySettingEndpoints:
 
         from litellm.proxy.proxy_server import proxy_config
 
-        monkeypatch.setattr(proxy_config, "_encrypt_env_variables", mock_encrypt)
+        monkeypatch.setattr(proxy_config, "encrypt_env_variables", mock_encrypt)
 
         # New SSO settings to save
         new_sso_settings = {
@@ -2043,7 +2043,7 @@ class TestProxySettingEndpoints:
 
         monkeypatch.setattr(
             proxy_config,
-            "_encrypt_env_variables",
+            "encrypt_env_variables",
             lambda environment_variables: environment_variables,
         )
 
@@ -2092,7 +2092,7 @@ class TestProxySettingEndpoints:
 
         monkeypatch.setattr(
             proxy_config,
-            "_encrypt_env_variables",
+            "encrypt_env_variables",
             lambda environment_variables: environment_variables,
         )
 
@@ -2127,7 +2127,7 @@ class TestProxySettingEndpoints:
         from litellm.proxy.proxy_server import proxy_config
 
         monkeypatch.setattr(
-            proxy_config, "_decrypt_and_set_db_env_variables", mock_decrypt_and_set
+            proxy_config, "decrypt_and_set_db_env_variables", mock_decrypt_and_set
         )
 
         response = client.get("/get/sso_settings")
@@ -2212,7 +2212,7 @@ class TestProxySettingEndpoints:
             return environment_variables
 
         monkeypatch.setattr(
-            proxy_config, "_decrypt_and_set_db_env_variables", mock_decrypt
+            proxy_config, "decrypt_and_set_db_env_variables", mock_decrypt
         )
 
         response = client.get("/get/sso_settings")
@@ -2257,7 +2257,7 @@ class TestProxySettingEndpoints:
 
         monkeypatch.setattr(
             proxy_config,
-            "_encrypt_env_variables",
+            "encrypt_env_variables",
             lambda environment_variables: environment_variables,
         )
 
@@ -2309,7 +2309,7 @@ class TestProxySettingEndpoints:
         )
         monkeypatch.setattr(
             proxy_config,
-            "_decrypt_and_set_db_env_variables",
+            "decrypt_and_set_db_env_variables",
             lambda environment_variables: environment_variables,
         )
 
@@ -2431,7 +2431,7 @@ class TestProxySettingEndpoints:
 
         monkeypatch.setattr(
             proxy_config,
-            "_decrypt_and_set_db_env_variables",
+            "decrypt_and_set_db_env_variables",
             lambda environment_variables: environment_variables,
         )
 
@@ -2581,7 +2581,7 @@ def test_update_sso_settings_writes_redacted_audit_log(mock_proxy_config, monkey
     monkeypatch.setattr(litellm, "store_audit_logs", True)
     monkeypatch.setattr(
         proxy_server_module.proxy_config,
-        "_encrypt_env_variables",
+        "encrypt_env_variables",
         lambda environment_variables: environment_variables,
     )
 
@@ -2653,14 +2653,14 @@ def test_update_sso_settings_audit_captures_redacted_before_snapshot(
     monkeypatch.setattr(litellm, "store_audit_logs", True)
     monkeypatch.setattr(
         proxy_server_module.proxy_config,
-        "_encrypt_env_variables",
+        "encrypt_env_variables",
         lambda environment_variables: environment_variables,
     )
     # Pretend the stored value is already plaintext for the test (production
     # decrypts via Fernet); the audit helper still has to redact it.
     monkeypatch.setattr(
         proxy_server_module.proxy_config,
-        "_decrypt_db_variables",
+        "decrypt_db_variables",
         lambda variables_dict: dict(variables_dict),
     )
 
@@ -2934,7 +2934,7 @@ def test_update_ui_theme_settings_writes_audit_log(mock_proxy_config, monkeypatc
     monkeypatch.setattr(litellm, "store_audit_logs", True)
     monkeypatch.setattr(
         proxy_server_module.proxy_config,
-        "_encrypt_env_variables",
+        "encrypt_env_variables",
         lambda environment_variables: environment_variables,
     )
 

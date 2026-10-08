@@ -22,7 +22,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    _PROXY_MaxParallelRequestsHandler_v3,
+    PROXY_MaxParallelRequestsHandler_v3,
 )
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.mcp import MCPAuth, MCPTransport
@@ -294,7 +294,7 @@ def _catalog_case(method):
 
 def _mcp_rate_limited_proxy_logging() -> ProxyLogging:
     proxy_logging: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
-    proxy_logging.proxy_hook_mapping["parallel_request_limiter"] = _PROXY_MaxParallelRequestsHandler_v3(
+    proxy_logging.proxy_hook_mapping["parallel_request_limiter"] = PROXY_MaxParallelRequestsHandler_v3(
         internal_usage_cache=InternalUsageCache(DualCache())
     )
     return proxy_logging
@@ -324,7 +324,7 @@ async def test_mcp_server_rpm_limits_every_catalog_operation(operation: str) -> 
     )
     caller: Final = UserAPIKeyAuth(api_key=hash_token("sk-catalog-rpm"))
     operation_to_manager_method: Final = {
-        "tools/list": "_get_tools_from_server",
+        "tools/list": "get_tools_from_server",
         "prompts/list": "get_prompts_from_server",
         "resources/list": "get_resources_from_server",
         "resources/templates/list": "get_resource_templates_from_server",
@@ -433,7 +433,7 @@ async def test_tools_call_warmup_does_not_consume_mcp_server_rpm() -> None:
         patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
         patch.object(operations.global_mcp_server_manager, "server_exposes_tool", return_value=False),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
-        patch.object(operations.global_mcp_server_manager, "_get_tools_from_server", upstream),
+        patch.object(operations.global_mcp_server_manager, "get_tools_from_server", upstream),
     ):
         await operations._list_tools_before_first_call(
             server=server,
@@ -502,8 +502,8 @@ async def test_tools_call_pre_call_hook_rejection_does_not_enforce_mcp_server_rp
     )
     rate_limit_error: Final = ProxyRateLimitError(detail="ordinary key rate limit")
     proxy_logging: Final = MagicMock()
-    proxy_logging._create_mcp_request_object_from_kwargs.return_value = {}
-    proxy_logging._convert_mcp_to_llm_format.return_value = {}
+    proxy_logging.create_mcp_request_object_from_kwargs.return_value = {}
+    proxy_logging.convert_mcp_to_llm_format.return_value = {}
     proxy_logging.pre_call_hook = AsyncMock(side_effect=rate_limit_error)
     proxy_logging.enforce_mcp_server_rate_limits = AsyncMock()
 
@@ -714,7 +714,7 @@ async def test_tool_listing_returns_empty_result_without_dispatch_for_unavailabl
     upstream = AsyncMock()
     with (
         patch.object(operations, "_get_allowed_mcp_servers", allowed),
-        patch.object(operations.global_mcp_server_manager, "_get_tools_from_server", upstream),
+        patch.object(operations.global_mcp_server_manager, "get_tools_from_server", upstream),
     ):
         result = await GatewayOperations().execute(ListToolsRequest(), prepare_context())
     assert result.tools == []
@@ -1142,7 +1142,7 @@ async def test_list_mcp_tools_records_the_catalog_only_when_asked(
     upstream = [MCPTool(name="echo", description="Echo text back", inputSchema={"type": "object"})]
     with (
         patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
-        patch.object(manager, "_create_mcp_client", AsyncMock(return_value=object())),
+        patch.object(manager, "create_mcp_client", AsyncMock(return_value=object())),
         patch.object(manager, "_fetch_tools_with_timeout", AsyncMock(return_value=upstream)),
         patch.dict(manager.tool_name_to_mcp_server_name_mapping),
     ):

@@ -228,7 +228,7 @@ async def _check_summary_model_access(
     try:
         from litellm.proxy._types import ProxyException
         from litellm.proxy.auth.auth_checks import (
-            _can_object_call_model,
+            can_object_call_model,
             can_project_access_model,
             can_user_call_model,
             get_project_object,
@@ -258,7 +258,7 @@ async def _check_summary_model_access(
         if not models:
             continue
         try:
-            _can_object_call_model(
+            can_object_call_model(
                 model=summary_model,
                 llm_router=llm_router,
                 models=models,
@@ -370,7 +370,7 @@ async def _check_summary_model_access(
         )
         if member_allowed_models:
             try:
-                _can_object_call_model(
+                can_object_call_model(
                     model=summary_model,
                     llm_router=llm_router,
                     models=list(member_allowed_models),
@@ -558,7 +558,7 @@ async def _check_summary_model_rate_limit(
     limiter: Final[object] = get_proxy_hook("parallel_request_limiter") if get_proxy_hook is not None else None
     should_rate_limit_check: Final[_ShouldRateLimit | None] = getattr(limiter, "should_rate_limit", None)
     create_descriptors: Final[_CreateRateLimitDescriptors | None] = getattr(
-        limiter, "_create_rate_limit_descriptors", None
+        limiter, "create_rate_limit_descriptors", None
     )
     add_team_descriptor: Final[_AddModelRateLimitDescriptor | None] = getattr(
         limiter, "_add_team_model_rate_limit_descriptor_from_metadata", None

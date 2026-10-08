@@ -639,7 +639,7 @@ class TestEncodeUiSessionJwt:
         from unittest.mock import MagicMock
 
         from litellm.proxy._experimental.mcp_server.byok_oauth_endpoints import (
-            _user_id_from_session_cookie,
+            user_id_from_session_cookie,
         )
         from litellm.proxy.auth.login_utils import encode_ui_session_jwt
 
@@ -649,7 +649,7 @@ class TestEncodeUiSessionJwt:
         request = MagicMock()
         request.cookies = {"token": token}
         with patch("litellm.proxy.proxy_server.master_key", "sk-master-for-tests"):
-            assert _user_id_from_session_cookie(request) == "cornell-user"
+            assert user_id_from_session_cookie(request) == "cornell-user"
 
 
 def _throttle(

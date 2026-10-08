@@ -493,7 +493,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         return healthy_deployments
 
     @with_service_target("model_budgets")
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         """
         Track spend for virtual key + model in DualCache
 
@@ -627,3 +627,6 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             key=marker_key, value=1, ttl=ttl_seconds, refresh_ttl=True
         )
         return polls == 1
+
+
+PROXY_VirtualKeyModelMaxBudgetLimiter = _PROXY_VirtualKeyModelMaxBudgetLimiter

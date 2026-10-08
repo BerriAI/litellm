@@ -6,7 +6,10 @@ from fastapi.responses import ORJSONResponse
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    read_request_body,
+)
 from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
 
 router: Final = APIRouter(
@@ -42,7 +45,7 @@ async def google_generate_content(
         version,
     )
 
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     if "model" not in data:
         data["model"] = model_name
 
@@ -67,7 +70,7 @@ async def google_generate_content(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -103,7 +106,7 @@ async def google_stream_generate_content(
         version,
     )
 
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     if "model" not in data:
         data["model"] = model_name
     data["stream"] = True
@@ -132,7 +135,7 @@ async def google_stream_generate_content(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -166,10 +169,10 @@ async def google_count_tokens(request: Request, model_name: str):
     ```
     """
     from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
-    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+    from litellm.proxy.common_utils.http_parsing_utils import read_request_body
     from litellm.proxy.proxy_server import token_counter as internal_token_counter
 
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     contents: Final = data.get("contents", [])
     # Create TokenCountRequest for the internal endpoint
     from litellm.proxy._types import TokenCountRequest
@@ -268,7 +271,7 @@ async def create_interaction(
         version,
     )
 
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
 
     # Default to gemini provider for interactions
     if "custom_llm_provider" not in data:
@@ -295,7 +298,7 @@ async def create_interaction(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -363,7 +366,7 @@ async def get_interaction(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -431,7 +434,7 @@ async def delete_interaction(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -499,7 +502,7 @@ async def cancel_interaction(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,

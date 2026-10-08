@@ -19,7 +19,7 @@ from litellm.constants import BATCH_TPD_WINDOW_SECONDS
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.batch_rate_limiter import BatchFileUsage
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    _PROXY_MaxParallelRequestsHandler_v3,
+    PROXY_MaxParallelRequestsHandler_v3,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
 
@@ -34,7 +34,7 @@ class _Clock:
 
 def _make_limiters(clock: _Clock | None = None):
     internal_usage_cache = InternalUsageCache(dual_cache=DualCache())
-    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=internal_usage_cache, time_provider=clock)
+    rate_limiter = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=internal_usage_cache, time_provider=clock)
     batch_limiter = rate_limiter._get_batch_rate_limiter()
     assert batch_limiter is not None
     return internal_usage_cache, rate_limiter, batch_limiter
@@ -252,7 +252,7 @@ def test_tpd_only_key_is_not_skipped_as_having_no_limits():
 def test_online_descriptors_ignore_tpd_limit():
     _internal_usage_cache, rate_limiter, _batch_limiter = _make_limiters()
     api_key = hash_token("online-key")
-    descriptors = rate_limiter._create_rate_limit_descriptors(
+    descriptors = rate_limiter.create_rate_limit_descriptors(
         user_api_key_dict=UserAPIKeyAuth(api_key=api_key, rpm_limit=5, tpd_limit=100, team_id="t", team_tpd_limit=9),
         data={"model": "gpt-4o"},
         rpm_limit_type=None,

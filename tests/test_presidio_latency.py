@@ -3,7 +3,7 @@ import aiohttp
 import pytest
 from unittest.mock import MagicMock, patch
 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
-    _OPTIONAL_PresidioPIIMasking,
+    OPTIONAL_PresidioPIIMasking,
 )
 
 
@@ -14,7 +14,7 @@ async def test_sanity_presidio_session_reuse_main_thread():
     Verify that Presidio guardrail reuses sessions in the main thread.
     This ensures we don't break existing session pooling functionality.
     """
-    presidio = _OPTIONAL_PresidioPIIMasking(
+    presidio = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         presidio_analyzer_api_base="http://mock-analyzer",
         presidio_anonymizer_api_base="http://mock-anonymizer",
@@ -28,9 +28,7 @@ async def test_sanity_presidio_session_reuse_main_thread():
         session_creations += 1
         original_init(self, *args, **kwargs)
 
-    with patch.object(
-        aiohttp.ClientSession, "__init__", side_effect=mocked_init, autospec=True
-    ):
+    with patch.object(aiohttp.ClientSession, "__init__", side_effect=mocked_init, autospec=True):
         for _ in range(10):
             async with presidio._get_session_iterator() as session:
                 pass
@@ -51,7 +49,7 @@ async def test_bug_presidio_session_explosion_background_thread_causes_latency()
     """
     import threading
 
-    presidio = _OPTIONAL_PresidioPIIMasking(
+    presidio = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         presidio_analyzer_api_base="http://mock-analyzer",
         presidio_anonymizer_api_base="http://mock-anonymizer",
@@ -68,9 +66,7 @@ async def test_bug_presidio_session_explosion_background_thread_causes_latency()
         session_creations += 1
         original_init(self, *args, **kwargs)
 
-    with patch.object(
-        aiohttp.ClientSession, "__init__", side_effect=mocked_init, autospec=True
-    ):
+    with patch.object(aiohttp.ClientSession, "__init__", side_effect=mocked_init, autospec=True):
         for _ in range(10):
             async with presidio._get_session_iterator() as session:
                 pass

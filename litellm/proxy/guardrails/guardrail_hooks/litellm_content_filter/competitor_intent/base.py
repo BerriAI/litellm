@@ -31,17 +31,23 @@ def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", t)
 
 
-def _word_boundary_match(text: str, token: str) -> bool:
+def word_boundary_match(text: str, token: str) -> bool:
     """True if token appears as a word in text."""
     return bool(re.search(r"\b" + re.escape(token) + r"\b", text))
 
 
-def _count_signals(text: str, patterns: list[str]) -> int:
+_word_boundary_match: Final = word_boundary_match
+
+
+def count_signals(text: str, patterns: list[str]) -> int:
     """Count how many of the patterns appear in text."""
     return sum(1 for p in patterns if re.search(p, text, re.IGNORECASE))
 
 
-def _compile_marker(pattern: str | None) -> Pattern[str] | None:
+_count_signals: Final = count_signals
+
+
+def compile_marker(pattern: str | None) -> Pattern[str] | None:
     """Compile optional regex string to a pattern."""
     if not pattern or not pattern.strip():
         return None
@@ -49,6 +55,9 @@ def _compile_marker(pattern: str | None) -> Pattern[str] | None:
         return re.compile(pattern, re.IGNORECASE)
     except re.error:
         return None
+
+
+_compile_marker: Final = compile_marker
 
 
 def text_for_entity_matching(text: str) -> str:
@@ -117,7 +126,7 @@ class BaseCompetitorIntentChecker:
         found: Final[list[tuple[str, str, bool]]] = []
         seen: Final[set[tuple[str, str]]] = set()
         for token in self._competitor_tokens:
-            if not _word_boundary_match(normalized, token):
+            if not word_boundary_match(normalized, token):
                 continue
             canonical = self.competitor_canonical.get(token, token)
             key = (token, canonical)
@@ -139,7 +148,7 @@ class BaseCompetitorIntentChecker:
         }
 
         for b in self.brand_self:
-            if _word_boundary_match(normalized, b):
+            if word_boundary_match(normalized, b):
                 entities["brand_self"].append(b)
                 evidence.append({"type": "entity", "key": "brand_self", "value": b, "match": b})
 

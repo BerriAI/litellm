@@ -14,7 +14,7 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
     UnloadableEntitlementError,
     _agent_capped_servers,
-    _is_mcp_admitted_user_subject,
+    is_mcp_admitted_user_subject,
 )
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
@@ -364,7 +364,7 @@ class TestMCPRequestHandler:
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
                 mock_manager,
             ),
-            patch.object(MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])),
+            patch.object(MCPRequestHandler, "get_mcp_servers_from_access_groups", AsyncMock(return_value=[])),
         ):
             result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(user_api_key_auth)
 
@@ -385,7 +385,7 @@ class TestMCPRequestHandler:
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
                 mock_manager,
             ),
-            patch.object(MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])),
+            patch.object(MCPRequestHandler, "get_mcp_servers_from_access_groups", AsyncMock(return_value=[])),
         ):
             result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(user_api_key_auth)
 
@@ -405,7 +405,7 @@ class TestMCPRequestHandler:
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
                 mock_manager,
             ),
-            patch.object(MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])),
+            patch.object(MCPRequestHandler, "get_mcp_servers_from_access_groups", AsyncMock(return_value=[])),
             patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_team", AsyncMock(return_value=[])),
             patch.object(MCPRequestHandler, "_get_key_access_group_mcp_server_extras", AsyncMock(return_value=[])),
         ):
@@ -430,7 +430,7 @@ class TestMCPRequestHandler:
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
                 mock_manager,
             ),
-            patch.object(MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])),
+            patch.object(MCPRequestHandler, "get_mcp_servers_from_access_groups", AsyncMock(return_value=[])),
             patch.object(
                 MCPRequestHandler,
                 "_get_allowed_mcp_servers_for_team",
@@ -733,7 +733,7 @@ class TestMCPRequestHandler:
                 mock_manager,
             ),
             patch.object(  # test-quality-ok: access-group lookup hits the DB, not under test here
-                MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])
+                MCPRequestHandler, "get_mcp_servers_from_access_groups", AsyncMock(return_value=[])
             ),
         ):
             servers = await MCPRequestHandler._team_granted_servers(team_obj, [])
@@ -763,7 +763,7 @@ class TestMCPRequestHandler:
                 "litellm.proxy.auth.auth_checks.get_team_object", AsyncMock(return_value=team_obj)
             ),
             patch(  # test-quality-ok: access-group lookup hits the DB, not under test here
-                "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+                "litellm.proxy.auth.auth_checks.get_mcp_server_ids_from_access_groups",
                 AsyncMock(return_value=[]),
             ),
             patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
@@ -801,7 +801,7 @@ class TestMCPRequestHandler:
                 MCPRequestHandler, "_get_key_access_group_mcp_server_extras", AsyncMock(return_value=[])
             ),
             patch.object(  # test-quality-ok: access-group lookup hits the DB, not under test here
-                MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])
+                MCPRequestHandler, "get_mcp_servers_from_access_groups", AsyncMock(return_value=[])
             ),
             patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
@@ -838,7 +838,7 @@ class TestMCPRequestHandler:
                 MCPRequestHandler, "_get_key_access_group_mcp_server_extras", AsyncMock(return_value=[])
             ),
             patch.object(  # test-quality-ok: access-group lookup hits the DB, not under test here
-                MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])
+                MCPRequestHandler, "get_mcp_servers_from_access_groups", AsyncMock(return_value=[])
             ),
             patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
@@ -880,7 +880,7 @@ class TestMCPRequestHandler:
                 "litellm.proxy.auth.auth_checks.get_team_object", AsyncMock(return_value=team_obj)
             ),
             patch(  # test-quality-ok: access-group lookup hits the DB, not under test here
-                "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+                "litellm.proxy.auth.auth_checks.get_mcp_server_ids_from_access_groups",
                 AsyncMock(return_value=[]),
             ),
             patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
@@ -940,7 +940,7 @@ class TestMCPRequestHandler:
                 MCPRequestHandler, "_get_org_object_permission", AsyncMock(return_value=org_object_permission)
             ),
             patch.object(  # test-quality-ok: access-group lookup hits the DB, not under test here
-                MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])
+                MCPRequestHandler, "get_mcp_servers_from_access_groups", AsyncMock(return_value=[])
             ),
             patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
@@ -992,7 +992,7 @@ class TestMCPRequestHandler:
                 MCPRequestHandler, "_get_user_object_permission", AsyncMock(return_value=user_object_permission)
             ),
             patch.object(  # test-quality-ok: access-group lookup hits the DB, not under test here
-                MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])
+                MCPRequestHandler, "get_mcp_servers_from_access_groups", AsyncMock(return_value=[])
             ),
             patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
@@ -1045,7 +1045,7 @@ class TestMCPRequestHandler:
                 MCPRequestHandler, "_get_org_object_permission", AsyncMock(return_value=org_object_permission)
             ),
             patch.object(  # test-quality-ok: access-group lookup hits the DB, not under test here
-                MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])
+                MCPRequestHandler, "get_mcp_servers_from_access_groups", AsyncMock(return_value=[])
             ),
             patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
@@ -1067,7 +1067,7 @@ class TestMCPRequestHandler:
                 MCPRequestHandler, "_get_user_object_permission", AsyncMock(return_value=user_object_permission)
             ),
             patch.object(  # test-quality-ok: access-group lookup hits the DB, not under test here
-                MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])
+                MCPRequestHandler, "get_mcp_servers_from_access_groups", AsyncMock(return_value=[])
             ),
             patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
@@ -1220,7 +1220,7 @@ class TestMCPRequestHandler:
         auth = UserAPIKeyAuth(api_key="k", access_group_ids=[])
         with (
             patch(
-                "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+                "litellm.proxy.auth.auth_checks.get_mcp_server_ids_from_access_groups",
                 new=AsyncMock(return_value=[]),
             ),
             patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
@@ -1235,7 +1235,7 @@ class TestMCPRequestHandler:
         auth = UserAPIKeyAuth(api_key="k", access_group_ids=["grp-mcp"])
         with (
             patch(
-                "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+                "litellm.proxy.auth.auth_checks.get_mcp_server_ids_from_access_groups",
                 new=AsyncMock(return_value=["alias-a", "srv-b"]),
             ),
             patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
@@ -1249,7 +1249,7 @@ class TestMCPRequestHandler:
         """Resolution failures degrade to no grants rather than raising."""
         auth = UserAPIKeyAuth(api_key="k", access_group_ids=["grp-mcp"])
         with patch(
-            "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+            "litellm.proxy.auth.auth_checks.get_mcp_server_ids_from_access_groups",
             new=AsyncMock(side_effect=Exception("db down")),
         ):
             result = await MCPRequestHandler._get_key_access_group_mcp_server_extras(auth)
@@ -1720,7 +1720,7 @@ class TestMCPOAuth2AuthFlow:
         [b"sk-litellm-valid-key", b"Bearer sk-litellm-valid-key", b"bearer sk-litellm-valid-key"],
     )
     async def test_x_litellm_api_key_survives_bearer_only_strip(self, header_value):
-        from litellm.proxy.auth.user_api_key_auth import _get_bearer_token
+        from litellm.proxy.auth.user_api_key_auth import get_bearer_token
 
         scope = {
             "type": "http",
@@ -1741,7 +1741,7 @@ class TestMCPOAuth2AuthFlow:
             auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
 
         mock_auth.assert_called_once()
-        assert _get_bearer_token(api_key=mock_auth.call_args.kwargs["api_key"]) == "sk-litellm-valid-key"
+        assert get_bearer_token(api_key=mock_auth.call_args.kwargs["api_key"]) == "sk-litellm-valid-key"
         assert auth_result.user_id == "test-user"
 
     async def test_litellm_key_in_authorization_backward_compat(self):
@@ -4135,7 +4135,7 @@ async def test_get_allowed_mcp_servers_for_team_uses_helper():
             ),
             patch.object(
                 MCPRequestHandler,
-                "_get_mcp_servers_from_access_groups",
+                "get_mcp_servers_from_access_groups",
                 new_callable=AsyncMock,
                 return_value=["group-server1", "group-server2"],
             ) as mock_get_access_group_servers,
@@ -4311,7 +4311,7 @@ async def test_get_allowed_mcp_servers_for_key_prefers_in_memory_permission():
             "litellm.proxy.auth.auth_checks.get_object_permission",
             new_callable=AsyncMock,
         ) as mock_get_perm:
-            with patch.object(MCPRequestHandler, "_get_mcp_servers_from_access_groups") as mock_access_groups:
+            with patch.object(MCPRequestHandler, "get_mcp_servers_from_access_groups") as mock_access_groups:
                 mock_access_groups.return_value = ["group-server"]
 
                 result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(user_api_key_auth)
@@ -4706,7 +4706,7 @@ class TestAgentMCPPermissions:
                 mock_manager,
             ),
             patch.object(  # test-quality-ok: access-group lookup hits the DB, not under test here
-                MCPRequestHandler, "_get_mcp_servers_from_access_groups", AsyncMock(return_value=[])
+                MCPRequestHandler, "get_mcp_servers_from_access_groups", AsyncMock(return_value=[])
             ),
         )
 
@@ -4944,7 +4944,7 @@ async def test_tool_permission_servers_included_in_allowed_servers():
             patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=perm),
             patch.object(
                 MCPRequestHandler,
-                "_get_mcp_servers_from_access_groups",
+                "get_mcp_servers_from_access_groups",
                 new_callable=AsyncMock,
                 return_value=[],
             ),
@@ -5095,7 +5095,7 @@ class TestOrgMCPPermissions:
             ),
             patch.object(
                 MCPRequestHandler,
-                "_get_mcp_servers_from_access_groups",
+                "get_mcp_servers_from_access_groups",
                 new_callable=AsyncMock,
                 return_value=[],
             ),
@@ -5121,7 +5121,7 @@ class TestOrgMCPPermissions:
             ),
             patch.object(
                 MCPRequestHandler,
-                "_get_mcp_servers_from_access_groups",
+                "get_mcp_servers_from_access_groups",
                 new_callable=AsyncMock,
                 return_value=["group_server_1"],
             ),
@@ -5147,7 +5147,7 @@ class TestOrgMCPPermissions:
             ),
             patch.object(
                 MCPRequestHandler,
-                "_get_mcp_servers_from_access_groups",
+                "get_mcp_servers_from_access_groups",
                 new_callable=AsyncMock,
                 return_value=[],
             ),
@@ -5552,7 +5552,7 @@ async def test_team_access_group_ids_resolve_to_mcp_servers():
             return_value=mock_team,
         ),
         patch(
-            "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+            "litellm.proxy.auth.auth_checks.get_mcp_server_ids_from_access_groups",
             new_callable=AsyncMock,
             return_value=["srv-stripe"],
         ) as mock_resolver,
@@ -5611,7 +5611,7 @@ async def test_team_access_group_ids_union_with_object_permission():
                 return_value=mock_team,
             ),
             patch(
-                "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+                "litellm.proxy.auth.auth_checks.get_mcp_server_ids_from_access_groups",
                 new_callable=AsyncMock,
                 return_value=["srv-stripe"],
             ),
@@ -5649,7 +5649,7 @@ async def test_team_access_group_ids_empty_returns_no_extras():
             return_value=mock_team,
         ),
         patch(
-            "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+            "litellm.proxy.auth.auth_checks.get_mcp_server_ids_from_access_groups",
             new_callable=AsyncMock,
             return_value=[],
         ) as mock_resolver,
@@ -5712,7 +5712,7 @@ async def test_allowed_mcp_servers_for_key_excludes_access_group_ids():
     with (
         patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
         patch(
-            "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+            "litellm.proxy.auth.auth_checks.get_mcp_server_ids_from_access_groups",
             new_callable=AsyncMock,
             return_value=["srv-stripe"],
         ) as mock_resolver,
@@ -5760,7 +5760,7 @@ async def test_allowed_mcp_servers_for_key_uses_object_permission_not_access_gro
         with (
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
             patch(
-                "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+                "litellm.proxy.auth.auth_checks.get_mcp_server_ids_from_access_groups",
                 new_callable=AsyncMock,
                 return_value=["srv-stripe"],
             ) as mock_resolver,
@@ -5787,7 +5787,7 @@ async def test_get_allowed_mcp_servers_surfaces_ungated_key_access_group_grant_e
 
     patches = _patch_proxy_server_globals_for_mcp() + [
         patch(
-            "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+            "litellm.proxy.auth.auth_checks.get_mcp_server_ids_from_access_groups",
             new_callable=AsyncMock,
             return_value=["srv-deepwiki"],
         ),
@@ -5887,7 +5887,7 @@ async def test_get_allowed_mcp_servers_for_team_expands_all_proxy_sentinel_dynam
                 return_value=team_obj,
             ),
             patch(
-                "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+                "litellm.proxy.auth.auth_checks.get_mcp_server_ids_from_access_groups",
                 new_callable=AsyncMock,
                 return_value=[],
             ),
@@ -6022,13 +6022,13 @@ async def test_get_allowed_mcp_servers_team_all_proxy_key_scoped_to_one_end_to_e
                 return_value=team_obj,
             ),
             patch(
-                "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+                "litellm.proxy.auth.auth_checks.get_mcp_server_ids_from_access_groups",
                 new_callable=AsyncMock,
                 return_value=[],
             ),
             patch.object(
                 MCPRequestHandler,
-                "_get_mcp_servers_from_access_groups",
+                "get_mcp_servers_from_access_groups",
                 new_callable=AsyncMock,
                 return_value=[],
             ),
@@ -6737,7 +6737,7 @@ class TestMCPDcrBridgeDelegateAdmission:
 
         assert exc_info.value.status_code == 401
 
-    _POLICY_GATE = "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp._run_centralized_common_checks"
+    _POLICY_GATE = "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.run_centralized_common_checks"
 
     async def _enforce_with_gate_error(self, error):
         """Drive _enforce_admitted_live_policy with the centralized gate raising ``error`` and return
@@ -8273,7 +8273,7 @@ class TestUserSubjectTeamUnion:
             patch("litellm.proxy.auth.auth_checks.get_team_object", _get_team_object),
             patch("litellm.proxy.auth.auth_checks.get_user_object", _get_user_object),
             patch("litellm.proxy.auth.auth_checks.get_org_object", _get_org_object),
-            patch("litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups", AsyncMock(return_value=[])),
+            patch("litellm.proxy.auth.auth_checks.get_mcp_server_ids_from_access_groups", AsyncMock(return_value=[])),
             patch("litellm.proxy.proxy_server.get_current_spend", _spend_from_fallback),
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
             patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
@@ -8460,7 +8460,7 @@ class TestUserSubjectTeamUnion:
         one cross-team user drain several teams' buckets on a single call, blocking their other
         members for access those teams did not provide. Exactly one source is charged, and it is the
         SAME source billing picks — one owner for both, so they cannot disagree."""
-        from litellm.proxy.hooks.parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 
         t1 = _make_team("t1", ["srv1"])
         t1.metadata = {"mcp_rpm_limit": {"srv1": 5}}
@@ -8474,7 +8474,7 @@ class TestUserSubjectTeamUnion:
         assert billed is not None and billed.team_id == "t1", "throttling and billing pick the same source"
 
         descriptors: list = []
-        limiter = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=MagicMock())
+        limiter = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=MagicMock())
         limiter._add_mcp_per_team_rate_limit_descriptor(auth, "srv1", descriptors)
         charged = {d["value"]: d["rate_limit"]["requests_per_unit"] for d in descriptors}
         assert charged == {"t1:srv1": 5}, "only the attributing team's bucket is charged"
@@ -8536,7 +8536,7 @@ class TestUserSubjectTeamUnion:
         server = MagicMock(server_id="srv1")
         with self._patch(teams_by_id={"t-grant": t_grant}, user_teams=["t-grant"]):
             with patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager._get_mcp_server_from_tool_name",
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.get_mcp_server_from_tool_name",
                 MagicMock(return_value=server),
             ):
                 billed = await MCPRequestHandler.billing_auth_for_tool_call(auth, tool_name="t-grant/tool_a")
@@ -8985,7 +8985,7 @@ class TestUserSubjectTeamUnion:
             api_key="sk-real-key",
             metadata={"mcp_admitted_user_subject": True},  # caller-forged marker in key metadata
         )
-        assert _is_mcp_admitted_user_subject(forged) is False
+        assert is_mcp_admitted_user_subject(forged) is False
         with self._patch(teams_by_id=teams, user_teams=["team-a", "team-b"]):
             assert await MCPRequestHandler._team_ids_for_mcp_grant(forged) == []
             assert await MCPRequestHandler._get_allowed_mcp_servers_for_team(forged) == []
@@ -9065,8 +9065,8 @@ class TestUserSubjectTeamUnion:
         via_validate = UserAPIKeyAuth.model_validate({"user_id": "u", "mcp_admitted_user_subject": True})
         assert via_kwarg.mcp_admitted_user_subject is False
         assert via_validate.mcp_admitted_user_subject is False
-        assert _is_mcp_admitted_user_subject(via_kwarg) is False
-        assert _is_mcp_admitted_user_subject(via_validate) is False
+        assert is_mcp_admitted_user_subject(via_kwarg) is False
+        assert is_mcp_admitted_user_subject(via_validate) is False
 
 
 @pytest.mark.asyncio
@@ -9126,7 +9126,7 @@ class TestAdmittedSubjectPerTeamOrgCap:
             patch("litellm.proxy.auth.auth_checks.get_org_object", _get_org_object),
             patch("litellm.proxy.auth.auth_checks.get_object_permission", _get_object_permission),
             patch(
-                "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+                "litellm.proxy.auth.auth_checks.get_mcp_server_ids_from_access_groups",
                 AsyncMock(return_value=[]),
             ),
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
@@ -9574,7 +9574,7 @@ class TestUserMCPEntitlement:
             ),
             patch.object(
                 MCPRequestHandler,
-                "_get_mcp_servers_from_access_groups",
+                "get_mcp_servers_from_access_groups",
                 new_callable=AsyncMock,
                 return_value=[],
             ),
@@ -9731,7 +9731,7 @@ class TestUserMCPEntitlement:
             with self._entitled(self._perm(tool_permissions={"srv-a": ["read"]})):
                 with patch.object(
                     MCPRequestHandler,
-                    "_get_mcp_servers_from_access_groups",
+                    "get_mcp_servers_from_access_groups",
                     new_callable=AsyncMock,
                     return_value=[],
                 ):

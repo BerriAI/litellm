@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from litellm.proxy.utils import (
-    _hash_token_if_needed,
+    hash_token_if_needed,
     hash_password,
     hash_token,
     migrate_passwords_to_scrypt_async,
@@ -116,9 +116,9 @@ def test_hash_token_if_needed_handles_sk_prefix() -> None:
     already_hashed = hashlib.sha256(plain.encode()).hexdigest()
     not_a_secret = "token-without-sk-prefix"
     actual = {
-        "sk_input_is_hashed": _hash_token_if_needed(plain) == already_hashed,
-        "non_sk_passthrough": _hash_token_if_needed(not_a_secret) == not_a_secret,
-        "double_hash_stable": _hash_token_if_needed(already_hashed) == already_hashed,
+        "sk_input_is_hashed": hash_token_if_needed(plain) == already_hashed,
+        "non_sk_passthrough": hash_token_if_needed(not_a_secret) == not_a_secret,
+        "double_hash_stable": hash_token_if_needed(already_hashed) == already_hashed,
     }
     assert actual == {
         "sk_input_is_hashed": True,
@@ -129,7 +129,7 @@ def test_hash_token_if_needed_handles_sk_prefix() -> None:
 
 def test_hash_token_if_needed_error_on_non_string() -> None:
     with pytest.raises(AttributeError):
-        _hash_token_if_needed(None)  # type: ignore[arg-type]
+        hash_token_if_needed(None)  # pyright: ignore[reportArgumentType]  # intentional invalid input checks the error
 
 
 # ---------------------------------------------------------------------------
@@ -191,12 +191,10 @@ async def test_migrate_passwords_upgrades_only_plaintext_rows() -> None:
     result = await migrate_passwords_to_scrypt_async(pc)
 
     updated_user_ids = sorted(
-        call.kwargs["where"]["user_id"]
-        for call in pc.db.litellm_usertable.update.await_args_list
+        call.kwargs["where"]["user_id"] for call in pc.db.litellm_usertable.update.await_args_list
     )
     new_password_prefixes = sorted(
-        call.kwargs["data"]["password"][:7]
-        for call in pc.db.litellm_usertable.update.await_args_list
+        call.kwargs["data"]["password"][:7] for call in pc.db.litellm_usertable.update.await_args_list
     )
     outcome = {
         "message": result,
@@ -216,8 +214,6 @@ async def test_migrate_passwords_upgrades_only_plaintext_rows() -> None:
 async def test_migrate_passwords_raises_on_db_failure() -> None:
     pc = MagicMock()
     pc.db = MagicMock()
-    pc.db.litellm_usertable.find_many = AsyncMock(
-        side_effect=RuntimeError("db unavailable")
-    )
+    pc.db.litellm_usertable.find_many = AsyncMock(side_effect=RuntimeError("db unavailable"))
     with pytest.raises(RuntimeError, match="db unavailable"):
         await migrate_passwords_to_scrypt_async(pc)

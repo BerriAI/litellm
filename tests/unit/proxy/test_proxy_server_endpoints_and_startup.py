@@ -1652,7 +1652,7 @@ mock_prisma = MockPrisma()
 
 
 @patch(
-    "litellm.proxy.proxy_server.ProxyStartupEvent._setup_prisma_client",
+    "litellm.proxy.proxy_server.ProxyStartupEvent.setup_prisma_client",
     return_value=mock_prisma,
 )
 @pytest.mark.asyncio
@@ -3623,12 +3623,12 @@ async def test_startup_initializes_string_callbacks_after_all_litellm_settings_l
 
 def test_startup_hands_router_to_every_registered_prompt_injection_detector(monkeypatch):
     from litellm.proxy._types import LiteLLMPromptInjectionParams
-    from litellm.proxy.hooks.prompt_injection_detection import _OPTIONAL_PromptInjectionDetection
+    from litellm.proxy.hooks.prompt_injection_detection import OPTIONAL_PromptInjectionDetection
     from litellm.proxy.proxy_server import ProxyStartupEvent
     from litellm.router import Router
 
     monkeypatch.setattr(litellm, "callbacks", [])
-    detector = _OPTIONAL_PromptInjectionDetection(
+    detector = OPTIONAL_PromptInjectionDetection(
         prompt_injection_params=LiteLLMPromptInjectionParams(
             heuristics_check=False,
             llm_api_check=True,
@@ -4545,7 +4545,7 @@ async def test_chat_completion_result_no_nested_none_values():
 
     with (
         patch(
-            "litellm.proxy.proxy_server._read_request_body",
+            "litellm.proxy.proxy_server.read_request_body",
             return_value={"model": "gpt-3.5-turbo", "messages": []},
         ),
         patch(
@@ -6554,7 +6554,7 @@ async def test_init_sso_settings_in_db():
     mock_prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=mock_sso_config)
 
     # Mock _decrypt_and_set_db_env_variables
-    with patch.object(proxy_config, "_decrypt_and_set_db_env_variables") as mock_decrypt_and_set:
+    with patch.object(proxy_config, "decrypt_and_set_db_env_variables") as mock_decrypt_and_set:
         await proxy_config._init_sso_settings_in_db(prisma_client=mock_prisma_client)
 
         # Verify find_unique was called with correct parameters
@@ -6598,7 +6598,7 @@ async def test_init_sso_settings_in_db_no_settings():
     mock_prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
 
     # Mock _decrypt_and_set_db_env_variables
-    with patch.object(proxy_config, "_decrypt_and_set_db_env_variables") as mock_decrypt_and_set:
+    with patch.object(proxy_config, "decrypt_and_set_db_env_variables") as mock_decrypt_and_set:
         await proxy_config._init_sso_settings_in_db(prisma_client=mock_prisma_client)
 
         # Verify find_unique was called
@@ -6652,7 +6652,7 @@ async def test_init_sso_settings_in_db_empty_settings():
     mock_prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=mock_sso_config)
 
     # Mock _decrypt_and_set_db_env_variables
-    with patch.object(proxy_config, "_decrypt_and_set_db_env_variables") as mock_decrypt_and_set:
+    with patch.object(proxy_config, "decrypt_and_set_db_env_variables") as mock_decrypt_and_set:
         await proxy_config._init_sso_settings_in_db(prisma_client=mock_prisma_client)
 
         # Verify find_unique was called
@@ -6694,7 +6694,7 @@ async def test_init_sso_settings_in_db_retries_on_transport_error():
     mock_prisma_client._db_auth_reconnect_timeout_seconds = 2.0
     mock_prisma_client._db_auth_reconnect_lock_timeout_seconds = 0.1
 
-    with patch.object(proxy_config, "_decrypt_and_set_db_env_variables") as mock_decrypt:
+    with patch.object(proxy_config, "decrypt_and_set_db_env_variables") as mock_decrypt:
         await proxy_config._init_sso_settings_in_db(prisma_client=mock_prisma_client)
 
     assert len(invocations) == 2
@@ -6872,7 +6872,7 @@ def test_root_redirect_when_docs_url_not_root_and_redirect_url_set(monkeypatch):
     from fastapi.responses import RedirectResponse
 
     from litellm.proxy.proxy_server import cleanup_router_config_variables
-    from litellm.proxy.utils import _get_docs_url
+    from litellm.proxy.utils import get_docs_url
 
     cleanup_router_config_variables()
     filepath = os.path.dirname(os.path.abspath(__file__))
@@ -6885,7 +6885,7 @@ def test_root_redirect_when_docs_url_not_root_and_redirect_url_set(monkeypatch):
 
     asyncio.run(initialize(config=config_fp, debug=True))
 
-    docs_url = _get_docs_url()
+    docs_url = get_docs_url()
     root_redirect_url = os.getenv("ROOT_REDIRECT_URL")
 
     # Remove any existing "/" route that might interfere
@@ -7368,7 +7368,7 @@ class TestInvitationEndpoints:
             mock_prisma.db.litellm_invitationlink = MagicMock()
             # Avoid triggering async DB calls in _user_has_admin_privileges
             with patch(
-                "litellm.proxy.proxy_server._user_has_admin_privileges",
+                "litellm.proxy.proxy_server.user_has_admin_privileges",
                 new_callable=AsyncMock,
                 return_value=False,
             ):
@@ -7537,7 +7537,7 @@ async def test_async_data_generator_uses_direct_stream_fast_path_without_callbac
     mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
-        with patch.object(ProxyLogging, "_fire_deferred_stream_logging") as mock_deferred_logging:
+        with patch.object(ProxyLogging, "fire_deferred_stream_logging") as mock_deferred_logging:
             yielded_data = []
             async for data in async_data_generator(mock_response, mock_user_api_key_dict, mock_request_data):
                 yielded_data.append(data)
@@ -7593,7 +7593,7 @@ async def test_async_data_generator_preserves_non_raw_sse_like_bytes():
     mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
-        with patch.object(ProxyLogging, "_fire_deferred_stream_logging"):
+        with patch.object(ProxyLogging, "fire_deferred_stream_logging"):
             yielded_data = []
             async for data in async_data_generator(mock_response, mock_user_api_key_dict, mock_request_data):
                 yielded_data.append(data)
@@ -7650,7 +7650,7 @@ async def test_async_data_generator_buffers_split_google_native_sse_json_frame()
     mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
-        with patch.object(ProxyLogging, "_fire_deferred_stream_logging"):
+        with patch.object(ProxyLogging, "fire_deferred_stream_logging"):
             yielded_data = []
             async for data in async_data_generator(mock_response, mock_user_api_key_dict, mock_request_data):
                 yielded_data.append(data)
@@ -7698,7 +7698,7 @@ async def test_async_data_generator_flushes_raw_sse_stream_without_trailing_deli
 
     with (
         patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj),
-        patch.object(ProxyLogging, "_fire_deferred_stream_logging"),
+        patch.object(ProxyLogging, "fire_deferred_stream_logging"),
     ):
         yielded_data = []
         async for data in async_data_generator(mock_response, mock_user_api_key_dict, mock_request_data):
@@ -7748,7 +7748,7 @@ async def test_async_data_generator_errors_when_raw_sse_frame_exceeds_buffer_lim
     with (
         patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj),
         patch("litellm.proxy.proxy_server._MAX_RAW_SSE_BUFFER_CHARS", 8),
-        patch.object(ProxyLogging, "_fire_deferred_stream_logging"),
+        patch.object(ProxyLogging, "fire_deferred_stream_logging"),
     ):
         yielded_data = []
         async for data in async_data_generator(mock_response, mock_user_api_key_dict, mock_request_data):
@@ -7804,7 +7804,7 @@ async def test_async_data_generator_checks_raw_sse_buffer_limit_after_complete_f
     with (
         patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj),
         patch("litellm.proxy.proxy_server._MAX_RAW_SSE_BUFFER_CHARS", 8),
-        patch.object(ProxyLogging, "_fire_deferred_stream_logging"),
+        patch.object(ProxyLogging, "fire_deferred_stream_logging"),
     ):
         yielded_data = []
         async for data in async_data_generator(mock_response, mock_user_api_key_dict, mock_request_data):
@@ -7854,7 +7854,7 @@ async def test_async_data_generator_google_genai_stream_omits_openai_done():
     mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
-        with patch.object(ProxyLogging, "_fire_deferred_stream_logging"):
+        with patch.object(ProxyLogging, "fire_deferred_stream_logging"):
             yielded_data = []
             async for data in async_data_generator(mock_response, mock_user_api_key_dict, mock_request_data):
                 yielded_data.append(data)
@@ -7896,7 +7896,7 @@ async def test_async_data_generator_does_not_mark_completed_stream_as_disconnect
     mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
-        with patch.object(ProxyLogging, "_fire_deferred_stream_logging"):
+        with patch.object(ProxyLogging, "fire_deferred_stream_logging"):
             yielded_data = []
             async for data in async_data_generator(
                 mock_response,
@@ -7946,7 +7946,7 @@ async def test_async_data_generator_google_genai_stream_forwards_error_without_d
     mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
-        with patch.object(ProxyLogging, "_fire_deferred_stream_logging"):
+        with patch.object(ProxyLogging, "fire_deferred_stream_logging"):
             yielded_data = []
             async for data in async_data_generator(mock_response, mock_user_api_key_dict, mock_request_data):
                 yielded_data.append(data)
@@ -9384,7 +9384,7 @@ async def test_window_spend_counter_skips_invalid_window_start():
 @pytest.mark.asyncio
 async def test_window_spend_counter_does_not_seed_zero_when_db_unavailable():
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.proxy_server import _ensure_window_spend_counter_initialized
+    from litellm.proxy.proxy_server import ensure_window_spend_counter_initialized
 
     counter_cache = DualCache()
     counter_key = "spend:key:key-window-db-unavailable:window:1h"
@@ -9395,7 +9395,7 @@ async def test_window_spend_counter_does_not_seed_zero_when_db_unavailable():
     ps.spend_counter_cache = counter_cache
     ps.prisma_client = None
     try:
-        initialized = await _ensure_window_spend_counter_initialized(
+        initialized = await ensure_window_spend_counter_initialized(
             counter_key=counter_key,
             entity_type="Key",
             entity_id="key-window-db-unavailable",
@@ -9563,7 +9563,7 @@ async def test_increment_spend_counters_reseeds_from_db_on_bad_reserved_counter(
 @pytest.mark.asyncio
 async def test_increment_spend_counter_invalidates_stale_cache_on_redis_failure():
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.proxy_server import _increment_spend_counter_cache
+    from litellm.proxy.proxy_server import increment_spend_counter_cache
 
     counter_cache = DualCache()
     counter_cache.in_memory_cache.set_cache(key="spend:team:redis-fail", value=4.0)
@@ -9578,7 +9578,7 @@ async def test_increment_spend_counter_invalidates_stale_cache_on_redis_failure(
     ps.spend_counter_cache = counter_cache
     try:
         with pytest.raises(RuntimeError):
-            await _increment_spend_counter_cache(
+            await increment_spend_counter_cache(
                 counter_key="spend:team:redis-fail",
                 increment=0.5,
             )
@@ -11161,14 +11161,14 @@ async def _lit6463_drive_realtime_session_holding_a_max_parallel_slot(
     endpoint did to the slot."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-        _PROXY_MaxParallelRequestsHandler_v3,
+        PROXY_MaxParallelRequestsHandler_v3,
         _request_stash,
     )
     from litellm.proxy.utils import InternalUsageCache
 
     dual_cache: Final = DualCache()
     await dual_cache.async_set_cache(key=_LIT6463_COUNTER_KEY, value={"slot-1": 1.0, "slot-2": 2.0}, local_only=True)
-    limiter: Final = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(dual_cache))
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(dual_cache))
     stash: Final = RequestRateLimiterStash(parallel_slot={"slot_id": "slot-1", "counter_keys": [_LIT6463_COUNTER_KEY]})
     reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
 
@@ -11271,7 +11271,7 @@ async def test_release_or_invalidate_falls_back_to_invalidating_the_counters():
         br, "release_budget_reservation", new=AsyncMock(side_effect=RuntimeError("counter store down"))
     )  # test-quality-ok: forces the failure branch; assertion observes which counter key got invalidated
     sink = patch.object(
-        ps, "_invalidate_spend_counter", new=_record
+        ps, "invalidate_spend_counter", new=_record
     )  # test-quality-ok: fakes the counter-store sink so the invalidated key is observable
     with failing_release, sink:
         await br.release_or_invalidate_budget_reservation(budget_reservation=reservation)
@@ -11518,7 +11518,7 @@ class TestDeleteDeploymentSync:
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(side_effect=Exception("DB connection lost"))
 
-        result = await proxy_config._get_models_from_db(prisma_client=mock_prisma)
+        result = await proxy_config.get_models_from_db(prisma_client=mock_prisma)
 
         assert result is None, f"Expected None on DB failure to signal fetch error, got {result!r}"
 
@@ -11548,7 +11548,7 @@ class TestDeleteDeploymentSync:
             reader=PrismaWrapper(original_prisma=reader_inner, iam_token_db_auth=False),
         )
 
-        result = await ProxyConfig()._get_models_from_db(prisma_client=mock_prisma)
+        result = await ProxyConfig().get_models_from_db(prisma_client=mock_prisma)
 
         assert result == [committed_row], f"Expected the writer's just-committed row, got {result!r}"
         reader_inner.litellm_proxymodeltable.find_many.assert_not_awaited()
@@ -11587,7 +11587,7 @@ class TestDeleteDeploymentSync:
         )
         mock_prisma.db._writer_unavailable = True
 
-        result = await ProxyConfig()._get_models_from_db(prisma_client=mock_prisma)
+        result = await ProxyConfig().get_models_from_db(prisma_client=mock_prisma)
 
         assert result == [replica_row], f"Expected the replica's rows in degraded mode, got {result!r}"
         writer_inner.litellm_proxymodeltable.find_many.assert_not_awaited()
@@ -13755,7 +13755,7 @@ async def _collect_async_data_generator_frames(request_data: dict) -> list:
     mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
-        with patch.object(proxy_server_module.ProxyLogging, "_fire_deferred_stream_logging"):
+        with patch.object(proxy_server_module.ProxyLogging, "fire_deferred_stream_logging"):
             return [
                 frame.decode("utf-8") if isinstance(frame, bytes) else frame
                 async for frame in async_data_generator(MockStream(), MagicMock(spec=UserAPIKeyAuth), request_data)
@@ -13842,7 +13842,7 @@ def test_startup_warns_when_mock_testing_params_enabled(caplog):
     )
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        ProxyStartupEvent._warn_if_mock_testing_params_enabled(general_settings={MOCK_TESTING_CONFIG_KEY: True})
+        ProxyStartupEvent.warn_if_mock_testing_params_enabled(general_settings={MOCK_TESTING_CONFIG_KEY: True})
 
     assert MOCK_TESTING_CONFIG_KEY in caplog.text
     for param_name in GATED_MOCK_PARAM_NAMES:
@@ -13857,7 +13857,7 @@ def test_startup_is_silent_when_mock_testing_params_disabled(caplog):
     from litellm.proxy.route_llm_request import MOCK_TESTING_CONFIG_KEY
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        ProxyStartupEvent._warn_if_mock_testing_params_enabled(general_settings={})
+        ProxyStartupEvent.warn_if_mock_testing_params_enabled(general_settings={})
 
     assert MOCK_TESTING_CONFIG_KEY not in caplog.text
 
@@ -14932,7 +14932,7 @@ class TestEmbeddingsFailureHookRequestData:
         with (
             patch.object(
                 proxy_server_module,
-                "_read_request_body",
+                "read_request_body",
                 new=AsyncMock(return_value={"model": "my-embed", "input": "hello"}),
             ),
             patch.object(

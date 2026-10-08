@@ -69,13 +69,13 @@ if TYPE_CHECKING:
 
     from litellm.caching.caching import DualCache
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        PROXY_MaxParallelRequestsHandler_v3 as _ParallelRequestLimiter,
+    )
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
         RateLimitDescriptor as _RateLimitDescriptor,
     )
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
         RateLimitStatus as _RateLimitStatus,
-    )
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-        _PROXY_MaxParallelRequestsHandler_v3 as _ParallelRequestLimiter,
     )
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
     from litellm.router import Router as _Router
@@ -164,16 +164,16 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             return None
 
         from litellm.proxy.openai_files_endpoints.common_utils import (
-            _is_base64_encoded_unified_file_id,
             decode_model_from_file_id,
             get_models_from_unified_file_id,
+            is_base64_encoded_unified_file_id,
         )
 
         model_from_file_id: Final = decode_model_from_file_id(input_file_id)
         if model_from_file_id:
             return model_from_file_id
 
-        unified_file_id: Final = _is_base64_encoded_unified_file_id(input_file_id)
+        unified_file_id: Final = is_base64_encoded_unified_file_id(input_file_id)
         if unified_file_id:
             target_model_names: Final = get_models_from_unified_file_id(unified_file_id)
             if target_model_names:
@@ -250,7 +250,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         minute with the submission. The daily descriptor uses its own key so
         its 24h window never collides with the online limiter's counters.
         """
-        descriptors: Final = self.parallel_request_limiter._create_rate_limit_descriptors(
+        descriptors: Final = self.parallel_request_limiter.create_rate_limit_descriptors(
             user_api_key_dict=user_api_key_dict,
             data=data,
             rpm_limit_type=None,
@@ -892,13 +892,13 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         try:
             # Check if this is a managed file (base64 encoded unified file ID)
             from litellm.proxy.openai_files_endpoints.common_utils import (
-                _is_base64_encoded_unified_file_id,
                 get_models_from_unified_file_id,
+                is_base64_encoded_unified_file_id,
             )
 
             # Managed files require bypassing the HTTP endpoint (which runs access-check hooks)
             # and calling the managed files hook directly with the user's credentials.
-            is_managed_file: Final = _is_base64_encoded_unified_file_id(file_id)
+            is_managed_file: Final = is_base64_encoded_unified_file_id(file_id)
             # For managed files the unified file id encodes the proxy model
             # alias(es) the file was uploaded for; auth validates against those.
             target_model_names: Final = get_models_from_unified_file_id(is_managed_file) if is_managed_file else []
@@ -1039,11 +1039,11 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         enforces on `/chat/completions` apply here.
         """
         from litellm.proxy.auth.auth_checks import (
-            _check_team_member_model_access,
-            _key_access_group_grants_model,
             can_key_call_model,
             can_team_access_model,
+            check_team_member_model_access,
             get_team_object,
+            key_access_group_grants_model,
         )
         from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_logging_obj, user_api_key_cache
 
@@ -1092,14 +1092,14 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     except ProxyException as team_denial:
                         if team_denial.type != ProxyErrorTypes.team_model_access_denied:
                             raise
-                        if not await _key_access_group_grants_model(
+                        if not await key_access_group_grants_model(
                             model=model_to_check,
                             valid_token=user_api_key_dict,
                             team_object=team_object,
                             llm_router=llm_router,
                         ):
                             raise
-                    await _check_team_member_model_access(
+                    await check_team_member_model_access(
                         model=model_to_check,
                         team_object=team_object,
                         valid_token=user_api_key_dict,
@@ -1281,3 +1281,6 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             verbose_proxy_logger.error("Error in batch rate limiting: %s", e, exc_info=True)
             # Don't block the request if rate limiting fails
             return data
+
+
+PROXY_BatchRateLimiter = _PROXY_BatchRateLimiter

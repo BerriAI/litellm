@@ -137,7 +137,7 @@ async def test_responses_api_background_polling_rejects_missing_input():
     async def return_exception(*, e: Exception, **kwargs: object) -> Exception:
         return e
 
-    processor._handle_llm_api_exception = AsyncMock(side_effect=return_exception)
+    processor.handle_llm_api_exception = AsyncMock(side_effect=return_exception)
     processor.common_processing_pre_call_logic = AsyncMock(return_value=({"model": "gpt-4o"}, MagicMock()))
 
     async def receive():
@@ -960,11 +960,11 @@ class TestResponsesWSFirstFrameModelAuth:
 
         with (
             patch(
-                "litellm.proxy.auth.user_api_key_auth._enforce_key_and_fallback_model_access",
+                "litellm.proxy.auth.user_api_key_auth.enforce_key_and_fallback_model_access",
                 new_callable=AsyncMock,
             ) as mock_key_check,
             patch(
-                "litellm.proxy.auth.user_api_key_auth._run_centralized_common_checks",
+                "litellm.proxy.auth.user_api_key_auth.run_centralized_common_checks",
                 new_callable=AsyncMock,
             ) as mock_common_checks,
             patch(
@@ -1260,7 +1260,7 @@ def test_cursor_chat_completions_input_body_uses_responses_pipeline_and_strips_s
 
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.common_utils.http_parsing_utils import (
-        _read_request_body as real_read_request_body,
+        read_request_body as real_read_request_body,
     )
     from litellm.types.llms.openai import ResponsesAPIResponse
 
@@ -1297,7 +1297,7 @@ def test_cursor_chat_completions_input_body_uses_responses_pipeline_and_strips_s
         with (
             patch.object(ps, "llm_router", mock_router),
             patch(
-                "litellm.proxy.response_api_endpoints.endpoints._read_request_body",
+                "litellm.proxy.response_api_endpoints.endpoints.read_request_body",
                 side_effect=capturing_read_request_body,
             ),
         ):
@@ -1407,9 +1407,9 @@ class TestCursorMessagesArmToolNormalization:
         seen = {}
 
         async def fake_chat_completion(request, fastapi_response, model, user_api_key_dict):
-            from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+            from litellm.proxy.common_utils.http_parsing_utils import read_request_body
 
-            seen["body"] = await _read_request_body(request=request)
+            seen["body"] = await read_request_body(request=request)
             return {"id": "chatcmpl-fake", "object": "chat.completion", "choices": []}
 
         app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key=MASTER_KEY)
@@ -1470,9 +1470,9 @@ class TestCursorMessagesArmToolNormalization:
         seen = {}
 
         async def fake_chat_completion(request, fastapi_response, model, user_api_key_dict):
-            from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+            from litellm.proxy.common_utils.http_parsing_utils import read_request_body
 
-            seen["body"] = await _read_request_body(request=request)
+            seen["body"] = await read_request_body(request=request)
             return {"id": "chatcmpl-fake", "object": "chat.completion", "choices": []}
 
         body = {
@@ -1949,9 +1949,9 @@ class TestCursorModelSuffixResolutionEndToEnd:
         seen = {}
 
         async def fake_chat_completion(request, fastapi_response, model, user_api_key_dict):
-            from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+            from litellm.proxy.common_utils.http_parsing_utils import read_request_body
 
-            seen["body"] = await _read_request_body(request=request)
+            seen["body"] = await read_request_body(request=request)
             return {"id": "chatcmpl-fake", "object": "chat.completion", "choices": []}
 
         app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key=MASTER_KEY)
@@ -2031,7 +2031,7 @@ def _cursor_budget_auth_env(base_model: str, spend: float):
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.hooks.model_max_budget_limiter import (
         VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
-        _PROXY_VirtualKeyModelMaxBudgetLimiter,
+        PROXY_VirtualKeyModelMaxBudgetLimiter,
     )
 
     valid_token = UserAPIKeyAuth(
@@ -2039,7 +2039,7 @@ def _cursor_budget_auth_env(base_model: str, spend: float):
         token="hashed-cursor-budget-token",
         model_max_budget={base_model: {"budget_limit": 0.00001, "time_period": "1d"}},
     )
-    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
     limiter.dual_cache.in_memory_cache.set_cache(
         key=f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{valid_token.token}:{base_model}:1d",
         value=spend,
@@ -2127,14 +2127,14 @@ class TestCursorVariantResolvedBeforeAuth:
     def _run_with_recording_auth(self, mock_router, request_model: str):
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-        from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+        from litellm.proxy.common_utils.http_parsing_utils import read_request_body
 
         from fastapi import Request
 
         bodies_seen_by_auth = []
 
         async def recording_auth(request: Request) -> UserAPIKeyAuth:
-            bodies_seen_by_auth.append(await _read_request_body(request=request))
+            bodies_seen_by_auth.append(await read_request_body(request=request))
             return UserAPIKeyAuth(api_key="sk-test-cursor")
 
         async def fake_chat_completion(request, fastapi_response, model, user_api_key_dict):

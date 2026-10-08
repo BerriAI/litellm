@@ -15,19 +15,19 @@ from litellm import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.batch_rate_limiter import (
     BatchFileUsage,
-    _PROXY_BatchRateLimiter,
+    PROXY_BatchRateLimiter,
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    _PROXY_MaxParallelRequestsHandler_v3,
+    PROXY_MaxParallelRequestsHandler_v3,
 )
 from litellm.proxy.utils import InternalUsageCache
 
 
-def _build_batch_limiter() -> _PROXY_BatchRateLimiter:
+def _build_batch_limiter() -> PROXY_BatchRateLimiter:
     internal_usage_cache = InternalUsageCache(dual_cache=DualCache())
-    return _PROXY_BatchRateLimiter(
+    return PROXY_BatchRateLimiter(
         internal_usage_cache=internal_usage_cache,
-        parallel_request_limiter=_PROXY_MaxParallelRequestsHandler_v3(
+        parallel_request_limiter=PROXY_MaxParallelRequestsHandler_v3(
             internal_usage_cache=internal_usage_cache
         ),
     )
@@ -136,7 +136,7 @@ async def test_batch_rate_limit_single_file(tmp_path):
     # Setup: Create internal usage cache and rate limiter
     dual_cache = DualCache()
     internal_usage_cache = InternalUsageCache(dual_cache=dual_cache)
-    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(
+    rate_limiter = PROXY_MaxParallelRequestsHandler_v3(
         internal_usage_cache=internal_usage_cache
     )
 
@@ -198,7 +198,7 @@ async def test_batch_rate_limit_single_file(tmp_path):
     # Reset cache for clean test
     dual_cache = DualCache()
     internal_usage_cache = InternalUsageCache(dual_cache=dual_cache)
-    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(
+    rate_limiter = PROXY_MaxParallelRequestsHandler_v3(
         internal_usage_cache=internal_usage_cache
     )
     batch_limiter = rate_limiter._get_batch_rate_limiter()
@@ -278,7 +278,7 @@ async def test_batch_rate_limit_multiple_requests(tmp_path):
     # Setup: Create internal usage cache and rate limiter
     dual_cache = DualCache()
     internal_usage_cache = InternalUsageCache(dual_cache=dual_cache)
-    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(
+    rate_limiter = PROXY_MaxParallelRequestsHandler_v3(
         internal_usage_cache=internal_usage_cache
     )
 
@@ -431,7 +431,7 @@ async def test_batch_rate_limiter_with_managed_files(tmp_path):
     # Setup: Create internal usage cache and rate limiter
     dual_cache = DualCache()
     internal_usage_cache = InternalUsageCache(dual_cache=dual_cache)
-    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(
+    rate_limiter = PROXY_MaxParallelRequestsHandler_v3(
         internal_usage_cache=internal_usage_cache
     )
 
@@ -662,7 +662,7 @@ async def test_batch_rate_limiter_managed_files_regression():
     # Setup: Create batch rate limiter
     dual_cache = DualCache()
     internal_usage_cache = InternalUsageCache(dual_cache=dual_cache)
-    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(
+    rate_limiter = PROXY_MaxParallelRequestsHandler_v3(
         internal_usage_cache=internal_usage_cache
     )
     batch_limiter = rate_limiter._get_batch_rate_limiter()
@@ -685,10 +685,10 @@ async def test_batch_rate_limiter_managed_files_regression():
     # Test 1: Verify managed file detection
     print("\n1. Verifying managed file detection...")
     from litellm.proxy.openai_files_endpoints.common_utils import (
-        _is_base64_encoded_unified_file_id,
+        is_base64_encoded_unified_file_id,
     )
 
-    is_managed = _is_base64_encoded_unified_file_id(managed_file_id)
+    is_managed = is_base64_encoded_unified_file_id(managed_file_id)
     assert is_managed, "Managed file should be detected correctly"
     print("   ✓ Managed file detected")
 

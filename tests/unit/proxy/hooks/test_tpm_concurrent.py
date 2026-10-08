@@ -27,7 +27,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROJECT_OTPM_DESCRIPTOR_KEY,
     RateLimitedModel,
     _AUDIO_BYTES_PER_TOKEN,
-    _PROXY_MaxParallelRequestsHandler_v3 as RateLimitHandler,
+    PROXY_MaxParallelRequestsHandler_v3 as RateLimitHandler,
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _call_id_from_callback_kwargs,

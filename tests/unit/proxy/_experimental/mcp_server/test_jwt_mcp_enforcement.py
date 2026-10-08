@@ -308,7 +308,7 @@ async def test_e2e_jwt_team_mcp_permissions_enforced(monkeypatch):
 
                 # Mock _get_mcp_servers_from_access_groups to return empty
                 with patch.object(
-                    MCPRequestHandler, "_get_mcp_servers_from_access_groups"
+                    MCPRequestHandler, "get_mcp_servers_from_access_groups"
                 ) as mock_access_groups:
                     mock_access_groups.return_value = []
 
@@ -506,7 +506,7 @@ async def test_e2e_jwt_team_mcp_key_intersection(monkeypatch):
             ),
             patch.object(
                 MCPRequestHandler,
-                "_get_mcp_servers_from_access_groups",
+                "get_mcp_servers_from_access_groups",
                 new_callable=AsyncMock,
                 return_value=[],
             ),

@@ -1121,9 +1121,15 @@ class ResponsesAPIRequestUtils:
 
         if raw_headers_from_request:
             headers_obj: Final = Headers(raw_headers_from_request)
-            mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers_obj)
-            mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj)
-            oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers_obj)
+            mcp_auth_header = (  # rebind-ok: pre-existing rebinding on a rename-only line
+                MCPRequestHandler.get_mcp_auth_header_from_headers(headers_obj)
+            )
+            mcp_server_auth_headers = (  # rebind-ok: pre-existing rebinding on a rename-only line
+                MCPRequestHandler.get_mcp_server_auth_headers_from_headers(headers_obj)
+            )
+            oauth2_headers = (  # rebind-ok: pre-existing rebinding on a rename-only line
+                MCPRequestHandler.get_oauth2_headers_from_headers(headers_obj)
+            )
 
         if tools:
             for tool in tools:
@@ -1133,7 +1139,7 @@ class ResponsesAPIRequestUtils:
                         # Merge tool headers into mcp_server_auth_headers
                         # Extract server-specific headers from tool.headers
                         headers_obj_from_tool = Headers(tool_headers)
-                        tool_mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(
+                        tool_mcp_server_auth_headers = MCPRequestHandler.get_mcp_server_auth_headers_from_headers(
                             headers_obj_from_tool
                         )
                         if tool_mcp_server_auth_headers:

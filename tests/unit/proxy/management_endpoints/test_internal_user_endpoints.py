@@ -4004,7 +4004,7 @@ async def test_admin_user_update_spend_invalidates_counter(mocker):
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mocker.patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
     mock_invalidate = mocker.patch(
-        "litellm.proxy.proxy_server._invalidate_spend_counter",
+        "litellm.proxy.proxy_server.invalidate_spend_counter",
         new=mocker.AsyncMock(),
     )
 
@@ -4038,7 +4038,7 @@ async def test_user_update_rejects_non_finite_spend(mocker):
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mocker.patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
     mock_invalidate = mocker.patch(
-        "litellm.proxy.proxy_server._invalidate_spend_counter",
+        "litellm.proxy.proxy_server.invalidate_spend_counter",
         new=mocker.AsyncMock(),
     )
 
@@ -4276,7 +4276,7 @@ def _object_permission_mocks(mocker, existing_object_permission_id=None):
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mocker.patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
     mocker.patch(
-        "litellm.proxy.proxy_server._invalidate_spend_counter",
+        "litellm.proxy.proxy_server.invalidate_spend_counter",
         new=mocker.AsyncMock(),
     )
     return mock_prisma_client

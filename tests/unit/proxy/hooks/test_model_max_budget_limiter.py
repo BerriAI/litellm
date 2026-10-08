@@ -8,7 +8,7 @@ import pytest
 
 from litellm.caching.caching import DualCache
 from litellm.proxy.hooks.model_max_budget_limiter import (
-    _PROXY_VirtualKeyModelMaxBudgetLimiter,
+    PROXY_VirtualKeyModelMaxBudgetLimiter,
 )
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import LiteLLMBatch, Usage
@@ -54,23 +54,23 @@ def _event(call_type: str, response_cost: float) -> dict[str, object]:
     }
 
 
-async def _poll(limiter: _PROXY_VirtualKeyModelMaxBudgetLimiter, batch: LiteLLMBatch, response_cost: float) -> None:
+async def _poll(limiter: PROXY_VirtualKeyModelMaxBudgetLimiter, batch: LiteLLMBatch, response_cost: float) -> None:
     await limiter.async_log_success_event(
         _event("aretrieve_batch", response_cost), response_obj=batch, start_time=None, end_time=None
     )
 
 
-async def _chat(limiter: _PROXY_VirtualKeyModelMaxBudgetLimiter) -> None:
+async def _chat(limiter: PROXY_VirtualKeyModelMaxBudgetLimiter) -> None:
     await limiter.async_log_success_event(
         _event("acompletion", CHAT_COST), response_obj=None, start_time=None, end_time=None
     )
 
 
-async def _spend(limiter: _PROXY_VirtualKeyModelMaxBudgetLimiter, spend_key: str) -> float:
+async def _spend(limiter: PROXY_VirtualKeyModelMaxBudgetLimiter, spend_key: str) -> float:
     return await limiter.dual_cache.async_get_cache(key=spend_key) or 0.0
 
 
-def _local_spend(limiter: _PROXY_VirtualKeyModelMaxBudgetLimiter, spend_key: str) -> float:
+def _local_spend(limiter: PROXY_VirtualKeyModelMaxBudgetLimiter, spend_key: str) -> float:
     return limiter.dual_cache.in_memory_cache.get_cache(key=spend_key) or 0.0
 
 
@@ -133,8 +133,8 @@ class _SharedRedisDouble:
         return [await self.async_increment(op["key"], op["increment_value"], ttl=op["ttl"]) for op in increment_list]
 
 
-def _worker(redis: _SharedRedisDouble) -> _PROXY_VirtualKeyModelMaxBudgetLimiter:
-    return _PROXY_VirtualKeyModelMaxBudgetLimiter(
+def _worker(redis: _SharedRedisDouble) -> PROXY_VirtualKeyModelMaxBudgetLimiter:
+    return PROXY_VirtualKeyModelMaxBudgetLimiter(
         dual_cache=DualCache(redis_cache=redis)  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
     )
 
@@ -145,7 +145,7 @@ async def _drain_redis_pushes() -> None:
 
 @pytest.mark.asyncio
 async def test_polls_of_a_finished_batch_charge_each_per_model_budget_once():
-    limiter: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
     first: Final = _batch("batch_first", "completed")
 
     await _poll(limiter, _batch("batch_first", "in_progress"), response_cost=0)
@@ -158,7 +158,7 @@ async def test_polls_of_a_finished_batch_charge_each_per_model_budget_once():
 
 @pytest.mark.asyncio
 async def test_a_second_batch_and_chat_requests_still_charge_the_budget():
-    limiter: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
 
     await _poll(limiter, _batch("batch_first", "completed"), response_cost=BATCH_COST)
     await _poll(limiter, _batch("batch_first", "completed"), response_cost=BATCH_COST)
