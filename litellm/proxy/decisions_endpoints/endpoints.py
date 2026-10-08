@@ -5,11 +5,10 @@ from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import ORJSONResponse  # pyright: ignore[reportDeprecated]  # required endpoint contract
 from pydantic import TypeAdapter, ValidationError
 
-from litellm.decisions.openai_transformation import to_openai_response, to_systemone_request
 from litellm.exceptions import BadRequestError
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.types.decisions import DecisionsRequestBody, DecisionsResponse, OpenAIDecisionRequestBody
+from litellm.types.decisions import DecisionsRequestBody, OpenAIDecisionRequestBody
 
 router: Final = APIRouter()
 _REQUEST_DATA_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
@@ -17,7 +16,6 @@ _DECISIONS_REQUEST_BODY_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = Type
 _OPENAI_DECISION_REQUEST_BODY_ADAPTER: Final[TypeAdapter[OpenAIDecisionRequestBody]] = TypeAdapter(
     OpenAIDecisionRequestBody
 )
-_DECISIONS_RESPONSE_ADAPTER: Final[TypeAdapter[DecisionsResponse]] = TypeAdapter(DecisionsResponse)
 _GENERAL_SETTINGS_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 _OPTIONAL_STRING_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 _OPTIONAL_FLOAT_ADAPTER: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
@@ -48,12 +46,11 @@ async def _request_data(request: Request, user_api_key_dict: UserAPIKeyAuth) -> 
         raise await _invalid_request(raw_data={}, error=error, user_api_key_dict=user_api_key_dict)
 
 
-async def _process_systemone(
+async def _process_decisions(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth,
-    raw_data: Mapping[str, object],
-    openai_body: OpenAIDecisionRequestBody | None,
+    body_adapter: TypeAdapter[DecisionsRequestBody] | TypeAdapter[OpenAIDecisionRequestBody],
 ) -> object:
     from litellm.proxy.proxy_server import (
         general_settings as proxy_general_settings,
@@ -76,15 +73,18 @@ async def _process_systemone(
         user_temperature as proxy_user_temperature,
     )
 
-    data: Final = dict(raw_data if openai_body is None else to_systemone_request(raw_data, openai_body))
+    data: Final = await _request_data(request, user_api_key_dict)
+    try:
+        body_adapter.validate_python(data)
+    except ValidationError as error:
+        raise await _invalid_request(raw_data=data, error=error, user_api_key_dict=user_api_key_dict)
     general_settings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(proxy_general_settings)
     user_api_base: Final = _OPTIONAL_STRING_ADAPTER.validate_python(proxy_user_api_base)
     user_model: Final = _OPTIONAL_STRING_ADAPTER.validate_python(proxy_user_model)
     user_temperature: Final = _OPTIONAL_FLOAT_ADAPTER.validate_python(proxy_user_temperature)
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        _DECISIONS_REQUEST_BODY_ADAPTER.validate_python(data)
-        result: Final[object] = await processor.base_process_llm_request(
+        return await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -102,15 +102,6 @@ async def _process_systemone(
             user_api_base=user_api_base,
             version=version,
         )
-        if openai_body is None or isinstance(result, Response):
-            return result
-        return to_openai_response(
-            _DECISIONS_RESPONSE_ADAPTER.validate_python(result),
-            openai_body.questions,
-            str(data.get("model", "")),
-        )
-    except ValidationError as error:
-        raise await _invalid_request(raw_data=data, error=error, user_api_key_dict=user_api_key_dict)
     except Exception as error:
         raise await processor._handle_llm_api_exception(
             e=error,
@@ -137,12 +128,11 @@ async def systemone(
     fastapi_response: Response,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
-    return await _process_systemone(
+    return await _process_decisions(
         request=request,
         fastapi_response=fastapi_response,
         user_api_key_dict=user_api_key_dict,
-        raw_data=await _request_data(request, user_api_key_dict),
-        openai_body=None,
+        body_adapter=_DECISIONS_REQUEST_BODY_ADAPTER,
     )
 
 
@@ -163,15 +153,9 @@ async def decisions(
     fastapi_response: Response,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
-    raw_data: Final = await _request_data(request, user_api_key_dict)
-    try:
-        openai_body: Final = _OPENAI_DECISION_REQUEST_BODY_ADAPTER.validate_python(raw_data)
-    except ValidationError as error:
-        raise await _invalid_request(raw_data=raw_data, error=error, user_api_key_dict=user_api_key_dict)
-    return await _process_systemone(
+    return await _process_decisions(
         request=request,
         fastapi_response=fastapi_response,
         user_api_key_dict=user_api_key_dict,
-        raw_data=raw_data,
-        openai_body=openai_body,
+        body_adapter=_OPENAI_DECISION_REQUEST_BODY_ADAPTER,
     )

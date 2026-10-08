@@ -1,4 +1,3 @@
-import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final
@@ -6,117 +5,267 @@ from typing import Final
 from pydantic import TypeAdapter
 from typing_extensions import assert_never
 
+from litellm.llms.base_llm.decisions.transformation import decisions_text
 from litellm.types.decisions import (
-    ChoiceAnswer,
-    ChoiceQuestion,
-    DecisionAnswer,
-    DecisionQuestion,
+    DecisionsIRAnswer,
+    DecisionsIRChoiceAnswer,
+    DecisionsIRChoiceOption,
+    DecisionsIRChoiceProbability,
+    DecisionsIRChoiceQuestion,
+    DecisionsIRMessages,
+    DecisionsIRPredicateAnswer,
+    DecisionsIRPredicateQuestion,
+    DecisionsIRQuestion,
+    DecisionsIRRefusal,
+    DecisionsIRRequest,
+    DecisionsIRResponse,
+    DecisionsIRScoreAnswer,
+    DecisionsIRScoreLevel,
+    DecisionsIRScoreProbability,
+    DecisionsIRScoreQuestion,
+    DecisionsIRState,
+    DecisionsIRUsage,
     DecisionsJSON,
-    DecisionsRequestBody,
-    DecisionsResponse,
-    DecisionsUsage,
-    NoulAnswer,
-    NoulQuestion,
     OpenAIChoiceAnswer,
+    OpenAIChoiceProbability,
+    OpenAIChoiceQuestion,
     OpenAIDecisionAnswer,
+    OpenAIDecisionInput,
+    OpenAIDecisionInputTokensDetails,
+    OpenAIDecisionOutputTokensDetails,
+    OpenAIDecisionQuestion,
+    OpenAIDecisionRequestBody,
     OpenAIDecisionResponse,
+    OpenAIDecisionUsage,
     OpenAIPredicateAnswer,
+    OpenAIPredicateQuestion,
     OpenAIRefusalAnswer,
     OpenAIScoreAnswer,
-    ScoreAnswer,
-    ScoreQuestion,
+    OpenAIScoreProbability,
+    OpenAIScoreQuestion,
     systemone_choice_key,
 )
 
 _OPENAI_RESPONSE_ADAPTER: Final[TypeAdapter[OpenAIDecisionResponse]] = TypeAdapter(OpenAIDecisionResponse)
 
 
-def _text(value: DecisionsJSON) -> str:
-    return value if isinstance(value, str) else json.dumps(value)
+def _ir_input(decision_input: OpenAIDecisionInput) -> DecisionsIRState | DecisionsIRMessages:
+    if isinstance(decision_input, str):
+        return DecisionsIRState(state=decision_input)
+    return DecisionsIRMessages(messages=tuple(decision_input))
 
 
-def _instructions(instructions: DecisionsJSON | None) -> Mapping[str, str]:
-    return {} if instructions is None else {"instructions": _text(instructions)}
+def _ir_question(question: OpenAIDecisionQuestion) -> DecisionsIRQuestion:
+    match question:
+        case OpenAIPredicateQuestion():
+            return DecisionsIRPredicateQuestion(name=question.name, instructions=question.instructions)
+        case OpenAIChoiceQuestion():
+            return DecisionsIRChoiceQuestion(
+                name=question.name,
+                instructions=question.instructions,
+                choices=tuple(
+                    DecisionsIRChoiceOption(value=option.value, description=option.description)
+                    for option in question.choices
+                ),
+            )
+        case OpenAIScoreQuestion():
+            return DecisionsIRScoreQuestion(
+                name=question.name,
+                instructions=question.instructions,
+                levels=tuple(
+                    DecisionsIRScoreLevel(label=level.label, description=level.description) for level in question.levels
+                ),
+            )
+        case _:
+            assert_never(question)
 
 
-def _predicate_instructions(question: NoulQuestion) -> str:
-    instructions: Final = () if question.instructions is None else (_text(question.instructions),)
+def openai_request_to_ir(request: OpenAIDecisionRequestBody) -> DecisionsIRRequest:
+    return DecisionsIRRequest(
+        input=_ir_input(request.input),
+        questions=tuple(_ir_question(question) for question in request.questions),
+        safety_identifier=request.safety_identifier,
+    )
+
+
+def _text_field(key: str, value: DecisionsJSON | None) -> Mapping[str, str]:
+    return {} if value is None else {key: decisions_text(value)}
+
+
+def _predicate_instructions(question: DecisionsIRPredicateQuestion) -> str:
+    instructions: Final = () if question.instructions is None else (decisions_text(question.instructions),)
     criteria: Final = tuple(
-        f"Answer {answer} when: {_text(rule)}" for answer, rule in (question.criteria or {}).items() if rule is not None
+        f"Answer {answer} when: {decisions_text(rule)}"
+        for answer, rule in (question.criteria or {}).items()
+        if rule is not None
     )
     return "\n\n".join((*instructions, *criteria))
 
 
-def _choice(value: str, description: DecisionsJSON | None) -> Mapping[str, str]:
-    return {"value": value} if description is None else {"value": value, "description": _text(description)}
-
-
-def _openai_question(name: str, question: DecisionQuestion) -> Mapping[str, object]:
+def _openai_question(question: DecisionsIRQuestion) -> Mapping[str, object]:
     match question:
-        case NoulQuestion():
-            return {"type": "predicate", "name": name, "instructions": _predicate_instructions(question)}
-        case ChoiceQuestion():
+        case DecisionsIRPredicateQuestion():
+            return {
+                "type": "predicate",
+                **_text_field("name", question.name),
+                "instructions": _predicate_instructions(question),
+            }
+        case DecisionsIRChoiceQuestion():
             return {
                 "type": "choice",
-                "name": name,
-                **_instructions(question.instructions),
-                "choices": [_choice(value, description) for value, description in question.criteria.items()],
+                **_text_field("name", question.name),
+                **_text_field("instructions", question.instructions),
+                "choices": [
+                    {"value": option.value, **_text_field("description", option.description)}
+                    for option in question.choices
+                ],
             }
-        case ScoreQuestion():
+        case DecisionsIRScoreQuestion():
             return {
                 "type": "score",
-                "name": name,
-                **_instructions(question.instructions),
-                "levels": [{"label": _text(criterion)} for criterion in question.criteria],
+                **_text_field("name", question.name),
+                **_text_field("instructions", question.instructions),
+                "levels": [
+                    {"label": decisions_text(level.label), **_text_field("description", level.description)}
+                    for level in question.levels
+                ],
             }
         case _:
             assert_never(question)
 
 
-def to_openai_request(model: str, request: DecisionsRequestBody) -> Mapping[str, object]:
+def _openai_input(decision_input: DecisionsIRState | DecisionsIRMessages) -> str | Sequence[Mapping[str, object]]:
+    match decision_input:
+        case DecisionsIRState():
+            return decisions_text(decision_input.state)
+        case DecisionsIRMessages():
+            return [message.model_dump(mode="json", exclude_none=True) for message in decision_input.messages]
+        case _:
+            assert_never(decision_input)
+
+
+def ir_to_openai_request(model: str, request: DecisionsIRRequest) -> Mapping[str, object]:
     return {
         "model": model,
-        "input": _text(request.state),
-        "questions": [_openai_question(name, question) for name, question in request.questions.items()],
+        "input": _openai_input(request.input),
+        "questions": [_openai_question(question) for question in request.questions],
+        **_text_field("safety_identifier", request.safety_identifier),
     }
 
 
-def _systemone_answer(answer: OpenAIDecisionAnswer) -> DecisionAnswer | None:
-    match answer:
-        case OpenAIPredicateAnswer():
-            return NoulAnswer(type="noul", noul=answer.probability)
-        case OpenAIChoiceAnswer():
-            return ChoiceAnswer(
-                type="choice",
-                choice=systemone_choice_key(answer.choice),
+def _level_label(question: DecisionsIRScoreQuestion, probability: OpenAIScoreProbability) -> DecisionsJSON:
+    if 0 <= probability.value < len(question.levels):
+        return question.levels[probability.value].label
+    return probability.label
+
+
+def _ir_answer(question: DecisionsIRQuestion, answer: OpenAIDecisionAnswer | None) -> DecisionsIRAnswer:
+    match question, answer:
+        case DecisionsIRPredicateQuestion(), OpenAIPredicateAnswer():
+            return DecisionsIRPredicateAnswer(probability=answer.probability)
+        case DecisionsIRChoiceQuestion(), OpenAIChoiceAnswer():
+            return DecisionsIRChoiceAnswer(
+                choice=answer.choice,
                 confidence=answer.confidence,
-                probabilities={systemone_choice_key(item.value): item.probability for item in answer.probabilities},
+                probabilities=tuple(
+                    DecisionsIRChoiceProbability(value=item.value, probability=item.probability)
+                    for item in answer.probabilities
+                ),
             )
-        case OpenAIScoreAnswer():
-            return ScoreAnswer(
-                type="score",
+        case DecisionsIRScoreQuestion(), OpenAIScoreAnswer():
+            return DecisionsIRScoreAnswer(
                 score=answer.score,
                 confidence=answer.confidence,
-                legend={str(item.value): item.label for item in answer.probabilities},
-                probabilities={str(item.value): item.probability for item in answer.probabilities},
+                probabilities=tuple(
+                    DecisionsIRScoreProbability(
+                        value=item.value, label=_level_label(question, item), probability=item.probability
+                    )
+                    for item in answer.probabilities
+                ),
             )
-        case OpenAIRefusalAnswer():
-            return None
         case _:
-            assert_never(answer)
+            return DecisionsIRRefusal()
 
 
-def _named_answers(answers: Sequence[OpenAIDecisionAnswer]) -> Mapping[str, DecisionAnswer]:
-    translated: Final = ((answer.name, _systemone_answer(answer)) for answer in answers)
-    return {name: answer for name, answer in translated if name is not None and answer is not None}
-
-
-def to_systemone_response(payload: object) -> DecisionsResponse:
-    response: Final = _OPENAI_RESPONSE_ADAPTER.validate_python(payload)
-    return DecisionsResponse(
+def openai_response_to_ir(response: OpenAIDecisionResponse, request: DecisionsIRRequest) -> DecisionsIRResponse:
+    answers: Final = response.answers
+    return DecisionsIRResponse(
         model=response.model,
-        answers=_named_answers(response.answers),
-        usage=DecisionsUsage(input_tokens=response.usage.input_tokens, output_tokens=response.usage.output_tokens),
+        answers=tuple(
+            _ir_answer(question, answers[index] if index < len(answers) else None)
+            for index, question in enumerate(request.questions)
+        ),
+        usage=DecisionsIRUsage(
+            input_tokens=response.usage.input_tokens,
+            output_tokens=response.usage.output_tokens,
+            cached_tokens=response.usage.input_tokens_details.cached_tokens,
+            cache_write_tokens=response.usage.input_tokens_details.cache_write_tokens,
+            reasoning_tokens=response.usage.output_tokens_details.reasoning_tokens,
+        ),
+    )
+
+
+def _openai_choice_answer(question: DecisionsIRChoiceQuestion, answer: DecisionsIRChoiceAnswer) -> OpenAIChoiceAnswer:
+    probabilities: Final = {systemone_choice_key(item.value): item.probability for item in answer.probabilities}
+    return OpenAIChoiceAnswer(
+        name=question.name,
+        choice=answer.choice,
+        probabilities=tuple(
+            OpenAIChoiceProbability(
+                value=option.value, probability=probabilities.get(systemone_choice_key(option.value), 0.0)
+            )
+            for option in question.choices
+        ),
+        confidence=answer.confidence,
+    )
+
+
+def _openai_score_answer(question: DecisionsIRScoreQuestion, answer: DecisionsIRScoreAnswer) -> OpenAIScoreAnswer:
+    probabilities: Final = {item.value: item.probability for item in answer.probabilities}
+    return OpenAIScoreAnswer(
+        name=question.name,
+        score=answer.score,
+        probabilities=tuple(
+            OpenAIScoreProbability(
+                value=index, label=decisions_text(level.label), probability=probabilities.get(index, 0.0)
+            )
+            for index, level in enumerate(question.levels)
+        ),
+        confidence=answer.confidence,
+    )
+
+
+def _openai_answer(question: DecisionsIRQuestion, answer: DecisionsIRAnswer) -> OpenAIDecisionAnswer:
+    match question, answer:
+        case DecisionsIRPredicateQuestion(), DecisionsIRPredicateAnswer():
+            return OpenAIPredicateAnswer(name=question.name, probability=answer.probability)
+        case DecisionsIRChoiceQuestion(), DecisionsIRChoiceAnswer():
+            return _openai_choice_answer(question, answer)
+        case DecisionsIRScoreQuestion(), DecisionsIRScoreAnswer():
+            return _openai_score_answer(question, answer)
+        case _:
+            return OpenAIRefusalAnswer(name=question.name)
+
+
+def ir_to_openai_response(
+    response: DecisionsIRResponse, request: DecisionsIRRequest, requested_model: str
+) -> OpenAIDecisionResponse:
+    return OpenAIDecisionResponse(
+        model=response.model or requested_model,
+        answers=tuple(
+            _openai_answer(question, answer)
+            for question, answer in zip(request.questions, response.answers, strict=True)
+        ),
+        usage=OpenAIDecisionUsage(
+            input_tokens=response.usage.input_tokens,
+            input_tokens_details=OpenAIDecisionInputTokensDetails(
+                cached_tokens=response.usage.cached_tokens,
+                cache_write_tokens=response.usage.cache_write_tokens,
+            ),
+            output_tokens=response.usage.output_tokens,
+            output_tokens_details=OpenAIDecisionOutputTokensDetails(reasoning_tokens=response.usage.reasoning_tokens),
+            total_tokens=response.usage.input_tokens + response.usage.output_tokens,
+        ),
     )
 
 
@@ -141,11 +290,11 @@ class OpenAIDecisionsEndpoint:
     def endpoint_url(self, api_base: str, model: str) -> str:
         return f"{api_base.rstrip('/').removesuffix('/v1')}/v1/decisions"
 
-    def request_body(self, model: str, request: DecisionsRequestBody) -> Mapping[str, object]:
-        return to_openai_request(model, request)
+    def request_body(self, model: str, request: DecisionsIRRequest) -> Mapping[str, object]:
+        return ir_to_openai_request(model, request)
 
-    def unwrap_response(self, payload: object) -> DecisionsResponse:
-        return to_systemone_response(payload)
+    def parse_response(self, payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
+        return openai_response_to_ir(_OPENAI_RESPONSE_ADAPTER.validate_python(payload), request)
 
 
 OPENAI_DECISIONS_ENDPOINT: Final[OpenAIDecisionsEndpoint] = OpenAIDecisionsEndpoint()
