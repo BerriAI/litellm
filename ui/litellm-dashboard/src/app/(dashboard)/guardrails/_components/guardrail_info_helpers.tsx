@@ -12,6 +12,7 @@ import deepkeepLogo from "../../../../../public/assets/logos/deepkeep.svg";
 import enkryptAiLogo from "../../../../../public/assets/logos/enkrypt_ai.avif";
 import googleLogo from "../../../../../public/assets/logos/google.svg";
 import guardrailsAiLogo from "../../../../../public/assets/logos/guardrails_ai.jpeg";
+import highflameLogo from "../../../../../public/assets/logos/highflame.png";
 import javelinLogo from "../../../../../public/assets/logos/javelin.png";
 import lakeraAiLogo from "../../../../../public/assets/logos/lakeraai.jpeg";
 import lassoLogo from "../../../../../public/assets/logos/lasso.png";
@@ -92,6 +93,7 @@ export const guardrail_provider_map: Record<string, string> = {
   "LLM Shield Proxy": "llm_shield_proxy",
   Conduct: "conduct",
   DecisionModel: "decision_model",
+  Highflame: "highflame",
 };
 
 // Search aliases matched alongside the provider label in the add-guardrail provider combobox
@@ -328,6 +330,7 @@ export const guardrailLogoMap = {
   Wingback: wingbackLogo.src,
   "Airia Guardrail": airiaLogo.src,
   "Decision Model": litellmLogo.src,
+  Highflame: highflameLogo.src,
 } satisfies Record<string, string>;
 
 export const getGuardrailLogo = (displayName: string): string | undefined =>
