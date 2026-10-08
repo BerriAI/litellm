@@ -8,6 +8,8 @@ This test ensures that:
 """
 
 import json
+from contextlib import AbstractContextManager
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -667,15 +669,17 @@ CLIP_BLOCK = {
 CLIP_PART_METADATA = {"fps": 2.0, "startOffset": "3s", "endOffset": "6s"}
 
 
-def _mock_embedding_call(client, url, response_json):
-    mock_get_token = patch(
+def _mock_embedding_call(
+    response_json: dict[str, object],
+) -> tuple[AbstractContextManager[MagicMock], AbstractContextManager[MagicMock], MagicMock]:
+    mock_get_token: Final = patch(
         "litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_handler.GoogleBatchEmbeddings._get_token_and_url"
     )
-    mock_auth = patch(
+    mock_auth: Final = patch(
         "litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_handler.GoogleBatchEmbeddings._ensure_access_token",
         side_effect=lambda *args, **kwargs: (None, "test-project"),
     )
-    mock_response = MagicMock()
+    mock_response: Final = MagicMock()
     mock_response.status_code = 200
     mock_response.json.return_value = response_json
     return mock_get_token, mock_auth, mock_response
@@ -684,9 +688,7 @@ def _mock_embedding_call(client, url, response_json):
 def test_gemini_batch_path_sends_file_block_video_metadata():
     client = HTTPHandler()
     mock_get_token, mock_auth, mock_response = _mock_embedding_call(
-        client,
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:batchEmbedContents",
-        {"embeddings": [{"values": [0.1, 0.2]}, {"values": [0.3, 0.4]}]},
+        {"embeddings": [{"values": [0.1, 0.2]}, {"values": [0.3, 0.4]}]}
     )
     with patch.object(client, "post", return_value=mock_response) as mock_post, mock_auth, mock_get_token as token:
         token.return_value = (
@@ -711,9 +713,7 @@ def test_gemini_batch_path_sends_file_block_video_metadata():
 def test_vertex_embed_content_path_sends_file_block_video_metadata():
     client = HTTPHandler()
     url = "https://us-central1-aiplatform.googleapis.com/v1/projects/test/locations/us-central1/publishers/google/models/gemini-embedding-2-preview:embedContent"
-    mock_get_token, mock_auth, mock_response = _mock_embedding_call(
-        client, url, {"embedding": {"values": [0.1, 0.2]}}
-    )
+    mock_get_token, mock_auth, mock_response = _mock_embedding_call({"embedding": {"values": [0.1, 0.2]}})
     with patch.object(client, "post", return_value=mock_response) as mock_post, mock_auth, mock_get_token as token:
         token.return_value = ({"Authorization": "Bearer test-token"}, url)
         response = litellm.embedding(
@@ -733,11 +733,7 @@ def test_vertex_embed_content_path_sends_file_block_video_metadata():
 def test_file_block_with_files_reference_is_resolved_through_the_files_api():
     client = HTTPHandler()
     files_uri = "https://generativelanguage.googleapis.com/v1beta/files/clip123"
-    mock_get_token, mock_auth, mock_response = _mock_embedding_call(
-        client,
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:batchEmbedContents",
-        {"embeddings": [{"values": [0.1, 0.2]}]},
-    )
+    mock_get_token, mock_auth, mock_response = _mock_embedding_call({"embeddings": [{"values": [0.1, 0.2]}]})
     file_lookup = MagicMock()
     file_lookup.status_code = 200
     file_lookup.json.return_value = {"mimeType": "video/mp4", "uri": files_uri}

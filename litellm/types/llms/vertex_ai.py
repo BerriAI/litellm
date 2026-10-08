@@ -10,9 +10,8 @@ from typing_extensions import (
 from litellm.types.llms.openai import ChatCompletionFileObject, EmbeddingInput
 
 # Gemini supports nested-list inputs (e.g. [["text", "image"]]) as an explicit
-# opt-in for combined embeddings, and an OpenAI file content block as an element
-# so a media part can carry its own mime type and video_metadata — provider-specific
-# extensions of the OpenAI-faithful EmbeddingInput shape.
+# opt-in for combined embeddings — a provider-specific extension of the
+# OpenAI-faithful EmbeddingInput shape.
 GeminiEmbeddingElement = str | ChatCompletionFileObject
 GeminiEmbeddingInput = (
     EmbeddingInput | list[GeminiEmbeddingElement] | list[list[str]] | list[list[GeminiEmbeddingElement]]
