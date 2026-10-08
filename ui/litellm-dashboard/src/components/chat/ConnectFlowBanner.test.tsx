@@ -3,16 +3,19 @@ import { render, screen } from "@testing-library/react";
 import type { ConnectFlowStatus } from "@/components/networking";
 import ConnectFlowBanner, { isLoopbackOrigin } from "./ConnectFlowBanner";
 
+const { startOAuthFlow } = vi.hoisted(() => ({ startOAuthFlow: vi.fn() }));
+
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: () => "https://gateway.example.com",
 }));
 
 vi.mock("@/hooks/useUserMcpOAuthFlow", () => ({
-  useUserMcpOAuthFlow: () => ({ startOAuthFlow: vi.fn(), status: "idle" }),
+  useUserMcpOAuthFlow: () => ({ startOAuthFlow, status: "idle" }),
 }));
 
 afterEach(() => {
   vi.restoreAllMocks();
+  startOAuthFlow.mockClear();
 });
 
 const unscoped = (client_origin: string): ConnectFlowStatus => ({
@@ -72,6 +75,7 @@ describe("ConnectFlowBanner", () => {
 
     expect(screen.getByText("Allow https://claude.ai to use alpha, beta")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Connect" })).toHaveLength(2);
+    expect(startOAuthFlow).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: /finish connecting/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
 

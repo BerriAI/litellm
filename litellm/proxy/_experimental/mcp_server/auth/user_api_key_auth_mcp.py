@@ -280,10 +280,12 @@ def _gateway_dcr_challenge_scope(
     if any(server is None or not server.advertises_gateway_authorization_server for _, server in resolved):
         return None
     servers: Final = tuple((entry, server) for entry, server in resolved if server is not None)
-    unique_servers_by_id: Final[dict[str, tuple[str, MCPServer]]] = {}
-    for entry, server in servers:
-        unique_servers_by_id.setdefault(server.server_id, (entry, server))
-    unique_servers: Final = tuple(unique_servers_by_id.values())
+    unique_servers: Final = tuple(
+        (entry, server)
+        for index, (entry, server) in enumerate(servers)
+        if server.server_id
+        not in frozenset(previous_server.server_id for _, previous_server in servers[:index])
+    )
     tokens: Final = tuple(
         gateway_server_scope(entry) or gateway_server_scope(server.server_id) for entry, server in unique_servers
     )

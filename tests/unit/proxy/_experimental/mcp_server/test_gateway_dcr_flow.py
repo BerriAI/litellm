@@ -28,6 +28,7 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
     MintedProxyCredential,
     SubjectIdentity,
     SubjectTokenRefusal,
+    _ConnectFlow,
     _GatewayAuthCode,
     _open_sealed,
     _seal,
@@ -44,6 +45,7 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
     register_aggregate_client,
     revoke_refresh_token,
 )
+from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
     SessionBearerAdmitted,
     SessionRefreshOpened,
@@ -1109,6 +1111,107 @@ def _sealed_wire_json(sealed, prefix, debug_key):
     return json.loads(raw)
 
 
+def test_legacy_server_scope_payloads_open_as_single_server_ids():
+    flow_payload: Final = {
+        "user_id": "u1",
+        "client_id": "client-1",
+        "redirect_uri": REDIRECT_URI,
+        "state": "state",
+        "code_challenge": CODE_CHALLENGE,
+        "jti": "flow-jti",
+        "exp": 2,
+        "resource_server_id": "server-1",
+    }
+    encrypted_flow_payload: Final = encrypt_value_helper(json.dumps(flow_payload))
+    assert isinstance(encrypted_flow_payload, str)
+    opened_flow: Final = _open_sealed(
+        encrypted_flow_payload, "", _ConnectFlow, "gateway_connect_flow"
+    )
+    assert opened_flow is not None
+    assert opened_flow.resource_server_ids == ("server-1",)
+    rejected_flow_payload: Final = encrypt_value_helper(
+        json.dumps(flow_payload | {"resource_server_ids": ["server-1"]})
+    )
+    assert isinstance(rejected_flow_payload, str)
+    assert _open_sealed(rejected_flow_payload, "", _ConnectFlow, "gateway_connect_flow") is None
+
+    code_payload: Final = {
+        "user_id": "u1",
+        "client_id": "client-1",
+        "redirect_uri": REDIRECT_URI,
+        "code_challenge": CODE_CHALLENGE,
+        "jti": "code-jti",
+        "iat": 1,
+        "exp": 2,
+        "resource_server_id": "server-1",
+    }
+    encrypted_code_payload: Final = encrypt_value_helper(json.dumps(code_payload))
+    assert isinstance(encrypted_code_payload, str)
+    opened_code: Final = _open_sealed(
+        f"{GATEWAY_AUTH_CODE_PREFIX}{encrypted_code_payload}",
+        GATEWAY_AUTH_CODE_PREFIX,
+        _GatewayAuthCode,
+        _AUTH_CODE_DEBUG_KEY,
+    )
+    assert opened_code is not None
+    assert opened_code.resource_server_ids == ("server-1",)
+    rejected_code_payload: Final = encrypt_value_helper(
+        json.dumps(code_payload | {"resource_server_ids": ["server-1"]})
+    )
+    assert isinstance(rejected_code_payload, str)
+    assert (
+        _open_sealed(
+            f"{GATEWAY_AUTH_CODE_PREFIX}{rejected_code_payload}",
+            GATEWAY_AUTH_CODE_PREFIX,
+            _GatewayAuthCode,
+            _AUTH_CODE_DEBUG_KEY,
+        )
+        is None
+    )
+
+
+def test_single_server_flow_and_code_payloads_keep_the_legacy_wire_key():
+    flow_payload: Final = _sealed_wire_json(
+        _seal(
+            "",
+            _ConnectFlow(
+                user_id="u1",
+                client_id="client-1",
+                redirect_uri=REDIRECT_URI,
+                state="state",
+                code_challenge=CODE_CHALLENGE,
+                jti="flow-jti",
+                exp=2,
+                resource_server_ids=("server-1",),
+            ),
+        ),
+        "",
+        "gateway_connect_flow",
+    )
+    assert flow_payload["resource_server_id"] == "server-1"
+    assert "resource_server_ids" not in flow_payload
+
+    code_payload: Final = _sealed_wire_json(
+        _seal(
+            GATEWAY_AUTH_CODE_PREFIX,
+            _GatewayAuthCode(
+                user_id="u1",
+                client_id="client-1",
+                redirect_uri=REDIRECT_URI,
+                code_challenge=CODE_CHALLENGE,
+                jti="code-jti",
+                iat=1,
+                exp=2,
+                resource_server_ids=("server-1",),
+            ),
+        ),
+        GATEWAY_AUTH_CODE_PREFIX,
+        _AUTH_CODE_DEBUG_KEY,
+    )
+    assert code_payload["resource_server_id"] == "server-1"
+    assert "resource_server_ids" not in code_payload
+
+
 @pytest.mark.asyncio
 async def test_scoped_authorize_runs_connect_page_with_sealed_scope():
     """LIT-4917 plus LIT-7075: a per-server RFC 8707 resource naming a gateway-managed oauth2
@@ -1128,9 +1231,9 @@ async def test_scoped_authorize_runs_connect_page_with_sealed_scope():
     assert location.path == "/ui/connect"
     assert set(parse_qs(location.query)) == {"connect_flow"}
     _, cookies = _flow_cookie_from(response)
-    assert _sealed_wire_json(next(iter(cookies.values())), "", "gateway_connect_flow")["resource_server_ids"] == [
+    assert _sealed_wire_json(next(iter(cookies.values())), "", "gateway_connect_flow")["resource_server_id"] == (
         "github-id"
-    ]
+    )
     described = await _describe_page(response, scoped_server=github, vendor=_VendorCredential("absent"))
     assert json.loads(described.body) == {
         "state": "interactive",
@@ -1149,9 +1252,9 @@ async def test_scoped_authorize_runs_connect_page_with_sealed_scope():
     assert completed.status_code == 303
     assert present.calls == [("u1", "github-id")]
     code = parse_qs(urlparse(completed.headers["location"]).query)["code"][0]
-    assert _sealed_wire_json(code, GATEWAY_AUTH_CODE_PREFIX, "gateway_authorization_code")["resource_server_ids"] == [
+    assert _sealed_wire_json(code, GATEWAY_AUTH_CODE_PREFIX, "gateway_authorization_code")["resource_server_id"] == (
         "github-id"
-    ]
+    )
     token_response = await _redeem(code, client_id)
     assert token_response.status_code == 200
     principal = _opened_principal(json.loads(token_response.body))
@@ -1175,7 +1278,7 @@ async def test_aggregate_scope_seals_server_through_redemption_and_refresh() -> 
     assert response.status_code == 303
     _, cookies = _flow_cookie_from(response)
     sealed_flow: Final = _sealed_wire_json(next(iter(cookies.values())), "", "gateway_connect_flow")
-    assert sealed_flow["resource_server_ids"] == ["github-id"]
+    assert sealed_flow["resource_server_id"] == "github-id"
 
     code: Final = await _finish_connect_page(response, scoped_server=github)
     cache: Final = DualCache()
@@ -1329,7 +1432,7 @@ async def test_per_server_resource_takes_precedence_over_conflicting_scope() -> 
         )
     _, cookies = _flow_cookie_from(response)
     sealed_flow: Final = _sealed_wire_json(next(iter(cookies.values())), "", "gateway_connect_flow")
-    assert sealed_flow["resource_server_ids"] == ["github-id"]
+    assert sealed_flow["resource_server_id"] == "github-id"
 
 
 @pytest.mark.asyncio

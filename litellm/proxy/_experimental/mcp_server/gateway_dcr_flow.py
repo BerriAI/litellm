@@ -47,12 +47,13 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Final, Literal, Protocol, TypeVar
+from typing import Final, Literal, Protocol, TypeVar, cast
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_serializer, model_validator
+from pydantic_core.core_schema import SerializerFunctionWrapHandler
 from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm._internal_context import with_service_target
@@ -298,13 +299,52 @@ class GatewayDcrClient(LiteLLMBaseModel):
     iat: int
 
 
-class _ConnectFlow(LiteLLMBaseModel):
+def _legacy_server_scope_payload(payload: object) -> object:
+    if not isinstance(payload, dict):
+        return payload
+    values: Final = cast(dict[str, object], payload)
+    if "resource_server_id" not in values:
+        return values
+    if "resource_server_ids" in values:
+        raise ValueError("sealed payload cannot contain both resource_server_id and resource_server_ids")
+    resource_server_id: Final = values["resource_server_id"]
+    server_scope: Final[dict[str, object]] = (
+        {"resource_server_ids": (resource_server_id,)} if resource_server_id is not None else {}
+    )
+    return {key: value for key, value in values.items() if key != "resource_server_id"} | server_scope
+
+
+def _server_scope_wire_payload(
+    payload: dict[str, object], resource_server_ids: tuple[str, ...] | None
+) -> dict[str, object]:
+    if resource_server_ids is None or len(resource_server_ids) != 1:
+        return payload
+    return {key: value for key, value in payload.items() if key != "resource_server_ids"} | {
+        "resource_server_id": resource_server_ids[0]
+    }
+
+
+class _ServerScopedSealedModel(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    resource_server_ids: tuple[str, ...] | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_server_scope(cls, payload: object) -> object:
+        return _legacy_server_scope_payload(payload)
+
+    @model_serializer(mode="wrap")
+    def _serialize_server_scope(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        payload: Final = cast(dict[str, object], handler(self))
+        return _server_scope_wire_payload(payload, self.resource_server_ids)
+
+
+class _ConnectFlow(_ServerScopedSealedModel):
     """One in-flight authorize: the SSO user it belongs to and the client parameters
     needed to mint the code at the finish step. Sealed into the per-flow cookie. ``jti``
     makes the flow single-use at complete; ``extra="forbid"`` rejects cross-type
     confusion."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
     user_id: str = Field(min_length=1)
     client_id: str = Field(min_length=1)
     redirect_uri: str = Field(min_length=1)
@@ -312,17 +352,15 @@ class _ConnectFlow(LiteLLMBaseModel):
     code_challenge: str = Field(min_length=1)
     jti: str = Field(min_length=1)
     exp: int
-    resource_server_ids: tuple[str, ...] | None = Field(default=None, min_length=1)
     audience: SessionAudience | None = None
 
 
-class _GatewayAuthCode(LiteLLMBaseModel):
+class _GatewayAuthCode(_ServerScopedSealedModel):
     """The gateway-sealed authorization code: the user consent it represents and the
     bindings the token endpoint must verify (client, redirect URI, PKCE challenge),
     plus a ``jti`` for the single-use guard. ``extra="forbid"`` rejects cross-type
     confusion."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
     user_id: str = Field(min_length=1)
     client_id: str = Field(min_length=1)
     redirect_uri: str = Field(min_length=1)
@@ -330,7 +368,6 @@ class _GatewayAuthCode(LiteLLMBaseModel):
     jti: str = Field(min_length=1)
     iat: int
     exp: int
-    resource_server_ids: tuple[str, ...] | None = Field(default=None, min_length=1)
     audience: SessionAudience | None = None
     team_id: str | None = None
 
@@ -591,10 +628,11 @@ def resolve_scoped_servers_from_scope(
     if any(server is None for server in resolved):
         return InvalidGatewayScope()
     servers: Final = tuple(server for server in resolved if server is not None)
-    servers_by_id: Final[dict[str, MCPServer]] = {}
-    for server in servers:
-        servers_by_id.setdefault(server.server_id, server)
-    return tuple(servers_by_id.values())
+    return tuple(
+        server
+        for index, server in enumerate(servers)
+        if server.server_id not in frozenset(previous.server_id for previous in servers[:index])
+    )
 
 
 def aggregate_authorize(

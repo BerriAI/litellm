@@ -109,7 +109,9 @@ const ConnectFlowBanner: React.FC<Props> = ({ flowHandle, flow, accessToken, onC
               accessToken={accessToken}
               onConnect={onConnected}
               variant="button"
-              autoStartKey={`litellm-mcp-autostart:${flowHandle}:${server.server_id}`}
+              {...(state === "multi"
+                ? {}
+                : { autoStartKey: `litellm-mcp-autostart:${flowHandle}:${server.server_id}` })}
             />
           ))}
           <form method="POST" action={action}>
