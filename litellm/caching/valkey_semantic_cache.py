@@ -175,26 +175,26 @@ class ValkeySemanticCache(RedisSemanticCache):
         if self._index_dim == dim:
             return
         try:
-            self.sync_client.ft(self.index_name).create_index(
+            self.sync_client.ft(self.index_name).create_index(  # pyright: ignore[reportUnknownMemberType]  # the from_url(lib_name=...) overload mismatch leaves sync_client's type unknown; .ft/.create_index inherit that
                 self._index_schema(dim), definition=self._index_definition()
             )
         except Exception as exc:
             if not self._is_index_exists_error(exc):
                 raise
-            self._assert_dim_matches(self.sync_client.ft(self.index_name).info(), dim)
+            self._assert_dim_matches(self.sync_client.ft(self.index_name).info(), dim)  # pyright: ignore[reportUnknownMemberType]  # the from_url(lib_name=...) overload mismatch leaves sync_client's type unknown; .ft/.info inherit that
         self._index_dim = dim
 
     async def _ensure_index_async(self, dim: int) -> None:
         if self._index_dim == dim:
             return
         try:
-            await self.async_client.ft(self.index_name).create_index(
+            await self.async_client.ft(self.index_name).create_index(  # pyright: ignore[reportUnknownMemberType]  # the from_url(lib_name=...) overload mismatch leaves async_client's type unknown; .ft/.create_index inherit that
                 self._index_schema(dim), definition=self._index_definition()
             )
         except Exception as exc:
             if not self._is_index_exists_error(exc):
                 raise
-            info: Final = await self.async_client.ft(self.index_name).info()
+            info: Final = await self.async_client.ft(self.index_name).info()  # pyright: ignore[reportUnknownMemberType]  # the from_url(lib_name=...) overload mismatch leaves async_client's type unknown; .ft/.info inherit that
             self._assert_dim_matches(info, dim)
         self._index_dim = dim
 
@@ -221,7 +221,7 @@ class ValkeySemanticCache(RedisSemanticCache):
 
     async def _async_search(self, key: str, embedding: Sequence[float]) -> object:
         """Run the KNN query on the async client, stopping the untyped search surface here."""
-        return await self.async_client.ft(self.index_name).search(
+        return await self.async_client.ft(self.index_name).search(  # pyright: ignore[reportUnknownMemberType]  # the from_url(lib_name=...) overload mismatch leaves async_client's type unknown; .ft/.search inherit that
             self._knn_query(key),
             query_params={"vec": self._embedding_to_bytes(embedding)},  # pyright: ignore[reportArgumentType]  # redis stubs omit bytes; KNN vectors are raw bytes at runtime
         )
@@ -273,10 +273,10 @@ class ValkeySemanticCache(RedisSemanticCache):
             self._ensure_index_sync(len(embedding))
 
             doc_key: Final = self._doc_key(key)
-            self.sync_client.hset(doc_key, mapping=self._doc_mapping(key, prompt, str(value), embedding))
+            self.sync_client.hset(doc_key, mapping=self._doc_mapping(key, prompt, str(value), embedding))  # pyright: ignore[reportUnknownMemberType]  # the from_url(lib_name=...) overload mismatch leaves sync_client's type unknown; .hset inherits that
             ttl: Final = self._get_ttl(**kwargs)
             if ttl is not None:
-                self.sync_client.expire(doc_key, ttl)
+                self.sync_client.expire(doc_key, ttl)  # pyright: ignore[reportUnknownMemberType]  # the from_url(lib_name=...) overload mismatch leaves sync_client's type unknown; .expire inherits that
         except Exception as e:
             print_verbose(f"Error in Valkey semantic-cache set_cache: {e}")
 
@@ -291,7 +291,7 @@ class ValkeySemanticCache(RedisSemanticCache):
             embedding: Final = self._get_embedding(prompt)
             self._ensure_index_sync(len(embedding))
 
-            search_result: Final = self.sync_client.ft(self.index_name).search(
+            search_result: Final = self.sync_client.ft(self.index_name).search(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the from_url(lib_name=...) overload mismatch leaves sync_client's type unknown; .ft/.search and their result inherit that
                 self._knn_query(key),
                 query_params={"vec": self._embedding_to_bytes(embedding)},  # pyright: ignore[reportArgumentType]  # redis stubs omit bytes; KNN vectors are raw bytes at runtime
             )
@@ -312,10 +312,10 @@ class ValkeySemanticCache(RedisSemanticCache):
             await self._ensure_index_async(len(embedding))
 
             doc_key: Final = self._doc_key(key)
-            await self.async_client.hset(doc_key, mapping=self._doc_mapping(key, prompt, str(value), embedding))
+            await self.async_client.hset(doc_key, mapping=self._doc_mapping(key, prompt, str(value), embedding))  # pyright: ignore[reportUnknownMemberType]  # the from_url(lib_name=...) overload mismatch leaves async_client's type unknown; .hset inherits that
             ttl: Final = self._get_ttl(**kwargs)
             if ttl is not None:
-                await self.async_client.expire(doc_key, ttl)
+                await self.async_client.expire(doc_key, ttl)  # pyright: ignore[reportUnknownMemberType]  # the from_url(lib_name=...) overload mismatch leaves async_client's type unknown; .expire inherits that
         except Exception as e:
             print_verbose(f"Error in async Valkey semantic-cache set_cache: {e}")
 
@@ -343,4 +343,4 @@ class ValkeySemanticCache(RedisSemanticCache):
             print_verbose(f"Error in Valkey semantic-cache async_set_cache_pipeline: {e}")
 
     async def _index_info(self) -> Mapping[str, object]:
-        return await self.async_client.ft(self.index_name).info()
+        return await self.async_client.ft(self.index_name).info()  # pyright: ignore[reportUnknownMemberType]  # the from_url(lib_name=...) overload mismatch leaves async_client's type unknown; .ft/.info inherit that
