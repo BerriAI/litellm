@@ -1,14 +1,19 @@
 import json
+import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
 import pytest
+from pydantic import JsonValue
 
+from litellm.proxy.lens.release import PROTOCOL_VERSION
 from tests.integration._support.client import Gateway, eventually, object_value, string_value
 from tests.integration._support.database import read_rows, write_rows
 from tests.integration._support.process import owned_proxy
+from tests.integration._support.wire import Reply, Request, wire_server
 from tests.integration.pricing.test_off_peak_pricing import off_peak_window
 
 RELEASE_TAG: Final = "v0.0.0-lens-integration"
@@ -20,10 +25,185 @@ def delete_lens(lens_id: str) -> None:
     assert read_rows('SELECT id FROM "LiteLLM_Lens" WHERE id=%s', (lens_id,)) == []
 
 
-@pytest.mark.parametrize("off_peak", (False, True))
-def test_lens_bills_selected_key_and_rechecks_its_permissions(
-    gateway: Gateway, tmp_path: Path, off_peak: bool
+@pytest.mark.parametrize("request_timeout", (0.3, 6000))
+def test_budget_admission_times_out_without_model_charges(
+    gateway: Gateway, tmp_path: Path, request_timeout: float
 ) -> None:
+    config: Final = tmp_path / "admission-timeout.json"
+    config.write_text(
+        json.dumps(
+            {
+                "model_list": [],
+                "litellm_settings": {"request_timeout": request_timeout},
+                "general_settings": {
+                    "master_key": "os.environ/LITELLM_MASTER_KEY",
+                    "database_url": "os.environ/DATABASE_URL",
+                    "store_model_in_db": True,
+                },
+            }
+        )
+    )
+    with (
+        owned_proxy(gateway, tmp_path, {"LITELLM_RELEASE_TAG": RELEASE_TAG}, config=config) as isolated,
+        isolated.scenario() as scenario,
+    ):
+        model: Final = scenario.model(input_cost_per_token=0.000001, output_cost_per_token=0.000002)
+        key: Final = scenario.key(models=[model])
+        worker: Final = isolated.post("/lens/workers/register", {"analysis_key_id": sha256(key.encode()).hexdigest()})
+        worker_id: Final = string_value(object_value(worker["worker"])["id"])
+        scenario.cleanups.callback(write_rows, 'DELETE FROM "LiteLLM_LensWorker" WHERE id=%s', (worker_id,))
+        lens: Final = isolated.post(
+            "/lens", {"name": "Admission timeout", "model": model, "enabled": False, "context": "Find problems"}
+        )
+        lens_id: Final = string_value(lens["id"])
+        scenario.cleanups.callback(delete_lens, lens_id)
+        token: Final = string_value(worker["token"])
+        claimed: Final = isolated.post(
+            f"/lens/worker/claim?protocol_version={PROTOCOL_VERSION}&worker_release={RELEASE_TAG}", {}, key=token
+        )
+        job_id: Final = string_value(object_value(claimed["job"])["id"])
+        now: Final = datetime.now(timezone.utc)
+        holds: Final = [
+            {
+                "id": "other-request",
+                "job_id": job_id,
+                "amount": object_value(lens["settings"])["monthly_budget"],
+                "month": now.strftime("%Y-%m"),
+                "expires_at": (now + timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
+            }
+        ]
+        write_rows(
+            "UPDATE \"LiteLLM_Lens\" SET data=jsonb_set(data, '{reservations}', %s::jsonb) WHERE id=%s",
+            (json.dumps(holds), lens_id),
+        )
+        response: Final = isolated.client.post(
+            f"/lens/worker/{lens_id}/{job_id}/model",
+            json={"prompt": "Review", "purpose": "extract"},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=90,
+        )
+        assert response.status_code == 504, response.text
+        assert "timed out waiting for budget" in response.text
+        saved: Final = isolated.get(f"/lens/{lens_id}")
+        assert saved["spent"] == 0
+        assert saved["reservations"] == holds
+        isolated.post(f"/lens/{lens_id}/cancel", {})
+
+
+@pytest.mark.parametrize("lose_lease", (False, True))
+def test_active_model_renews_budget_and_stops_if_its_lease_is_lost(
+    gateway: Gateway, tmp_path: Path, lose_lease: bool
+) -> None:
+    release: Final = threading.Event()
+    config: Final = tmp_path / "budget-lease.json"
+    config.write_text(
+        json.dumps(
+            {
+                "model_list": [],
+                "general_settings": {
+                    "master_key": "os.environ/LITELLM_MASTER_KEY",
+                    "database_url": "os.environ/DATABASE_URL",
+                    "store_model_in_db": True,
+                },
+            }
+        )
+    )
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST" and request.target == "/v1/chat/completions"
+        assert json.loads(request.body)["messages"][-1]["content"] == "Review"
+        assert release.wait(timeout=90), "The test must release its held provider response"
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": "chatcmpl-lens-budget-lease",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "gpt-4o-mini",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "{}"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 20, "completion_tokens": 20, "total_tokens": 40},
+                }
+            ).encode()
+        )
+
+    with (
+        wire_server(respond) as wire,
+        owned_proxy(gateway, tmp_path, {"LITELLM_RELEASE_TAG": RELEASE_TAG}, config=config) as isolated,
+        isolated.scenario() as scenario,
+    ):
+        model: Final = scenario.model(
+            api_base=wire.url + "/v1", input_cost_per_token=0.000001, output_cost_per_token=0.000002, max_tokens=100
+        )
+        key: Final = scenario.key(models=[model])
+        worker: Final = isolated.post("/lens/workers/register", {"analysis_key_id": sha256(key.encode()).hexdigest()})
+        worker_id: Final = string_value(object_value(worker["worker"])["id"])
+        scenario.cleanups.callback(write_rows, 'DELETE FROM "LiteLLM_LensWorker" WHERE id=%s', (worker_id,))
+        lens: Final = isolated.post(
+            "/lens", {"name": "Budget lease", "model": model, "enabled": False, "context": "Find problems"}
+        )
+        lens_id: Final = string_value(lens["id"])
+        scenario.cleanups.callback(delete_lens, lens_id)
+        token: Final = string_value(worker["token"])
+        claimed: Final = isolated.post(
+            f"/lens/worker/claim?protocol_version={PROTOCOL_VERSION}&worker_release={RELEASE_TAG}", {}, key=token
+        )
+        job_id: Final = string_value(object_value(claimed["job"])["id"])
+
+        def holds() -> list[JsonValue]:
+            value: Final = isolated.get(f"/lens/{lens_id}")["reservations"]
+            assert isinstance(value, list)
+            return value
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            call: Final = pool.submit(
+                isolated.client.post,
+                f"/lens/worker/{lens_id}/{job_id}/model",
+                json={
+                    "prompt": "Review",
+                    "purpose": "extract",
+                    "messages": [{"role": "user", "content": "Review"}],
+                },
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=100,
+            )
+            try:
+                first: Final = object_value(eventually(holds, lambda values: len(values) == 1)[0])
+                expiry: Final = datetime.fromisoformat(string_value(first["expires_at"]).replace("Z", "+00:00"))
+                assert 0 < (expiry - datetime.now(timezone.utc)).total_seconds() <= 300
+                eventually(wire.received.qsize, lambda count: count == 1)
+                if lose_lease:
+                    write_rows(
+                        "UPDATE \"LiteLLM_Lens\" SET data=jsonb_set(data, '{reservations,0,expires_at}', %s::jsonb) "
+                        "WHERE id=%s",
+                        (json.dumps(datetime.now(timezone.utc).isoformat()), lens_id),
+                    )
+                    response: Final = call.result(timeout=45)
+                    assert response.status_code == 503, response.text
+                    assert "reservation expired" in response.text
+                    assert isolated.get(f"/lens/{lens_id}")["spent"] == 0
+                else:
+                    refreshed: Final = eventually(
+                        holds,
+                        lambda values: bool(values) and object_value(values[0])["expires_at"] != first["expires_at"],
+                        seconds=45,
+                    )
+                    assert object_value(refreshed[0])["id"] == first["id"]
+                    assert object_value(refreshed[0])["amount"] == first["amount"]
+                    assert not call.done()
+                    release.set()
+                    completed: Final = call.result(timeout=15)
+                    assert completed.status_code == 200, completed.text
+                    assert completed.json()["cost"] == pytest.approx(20 * 0.000001 + 20 * 0.000002)
+                assert holds() == []
+            finally:
+                release.set()
+        isolated.post(f"/lens/{lens_id}/cancel", {})
+
+
+@pytest.mark.parametrize("off_peak", (False, True))
+def test_lens_bills_selected_key_and_rechecks_its_permissions(gateway: Gateway, tmp_path: Path, off_peak: bool) -> None:
     with (
         owned_proxy(gateway, tmp_path, {"LITELLM_RELEASE_TAG": RELEASE_TAG}) as isolated,
         isolated.scenario() as scenario,
@@ -71,7 +251,7 @@ def test_lens_bills_selected_key_and_rechecks_its_permissions(
                 pool.map(
                     lambda _: isolated.request(
                         "POST",
-                        "/lens/worker/claim?protocol_version=4&worker_release=" + RELEASE_TAG,
+                        f"/lens/worker/claim?protocol_version={PROTOCOL_VERSION}&worker_release={RELEASE_TAG}",
                         {},
                         key=worker_key,
                     ),
@@ -206,7 +386,7 @@ def test_worker_spend_logs_do_not_expose_investigation_content(
         scenario.cleanups.callback(delete_lens, lens_id)
         worker_token: Final = string_value(worker["token"])
         claim: Final = isolated.post(
-            "/lens/worker/claim?protocol_version=4&worker_release=" + RELEASE_TAG, {}, key=worker_token
+            f"/lens/worker/claim?protocol_version={PROTOCOL_VERSION}&worker_release={RELEASE_TAG}", {}, key=worker_token
         )
         job_id: Final = string_value(object_value(claim["job"])["id"])
         result: Final = isolated.post(

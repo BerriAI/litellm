@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class ModelAccessGroupBudget(BaseModel):
+class ModelAccessGroupBudget(LiteLLMBaseModel):
     """One model access group's budget, flattened out of its joined ``LiteLLM_ModelAccessGroupBudgetTable`` row.
 
     Both readers want only the recorded spend and the ceiling, and this sits on the per-request hot

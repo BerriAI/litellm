@@ -27,7 +27,7 @@ class AzureOpenAIExceptionMapping:
 
         # Keep the OpenAI-style body fields populated so downstream (proxy + SDK)
         # can surface `type` / `code` correctly.
-        openai_style_body: Final[dict[str, Any]] = {
+        openai_style_body: Final[dict[str, object]] = {
             "message": provider_message,
             "type": provider_type or "invalid_request_error",
             "code": provider_code or "content_policy_violation",
@@ -54,7 +54,7 @@ class AzureOpenAIExceptionMapping:
     @staticmethod
     def _extract_azure_error(
         original_exception: Exception,
-    ) -> tuple[dict[str, Any], dict | None]:
+    ) -> tuple[dict[str, object], dict | None]:
         """Extract Azure OpenAI error payload and inner error details.
 
         Azure error formats can vary by endpoint/version. Common shapes:

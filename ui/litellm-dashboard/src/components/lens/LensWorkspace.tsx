@@ -11,11 +11,12 @@ import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { LensServicesProvider, useLensAccessToken, useLensApi, useLiveLensServices } from "./data/LensServices";
 import { isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
 import { InvestigationsView } from "./investigations/InvestigationsView";
+import { DatasetsView } from "./datasets/DatasetsView";
 import { LensSettings } from "./settings/LensSettings";
 import { createLensDemo } from "./data/demo/createLensDemo";
 import { lensQueries } from "./data/queries";
 import { LensModeSwitch } from "./LensModeSwitch";
-import { frameCard } from "./ui/frame";
+import { FindingsView } from "./investigations/FindingsView";
 import { investigationActivity, listPollInterval } from "./model/status";
 import { cn } from "@/lib/cva.config";
 import { useDialogRoute, useIssueRoute, useLensRoute, type LensDialog, type LensTab } from "./route";
@@ -23,6 +24,7 @@ import { LensGettingStarted } from "./onboarding/LensGettingStarted";
 import { useLensReadiness, type LensReadiness } from "./hooks/useLensReadiness";
 import { OnboardingProvider, type Onboarding } from "./onboarding/OnboardingContext";
 import { traceRefOf, useOpenTraceRouting, type TraceRef } from "@/components/lens/traces/routing";
+import { AgentBreadcrumb, useLensAgents } from "./agents/AgentScoped";
 
 type WorkspaceProps = { accessToken: string; userRole: string; readOnly: boolean };
 
@@ -64,9 +66,6 @@ function DemoToggle({ demo, onChange }: { demo: boolean; onChange: (demo: boolea
   );
 }
 
-/** The inline investigation editor marks the tab so the notch says where you are, not just which tab is open. */
-const SETUP_LABELS: Partial<Record<LensDialog, string>> = { new: "New", edit: "Editing", duplicate: "Duplicate" };
-
 /** The one always-mounted `/lens` observer; every other reader is a plain cache subscriber. */
 function useLensOverview(enabled: boolean, settingsOpen: boolean) {
   const api = useLensApi();
@@ -87,6 +86,7 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
   const { dialog, openDialog } = useDialogRoute();
   const { issueKey } = useIssueRoute();
   const { trace, openTrace } = useOpenTraceRouting();
+  const agents = useLensAgents(accessToken);
   const canViewInvestigations = isProxyAdminTierRole(userRole);
   const isAdmin = isProxyAdminRole(userRole);
   const canConfigure = canViewInvestigations && !readOnly;
@@ -156,38 +156,31 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
           }}
           className="@container/lens-frame min-h-0 flex-1 gap-0"
         >
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-1">
-            <div className="contents">
-              <h1 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
-                <Aperture aria-hidden="true" className="size-5" strokeWidth={2} />
+          <header className="grid shrink-0 grid-cols-[1fr_auto] items-center gap-x-4 gap-y-2 border-b pb-2 @min-[42rem]/lens-frame:grid-cols-[auto_1fr_auto]">
+            <div className="flex min-w-0 items-center gap-2">
+              <h1 className="flex items-center gap-1.5 text-sm font-semibold">
+                <Aperture aria-hidden="true" className="size-4" strokeWidth={2} />
                 Lens
               </h1>
-              <p className="col-span-2 row-start-2 text-xs leading-5 text-muted-foreground">
-                Trace your agents and investigate what goes wrong.{" "}
-                <a
-                  href="https://docs.litellm.ai/docs/proxy/lens"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-0.5 font-medium text-foreground/80 underline-offset-2 hover:text-foreground hover:underline"
-                >
-                  Docs
-                  <ArrowUpRight aria-hidden="true" className="size-3" />
-                </a>
-              </p>
+              <AgentBreadcrumb agents={agents} />
             </div>
-            <div className="col-span-2 row-start-3 mt-2 @min-[24rem]/lens-frame:ml-8 @min-[24rem]/lens-frame:justify-self-start">
-              <LensModeSwitch
-                activity={activity}
-                demo={demo}
-                workers={workers}
-                setup={activeTab === "investigations" && dialog ? SETUP_LABELS[dialog] : undefined}
-              />
+            <div className="col-span-2 row-start-2 min-w-0 @min-[42rem]/lens-frame:col-span-1 @min-[42rem]/lens-frame:col-start-2 @min-[42rem]/lens-frame:row-start-1">
+              <LensModeSwitch activity={activity} workers={workers} />
             </div>
-            <div className="col-start-2 row-start-1 flex items-center justify-end pt-1">
+            <div className="col-start-2 row-start-1 flex items-center justify-end gap-4 @min-[42rem]/lens-frame:col-start-3">
+              <a
+                href="https://docs.litellm.ai/docs/proxy/lens"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-0.5 text-xs text-muted-foreground hover:text-foreground"
+              >
+                Docs
+                <ArrowUpRight aria-hidden="true" className="size-3" />
+              </a>
               <DemoToggle demo={demo} onChange={toggleDemo} />
             </div>
-          </div>
-          <div className={frameCard({ session: demo ? "demo" : "live" })}>
+          </header>
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-card">
             {showSetup ? (
               <TabsContent value={activeTab} keepMounted className={cn(PANEL, "p-3 sm:p-5")}>
                 {setupState.loading ? (
@@ -207,7 +200,16 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
                     isActive={activeTab === "traces"}
                     readOnly={readOnly}
                     canMintTracingKey={isAdmin}
+                    canViewFindings={canViewInvestigations}
+                    onSetUpSignals={canConfigure ? showSettings : undefined}
                   />
+                </TabsContent>
+                <TabsContent value="findings" className={PANEL}>
+                  {canViewInvestigations ? (
+                    <FindingsView readOnly={readOnly || !isAdmin} />
+                  ) : (
+                    <p className="py-6 text-sm text-muted-foreground">Findings require proxy administrator access.</p>
+                  )}
                 </TabsContent>
                 <TabsContent value="investigations" className={PANEL}>
                   {canViewInvestigations ? (
@@ -217,6 +219,9 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
                       Investigations require proxy administrator access. You can still view your traces.
                     </p>
                   )}
+                </TabsContent>
+                <TabsContent value="datasets" className={PANEL}>
+                  <DatasetsPanel canView={canViewInvestigations} isAdmin={isAdmin} readOnly={readOnly} />
                 </TabsContent>
               </>
             )}
@@ -242,6 +247,12 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
   );
 }
 
+function DatasetsPanel({ canView, isAdmin, readOnly }: { canView: boolean; isAdmin: boolean; readOnly: boolean }) {
+  if (!canView)
+    return <p className="py-6 text-sm text-muted-foreground">Datasets require proxy administrator access.</p>;
+  return <DatasetsView readOnly={readOnly || !isAdmin} />;
+}
+
 function needsSetup(
   state: LensReadiness,
   location: {
@@ -254,7 +265,7 @@ function needsSetup(
     issueKey: string | null;
   },
 ) {
-  if (location.tab === "settings") return false;
+  if (location.tab === "settings" || location.tab === "datasets") return false;
   if (location.requested) return true;
   const selected = location.tab === "traces" ? location.trace : location.lensId || location.dialog || location.issueKey;
   if (!state.missingTraces || selected) return false;

@@ -91,7 +91,7 @@ def _get_max_string_length_prompt_in_db() -> int:
         return DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
 
 
-def _is_master_key(api_key: str | None, _master_key: str | None) -> bool:
+def is_master_key(api_key: str | None, _master_key: str | None) -> bool:
     """
     Raw-only constant-time master-key comparison. The hashed form is never
     considered equivalent — only the raw master-key string matches.
@@ -99,6 +99,9 @@ def _is_master_key(api_key: str | None, _master_key: str | None) -> bool:
     if _master_key is None or api_key is None:
         return False
     return secrets.compare_digest(api_key, _master_key)
+
+
+_is_master_key: Final = is_master_key
 
 
 _HASHED_JWT_RE = re.compile(r"hashed-jwt-[a-fA-F0-9]{64}")
@@ -1416,7 +1419,7 @@ def _redact_prompt_fields_in_guardrail_entry(
     return {**redacted, "guardrail_response": preserved_stats}
 
 
-def _sanitize_error_information_for_spend_logs(
+def sanitize_error_information_for_spend_logs(
     error_information: StandardLoggingPayloadErrorInformation | None,
     original_exception: BaseException | None = None,
 ) -> StandardLoggingPayloadErrorInformation | None:
@@ -1455,6 +1458,9 @@ def _sanitize_error_information_for_spend_logs(
 
     sanitized = _sanitize_request_body_for_spend_logs_payload(sanitized)
     return cast(StandardLoggingPayloadErrorInformation, sanitized)
+
+
+_sanitize_error_information_for_spend_logs: Final = sanitize_error_information_for_spend_logs
 
 
 def _convert_to_json_serializable_dict(obj: object, visited: set[int] | None = None, max_depth: int = 20) -> object:

@@ -73,6 +73,28 @@ fn decode(
 }
 
 #[rstest]
+#[case::interaction("interaction", "user_prompt", "")]
+#[case::model_context("llm_request", "new_context", "[USER]\n")]
+fn native_claude_prompts_preserve_notification_text_and_user_role(
+    span: Span,
+    #[case] kind: &str,
+    #[case] key: &str,
+    #[case] prefix: &str,
+) {
+    let prompt = "<task-notification><summary>Quoted summary</summary><result>Keep this result</result></task-notification>\nExplain this example";
+    let payload = format!("{prefix}{prompt}");
+    let decoded = decode(
+        span,
+        "com.anthropic.claude_code.tracing",
+        &[("span.type", kind), (key, &payload)],
+        vec![],
+    )
+    .unwrap();
+    let messages: Value = serde_json::from_str(&decoded.normalized.input).unwrap();
+    assert_eq!(messages, json!([{"role": "user", "content": prompt}]));
+}
+
+#[rstest]
 #[case::agent("agent", ObservationType::Agent)]
 #[case::workflow("workflow", ObservationType::Chain)]
 #[case::task("task", ObservationType::Chain)]
@@ -478,6 +500,25 @@ fn existing_formats_win_over_new_formats(span: Span, #[case] kind: &str) {
     )
     .unwrap();
     assert_eq!(decoded.normalized.observation_type, ObservationType::Llm);
+}
+
+#[rstest]
+fn input_preview_is_the_first_user_message(span: Span) {
+    let conversation = json!([
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "initial question"},
+        {"role": "assistant", "content": "answer"},
+        {"role": "user", "content": "follow up"},
+    ])
+    .to_string();
+    let decoded = decode(
+        span,
+        "custom",
+        &[("gen_ai.input.messages", &conversation)],
+        vec![],
+    )
+    .unwrap();
+    assert_eq!(decoded.normalized.input_preview, "initial question");
 }
 
 #[rstest]
@@ -905,4 +946,29 @@ fn convention_markers_keep_genai_call_evidence(
         .collect::<Vec<_>>();
     let marked = decode(span, scope, &marked_attributes, vec![]).unwrap();
     assert_eq!(marked.normalized.calls, plain.normalized.calls);
+}
+
+#[rstest]
+#[case::request("req_native", CallKey::ProviderRequest("req_native".into()))]
+#[case::legacy_message("msg_legacy", CallKey::ProviderResponse("msg_legacy".into()))]
+fn native_claude_preserves_the_provider_id_family(
+    span: Span,
+    #[case] id: &str,
+    #[case] key: CallKey,
+) {
+    let native = Span {
+        name: "claude_code.llm_request".into(),
+        ..span
+    };
+    let decoded = decode(
+        native,
+        "com.anthropic.claude_code.tracing",
+        &[("gen_ai.response.id", id)],
+        Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        decoded.normalized.calls,
+        CallEvidence::Complete(std::collections::BTreeSet::from([key]))
+    );
 }
