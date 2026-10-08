@@ -1024,7 +1024,6 @@ async def invoke_agent_a2a(
             upstream_version: Final = _upstream_version(agent)
             if isinstance(params, dict) and upstream_version == "0.3":
                 params = normalize_request_params(params, served_version, method=method)
-            forward_headers: Mapping[str, str] | None
             if upstream_version == "1.0":
                 forward_method = _WIRE_TO_PASCAL.get(method, method)
                 forward_headers = {**(agent_extra_headers or {}), "A2A-Version": "1.0"}
