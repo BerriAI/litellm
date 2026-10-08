@@ -196,13 +196,29 @@ def _proxy_llm_router() -> Router | None:
     return cast(Router | None, getattr(proxy_server_module, "llm_router", None))
 
 
-def _has_provider_file_retrieve_route(
+def _provider_file_retrieve_credentials(
     *,
     llm_router: Router | None,
     model_id: str | None,
+) -> Mapping[str, object] | None:
+    if llm_router is None or model_id is None:
+        return None
+    try:
+        credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id)
+    except Exception as error:
+        verbose_logger.warning(
+            f"Failed to retrieve credentials for provider file model_id={model_id}: {error}"
+        )
+        return None
+    return cast(Mapping[str, object], credentials) if credentials else None
+
+
+def _has_provider_file_retrieve_route(
+    *,
+    router_credentials: Mapping[str, object] | None,
     model_name: str | None,
 ) -> bool:
-    return (llm_router is not None and model_id is not None) or (
+    return bool(router_credentials) or (
         model_name is not None and "/" in model_name
     )
 
@@ -221,6 +237,8 @@ class _ManagedFileRow(Protocol):
 
 class _ManagedFileTableActions(Protocol):
     async def find_first(self, where: Mapping[str, object]) -> Optional[_ManagedFileRow]: ...
+
+    async def update_many(self, where: Mapping[str, object], data: Mapping[str, object]) -> int: ...
 
     async def find_many(
         self,
@@ -714,50 +732,55 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         model_id: str | None,
         model_name: str | None,
         llm_router: Router | None = None,
-    ) -> OpenAIFileObject | None:
+        raise_on_failure: bool = False,
+    ) -> tuple[OpenAIFileObject | None, bool]:
         route_llm_router: Final = llm_router if llm_router is not None else _proxy_llm_router()
-        if not _has_provider_file_retrieve_route(
+        router_credentials: Final = _provider_file_retrieve_credentials(
             llm_router=route_llm_router,
             model_id=model_id,
+        )
+        model_name_provider: Final = _model_name_file_retrieve_provider(model_name)
+        fetch_route_available: Final = _has_provider_file_retrieve_route(
+            router_credentials=router_credentials,
             model_name=model_name,
-        ):
-            return None
+        )
+        if not fetch_route_available:
+            return None, False
 
         try:
-            if route_llm_router is not None and model_id is not None:
-                credentials: Final = cast(
-                    Mapping[str, object],
-                    route_llm_router.get_deployment_credentials_with_provider(model_id) or {},
-                )
+            if router_credentials is not None:
                 provider_file_object: Final = await asyncio.wait_for(
                     self._afile_retrieve_with_retries(
                         provider_file_id=provider_file_id,
-                        call_options=credentials,
-                        internal_model_credentials=credentials,
+                        call_options=router_credentials,
+                        internal_model_credentials=router_credentials,
                     ),
                     timeout=BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS,
                 )
-                return provider_file_object.model_copy(update={"id": unified_file_id})
-            if model_name is not None and "/" in model_name:
-                custom_llm_provider: Final = cast(
-                    FileRetrieveProvider, model_name.split("/", 1)[0]
-                )
+                return provider_file_object.model_copy(update={"id": unified_file_id}), True
+            if model_name_provider is not None:
                 provider_file_object_by_model_name: Final = await asyncio.wait_for(
                     self._afile_retrieve_with_retries(
                         provider_file_id=provider_file_id,
-                        call_options={"custom_llm_provider": custom_llm_provider},
+                        call_options={"custom_llm_provider": model_name_provider},
                     ),
                     timeout=BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS,
                 )
-                return provider_file_object_by_model_name.model_copy(
-                    update={"id": unified_file_id}
+                return (
+                    provider_file_object_by_model_name.model_copy(
+                        update={"id": unified_file_id}
+                    ),
+                    True,
                 )
-            return None
-        except Exception as e:
+            return None, False
+        except Exception as error:
             verbose_logger.warning(
-                f"Failed to retrieve batch file object for provider_file_id={provider_file_id}: {type(e).__name__} {e}"
+                f"Failed to retrieve batch file object for provider_file_id={provider_file_id}: "
+                f"{type(error).__name__} {error}"
             )
-            return None
+            if raise_on_failure:
+                raise
+            return None, True
 
     async def _save_refreshed_file_object(
         self,
@@ -765,20 +788,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         file_object: OpenAIFileObject,
     ) -> None:
         file_object_json: Final = file_object.model_dump_json()
-        await _managed_file_table(self.prisma_client).upsert(
+        updated_row_count: Final = await _managed_file_table(self.prisma_client).update_many(
             where={"unified_file_id": stored.unified_file_id},
-            data={
-                "create": {
-                    "unified_file_id": stored.unified_file_id,
-                    "model_mappings": json.dumps(stored.model_mappings),
-                    "flat_model_file_ids": stored.flat_model_file_ids,
-                    "created_by": stored.created_by,
-                    "team_id": stored.team_id,
-                    "file_object": file_object_json,
-                },
-                "update": {"file_object": file_object_json},
-            },
+            data={"file_object": file_object_json},
         )
+        if updated_row_count == 0:
+            return
         refreshed_row: Final = stored.model_copy(update={"file_object": file_object})
         await self.internal_usage_cache.async_set_cache(
             key=stored.unified_file_id,
@@ -802,17 +817,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         if stored_object is not None and not stored_object.litellm_details_fallback:
             return
 
-        fetch_route_available: Final = _has_provider_file_retrieve_route(
-            llm_router=_proxy_llm_router(),
-            model_id=model_id,
-            model_name=model_name,
-        )
         fallback_written_recently: Final = (
             stored_object is not None
             and time.time() - stored_object.created_at < BATCH_OUTPUT_FILE_FALLBACK_RETRY_AFTER_SECONDS
         )
-        provider_object: Final = (
-            None
+        provider_fetch_result: Final = (
+            (None, True)
             if fallback_written_recently
             else await self._fetch_provider_file_object(
                 unified_file_id=unified_file_id,
@@ -821,6 +831,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 model_name=model_name,
             )
         )
+        provider_object, fetch_route_available = provider_fetch_result
         if stored_object is not None and provider_object is None and (
             size_bytes is None or stored_object.bytes == size_bytes
         ):
@@ -1840,14 +1851,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         # so callers see a consistent ID (matching Case 3 which does response.id = file_id).
         if stored_file_object.file_object is not None:
             file_object: Final = stored_file_object.file_object
-            if file_object.litellm_details_fallback and llm_router is not None and stored_file_object.model_mappings:
+            if file_object.litellm_details_fallback and stored_file_object.model_mappings:
                 try:
                     model_id, provider_file_id = next(iter(stored_file_object.model_mappings.items()))
-                    refreshed_file_object: Final = await self._fetch_provider_file_object(
+                    refreshed_file_object, _ = await self._fetch_provider_file_object(
                         unified_file_id=file_id,
                         provider_file_id=provider_file_id,
                         model_id=model_id,
-                        model_name=None,
+                        model_name=model_id,
                         llm_router=llm_router,
                     )
                     if refreshed_file_object is None:
@@ -1860,26 +1871,33 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         # Case 3: Managed file exists in the database but not the file object (for. e.g the batch task might not have run)
         # So we fetch the file object from the provider. We deliberately do not store the result to avoid interfering with batch cost tracking code.
-        if not llm_router:
+        model_mapping: Final = next(iter(stored_file_object.model_mappings.items()), None)
+        if model_mapping is None:
             raise Exception(
                 f"LiteLLM Managed File object with id={file_id} has no file_object "
                 f"and llm_router is required to fetch from provider"
             )
 
+        model_id, model_file_id = model_mapping
         try:
-            model_id, model_file_id = next(iter(stored_file_object.model_mappings.items()))
-            response: Final = await self._fetch_provider_file_object(
+            response, fetch_route_available = await self._fetch_provider_file_object(
                 unified_file_id=file_id,
                 provider_file_id=model_file_id,
                 model_id=model_id,
-                model_name=None,
+                model_name=model_id,
                 llm_router=llm_router,
+                raise_on_failure=True,
             )
-            if response is None:
-                raise ValueError("Provider file details could not be retrieved")
-            return _public_file_object(response, file_id)
         except Exception as e:
             raise Exception(f"Failed to retrieve file {file_id} from provider: {str(e)}") from e
+        if not fetch_route_available:
+            raise Exception(
+                f"LiteLLM Managed File object with id={file_id} has no file_object "
+                f"and llm_router is required to fetch from provider"
+            )
+        if response is None:
+            raise ValueError("Provider file details could not be retrieved")
+        return _public_file_object(response, file_id)
 
     async def afile_list(
         self,

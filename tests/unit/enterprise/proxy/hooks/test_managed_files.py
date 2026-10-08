@@ -17,6 +17,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     is_base64_encoded_unified_file_id,
     encode_file_id_with_model,
 )
+from litellm.types.llms.openai import OpenAIFileObject
 
 
 class _InMemoryManagedFileTable:
@@ -27,6 +28,9 @@ class _InMemoryManagedFileTable:
         self.find_first_calls: list[Mapping[str, object]] = []
         self.upsert_calls: list[
             tuple[Mapping[str, object], Mapping[str, Mapping[str, object]]]
+        ] = []
+        self.update_many_calls: list[
+            tuple[Mapping[str, object], Mapping[str, object]]
         ] = []
 
     async def find_first(
@@ -73,6 +77,29 @@ class _InMemoryManagedFileTable:
         )
         self.rows[unified_file_id] = row
         return row
+
+    async def update_many(
+        self,
+        where: Mapping[str, object],
+        data: Mapping[str, object],
+    ) -> int:
+        self.update_many_calls.append((where, data))
+        unified_file_id: Final = cast(str, where["unified_file_id"])
+        existing_row: Final = self.rows.get(unified_file_id)
+        if existing_row is None:
+            return 0
+        file_object: Final = OpenAIFileObject.model_validate(
+            json.loads(cast(str, data["file_object"]))
+        )
+        self.rows[unified_file_id] = existing_row.model_copy(
+            update={"file_object": file_object}
+        )
+        return 1
+
+    async def delete(
+        self, where: Mapping[str, object]
+    ) -> LiteLLM_ManagedFileTable | None:
+        return self.rows.pop(cast(str, where["unified_file_id"]), None)
 
     async def find_many(
         self,
@@ -2472,14 +2499,179 @@ async def test_afile_retrieve_refreshes_marked_fallback_and_preserves_ownership(
     assert updated_row.file_object == response
     assert updated_row.created_by == "user-123"
     assert updated_row.team_id == "team-123"
-    assert managed_file_table.upsert_calls[0][1]["update"] == {
+    assert managed_file_table.update_many_calls[0][1] == {
         "file_object": response.model_dump_json()
     }
+    assert managed_file_table.upsert_calls == []
     cached_row = await proxy_managed_files.internal_usage_cache.async_get_cache(
         key="unified-output",
         litellm_parent_otel_span=None,
     )
     assert cached_row["file_object"]["bytes"] == 836
+
+
+@pytest.mark.asyncio
+async def test_afile_retrieve_refreshes_marked_fallback_without_router_from_model_name():
+    row: Final = _marked_fallback_file_row().model_copy(
+        update={"model_mappings": {"bedrock/model-x": "provider-output"}}
+    )
+    provider_object: Final = OpenAIFileObject(
+        id="provider-output",
+        object="file",
+        bytes=836,
+        created_at=456,
+        filename="output.jsonl",
+        purpose="batch_output",
+        status="processed",
+    )
+    proxy_managed_files, managed_file_table = _managed_files_with_fake_prisma(row)
+
+    with patch(
+        "litellm.afile_retrieve",
+        new_callable=AsyncMock,
+        return_value=provider_object,
+    ) as retrieve:
+        response: Final = await proxy_managed_files.afile_retrieve(
+            file_id="unified-output",
+            litellm_parent_otel_span=None,
+            llm_router=None,
+        )
+
+    assert response.bytes == 836
+    assert response.id == "unified-output"
+    assert response.litellm_details_fallback is None
+    retrieve.assert_awaited_once()
+    assert retrieve.await_args.kwargs["custom_llm_provider"] == "bedrock"
+    assert retrieve.await_args.kwargs["max_retries"] == 0
+    assert "_litellm_internal_model_credentials" not in retrieve.await_args.kwargs
+    updated_row: Final = managed_file_table.rows["unified-output"]
+    assert updated_row.file_object == response
+    assert updated_row.model_mappings == {"bedrock/model-x": "provider-output"}
+    assert updated_row.created_by == "user-123"
+    assert updated_row.team_id == "team-123"
+
+
+@pytest.mark.asyncio
+async def test_afile_retrieve_uses_model_name_when_router_does_not_know_deployment():
+    row: Final = _marked_fallback_file_row().model_copy(
+        update={"model_mappings": {"bedrock/model-x": "provider-output"}}
+    )
+    provider_object: Final = OpenAIFileObject(
+        id="provider-output",
+        object="file",
+        bytes=836,
+        created_at=456,
+        filename="output.jsonl",
+        purpose="batch_output",
+        status="processed",
+    )
+    router: Final = MagicMock()
+    router.get_deployment_credentials_with_provider.return_value = None
+    proxy_managed_files, _ = _managed_files_with_fake_prisma(row)
+
+    with patch(
+        "litellm.afile_retrieve",
+        new_callable=AsyncMock,
+        return_value=provider_object,
+    ) as retrieve:
+        response: Final = await proxy_managed_files.afile_retrieve(
+            file_id="unified-output",
+            litellm_parent_otel_span=None,
+            llm_router=router,
+        )
+
+    assert response.bytes == 836
+    retrieve.assert_awaited_once()
+    router.get_deployment_credentials_with_provider.assert_called_once_with(
+        "bedrock/model-x"
+    )
+    assert retrieve.await_args.kwargs["custom_llm_provider"] == "bedrock"
+    assert retrieve.await_args.kwargs["max_retries"] == 0
+    assert "_litellm_internal_model_credentials" not in retrieve.await_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_afile_retrieve_does_not_recreate_deleted_row_after_refresh():
+    row: Final = _marked_fallback_file_row()
+    provider_object: Final = OpenAIFileObject(
+        id="provider-output",
+        object="file",
+        bytes=836,
+        created_at=456,
+        filename="output.jsonl",
+        purpose="batch_output",
+        status="processed",
+    )
+    router: Final = MagicMock()
+    router.get_deployment_credentials_with_provider.return_value = {"api_key": "key"}
+    proxy_managed_files, managed_file_table = _managed_files_with_fake_prisma(row)
+
+    async def delete_row_then_return_file(
+        *, file_id: str, **_options: object
+    ) -> OpenAIFileObject:
+        assert file_id == "provider-output"
+        deleted_row: Final = await managed_file_table.delete(
+            where={"unified_file_id": "unified-output"}
+        )
+        assert deleted_row is not None
+        return provider_object
+
+    with patch(
+        "litellm.afile_retrieve",
+        new_callable=AsyncMock,
+        side_effect=delete_row_then_return_file,
+    ):
+        response: Final = await proxy_managed_files.afile_retrieve(
+            file_id="unified-output",
+            litellm_parent_otel_span=None,
+            llm_router=router,
+        )
+
+    assert response.bytes == 836
+    assert "unified-output" not in managed_file_table.rows
+    assert managed_file_table.upsert_calls == []
+    cached_row: Final = await proxy_managed_files.internal_usage_cache.async_get_cache(
+        key="unified-output",
+        litellm_parent_otel_span=None,
+    )
+    assert cached_row is None
+
+
+@pytest.mark.asyncio
+async def test_afile_retrieve_case3_includes_provider_error_text():
+    stored_file: Final = LiteLLM_ManagedFileTable(
+        unified_file_id="unified-output",
+        file_object=None,
+        model_mappings={"model-123": "provider-output"},
+        flat_model_file_ids=["provider-output"],
+        created_by="user-123",
+    )
+    router: Final = MagicMock()
+    router.get_deployment_credentials_with_provider.return_value = {"api_key": "key"}
+    proxy_managed_files, _ = _managed_files_with_fake_prisma(stored_file)
+
+    with (
+        patch(
+            "litellm.afile_retrieve",
+            new_callable=AsyncMock,
+            side_effect=HTTPException(
+                status_code=404,
+                detail="provider file is missing",
+            ),
+        ),
+        pytest.raises(Exception) as error,
+    ):
+        await proxy_managed_files.afile_retrieve(
+            file_id="unified-output",
+            litellm_parent_otel_span=None,
+            llm_router=router,
+        )
+
+    assert type(error.value) is Exception
+    assert str(error.value) == (
+        "Failed to retrieve file unified-output from provider: "
+        "404: provider file is missing"
+    )
 
 
 @pytest.mark.asyncio
