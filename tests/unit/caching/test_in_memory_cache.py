@@ -304,6 +304,23 @@ def test_in_memory_cache_repeated_refresh_ttl_keeps_the_heap_bounded() -> None:
     assert cache.get_cache("pin") == "v"
 
 
+def test_in_memory_cache_refreshing_a_pin_behind_a_live_neighbour_keeps_the_heap_bounded() -> None:
+    clock = MagicMock(return_value=0.0)
+    cache = InMemoryCache(max_size_in_memory=3, clock=clock)
+    cache.set_cache("neighbour", "v", ttl=3600)
+    cache.set_cache("pin", "v", ttl=3600)
+    for tick in range(1, 1_001):
+        clock.return_value = float(tick)
+        assert cache.refresh_ttl("pin", 3600) is True
+    assert len(cache.expiration_heap) <= 2 * len(cache.cache_dict)
+    cache.set_cache("third", "v", ttl=3600)
+    cache.set_cache("fourth", "v", ttl=3600)
+    assert cache.get_cache("neighbour") is None
+    assert cache.get_cache("pin") == "v"
+    assert cache.get_cache("third") == "v"
+    assert cache.get_cache("fourth") == "v"
+
+
 def test_in_memory_cache_refresh_ttl_never_evicts_a_neighbour_from_a_full_cache() -> None:
     clock = MagicMock(return_value=0.0)
     cache = InMemoryCache(max_size_in_memory=2, clock=clock)

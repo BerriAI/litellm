@@ -118,6 +118,13 @@ class InMemoryCache(BaseCache):
             else:
                 # Case 3: Entry is valid and not expired
                 break
+        if len(self.expiration_heap) > 2 * len(self.ttl_dict):
+            self._rebuild_heap()
+
+    def _rebuild_heap(self) -> None:
+        live_entries: Final = [(expires_at, key) for key, expires_at in self.ttl_dict.items()]
+        heapq.heapify(live_entries)
+        self.expiration_heap = live_entries
 
     def evict_cache(self):
         """
