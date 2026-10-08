@@ -326,8 +326,8 @@ def calculate_request_duration(file: FileTypes) -> float | None:
         # Extract duration using soundfile
         file_object: Final = io.BytesIO(file_content)
         with sf.SoundFile(file_object) as audio:
-            frames: Final = len(audio)
-            samplerate: Final = audio.samplerate
+            frames: Final[int] = len(audio)
+            samplerate: Final[int] = audio.samplerate
 
     except Exception:
         # Silently fail if duration extraction fails
