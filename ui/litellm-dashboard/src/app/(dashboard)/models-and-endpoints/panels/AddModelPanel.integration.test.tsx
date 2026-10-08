@@ -1,4 +1,5 @@
-import { renderWithProviders, screen, waitFor } from "../../../../../tests/test-utils";
+import { useSyncExternalStore } from "react";
+import { act, renderWithProviders, screen, waitFor } from "../../../../../tests/test-utils";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AddModelPanel from "./AddModelPanel";
@@ -64,6 +65,13 @@ vi.mock("@/app/(dashboard)/hooks/providers/useProviderFields", () => ({
           { key: "api_base", label: "API Base", field_type: "text", required: false },
         ],
       },
+      {
+        provider: "Anthropic",
+        provider_display_name: "Anthropic",
+        litellm_provider: "anthropic",
+        default_model_placeholder: "claude-3-opus",
+        credential_fields: [{ key: "api_key", label: "API Key", field_type: "password", required: false }],
+      },
     ],
     isLoading: false,
     error: null,
@@ -73,6 +81,26 @@ vi.mock("@/app/(dashboard)/hooks/providers/useProviderFields", () => ({
 vi.mock("@/components/vector_store_management/VectorStoreSelector", () => ({
   default: () => <div data-testid="vector-store-selector" />,
 }));
+
+type Catalog = Record<string, { litellm_provider: string }>;
+
+const createCatalogFeed = () => {
+  let current: Catalog | undefined;
+  const listeners = new Set<() => void>();
+  const subscribe = (listener: () => void) => {
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
+  };
+  return {
+    useData: () => ({ data: useSyncExternalStore(subscribe, () => current) }),
+    publish: (next: Catalog) => {
+      current = next;
+      listeners.forEach((listener) => listener());
+    },
+  };
+};
 
 const lastCreatedModel = () => modelCreateCall.mock.calls.at(-1)?.[1];
 
@@ -163,6 +191,70 @@ describe("AddModelPanel submit payload contract", () => {
 
     expect(await screen.findByText("gpt-4o-2024-08-06")).toBeInTheDocument();
     expect(screen.queryByText("openai-gpt-4o-deployment-id")).not.toBeInTheDocument();
+  });
+
+  it("offers the catalog models once the catalog arrives after the provider was picked", async () => {
+    const catalog = createCatalogFeed();
+    mockUseModelCostMap.mockImplementation(() => catalog.useData());
+    const { user } = await setup();
+    await user.click(screen.getByRole("combobox", { name: /provider/i }));
+    await user.click(await screen.findByText("OpenAI"));
+    expect(await screen.findByPlaceholderText("gpt-3.5-turbo")).toBeInTheDocument();
+
+    act(() => catalog.publish({ "gpt-4o-2024-08-06": { litellm_provider: "openai" } }));
+    await user.click(await screen.findByPlaceholderText("Select models"));
+
+    expect(await screen.findByText("gpt-4o-2024-08-06")).toBeInTheDocument();
+  });
+
+  it("keeps a model name typed before the catalog arrives instead of swapping the field under the user", async () => {
+    const catalog = createCatalogFeed();
+    mockUseModelCostMap.mockImplementation(() => catalog.useData());
+    const { user } = await setup();
+    await user.click(screen.getByRole("combobox", { name: /provider/i }));
+    await user.click(await screen.findByText("OpenAI"));
+    await user.type(await screen.findByPlaceholderText("gpt-3.5-turbo"), "my-fine-tune");
+
+    act(() => catalog.publish({ "gpt-4o-2024-08-06": { litellm_provider: "openai" } }));
+
+    await waitFor(() => expect(screen.getByPlaceholderText("gpt-3.5-turbo")).toHaveValue("my-fine-tune"));
+    expect(screen.queryByPlaceholderText("Select models")).not.toBeInTheDocument();
+  });
+
+  it("offers the catalog models when a name typed before the catalog arrived was cleared again", async () => {
+    const catalog = createCatalogFeed();
+    mockUseModelCostMap.mockImplementation(() => catalog.useData());
+    const { user } = await setup();
+    await user.click(screen.getByRole("combobox", { name: /provider/i }));
+    await user.click(await screen.findByText("OpenAI"));
+    const typed = await screen.findByPlaceholderText("gpt-3.5-turbo");
+    await user.type(typed, "my-fine-tune");
+    await user.clear(typed);
+
+    act(() => catalog.publish({ "gpt-4o-2024-08-06": { litellm_provider: "openai" } }));
+    await user.click(await screen.findByPlaceholderText("Select models"));
+
+    expect(await screen.findByText("gpt-4o-2024-08-06")).toBeInTheDocument();
+  });
+
+  it("swaps the offered models when the provider changes while the catalog stays the same", async () => {
+    const catalog = createCatalogFeed();
+    catalog.publish({
+      "gpt-4o-2024-08-06": { litellm_provider: "openai" },
+      "claude-sonnet-4-5": { litellm_provider: "anthropic" },
+    });
+    mockUseModelCostMap.mockImplementation(() => catalog.useData());
+    const { user } = await setup();
+    const provider = screen.getByRole("combobox", { name: /provider/i });
+    await user.click(provider);
+    await user.click(await screen.findByText("OpenAI"));
+    await user.clear(provider);
+    await user.type(provider, "Anthropic");
+    await user.click(await screen.findByText("Anthropic"));
+    await user.click(await screen.findByPlaceholderText("Select models"));
+
+    expect(await screen.findByText("claude-sonnet-4-5")).toBeInTheDocument();
+    expect(screen.queryByText("gpt-4o-2024-08-06")).not.toBeInTheDocument();
   });
 
   it("sends only the always-mounted fields while Advanced Settings stays closed", async () => {
