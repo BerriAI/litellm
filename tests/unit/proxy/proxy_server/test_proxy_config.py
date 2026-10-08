@@ -3755,11 +3755,13 @@ def test_ProxyConfig__encrypt_env_variables_for_db_without_pynacl_encrypts_new_p
     monkeypatch.setitem(sys.modules, "nacl.secret", None)
     pc = ProxyConfig()
 
-    saved = pc._encrypt_env_variables_for_db({"A": v3, "B": "first-write-plaintext"})
-    assert saved["B"].startswith("v3:gcm:") and saved["B"] != "first-write-plaintext"
+    long_plaintext = "A" * 56
+    saved = pc._encrypt_env_variables_for_db({"A": v3, "B": "first-write-plaintext", "C": long_plaintext})
+    assert all(v.startswith("v3:gcm:") for v in saved.values())
     assert {k: decrypt_value_helper(v, key=k) for k, v in saved.items()} == {
         "A": "already-migrated",
         "B": "first-write-plaintext",
+        "C": long_plaintext,
     }
 
 

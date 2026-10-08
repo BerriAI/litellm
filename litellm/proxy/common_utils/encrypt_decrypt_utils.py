@@ -269,6 +269,15 @@ def legacy_unreadable(value: object) -> bool:
     return needs_legacy_reader(value) and not legacy_encryption_available()
 
 
+def decrypt_for_rewrite(value: str, key: str) -> str | None:
+    """Decrypt a value a config writer submitted for storage: ciphertext read back from the store or a first-write
+    plaintext. Without PyNaCl an unprefixed value cannot be told apart from plaintext, so it is kept as submitted
+    instead of being dropped."""
+    if legacy_unreadable(value):
+        return value
+    return decrypt_value_helper(value=value, key=key, return_original_value=True)
+
+
 def require_legacy_reader_for(values: Iterable[object], purpose: str) -> None:
     """Refuse a decrypt-then-rewrite pass when PyNaCl is missing and one of the values is unprefixed: it would
     read as unreadable and be dropped, double wrapped or miscounted as plaintext. Versioned gcm and non string
