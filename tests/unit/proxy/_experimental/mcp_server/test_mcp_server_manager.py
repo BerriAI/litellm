@@ -4102,7 +4102,7 @@ class TestMCPServerManager:
 
         mock_prompt = Prompt(name="hello", description="Say hi")
         mock_client = AsyncMock()
-        mock_client.list_prompts = AsyncMock(return_value=[mock_prompt])
+        mock_client.list_prompts_result = AsyncMock(return_value=ListPromptsResult(prompts=[mock_prompt]))
         mock_client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
 
         with patch.object(
@@ -4113,7 +4113,7 @@ class TestMCPServerManager:
         ):
             prompts = await manager.get_prompts_from_server(server, user_api_key_auth=None, add_prefix=True)
 
-        mock_client.list_prompts.assert_awaited_once()
+        mock_client.list_prompts_result.assert_awaited_once()
         assert len(prompts) == 1
         assert prompts[0].name == "alias-server-hello"
 
@@ -4174,7 +4174,7 @@ class TestMCPServerManager:
 
         mock_client = AsyncMock()
         mock_resources = [Resource(name="file", uri="https://example.com/file")]
-        mock_client.list_resources = AsyncMock(return_value=mock_resources)
+        mock_client.list_resources_result = AsyncMock(return_value=ListResourcesResult(resources=mock_resources))
         mock_client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
         prefixed_resources = [Resource(name="alias-server-file", uri="https://example.com/file")]
 
@@ -4199,7 +4199,7 @@ class TestMCPServerManager:
         assert called_kwargs["server"] is server
         assert called_kwargs["mcp_auth_header"] == "auth"
         assert called_kwargs["extra_headers"] == {"X-Test": "1", "X-Static": "static"}
-        mock_client.list_resources.assert_awaited_once()
+        mock_client.list_resources_result.assert_awaited_once()
         assert result == prefixed_resources
 
     @pytest.mark.asyncio
@@ -4222,7 +4222,9 @@ class TestMCPServerManager:
                 uriTemplate="https://example.com/{id}",
             )
         ]
-        mock_client.list_resource_templates = AsyncMock(return_value=mock_templates)
+        mock_client.list_resource_templates_result = AsyncMock(
+            return_value=ListResourceTemplatesResult(resource_templates=mock_templates)
+        )
         mock_client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
         expected_templates = [
             ResourceTemplate(
@@ -4258,7 +4260,7 @@ class TestMCPServerManager:
             raw_headers=None,
             client_ip=None,
         )
-        mock_client.list_resource_templates.assert_awaited_once()
+        mock_client.list_resource_templates_result.assert_awaited_once()
         assert result == expected_templates
 
     @pytest.mark.asyncio
@@ -7459,10 +7461,10 @@ class TestMCPServerManager:
         metadata_key: Final = (new.server_id, new.url)
         prompt_fetches = 0
 
-        async def fetch_prompts() -> list[Prompt]:
+        async def fetch_prompts() -> ListPromptsResult:
             nonlocal prompt_fetches
             prompt_fetches += 1
-            return [Prompt(name="greet")]
+            return ListPromptsResult(prompts=[Prompt(name="greet")], ttl_ms=60000)
 
         async def register_while_discovery_fills(server: MCPServer, *, initialize_mapping: bool = True) -> None:
             manager.record_listed_tools(
@@ -7488,7 +7490,7 @@ class TestMCPServerManager:
             assert manager.registry["srv"] is new
             assert manager.get_listed_tool(new, "search", caller) is None
             prompts = await manager._prompt_discovery_cache.get((new.server_id, None), fetch_prompts)
-            assert [prompt.name for prompt in prompts] == ["greet"]
+            assert [prompt.name for prompt in prompts.prompts] == ["greet"]
             assert prompt_fetches == 1, "the prompts list filled after the save was published went upstream again"
             cached_metadata = discoverable_endpoints._OAUTH_METADATA_CACHE.get(metadata_key)
             assert cached_metadata is not None and cached_metadata[1] == {"resource": new.url}
@@ -14514,7 +14516,7 @@ class TestLitellmAdmissionKeyIsNeverTheSubjectToken:
         manager: Final = MCPServerManager()
         client: Final = AsyncMock()
         client.call_tool = AsyncMock(return_value=CallToolResult(content=[], isError=False))
-        client.list_prompts = AsyncMock(return_value=[])
+        client.list_prompts_result = AsyncMock(return_value=ListPromptsResult(prompts=[]))
         client.read_resource = AsyncMock(return_value=ReadResourceResult(contents=[]))
         manager._create_mcp_client = AsyncMock(return_value=client)
         return manager
@@ -15190,7 +15192,7 @@ class _DiscoveryClock:
 
 
 from pydantic import TypeAdapter
-from mcp.types import JSONRPCMessage
+from mcp.types import JSONRPCMessage, ListPromptsResult, ListResourcesResult, ListResourceTemplatesResult
 
 _JSONRPC_ADAPTER = TypeAdapter(JSONRPCMessage)
 
@@ -15219,6 +15221,7 @@ class _DiscoveryUpstream:
     def __init__(self) -> None:
         self.requests: tuple[tuple[str, str], ...] = ()
         self.outcome = "supported"
+        self.ttl_ms = 60000
         self.entered = asyncio.Event()
         self.release = asyncio.Event()
         self.release.set()
@@ -15232,6 +15235,21 @@ class _DiscoveryUpstream:
         if not isinstance(payload, JSONRPCRequest):
             return httpx2.Response(202)
         self.requests = (*self.requests, (payload.method, request.headers.get("authorization", "")))
+        if payload.method == "server/discover":
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "supportedVersions": ["2026-07-28"],
+                        "capabilities": {} if self.outcome == "unsupported" else {"prompts": {}, "resources": {}},
+                        "ttlMs": 0,
+                        "cacheScope": "private",
+                        "resultType": "complete",
+                    },
+                },
+            )
         if payload.method == "initialize":
             return httpx2.Response(
                 200,
@@ -15270,16 +15288,33 @@ class _DiscoveryUpstream:
             if self.outcome in ("paged", "paged_failure") and not (payload.params or {}).get("cursor")
             else {}
         )
-        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": {**result, **continuation}})
+        return httpx2.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": payload.id,
+                "result": {
+                    **result,
+                    **continuation,
+                    "ttlMs": self.ttl_ms,
+                    "cacheScope": "private",
+                    "resultType": "complete",
+                },
+            },
+        )
 
     @property
     def initializes(self) -> int:
-        return sum(method == "initialize" for method, _auth in self.requests)
+        return sum(method in ("initialize", "server/discover") for method, _auth in self.requests)
 
 
 def _discovery_server() -> MCPServer:
     return MCPServer(
-        server_id="discovery", name="discovery", url="https://discovery.example/mcp", transport=MCPTransport.http
+        server_id="discovery",
+        name="discovery",
+        url="https://discovery.example/mcp",
+        transport=MCPTransport.http,
+        protocol_version="2026-07-28",
     )
 
 
@@ -15306,7 +15341,7 @@ async def test_discovery_cache_reuses_raw_results_and_expires(kind: str) -> None
         assert second[0].name == "example"
         assert second[0].description == "original"
         assert upstream.initializes == 1
-        clock.now = 59.999
+        clock.now = 59.9
         assert (await operation(server, None))[0].name == "discovery-example"
         assert upstream.initializes == 1
         clock.now = 60.001
@@ -15331,7 +15366,7 @@ async def test_discovery_cache_empty_results_and_failures(kind: str, outcome: st
     with _mcp_upstream(upstream.respond):
         assert await operation(_discovery_server(), None) == []
         assert await operation(_discovery_server(), None) == []
-        assert upstream.initializes == (2 if outcome == "failure" else 1)
+        assert upstream.initializes == 2
         if outcome == "failure":
             upstream.outcome = "supported"
             assert (await operation(_discovery_server(), None))[0].name == "discovery-example"
@@ -15362,7 +15397,7 @@ async def test_discovery_cache_retries_failed_pagination_before_caching_complete
 
 
 @pytest.mark.asyncio
-async def test_discovery_cache_isolates_forwarded_credentials_and_shares_static_auth() -> None:
+async def test_discovery_cache_isolates_forwarded_credentials_and_static_auth_callers() -> None:
     import respx
 
     manager: Final = MCPServerManager()
@@ -15373,7 +15408,7 @@ async def test_discovery_cache_isolates_forwarded_credentials_and_shares_static_
     with _mcp_upstream(upstream.respond):
         for user in (first_user, second_user):
             assert len(await manager.get_prompts_from_server(server, user)) == 1
-        assert upstream.initializes == 1
+        assert upstream.initializes == 2
         for credential in ("first-secret", "second-secret", "first-secret"):
             assert (
                 len(
@@ -15383,12 +15418,34 @@ async def test_discovery_cache_isolates_forwarded_credentials_and_shares_static_
                 )
                 == 1
             )
-        assert upstream.initializes == 3
+        assert upstream.initializes == 4
         assert {auth for method, auth in upstream.requests if method == "prompts/list"} == {
             "",
             "first-secret",
             "second-secret",
         }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ("prompts", "resources", "templates"))
+@pytest.mark.parametrize("header", ("Authorization", "X-LiteLLM-API-Key"))
+@pytest.mark.parametrize("identified", (False, True))
+async def test_discovery_cache_isolates_keyless_admission_credentials(
+    kind: str, header: str, identified: bool
+) -> None:
+    manager: Final = MCPServerManager()
+    upstream: Final = _DiscoveryUpstream()
+    server: Final = _discovery_server().model_copy(update={"static_headers": {"Authorization": "Bearer upstream"}})
+    auth: Final = UserAPIKeyAuth(team_id="shared-team", user_id="known-user" if identified else None)
+    operation: Final = {
+        "prompts": manager.get_prompts_from_server,
+        "resources": manager.get_resources_from_server,
+        "templates": manager.get_resource_templates_from_server,
+    }[kind]
+    with _mcp_upstream(upstream.respond):
+        for credential in ("Bearer first", "Bearer second", "Bearer first"):
+            assert len(await operation(server, auth, raw_headers={header: credential})) == 1
+        assert upstream.initializes == (1 if identified else 2)
 
 
 @pytest.mark.asyncio
@@ -15526,35 +15583,35 @@ async def test_openapi_listing_finds_tools_registered_under_the_normalized_prefi
 
 @pytest.mark.asyncio
 async def test_discovery_cache_retries_cancelled_fetches() -> None:
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _DiscoveryCache
+    from litellm.proxy._experimental.mcp_server.catalog import _DiscoveryCache
 
-    cache: Final = _DiscoveryCache[Prompt](60, _DiscoveryClock(), TypeAdapter(tuple[Prompt, ...]))
+    cache: Final = _DiscoveryCache[ListPromptsResult](60, _DiscoveryClock(), TypeAdapter(ListPromptsResult))
 
-    async def cancelled() -> list[Prompt]:
+    async def cancelled() -> ListPromptsResult:
         raise asyncio.CancelledError()
 
-    async def supported() -> list[Prompt]:
-        return [Prompt(name="recovered")]
+    async def supported() -> ListPromptsResult:
+        return ListPromptsResult(prompts=[Prompt(name="recovered")], ttl_ms=60000)
 
     with pytest.raises(asyncio.CancelledError):
         await cache.get(("server", None), cancelled)
-    assert [item.name for item in await cache.get(("server", None), supported)] == ["recovered"]
+    assert [item.name for item in (await cache.get(("server", None), supported)).prompts] == ["recovered"]
 
 
 @pytest.mark.asyncio
 async def test_discovery_cache_cancels_fetch_when_last_waiter_leaves() -> None:
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _DiscoveryCache
+    from litellm.proxy._experimental.mcp_server.catalog import _DiscoveryCache
 
-    cache: Final = _DiscoveryCache[Prompt](60, _DiscoveryClock(), TypeAdapter(tuple[Prompt, ...]))
+    cache: Final = _DiscoveryCache[ListPromptsResult](60, _DiscoveryClock(), TypeAdapter(ListPromptsResult))
     entered: Final = asyncio.Event()
     stopped: Final = asyncio.Event()
     release: Final = asyncio.Event()
 
-    async def fetch() -> list[Prompt]:
+    async def fetch() -> ListPromptsResult:
         entered.set()
         try:
             await release.wait()
-            return [Prompt(name="result")]
+            return ListPromptsResult(prompts=[Prompt(name="result")], ttl_ms=60000)
         finally:
             stopped.set()
 
@@ -15572,16 +15629,16 @@ async def test_discovery_cache_cancels_fetch_when_last_waiter_leaves() -> None:
 
 @pytest.mark.asyncio
 async def test_discovery_cache_bounds_detached_fetches_without_dropping_results() -> None:
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _DiscoveryCache
+    from litellm.proxy._experimental.mcp_server.catalog import _DiscoveryCache
 
-    cache: Final = _DiscoveryCache[Prompt](60, _DiscoveryClock(), TypeAdapter(tuple[Prompt, ...]))
+    cache: Final = _DiscoveryCache[ListPromptsResult](60, _DiscoveryClock(), TypeAdapter(ListPromptsResult))
     entered: Final[asyncio.Queue[None]] = asyncio.Queue()
     release: Final = asyncio.Event()
 
-    async def blocked() -> list[Prompt]:
+    async def blocked() -> ListPromptsResult:
         await entered.put(None)
         await release.wait()
-        return [Prompt(name="blocked")]
+        return ListPromptsResult(prompts=[Prompt(name="blocked")], ttl_ms=60000)
 
     tasks: Final = tuple(asyncio.create_task(cache.get((str(index), None), blocked)) for index in range(1024))
     try:
@@ -15589,16 +15646,16 @@ async def test_discovery_cache_bounds_detached_fetches_without_dropping_results(
             await asyncio.wait_for(entered.get(), timeout=5)
         active_tasks: Final = frozenset(asyncio.all_tasks())
 
-        async def overflow() -> list[Prompt]:
+        async def overflow() -> ListPromptsResult:
             assert frozenset(asyncio.all_tasks()) <= active_tasks
-            return [Prompt(name="overflow")]
+            return ListPromptsResult(prompts=[Prompt(name="overflow")], ttl_ms=60000)
 
         result: Final = await cache.get(("overflow", None), overflow)
-        assert [item.name for item in result] == ["overflow"]
+        assert [item.name for item in result.prompts] == ["overflow"]
     finally:
         release.set()
         outcomes: Final = await asyncio.gather(*tasks)
-        assert all(result[0].name == "blocked" for result in outcomes)
+        assert all(result.prompts[0].name == "blocked" for result in outcomes)
 
 
 @pytest.mark.asyncio
@@ -15628,6 +15685,7 @@ async def test_discovery_cache_tracks_resolved_credentials_across_workers() -> N
         transport=MCPTransport.http,
         auth_type=MCPAuth.oauth2,
         oauth2_flow="authorization_code",
+        protocol_version="2026-07-28",
         client_id="discovery-client",
         authorization_url="https://discovery.example/authorize",
         token_url="https://discovery.example/token",
@@ -15644,16 +15702,28 @@ async def test_discovery_cache_tracks_resolved_credentials_across_workers() -> N
         payload: Final = _JSONRPC_ADAPTER.validate_json(request.content)
         assert isinstance(payload, JSONRPCRequest)
         name: Final = {"Bearer token-a": "account-a", "Bearer token-b": "account-b"}[request.headers["authorization"]]
-        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": {"prompts": [{"name": name}]}})
+        return httpx2.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": payload.id,
+                "result": {
+                    "prompts": [{"name": name}],
+                    "ttlMs": 60000,
+                    "cacheScope": "private",
+                    "resultType": "complete",
+                },
+            },
+        )
 
     with _mcp_upstream(respond):
-        for manager in managers:
+        for manager in (*managers, *managers):
             assert [item.name for item in await manager.get_prompts_from_server(server, user)] == [
                 "discovery-account-a"
             ]
         assert upstream.initializes == 2
         source.token = "token-b"
-        for manager in managers:
+        for manager in (*managers, *managers):
             assert [item.name for item in await manager.get_prompts_from_server(server, user)] == [
                 "discovery-account-b"
             ]
@@ -15699,69 +15769,71 @@ async def test_discovery_resolves_stored_oauth_for_the_requesting_user() -> None
         assert len(await manager.get_prompts_from_server(server, user)) == 1
         assert len(await manager.get_prompts_from_server(server, user)) == 1
     assert store.calls == (("requesting-user", "discovery"), ("requesting-user", "discovery"))
-    assert upstream.initializes == 1
+    assert upstream.initializes == 2
     assert ("prompts/list", "Bearer stored-token") in upstream.requests
 
 
 @pytest.mark.asyncio
 async def test_discovery_cache_evicts_results_at_capacity() -> None:
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _DiscoveryCache
+    from litellm.proxy._experimental.mcp_server.catalog import _DiscoveryCache
 
-    cache: Final = _DiscoveryCache[Prompt](60, _DiscoveryClock(), TypeAdapter(tuple[Prompt, ...]))
+    cache: Final = _DiscoveryCache[ListPromptsResult](60, _DiscoveryClock(), TypeAdapter(ListPromptsResult))
 
-    async def original() -> list[Prompt]:
-        return [Prompt(name="original")]
+    async def original() -> ListPromptsResult:
+        return ListPromptsResult(prompts=[Prompt(name="original")], ttl_ms=60000)
 
-    async def refetched() -> list[Prompt]:
-        return [Prompt(name="refetched")]
+    async def refetched() -> ListPromptsResult:
+        return ListPromptsResult(prompts=[Prompt(name="refetched")], ttl_ms=60000)
 
     for index in range(1025):
-        assert (await cache.get((f"server-{index:04}", None), original))[0].name == "original"
-    assert (await cache.get(("server-1024", None), refetched))[0].name == "original"
-    assert (await cache.get(("server-0000", None), refetched))[0].name == "refetched"
+        assert (await cache.get((f"server-{index:04}", None), original)).prompts[0].name == "original"
+    assert (await cache.get(("server-1024", None), refetched)).prompts[0].name == "original"
+    assert (await cache.get(("server-0000", None), refetched)).prompts[0].name == "refetched"
 
 
 @pytest.mark.asyncio
 async def test_discovery_cache_invalidation_preserves_other_servers_and_pending_fetches() -> None:
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _DiscoveryCache
+    from litellm.proxy._experimental.mcp_server.catalog import _DiscoveryCache
 
-    cache: Final = _DiscoveryCache[Prompt](60, _DiscoveryClock(), TypeAdapter(tuple[Prompt, ...]))
+    cache: Final = _DiscoveryCache[ListPromptsResult](60, _DiscoveryClock(), TypeAdapter(ListPromptsResult))
     entered: Final = asyncio.Event()
     release: Final = asyncio.Event()
 
-    async def original() -> list[Prompt]:
-        return [Prompt(name="original")]
+    async def original() -> ListPromptsResult:
+        return ListPromptsResult(prompts=[Prompt(name="original")], ttl_ms=60000)
 
-    async def blocked() -> list[Prompt]:
+    async def blocked() -> ListPromptsResult:
         entered.set()
         await release.wait()
-        return [Prompt(name="pending")]
+        return ListPromptsResult(prompts=[Prompt(name="pending")], ttl_ms=60000)
 
-    async def refetched() -> list[Prompt]:
-        return [Prompt(name="refetched")]
+    async def refetched() -> ListPromptsResult:
+        return ListPromptsResult(prompts=[Prompt(name="refetched")], ttl_ms=60000)
 
-    assert (await cache.get(("server", None), original))[0].name == "original"
-    assert (await cache.get(("server-extra", None), original))[0].name == "original"
+    assert (await cache.get(("server", None), original)).prompts[0].name == "original"
+    assert (await cache.get(("server-extra", None), original)).prompts[0].name == "original"
     task: Final = asyncio.create_task(cache.get(("other", None), blocked))
     await asyncio.wait_for(entered.wait(), timeout=5)
     cache.invalidate("server")
     release.set()
-    assert (await asyncio.wait_for(task, timeout=5))[0].name == "pending"
-    assert (await cache.get(("other", None), refetched))[0].name == "pending"
-    assert (await cache.get(("server-extra", None), refetched))[0].name == "original"
-    assert (await cache.get(("server", None), refetched))[0].name == "refetched"
+    assert (await asyncio.wait_for(task, timeout=5)).prompts[0].name == "pending"
+    assert (await cache.get(("other", None), refetched)).prompts[0].name == "pending"
+    assert (await cache.get(("server-extra", None), refetched)).prompts[0].name == "original"
+    assert (await cache.get(("server", None), refetched)).prompts[0].name == "refetched"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("description", ("x" * 96_000, "é" * 40_000), ids=("ascii", "unicode"))
 async def test_discovery_cache_returns_oversized_results_without_retaining_them(description: str) -> None:
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _DiscoveryCache
+    from litellm.proxy._experimental.mcp_server.catalog import _DiscoveryCache
 
-    cache: Final = _DiscoveryCache[Prompt](60, _DiscoveryClock(), TypeAdapter(tuple[Prompt, ...]))
-    fetch: Final = AsyncMock(return_value=[Prompt(name="large", description=description)])
+    cache: Final = _DiscoveryCache[ListPromptsResult](60, _DiscoveryClock(), TypeAdapter(ListPromptsResult))
+    fetch: Final = AsyncMock(
+        return_value=ListPromptsResult(prompts=[Prompt(name="large", description=description)], ttl_ms=60000)
+    )
     for _ in range(2):
         result: Final = await cache.get(("server", None), fetch)
-        assert result[0].description == description
+        assert result.prompts[0].description == description
     assert fetch.await_count == 2
 
 
@@ -19005,3 +19077,34 @@ async def test_aggregate_publishes_complete_bare_routes_only_after_delivering_a_
         with pytest.raises(MCPError, match="LITELLM_SALT_KEY"):
             await listing
         assert manager._get_mcp_server_from_tool_name("first") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ("prompts", "resources", "templates"))
+async def test_discovery_does_not_retain_unknown_freshness(kind: str) -> None:
+    manager: Final = MCPServerManager()
+    upstream: Final = _DiscoveryUpstream()
+    upstream.ttl_ms = 0
+    operation: Final = {
+        "prompts": manager.get_prompts_from_server,
+        "resources": manager.get_resources_from_server,
+        "templates": manager.get_resource_templates_from_server,
+    }[kind]
+    with _mcp_upstream(upstream.respond):
+        assert len(await operation(_discovery_server(), None)) == 1
+        assert len(await operation(_discovery_server(), None)) == 1
+    assert upstream.initializes == 2
+
+
+def test_discovery_keys_bind_static_auth_to_caller_and_configuration() -> None:
+    manager: Final = MCPServerManager()
+    server: Final = _discovery_server()
+    first: Final = UserAPIKeyAuth(user_id="first", team_id="one")
+    second: Final = UserAPIKeyAuth(user_id="second", team_id="two")
+    updated: Final = server.model_copy(update={"url": "https://replacement.example/mcp"})
+    keys: Final = (
+        manager._discovery_key(server, first, None, None, None, None),
+        manager._discovery_key(server, second, None, None, None, None),
+        manager._discovery_key(updated, first, None, None, None, None),
+    )
+    assert len(set(keys)) == 3
