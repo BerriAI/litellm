@@ -169,15 +169,19 @@ impl AnthropicBeta {
     }
 
     pub fn on(&self, provider: BetaProvider) -> Option<Self> {
-        if matches!(self, Self::Other(_)) || self.rejected_by().contains(&provider) {
+        let resolved = match self {
+            Self::Other(raw) => raw.parse().unwrap(),
+            _ => self.clone(),
+        };
+        if resolved.rejected_by().contains(&provider) {
             return None;
         }
-        Some(match (self, provider) {
+        Some(match (resolved, provider) {
             (
                 Self::AdvancedToolUse20251120,
                 BetaProvider::Bedrock | BetaProvider::BedrockMantle | BetaProvider::VertexAi,
             ) => Self::ToolSearchTool20251019,
-            _ => self.clone(),
+            (beta, _) => beta,
         })
     }
 
@@ -498,6 +502,23 @@ mod tests {
                     let parsed: AnthropicBeta = actual.as_deref().unwrap().parse().unwrap();
                     assert!(AnthropicBeta::KNOWN.contains(&parsed));
                     assert!(!matches!(parsed, AnthropicBeta::Other(_)));
+                }
+            }
+        }
+    }
+
+    #[rstest]
+    fn known_betas_as_other_match_named_variants() {
+        for beta in &AnthropicBeta::KNOWN {
+            for provider in BetaProvider::ALL {
+                let actual = AnthropicBeta::Other(beta.as_str().to_string()).on(*provider);
+                let expected = beta.on(*provider);
+                assert_eq!(actual, expected, "provider {provider}, beta {beta}");
+                if let Some(actual) = actual {
+                    assert!(
+                        !matches!(actual, AnthropicBeta::Other(_)),
+                        "provider {provider}, beta {beta}"
+                    );
                 }
             }
         }
