@@ -545,6 +545,8 @@ def test_databricks_requires_the_bare_serving_endpoint_name_as_the_model() -> No
         JevClassifierConfig.model_validate({"provider": "databricks"})
     with pytest.raises(ValueError, match="bare endpoint name"):
         JevClassifierConfig.model_validate({"provider": "databricks", "model": "serving-endpoints/my-openjev"})
+    with pytest.raises(ValueError, match="bare endpoint name"):
+        JevClassifierConfig.model_validate({"provider": "databricks", "model": ".."})
     assert JevClassifierConfig.model_validate({"provider": "databricks", "model": "my-openjev"}).model == "my-openjev"
 
 

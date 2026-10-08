@@ -634,7 +634,7 @@ async def test_databricks_requires_api_base_before_http(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("endpoint_name", ["serving-endpoints/openjev", "openjev?x=1", "openjev#frag"])
+@pytest.mark.parametrize("endpoint_name", ["serving-endpoints/openjev", "openjev?x=1", "openjev#frag", "..", "open jev"])
 async def test_databricks_rejects_a_serving_endpoint_name_that_would_rewrite_the_url(
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,

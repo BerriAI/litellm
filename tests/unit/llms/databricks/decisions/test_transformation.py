@@ -12,7 +12,10 @@ def test_endpoint_url_posts_to_the_serving_endpoint_invocations_route(api_base: 
     assert DATABRICKS_DECISIONS_ENDPOINT.endpoint_url(api_base, "openjev") == f"{_BASE}/openjev/invocations"
 
 
-@pytest.mark.parametrize("name", ["", "serving-endpoints/openjev", "openjev?x=1", "openjev#frag"])
+@pytest.mark.parametrize(
+    "name",
+    ["", "serving-endpoints/openjev", "openjev?x=1", "openjev#frag", ".", "..", ".openjev", "open jev", "openjev%2Fx"],
+)
 def test_a_name_that_would_rewrite_the_url_is_rejected_before_any_request(name: str) -> None:
     with pytest.raises(ValueError, match="bare endpoint name"):
         _ = DATABRICKS_DECISIONS_ENDPOINT.endpoint_url(_BASE, name)

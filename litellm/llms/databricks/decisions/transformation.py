@@ -1,3 +1,4 @@
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -5,14 +6,14 @@ from typing import Final
 
 from litellm.secret_managers.main import get_secret_str
 
-_URL_SEPARATORS: Final = frozenset("/?#")
+_SERVING_ENDPOINT_NAME: Final = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]*")
 
 
 def validate_serving_endpoint_name(name: str) -> str:
-    if not name or any(char in _URL_SEPARATORS for char in name):
+    if _SERVING_ENDPOINT_NAME.fullmatch(name) is None:
         raise ValueError(
-            f"Databricks serving endpoint name {name!r} must be the bare endpoint name, "
-            "with no '/', '?', or '#', e.g. databricks-openjev-qwen35-4b"
+            f"Databricks serving endpoint name {name!r} must be the bare endpoint name (letters, digits, '-', '_' "
+            "and '.', with no '/', '?', '#', spaces, or a leading '.'), e.g. databricks-openjev-qwen35-4b"
         )
     return name
 
