@@ -39,7 +39,6 @@ from typing import (
     Optional,
     Protocol,
     TypeAlias,
-    TypedDict,
     Union,
     cast,
     get_args,
@@ -50,9 +49,9 @@ from typing import (
 import anyio
 import websockets
 import websockets.exceptions
-from pydantic import BaseModel, Json, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Json, JsonValue, TypeAdapter, ValidationError, with_config
 from pydantic.fields import FieldInfo, PydanticUndefined
-from typing_extensions import NotRequired, ReadOnly, assert_never
+from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm._uuid import uuid
 from litellm.constants import (
@@ -582,6 +581,16 @@ from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger, run_sp
 from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.lens.dataset_endpoints import router as lens_dataset_router
 from litellm.proxy.lens.endpoints import router as lens_router
+from litellm.proxy.lens.repository import WriterDatabase
+from litellm.proxy.lens.signal_repository import SignalRepository
+from litellm.proxy.lens.signals import (
+    SIGNAL_BACKLOG_SWEEP,
+    SIGNAL_LIVE_SWEEP,
+    DecisionQuestions,
+    DecisionsCall,
+    DecisionState,
+    run_signal_loop,
+)
 from litellm.proxy.list_api.common import (
     ManagementProblem,
     problem_response,
@@ -761,6 +770,7 @@ from litellm.proxy.middleware.request_size_limit_middleware import (
 from litellm.proxy.middleware.security_headers_middleware import (
     SecurityHeadersMiddleware,
 )
+from litellm.proxy.moyai_endpoints import router as moyai_router
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
@@ -878,7 +888,7 @@ from litellm.secret_managers.main import (
     secret_manager_would_be_consulted,
     str_to_bool,
 )
-from litellm.tracing.config import is_clickhouse_tracing_enabled
+from litellm.tracing.config import is_lens_tracing_enabled
 from litellm.types.integrations.slack_alerting import AlertType, SlackAlertingArgs
 from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
@@ -1191,6 +1201,34 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
 _AiohttpAddrInfo: TypeAlias = tuple[int | socket.AddressFamily, int | socket.SocketKind, int, str, tuple[object, ...]]
 
 
+@with_config(ConfigDict(extra="allow", strict=True))
+class _LoginRequestBody(TypedDict, total=False):
+    username: ReadOnly[object]
+    password: ReadOnly[object]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _LoginExchangeRequestBody(TypedDict, total=False):
+    code: ReadOnly[object]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _AnthropicBetaHeadersReloadConfig(TypedDict, total=False):
+    interval_hours: ReadOnly[int | float | None]
+    force_reload: ReadOnly[object]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _WebsearchInterceptionLitellmSettings(TypedDict, total=False):
+    websearch_interception_params: ReadOnly[object]
+
+
+_LOGIN_REQUEST_BODY: Final = TypeAdapter(_LoginRequestBody)
+_LOGIN_EXCHANGE_REQUEST_BODY: Final = TypeAdapter(_LoginExchangeRequestBody)
+_ANTHROPIC_BETA_HEADERS_RELOAD_CONFIG: Final = TypeAdapter(_AnthropicBetaHeadersReloadConfig)
+_WEBSEARCH_INTERCEPTION_LITELLM_SETTINGS: Final = TypeAdapter(_WebsearchInterceptionLitellmSettings)
+
+
 class _AiohttpConnectorKwargs(TypedDict, total=False):
     keepalive_timeout: float
     ttl_dns_cache: int
@@ -1206,7 +1244,7 @@ async def _initialize_shared_aiohttp_session():
         from aiohttp import ClientSession, DummyCookieJar, TCPConnector
 
         from litellm.llms.custom_httpx.http_handler import (
-            _build_aiohttp_keepalive_socket_factory,
+            build_aiohttp_keepalive_socket_factory,
         )
 
         connector_kwargs: Final[_AiohttpConnectorKwargs] = {
@@ -1219,7 +1257,7 @@ async def _initialize_shared_aiohttp_session():
             connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
         if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
             connector_kwargs["limit_per_host"] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
-        socket_factory: Final = _build_aiohttp_keepalive_socket_factory()
+        socket_factory: Final = build_aiohttp_keepalive_socket_factory()
         if socket_factory is not None:
             connector_kwargs["socket_factory"] = socket_factory
 
@@ -1246,6 +1284,27 @@ async def _connect_to_count_stored_values() -> SupportsRawQueries:
     )
     await client.connect()
     return client.writer_db
+
+
+async def _call_current_lens_signal_router(
+    *,
+    model: str,
+    state: DecisionState,
+    questions: DecisionQuestions,
+    timeout: float,
+    metadata: Mapping[str, object],
+) -> object:
+    current_router: Final = llm_router
+    if current_router is None:
+        raise RuntimeError("The proxy router is not initialized")
+    decisions: Final[DecisionsCall] = cast(DecisionsCall, current_router.adecisions)
+    return await decisions(
+        model=model,
+        state=state,
+        questions=questions,
+        timeout=timeout,
+        metadata=metadata,
+    )
 
 
 @asynccontextmanager
@@ -1610,7 +1669,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         dict[str, object] | None,
         TypeAdapter(dict[str, object] | None).validate_python(general_settings.get("tracing")),
     )
-    tracing_enabled: Final = is_clickhouse_tracing_enabled(tracing_settings)
+    tracing_enabled: Final = is_lens_tracing_enabled(tracing_settings)
     async with manage_tracing(
         enabled=tracing_enabled,
         settings=tracing_settings,
@@ -1618,12 +1677,34 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         state: Final[ProxyLifespanState] = {"tracing_receiver": receiver}
         from litellm.proxy.admin_mcp import admin_mcp_lifespan
 
+        signal_completion: Final[DecisionsCall] = _call_current_lens_signal_router
+        signal_tasks: Final = (
+            tuple(
+                asyncio.create_task(
+                    run_signal_loop(
+                        receiver.storage,
+                        SignalRepository(WriterDatabase(writer_wrapper(prisma_client.db))),
+                        signal_completion,
+                        router_ready=lambda: llm_router is not None,
+                        sweep=sweep,
+                    )
+                )
+                for sweep in (SIGNAL_LIVE_SWEEP, SIGNAL_BACKLOG_SWEEP)
+            )
+            if receiver is not None and prisma_client is not None
+            else ()
+        )
+
         try:
             async with AsyncExitStack() as admin_mcp_stack:
                 try:
                     await admin_mcp_stack.enter_async_context(admin_mcp_lifespan(app))
                     yield state
                 finally:
+                    for signal_task in signal_tasks:
+                        signal_task.cancel()
+                    await asyncio.gather(*signal_tasks, return_exceptions=True)
+
                     if model_info_scheduler is not None and model_info_scheduler.running:
                         model_info_scheduler.remove_job("refresh_model_info")
                         if model_info_scheduler is not scheduler:
@@ -4550,7 +4631,7 @@ async def _adaptive_router_flusher_loop():
                     ar = tagged.strategy
                     # Lazy state load: covers adaptive routers registered via
                     # `/config/reload` after proxy boot.
-                    if not getattr(ar, "state_loaded", False):
+                    if not ar.state_loaded:
                         try:
                             await ar.load_state_from_db(prisma_client)
                         finally:
@@ -8471,9 +8552,10 @@ class ProxyConfig:
             if config_record is None or config_record.param_value is None:
                 return
 
-            litellm_settings = config_record.param_value
-            if isinstance(litellm_settings, str):
-                litellm_settings = json.loads(litellm_settings)
+            raw_litellm_settings: Final = config_record.param_value
+            litellm_settings: Final = _WEBSEARCH_INTERCEPTION_LITELLM_SETTINGS.validate_python(
+                json.loads(raw_litellm_settings) if isinstance(raw_litellm_settings, str) else raw_litellm_settings
+            )
 
             websearch_config: Final = litellm_settings.get("websearch_interception_params", None)
 
@@ -8726,7 +8808,7 @@ class ProxyConfig:
             if config_record is None or config_record.param_value is None:
                 return  # No configuration found, skip reload
 
-            config: Final = config_record.param_value
+            config: Final = _ANTHROPIC_BETA_HEADERS_RELOAD_CONFIG.validate_python(config_record.param_value)
             interval_hours: Final = config.get("interval_hours")
             force_reload: Final = config.get("force_reload", False)
 
@@ -13923,7 +14005,7 @@ async def run_thread(
 # )
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
-from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
+from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient, writer_wrapper
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
@@ -17127,7 +17209,7 @@ async def login_v2(request: Request):
     from litellm.proxy.utils import get_custom_url
 
     try:
-        body: Final = await request.json()
+        body: Final = _LOGIN_REQUEST_BODY.validate_python(await request.json())
         username: Final = str(body.get("username"))
         password: Final = str(body.get("password"))
 
@@ -17199,7 +17281,7 @@ async def login_v3(request: Request):
                 code=status.HTTP_404_NOT_FOUND,
             )
 
-        body: Final = await request.json()
+        body: Final = _LOGIN_REQUEST_BODY.validate_python(await request.json())
         username: Final = str(body.get("username"))
         password: Final = str(body.get("password"))
 
@@ -17271,7 +17353,7 @@ async def login_v3_exchange(request: Request):
                 code=status.HTTP_404_NOT_FOUND,
             )
 
-        body: Final = await request.json()
+        body: Final = _LOGIN_EXCHANGE_REQUEST_BODY.validate_python(await request.json())
         code: Final = body.get("code")
         if not code:
             raise ProxyException(
@@ -20102,6 +20184,7 @@ app.include_router(callback_management_endpoints_router)
 app.include_router(debugging_endpoints_router)
 app.include_router(rust_control_plane_router)
 app.include_router(ui_crud_endpoints_router)
+app.include_router(moyai_router)
 app.include_router(user_banner_endpoints_router)
 app.include_router(latest_release_endpoints_router)
 app.include_router(team_callback_router)

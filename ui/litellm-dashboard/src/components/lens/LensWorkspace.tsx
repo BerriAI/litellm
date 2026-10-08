@@ -24,6 +24,7 @@ import { LensGettingStarted } from "./onboarding/LensGettingStarted";
 import { useLensReadiness, type LensReadiness } from "./hooks/useLensReadiness";
 import { OnboardingProvider, type Onboarding } from "./onboarding/OnboardingContext";
 import { traceRefOf, useOpenTraceRouting, type TraceRef } from "@/components/lens/traces/routing";
+import { AgentBreadcrumb, useLensAgents } from "./agents/AgentScoped";
 
 type WorkspaceProps = { accessToken: string; userRole: string; readOnly: boolean };
 
@@ -85,6 +86,7 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
   const { dialog, openDialog } = useDialogRoute();
   const { issueKey } = useIssueRoute();
   const { trace, openTrace } = useOpenTraceRouting();
+  const agents = useLensAgents(accessToken);
   const canViewInvestigations = isProxyAdminTierRole(userRole);
   const isAdmin = isProxyAdminRole(userRole);
   const canConfigure = canViewInvestigations && !readOnly;
@@ -155,10 +157,13 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
           className="@container/lens-frame min-h-0 flex-1 gap-0"
         >
           <header className="grid shrink-0 grid-cols-[1fr_auto] items-center gap-x-4 gap-y-2 border-b pb-2 @min-[42rem]/lens-frame:grid-cols-[auto_1fr_auto]">
-            <h1 className="flex items-center gap-1.5 text-sm font-semibold">
-              <Aperture aria-hidden="true" className="size-4" strokeWidth={2} />
-              Lens
-            </h1>
+            <div className="flex min-w-0 items-center gap-2">
+              <h1 className="flex items-center gap-1.5 text-sm font-semibold">
+                <Aperture aria-hidden="true" className="size-4" strokeWidth={2} />
+                Lens
+              </h1>
+              <AgentBreadcrumb agents={agents} />
+            </div>
             <div className="col-span-2 row-start-2 min-w-0 @min-[42rem]/lens-frame:col-span-1 @min-[42rem]/lens-frame:col-start-2 @min-[42rem]/lens-frame:row-start-1">
               <LensModeSwitch activity={activity} workers={workers} />
             </div>
@@ -196,6 +201,7 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
                     readOnly={readOnly}
                     canMintTracingKey={isAdmin}
                     canViewFindings={canViewInvestigations}
+                    onSetUpSignals={canConfigure ? showSettings : undefined}
                   />
                 </TabsContent>
                 <TabsContent value="findings" className={PANEL}>

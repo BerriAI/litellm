@@ -33,6 +33,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     delete_cache_key_objects,
+    forget_missing_user,
     get_jwt_key_mapping_cache_keys_for_tokens,
     get_team_object,
     get_user_object,
@@ -118,7 +119,7 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 _USER_MODEL_BUDGET_ADAPTER: Final = TypeAdapter(dict[str, float | BudgetConfig])
 _USER_BUDGET_CACHE_INVALIDATION_BATCH_SIZE: Final = 50
-_USER_BUDGET_CACHE_FIELDS: Final = frozenset({"max_budget", "model_max_budget"})
+_USER_LIMIT_CACHE_FIELDS: Final = frozenset({"max_budget", "model_max_budget", "tpm_limit", "rpm_limit"})
 
 
 def _user_table(
@@ -609,6 +610,9 @@ async def new_user(
         organization_ids: Final = cast(list[str] | None, data_json.pop("organizations", None))
 
         response: Final = await generate_key_helper_fn(request_type="user", **data_json, llm_router=None)
+        created_user_id: Final = cast(str | None, response.get("user_id", None))
+        if created_user_id is not None:
+            forget_missing_user(created_user_id)
         # Admin UI Logic
         # Add User to Team and Organization
         # if team_id passed add this user to the team
@@ -1154,6 +1158,8 @@ async def user_info_v2(
             user_role=user_data.get("user_role"),
             spend=user_data.get("spend", 0.0),
             max_budget=user_data.get("max_budget"),
+            tpm_limit=user_data.get("tpm_limit"),
+            rpm_limit=user_data.get("rpm_limit"),
             models=user_data.get("models") or [],
             budget_duration=user_data.get("budget_duration"),
             budget_reset_at=user_data.get("budget_reset_at"),
@@ -1294,7 +1300,7 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
     fields_set: Final = data.fields_set() if hasattr(data, "fields_set") else set()
 
     for k, v in data_json.items():
-        if k in ("max_budget", "budget_duration"):
+        if k in ("max_budget", "budget_duration", "tpm_limit", "rpm_limit"):
             if k in fields_set:
                 non_default_values[k] = v
         elif k == "model_max_budget":
@@ -1623,7 +1629,7 @@ async def _update_single_user_helper(
 
         await _invalidate_user_spend_counter_if_changed(non_default_values)
 
-        if not _USER_BUDGET_CACHE_FIELDS.isdisjoint(non_default_values) or "metadata" in data_json:
+        if not _USER_LIMIT_CACHE_FIELDS.isdisjoint(non_default_values) or "metadata" in data_json:
             await evict_and_broadcast(
                 cache_keys=(non_default_values["user_id"],),
                 user_api_key_cache=user_api_key_cache,
@@ -1981,7 +1987,7 @@ async def bulk_user_update(
                 ),
             )
 
-            if not _USER_BUDGET_CACHE_FIELDS.isdisjoint(non_default_values):
+            if not _USER_LIMIT_CACHE_FIELDS.isdisjoint(non_default_values):
                 for start in range(0, len(all_users_in_db), _USER_BUDGET_CACHE_INVALIDATION_BATCH_SIZE):
                     await asyncio.gather(
                         *(

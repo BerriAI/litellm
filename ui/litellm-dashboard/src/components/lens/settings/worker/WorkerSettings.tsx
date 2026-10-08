@@ -9,7 +9,6 @@ import type { LensList, Worker } from "../../model/types";
 import { useWorkerConnected } from "../../hooks/useWorkerConnected";
 import { SettingsCard } from "../SettingsSection";
 import { usePrepareWorker } from "./usePrepareWorker";
-import { initialProxyAddress } from "./workerCommand";
 import { WorkerForm } from "./WorkerForm";
 import { WorkerInstall } from "./WorkerInstall";
 import { WorkerList } from "./WorkerList";
@@ -21,7 +20,6 @@ function defaultWorkerFormValues(): WorkerFormInput {
     useExisting: false,
     analysisKey: null,
     access: { model: null, budget: "100" },
-    address: typeof window === "undefined" ? "" : initialProxyAddress(),
   };
 }
 
@@ -36,7 +34,7 @@ function ErrorText({ message }: { message: string | undefined }) {
 
 function submitLabel(editing: Worker | null, busy: boolean): string {
   if (busy) return "Preparing…";
-  return editing ? "Save analysis access" : "Get install command";
+  return editing ? "Save analysis access" : "Enable investigations";
 }
 
 function WorkerFormCard({
@@ -59,7 +57,9 @@ function WorkerFormCard({
       <header className="space-y-1">
         <h3 className="text-base font-semibold">{editing ? "Analysis access" : "Connect a worker"}</h3>
         <p className="text-sm text-muted-foreground">
-          {editing ? "Choose which key pays for analysis." : "Deploy the worker on your server to run investigations."}
+          {editing
+            ? "Choose which key pays for analysis."
+            : "Choose a model and spending limit. Your Lens service runs investigations automatically."}
         </p>
       </header>
       <WorkerForm editingWorker={editing?.id ?? null} />
@@ -111,7 +111,6 @@ export function WorkerSettings({
   const submit = (editing: Worker | null) =>
     form.handleSubmit((values) => {
       const registration = {
-        address: values.address,
         useExisting: values.useExisting,
         analysisKey: values.analysisKey,
         access: values.access,
@@ -156,7 +155,7 @@ export function WorkerSettings({
       );
     case "install":
       return (
-        <WorkerInstall address={form.getValues("address")} created={screen.created} connected={screen.connected}>
+        <WorkerInstall connected={screen.connected}>
           {readyAction ?? (
             <Button className="w-full" onClick={() => prepareWorker.reset()}>
               Done

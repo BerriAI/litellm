@@ -578,7 +578,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     )
 
                     # Convert string chunk to dict
-                    stripped_json_chunk = BaseModelResponseIterator._string_to_dict_parser(str_line=chunk_str)
+                    stripped_json_chunk = BaseModelResponseIterator.string_to_dict_parser(str_line=chunk_str)
 
                     if stripped_json_chunk:
                         # Parse the chunk using OpenAI's chunk parser

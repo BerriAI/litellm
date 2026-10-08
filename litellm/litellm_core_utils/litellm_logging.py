@@ -292,7 +292,7 @@ else:
     _GENERIC_API_LOGGER_CLS: Final = GenericAPILogger
 _in_memory_loggers: Final[list[CustomLogger]] = []
 
-_STANDARD_LOGGING_METADATA_RESOLVED_KEYS: Final[frozenset[str]] = frozenset(("used_client_oauth_token",))
+_STANDARD_LOGGING_METADATA_RESOLVED_KEYS: Final[frozenset[str]] = frozenset(("used_client_oauth_token", "usage_object"))
 _STANDARD_LOGGING_METADATA_KEYS: Final[frozenset[str]] = (
     frozenset(StandardLoggingMetadata.__annotations__.keys()) - _STANDARD_LOGGING_METADATA_RESOLVED_KEYS
 )
@@ -2123,7 +2123,7 @@ class Logging(LiteLLMLoggingBaseClass):
             import httpx
 
             completion_response = result.model_dump(by_alias=True) if isinstance(result, BaseModel) else dict(result)
-            return litellm.VertexGeminiConfig()._transform_google_generate_content_to_openai_model_response(
+            return litellm.VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
                 completion_response=completion_response,
                 model_response=ModelResponse(),
                 model=self.model or "",
@@ -4368,7 +4368,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if httpx_response is None:
             raise ValueError("Google GenAI Generate Content: httpx_response is None")
         dict_result: Final = httpx_response.json()
-        result = litellm.VertexGeminiConfig()._transform_google_generate_content_to_openai_model_response(
+        result = litellm.VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
             completion_response=dict_result,
             model_response=litellm.ModelResponse(),
             model=self.model,
@@ -6000,7 +6000,7 @@ class StandardLoggingPayloadSetup:
         Like get_usage_from_response_obj but returns a plain dict, skipping
         the Pydantic Usage construction on the hot path.
         """
-        _empty: Final[dict] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        _empty: Final[dict[str, object]] = {}
         if combined_usage_object is not None:
             return combined_usage_object.model_dump()
         if not response_obj:

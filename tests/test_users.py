@@ -110,16 +110,6 @@ async def test_user_info():
         assert status == 403
 
 
-@pytest.mark.asyncio
-async def test_user_update():
-    """
-    Create user
-    Update user access to new model
-    Make chat completion call
-    """
-    pass
-
-
 @pytest.mark.skip(reason="Frequent check on ci/cd leads to read timeout issue.")
 @pytest.mark.asyncio
 async def test_users_budgets_reset():
@@ -182,38 +172,6 @@ async def chat_completion_streaming(session, key, model="gpt-4"):
         continue
 
 
-@pytest.mark.skip(reason="Global proxy now tracked via `/global/spend/logs`")
-@pytest.mark.asyncio
-async def test_global_proxy_budget_update():
-    """
-    - Get proxy current spend
-    - Make chat completion call (normal)
-    - Assert spend increased
-    - Make chat completion call (streaming)
-    - Assert spend increased
-    """
-    get_user = f"litellm-proxy-budget"
-    async with aiohttp.ClientSession() as session:
-        user_info = await get_user_info(
-            session=session, get_user=get_user, call_user=os.environ["LITELLM_MASTER_KEY"]
-        )
-        original_spend = user_info["user_info"]["spend"]
-        await chat_completion(session=session, key=os.environ["LITELLM_MASTER_KEY"])
-        await asyncio.sleep(5)  # let db update
-        user_info = await get_user_info(
-            session=session, get_user=get_user, call_user=os.environ["LITELLM_MASTER_KEY"]
-        )
-        new_spend = user_info["user_info"]["spend"]
-        print(f"new_spend: {new_spend}; original_spend: {original_spend}")
-        assert new_spend > original_spend
-        await chat_completion_streaming(session=session, key=os.environ["LITELLM_MASTER_KEY"])
-        await asyncio.sleep(5)  # let db update
-        user_info = await get_user_info(
-            session=session, get_user=get_user, call_user=os.environ["LITELLM_MASTER_KEY"]
-        )
-        new_new_spend = user_info["user_info"]["spend"]
-        print(f"new_spend: {new_spend}; original_spend: {original_spend}")
-        assert new_new_spend > new_spend
 
 
 import json

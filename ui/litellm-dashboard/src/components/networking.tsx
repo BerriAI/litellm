@@ -1091,6 +1091,8 @@ export interface UserInfoV2Response {
   user_role: string | null;
   spend: number;
   max_budget: number | null;
+  tpm_limit?: number | null;
+  rpm_limit?: number | null;
   models: string[];
   budget_duration: string | null;
   budget_reset_at: string | null;
@@ -7047,6 +7049,13 @@ export const updateUiSettings = async (accessToken: string, settings: Record<str
   }
   const data = await response.json();
   return data;
+};
+
+export const startMoyaiQuickConnect = async (accessToken: string, moyaiUrl: string, returnTo: string) => {
+  return apiClient.post<{ connect_url: string }>("/moyai/connect/start", {
+    accessToken,
+    body: { moyai_url: moyaiUrl, return_to: returnTo },
+  });
 };
 
 export type UserBannerSeverity = "info" | "warning" | "error";
