@@ -2850,25 +2850,6 @@ def test_completion_text_003_prompt_array():
 # asyncio.run(test_text_completion_async_stream())
 
 
-def test_async_text_completion():
-    litellm.set_verbose = True
-    print("test_async_text_completion")
-
-    async def test_get_response():
-        try:
-            response = await litellm.atext_completion(
-                model="gpt-3.5-turbo-instruct",
-                prompt="good morning",
-                stream=False,
-                max_tokens=10,
-            )
-            print(f"response: {response}")
-        except litellm.Timeout as e:
-            print(e)
-        except Exception as e:
-            print(e)
-
-    asyncio.run(test_get_response())
 
 
 # test_async_text_completion()

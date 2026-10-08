@@ -6,6 +6,7 @@ import { readRequest, requestPath } from "@/../tests/lens-test-utils";
 import { LensWorkspace } from "./LensWorkspace";
 import { createLensDemoData } from "./data/demo/fixtures";
 import type { LensList } from "./model/types";
+import { rollUpAgents } from "./agents/agentRollup";
 
 const network = vi.fn<typeof fetch>();
 const list = vi.fn<() => Promise<LensList>>();
@@ -22,10 +23,18 @@ function serve({ enabled = false, traces = false, requests = false, connected = 
   list.mockResolvedValue({ lenses: [], workers: connected ? [worker()] : [], tracing_enabled: enabled });
   network.mockImplementation(async (input, init) => {
     const { path, method, body, query } = await readRequest(input, init);
+    if (path === "/lens/service")
+      return Response.json({
+        url: "https://traces.test",
+        connected: true,
+        status: { storage_ready: true, credentials_ready: true },
+      });
     if (path === "/v1/traces")
       return enabled
         ? Response.json({ data: traces ? [data.runs[0].trace.summary] : [] })
         : Response.json({ detail: "Tracing is not enabled" }, { status: 501 });
+    if (path === "/v1/traces/agents")
+      return Response.json({ agents: traces ? rollUpAgents([data.runs[0].trace.summary]) : [] });
     if (path === "/lens/activity/available") return Response.json({ traces, requests });
     if (path === "/lens/traces/findings") return Response.json([]);
     if (path === "/lens" && method === "POST") {
@@ -37,7 +46,8 @@ function serve({ enabled = false, traces = false, requests = false, connected = 
     if (path === "/key/generate") return Response.json({ token_id: worker().analysis_key_id });
     if (path === "/lens/workers/register") {
       list.mockResolvedValue({ lenses: [], workers: [worker()], tracing_enabled: true });
-      return Response.json({ worker: worker(), token: "test-worker-token", image: "test-worker-image" });
+      const created = { worker: worker(), token: "", image: "test-worker-image", managed: true };
+      return Response.json(created);
     }
     if (path === "/models") return Response.json({ data: [{ id: "analysis" }] });
     if (path === "/model_group/info")
@@ -77,7 +87,7 @@ async function connectWorkerFromSettings(user: ReturnType<typeof userEvent.setup
   expect(settings.getByRole("heading", { name: "Connect a worker" })).toBeVisible();
   await user.click(settings.getByRole("combobox", { name: "Analysis model" }));
   await user.click(await screen.findByRole("option", { name: "analysis" }));
-  await user.click(settings.getByRole("button", { name: "Get install command" }));
+  await user.click(settings.getByRole("button", { name: "Enable investigations" }));
   expect(await settings.findByRole("heading", { name: "Worker connected" })).toBeVisible();
   await user.click(settings.getByRole("button", { name: "New investigation" }));
   expect(await screen.findByRole("region", { name: "New investigation" })).toBeVisible();
@@ -305,8 +315,10 @@ describe("Lens setup journey", () => {
         within(screen.getByRole("tablist", { name: "Lens" })).getByRole("tab", { name: "Investigations" }),
       ).toHaveAttribute("aria-selected", "true");
       await waitFor(() => expect(setupParam(onUrlUpdate)).toBeNull());
-      const requests = await Promise.all(network.mock.calls.map(([input, init]) => readRequest(input, init)));
-      const create = requests.find((request) => request.path === "/lens" && request.method === "POST");
+      const creates = network.mock.calls.filter(
+        ([input, init]) => requestPath(input) === "/lens" && (init?.method ?? (input as Request).method) === "POST",
+      );
+      const [create] = await Promise.all(creates.map(([input, init]) => readRequest(input, init)));
       expect(create).toBeDefined();
       expect(create?.body).toEqual(expect.objectContaining({ name: "My first review", source }));
     },
