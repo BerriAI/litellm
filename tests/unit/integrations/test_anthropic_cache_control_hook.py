@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict
 import litellm
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
+    configured_injection_points,
     supports_openai_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -4125,3 +4126,65 @@ class TestRecordGatewayInjection:
             custom_llm_provider="anthropic",
         )
         assert self.KEY not in kwargs["litellm_metadata"]
+
+
+class TestMalformedInjectionPointsAreIgnored:
+    """A ``cache_control_injection_points`` value that is not a list of points (a string, an int, a bare
+    dict, a list of strings) raised inside the hook and turned every request to that deployment into a 500.
+    Every entry point now reads it as no configured points, the way ``null`` already read."""
+
+    SHAPES = ("system", 5, {"location": "message", "role": "system"}, ["system"], None)
+    MESSAGES = [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
+
+    @pytest.mark.parametrize("value", SHAPES)
+    def test_reads_as_no_points(self, value):
+        assert configured_injection_points(value) == ()
+
+    def test_keeps_the_point_entries_of_a_mixed_list(self):
+        mixed = ["system", {"location": "message", "role": "system"}, 3]
+        assert configured_injection_points(mixed) == ({"location": "message", "role": "system"},)
+
+    @pytest.mark.parametrize("value", SHAPES)
+    def test_chat_prompt_hook_leaves_the_request_untouched(self, value):
+        _, processed, params = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model="openai/gpt-5.6",
+            messages=copy.deepcopy(self.MESSAGES),
+            non_default_params={"cache_control_injection_points": copy.deepcopy(value)},
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert processed == self.MESSAGES
+        assert "cache_control_injection_points" not in params
+        assert "prompt_cache_options" not in params
+
+    @pytest.mark.parametrize("value", SHAPES)
+    def test_chat_seeding_falls_through_to_the_defaults(self, monkeypatch, value):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        params: dict = {"cache_control_injection_points": copy.deepcopy(value)}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(self.MESSAGES),
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+        seeded = params["cache_control_injection_points"]
+        assert seeded and all(isinstance(point, dict) and "location" in point for point in seeded)
+
+    @pytest.mark.parametrize("value", SHAPES)
+    def test_messages_path_leaves_the_request_untouched(self, value):
+        kwargs: dict = {"cache_control_injection_points": copy.deepcopy(value)}
+        messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(
+            [{"role": "user", "content": "hi"}], "sys", kwargs, model="gpt-5.6", custom_llm_provider="openai"
+        )
+        assert (messages, system) == ([{"role": "user", "content": "hi"}], "sys")
+        assert "cache_control_injection_points" not in kwargs
+        assert "prompt_cache_options" not in kwargs
+
+    @pytest.mark.parametrize("value", SHAPES)
+    def test_responses_dialect_stamp_leaves_the_request_untouched(self, value):
+        from litellm.responses.main import _stamp_injection_points_with_dialect
+
+        kwargs: dict = {"cache_control_injection_points": copy.deepcopy(value)}
+        _stamp_injection_points_with_dialect(kwargs, "gpt-5.6", "openai")
+        assert kwargs == {"cache_control_injection_points": value}

@@ -18,7 +18,11 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     LiteLLMResponsesTransformationHandler,
 )
 from litellm.constants import DEFAULT_CHAT_COMPLETION_PARAM_VALUES, request_timeout
-from litellm.integrations.anthropic_cache_control_hook import CARRY_UNMATCHED_MESSAGE_POINTS, AnthropicCacheControlHook
+from litellm.integrations.anthropic_cache_control_hook import (
+    CARRY_UNMATCHED_MESSAGE_POINTS,
+    AnthropicCacheControlHook,
+    configured_injection_points,
+)
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -575,8 +579,8 @@ def _stamp_injection_points_with_dialect(
     resolved here, and resolving the model name alone reads a Foundry deployment of an OpenAI
     model (``azure_ai/gpt-6-astra``) as Azure OpenAI, which left it on the Anthropic dialect.
     """
-    points: Final = kwargs.get("cache_control_injection_points")
-    if not isinstance(points, list) or not points:
+    points: Final = configured_injection_points(kwargs.get("cache_control_injection_points"))
+    if not points:
         return
     kwargs["cache_control_injection_points"] = AnthropicCacheControlHook._stamped_with_dialect(
         points,

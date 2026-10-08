@@ -90,6 +90,14 @@ def _validated_object_list(value: object) -> list[object] | None:
         return None
 
 
+def configured_injection_points(value: object) -> Sequence[CacheControlInjectionPoint]:
+    if not isinstance(value, list):
+        return ()
+    if all(isinstance(entry, dict) for entry in value):
+        return cast(list[CacheControlInjectionPoint], value)
+    return tuple(cast(CacheControlInjectionPoint, entry) for entry in value if isinstance(entry, dict))
+
+
 def supports_openai_prompt_cache_breakpoint(model: str) -> bool:
     model_map_flag: Final = _model_map_prompt_cache_breakpoint_flag(model)
     if model_map_flag is not None:
@@ -280,8 +288,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         """
         # Extract cache control injection points
         carry_unmatched: Final = bool(non_default_params.pop(CARRY_UNMATCHED_MESSAGE_POINTS, False))
-        injection_points: Final[list[CacheControlInjectionPoint]] = non_default_params.pop(
-            "cache_control_injection_points", []
+        injection_points: Final = configured_injection_points(
+            non_default_params.pop("cache_control_injection_points", None)
         )
         if not injection_points:
             return model, messages, non_default_params
@@ -920,7 +928,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         """
         import litellm
 
-        configured: Final = non_default_params.get("cache_control_injection_points")
+        configured: Final = configured_injection_points(non_default_params.get("cache_control_injection_points"))
         if configured:
             tools_keeping_marks: Final = tuple(
                 tool for tool in tools or () if not _chat_transform_drops_tool_cache_control(tool)
@@ -1051,9 +1059,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             bool | None, kwargs.pop("enable_prompt_caching", None)
         )
         cache_control: Final = kwargs.get("cache_control")
-        configured: Final = cast(  # cast-ok: kwargs is untyped; this key only holds the documented injection-point list
-            list[CacheControlInjectionPoint] | None, kwargs.pop("cache_control_injection_points", None)
-        )
+        configured: Final = configured_injection_points(kwargs.pop("cache_control_injection_points", None))
         injection_points: Final[Sequence[CacheControlInjectionPoint]] = configured or (
             AnthropicCacheControlHook.get_default_injection_points(
                 messages=typed_messages,
