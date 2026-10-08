@@ -1,6 +1,6 @@
 use std::convert::Infallible;
 
-use super::super::inference::InferenceHost;
+use crate::routes::inference::InferenceHost;
 use litellm_host_python::{InvokeError, PythonBinding, PythonHostCalls, PythonOwned};
 use litellm_inference_responses::{Error, route::Responses, types::ResponsesCall};
 use pyo3::{
