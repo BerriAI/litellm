@@ -381,7 +381,10 @@ async def test_unknown_provider_fields_reach_messages_transport(
     await invoke_native_messages(messages_server, asynchronous, provider_fields_model, options)
 
     body, _ = sent(messages_server)
-    assert body["future_provider_option"] == extension
+    if extension is None and not in_extra_body:
+        assert "future_provider_option" not in body
+    else:
+        assert body["future_provider_option"] == extension
     assert fields == {"future_provider_option": extension}
 
 
@@ -514,5 +517,5 @@ async def test_public_messages_preserves_unknown_kwargs_and_extra_body(
         await asyncio.to_thread(litellm.anthropic.messages.create, **options)
 
     body, _ = sent(messages_server)
-    assert body["future_provider_option"] is None
+    assert "future_provider_option" not in body
     assert body["another_future_option"] == {"values": [True, None, 0]}
