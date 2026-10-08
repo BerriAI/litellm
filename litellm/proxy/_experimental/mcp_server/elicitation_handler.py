@@ -10,9 +10,14 @@ from litellm.constants import MCP_CLIENT_TIMEOUT
 
 if TYPE_CHECKING:
     from mcp.types import (
+        INTERNAL_ERROR,
+        INVALID_REQUEST,
+        REQUEST_TIMEOUT,
         ClientCapabilities,
         ElicitRequestedSchema,
+        ElicitRequestFormParams,
         ElicitRequestParams,
+        ElicitRequestURLParams,
         ElicitResult,
         ErrorData,
         RequestId,

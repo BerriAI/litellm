@@ -27,6 +27,6 @@ mcp_servers:
     timeout: 60
 ```
 
-The downstream MCP client must advertise the requested form or URL capability during initialization. Streamable HTTP relays use the active tool-call response stream, so a separate GET stream is not required. Legacy SSE clients remain supported. A request without initialized client capabilities, including a stateless call or an LLM tool bridge with no downstream MCP client, receives an explicit elicitation error
+The downstream MCP client must advertise the requested form or URL capability during initialization. Use the gateway's legacy SSE endpoint (`/mcp/sse`) for the verified interactive form and URL relay path. The current Streamable HTTP endpoint (`/mcp`) can lose initialization state before a tool call, so even a client that advertised support receives an explicit elicitation error instead of an input request. Successful interactive relay over Streamable HTTP is not currently verified. Stateless calls and LLM tool bridges with no downstream MCP client also receive explicit errors
 
 The relay wait uses the upstream server's existing `timeout` setting, or `LITELLM_MCP_CLIENT_TIMEOUT` (60 seconds by default). The enclosing tool call also retains its existing timeout. Unsupported modes, disconnects and relay failures return errors, never a fabricated user decline. Actual user accept, decline and cancel responses are preserved; cancellation stops the relay
