@@ -16,6 +16,7 @@ from integration.providers._mantle_gpt_prompt_cache_support import (
     EXPLICIT,
     GPT,
     GPT_FLAGGED_ROW,
+    GPT_BARE,
     GPT_REGION,
     GPT_UNFLAGGED_ROW,
     HOSTILE_OPTIONS,
@@ -117,6 +118,19 @@ def test_b3_b4_a_region_prefixed_deployment_reads_the_region_free_row(gateway: G
     marker: Final = fresh_marker()
     with wire_server(mantle_peer()) as wire, gateway.scenario() as scenario:
         name: Final = mantle_deployment(gateway, scenario, wire, GPT_REGION)
+        outcome, received = observe(gateway, wire, endpoint, request_body(endpoint, name, prompt_text(marker)))
+        assert_answered(outcome, marker)
+        assert_wire(received, expected_wire(GPT, prompt_text(marker), endpoint=endpoint, marked=True), streaming=False)
+        assert_priced_row(success_row(name, marker), GPT)
+
+
+@pytest.mark.parametrize("endpoint", ENDPOINTS)
+def test_b15_to_b17_a_bare_deployment_name_with_its_provider_reads_the_provider_keyed_row(
+    gateway: Gateway, endpoint: Endpoint
+) -> None:
+    marker: Final = fresh_marker()
+    with wire_server(mantle_peer()) as wire, gateway.scenario() as scenario:
+        name: Final = mantle_deployment(gateway, scenario, wire, GPT_BARE, custom_llm_provider="bedrock_mantle")
         outcome, received = observe(gateway, wire, endpoint, request_body(endpoint, name, prompt_text(marker)))
         assert_answered(outcome, marker)
         assert_wire(received, expected_wire(GPT, prompt_text(marker), endpoint=endpoint, marked=True), streaming=False)

@@ -42,6 +42,8 @@ GPT: Final = "bedrock_mantle/openai.gpt-5.6-sol"
 
 GPT_REGION: Final = "bedrock_mantle/us-east-1/openai.gpt-5.6-sol"
 
+GPT_BARE: Final = "openai.gpt-5.6-sol"
+
 
 GPT_UNFLAGGED_ROW: Final = "bedrock_mantle/openai.gpt-5.4"
 
