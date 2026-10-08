@@ -236,6 +236,7 @@ _UNBILLED_ROUTES: Final[frozenset[str]] = frozenset(
         "/responses/input_tokens",
         "/v1/responses/input_tokens",
         "/openai/v1/responses/input_tokens",
+        "/openai/responses/input_tokens",
     }
 )
 _TOKEN_COUNTING_SEGMENTS: Final[frozenset[str]] = frozenset({"count_tokens", "count-tokens"})
