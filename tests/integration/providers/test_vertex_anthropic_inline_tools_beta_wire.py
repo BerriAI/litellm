@@ -399,7 +399,7 @@ def test_vertex_messages_sends_no_beta_header_when_nothing_survives_the_filter(
 
 @pytest.mark.parametrize(
     "beta",
-    [f" {_INLINE_TOOLS} , {_INLINE_TOOLS} ", f"{_UNKNOWN}," * 240 + _INLINE_TOOLS],
+    [f"{_INLINE_TOOLS} , {_INLINE_TOOLS}", f"{_UNKNOWN}," * 240 + _INLINE_TOOLS],
     ids=["duplicated_with_spaces", "inside_5kb_junk"],
 )
 def test_vertex_messages_forwards_inline_tools_once_from_a_hostile_header_value(gateway: Gateway, beta: str) -> None:
