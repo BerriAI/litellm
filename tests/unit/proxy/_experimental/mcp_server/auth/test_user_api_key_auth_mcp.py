@@ -2,7 +2,7 @@ import contextlib
 import json
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Literal
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -9517,6 +9517,104 @@ class TestSessionBearerEgressScrub:
         assert oauth2 is None
         assert "authorization" not in {k.lower() for k in raw}
         assert per_server == {"github": {"Authorization": "Bearer gh_injected_upstream"}}
+
+    @pytest.mark.parametrize(
+        "context",
+        ["per_server", "mcp_auth", "oauth2_authorization", "raw_authorization"],
+    )
+    @pytest.mark.parametrize(
+        "caller_value",
+        ["sk-caller-admission-key-123", "Bearer sk-caller-admission-key-123"],
+    )
+    async def test_scrub_removes_caller_admission_key_from_each_egress_context(
+        self,
+        context: Literal["per_server", "mcp_auth", "oauth2_authorization", "raw_authorization"],
+        caller_value: str,
+    ) -> None:
+        caller_key: Final = "sk-caller-admission-key-123"
+        upstream_token: Final = "Bearer real-upstream-token"
+        oauth2_headers: Final = {
+            "Authorization": caller_value if context == "oauth2_authorization" else upstream_token
+        }
+        raw_headers: Final = {
+            "x-litellm-api-key": f"Bearer {caller_key}",
+            "authorization": caller_value if context == "raw_authorization" else upstream_token,
+            "x-upstream-token": upstream_token,
+        }
+        mcp_auth_header: Final = caller_value if context == "mcp_auth" else upstream_token
+        mcp_server_auth_headers: Final = {
+            "echo_srv": {
+                "Authorization": caller_value if context == "per_server" else upstream_token,
+            }
+        }
+
+        oauth2, raw, mcp_auth, per_server = MCPRequestHandler._scrub_gateway_admission_credentials(
+            admitted=False,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+            mcp_auth_header=mcp_auth_header,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            admitted_credential=caller_key,
+        )
+
+        assert raw["x-litellm-api-key"] == f"Bearer {caller_key}"
+        assert raw["x-upstream-token"] == upstream_token
+        if context == "raw_authorization":
+            assert "authorization" not in raw
+        else:
+            assert raw["authorization"] == upstream_token
+        if context == "oauth2_authorization":
+            assert oauth2 is None
+        else:
+            assert oauth2 == {"Authorization": upstream_token}
+        if context == "mcp_auth":
+            assert mcp_auth is None
+        else:
+            assert mcp_auth == upstream_token
+        if context == "per_server":
+            assert not per_server
+        else:
+            assert per_server == {"echo_srv": {"Authorization": upstream_token}}
+
+    async def test_scrub_keeps_caller_key_when_admission_credential_is_missing(self) -> None:
+        caller_key: Final = "Bearer sk-caller-admission-key-123"
+        oauth2, raw, mcp_auth, per_server = MCPRequestHandler._scrub_gateway_admission_credentials(
+            admitted=False,
+            oauth2_headers={"Authorization": caller_key},
+            raw_headers={"x-litellm-api-key": caller_key, "authorization": caller_key},
+            mcp_auth_header=caller_key,
+            mcp_server_auth_headers={"echo_srv": {"Authorization": caller_key}},
+            admitted_credential=None,
+        )
+
+        assert oauth2 == {"Authorization": caller_key}
+        assert raw == {"x-litellm-api-key": caller_key, "authorization": caller_key}
+        assert mcp_auth == caller_key
+        assert per_server == {"echo_srv": {"Authorization": caller_key}}
+
+    async def test_process_scrubs_master_admission_key_from_per_server_auth(self) -> None:
+        scope: Final = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/",
+            "headers": [
+                (b"x-litellm-api-key", b"Bearer sk-1234"),
+                (b"x-mcp-echo_srv-authorization", b"Bearer sk-1234"),
+            ],
+        }
+        master_auth: Final = UserAPIKeyAuth(api_key="litellm_proxy_master_key")
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+            new_callable=AsyncMock,
+            return_value=master_auth,
+        ) as mock_auth:
+            auth, _mcp_auth, _servers, mcp_server_auth, _oauth2, raw = await MCPRequestHandler.process_mcp_request(scope)
+
+        mock_auth.assert_awaited_once()
+        assert auth is master_auth
+        assert not mcp_server_auth
+        assert raw["x-litellm-api-key"] == "Bearer sk-1234"
 
 
 # ---------------------------------------------------------------------------

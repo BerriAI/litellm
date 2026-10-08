@@ -23,6 +23,7 @@ from litellm.exceptions import (
     GuardrailRaisedException,
     ModifyResponseException,
 )
+from litellm.experimental_mcp_client.client import strip_auth_scheme
 from litellm.proxy._experimental.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPServerListError,
@@ -376,7 +377,7 @@ if MCP_AVAILABLE:
             virtual_mcp_auth_header,
             virtual_mcp_server_auth_headers,
             virtual_raw_headers,
-        ) = _extract_mcp_headers_from_request(request, MCPRequestHandler)
+        ) = _extract_mcp_headers_from_request(request, user_api_key_dict)
         virtual_oauth2_headers: Final = MCPRequestHandler.get_oauth2_headers_from_headers(request.headers)
         if tool_name == MCP_TOOL_SEARCH_TOOL_NAME:
             return await handle_mcp_tool_search(
@@ -587,18 +588,36 @@ if MCP_AVAILABLE:
 
     def _extract_mcp_headers_from_request(
         request: Request,
-        mcp_request_handler_cls,
-    ) -> tuple[str | None, dict[str, dict[str, str]], dict[str, str]]:
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> tuple[str | None, dict[str, dict[str, str]] | None, dict[str, str]]:
         """
         Extract MCP auth headers from HTTP request.
 
         Returns:
             Tuple of (mcp_auth_header, mcp_server_auth_headers, raw_headers)
         """
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+
         headers: Final = request.headers
-        raw_headers: Final = dict(headers)
-        mcp_auth_header: Final = mcp_request_handler_cls._get_mcp_auth_header_from_headers(headers)
-        mcp_server_auth_headers: Final = mcp_request_handler_cls._get_mcp_server_auth_headers_from_headers(headers)
+        litellm_api_key: Final = MCPRequestHandler.get_litellm_api_key_from_headers(headers)
+        admitted_credential: Final = (
+            strip_auth_scheme(litellm_api_key, "Bearer")
+            if user_api_key_dict.api_key is not None and litellm_api_key is not None
+            else None
+        )
+        (
+            _oauth2_headers,
+            raw_headers,
+            mcp_auth_header,
+            mcp_server_auth_headers,
+        ) = MCPRequestHandler.scrub_gateway_admission_credentials(
+            admitted=False,
+            admitted_credential=admitted_credential,
+            oauth2_headers=None,
+            raw_headers=dict(headers),
+            mcp_auth_header=MCPRequestHandler.get_mcp_auth_header_from_headers(headers),
+            mcp_server_auth_headers=MCPRequestHandler.get_mcp_server_auth_headers_from_headers(headers),
+        )
         return mcp_auth_header, mcp_server_auth_headers, raw_headers
 
     def _resolve_mcp_server_id_for_rest(
@@ -790,11 +809,10 @@ if MCP_AVAILABLE:
     async def fetch_pinnable_tool_catalog(
         server: MCPServer, request: Request, user_api_key_dict: UserAPIKeyAuth
     ) -> dict[str, PinnedMCPTool]:
-        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
         from litellm.proxy.proxy_server import proxy_logging_obj
 
         mcp_auth_header, mcp_server_auth_headers, raw_headers = _extract_mcp_headers_from_request(
-            request, MCPRequestHandler
+            request, user_api_key_dict
         )
         upstream: Final = await _list_server_tools(
             server.model_copy(update={"pinned_tools": None, "tool_name_to_description": None}),
@@ -1041,9 +1059,25 @@ if MCP_AVAILABLE:
 
             # Extract auth headers from request
             headers: Final = request.headers
-            raw_headers_from_request: Final = dict(headers)
-            mcp_auth_header: Final = MCPRequestHandler.get_mcp_auth_header_from_headers(headers)
-            mcp_server_auth_headers: Final = MCPRequestHandler.get_mcp_server_auth_headers_from_headers(headers)
+            litellm_api_key: Final = MCPRequestHandler.get_litellm_api_key_from_headers(headers)
+            admitted_credential: Final = (
+                strip_auth_scheme(litellm_api_key, "Bearer")
+                if user_api_key_dict.api_key is not None and litellm_api_key is not None
+                else None
+            )
+            (
+                _oauth2_headers,
+                raw_headers_from_request,
+                mcp_auth_header,
+                mcp_server_auth_headers,
+            ) = MCPRequestHandler.scrub_gateway_admission_credentials(
+                admitted=False,
+                admitted_credential=admitted_credential,
+                oauth2_headers=None,
+                raw_headers=dict(headers),
+                mcp_auth_header=MCPRequestHandler.get_mcp_auth_header_from_headers(headers),
+                mcp_server_auth_headers=MCPRequestHandler.get_mcp_server_auth_headers_from_headers(headers),
+            )
 
             auth_contexts: Final = await build_effective_auth_contexts(user_api_key_dict)
 
@@ -1069,7 +1103,7 @@ if MCP_AVAILABLE:
                     server_id=server_id,
                     allowed_server_ids=allowed_server_ids,
                     rest_client_ip=_rest_client_ip,
-                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    mcp_server_auth_headers=mcp_server_auth_headers or {},
                     mcp_auth_header=mcp_auth_header,
                     raw_headers_from_request=raw_headers_from_request,
                     user_api_key_dict=user_api_key_dict,
@@ -1272,7 +1306,7 @@ if MCP_AVAILABLE:
                     mcp_auth_header,
                     mcp_server_auth_headers,
                     raw_headers_from_request,
-                ) = _extract_mcp_headers_from_request(request, MCPRequestHandler)
+                ) = _extract_mcp_headers_from_request(request, user_api_key_dict)
                 if mcp_auth_header:
                     data["mcp_auth_header"] = mcp_auth_header
                 if mcp_server_auth_headers:

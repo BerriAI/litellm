@@ -3,7 +3,7 @@ import inspect
 import json
 import sys
 from datetime import datetime
-from typing import Any, Dict, Final, Optional
+from typing import Any, Dict, Final, Optional, cast
 from unittest.mock import AsyncMock, MagicMock
 
 from litellm.proxy._experimental.mcp_server import operations as mcp_operations
@@ -2651,6 +2651,85 @@ class TestCallToolRestAPI:
         assert captured["allowed_mcp_servers"] == [stub_server]
         assert captured["oauth2_headers"] is None
         fire_logging.assert_awaited_once()
+
+    async def test_rest_tool_call_scrubs_caller_key_from_per_server_auth(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def fake_contexts(user_api_key_auth: UserAPIKeyAuth) -> list[UserAPIKeyAuth]:
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args: object, **kwargs: object) -> list[str]:
+            return ["server-1"]
+
+        class StubServer:
+            server_id: str = "server-1"
+            alias: str = "echo_srv"
+            server_name: str = "echo_srv"
+            name: str = "stub"
+            allowed_tools: None = None
+            mcp_info: dict[str, str] = {"server_name": "stub"}
+            available_on_public_internet: bool = True
+            auth_type: None = None
+
+        stub_server: Final = StubServer()
+        captured: Final[dict[str, object]] = {}
+
+        async def fake_add_litellm_data_to_request(**kwargs: object) -> object:
+            return kwargs.get("data", {})
+
+        async def fake_execute_mcp_tool(**kwargs: object) -> CallToolResult:
+            captured.update(kwargs)
+            return _OK_TOOL_RESULT
+
+        def fake_get_mcp_server_by_id(server_id: str) -> StubServer | None:
+            return stub_server if server_id == "server-1" else None
+
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            fake_get_mcp_server_by_id,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.add_litellm_data_to_request",
+            fake_add_litellm_data_to_request,
+            raising=False,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", {}, raising=False)
+        monkeypatch.setattr(rest_endpoints, "execute_mcp_tool", fake_execute_mcp_tool, raising=False)
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_fire_mcp_tool_call_logging",
+            AsyncMock(side_effect=RuntimeError("logging failed")),
+            raising=False,
+        )
+
+        caller_key: Final = "sk-rest-caller-admission-key-123"
+        request: Final = _build_request(
+            headers={
+                "x-litellm-api-key": f"Bearer {caller_key}",
+                "x-mcp-echo_srv-authorization": f"Bearer {caller_key}",
+            },
+            path="/mcp-rest/tools/call",
+            method="POST",
+            json_body={"server_id": "server-1", "name": "demo-tool", "arguments": {"foo": "bar"}},
+        )
+        caller: Final = UserAPIKeyAuth(api_key="stored-key-hash")
+
+        result: Final = await rest_endpoints.call_tool_rest_api(request, user_api_key_dict=caller)
+        raw_headers: Final = cast(dict[str, str], captured["raw_headers"])
+
+        assert result == _OK_TOOL_RESULT
+        assert not captured["mcp_server_auth_headers"]
+        assert "x-mcp-echo_srv-authorization" not in {key.lower() for key in raw_headers}
+        assert raw_headers["x-litellm-api-key"] == f"Bearer {caller_key}"
 
     @pytest.mark.parametrize(
         ("structured", "expected_structured", "expected_texts"),
