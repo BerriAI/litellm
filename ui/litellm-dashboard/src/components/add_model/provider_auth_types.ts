@@ -29,6 +29,7 @@ export const PROVIDER_AUTH_TYPES: Partial<Record<keyof typeof Providers, readonl
     {
       id: GITHUB_COPILOT_PER_USER_AUTH_TYPE,
       label: "Per-user GitHub OAuth",
+      credentialOnly: true,
       description:
         "Each LiteLLM user connects their own GitHub account from LLM Credentials, and their requests use their own GitHub Copilot access. Users who have not connected get a 401.",
       fieldKeys: [GITHUB_COPILOT_AUTH_TYPE_KEY],
