@@ -382,7 +382,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return None
 
     @staticmethod
-    def _normalize_session_payload_for_mapping(session: dict) -> dict:
+    def _normalize_session_payload_for_mapping(session: dict) -> dict[str, object]:
         """Normalize GA-remapped session fields back to their beta keys.
 
         ``map_openai_params`` only recognises the flat OpenAI-beta key names
