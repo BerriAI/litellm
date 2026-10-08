@@ -1,3 +1,4 @@
+from types import MappingProxyType
 from typing import Final
 from urllib.parse import parse_qs, urlparse
 
@@ -124,27 +125,29 @@ async def test_afile_retrieve_rejects_a_provider_file_without_its_size():
 
 
 _FILE_BODY: Final = b'{"prompt": "Hello", "completion": "Hi"}'
-_FINE_TUNE_FILE_JSON: Final = {
-    "id": "file-abc123",
-    "object": "file",
-    "bytes": len(_FILE_BODY),
-    "created_at": 1699000000,
-    "filename": "mydata.jsonl",
-    "purpose": "fine-tune",
-}
+_FINE_TUNE_FILE_JSON: Final = MappingProxyType(
+    {
+        "id": "file-abc123",
+        "object": "file",
+        "bytes": len(_FILE_BODY),
+        "created_at": 1699000000,
+        "filename": "mydata.jsonl",
+        "purpose": "fine-tune",
+    }
+)
 
 
 @pytest.mark.asyncio
 async def test_openai_file_operations_roundtrip(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     files_route: Final = respx_mock.post("https://api.openai.com/v1/files").mock(
-        return_value=httpx.Response(200, json=_FINE_TUNE_FILE_JSON)
+        return_value=httpx.Response(200, json=dict(_FINE_TUNE_FILE_JSON))
     )
     list_route: Final = respx_mock.get("https://api.openai.com/v1/files").mock(
-        return_value=httpx.Response(200, json={"object": "list", "data": [_FINE_TUNE_FILE_JSON]})
+        return_value=httpx.Response(200, json={"object": "list", "data": [dict(_FINE_TUNE_FILE_JSON)]})
     )
     retrieve_route: Final = respx_mock.get("https://api.openai.com/v1/files/file-abc123").mock(
-        return_value=httpx.Response(200, json=_FINE_TUNE_FILE_JSON)
+        return_value=httpx.Response(200, json=dict(_FINE_TUNE_FILE_JSON))
     )
     content_route: Final = respx_mock.get("https://api.openai.com/v1/files/file-abc123/content").mock(
         return_value=httpx.Response(200, content=_FILE_BODY)

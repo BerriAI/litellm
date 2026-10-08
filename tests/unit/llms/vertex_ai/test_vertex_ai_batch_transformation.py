@@ -1,4 +1,5 @@
 import json
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -203,57 +204,59 @@ async def test_litellm_cancel_batch_vertex_ai():
         assert response.status == "cancelling"
 
 
-_MOCK_GCS_FILE_RESPONSE = {
-    "kind": "storage#object",
-    "id": "litellm-local/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/5f7b99ad-9203-4430-98bf-3b45451af4cb/1739598666670574",
-    "selfLink": "https://www.googleapis.com/storage/v1/b/litellm-local/o/litellm-vertex-files%2Fpublishers%2Fgoogle%2Fmodels%2Fgemini-1.5-flash-001%2F5f7b99ad-9203-4430-98bf-3b45451af4cb",
-    "name": "litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/5f7b99ad-9203-4430-98bf-3b45451af4cb",
-    "bucket": "litellm-local",
-    "generation": "1739598666670574",
-    "metageneration": "1",
-    "contentType": "application/json",
-    "storageClass": "STANDARD",
-    "size": "416",
-    "md5Hash": "hbBNj7C8KJ7oVH+JmyRM6A==",
-    "crc32c": "oDmiUA==",
-    "etag": "CO7D0IT+xIsDEAE=",
-    "timeCreated": "2025-02-15T05:51:06.741Z",
-    "updated": "2025-02-15T05:51:06.741Z",
-    "timeStorageClassUpdated": "2025-02-15T05:51:06.741Z",
-    "timeFinalized": "2025-02-15T05:51:06.741Z",
-}
+_MOCK_GCS_FILE_RESPONSE: Final = MappingProxyType(
+    {
+        "kind": "storage#object",
+        "id": "litellm-local/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/5f7b99ad-9203-4430-98bf-3b45451af4cb/1739598666670574",
+        "selfLink": "https://www.googleapis.com/storage/v1/b/litellm-local/o/litellm-vertex-files%2Fpublishers%2Fgoogle%2Fmodels%2Fgemini-1.5-flash-001%2F5f7b99ad-9203-4430-98bf-3b45451af4cb",
+        "name": "litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/5f7b99ad-9203-4430-98bf-3b45451af4cb",
+        "bucket": "litellm-local",
+        "generation": "1739598666670574",
+        "metageneration": "1",
+        "contentType": "application/json",
+        "storageClass": "STANDARD",
+        "size": "416",
+        "md5Hash": "hbBNj7C8KJ7oVH+JmyRM6A==",
+        "crc32c": "oDmiUA==",
+        "etag": "CO7D0IT+xIsDEAE=",
+        "timeCreated": "2025-02-15T05:51:06.741Z",
+        "updated": "2025-02-15T05:51:06.741Z",
+        "timeStorageClassUpdated": "2025-02-15T05:51:06.741Z",
+        "timeFinalized": "2025-02-15T05:51:06.741Z",
+    }
+)
 
-_MOCK_VERTEX_BATCH_RESPONSE = {
-    "name": "projects/123456789/locations/us-central1/batchPredictionJobs/test-batch-id-456",
-    "displayName": "litellm_batch_job",
-    "model": "projects/123456789/locations/us-central1/models/gemini-1.5-flash-001",
-    "modelVersionId": "v1",
-    "inputConfig": {
-        "gcsSource": {
-            "uris": [
-                "gs://litellm-local/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/5f7b99ad-9203-4430-98bf-3b45451af4cb"
-            ]
-        }
-    },
-    "outputConfig": {
-        "gcsDestination": {"outputUriPrefix": "gs://litellm-local/batch-outputs/"}
-    },
-    "dedicatedResources": {
-        "machineSpec": {
-            "machineType": "n1-standard-4",
-            "acceleratorType": "NVIDIA_TESLA_T4",
-            "acceleratorCount": 1,
+_MOCK_VERTEX_BATCH_RESPONSE: Final = MappingProxyType(
+    {
+        "name": "projects/123456789/locations/us-central1/batchPredictionJobs/test-batch-id-456",
+        "displayName": "litellm_batch_job",
+        "model": "projects/123456789/locations/us-central1/models/gemini-1.5-flash-001",
+        "modelVersionId": "v1",
+        "inputConfig": {
+            "gcsSource": {
+                "uris": [
+                    "gs://litellm-local/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/5f7b99ad-9203-4430-98bf-3b45451af4cb"
+                ]
+            }
         },
-        "startingReplicaCount": 1,
-        "maxReplicaCount": 1,
-    },
-    "state": "JOB_STATE_RUNNING",
-    "createTime": "2025-02-15T05:51:06.741Z",
-    "startTime": "2025-02-15T05:51:07.741Z",
-    "updateTime": "2025-02-15T05:51:08.741Z",
-    "labels": {"key1": "value1", "key2": "value2"},
-    "completionStats": {"successfulCount": 0, "failedCount": 0, "remainingCount": 100},
-}
+        "outputConfig": {"gcsDestination": {"outputUriPrefix": "gs://litellm-local/batch-outputs/"}},
+        "dedicatedResources": {
+            "machineSpec": {
+                "machineType": "n1-standard-4",
+                "acceleratorType": "NVIDIA_TESLA_T4",
+                "acceleratorCount": 1,
+            },
+            "startingReplicaCount": 1,
+            "maxReplicaCount": 1,
+        },
+        "state": "JOB_STATE_RUNNING",
+        "createTime": "2025-02-15T05:51:06.741Z",
+        "startTime": "2025-02-15T05:51:07.741Z",
+        "updateTime": "2025-02-15T05:51:08.741Z",
+        "labels": {"key1": "value1", "key2": "value2"},
+        "completionStats": {"successfulCount": 0, "failedCount": 0, "remainingCount": 100},
+    }
+)
 
 
 @pytest.mark.asyncio
@@ -272,12 +275,12 @@ async def test_vertex_file_upload_create_and_retrieve_batch(
     )
     upload_route: Final = respx_mock.post(
         url__startswith="https://storage.googleapis.com/upload/storage/v1/b/litellm-local/o"
-    ).mock(return_value=httpx.Response(200, json=_MOCK_GCS_FILE_RESPONSE))
+    ).mock(return_value=httpx.Response(200, json=dict(_MOCK_GCS_FILE_RESPONSE)))
     create_route: Final = respx_mock.post(jobs_url).mock(
-        return_value=httpx.Response(200, json=_MOCK_VERTEX_BATCH_RESPONSE)
+        return_value=httpx.Response(200, json=dict(_MOCK_VERTEX_BATCH_RESPONSE))
     )
     retrieve_route: Final = respx_mock.get(f"{jobs_url}/test-batch-id-456").mock(
-        return_value=httpx.Response(200, json=_MOCK_VERTEX_BATCH_RESPONSE)
+        return_value=httpx.Response(200, json=dict(_MOCK_VERTEX_BATCH_RESPONSE))
     )
     gcs_object_uri: Final = (
         "gs://litellm-local/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/"

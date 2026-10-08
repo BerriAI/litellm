@@ -995,26 +995,30 @@ async def test_batch_logging_azure_credentials_regression():
     print("✓ Backwards compatibility maintained\n")
 
 
-_OPENAI_FILE_JSON: Final = {
-    "id": "file-abc123",
-    "object": "file",
-    "purpose": "batch",
-    "filename": "batch.jsonl",
-    "bytes": 416,
-    "created_at": 1739598666,
-    "status": "processed",
-}
+_OPENAI_FILE_JSON: Final = MappingProxyType(
+    {
+        "id": "file-abc123",
+        "object": "file",
+        "purpose": "batch",
+        "filename": "batch.jsonl",
+        "bytes": 416,
+        "created_at": 1739598666,
+        "status": "processed",
+    }
+)
 
 
-_OPENAI_BATCH_JSON: Final = {
-    "id": "batch_abc123",
-    "object": "batch",
-    "endpoint": "/v1/chat/completions",
-    "input_file_id": "file-abc123",
-    "status": "validating",
-    "completion_window": "24h",
-    "created_at": 1739598666,
-}
+_OPENAI_BATCH_JSON: Final = MappingProxyType(
+    {
+        "id": "batch_abc123",
+        "object": "batch",
+        "endpoint": "/v1/chat/completions",
+        "input_file_id": "file-abc123",
+        "status": "validating",
+        "completion_window": "24h",
+        "created_at": 1739598666,
+    }
+)
 
 
 class _SuccessPayloadRecorder(CustomLogger):
@@ -1047,28 +1051,28 @@ async def test_acreate_batch_full_crud_and_logging_metadata(
     monkeypatch.setattr(litellm, "callbacks", [recorder])
 
     upload_route: Final = respx_mock.post("https://api.openai.com/v1/files").mock(
-        return_value=httpx.Response(200, json=_OPENAI_FILE_JSON)
+        return_value=httpx.Response(200, json=dict(_OPENAI_FILE_JSON))
     )
     create_route: Final = respx_mock.post("https://api.openai.com/v1/batches").mock(
-        return_value=httpx.Response(200, json=_OPENAI_BATCH_JSON)
+        return_value=httpx.Response(200, json=dict(_OPENAI_BATCH_JSON))
     )
     retrieve_route: Final = respx_mock.get("https://api.openai.com/v1/batches/batch_abc123").mock(
-        return_value=httpx.Response(200, json=_OPENAI_BATCH_JSON)
+        return_value=httpx.Response(200, json=dict(_OPENAI_BATCH_JSON))
     )
     list_batches_route: Final = respx_mock.get("https://api.openai.com/v1/batches").mock(
-        return_value=httpx.Response(200, json={"object": "list", "data": [_OPENAI_BATCH_JSON]})
+        return_value=httpx.Response(200, json={"object": "list", "data": [dict(_OPENAI_BATCH_JSON)]})
     )
     respx_mock.get("https://api.openai.com/v1/files/file-abc123/content").mock(
         return_value=httpx.Response(200, content=b'{"custom_id": "request-1"}\n')
     )
     respx_mock.get("https://api.openai.com/v1/files/file-abc123").mock(
-        return_value=httpx.Response(200, json=_OPENAI_FILE_JSON)
+        return_value=httpx.Response(200, json=dict(_OPENAI_FILE_JSON))
     )
     respx_mock.delete("https://api.openai.com/v1/files/file-abc123").mock(
         return_value=httpx.Response(200, json={"id": "file-abc123", "object": "file", "deleted": True})
     )
     list_files_route: Final = respx_mock.get("https://api.openai.com/v1/files").mock(
-        return_value=httpx.Response(200, json={"object": "list", "data": [_OPENAI_FILE_JSON]})
+        return_value=httpx.Response(200, json={"object": "list", "data": [dict(_OPENAI_FILE_JSON)]})
     )
     cancel_route: Final = respx_mock.post("https://api.openai.com/v1/batches/batch_abc123/cancel").mock(
         return_value=httpx.Response(200, json={**_OPENAI_BATCH_JSON, "status": "cancelling"})
