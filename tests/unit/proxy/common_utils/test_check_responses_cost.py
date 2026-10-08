@@ -385,6 +385,11 @@ class TestCheckResponsesCost:
         mock_job.file_object = {"model": "gpt-4o", "id": encoded_response_id}
 
         mock_llm_router.get_deployment.return_value = {"model_id": "deployment-404"}
+        mock_llm_router.aget_responses = AsyncMock(
+            side_effect=litellm.NotFoundError(
+                message="Response not found", model="gpt-5", llm_provider="openai"
+            )
+        )
 
         mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
             return_value=[mock_job]
@@ -393,14 +398,12 @@ class TestCheckResponsesCost:
             return_value=1
         )
 
-        check_responses_cost_instance._get_response = AsyncMock(
-            side_effect=litellm.NotFoundError(
-                message="Response not found", model="gpt-5", llm_provider="openai"
-            )
-        )
+        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_sdk_aget:
+            await check_responses_cost_instance.check_responses_cost()
 
-        await check_responses_cost_instance.check_responses_cost()
-
+        mock_sdk_aget.assert_not_called()
+        mock_llm_router.get_deployment.assert_called_once_with(model_id="deployment-404")
+        assert mock_llm_router.aget_responses.call_args.kwargs["response_id"] == encoded_response_id
         update_many = mock_prisma_client.db.litellm_managedobjecttable.update_many
         update_many.assert_awaited_once()
         assert update_many.call_args.kwargs["where"] == {"id": {"in": ["job-404"]}}
@@ -435,29 +438,46 @@ class TestCheckResponsesCost:
             return_value=0
         )
 
-        check_responses_cost_instance._get_response = AsyncMock(
+        with patch(
+            "litellm.aget_responses",
+            new_callable=AsyncMock,
             side_effect=litellm.NotFoundError(
                 message="Response not found", model="gpt-5", llm_provider="openai"
-            )
-        )
+            ),
+        ) as mock_sdk_aget:
+            await check_responses_cost_instance.check_responses_cost()
 
-        await check_responses_cost_instance.check_responses_cost()
-
+        mock_sdk_aget.assert_awaited_once()
+        mock_llm_router.aget_responses.assert_not_called()
         update_many = mock_prisma_client.db.litellm_managedobjecttable.update_many
         assert update_many.call_args_list == []
 
     @pytest.mark.asyncio
     async def test_check_responses_cost_non_404_error_keeps_row_for_retry(
-        self, check_responses_cost_instance, mock_prisma_client
+        self, check_responses_cost_instance, mock_prisma_client, mock_llm_router
     ):
-        """Non-404 provider errors skip the job so it is retried next cycle."""
+        """A non-404 provider error through a resolved deployment skips the job so it is retried next cycle."""
         import litellm
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        encoded_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai",
+            model_id="deployment-500",
+            response_id="resp_upstream_500",
+        )
 
         mock_job = MagicMock()
-        mock_job.unified_object_id = "resp_test_500"
+        mock_job.unified_object_id = encoded_response_id
         mock_job.created_by = "test-user"
         mock_job.id = "job-500"
-        mock_job.file_object = {"model": "gpt-4o", "id": "resp_test_500"}
+        mock_job.file_object = {"model": "gpt-4o", "id": encoded_response_id}
+
+        mock_llm_router.get_deployment.return_value = {"model_id": "deployment-500"}
+        mock_llm_router.aget_responses = AsyncMock(
+            side_effect=litellm.InternalServerError(
+                message="boom", model="gpt-5", llm_provider="openai"
+            )
+        )
 
         mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
             return_value=[mock_job]
@@ -466,14 +486,11 @@ class TestCheckResponsesCost:
             return_value=0
         )
 
-        check_responses_cost_instance._get_response = AsyncMock(
-            side_effect=litellm.InternalServerError(
-                message="boom", model="gpt-5", llm_provider="openai"
-            )
-        )
+        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_sdk_aget:
+            await check_responses_cost_instance.check_responses_cost()
 
-        await check_responses_cost_instance.check_responses_cost()
-
+        mock_sdk_aget.assert_not_called()
+        mock_llm_router.aget_responses.assert_awaited_once()
         update_many = mock_prisma_client.db.litellm_managedobjecttable.update_many
         assert update_many.call_args_list == []
 
