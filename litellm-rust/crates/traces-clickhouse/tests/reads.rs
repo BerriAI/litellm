@@ -3,9 +3,7 @@ use std::collections::BTreeMap;
 use litellm_http::Client;
 use litellm_traces::query::named::ReadAccessParams;
 use litellm_traces_cache::{ReadError, TraceReader};
-use litellm_traces_clickhouse::{
-    ClickHouseTraces, Connection, InsertTable, QueryScope, insert_rows,
-};
+use litellm_traces_clickhouse::{ClickHouseTraces, Connection, InsertTable, insert_rows};
 use rstest::rstest;
 use serde_json::json;
 
@@ -83,10 +81,7 @@ async fn list_costs_match_each_run_when_response_ids_are_reused(
             .collect(),
     )
     .await?;
-    let connection = fixture
-        .readers
-        .connection(client, &QueryScope::All, "fixture-secret")
-        .await?;
+    let connection = Connection::reader(&fixture.database.url, DATABASE)?;
     let (reader, store) = make_reader(client, connection);
     let access = ReadAccessParams {
         all_teams: false,
@@ -212,10 +207,7 @@ async fn large_runs_remain_complete_under_default_reader_limits(
             .collect::<Vec<_>>();
         insert_rows(client, &writer, DATABASE, InsertTable::SpendLogs, costs).await?;
     }
-    let connection = fixture
-        .readers
-        .connection(client, &QueryScope::All, "fixture-secret")
-        .await?;
+    let connection = Connection::reader(&fixture.database.url, DATABASE)?;
     let (reader, store) = make_reader(client, connection);
     let access = ReadAccessParams {
         all_teams: false,
@@ -365,10 +357,7 @@ async fn cursor_pages_keep_a_tenant_scoped_snapshot_when_more_spans_arrive(
 ) -> TestResult {
     let fixture = seeded_database?;
     let client = &fixture.database.client;
-    let connection = fixture
-        .readers
-        .connection(client, &QueryScope::All, "fixture-secret")
-        .await?;
+    let connection = Connection::reader(&fixture.database.url, DATABASE)?;
     let (reader, store) = make_reader(client, connection.clone());
     let access = ReadAccessParams {
         all_teams: true,
@@ -528,10 +517,7 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
 ) -> TestResult {
     let fixture = seeded_database?;
     let client = &fixture.database.client;
-    let connection = fixture
-        .readers
-        .connection(client, &QueryScope::All, "fixture-secret")
-        .await?;
+    let connection = Connection::reader(&fixture.database.url, DATABASE)?;
     let (reader, store) = make_reader(client, connection.clone());
     let access = ReadAccessParams {
         all_teams: true,
@@ -557,10 +543,7 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
             ("TraceId".into(), json!(run.trace_id)),
             ("SpanId".into(), json!("oversized-child")),
             ("ParentSpanId".into(), json!("0101010101010101")),
-            (
-                "SpanName".into(),
-                json!("x".repeat(litellm_storage_clickhouse::READ_LIMITS.response_bytes + 1)),
-            ),
+            ("SpanName".into(), json!("x".repeat(16 * 1024 * 1024 + 1))),
             ("ObservationType".into(), json!("tool")),
             ("TeamId".into(), json!("team-a")),
             ("ApiKeyHash".into(), json!("key-a")),
@@ -699,10 +682,7 @@ async fn assigned_call_ids_require_shared_ownership_through_detail_and_batch_rea
             .collect(),
     )
     .await?;
-    let connection = fixture
-        .readers
-        .connection(client, &QueryScope::All, "fixture-secret")
-        .await?;
+    let connection = Connection::reader(&fixture.database.url, DATABASE)?;
     let (reader, store) = make_reader(client, connection);
     let access = ReadAccessParams {
         all_teams: false,
@@ -815,10 +795,7 @@ async fn native_cost_correlation_survives_session_grouping_and_excludes_other_ow
             .collect(),
     )
     .await?;
-    let connection = fixture
-        .readers
-        .connection(client, &QueryScope::All, "fixture-secret")
-        .await?;
+    let connection = Connection::reader(&fixture.database.url, DATABASE)?;
     let (reader, store) = make_reader(client, connection);
     let access = ReadAccessParams {
         all_teams: true,

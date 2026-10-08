@@ -26,6 +26,7 @@ use litellm_traces_clickhouse::InsertTable;
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
+    future::Future,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -33,6 +34,7 @@ use std::{
     time::Duration,
 };
 pub use storage::Storage;
+use tokio::sync::Semaphore;
 
 #[allow(
     dead_code,
@@ -46,7 +48,8 @@ pub use storage::Storage;
 pub mod wire {
     include!(concat!(env!("OUT_DIR"), "/wire.rs"));
 }
-use tokio::sync::Semaphore;
+
+const READ_QUEUE_WAIT: Duration = Duration::from_secs(10);
 
 pub struct State {
     pub credentials: Arc<auth::Credentials>,
@@ -78,6 +81,15 @@ impl State {
             Err(Error::Unavailable)
         }
     }
+}
+
+async fn wait_for_read_slot<P>(
+    acquire: impl Future<Output = Result<P, tokio::sync::AcquireError>>,
+) -> Result<P, Error> {
+    tokio::time::timeout(READ_QUEUE_WAIT, acquire)
+        .await
+        .map_err(|_| Error::Unavailable)?
+        .map_err(|_| Error::Unavailable)
 }
 
 pub fn router(state: Arc<State>) -> Router {
@@ -125,10 +137,7 @@ async fn receipt(
 ) -> Result<Json<Value>, Error> {
     let tenant = state.credentials.tenant(&headers)?;
     state.require_storage()?;
-    let _permit = state
-        .read_slots
-        .try_acquire()
-        .map_err(|_| Error::Unavailable)?;
+    let _permit = wait_for_read_slot(state.read_slots.acquire()).await?;
     let body = tokio::time::timeout(Duration::from_secs(5), to_bytes(body, 64 * 1024))
         .await
         .map_err(|_| Error::Unavailable)?
@@ -206,11 +215,7 @@ async fn read(
 ) -> Result<Json<Value>, Error> {
     auth::authorize_service(&headers, &state.service_token)?;
     state.require_storage()?;
-    let permit = state
-        .read_slots
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| Error::Unavailable)?;
+    let permit = wait_for_read_slot(state.read_slots.clone().acquire_owned()).await?;
     let body = tokio::time::timeout(Duration::from_secs(10), to_bytes(body, 1024 * 1024))
         .await
         .map_err(|_| Error::Unavailable)?
@@ -277,5 +282,41 @@ pub async fn provision(state: Arc<State>) {
             tracing::warn!("Lens storage unavailable; retrying");
         }
         tokio::time::sleep(Duration::from_secs(10)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Error, READ_QUEUE_WAIT, wait_for_read_slot};
+    use std::sync::Arc;
+    use tokio::sync::Semaphore;
+
+    #[tokio::test]
+    async fn ninth_read_waits_for_a_permit_and_succeeds() {
+        let slots = Arc::new(Semaphore::new(8));
+        let permits = (0..8)
+            .map(|_| slots.clone().try_acquire_owned().expect("available permit"))
+            .collect::<Vec<_>>();
+        let waiting_slots = slots.clone();
+        let waiting =
+            tokio::spawn(async move { wait_for_read_slot(waiting_slots.acquire_owned()).await });
+
+        tokio::task::yield_now().await;
+        assert!(!waiting.is_finished());
+        drop(permits);
+        assert!(waiting.await.expect("joined read").is_ok());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn read_queue_timeout_returns_unavailable() {
+        let slots = Arc::new(Semaphore::new(0));
+        let waiting = tokio::spawn(wait_for_read_slot(slots.acquire_owned()));
+
+        tokio::task::yield_now().await;
+        tokio::time::advance(READ_QUEUE_WAIT).await;
+        assert!(matches!(
+            waiting.await.expect("joined read"),
+            Err(Error::Unavailable)
+        ));
     }
 }
