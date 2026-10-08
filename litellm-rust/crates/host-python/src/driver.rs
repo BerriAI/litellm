@@ -2045,16 +2045,24 @@ mod tests {
 
     /// Runs a call whose base binds `messages` positionally with `api_key` and `timeout`
     /// defaulting to `None`, and whose caller passed `model` and `api_key` as keywords.
-    fn decoded_argument(py: Python<'_>, name: &'static str) -> (Option<String>, Vec<String>) {
-        install_lifecycle_module(py);
-        let log = Log::default();
-        let views = Log(log.0.clone());
-        let decoded = Log(log.0.clone());
+    fn call_base(py: Python<'_>) -> Bound<'_, PyDict> {
         let base = PyDict::new(py);
         base.set_item("model", "base-model").unwrap();
         base.set_item("messages", "positional").unwrap();
         base.set_item("api_key", py.None()).unwrap();
         base.set_item("timeout", py.None()).unwrap();
+        base
+    }
+
+    fn decoded_argument(
+        py: Python<'_>,
+        name: &'static str,
+        base: &Bound<'_, PyDict>,
+    ) -> (Option<String>, Vec<String>) {
+        install_lifecycle_module(py);
+        let log = Log::default();
+        let views = Log(log.0.clone());
+        let decoded = Log(log.0.clone());
         let kwargs = PyDict::new(py);
         kwargs.set_item("model", "caller-model").unwrap();
         kwargs.set_item("api_key", "caller-key").unwrap();
@@ -2079,7 +2087,7 @@ mod tests {
                 .with(KeywordRewrite)
                 .with(ArgumentViews(views)),
             CallArguments {
-                base: base.unbind(),
+                base: base.clone().unbind(),
                 kwargs: kwargs.unbind(),
             },
             call_options(false),
@@ -2115,7 +2123,7 @@ mod tests {
             .unwrap_or_else(|error| error.into_inner());
         crate::initialize_python();
         Python::attach(|py| {
-            let (value, _) = decoded_argument(py, name);
+            let (value, _) = decoded_argument(py, name, &call_base(py));
             assert_eq!(value.as_deref(), expected);
         });
     }
@@ -2127,13 +2135,26 @@ mod tests {
             .unwrap_or_else(|error| error.into_inner());
         crate::initialize_python();
         Python::attach(|py| {
-            let (_, entries) = decoded_argument(py, "model");
+            let (_, entries) = decoded_argument(py, "model", &call_base(py));
             let prepared = entries.iter().position(|entry| entry == "prepared:model");
             let resolved = entries
                 .iter()
                 .position(|entry| entry == "resolved:api_key,messages,model,timeout");
             let project = entries.iter().position(|entry| entry == "project");
             assert!(prepared < resolved && resolved < project, "{entries:?}");
+        });
+    }
+
+    #[rstest::rstest]
+    fn resolving_the_call_leaves_the_base_as_python_bound_it() {
+        let _guard = PYTHON_GLOBALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        crate::initialize_python();
+        Python::attach(|py| {
+            let base = call_base(py);
+            decoded_argument(py, "model", &base);
+            assert!(base.eq(call_base(py)).unwrap(), "{base}");
         });
     }
 
