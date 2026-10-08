@@ -2589,9 +2589,11 @@ class DBSpendUpdateWriter:
                             PrismaDBExceptionHandler,
                         )
 
-                        is_retryable = isinstance(
-                            e, DB_RETRY_SAFE_ERROR_TYPES
-                        ) or PrismaDBExceptionHandler.is_deadlock_error(e)
+                        is_retryable = (
+                            isinstance(e, DB_RETRY_SAFE_ERROR_TYPES)
+                            or PrismaDBExceptionHandler.is_deadlock_error(e)
+                            or PrismaDBExceptionHandler.is_lock_timeout_error(e)
+                        )
                         if not is_retryable:
                             raise
                         if i >= n_retry_times:
