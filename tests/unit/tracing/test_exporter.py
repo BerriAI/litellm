@@ -10,6 +10,57 @@ from litellm.tracing.exporter import MAX_BUFFER_EVENTS, MAX_EVENT_BYTES, ExportF
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failed", (False, True), ids=("success-event", "failure-event"))
+@pytest.mark.parametrize(
+    ("tags", "expected"),
+    (
+        pytest.param((7,), ("7",), id="numeric"),
+        pytest.param(("env:prod", 0, -7, 2.5, True, None), ("env:prod", "0", "-7", "2.5", "True", "None"), id="mixed"),
+        pytest.param(("env:prod", "agent:research"), ("env:prod", "agent:research"), id="strings"),
+    ),
+)
+async def test_request_tags_are_normalized_without_dropping_the_record(
+    failed: bool, tags: tuple[object, ...], expected: tuple[str, ...]
+) -> None:
+    requests: Final = asyncio.Queue[httpx.Request]()
+
+    def accept(request: httpx.Request) -> httpx.Response:
+        requests.put_nowait(request)
+        return httpx.Response(204)
+
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(accept)) as client:
+        exporter: Final = LensExporter(client)
+        exporter.start()
+        callback: Final = exporter.async_log_failure_event if failed else exporter.async_log_success_event
+        await callback(
+            {
+                "response_cost": 0.12,
+                "standard_logging_object": {
+                    "id": "tagged-request",
+                    "status": "failure" if failed else "success",
+                    "response_cost": 0.12,
+                    "request_tags": list(tags),
+                },
+            },
+            None,
+            None,
+            None,
+        )
+        await exporter.aclose()
+    assert exporter.rows_written == 1
+    assert exporter.rows_dropped == 0
+    assert requests.qsize() == 1
+    request: Final = requests.get_nowait()
+    rows: Final = json.loads(request.content)
+    assert request.url.path == "/internal/spend"
+    assert len(rows) == 1
+    assert rows[0]["request_id"] == "tagged-request"
+    assert rows[0]["status"] == ("failure" if failed else "success")
+    assert rows[0]["spend"] == 0.12
+    assert rows[0]["request_tags"] == list(expected)
+
+
+@pytest.mark.asyncio
 async def test_request_export_ignores_unrelated_model_metadata_and_preserves_billing() -> None:
     received: Final = asyncio.Future[httpx.Request]()
 
