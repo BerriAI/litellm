@@ -79,6 +79,21 @@ _PROVIDERS: Final[tuple[tuple[str, str, str, str], ...]] = (
     ),
 )
 
+_OPENAI_RESPONSE: Final[Mapping[str, object]] = {
+    "model": "gpt-6-luna",
+    "answers": [
+        {"type": "predicate", "name": "is_defect", "probability": 0.9},
+        {"type": "refusal", "name": "sentiment"},
+    ],
+    "usage": {
+        "input_tokens": _INPUT_TOKENS,
+        "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+        "output_tokens": _OUTPUT_TOKENS,
+        "output_tokens_details": {"reasoning_tokens": 0},
+        "total_tokens": _INPUT_TOKENS + _OUTPUT_TOKENS,
+    },
+}
+
 
 class _RecordingLogger(CustomLogger):
     def __init__(self) -> None:
@@ -590,3 +605,61 @@ async def test_strands_decider_provider_resolution_and_router_dispatch(
     assert provider_resolution[:2] == ("strands-decider-2B-hobson-v19", "strands_decider")
     assert route.called
     assert response.model == _STRANDS_RESPONSE["model"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("api_base", "url"),
+    (
+        (None, "https://api.openai.com/v1/decisions"),
+        ("https://gateway.example/v1", "https://gateway.example/v1/decisions"),
+    ),
+)
+async def test_openai_decisions_translate_systemone_to_the_openai_wire_contract_and_back(
+    api_base: str | None,
+    url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    route: Final = respx_mock.post(url).respond(json=_OPENAI_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        state="The package arrived broken.",
+        questions={
+            "is_defect": {"type": "noul", "instructions": "Is this a defect?"},
+            "sentiment": {
+                "type": "choice",
+                "instructions": "How does the customer feel?",
+                "criteria": {"positive": None, "negative": "unhappy"},
+            },
+        },
+        api_key="caller-key",
+        api_base=api_base,
+    )
+
+    assert route.called
+    request: Final = respx_mock.calls[0].request
+    assert request.headers["authorization"] == "Bearer caller-key"
+    assert json.loads(request.content) == {
+        "model": "gpt-6-luna",
+        "input": "The package arrived broken.",
+        "questions": [
+            {"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"},
+            {
+                "type": "choice",
+                "name": "sentiment",
+                "instructions": "How does the customer feel?",
+                "choices": [{"value": "positive"}, {"value": "negative", "description": "unhappy"}],
+            },
+        ],
+    }
+    assert response.answers == {"is_defect": NoulAnswer(type="noul", noul=0.9)}
+    assert response.hidden_params["custom_llm_provider"] == "openai"
+    luna_cost: Final = litellm.model_cost["gpt-6-luna"]
+    expected_cost: Final = _INPUT_TOKENS * float(luna_cost["input_cost_per_token"]) + _OUTPUT_TOKENS * float(
+        luna_cost["output_cost_per_token"]
+    )
+    assert expected_cost > 0
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(expected_cost)

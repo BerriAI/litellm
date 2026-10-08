@@ -4,10 +4,12 @@ from typing import Final
 
 from pydantic import TypeAdapter
 
+from litellm.llms.base_llm.decisions.transformation import systemone_request_body
 from litellm.secret_managers.main import (
     get_secret_str,
     normalize_nonempty_secret_str,
 )
+from litellm.types.decisions import DecisionsRequestBody
 
 _RESPONSE_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
@@ -42,6 +44,9 @@ class CloudflareDecisionsEndpoint:
         if normalized_api_base.endswith("/ai/run"):
             return f"{normalized_api_base}/{model}"
         return f"{normalized_api_base}/ai/run/{model}"
+
+    def request_body(self, model: str, request: DecisionsRequestBody) -> Mapping[str, object]:
+        return systemone_request_body(model, request)
 
     def unwrap_response(self, payload: object) -> object:
         if not isinstance(payload, Mapping):
