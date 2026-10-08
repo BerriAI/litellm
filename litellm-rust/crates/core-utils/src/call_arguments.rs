@@ -8,13 +8,6 @@ use serde_json::{Map, Value};
 pub struct CallArguments(Map<String, Value>);
 
 impl CallArguments {
-    pub fn resolve_body_overrides(&self) -> Result<Self, crate::params::Error> {
-        match compose_body(self, &Map::<String, Value>::new(), &[])? {
-            Value::Object(fields) => Ok(Self(fields)),
-            _ => Err(crate::params::Error::Body),
-        }
-    }
-
     pub fn select(&self, names: &[&str]) -> Map<String, Value> {
         self.iter()
             .filter(|(name, _)| names.contains(&name.as_str()))
@@ -190,29 +183,5 @@ mod tests {
             parse_options::<Options>(&invalid).err().unwrap().path,
             "enabled"
         );
-    }
-
-    #[rstest]
-    #[case::null(json!(null))]
-    #[case::false_value(json!(false))]
-    #[case::zero(json!(0))]
-    #[case::nested(json!({"mode": "new", "values": [true, null, {"nested": 7}]}))]
-    fn resolved_extensions_survive_typed_projection(#[case] extension: Value) {
-        #[derive(Deserialize)]
-        struct Options {
-            enabled: bool,
-        }
-        let original = json!({
-            "enabled": false,
-            "future_provider_option": "original",
-            "extra_body": {"enabled": true, "future_provider_option": extension}
-        });
-        let arguments: CallArguments = serde_json::from_value(original.clone()).unwrap();
-        let resolved = arguments.resolve_body_overrides().unwrap();
-        let options: Options = parse_options(&resolved).unwrap();
-        assert!(options.enabled);
-        let body = compose_body(&resolved, &json!({}), &["enabled"]).unwrap();
-        assert_eq!(body, json!({"future_provider_option": extension}));
-        assert_eq!(serde_json::to_value(arguments).unwrap(), original);
     }
 }
