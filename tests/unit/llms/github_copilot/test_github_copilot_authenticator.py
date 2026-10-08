@@ -1,8 +1,10 @@
 import json
+import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from typing import Final
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
@@ -252,7 +254,6 @@ class TestGitHubCopilotAuthenticator:
             patch.object(
                 authenticator, "_poll_for_access_token", return_value=mock_token
             ),
-            patch("builtins.print") as mock_print,
         ):
             result = authenticator._login()
             assert result == mock_token
@@ -260,7 +261,33 @@ class TestGitHubCopilotAuthenticator:
             authenticator._poll_for_access_token.assert_called_once_with(
                 "mock-device-code"
             )
-            mock_print.assert_called_once()
+
+    def test_login_device_code_instructions_are_logged_not_printed(
+        self, authenticator: Authenticator, caplog: pytest.LogCaptureFixture, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        device_code_info: Final = {
+            "device_code": "mock-device-code",
+            "user_code": "ABCD-EFGH",
+            "verification_uri": "https://github.com/login/device",
+        }
+        with (
+            patch.object(authenticator, "_get_device_code", return_value=device_code_info),
+            patch.object(authenticator, "_poll_for_access_token", return_value="mock-access-token"),
+        ):
+            caplog.set_level(logging.ERROR, logger="LiteLLM")
+            authenticator._login()
+            captured: Final = capsys.readouterr()
+            assert (captured.out, captured.err) == ("", "")
+
+            caplog.set_level(logging.WARNING, logger="LiteLLM")
+            authenticator._login()
+
+        warnings: Final = [
+            record.getMessage()
+            for record in caplog.records
+            if record.name == "LiteLLM" and record.levelno == logging.WARNING
+        ]
+        assert warnings == ["Please visit https://github.com/login/device and enter code ABCD-EFGH to authenticate."]
 
     def test_get_api_base_from_file(self, authenticator):
         """Test retrieving the API base endpoint from a file."""

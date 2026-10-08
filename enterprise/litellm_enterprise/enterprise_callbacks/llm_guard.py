@@ -39,12 +39,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
             self.llm_guard_api_base += "/"
 
     def print_verbose(self, print_statement):
-        try:
-            verbose_proxy_logger.debug(print_statement)
-            if litellm.set_verbose:
-                print(print_statement)  # noqa
-        except Exception:
-            pass
+        verbose_proxy_logger.debug(print_statement)
 
     async def moderation_check(self, text: str) -> str:
         """

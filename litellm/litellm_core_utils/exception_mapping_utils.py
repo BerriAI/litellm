@@ -2380,14 +2380,10 @@ def exception_type(
     exception_provider = custom_llm_provider
     mappable_exception: Final[_ProviderHTTPException] = cast("_ProviderHTTPException", original_exception)
     if litellm.suppress_debug_info is False:
-        print()  # noqa: T201
-        print(  # noqa: T201
-            "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"
-        )
-        print(  # noqa: T201
+        verbose_logger.info(
+            "Give Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\n"
             "LiteLLM.Info: If you need to debug this error, use `litellm.turn_on_debug()'."
         )
-        print()  # noqa: T201
 
     litellm_response_headers: Final = _get_response_headers(original_exception=original_exception)
     try:

@@ -1221,7 +1221,7 @@ Model Info:
         if response.status_code == 200:
             return True
         else:
-            print("Error sending webhook alert. Error=", response.text)  # noqa: T201
+            verbose_proxy_logger.error("Error sending webhook alert. Error=%s", response.text)
 
         return False
 

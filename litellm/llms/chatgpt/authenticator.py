@@ -183,12 +183,11 @@ class Authenticator:
 
         device_code: Final = self._request_device_code()
         self._record_device_code_request()
-        print(  # noqa: T201
-            "Sign in with ChatGPT using device code:\n"
-            f"1) Visit {CHATGPT_DEVICE_VERIFY_URL}\n"
-            f"2) Enter code: {device_code['user_code']}\n"
+        verbose_logger.warning(
+            "Sign in with ChatGPT using device code:\n1) Visit %s\n2) Enter code: %s\n"
             "Device codes are a common phishing target. Never share this code.",
-            flush=True,
+            CHATGPT_DEVICE_VERIFY_URL,
+            device_code["user_code"],
         )
         auth_code: Final = self._poll_for_authorization_code(device_code)
         tokens: Final = self._exchange_code_for_tokens(auth_code)

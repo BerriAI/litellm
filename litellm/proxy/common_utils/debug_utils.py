@@ -1,6 +1,7 @@
 # Start tracing memory allocations
 import asyncio
 import gc
+import io
 import json
 import os
 import socket
@@ -95,13 +96,15 @@ if os.environ.get("LITELLM_PROFILE", "false").lower() == "true":
     try:
         import objgraph
 
-        print("growth of objects")  # noqa: T201
-        objgraph.show_growth()
-        print("\n\nMost common types")  # noqa: T201
-        objgraph.show_most_common_types()
+        profile_report: Final = io.StringIO()
+        profile_report.write("growth of objects\n")
+        objgraph.show_growth(file=profile_report)
+        profile_report.write("\n\nMost common types\n")
+        objgraph.show_most_common_types(file=profile_report)
         roots: Final = objgraph.get_leaking_objects()
-        print("\n\nLeaking objects")  # noqa: T201
-        objgraph.show_most_common_types(objects=roots)
+        profile_report.write("\n\nLeaking objects\n")
+        objgraph.show_most_common_types(objects=roots, file=profile_report)
+        verbose_proxy_logger.info("%s", profile_report.getvalue())
     except ImportError:
         raise ImportError("objgraph not found. Please install objgraph to use this feature.")
 
@@ -824,7 +827,7 @@ async def get_otel_spans():
     else:
         recorded_spans = []
 
-    print("Spans: ", recorded_spans)  # noqa: T201
+    verbose_proxy_logger.debug("Spans: %s", recorded_spans)
 
     most_recent_parent = None
     most_recent_start_time = 1000000

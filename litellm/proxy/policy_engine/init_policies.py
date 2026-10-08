@@ -18,82 +18,57 @@ from litellm.types.proxy.policy_engine import PolicyValidationResponse
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
-# ANSI color codes for terminal output
-_green_color_code: Final = "\033[92m"
-_blue_color_code: Final = "\033[94m"
-_yellow_color_code: Final = "\033[93m"
-_reset_color_code: Final = "\033[0m"
+
+def _as_mapping(value: object) -> Mapping[str, object]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _policy_block(policy_name: str, policy_data: Mapping[str, object]) -> str:
+    guardrails: Final = _as_mapping(policy_data.get("guardrails"))
+    condition: Final = _as_mapping(policy_data.get("condition"))
+    inherit: Final = policy_data.get("inherit")
+    inherit_str: Final = f" (inherits: {inherit})" if inherit else ""
+    details: Final = (
+        ("description", policy_data.get("description")),
+        ("guardrails.add", guardrails.get("add")),
+        ("guardrails.remove", guardrails.get("remove")),
+        ("condition.model", condition.get("model")),
+    )
+    detail_lines: Final = (f"      {label}: {value}" for label, value in details if value)
+    return "\n".join((f"  - {policy_name}{inherit_str}", *detail_lines))
+
+
+def _attachment_line(attachment: Mapping[str, object]) -> str:
+    scoped_fields: Final = (
+        ("teams", attachment.get("teams")),
+        ("keys", attachment.get("keys")),
+        ("models", attachment.get("models")),
+    )
+    global_part: Final = ("scope=* (global)",) if attachment.get("scope") == "*" else ()
+    field_parts: Final = tuple(f"{label}={value}" for label, value in scoped_fields if value)
+    scope_parts: Final = (*global_part, *field_parts)
+    scope_str: Final = ", ".join(scope_parts) if scope_parts else "all"
+    return f"  - {attachment.get('policy', 'unknown')} -> {scope_str}"
+
+
+def _attachment_lines(policy_attachments_config: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
+    if not policy_attachments_config:
+        return ()
+    header: Final = f"\nPolicy Attachments: {len(policy_attachments_config)} attachment(s)"
+    return (header, *(_attachment_line(attachment) for attachment in policy_attachments_config))
 
 
 def _print_policies_on_startup(
     policies_config: Mapping[str, Mapping[str, object]],
     policy_attachments_config: Sequence[Mapping[str, object]] | None = None,
 ) -> None:
-    """
-    Print loaded policies to console on startup (similar to model list).
-    """
-    import sys
-
-    print(  # noqa: T201
-        f"{_green_color_code}\nLiteLLM Policy Engine: Loaded {len(policies_config)} policies{_reset_color_code}\n"
-    )
-    sys.stdout.flush()
-
-    for policy_name, policy_data in policies_config.items():
-        guardrails = policy_data.get("guardrails", {})
-        inherit = policy_data.get("inherit")
-        condition = policy_data.get("condition")
-        description = policy_data.get("description")
-
-        guardrails_add = guardrails.get("add", []) if isinstance(guardrails, dict) else []
-        guardrails_remove = guardrails.get("remove", []) if isinstance(guardrails, dict) else []
-        inherit_str = f" (inherits: {inherit})" if inherit else ""
-
-        print(  # noqa: T201
-            f"{_blue_color_code}  - {policy_name}{inherit_str}{_reset_color_code}"
-        )
-        if description:
-            print(f"      description: {description}")  # noqa: T201
-        if guardrails_add:
-            print(f"      guardrails.add: {guardrails_add}")  # noqa: T201
-        if guardrails_remove:
-            print(f"      guardrails.remove: {guardrails_remove}")  # noqa: T201
-        if condition:
-            model_condition = condition.get("model") if isinstance(condition, dict) else None
-            if model_condition:
-                print(f"      condition.model: {model_condition}")  # noqa: T201
-
-    # Print attachments
-    if policy_attachments_config:
-        print(  # noqa: T201
-            f"\n{_yellow_color_code}Policy Attachments: {len(policy_attachments_config)} attachment(s){_reset_color_code}"
-        )
-        for attachment in policy_attachments_config:
-            policy = attachment.get("policy", "unknown")
-            scope = attachment.get("scope")
-            teams = attachment.get("teams")
-            keys = attachment.get("keys")
-            models = attachment.get("models")
-
-            scope_parts = []
-            if scope == "*":
-                scope_parts.append("scope=* (global)")
-            if teams:
-                scope_parts.append(f"teams={teams}")
-            if keys:
-                scope_parts.append(f"keys={keys}")
-            if models:
-                scope_parts.append(f"models={models}")
-            scope_str = ", ".join(scope_parts) if scope_parts else "all"
-
-            print(f"  - {policy} -> {scope_str}")  # noqa: T201
-    else:
-        print(  # noqa: T201
-            f"\n{_yellow_color_code}Warning: No policy_attachments configured. Policies will not be applied to any requests.{_reset_color_code}"
-        )
-
-    print()  # noqa: T201
-    sys.stdout.flush()
+    """Log the loaded policies and their attachments on startup (similar to the model list)."""
+    header: Final = f"LiteLLM Policy Engine: Loaded {len(policies_config)} policies"
+    policy_blocks: Final = (_policy_block(name, data) for name, data in policies_config.items())
+    attachment_lines: Final = _attachment_lines(policy_attachments_config or ())
+    verbose_proxy_logger.info("\n%s\n", "\n".join((header, *policy_blocks, *attachment_lines)))
+    if not policy_attachments_config:
+        verbose_proxy_logger.warning("No policy_attachments configured. Policies will not be applied to any requests.")
 
 
 async def init_policies(

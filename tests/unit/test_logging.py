@@ -1766,3 +1766,19 @@ def test_diagnostic_filter_redacts_a_non_string_message_object(monkeypatch, nati
     assert DiagnosticProcessingFilter().filter(record) is True
 
     assert secret not in record.getMessage()
+
+
+def test_print_verbose_logs_at_debug_instead_of_printing(monkeypatch, capsys, caplog):
+    from litellm._logging import print_verbose
+
+    monkeypatch.setattr("litellm._logging.set_verbose", True)
+    with caplog.at_level(logging.INFO, logger=verbose_logger.name):
+        capsys.readouterr()
+        print_verbose("hello from _logging")
+        captured = capsys.readouterr()
+    assert (captured.out, captured.err) == ("", "")
+
+    with caplog.at_level(logging.DEBUG, logger=verbose_logger.name):
+        print_verbose("hello from _logging")
+    emitted = [(record.levelno, record.getMessage()) for record in caplog.records if record.name == verbose_logger.name]
+    assert emitted == [(logging.DEBUG, "hello from _logging")]

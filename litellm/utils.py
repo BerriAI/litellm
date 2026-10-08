@@ -539,29 +539,22 @@ last_fetched_at_keys: Final = None
 
 ############################################################
 def print_verbose(
-    print_statement,
+    print_statement: object,
     logger_only: bool = False,
     log_level: Literal["DEBUG", "INFO", "ERROR"] = "DEBUG",
-):
-    try:
-        if log_level == "DEBUG":
-            verbose_logger.debug(print_statement)
-        elif log_level == "INFO":
-            verbose_logger.info(print_statement)
-        elif log_level == "ERROR":
-            verbose_logger.error(print_statement)
-        if litellm.set_verbose is True and logger_only is False:
-            print(print_statement)  # noqa: T201
-    except Exception:
-        pass
+) -> None:
+    if log_level == "DEBUG":
+        verbose_logger.debug(print_statement)
+    elif log_level == "INFO":
+        verbose_logger.info(print_statement)
+    elif log_level == "ERROR":
+        verbose_logger.error(print_statement)
 
 
 def _print_verbose_is_active() -> bool:
-    """Whether print_verbose would reach either of its two consumers, so a call site can skip
-    building a payload nothing would read. _is_debugging_on() is not the same predicate: it reads
-    litellm._logging.set_verbose, while print_verbose's print reads litellm.set_verbose, and
-    assigning the documented litellm.set_verbose = True rebinds only the latter."""
-    return litellm.set_verbose is True or verbose_logger.isEnabledFor(logging.DEBUG)
+    """Whether a debug-level print_verbose would emit, so a call site can skip building a payload
+    nothing would read."""
+    return verbose_logger.isEnabledFor(logging.DEBUG)
 
 
 ####### CLIENT ###################

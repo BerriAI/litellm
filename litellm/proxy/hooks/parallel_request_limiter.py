@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
-import litellm
 from litellm import DualCache, EmbeddingResponse, ModelResponse, TextCompletionResponse
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
@@ -58,12 +57,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         self.internal_usage_cache = internal_usage_cache
 
     def print_verbose(self, print_statement) -> None:
-        try:
-            verbose_proxy_logger.debug(print_statement)
-            if litellm.set_verbose:
-                print(print_statement)  # noqa: T201
-        except Exception:
-            pass
+        verbose_proxy_logger.debug(print_statement)
 
     @with_service_target("rate_limits")
     async def check_key_in_limits(

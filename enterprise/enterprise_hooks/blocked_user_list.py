@@ -55,9 +55,6 @@ class ENTERPRISE_BlockedUserList(CustomLogger):
         elif level == "DEBUG":
             verbose_proxy_logger.debug(print_statement)
 
-        if litellm.set_verbose is True:
-            print(print_statement)  # noqa
-
     @with_service_target(AUTH_OBJECTS_TARGET)
     async def async_pre_call_hook(
         self,

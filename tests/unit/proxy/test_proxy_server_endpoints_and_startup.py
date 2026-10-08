@@ -15757,3 +15757,81 @@ async def test_update_cache_reads_and_writes_declare_the_auth_objects_key_family
     assert seen, "update_cache must touch the cache for a priced user request"
     assert {target for _, target in seen} == {"auth_objects"}
     assert current_service_target() is None
+
+
+def test_generate_feedback_box_logs_one_record_through_proxy_logger_instead_of_stdout(caplog, capsys):
+    caplog.set_level(logging.WARNING, logger="LiteLLM Proxy")
+    proxy_server_module.generate_feedback_box()
+    quiet = capsys.readouterr()
+    assert quiet.out == ""
+    assert quiet.err == ""
+
+    caplog.set_level(logging.INFO, logger="LiteLLM Proxy")
+    proxy_server_module.generate_feedback_box()
+    records = [r for r in caplog.records if "https://github.com/BerriAI/litellm/issues/new" in r.getMessage()]
+    assert len(records) == 1
+    assert records[0].name == "LiteLLM Proxy"
+    assert records[0].levelno == logging.INFO
+    assert "Thank you for using LiteLLM!" in records[0].getMessage()
+    assert "Give Feedback / Get Help" in records[0].getMessage()
+    assert "\033[" not in records[0].getMessage()
+
+
+@pytest.mark.asyncio
+async def test_load_config_logs_model_names_in_one_record_through_proxy_logger_instead_of_stdout(
+    tmp_path, caplog, capsys
+):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_file: Final = tmp_path / "config.yaml"
+    config_file.write_text(
+        yaml.dump(
+            {
+                "model_list": [
+                    {"model_name": "boot-log-model-a", "litellm_params": {"model": "openai/gpt-5.6"}},
+                    {"model_name": "boot-log-model-b", "litellm_params": {"model": "anthropic/claude-opus-5-5"}},
+                ]
+            }
+        )
+    )
+
+    caplog.set_level(logging.WARNING, logger="LiteLLM Proxy")
+    await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+    quiet = capsys.readouterr()
+    assert "boot-log-model-a" not in quiet.out + quiet.err
+    assert "Set models" not in quiet.out + quiet.err
+
+    caplog.set_level(logging.INFO, logger="LiteLLM Proxy")
+    await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+    records = [r for r in caplog.records if "Proxy initialized with Config, Set models" in r.getMessage()]
+    assert len(records) == 1
+    assert records[0].name == "LiteLLM Proxy"
+    assert records[0].levelno == logging.INFO
+    assert "    boot-log-model-a\n    boot-log-model-b" in records[0].getMessage()
+    assert "\033[" not in records[0].getMessage()
+
+
+def test_parse_search_tools_logs_tool_names_in_one_record_through_proxy_logger_instead_of_stdout(caplog, capsys):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config: Final = {
+        "search_tools": [
+            {"search_tool_name": "boot-log-search-a", "litellm_params": {"search_provider": "tavily"}},
+            {"search_tool_name": "boot-log-search-b", "litellm_params": {"search_provider": "perplexity"}},
+        ]
+    }
+
+    caplog.set_level(logging.WARNING, logger="LiteLLM Proxy")
+    parsed = ProxyConfig().parse_search_tools(config)
+    quiet = capsys.readouterr()
+    assert parsed is not None and len(parsed) == 2
+    assert quiet.out == ""
+    assert quiet.err == ""
+
+    caplog.set_level(logging.INFO, logger="LiteLLM Proxy")
+    ProxyConfig().parse_search_tools(config)
+    records = [r for r in caplog.records if "Proxy initialized with Search Tools" in r.getMessage()]
+    assert len(records) == 1
+    assert records[0].name == "LiteLLM Proxy"
+    assert records[0].levelno == logging.INFO
+    assert "    boot-log-search-a (tavily)\n    boot-log-search-b (perplexity)" in records[0].getMessage()

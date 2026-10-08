@@ -54,9 +54,6 @@ class ENTERPRISE_BannedKeywords(CustomLogger):
         elif level == "DEBUG":
             verbose_proxy_logger.debug(print_statement)
 
-        if litellm.set_verbose is True:
-            print(print_statement)  # noqa
-
     def test_violation(self, test_str: str):
         for word in self.banned_keywords_list:
             if word in test_str.lower():

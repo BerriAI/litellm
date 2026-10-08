@@ -56,13 +56,8 @@ def response_cache_phase(operation: Literal["get", "set"]) -> Generator[None]:
         yield
 
 
-def print_verbose(print_statement):
-    try:
-        verbose_logger.debug(print_statement)
-        if litellm.set_verbose:
-            print(print_statement)  # noqa: T201
-    except Exception:
-        pass
+def print_verbose(print_statement: object):
+    verbose_logger.debug(print_statement)
 
 
 class CacheMode(str, Enum):

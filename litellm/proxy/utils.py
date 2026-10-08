@@ -350,19 +350,9 @@ unified_guardrail: Final = UnifiedLLMGuardrails()
 NON_OPENAI_STREAM_GUARDRAIL_TRANSLATION_CALL_TYPES: "frozenset[CallTypes]" = frozenset({CallTypes.anthropic_messages})
 
 
-def print_verbose(print_statement: object):
-    """
-    Prints the given `print_statement` to the console if `litellm.set_verbose` is True.
-    Also logs the `print_statement` at the debug level using `verbose_proxy_logger`.
-
-    :param print_statement: The statement to be printed and logged.
-    :type print_statement: Any
-    """
-    import traceback
-
+def print_verbose(print_statement: object) -> None:
+    """Logs `print_statement` and the active traceback at debug level through `verbose_proxy_logger`."""
     verbose_proxy_logger.debug("%s\n%s", print_statement, traceback.format_exc())
-    if litellm.set_verbose:
-        print(f"LiteLLM Proxy: {redact_string(str(print_statement))}")  # noqa: T201
 
 
 def _get_email_logger_class():

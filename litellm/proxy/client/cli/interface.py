@@ -108,9 +108,9 @@ def show_commands():
 
 def setup_shell(ctx: click.Context):
     """Set up the interactive shell with banner and initial info."""
-    from litellm.proxy.common_utils.banner import show_banner
+    from litellm.proxy.common_utils.banner import LITELLM_BANNER
 
-    show_banner()
+    click.echo(f"\n{LITELLM_BANNER}\n")
 
     # Show server connection info
     base_url: Final = ctx.obj.get("base_url")
@@ -130,9 +130,9 @@ def handle_special_commands(user_input: str) -> bool:
         return True
     elif user_input.lower() == "clear":
         click.clear()
-        from litellm.proxy.common_utils.banner import show_banner
+        from litellm.proxy.common_utils.banner import LITELLM_BANNER
 
-        show_banner()
+        click.echo(f"\n{LITELLM_BANNER}\n")
         show_commands()
         return True
 

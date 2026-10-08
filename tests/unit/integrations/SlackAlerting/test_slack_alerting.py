@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime
 import io
 import json
+import logging
 import os
 import time
 import unittest
@@ -496,6 +497,15 @@ def _webhook_accepting_posts() -> AsyncMock:
     return http_handler
 
 
+def _webhook_rejecting_posts(body: str) -> AsyncMock:
+    response: Final = MagicMock(spec=httpx.Response)
+    response.status_code = 500
+    response.text = body
+    http_handler: Final = AsyncMock(spec=AsyncHTTPHandler)
+    http_handler.post.return_value = response
+    return http_handler
+
+
 def _slack_alerting_flushing_to(http_handler: AsyncHTTPHandler) -> SlackAlerting:
     slack_alerting: Final = SlackAlerting(alerting=["slack"], async_http_handler=http_handler)
     slack_alerting.periodic_started = True
@@ -522,6 +532,31 @@ async def _send_budget_alert(slack_alerting: SlackAlerting, message: str) -> Non
         alert_type=AlertType.budget_alerts,
         alerting_metadata={},
     )
+
+
+@pytest.mark.asyncio
+async def test_send_webhook_alert_failure_is_logged_not_printed(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("WEBHOOK_URL", "https://hooks.example.com/budget")
+    slack_alerting: Final = _slack_alerting_flushing_to(_webhook_rejecting_posts("upstream rejected the alert"))
+    event: Final = WebhookEvent(
+        spend=1.0, event_group=Litellm_EntityType.KEY, event="budget_crossed", event_message="over budget"
+    )
+
+    caplog.set_level(logging.CRITICAL, logger="LiteLLM Proxy")
+    assert await slack_alerting.send_webhook_alert(event) is False
+    captured: Final = capsys.readouterr()
+    assert (captured.out, captured.err) == ("", "")
+
+    caplog.set_level(logging.ERROR, logger="LiteLLM Proxy")
+    assert await slack_alerting.send_webhook_alert(event) is False
+    errors: Final = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "LiteLLM Proxy" and record.levelno == logging.ERROR
+    ]
+    assert errors == ["Error sending webhook alert. Error=upstream rejected the alert"]
 
 
 @pytest.mark.asyncio

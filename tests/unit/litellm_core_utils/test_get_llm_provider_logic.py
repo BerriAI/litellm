@@ -1,3 +1,4 @@
+import logging
 from typing import Final
 
 import asyncio, httpx, importlib, os
@@ -54,6 +55,49 @@ def test_get_llm_provider_strips_prefix_when_custom_provider_passed_explicitly(
 def test_get_llm_provider_still_rejects_unregistered_prefix(registered_custom_provider: str) -> None:
     with pytest.raises(litellm.BadRequestError, match="LLM Provider NOT provided"):
         get_llm_provider(model="not-registered-llm/my-model")
+
+
+_PROVIDER_LIST_HINT: Final = "Provider List: https://docs.litellm.ai/docs/providers"
+
+
+def _resolve_an_unknown_model() -> None:
+    with pytest.raises(litellm.BadRequestError, match="LLM Provider NOT provided"):
+        get_llm_provider(model="some-unknown-model-xyz")
+
+
+def test_provider_list_hint_stays_off_stdout_and_stderr(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(litellm, "suppress_debug_info", False)
+    caplog.set_level(logging.WARNING, logger="LiteLLM")
+
+    _resolve_an_unknown_model()
+
+    captured: Final = capsys.readouterr()
+    assert (captured.out, captured.err) == ("", "")
+
+
+def test_provider_list_hint_is_an_info_record(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(litellm, "suppress_debug_info", False)
+    caplog.set_level(logging.INFO, logger="LiteLLM")
+
+    _resolve_an_unknown_model()
+
+    info_records: Final = [r for r in caplog.records if r.name == "LiteLLM" and r.levelno == logging.INFO]
+    assert _PROVIDER_LIST_HINT in [r.getMessage() for r in info_records]
+
+
+def test_provider_list_hint_is_gated_by_suppress_debug_info(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(litellm, "suppress_debug_info", True)
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
+
+    _resolve_an_unknown_model()
+
+    assert not any(_PROVIDER_LIST_HINT in r.getMessage() for r in caplog.records)
 
 
 @pytest.mark.parametrize(

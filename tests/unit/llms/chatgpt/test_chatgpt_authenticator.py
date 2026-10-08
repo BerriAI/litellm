@@ -1,7 +1,9 @@
 import base64
 import json
+import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
+from typing import Final
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
@@ -12,7 +14,13 @@ from litellm.llms.chatgpt.authenticator import (
     TOKEN_REFRESH_TIMEOUT_SECONDS,
     Authenticator,
 )
-from litellm.llms.chatgpt.common_utils import GetAccessTokenError
+from litellm.llms.chatgpt.common_utils import (
+    CHATGPT_DEVICE_CODE_URL,
+    CHATGPT_DEVICE_TOKEN_URL,
+    CHATGPT_DEVICE_VERIFY_URL,
+    CHATGPT_OAUTH_TOKEN_URL,
+    GetAccessTokenError,
+)
 
 
 def _make_jwt(payload: dict) -> str:
@@ -23,6 +31,23 @@ def _make_jwt(payload: dict) -> str:
         return base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
 
     return f"{_b64(header)}.{_b64(payload)}."
+
+
+def _device_code_flow_client(user_code: str) -> MagicMock:
+    bodies: Final = {
+        CHATGPT_DEVICE_CODE_URL: {"device_auth_id": "device-1", "user_code": user_code, "interval": 1},
+        CHATGPT_DEVICE_TOKEN_URL: {"authorization_code": "auth-1", "code_challenge": "ch", "code_verifier": "ver"},
+        CHATGPT_OAUTH_TOKEN_URL: {"access_token": "access-1", "refresh_token": "refresh-1", "id_token": "id-1"},
+    }
+
+    def post(url: str, **_: object) -> MagicMock:
+        response: Final = MagicMock(status_code=200)
+        response.json.return_value = bodies[url]
+        return response
+
+    client: Final = MagicMock()
+    client.post.side_effect = post
+    return client
 
 
 class TestChatGPTAuthenticator:
@@ -161,3 +186,37 @@ class TestChatGPTAuthenticator:
             assert account_id == "acct-123"
             mock_write.assert_called_once()
             assert mock_write.call_args[0][0]["account_id"] == "acct-123"
+
+    def test_login_device_code_writes_nothing_to_stdout_or_stderr_when_logger_is_quiet(
+        self, authenticator: Authenticator, caplog: pytest.LogCaptureFixture, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        caplog.set_level(logging.ERROR, logger="LiteLLM")
+
+        with patch(
+            "litellm.llms.chatgpt.authenticator.get_httpx_client",
+            return_value=_device_code_flow_client(user_code="ABCD-1234"),
+        ):
+            authenticator._login_device_code()
+
+        captured: Final = capsys.readouterr()
+        assert (captured.out, captured.err) == ("", "")
+
+    def test_login_device_code_logs_verification_url_and_user_code_as_warning(
+        self, authenticator: Authenticator, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.WARNING, logger="LiteLLM")
+
+        with patch(
+            "litellm.llms.chatgpt.authenticator.get_httpx_client",
+            return_value=_device_code_flow_client(user_code="ABCD-1234"),
+        ):
+            authenticator._login_device_code()
+
+        warnings: Final = [
+            record.getMessage()
+            for record in caplog.records
+            if record.name == "LiteLLM" and record.levelno == logging.WARNING
+        ]
+        assert len(warnings) == 1, caplog.text
+        assert CHATGPT_DEVICE_VERIFY_URL in warnings[0]
+        assert "ABCD-1234" in warnings[0]

@@ -1,3 +1,4 @@
+import logging
 from typing import Final, Literal
 
 import pytest
@@ -166,3 +167,25 @@ async def test_llm_guard_skips_unsupported_call_types(
     )
     assert result is data
     assert data == {"messages": [{"role": "user", "content": "unchanged"}]}
+
+
+def test_print_verbose_logs_at_debug_instead_of_printing(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    llm_guard: Final = _ENTERPRISE_LLMGuard(mock_testing=True)
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    caplog.set_level(logging.INFO, logger="LiteLLM Proxy")
+    capsys.readouterr()
+    llm_guard.print_verbose("llm guard verbose statement")
+    captured: Final = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+    caplog.set_level(logging.DEBUG, logger="LiteLLM Proxy")
+    llm_guard.print_verbose("llm guard verbose statement")
+    assert any(
+        record.levelno == logging.DEBUG
+        and record.name == "LiteLLM Proxy"
+        and "llm guard verbose statement" in record.getMessage()
+        for record in caplog.records
+    )

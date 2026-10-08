@@ -2,10 +2,13 @@
 Unit Tests for the max parallel request limiter v1 for the proxy
 """
 
+import logging
 from datetime import datetime
+from typing import Final
 
 import pytest
 
+import litellm
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter import (
@@ -107,3 +110,25 @@ async def test_async_log_success_event_counts_non_chat_response_tokens(response_
             f"expected 50 tokens counted for {scope_id}, "
             f"got {current['current_tpm']}"
         )
+
+
+def test_print_verbose_logs_at_debug_instead_of_printing(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    handler: Final = PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    caplog.set_level(logging.INFO, logger="LiteLLM Proxy")
+    capsys.readouterr()
+    handler.print_verbose("rate limiter verbose statement")
+    captured: Final = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+    caplog.set_level(logging.DEBUG, logger="LiteLLM Proxy")
+    handler.print_verbose("rate limiter verbose statement")
+    assert any(
+        record.levelno == logging.DEBUG
+        and record.name == "LiteLLM Proxy"
+        and "rate limiter verbose statement" in record.getMessage()
+        for record in caplog.records
+    )

@@ -94,11 +94,7 @@ def is_async_iterable(obj: object) -> bool:
 
 
 def print_verbose(print_statement: object):
-    try:
-        if litellm.set_verbose:
-            print(print_statement)  # noqa: T201
-    except Exception:
-        pass
+    verbose_logger.debug(print_statement)
 
 
 @dataclass(frozen=True, slots=True)

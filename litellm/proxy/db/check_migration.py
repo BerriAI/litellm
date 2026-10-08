@@ -63,9 +63,7 @@ def check_prisma_schema_diff_helper(db_url: str) -> tuple[bool, list[str]]:
             run_prisma,
         )
     except ImportError as e:
-        print(  # noqa: T201  # boot-time operator output, same channel as this helper's other messages
-            f"Skipping the migration diff: litellm-proxy-extras has no Prisma runner. Error: {e}"
-        )
+        verbose_logger.warning("Skipping the migration diff: litellm-proxy-extras has no Prisma runner. Error: %s", e)
         return False, []
 
     verbose_logger.debug("Checking for Prisma schema diff...")
@@ -89,22 +87,19 @@ def check_prisma_schema_diff_helper(db_url: str) -> tuple[bool, list[str]]:
         sql_commands: Final = extract_sql_commands(result.stdout)
 
         if sql_commands:
-            print("Changes to DB Schema detected")  # noqa: T201
-            print("Required SQL commands:")  # noqa: T201
-            for command in sql_commands:
-                print(command)  # noqa: T201
+            verbose_logger.warning("Changes to DB Schema detected\nRequired SQL commands:\n%s", "\n".join(sql_commands))
             return True, sql_commands
         else:
             return False, []
     except subprocess.TimeoutExpired:
-        print(  # noqa: T201  # boot-time operator output, same channel as this helper's other messages
-            f"Timed out after {timeout}s generating the migration diff. "
-            f"Raise {PRISMA_COMMAND_TIMEOUT_ENV_VAR} if this database needs longer."
+        verbose_logger.error(
+            "Timed out after %ss generating the migration diff. Raise %s if this database needs longer.",
+            timeout,
+            PRISMA_COMMAND_TIMEOUT_ENV_VAR,
         )
         return False, []
     except subprocess.CalledProcessError as e:
-        error_message: Final = f"Failed to generate migration diff. Error: {e.stderr}"
-        print(error_message)  # noqa: T201
+        verbose_logger.error("Failed to generate migration diff. Error: %s", e.stderr)
         return False, []
 
 
