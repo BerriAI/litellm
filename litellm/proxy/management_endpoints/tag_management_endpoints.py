@@ -676,6 +676,13 @@ async def list_tags(
         used_tag_names: Sequence[str]
         dynamic_tag_rows: Sequence[Mapping[str, object]]
         if team_scope is not None:
+            team_api_keys: Final[list[str] | None] = (
+                None
+                if team_key_filter is None
+                else [team_key_filter]
+                if isinstance(team_key_filter, str)
+                else list(team_key_filter)
+            )
             dynamic_tag_rows = [
                 {
                     "tag": row["tag"],
@@ -684,9 +691,7 @@ async def list_tags(
                 }
                 for row in await DailyTagSpendRepository(prisma_client).tags_used_in_teams(
                     team_ids=permitted_teams,
-                    api_keys=None
-                    if team_key_filter is None
-                    else [team_key_filter] if isinstance(team_key_filter, str) else list(team_key_filter),
+                    api_keys=team_api_keys,
                     start_date=start_date,
                     end_date=end_date,
                 )
@@ -703,7 +708,7 @@ async def list_tags(
             if start_date is not None and end_date is not None:
                 dynamic_tag_where["date"] = {"gte": start_date, "lte": end_date}
 
-            dynamic_tag_rows: Final = await _table(DailyTagSpendRepository(prisma_client)).group_by(
+            dynamic_tag_rows = await _table(DailyTagSpendRepository(prisma_client)).group_by(
                 by=["tag"],
                 where=dynamic_tag_where,
                 min={"created_at": True},

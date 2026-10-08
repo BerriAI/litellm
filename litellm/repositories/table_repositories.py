@@ -226,6 +226,10 @@ class _QueryRawDatabase(Protocol):
     async def query_raw(self, query: str, *args: object) -> "Sequence[Mapping[str, object]] | None": ...
 
 
+class _ClientWithDb(Protocol):
+    db: _QueryRawDatabase
+
+
 class DailyTagSpendRepository(PrismaTableRepository["prisma_models.LiteLLM_DailyTagSpend"]):
     table_name = "litellm_dailytagspend"
 
@@ -238,8 +242,8 @@ class DailyTagSpendRepository(PrismaTableRepository["prisma_models.LiteLLM_Daily
         end_date: str | None,
     ) -> "tuple[Mapping[str, object], ...]":
         database: Final = cast(
-            _QueryRawDatabase, self.prisma_client.db
-        )  # cast-ok: Prisma delegates database methods dynamically
+            _ClientWithDb, self._prisma_client
+        ).db  # cast-ok: Prisma delegates database methods dynamically
         rows: Final = await database.query_raw(
             _TAGS_USED_IN_TEAMS_SQL,
             list(team_ids),
