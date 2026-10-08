@@ -3,7 +3,7 @@ from types import MappingProxyType
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 
 from litellm.llms.anthropic.prompt_cache_prediction import (
     TokenCounter,
@@ -15,14 +15,17 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.proxy.auth.auth_utils import get_cache_prediction_deployments
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.http_parsing_utils import (
-    _read_request_body,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # canonical parsed-body owner; validate its legacy result at the endpoint boundary
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    read_request_body,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # canonical parsed-body owner; validate its legacy result at the endpoint boundary
 )
 from litellm.proxy.common_utils.prompt_cache_prediction import has_request_transforms, predict_arm
-from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage]  # use the configured proxy limiter's shared capacity owner
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401  # legacy module exports
+    PROXY_MaxParallelRequestsHandler_v3,
+    _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints.prompt_cache_prediction import (
     CachePredictionArm,
     CachePredictionRequest,
@@ -33,12 +36,12 @@ router: Final = APIRouter()
 _REQUEST_DATA: Final = TypeAdapter(Mapping[str, object])
 
 
-class _CallerSettings(BaseModel):
+class _CallerSettings(LiteLLMBaseModel):
     config: Mapping[str, object] | None = None
 
 
 def _capacity_counter(
-    limiter: _PROXY_MaxParallelRequestsHandler_v3,
+    limiter: PROXY_MaxParallelRequestsHandler_v3,
     caller: UserAPIKeyAuth,
     model_name: str,
     request_data: Mapping[str, object],
@@ -55,7 +58,7 @@ def _capacity_request_data(
 ) -> Mapping[str, object]:
     # The parsed-body cache retains only original top-level keys. Replay the
     # shared idempotent tag merges on limiter-only data when auth added metadata.
-    data: Final = dict(request_data)  # mutable-ok: the existing tag merge owners accept a dictionary out-param
+    data: Final = dict(request_data)
     LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(http_request, data, caller)  # pyright: ignore[reportUnknownMemberType]  # legacy tag owner takes the validated capacity dictionary
     LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(data, caller)  # pyright: ignore[reportUnknownMemberType]  # legacy tag owner merges trusted key tags into capacity metadata
     return MappingProxyType(data)
@@ -63,7 +66,7 @@ def _capacity_request_data(
 
 @router.post(
     "/cost/predict-cache",
-    tags=["Cost Tracking"],  # mutable-ok: FastAPI requires a list for OpenAPI tags
+    tags=["Cost Tracking"],
     response_model=CachePredictionResponse,
 )
 async def predict_cache_cost(
@@ -113,7 +116,7 @@ async def predict_cache_cost(
         or not caller
         or unsupported_transform
         or unsupported_headers
-        or not isinstance(limiter, _PROXY_MaxParallelRequestsHandler_v3)
+        or not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3)
     ):
         reason: Final = (
             "unsupported_provider_headers"
@@ -133,7 +136,7 @@ async def predict_cache_cost(
             cache_rebuild_penalty=None,
         )
     request_data: Final = _capacity_request_data(
-        http_request, user_api_key_dict, _REQUEST_DATA.validate_python(await _read_request_body(http_request))
+        http_request, user_api_key_dict, _REQUEST_DATA.validate_python(await read_request_body(http_request))
     )
     stay: Final = await predict_arm(
         current,

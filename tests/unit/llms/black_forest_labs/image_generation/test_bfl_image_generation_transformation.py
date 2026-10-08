@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 
 from litellm.llms.black_forest_labs.image_generation.transformation import (
@@ -355,3 +356,48 @@ class TestBlackForestLabsImageGenerationTransformation:
         config = get_black_forest_labs_image_generation_config("flux-pro-1.1")
 
         assert isinstance(config, BlackForestLabsImageGenerationConfig)
+
+
+def _transform(payload: object) -> ImageResponse:
+    return BlackForestLabsImageGenerationConfig().transform_image_generation_response(
+        model="flux-pro-1.1",
+        raw_response=httpx.Response(200, json=payload),
+        model_response=ImageResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("result", "expected_urls"),
+    [
+        ({"sample": "https://bfl.example/a.png"}, ["https://bfl.example/a.png"]),
+        (
+            ["https://bfl.example/a.png", {"url": "https://bfl.example/b.png"}, {"seed": 1}, 7],
+            ["https://bfl.example/a.png", "https://bfl.example/b.png"],
+        ),
+    ],
+)
+def test_transform_image_generation_response_reads_urls_from_the_result(result: object, expected_urls: list[str]):
+    response = _transform({"status": "Ready", "result": result})
+
+    assert [image.url for image in response.data] == expected_urls
+
+
+@pytest.mark.parametrize("payload", [{}, {"result": None}, {"result": "https://bfl.example/a.png"}, {"result": []}])
+def test_transform_image_generation_response_without_a_url_is_a_provider_error(payload: dict[str, object]):
+    with pytest.raises(BlackForestLabsError) as exc_info:
+        _transform(payload)
+
+    assert exc_info.value.status_code == 500
+
+
+@pytest.mark.parametrize("payload", [7, "https://bfl.example/a.png", [{"sample": "https://bfl.example/a.png"}]])
+def test_transform_image_generation_response_rejects_non_object_bodies(payload: object):
+    with pytest.raises(ValidationError) as exc_info:
+        _transform(payload)
+
+    assert "bfl.example" not in str(exc_info.value)
