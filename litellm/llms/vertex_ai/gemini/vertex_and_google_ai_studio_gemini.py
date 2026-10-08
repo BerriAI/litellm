@@ -987,9 +987,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         if reasoning_effort in ("medium", "high"):
             return {"thinkingLevel": "high", "includeThoughts": True}
-        if reasoning_effort == "disable":
+        if reasoning_effort in ("disable", "none"):
+            # Mirrors the Gemini 3 mapping: callers asking for no reasoning must not receive
+            # thought parts back, even though Gemma 4 still thinks at its `minimal` level.
             return {"thinkingLevel": "minimal", "includeThoughts": False}
-        if reasoning_effort in ("none", "minimal", "low"):
+        if reasoning_effort in ("minimal", "low"):
             return {"thinkingLevel": "minimal", "includeThoughts": True}
         else:
             raise _unsupported_reasoning_effort(reasoning_effort)
