@@ -136,6 +136,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/ui_discovery/",
     "/ui-config",
     "/sso_settings",
+    "/moyai/",
     "/public/",
     "/robots.txt",
     # Health (k8s probes)
