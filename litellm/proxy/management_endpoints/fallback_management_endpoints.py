@@ -50,7 +50,7 @@ _STORED_FALLBACKS: Final = TypeAdapter(list[StoredFallback])
 
 
 def _rule_covers(entry: StoredFallback, model: str) -> bool:
-    return isinstance(entry, dict) and isinstance(entry.get(model), list)
+    return isinstance(entry, dict) and model in entry
 
 
 async def _router_settings_fresh_from_db(proxy_config: "ProxyConfig") -> dict[str, object]:
@@ -165,7 +165,7 @@ async def create_fallback(
             fallback_key = "content_policy_fallbacks"
 
         # Get existing fallbacks
-        existing_fallbacks: Final = _STORED_FALLBACKS.validate_python(router_settings.get(fallback_key, []))
+        existing_fallbacks: Final = _STORED_FALLBACKS.validate_python(router_settings.get(fallback_key) or [])
 
         # Update or add the fallback configuration
         fallback_updated = False
@@ -321,7 +321,7 @@ async def delete_fallback(
             fallback_key = "content_policy_fallbacks"
 
         # Get existing fallbacks
-        existing_fallbacks: Final = _STORED_FALLBACKS.validate_python(router_settings.get(fallback_key, []))
+        existing_fallbacks: Final = _STORED_FALLBACKS.validate_python(router_settings.get(fallback_key) or [])
 
         # Find and remove the fallback configuration
         fallback_found = False

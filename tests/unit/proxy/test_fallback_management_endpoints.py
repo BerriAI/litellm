@@ -283,6 +283,7 @@ class _StoredRouterSettings:
 
 TEAM_RULE: Final = {"team-primary": ["team-fallback"]}
 GATEWAY_RULE: Final = {"gpt-5.4-mini": ["team-fallback"]}
+MALFORMED_GATEWAY_RULE: Final = {"gpt-5.4-mini": "team-fallback"}
 NON_STANDARD_RULES: Final = [
     "claude-3-haiku",
     {"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "retry"}]},
@@ -352,6 +353,27 @@ class TestFallbackWritesSeeTheLatestStoredRules:
 
         await self._delete("team-primary", stored)
         assert stored.stored_fallbacks() == [*NON_STANDARD_RULES, GATEWAY_RULE]
+
+    async def test_a_create_replaces_a_same_key_rule_whatever_its_targets_shape(self) -> None:
+        stored: Final = _StoredRouterSettings({"fallbacks": [MALFORMED_GATEWAY_RULE, TEAM_RULE]})
+
+        await self._create(FallbackCreateRequest(model="gpt-5.4-mini", fallback_models=["team-fallback"]), stored)
+
+        assert stored.stored_fallbacks() == [GATEWAY_RULE, TEAM_RULE]
+
+    async def test_a_delete_removes_a_same_key_rule_whatever_its_targets_shape(self) -> None:
+        stored: Final = _StoredRouterSettings({"fallbacks": [MALFORMED_GATEWAY_RULE, TEAM_RULE]})
+
+        await self._delete("gpt-5.4-mini", stored)
+
+        assert stored.stored_fallbacks() == [TEAM_RULE]
+
+    async def test_a_create_treats_a_null_rule_list_as_empty(self) -> None:
+        stored: Final = _StoredRouterSettings({"fallbacks": None})
+
+        await self._create(FallbackCreateRequest(model="gpt-5.4-mini", fallback_models=["team-fallback"]), stored)
+
+        assert stored.stored_fallbacks() == [GATEWAY_RULE]
 
 
 @pytest.mark.asyncio
