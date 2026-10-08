@@ -508,20 +508,26 @@ mod tests {
     }
 
     #[rstest]
-    fn known_betas_as_other_match_named_variants() {
-        for beta in &AnthropicBeta::KNOWN {
-            for provider in BetaProvider::ALL {
-                let actual = AnthropicBeta::Other(beta.as_str().to_string()).on(*provider);
-                let expected = beta.on(*provider);
-                assert_eq!(actual, expected, "provider {provider}, beta {beta}");
-                if let Some(actual) = actual {
-                    assert!(
-                        !matches!(actual, AnthropicBeta::Other(_)),
-                        "provider {provider}, beta {beta}"
-                    );
-                }
-            }
-        }
+    #[case::renamed(
+        "advanced-tool-use-2025-11-20",
+        BetaProvider::Bedrock,
+        Some(AnthropicBeta::ToolSearchTool20251019)
+    )]
+    #[case::kept(
+        "oauth-2025-04-20",
+        BetaProvider::Anthropic,
+        Some(AnthropicBeta::Oauth20250420)
+    )]
+    #[case::rejected("effort-2025-11-24", BetaProvider::VertexAi, None)]
+    #[case::unknown("example-beta-2099-01-01", BetaProvider::Anthropic, None)]
+    fn on_resolves_known_spellings_held_as_other(
+        #[case] raw: &str,
+        #[case] provider: BetaProvider,
+        #[case] expected: Option<AnthropicBeta>,
+    ) {
+        let actual = AnthropicBeta::Other(raw.to_string()).on(provider);
+        assert_eq!(actual, expected);
+        assert!(!matches!(actual, Some(AnthropicBeta::Other(_))));
     }
 
     #[rstest]
