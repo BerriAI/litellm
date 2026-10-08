@@ -5,6 +5,7 @@ import githubLogo from "../../../../../../../public/assets/logos/github.svg";
 import hermesLogo from "../../../../../../../public/assets/logos/hermes.png";
 import langchainLogo from "../../../../../../../public/assets/logos/langchain.svg";
 import litellmLogo from "../../../../../../../public/assets/logos/litellm_monogram.svg";
+import moyaiLogo from "../../../../../../../public/assets/moyai/moyai-head.svg";
 import openaiLogo from "../../../../../../../public/assets/logos/openai_small.svg";
 import openaiAgentsLogo from "../../../../../../../public/assets/logos/openai-agents.svg";
 import opencodeLogo from "../../../../../../../public/assets/moyai/logos/opencode.svg";
@@ -48,6 +49,14 @@ interface AgentFamily {
  * mark as in the Lens trace view; Claude Code gets its own spark tile rather than Anthropic's wordmark.
  */
 const FAMILIES: readonly AgentFamily[] = [
+  {
+    id: "moyai",
+    label: "Moyai",
+    description: "Cloud coding agent",
+    kind: "agent",
+    logo: moyaiLogo.src,
+    match: /^moyai\b/i,
+  },
   {
     id: "claude-code",
     label: "Claude Code",
