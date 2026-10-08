@@ -5841,7 +5841,7 @@ def _first_chat_model(provider_prefix: str, *, with_storage_rate: bool) -> str:
 
 
 def _cost_map_entry(name: str) -> object:
-    entry: object = litellm.model_cost.get(name)
+    entry: Final[object] = litellm.model_cost.get(name)
     return entry
 
 
