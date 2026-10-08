@@ -5,9 +5,10 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import token_counter
@@ -69,6 +70,31 @@ class PrefetchedUsage:
     @staticmethod
     def active() -> "PrefetchedUsage | None":
         return _active_prefetched_usage.get()
+
+
+_MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def _as_mapping(value: object) -> Mapping[str, object] | None:
+    try:
+        return _MAPPING_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _declares_tpm_limit(deployment: object) -> bool:
+    mapping: Final = _as_mapping(deployment)
+    if mapping is None:
+        return False
+    sources: Final = (mapping, _as_mapping(mapping.get("litellm_params")), _as_mapping(mapping.get("model_info")))
+    return any(source.get("tpm") is not None for source in sources if source is not None)
+
+
+def _count_input_tokens(messages: list[dict[str, str]] | None, input: str | list[str] | None) -> int:
+    try:
+        return token_counter(messages=messages, text=input)
+    except Exception:
+        return 0
 
 
 class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
@@ -421,10 +447,11 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         for idx, key in enumerate(rpm_keys):
             rpm_dict[rpm_keys[idx].split(":")[0]] = rpm_values[idx]
 
-        try:
-            input_tokens = token_counter(messages=messages, text=input)
-        except Exception:
-            input_tokens = 0
+        input_tokens: Final = (
+            _count_input_tokens(messages, input)
+            if any(map(_declares_tpm_limit, cast(Sequence[object], healthy_deployments)))
+            else 0
+        )
         verbose_router_logger.debug("input_tokens=%s", input_tokens)
         # -----------------------
         # Find lowest used model

@@ -42,14 +42,11 @@ def test_usage_based_routing_v1_selects_the_lowest_recorded_tpm() -> None:
     }
     now: Final = datetime.now()
     cache_keys: Final = tuple(
-        f"{MODEL_GROUP}:tpm:{(now + timedelta(minutes=offset)).strftime('%H-%M')}"
-        for offset in range(60)
+        f"{MODEL_GROUP}:tpm:{(now + timedelta(minutes=offset)).strftime('%H-%M')}" for offset in range(60)
     )
 
     for cache_key in cache_keys:
-        router.cache.set_cache(
-            key=cache_key, value=usage_by_deployment, ttl=float("inf")
-        )
+        router.cache.set_cache(key=cache_key, value=usage_by_deployment, ttl=float("inf"))
 
     deployment: Final = router.get_available_deployment(
         model=MODEL_GROUP,
@@ -109,11 +106,79 @@ async def test_v2_subclass_overriding_async_get_available_deployments_with_the_o
     )
     router.lowesttpm_logger_v2 = OldSignatureV2(router_cache=router.cache, routing_args={})
 
-    response: Final = await router.acompletion(
-        model=MODEL_GROUP, messages=[{"role": "user", "content": "x"}]
-    )
+    response: Final = await router.acompletion(model=MODEL_GROUP, messages=[{"role": "user", "content": "x"}])
 
     assert response.choices[0].message.content in {
         f"from {HIGH_USAGE_DEPLOYMENT_ID}",
         f"from {LOW_USAGE_DEPLOYMENT_ID}",
     }
+
+
+class _ReadTrackingMessages(list):
+    def __init__(self, messages: list[dict[str, str]]) -> None:
+        super().__init__(messages)
+        self.read_count = 0
+
+    def __iter__(self):
+        self.read_count += 1
+        return super().__iter__()
+
+
+def _common_checks(
+    strategy: LowestTPMLoggingHandler_v2, deployment: DeploymentTypedDict, messages: list
+) -> dict | None:
+    deployment_id: Final = deployment["model_info"]["id"]
+    return strategy._common_checks_available_deployment(
+        model_group=MODEL_GROUP,
+        healthy_deployments=[deployment],
+        tpm_keys=[f"{deployment_id}:gpt-4o:tpm:00-00"],
+        tpm_values=[10],
+        rpm_keys=[f"{deployment_id}:gpt-4o:rpm:00-00"],
+        rpm_values=[1],
+        messages=messages,
+    )
+
+
+def test_v2_skips_counting_request_tokens_when_no_deployment_declares_a_tpm_limit() -> None:
+    strategy: Final = LowestTPMLoggingHandler_v2(router_cache=DualCache())
+    messages: Final = _ReadTrackingMessages([{"role": "user", "content": "hello " * 200}])
+
+    picked: Final = _common_checks(strategy, _deployment(LOW_USAGE_DEPLOYMENT_ID), messages)
+
+    assert picked is not None and picked["model_info"]["id"] == LOW_USAGE_DEPLOYMENT_ID
+    assert messages.read_count == 0, "request messages were tokenized although no deployment has a tpm limit"
+
+
+def test_v2_still_counts_request_tokens_to_enforce_a_declared_tpm_limit() -> None:
+    strategy: Final = LowestTPMLoggingHandler_v2(router_cache=DualCache())
+    limited: Final = _deployment(LOW_USAGE_DEPLOYMENT_ID)
+    limited["litellm_params"]["tpm"] = 50
+    messages: Final = _ReadTrackingMessages([{"role": "user", "content": "hello " * 200}])
+
+    picked: Final = _common_checks(strategy, limited, messages)
+
+    assert messages.read_count > 0, "request messages must be tokenized when a deployment declares a tpm limit"
+    assert picked is None, "a request larger than the remaining tpm budget must not be routed to the limited deployment"
+
+
+def test_v2_counts_request_tokens_when_only_one_of_two_deployments_declares_a_tpm_limit() -> None:
+    strategy: Final = LowestTPMLoggingHandler_v2(router_cache=DualCache())
+    limited: Final = _deployment(LOW_USAGE_DEPLOYMENT_ID)
+    limited["litellm_params"]["tpm"] = 50
+    unlimited: Final = _deployment(HIGH_USAGE_DEPLOYMENT_ID)
+    messages: Final = _ReadTrackingMessages([{"role": "user", "content": "hello " * 200}])
+
+    picked: Final = strategy._common_checks_available_deployment(
+        model_group=MODEL_GROUP,
+        healthy_deployments=[limited, unlimited],
+        tpm_keys=[f"{LOW_USAGE_DEPLOYMENT_ID}:gpt-4o:tpm:00-00", f"{HIGH_USAGE_DEPLOYMENT_ID}:gpt-4o:tpm:00-00"],
+        tpm_values=[10, 10],
+        rpm_keys=[f"{LOW_USAGE_DEPLOYMENT_ID}:gpt-4o:rpm:00-00", f"{HIGH_USAGE_DEPLOYMENT_ID}:gpt-4o:rpm:00-00"],
+        rpm_values=[1, 1],
+        messages=messages,
+    )
+
+    assert messages.read_count > 0, "a single tpm-limited deployment in the group must keep the request count"
+    assert picked is not None and picked["model_info"]["id"] == HIGH_USAGE_DEPLOYMENT_ID, (
+        "the oversized request must skip the tpm-limited deployment and land on the unlimited one"
+    )
