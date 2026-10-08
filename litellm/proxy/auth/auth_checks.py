@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from functools import partial
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Optional, Protocol, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Optional, Protocol, TypeAlias
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -401,12 +401,22 @@ def _typed_request_body(request_body: dict) -> Mapping[str, object]:
 typed_general_settings: Final = _typed_request_body
 
 
+_TRACE_ID_METADATA_ADAPTER: Final = TypeAdapter(dict[str, object])
+_TRACE_ID_OPTIONAL_METADATA_ADAPTER: Final[TypeAdapter[dict[str, object] | None]] = TypeAdapter(
+    dict[str, object] | None
+)
+
+
+def _metadata_mapping_has_trace_id(metadata: Mapping[str, object]) -> bool:
+    trace_id: Final[object] = metadata.get("trace_id")
+    return isinstance(trace_id, str) and bool(trace_id)
+
+
 def _metadata_has_trace_id(metadata: object) -> bool:
     if not isinstance(metadata, dict):
         return False
-    metadata_dict: Final = cast(dict[str, object], metadata)
-    trace_id: Final[object] = metadata_dict.get("trace_id")
-    return isinstance(trace_id, str) and bool(trace_id)
+    metadata_dict: Final = _TRACE_ID_METADATA_ADAPTER.validate_python(metadata)
+    return _metadata_mapping_has_trace_id(metadata_dict)
 
 
 def _request_has_trace_id(request_body: Mapping[str, object], request: Request, *, headers_only: bool = False) -> bool:
@@ -429,11 +439,10 @@ def _request_has_trace_id(request_body: Mapping[str, object], request: Request, 
             return True
     metadata_variable_name: Final = metadata_variable_name_for_route(get_request_route(request))
     selected_metadata: Final[object] = request_body.get(metadata_variable_name)
-    selected_metadata_dict: Final[dict[str, object] | None] = (
-        cast(dict[str, object], selected_metadata) if isinstance(selected_metadata, dict) else None
-    )
-    if selected_metadata_dict is not None and "trace_id" in selected_metadata_dict:
-        return _metadata_has_trace_id(selected_metadata_dict)
+    if isinstance(selected_metadata, dict):
+        selected_metadata_dict: Final = _TRACE_ID_METADATA_ADAPTER.validate_python(selected_metadata)
+        if "trace_id" in selected_metadata_dict:
+            return _metadata_mapping_has_trace_id(selected_metadata_dict)
     other_metadata_variable_name: Final = "litellm_metadata" if metadata_variable_name == "metadata" else "metadata"
     return _metadata_has_trace_id(request_body.get(other_metadata_variable_name))
 
@@ -1180,9 +1189,12 @@ async def common_checks(
         )
         or pass_through_route
     )
-    team_metadata_value: Final[object] = cast(object, team_object.metadata) if team_object is not None else None
     team_metadata: Final[dict[str, object] | None] = (
-        cast(dict[str, object], team_metadata_value) if isinstance(team_metadata_value, dict) else None
+        _TRACE_ID_OPTIONAL_METADATA_ADAPTER.validate_python(
+            team_object.metadata  # pyright: ignore[reportUnknownMemberType]  # validate the untyped model field
+        )
+        if team_object is not None
+        else None
     )
     if (
         team_object is not None
