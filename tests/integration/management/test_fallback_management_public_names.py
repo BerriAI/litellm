@@ -46,16 +46,16 @@ def _fallback_body(model: str, fallback_models: list[str], fallback_type: str = 
     return {"model": model, "fallback_models": list(fallback_models), "fallback_type": fallback_type}
 
 
+def _forget_fallback(gateway: Gateway, model: str, fallback_type: str) -> None:
+    gateway.request("DELETE", f"/fallback/{model}", params={"fallback_type": fallback_type})
+
+
 def _create_fallback(
-    gateway: Gateway,
-    model: str,
-    fallback_models: list[str],
-    fallback_type: str = "general",
-    *,
-    key: str | None = None,
+    gateway: Gateway, scenario: Scenario, model: str, fallback_models: list[str], fallback_type: str = "general"
 ) -> httpx.Response:
+    scenario.cleanups.callback(_forget_fallback, gateway, model, fallback_type)
     return eventually(
-        lambda: gateway.request("POST", "/fallback", _fallback_body(model, fallback_models, fallback_type), key=key),
+        lambda: gateway.request("POST", "/fallback", _fallback_body(model, fallback_models, fallback_type)),
         lambda response: response.status_code == 200,
         seconds=30,
         return_last_on_timeout=True,
@@ -150,7 +150,7 @@ def test_post_by_team_public_name_creates_reads_back_and_peer_converges(gateway:
         team: Final = scenario.team()
         primary: Final = scenario.model(model=f"openai/n1p-{uuid.uuid4().hex}", model_info={"team_id": team})
         fallback: Final = scenario.model(model=f"openai/n1f-{uuid.uuid4().hex}", model_info={"team_id": team})
-        created: Final = _create_fallback(gateway, primary, [fallback])
+        created: Final = _create_fallback(gateway, scenario, primary, [fallback])
         assert created.status_code == 200, created.text
         here: Final = eventually(
             lambda: gateway.request("GET", f"/fallback/{primary}", params={"fallback_type": "general"}),
@@ -176,7 +176,7 @@ def test_rule_by_team_public_name_fires_on_chat_completions(gateway: Gateway, up
         primary: Final = scenario.model(model=f"openai/{primary_provider}", num_retries=0, model_info={"team_id": team})
         fallback: Final = scenario.model(model=f"openai/{fallback_provider}", model_info={"team_id": team})
         team_key: Final = scenario.key(team_id=team)
-        created: Final = _create_fallback(gateway, primary, [fallback])
+        created: Final = _create_fallback(gateway, scenario, primary, [fallback])
         assert created.status_code == 200, created.text
         upstream.post(f"/__scripts/{primary_provider}", json={"statuses": [500]}).raise_for_status()
         upstream.get("/__observations").raise_for_status()
@@ -203,9 +203,7 @@ def test_consecutive_creates_within_the_cache_window_keep_every_rule(gateway: Ga
         primaries: Final = tuple(scenario.model(model=f"openai/n5{tag}-{uuid.uuid4().hex}") for tag in "abc")
         for model in (target, *primaries):
             _wait_until_served(gateway, model)
-        created: Final = tuple(
-            gateway.request("POST", "/fallback", _fallback_body(primary, [target])) for primary in primaries
-        )
+        created: Final = tuple(_create_fallback(gateway, scenario, primary, [target]) for primary in primaries)
         assert all(response.status_code == 200 for response in created), [response.text for response in created]
         covered: Final = _covered_models(_stored_fallbacks())
         assert frozenset(primaries) <= covered, (primaries, covered)
@@ -233,7 +231,7 @@ def test_create_by_generated_internal_name_still_works(gateway: Gateway) -> None
         team: Final = scenario.team()
         _, primary_internal = _team_model(gateway, scenario, team, f"c1p-{uuid.uuid4().hex}")
         _, fallback_internal = _team_model(gateway, scenario, team, f"c1f-{uuid.uuid4().hex}")
-        created: Final = _create_fallback(gateway, primary_internal, [fallback_internal])
+        created: Final = _create_fallback(gateway, scenario, primary_internal, [fallback_internal])
         assert created.status_code == 200, created.text
         here: Final = eventually(
             lambda: gateway.request("GET", f"/fallback/{primary_internal}", params={"fallback_type": "general"}),
@@ -252,8 +250,8 @@ def test_delete_reads_fresh_rules_and_keeps_the_others(gateway: Gateway) -> None
         _wait_until_served(gateway, target)
         _wait_until_served(gateway, keep)
         _wait_until_served(gateway, drop)
-        assert _create_fallback(gateway, keep, [target]).status_code == 200
-        assert _create_fallback(gateway, drop, [target]).status_code == 200
+        assert _create_fallback(gateway, scenario, keep, [target]).status_code == 200
+        assert _create_fallback(gateway, scenario, drop, [target]).status_code == 200
         removed: Final = gateway.request("DELETE", f"/fallback/{drop}", params={"fallback_type": "general"})
         assert removed.status_code == 200, removed.text
         covered: Final = _covered_models(_stored_fallbacks())
@@ -289,7 +287,7 @@ def test_malformed_requests_are_rejected_and_the_proxy_stays_up(gateway: Gateway
         )
         for body in malformed:
             assert gateway.request("POST", "/fallback", body).status_code in (400, 422), body
-        healthy: Final = _create_fallback(gateway, model, [fallback])
+        healthy: Final = _create_fallback(gateway, scenario, model, [fallback])
         assert healthy.status_code == 200, healthy.text
         listed: Final = gateway.request("GET", "/v1/models")
         assert listed.status_code == 200, listed.text
@@ -304,7 +302,7 @@ def test_team_key_is_forbidden_on_create_and_delete(gateway: Gateway) -> None:
         creating: Final = gateway.request("POST", "/fallback", _fallback_body(model, [fallback]), key=team_key)
         assert creating.status_code in REFUSED, creating.text
         assert model not in _covered_models(_stored_fallbacks())
-        admitted: Final = _create_fallback(gateway, model, [fallback])
+        admitted: Final = _create_fallback(gateway, scenario, model, [fallback])
         assert admitted.status_code == 200, admitted.text
         deleting: Final = gateway.request(
             "DELETE", f"/fallback/{model}", params={"fallback_type": "general"}, key=team_key
@@ -321,7 +319,7 @@ def test_context_window_and_content_policy_types_persist(gateway: Gateway) -> No
         _wait_until_served(gateway, target)
         _wait_until_served(gateway, windowed)
         _wait_until_served(gateway, policy)
-        window_create: Final = _create_fallback(gateway, windowed, [target], "context_window")
+        window_create: Final = _create_fallback(gateway, scenario, windowed, [target], "context_window")
         assert window_create.status_code == 200, window_create.text
         window_read: Final = eventually(
             lambda: gateway.request("GET", f"/fallback/{windowed}", params={"fallback_type": "context_window"}),
@@ -330,7 +328,7 @@ def test_context_window_and_content_policy_types_persist(gateway: Gateway) -> No
             return_last_on_timeout=True,
         )
         assert window_read.status_code == 200 and target in _fallback_models(window_read), window_read.text
-        policy_create: Final = _create_fallback(gateway, policy, [target], "content_policy")
+        policy_create: Final = _create_fallback(gateway, scenario, policy, [target], "content_policy")
         assert policy_create.status_code == 200, policy_create.text
         covered: Final = _covered_models(_stored_fallbacks("content_policy_fallbacks"))
         assert policy in covered, covered
@@ -347,9 +345,11 @@ def test_fallback_write_survives_a_redis_outage(gateway: Gateway, tmp_path: Path
                 third: Final = scenario.model(model=f"openai/x1c-{uuid.uuid4().hex}")
                 for model in (target, first, second, third):
                     _wait_until_served(owned.gateway, model)
-                assert _create_fallback(owned.gateway, first, [target]).status_code == 200
+                assert _create_fallback(owned.gateway, scenario, first, [target]).status_code == 200
                 cache.stop()
-                degraded: Final = tuple(_create_fallback(owned.gateway, model, [target]) for model in (second, third))
+                degraded: Final = tuple(
+                    _create_fallback(owned.gateway, scenario, model, [target]) for model in (second, third)
+                )
                 assert all(response.status_code == 200 for response in degraded), [r.text for r in degraded]
                 covered: Final = _covered_models(_stored_fallbacks())
                 assert {first, second, third} <= covered, covered
@@ -366,12 +366,14 @@ def test_fallback_write_survives_a_worker_kill(gateway: Gateway, tmp_path: Path)
             last: Final = scenario.model(model=f"openai/x2c-{uuid.uuid4().hex}")
             for model in (target, before, after, last):
                 _wait_until_served(owned.gateway, model)
-            assert _create_fallback(owned.gateway, before, [target]).status_code == 200
+            assert _create_fallback(owned.gateway, scenario, before, [target]).status_code == 200
             victim: Final = eventually(lambda: _workers(owned), lambda workers: len(workers) == 2)[0]
             victim.kill()
-            with httpx.Client(base_url=owned.gateway.client.base_url, timeout=15, trust_env=False) as fresh:
-                survivor: Final = Gateway(fresh, owned.gateway.key, owned.gateway.upstream_url)
-                degraded: Final = tuple(_create_fallback(survivor, model, [target]) for model in (after, last))
-                assert all(response.status_code == 200 for response in degraded), [r.text for r in degraded]
-                covered: Final = _covered_models(_stored_fallbacks())
-                assert {before, after, last} <= covered, covered
+            fresh: Final = scenario.cleanups.enter_context(
+                httpx.Client(base_url=owned.gateway.client.base_url, timeout=15, trust_env=False)
+            )
+            survivor: Final = Gateway(fresh, owned.gateway.key, owned.gateway.upstream_url)
+            degraded: Final = tuple(_create_fallback(survivor, scenario, model, [target]) for model in (after, last))
+            assert all(response.status_code == 200 for response in degraded), [r.text for r in degraded]
+            covered: Final = _covered_models(_stored_fallbacks())
+            assert {before, after, last} <= covered, covered
