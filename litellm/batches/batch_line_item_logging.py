@@ -419,6 +419,22 @@ async def _fetch_managed_file_or_empty(
     )
 
 
+async def _fetch_error_file_or_empty(
+    batch: LiteLLMBatch,
+    custom_llm_provider: _BatchLineProvider,
+    fetch_params: dict[str, object] | None,  # mutable-ok: batch_utils file fetch takes the shared litellm_params dict
+) -> bytes:
+    try:
+        return await _fetch_managed_file_or_empty(batch.error_file_id, custom_llm_provider, fetch_params)
+    except Exception as e:  # noqa: BLE001  # costing counts an unreadable error file as no failed lines, so the output lines still go out
+        verbose_logger.warning(
+            "batch line-item callbacks could not fetch the error file, emitting the output lines only. batch_id=%s error=%s",
+            batch.id,
+            e,
+        )
+        return b""
+
+
 async def log_batch_line_items(
     batch: LiteLLMBatch,
     custom_llm_provider: str,
@@ -488,7 +504,7 @@ async def log_batch_line_items(
         error_content: Final = (
             result_files.error
             if result_files is not None and result_files.error is not None
-            else await _fetch_managed_file_or_empty(batch.error_file_id, line_provider, fetch_params)
+            else await _fetch_error_file_or_empty(batch, line_provider, fetch_params)
         )
         for content in (output_content, error_content):
             for entry in _output_entries(content):
