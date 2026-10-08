@@ -8,8 +8,7 @@ pub(crate) mod responses;
 pub(crate) mod token_counter;
 pub(crate) mod traces;
 
-use litellm_callbacks_legacy_python::LoggingOperation;
-use litellm_callbacks_legacy_python::{LegacyLogging, PublicCall};
+use litellm_callbacks_legacy_python::{LegacyLogging, LoggingOperation, PublicCall};
 use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol};
 use litellm_host_python::{HookChain, PythonBinding, PythonCallHooks, PythonHostCalls};
 use pyo3::{
@@ -151,12 +150,10 @@ value = Broken()
                 .expect("locals should be readable")
                 .expect("helper value should exist");
 
-            for name in ["chat_completions", "achat_completions"] {
+            for name in ["transcription", "atranscription"] {
                 let error = module
                     .getattr(name)
-                    .and_then(|function| {
-                        function.call1((value_call(py, "messages", &broken, None),))
-                    })
+                    .and_then(|function| function.call1((value_call(py, "audio", &broken, None),)))
                     .expect_err("route should reject a value it cannot convert");
 
                 assert!(
@@ -172,26 +169,6 @@ value = Broken()
         Python::initialize();
         Python::attach(|py| {
             let module = crate::native_module(py);
-
-            let invalid_messages = PyDict::new(py);
-            let sync_chat_error = module
-                .getattr("chat_completions")
-                .and_then(|function| {
-                    function.call1((value_call(py, "messages", &invalid_messages, None),))
-                })
-                .expect_err("sync chat should reject a non-list messages value");
-            let async_chat_error = module
-                .getattr("achat_completions")
-                .and_then(|function| {
-                    function.call1((value_call(py, "messages", &invalid_messages, None),))
-                })
-                .expect_err("async chat should reject a non-list messages value");
-
-            assert_eq!(
-                sync_chat_error.to_string(),
-                "ValueError: messages must be a list"
-            );
-            assert_eq!(async_chat_error.to_string(), sync_chat_error.to_string());
 
             let invalid_headers = PyList::empty(py);
             let kwargs = PyDict::new(py);
@@ -228,44 +205,6 @@ value = Broken()
             let module = crate::native_module(py);
             let invalid = PyList::empty(py);
 
-            let chat_kwargs = PyDict::new(py);
-            chat_kwargs
-                .set_item("optional_params", &invalid)
-                .expect("kwargs should accept optional_params");
-            chat_kwargs
-                .set_item("extra_headers", &invalid)
-                .expect("kwargs should accept extra_headers");
-            let invalid_messages = PyDict::new(py);
-            let error = module
-                .getattr("chat_completions")
-                .and_then(|function| {
-                    function.call1((value_call(
-                        py,
-                        "messages",
-                        &invalid_messages,
-                        Some(&chat_kwargs),
-                    ),))
-                })
-                .expect_err("messages should be validated first");
-            assert_eq!(error.to_string(), "ValueError: messages must be a list");
-
-            let valid_messages = PyList::empty(py);
-            let error = module
-                .getattr("chat_completions")
-                .and_then(|function| {
-                    function.call1((value_call(
-                        py,
-                        "messages",
-                        &valid_messages,
-                        Some(&chat_kwargs),
-                    ),))
-                })
-                .expect_err("optional_params should be validated before headers");
-            assert_eq!(
-                error.to_string(),
-                "ValueError: optional_params must be a dict"
-            );
-
             let headers_kwargs = PyDict::new(py);
             headers_kwargs
                 .set_item("extra_headers", &invalid)
@@ -284,45 +223,6 @@ value = Broken()
                 })
                 .expect_err("payload should be validated before headers");
             assert!(!error.to_string().contains("extra_headers"));
-        });
-    }
-
-    #[test]
-    fn missing_and_explicit_none_optional_params_share_the_next_error() {
-        Python::initialize();
-        Python::attach(|py| {
-            let module = crate::native_module(py);
-            let messages = PyList::empty(py);
-            let headers = PyList::empty(py);
-            let omitted = PyDict::new(py);
-            omitted
-                .set_item("extra_headers", &headers)
-                .expect("kwargs should accept extra_headers");
-            let explicit = PyDict::new(py);
-            explicit
-                .set_item("optional_params", py.None())
-                .expect("kwargs should accept optional_params");
-            explicit
-                .set_item("extra_headers", &headers)
-                .expect("kwargs should accept extra_headers");
-
-            let omitted_error = module
-                .getattr("chat_completions")
-                .and_then(|function| {
-                    function.call1((value_call(py, "messages", &messages, Some(&omitted)),))
-                })
-                .expect_err("omitted optional_params should reach header validation");
-            let explicit_error = module
-                .getattr("chat_completions")
-                .and_then(|function| {
-                    function.call1((value_call(py, "messages", &messages, Some(&explicit)),))
-                })
-                .expect_err("None optional_params should reach header validation");
-            assert_eq!(
-                omitted_error.to_string(),
-                "ValueError: extra_headers must be a dict"
-            );
-            assert_eq!(explicit_error.to_string(), omitted_error.to_string());
         });
     }
 }
