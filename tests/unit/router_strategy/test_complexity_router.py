@@ -7416,16 +7416,16 @@ class TestSessionAffinity:
             },
         )
         for session_id in ("session-1", "session-2"):
-            pinned = await router.async_pre_routing_hook(
+            pinned: Final = await router.async_pre_routing_hook(
                 model="test-model", request_kwargs=self._request_kwargs(session_id), messages=self.REASONING_MESSAGE
             )
             assert pinned.model == "o1-preview"
         clock.return_value = 1_119.0
-        inside_ttl = await router.async_pre_routing_hook(
+        inside_ttl: Final = await router.async_pre_routing_hook(
             model="test-model", request_kwargs=self._request_kwargs("session-1"), messages=self.SIMPLE_MESSAGE
         )
         clock.return_value = 1_121.0
-        past_ttl = await router.async_pre_routing_hook(
+        past_ttl: Final = await router.async_pre_routing_hook(
             model="test-model", request_kwargs=self._request_kwargs("session-2"), messages=self.SIMPLE_MESSAGE
         )
         assert inside_ttl.model == "o1-preview"
@@ -7446,15 +7446,15 @@ class TestSessionAffinity:
                 "session_affinity_ttl_seconds": 90,
             },
         )
-        pinned = await router.async_pre_routing_hook(
+        pinned: Final = await router.async_pre_routing_hook(
             model="test-model", request_kwargs=self._request_kwargs("session-1"), messages=self.REASONING_MESSAGE
         )
         clock.return_value = 1_060.0
-        hit = await router.async_pre_routing_hook(
+        hit: Final = await router.async_pre_routing_hook(
             model="test-model", request_kwargs=self._request_kwargs("session-1"), messages=self.SIMPLE_MESSAGE
         )
         clock.return_value = 1_120.0
-        past_the_first_expiry = await router.async_pre_routing_hook(
+        past_the_first_expiry: Final = await router.async_pre_routing_hook(
             model="test-model", request_kwargs=self._request_kwargs("session-1"), messages=self.SIMPLE_MESSAGE
         )
         assert pinned.model == "o1-preview"
@@ -7643,7 +7643,7 @@ class TestClassificationMode:
         ]
 
     @staticmethod
-    def _replica(config: dict, server: FakeServer) -> ComplexityRouter:
+    def _replica(config: Mapping[str, object], server: FakeServer) -> ComplexityRouter:
         replica: Final = MagicMock()
         replica.cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=_FakeRedisBackedCache(server))
         return ComplexityRouter(
@@ -7660,13 +7660,13 @@ class TestClassificationMode:
         replica_c: Final = self._replica(user_turn_config, server)
         harder_ask: Final = [self.SIMPLE_ASK, self.ASSISTANT_ANSWER, self.REASONING_ASK]
 
-        first = await replica_b.async_pre_routing_hook(
+        first: Final = await replica_b.async_pre_routing_hook(
             model="test-model", request_kwargs=self._request_kwargs("shared"), messages=[self.SIMPLE_ASK]
         )
-        moved = await replica_c.async_pre_routing_hook(
+        moved: Final = await replica_c.async_pre_routing_hook(
             model="test-model", request_kwargs=self._request_kwargs("shared"), messages=harder_ask
         )
-        continuation = await replica_b.async_pre_routing_hook(
+        continuation: Final = await replica_b.async_pre_routing_hook(
             model="test-model",
             request_kwargs=self._request_kwargs("shared"),
             messages=[*harder_ask, self.TOOL_CALL_1, self.TOOL_RESULT_1],
@@ -7697,15 +7697,15 @@ class TestClassificationMode:
         cache_key: Final = router_b._get_session_affinity_cache_key("gap", self._request_kwargs("gap"))
         shared_redis: Final = FakeRedis(server=server)
 
-        first = await router_b.async_pre_routing_hook(
+        first: Final = await router_b.async_pre_routing_hook(
             model="test-model", request_kwargs=self._request_kwargs("gap"), messages=turns[0]
         )
-        second = await router_b.async_pre_routing_hook(
+        second: Final = await router_b.async_pre_routing_hook(
             model="test-model", request_kwargs=self._request_kwargs("gap"), messages=turns[1]
         )
         assert json.loads(await shared_redis.get(cache_key)) == {"model": "o1-preview", "tier": "REASONING"}
         assert 0 < await shared_redis.ttl(cache_key) <= router_b.config.session_affinity_ttl_seconds
-        third = await router_c.async_pre_routing_hook(
+        third: Final = await router_c.async_pre_routing_hook(
             model="test-model", request_kwargs=self._request_kwargs("gap"), messages=turns[2]
         )
 
@@ -7714,8 +7714,8 @@ class TestClassificationMode:
         assert third.routing_decision["cause"] == "user_turn_continuation"
 
     async def _tool_loop_on_one_replica(
-        self, redis_cache: RedisCache, config: dict, session_id: str
-    ) -> tuple[list, str]:
+        self, redis_cache: RedisCache, config: Mapping[str, object], session_id: str
+    ) -> tuple[list[PreRoutingHookResponse], str]:
         replica: Final = MagicMock()
         replica.cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis_cache)
         router: Final = ComplexityRouter(
@@ -13902,7 +13902,7 @@ async def test_session_pin_survives_json_list_round_trip(mock_router_instance):
         },
     )
     request_kwargs = {"metadata": {"session_id": "json-round-trip-session"}}
-    cache_key = router._get_session_affinity_cache_key("json-round-trip-session", request_kwargs)
+    cache_key: Final = router._get_session_affinity_cache_key("json-round-trip-session", request_kwargs)
     await mock_router_instance.cache.async_set_cache(key=cache_key, value=["shared", "SIMPLE"])
 
     response = await router.async_pre_routing_hook(
@@ -15248,7 +15248,7 @@ class TestModalityRouting:
             dict(self.BASE_VISION),
         )
         request_kwargs = {"metadata": {"session_id": "s1"}}
-        cache_key = router._get_session_affinity_cache_key("s1", request_kwargs)
+        cache_key: Final = router._get_session_affinity_cache_key("s1", request_kwargs)
         await mock_router_instance.cache.async_set_cache(key=cache_key, value={"model": "text-cheap", "tier": "SIMPLE"})
 
         image_turn = await router.async_pre_routing_hook(
@@ -15280,8 +15280,8 @@ class TestModalityRouting:
             },
             {"text-cheap": False, "text-big": False},
         )
-        request_kwargs = {"metadata": {"session_id": "s1"}}
-        cache_key = router._get_session_affinity_cache_key("s1", request_kwargs)
+        request_kwargs: Final = {"metadata": {"session_id": "s1"}}
+        cache_key: Final = router._get_session_affinity_cache_key("s1", request_kwargs)
         await mock_router_instance.cache.async_set_cache(key=cache_key, value={"model": "text-cheap", "tier": "SIMPLE"})
         with pytest.raises(litellm.BadRequestError, match="no model"):
             await router.async_pre_routing_hook(model="m", request_kwargs=request_kwargs, messages=self.IMAGE_MESSAGE)

@@ -165,7 +165,10 @@ class InMemoryCache(BaseCache):
         # Always prune expired/outdated heap roots before inserting.
         # This keeps expiration_heap bounded even when the live cache stays
         # below max_size_in_memory and keys are reinserted after TTL expiry.
-        self.evict_cache()
+        if key in self.cache_dict:
+            self._prune_heap_roots(self._clock())
+        else:
+            self.evict_cache()
         if not self.check_value_size(value):
             return
 

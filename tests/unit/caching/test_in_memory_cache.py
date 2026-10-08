@@ -3,6 +3,7 @@ import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -312,3 +313,24 @@ def test_in_memory_cache_refresh_ttl_never_evicts_a_neighbour_from_a_full_cache(
     assert cache.refresh_ttl("first", 60) is True
     assert cache.get_cache("first") == "v"
     assert cache.get_cache("second") == "v"
+
+
+def test_in_memory_cache_updating_a_present_key_in_a_full_cache_keeps_its_neighbours() -> None:
+    """A Redis-first pin read copies its hit into the local cache on every pinned request, so an
+    update that made room for a key already present would evict a live neighbour each turn."""
+
+    class Clock:
+        now = 0.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock: Final = Clock()
+    cache: Final = InMemoryCache(max_size_in_memory=2, default_ttl=60, clock=clock)
+    cache.set_cache("pin", "SIMPLE", ttl=300)
+    cache.set_cache("neighbour", "kept", ttl=30)
+    cache.set_cache("pin", "COMPLEX", ttl=300)
+
+    assert cache.get_cache("neighbour") == "kept"
+    assert cache.get_cache("pin") == "COMPLEX"
+    assert len(cache.cache_dict) == 2
