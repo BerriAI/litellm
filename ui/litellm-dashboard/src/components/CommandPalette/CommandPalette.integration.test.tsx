@@ -1,9 +1,10 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import type { KeyResponse } from "@/components/key_team_helpers/key_list";
 import { writeStorage } from "@/lib/storage";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { keyDetailHref } from "@/utils/entityLinks";
 import { uiHref } from "@/utils/uiHref";
 import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
@@ -15,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   pathname: "/api-keys",
   push: vi.fn<(href: string) => void>(),
   useKeys: vi.fn(),
+  teamAlias: "platform-team",
+  isPlaceholderData: false,
 }));
 
 vi.mock("next/navigation", () => ({
@@ -24,6 +27,17 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
   useKeys: mocks.useKeys,
+}));
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  useTeams: () => ({
+    data: [{ team_id: "team-1", team_alias: mocks.teamAlias, members_with_roles: [] }],
+  }),
+}));
+vi.mock("@/app/(dashboard)/hooks/useIsOrgAdmin", () => ({
+  default: () => false,
+}));
+vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
+  useUISettings: () => ({ data: { values: {} } }),
 }));
 
 const HIGH_VOLUME_KEY = keyFixture("key-prod-0", "high-volume-prod", "sk-...4zoA", "team-1");
@@ -72,6 +86,8 @@ beforeEach(() => {
   cachedKeyResults.clear();
   vi.clearAllMocks();
   mocks.pathname = "/api-keys";
+  mocks.teamAlias = "platform-team";
+  mocks.isPlaceholderData = false;
   sessionCookie();
   vi.stubGlobal(
     "fetch",
@@ -104,11 +120,13 @@ beforeEach(() => {
       data: { keys, total_count: keys.length, current_page: 1, total_pages: 1 },
       isFetching: false,
       isError: false,
+      isPlaceholderData: mocks.isPlaceholderData,
     } as ReturnType<typeof useKeys>;
   });
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   testQueryClient.clear();
   vi.unstubAllGlobals();
   document.cookie = "token=; Max-Age=0; Path=/";
@@ -232,6 +250,65 @@ describe("CommandPalette integration", () => {
     expect(mocks.push).toHaveBeenCalledWith(keyDetailHref(HIGH_VOLUME_KEY.token));
   });
 
+  it("does not activate stale key results while the new query is debouncing", () => {
+    vi.useFakeTimers();
+    renderPalette();
+
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+    const input = screen.getByRole("combobox", { name: "Search" });
+    fireEvent.change(input, { target: { value: "prod" } });
+    vi.advanceTimersByTime(DEBOUNCE_WAIT_MS / 2);
+
+    expect(screen.getByText("Searching…")).toBeVisible();
+    expect(screen.queryByRole("option", { name: /high-volume-prod/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /Filter the keys table/ })).toBeVisible();
+
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(mocks.push).toHaveBeenCalledWith(`${uiHref("api-keys")}?key_search=prod`);
+    expect(mocks.push).not.toHaveBeenCalledWith(keyDetailHref(HIGH_VOLUME_KEY.token));
+    expect(mocks.push).not.toHaveBeenCalledWith(keyDetailHref(PROD_KEY.token));
+  });
+
+  it("does not show placeholder key rows after the query debounce completes", () => {
+    vi.useFakeTimers();
+    mocks.isPlaceholderData = true;
+    renderPalette();
+
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+    const input = screen.getByRole("combobox", { name: "Search" });
+    fireEvent.change(input, { target: { value: "prod" } });
+    act(() => {
+      vi.advanceTimersByTime(DEBOUNCE_WAIT_MS);
+    });
+
+    expect(screen.getByText("Searching…")).toBeVisible();
+    expect(screen.queryByRole("option", { name: /high-volume-prod/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps the same key selected when its subtitle changes", async () => {
+    const { rerender } = renderPalette();
+
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+    const input = await screen.findByRole("combobox", { name: "Search" });
+    const secondKeyOption = await screen.findByRole("option", { name: /prod-backend/ });
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(secondKeyOption).toHaveAttribute("aria-selected", "true");
+
+    mocks.teamAlias = "renamed-platform-team";
+    rerender(
+      <CommandPaletteProvider>
+        <CommandPaletteTrigger />
+      </CommandPaletteProvider>,
+    );
+
+    const updatedSecondKeyOption = await screen.findByRole("option", { name: /prod-backend/ });
+    expect(updatedSecondKeyOption).toHaveTextContent("renamed-platform-team");
+    expect(updatedSecondKeyOption).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("option", { name: /high-volume-prod/ })).toHaveAttribute("aria-selected", "false");
+  });
+
   it("omits an unknown team ID from the key subtitle", async () => {
     const user = userEvent.setup();
     renderPalette();
@@ -304,6 +381,23 @@ describe("CommandPalette integration", () => {
     expect(logsOption).toBeVisible();
     fireEvent.keyDown(input, { key: "Enter" });
     expect(mocks.push).toHaveBeenCalledWith(uiHref("logs"));
+  });
+
+  it("clears the global query when switching to key search", async () => {
+    const user = userEvent.setup();
+    mocks.pathname = "/teams";
+    renderPalette();
+
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+    const input = await screen.findByRole("combobox", { name: "Search" });
+    await user.type(input, "keys");
+
+    expect(await screen.findByRole("option", { name: /Search virtual keys/ })).toBeVisible();
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    const keysInput = await screen.findByRole("combobox", { name: "Search" });
+    expect(keysInput).toHaveValue("");
+    expect(await screen.findByText("Recent keys")).toBeVisible();
   });
 
   it("switches from an empty keys scope to global search on Backspace", async () => {

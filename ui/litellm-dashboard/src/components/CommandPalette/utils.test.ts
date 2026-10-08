@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { MenuGroup } from "@/components/leftnav";
+import { visibleMenuGroups, type MenuGroup, menuGroups } from "@/components/leftnav";
 import { flattenNavItems, matchNavItems, paletteScopeForRoute, shortcutLabel, type PaletteNavItem } from "./utils";
 
 describe("paletteScopeForRoute", () => {
@@ -13,23 +13,57 @@ describe("paletteScopeForRoute", () => {
 });
 
 describe("flattenNavItems", () => {
-  it("filters admin-only groups and items for non-admin roles", () => {
+  it("flattens visible leaves and skips external links", () => {
     const groups: MenuGroup[] = [
       {
-        groupLabel: "ADMIN",
-        roles: ["Admin"],
-        items: [{ key: "users", page: "users", label: "Users" }],
-      },
-      {
-        groupLabel: "TOOLS",
+        groupLabel: "Tools",
         items: [
-          { key: "logs", page: "logs", label: "Logs", roles: ["Admin"] },
-          { key: "teams", page: "teams", label: "Teams" },
+          { key: "search-tools", page: "search-tools", label: "Search Tools" },
+          { key: "docs", page: "docs", label: "Docs", external_url: "https://example.com" },
+          { key: "tools", page: "tools", label: "Tools", children: [{ key: "logs", page: "logs", label: "Logs" }] },
         ],
       },
     ];
 
-    expect(flattenNavItems(groups, "Internal User").map(({ label }) => label)).toEqual(["Teams"]);
+    expect(flattenNavItems(groups).map(({ label }) => label)).toEqual(["Search Tools", "Logs"]);
+  });
+});
+
+describe("visibleMenuGroups", () => {
+  const context = {
+    userRole: "Internal User",
+    isViewOnly: false,
+    isOrgAdmin: false,
+    isTeamAdmin: false,
+  };
+
+  it("applies the internal-user page allowlist", () => {
+    const visible = visibleMenuGroups(menuGroups, {
+      ...context,
+      enabledPagesInternalUsers: ["api-keys"],
+    });
+
+    expect(flattenNavItems(visible).map(({ route }) => route)).toEqual(["api-keys"]);
+  });
+
+  it("hides Projects when its UI setting is disabled", () => {
+    const projectAdminContext = { ...context, userRole: "Admin", isTeamAdmin: true };
+    const visibleWithFlag = visibleMenuGroups(menuGroups, { ...projectAdminContext, enableProjectsUI: true });
+    const visibleWithoutFlag = visibleMenuGroups(menuGroups, { ...projectAdminContext, enableProjectsUI: false });
+
+    expect(flattenNavItems(visibleWithFlag).some(({ route }) => route === "projects")).toBe(true);
+    expect(flattenNavItems(visibleWithoutFlag).some(({ route }) => route === "projects")).toBe(false);
+  });
+
+  it("keeps admin pages visible despite the internal-user page allowlist", () => {
+    const visible = visibleMenuGroups(menuGroups, {
+      ...context,
+      userRole: "Admin",
+      enabledPagesInternalUsers: ["api-keys"],
+    });
+
+    expect(flattenNavItems(visible).some(({ route }) => route === "users")).toBe(true);
+    expect(flattenNavItems(visible).some(({ route }) => route === "organizations")).toBe(true);
   });
 });
 

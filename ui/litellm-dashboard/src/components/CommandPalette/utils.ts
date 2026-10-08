@@ -22,13 +22,11 @@ const matchRank = (item: PaletteNavItem, query: string): number => {
   return -1;
 };
 
-export const flattenNavItems = (groups: readonly MenuGroup[], userRole: string | null | undefined): PaletteNavItem[] =>
+export const flattenNavItems = (groups: readonly MenuGroup[]): PaletteNavItem[] =>
   groups.flatMap((group) => {
-    if (group.roles && !group.roles.includes(userRole ?? "")) return [];
-
     const flattenItems = (items: MenuGroup["items"]): PaletteNavItem[] =>
       items.flatMap((item) => {
-        if ((item.roles && !item.roles.includes(userRole ?? "")) || item.external_url) return [];
+        if (item.external_url) return [];
         if (item.children) return flattenItems(item.children);
         return [
           {

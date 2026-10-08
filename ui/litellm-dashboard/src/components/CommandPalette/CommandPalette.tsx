@@ -4,16 +4,15 @@ import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent,
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { FileText, KeyRound, LoaderCircle, Search } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
-import { useAllTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
-import { menuGroups } from "@/components/leftnav";
+import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { keyDetailHref } from "@/utils/entityLinks";
 import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
 import type { KeyResponse } from "@/components/key_team_helpers/key_list";
 import { CommandPaletteResultRow, type CommandPaletteRowData } from "./CommandPaletteResultRow";
+import { useVisibleMenuGroups } from "./useVisibleMenuGroups";
 import { flattenNavItems, matchNavItems, paletteScopeForRoute, type PaletteNavItem, type PaletteScope } from "./utils";
 
 type PaletteEntry = CommandPaletteRowData &
@@ -28,18 +27,8 @@ interface PaletteGroup {
   label: string;
   entries: PaletteEntry[];
   emptyMessage?: string;
+  isLoading?: boolean;
 }
-
-interface ActiveSelection {
-  entries: PaletteEntry[];
-  index: number;
-}
-
-const activeIndexForEntries = (entries: PaletteEntry[], selection: ActiveSelection | null): number => {
-  if (entries.length === 0) return -1;
-  if (selection?.entries !== entries) return 0;
-  return selection.index;
-};
 
 const shortcutChipClass =
   "rounded-sm border border-border border-b-2 bg-muted px-[3px] font-mono text-muted-foreground";
@@ -52,14 +41,17 @@ export function CommandPalette({ open, setOpen }: { open: boolean; setOpen: (ope
 function CommandPaletteDialog({ setOpen }: { setOpen: (open: boolean) => void }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { userRole } = useAuthorized();
   const [query, setQuery] = useState("");
-  const [activeSelection, setActiveSelection] = useState<ActiveSelection | null>(null);
+  const [activeSelection, setActiveSelection] = useState<{
+    id: string;
+    query: string;
+    scope: PaletteScope;
+  } | null>(null);
   const [scope, setScope] = useState<PaletteScope>(() => paletteScopeForRoute(routeSegmentForPathname(pathname)));
   const [debouncedQuery] = useDebouncedValue(query, { wait: DEBOUNCE_WAIT_MS });
   const trimmedQuery = query.trim();
   const debouncedSearch = debouncedQuery.trim();
-  const { data: teams } = useAllTeams();
+  const { data: teams } = useTeams({ enabled: false });
   const teamAliases = useMemo(
     () => new Map((teams ?? []).map((team) => [team.team_id, team.team_alias] as const)),
     [teams],
@@ -71,7 +63,12 @@ function CommandPaletteDialog({ setOpen }: { setOpen: (open: boolean) => void })
     expand: "user",
   };
   const keyResults = useKeys(1, 8, keyListOptions, { enabled: scope === "keys" });
-  const navItems = useMemo(() => flattenNavItems(menuGroups, userRole), [userRole]);
+  const isPendingQuery = trimmedQuery !== debouncedSearch;
+  const hasPlaceholderKeyResults = keyResults.isPlaceholderData;
+  const isInitialKeyLoad = keyResults.isFetching && !keyResults.data;
+  const isLoadingKeys = scope === "keys" && (isPendingQuery || hasPlaceholderKeyResults || isInitialKeyLoad);
+  const visibleGroups = useVisibleMenuGroups();
+  const navItems = useMemo(() => flattenNavItems(visibleGroups), [visibleGroups]);
   const navMatches = useMemo(
     () => (scope === "global" || trimmedQuery ? matchNavItems(navItems, query) : []),
     [navItems, query, scope, trimmedQuery],
@@ -111,7 +108,7 @@ function CommandPaletteDialog({ setOpen }: { setOpen: (open: boolean) => void })
       ];
     }
 
-    const keyEntries: PaletteEntry[] = (keyResults.data?.keys ?? []).map((key) => {
+    const keyEntries: PaletteEntry[] = (isLoadingKeys ? [] : keyResults.data?.keys ?? []).map((key) => {
       const teamAlias = key.team_alias || (key.team_id ? teamAliases.get(key.team_id) : undefined);
       const spend = typeof key.spend === "number" && Number.isFinite(key.spend) ? `$${key.spend.toFixed(2)}` : null;
       const details = [teamAlias, spend].filter((detail): detail is string => Boolean(detail));
@@ -135,6 +132,7 @@ function CommandPaletteDialog({ setOpen }: { setOpen: (open: boolean) => void })
       label: trimmedQuery ? "Keys" : "Recent keys",
       entries: keyEntries,
       emptyMessage: trimmedQuery ? `No keys match “${trimmedQuery}”` : "No recent keys",
+      isLoading: isLoadingKeys,
     };
 
     if (!trimmedQuery) return [keysGroup];
@@ -153,17 +151,17 @@ function CommandPaletteDialog({ setOpen }: { setOpen: (open: boolean) => void })
       { label: "Actions", entries: [filterEntry] },
       ...(pages.length > 0 ? [{ label: "Pages", entries: pages }] : []),
     ];
-  }, [keyResults.data?.keys, navMatches, scope, teamAliases, trimmedQuery]);
+  }, [isLoadingKeys, keyResults.data?.keys, navMatches, scope, teamAliases, trimmedQuery]);
   const selectableEntries = useMemo(() => groups.flatMap((group) => group.entries), [groups]);
-  const activeIndex = activeIndexForEntries(selectableEntries, activeSelection);
-  const activeId =
-    activeIndex >= 0 && activeIndex < selectableEntries.length ? `command-palette-option-${activeIndex}` : undefined;
-  const isSearching = scope === "keys" && keyResults.isFetching && keyResults.data === undefined;
+  const activeEntryId = activeSelection?.query === query && activeSelection.scope === scope ? activeSelection.id : null;
+  const selectedIndex = selectableEntries.findIndex((entry) => entry.id === activeEntryId);
+  const activeIndex = selectableEntries.length === 0 ? -1 : Math.max(0, selectedIndex);
+  const activeOptionId = activeIndex >= 0 ? `command-palette-option-${activeIndex}` : undefined;
   const hasKeyError = scope === "keys" && keyResults.isError && keyResults.data === undefined;
 
   useEffect(() => {
-    if (activeId) document.getElementById(activeId)?.scrollIntoView?.({ block: "nearest" });
-  }, [activeId]);
+    if (activeOptionId) document.getElementById(activeOptionId)?.scrollIntoView?.({ block: "nearest" });
+  }, [activeOptionId]);
 
   const activate = (entry: PaletteEntry) => {
     switch (entry.kind) {
@@ -176,6 +174,7 @@ function CommandPaletteDialog({ setOpen }: { setOpen: (open: boolean) => void })
         setOpen(false);
         return;
       case "search-keys":
+        setQuery("");
         setScope("keys");
         return;
       case "page":
@@ -202,18 +201,37 @@ function CommandPaletteDialog({ setOpen }: { setOpen: (open: boolean) => void })
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     event.preventDefault();
     if (selectableEntries.length === 0) return;
-    setActiveSelection((current) => {
-      const currentIndex = current?.entries === selectableEntries ? current.index : 0;
-      if (event.key === "ArrowDown") {
-        return {
-          entries: selectableEntries,
-          index: currentIndex >= selectableEntries.length - 1 ? 0 : currentIndex + 1,
-        };
-      }
-      return {
-        entries: selectableEntries,
-        index: currentIndex <= 0 ? selectableEntries.length - 1 : currentIndex - 1,
-      };
+    const currentIndex = activeIndex < 0 ? 0 : activeIndex;
+    const nextIndex =
+      event.key === "ArrowDown"
+        ? (currentIndex + 1) % selectableEntries.length
+        : (currentIndex - 1 + selectableEntries.length) % selectableEntries.length;
+    setActiveSelection({ id: selectableEntries[nextIndex].id, query, scope });
+  };
+
+  const renderGroupContents = (group: PaletteGroup, firstOptionIndex: number): ReactNode => {
+    if (group.isLoading) {
+      return (
+        <div className="flex h-20 items-center justify-center gap-2 text-sm text-muted-foreground">
+          <LoaderCircle className="size-4 animate-spin" />
+          Searching…
+        </div>
+      );
+    }
+    if (group.entries.length === 0)
+      return <div className="px-2 py-3 text-sm text-muted-foreground">{group.emptyMessage}</div>;
+    return group.entries.map((entry, entryIndex) => {
+      const currentIndex = firstOptionIndex + entryIndex;
+      return (
+        <CommandPaletteResultRow
+          key={entry.id}
+          item={entry}
+          optionId={`command-palette-option-${currentIndex}`}
+          active={activeIndex === currentIndex}
+          onActivate={() => activate(entry)}
+          onHover={() => setActiveSelection({ id: entry.id, query, scope })}
+        />
+      );
     });
   };
 
@@ -240,7 +258,7 @@ function CommandPaletteDialog({ setOpen }: { setOpen: (open: boolean) => void })
             aria-label="Search"
             aria-expanded="true"
             aria-controls="command-palette-results"
-            aria-activedescendant={activeId}
+            aria-activedescendant={activeOptionId}
             aria-autocomplete="list"
             className="h-full min-w-0 flex-1 border-0 bg-transparent text-[15px] outline-none placeholder:text-muted-foreground focus:ring-0"
             placeholder={scope === "keys" ? "Search keys by alias or ID…" : "Search pages and actions…"}
@@ -252,22 +270,15 @@ function CommandPaletteDialog({ setOpen }: { setOpen: (open: boolean) => void })
           />
         </div>
         <div id="command-palette-results" role="listbox" className="max-h-[400px] overflow-y-auto p-2">
-          {isSearching && (
-            <div className="flex h-20 items-center justify-center gap-2 text-sm text-muted-foreground">
-              <LoaderCircle className="size-4 animate-spin" />
-              Searching…
-            </div>
-          )}
           {hasKeyError && (
             <div className="flex h-20 items-center justify-center text-sm text-muted-foreground">
               Unable to search keys
             </div>
           )}
-          {!isSearching && !hasKeyError && scope === "global" && trimmedQuery && groups.length === 0 && (
+          {!hasKeyError && scope === "global" && trimmedQuery && groups.length === 0 && (
             <div className="px-2 py-3 text-sm text-muted-foreground">No results for “{trimmedQuery}”</div>
           )}
-          {!isSearching &&
-            !hasKeyError &&
+          {!hasKeyError &&
             groups.map((group, groupIndex) => {
               const firstOptionIndex = groups
                 .slice(0, groupIndex)
@@ -280,23 +291,7 @@ function CommandPaletteDialog({ setOpen }: { setOpen: (open: boolean) => void })
                   >
                     {group.label}
                   </div>
-                  {group.entries.length === 0 ? (
-                    <div className="px-2 py-3 text-sm text-muted-foreground">{group.emptyMessage}</div>
-                  ) : (
-                    group.entries.map((entry, entryIndex) => {
-                      const currentIndex = firstOptionIndex + entryIndex;
-                      return (
-                        <CommandPaletteResultRow
-                          key={entry.id}
-                          item={entry}
-                          optionId={`command-palette-option-${currentIndex}`}
-                          active={activeIndex === currentIndex}
-                          onActivate={() => activate(entry)}
-                          onHover={() => setActiveSelection({ entries: selectableEntries, index: currentIndex })}
-                        />
-                      );
-                    })
-                  )}
+                  {renderGroupContents(group, firstOptionIndex)}
                 </div>
               );
             })}
