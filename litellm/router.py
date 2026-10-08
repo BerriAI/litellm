@@ -9878,7 +9878,9 @@ class Router:
         - ValueError: If LITELLM_ENVIRONMENT is not set in .env or not one of the valid values
         - ValueError: If supported_environments is not set in model_info or not one of the valid values
         """
-        return model_info_is_active_for_environment(model_info=deployment.model_info)
+        return model_info_is_active_for_environment(
+            model_info=_MODEL_INFO_ADAPTER.validate_python(deployment.model_info.model_dump(exclude_none=True))
+        )
 
     def set_model_list(self, model_list: list):
         original_model_list: Final = copy.deepcopy(model_list)
@@ -10794,13 +10796,11 @@ class Router:
             cache=self.cache.in_memory_cache,
         )
 
-    def get_discovered_model_info(self, model_id: str | None) -> Mapping[str, object]:
+    def get_discovered_model_info(self, model_id: object) -> Mapping[str, object]:
+        if not isinstance(model_id, str):
+            return MappingProxyType({})
         cached: Final[object] = self._discovered_model_info_cache.get_cache(model_id)
-        if (
-            model_id is not None
-            and isinstance(cached, DiscoveredDeploymentModelInfo)
-            and cached.deployment is self.get_model_info(model_id)
-        ):
+        if isinstance(cached, DiscoveredDeploymentModelInfo) and cached.deployment is self.get_model_info(model_id):
             configured: Final = TypeAdapter(Mapping[str, object]).validate_python(cached.deployment["model_info"])
             return MappingProxyType({key: value for key, value in cached.limits.items() if configured.get(key) is None})
         return MappingProxyType({})
