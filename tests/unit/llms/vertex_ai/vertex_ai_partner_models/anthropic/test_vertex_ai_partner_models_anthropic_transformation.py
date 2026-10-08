@@ -1,6 +1,7 @@
 
 import copy
 import json
+from typing import Final
 
 import pytest
 
@@ -383,23 +384,19 @@ def test_vertex_ai_anthropic_extra_headers_beta_propagation():
     assert "interleaved-thinking-2025-05-14" in headers["anthropic-beta"]
 
 
-def test_vertex_ai_anthropic_inline_tools_beta_survives_the_chat_beta_filter(local_beta_headers_config):
-    """The chat path runs the Vertex beta filter over both the header and the `anthropic_beta`
-    body field right before the request goes out, so inline-tools-2026-09-15 must survive both. Anthropic documents inline-tools-2026-09-15 for the Claude API
-    (https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages, fetched
-    2026-10-07); Vertex rawPredict honored it live on claude-opus-5-5 at location global on 2026-10-07
-    (200, the inline tool called) and answered 400 "Input tag 'tool_addition' found using 'type' does
-    not match any of the expected tags" without it, which is what the customer's Pi client saw
-    through the proxy while the filter dropped the header as unknown."""
-    config = VertexAIAnthropicConfig()
-    headers: dict = {}
-    optional_params = {
+def test_vertex_ai_anthropic_inline_tools_beta_survives_the_chat_beta_filter(local_beta_headers_config: None) -> None:
+    """The chat path runs the Vertex beta filter over both the header and the `anthropic_beta` body field right
+    before the request goes out, so inline-tools-2026-09-15 must survive both (source and date in
+    tests/unit/test_anthropic_beta_headers_filtering.py)."""
+    config: Final = VertexAIAnthropicConfig()
+    headers: Final[dict[str, str]] = {}
+    optional_params: Final[dict[str, object]] = {
         "max_tokens": 100,
         "is_vertex_request": True,
         "extra_headers": {"anthropic-beta": "inline-tools-2026-09-15"},
     }
 
-    request_data = config.transform_request(
+    request_data: Final = config.transform_request(
         model="claude-opus-5-5",
         messages=[{"role": "user", "content": "Hello"}],
         optional_params=optional_params,

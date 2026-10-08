@@ -10,7 +10,7 @@ This test validates:
 
 import json
 import os
-from typing import Dict, List
+from typing import Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -459,15 +459,13 @@ class TestAnthropicBetaHeadersFiltering:
         assert filtered == ["dangerous-tool-use-2026-09-03"]
 
     @pytest.mark.parametrize("provider", ["anthropic", "vertex_ai"])
-    def test_inline_tools_forwarded(self, provider):
-        """Pi sends inline-tools-2026-09-15 whenever its tool list can change mid-conversation and
-        carries the new tool by value in a `tool_addition` system message. Anthropic documents inline-tools-2026-09-15 for the Claude API
-        (https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages, fetched
-        2026-10-07); Vertex rawPredict honored it live on claude-opus-5-5 at location global on 2026-10-07
-        (200, the inline tool called) and answered 400 "Input tag 'tool_addition' found using 'type' does
-        not match any of the expected tags" without it, which is what the customer's Pi client saw
-        through the proxy while the filter dropped the header as unknown."""
-        filtered = filter_and_transform_beta_headers(
+    def test_inline_tools_forwarded(self, provider: str) -> None:
+        """inline-tools-2026-09-15 lets a `tool_addition` system message carry a new tool mid-conversation.
+        Anthropic documents it for the Claude API
+        (https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages, fetched 2026-10-07),
+        and a live Vertex rawPredict call on claude-opus-5-5 honored it on 2026-10-07 while answering 400 on the
+        `tool_addition` block without it."""
+        filtered: Final = filter_and_transform_beta_headers(
             beta_headers=["inline-tools-2026-09-15"],
             provider=provider,
         )

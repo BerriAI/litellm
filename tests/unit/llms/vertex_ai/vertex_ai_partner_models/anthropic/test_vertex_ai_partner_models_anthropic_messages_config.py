@@ -1,6 +1,7 @@
 import copy
 import json
 import os
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -180,17 +181,13 @@ def test_no_per_message_output_config_leaves_per_turn_control_beta_out():
     assert "per-turn-control-2026-07-01" not in headers.get("anthropic-beta", "")
 
 
-def test_inline_tools_beta_reaches_the_vertex_messages_request(local_beta_headers_config):
-    """A `tool_addition` system message is only accepted under inline-tools-2026-09-15, so the
-    Vertex beta filter on the /v1/messages path must keep the header the client sent. Anthropic documents inline-tools-2026-09-15 for the Claude API
-    (https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages, fetched
-    2026-10-07); Vertex rawPredict honored it live on claude-opus-5-5 at location global on 2026-10-07
-    (200, the inline tool called) and answered 400 "Input tag 'tool_addition' found using 'type' does
-    not match any of the expected tags" without it, which is what the customer's Pi client saw
-    through the proxy while the filter dropped the header as unknown."""
+def test_inline_tools_beta_reaches_the_vertex_messages_request(local_beta_headers_config: None) -> None:
+    """Vertex rejects a `tool_addition` system message unless inline-tools-2026-09-15 is on the request, so the
+    /v1/messages beta filter must keep the header the client sent (source and date in
+    tests/unit/test_anthropic_beta_headers_filtering.py)."""
     from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 
-    messages = [
+    messages: Final[list[dict[str, object]]] = [
         {"role": "user", "content": "What is the weather in Paris?"},
         {
             "role": "system",
@@ -210,7 +207,7 @@ def test_inline_tools_beta_reaches_the_vertex_messages_request(local_beta_header
         },
     ]
 
-    filtered = update_headers_with_filtered_beta(
+    filtered: Final = update_headers_with_filtered_beta(
         headers=_validate_vertex_headers({"anthropic-beta": "inline-tools-2026-09-15"}, messages),
         provider="vertex_ai",
     )
