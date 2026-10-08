@@ -180,7 +180,7 @@ def _assert_answered_in_its_own_shape(served: _Served) -> None:
     assert served.text.startswith("{") != served.call.stream, served.text
     assert ("response.completed" in served.text) == (served.call.stream and served.call.endpoint == "responses")
     shown: Final = _upstream_id_shown_to_caller(served)
-    assert shown is None or rv.same_response(shown, pcb.response_id(served.call.marker)), served.text
+    assert shown is None or pcb.answers(shown, served.call.marker), served.text
 
 
 def _marked_once(posts: Sequence[Request], calls: Sequence[_Call], expected: JsonValue) -> None:
@@ -229,7 +229,7 @@ def _chat(gateway: Gateway, model: str, marker: str, breakpoint: JsonValue) -> h
 def _completion(response: httpx.Response, marker: str) -> str:
     assert response.status_code == 200, response.text
     body: Final = rv.JSON_OBJECT.validate_json(response.text)
-    assert rv.same_response(string_value(body["id"]), pcb.response_id(marker)), body
+    assert pcb.answers(string_value(body["id"]), marker), body
     assert rv.answer(marker) in response.text, response.text
     return response.headers["x-litellm-call-id"]
 
@@ -245,11 +245,11 @@ def test_global_drop_params_drops_a_malformed_marker(global_rig: _GlobalRig, mod
     marker: Final = uuid.uuid4().hex
     call_id: Final = _completion(_chat(global_rig.gateway, model, marker, "yes"), marker)
     pcb.assert_marker(_user_block_on_wire(global_rig.wire, marker), None)
-    spend.landed(model, call_id, pcb.response_id(marker))
+    spend.landed(model, call_id, marker)
     control: Final = uuid.uuid4().hex
     control_id: Final = _completion(_chat(global_rig.gateway, model, control, pcb.EXPLICIT), control)
     pcb.assert_marker(_user_block_on_wire(global_rig.wire, control), pcb.EXPLICIT)
-    spend.landed(model, control_id, pcb.response_id(control))
+    spend.landed(model, control_id, control)
 
 
 async def test_mixed_burst_carries_every_marker_once(gateway: Gateway, spend: pcb.SpendLogs) -> None:
@@ -364,7 +364,7 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_answering(
             follow_up: Final = uuid.uuid4().hex
             call_id: Final = _completion(_chat(candidate, _GLOBAL_UNSET, follow_up, "yes"), follow_up)
             pcb.assert_marker(_user_block_on_wire(wire, follow_up), None)
-            spend.landed(_GLOBAL_UNSET, call_id, pcb.response_id(follow_up))
+            spend.landed(_GLOBAL_UNSET, call_id, follow_up)
 
 
 async def test_proxy_restart_mid_burst_never_lands_a_served_call_twice(
@@ -388,7 +388,7 @@ async def test_proxy_restart_mid_burst_never_lands_a_served_call_twice(
             follow_up: Final = uuid.uuid4().hex
             call_id: Final = _completion(_chat(second.gateway, _GLOBAL_UNSET, follow_up, pcb.EXPLICIT), follow_up)
             pcb.assert_marker(_user_block_on_wire(wire, follow_up), pcb.EXPLICIT)
-            spend.landed(_GLOBAL_UNSET, call_id, pcb.response_id(follow_up))
+            spend.landed(_GLOBAL_UNSET, call_id, follow_up)
     counts: Final = Counter(string_value(row["litellm_call_id"]) for row in spend.rows_for(_GLOBAL_UNSET))
     assert all(count == 1 for count in counts.values()), counts
     landed: Final = sum(1 for item in served if item.call_id in counts)

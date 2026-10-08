@@ -112,7 +112,7 @@ def _chat(
 def _completion(response: httpx.Response, marker: str) -> str:
     assert response.status_code == 200, response.text
     body: Final = rv.JSON_OBJECT.validate_json(response.text)
-    assert rv.same_response(string_value(body["id"]), pcb.response_id(marker)), body
+    assert pcb.answers(string_value(body["id"]), marker), body
     (choice,) = rv.ITEMS.validate_python(body["choices"])
     assert rv.JSON_OBJECT.validate_python(choice["message"])["content"] == rv.answer(marker), body
     return response.headers["x-litellm-call-id"]
@@ -140,10 +140,10 @@ def test_openai_sdk_sends_a_valid_marker_through_the_bridge(bridge: _Bridge) -> 
             model=bridge.on, messages=[_user(marker, pcb.EXPLICIT)], extra_body=dict(pcb.NO_CACHE)
         )
     completion: Final = raw.parse()
-    assert rv.same_response(completion.id, pcb.response_id(marker)), completion
+    assert pcb.answers(completion.id, marker), completion
     assert completion.choices[0].message.content == rv.answer(marker), completion
     pcb.assert_marker(_user_block_on_wire(bridge, marker), pcb.EXPLICIT)
-    bridge.spend.landed(bridge.on, raw.headers["x-litellm-call-id"], pcb.response_id(marker))
+    bridge.spend.landed(bridge.on, raw.headers["x-litellm-call-id"], marker)
 
 
 def test_openai_sdk_stream_carries_the_system_list_marker(bridge: _Bridge) -> None:
@@ -157,7 +157,7 @@ def test_openai_sdk_stream_carries_the_system_list_marker(bridge: _Bridge) -> No
             extra_body=dict(pcb.NO_CACHE),
         )
         chunks: Final = tuple(raw.parse())
-    assert chunks and rv.same_response(chunks[0].id, pcb.response_id(marker)), chunks
+    assert chunks and pcb.answers(chunks[0].id, marker), chunks
     streamed: Final = "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices)
     assert streamed == rv.answer(marker), chunks
     request: Final = pcb.posted(bridge.wire, marker)
@@ -165,7 +165,7 @@ def test_openai_sdk_stream_carries_the_system_list_marker(bridge: _Bridge) -> No
     (system_block,) = pcb.content_of(pcb.input_items(request), "system")
     assert system_block["type"] == "input_text" and system_block["text"] == "sys", system_block
     pcb.assert_marker(system_block, pcb.EXPLICIT)
-    bridge.spend.landed(bridge.on, raw.headers["x-litellm-call-id"], pcb.response_id(marker))
+    bridge.spend.landed(bridge.on, raw.headers["x-litellm-call-id"], marker)
 
 
 async def test_async_openai_sdk_keeps_the_ttl_without_drop_params(bridge: _Bridge) -> None:
@@ -175,10 +175,10 @@ async def test_async_openai_sdk_keeps_the_ttl_without_drop_params(bridge: _Bridg
             model=bridge.off, messages=[_user(marker, pcb.EXPLICIT_30M)], extra_body=dict(pcb.NO_CACHE)
         )
     completion: Final = raw.parse()
-    assert rv.same_response(completion.id, pcb.response_id(marker)), completion
+    assert pcb.answers(completion.id, marker), completion
     assert completion.choices[0].message.content == rv.answer(marker), completion
     pcb.assert_marker(_user_block_on_wire(bridge, marker), pcb.EXPLICIT_30M)
-    bridge.spend.landed(bridge.off, raw.headers["x-litellm-call-id"], pcb.response_id(marker))
+    bridge.spend.landed(bridge.off, raw.headers["x-litellm-call-id"], marker)
 
 
 @pytest.mark.parametrize("mode", ("on", "off"))
@@ -187,7 +187,7 @@ def test_valid_marker_shapes_reach_the_wire_unchanged(bridge: _Bridge, mode: Mod
     marker: Final = uuid.uuid4().hex
     call_id: Final = _completion(_chat(bridge, bridge.model(mode), [_user(marker, breakpoint)]), marker)
     pcb.assert_marker(_user_block_on_wire(bridge, marker), breakpoint)
-    bridge.spend.landed(bridge.model(mode), call_id, pcb.response_id(marker))
+    bridge.spend.landed(bridge.model(mode), call_id, marker)
 
 
 @pytest.mark.parametrize(
@@ -197,7 +197,7 @@ def test_marker_with_an_unknown_key(bridge: _Bridge, mode: Mode, expected: JsonV
     marker: Final = uuid.uuid4().hex
     call_id: Final = _completion(_chat(bridge, bridge.model(mode), [_user(marker, _UNKNOWN_KEY)]), marker)
     pcb.assert_marker(_user_block_on_wire(bridge, marker), expected)
-    bridge.spend.landed(bridge.model(mode), call_id, pcb.response_id(marker))
+    bridge.spend.landed(bridge.model(mode), call_id, marker)
 
 
 def _second_block_on_wire(bridge: _Bridge, marker: str) -> dict[str, JsonValue]:
@@ -220,7 +220,7 @@ def test_valid_marker_is_carried_on_every_block_kind(bridge: _Bridge, kind: pcb.
     second: Final = _second_block_on_wire(bridge, marker)
     assert second["type"] == pcb.WIRE_TYPE[kind], second
     pcb.assert_marker(second, pcb.EXPLICIT)
-    bridge.spend.landed(bridge.model(mode), call_id, pcb.response_id(marker))
+    bridge.spend.landed(bridge.model(mode), call_id, marker)
 
 
 @pytest.mark.parametrize("kind", pcb.KINDS)
@@ -231,7 +231,7 @@ def test_malformed_marker_is_dropped_on_every_block_kind(bridge: _Bridge, kind: 
     second: Final = _second_block_on_wire(bridge, marker)
     assert second["type"] == pcb.WIRE_TYPE[kind], second
     pcb.assert_marker(second, None)
-    bridge.spend.landed(bridge.on, call_id, pcb.response_id(marker))
+    bridge.spend.landed(bridge.on, call_id, marker)
 
 
 @pytest.mark.parametrize(("mode", "breakpoint", "expected"), _CASE_VALUES, ids=_CASE_IDS)
@@ -252,7 +252,7 @@ def test_tool_output_marker(bridge: _Bridge, mode: Mode, breakpoint: JsonValue, 
     (output,) = pcb.function_output(pcb.input_items(request), "call_1")
     assert output["type"] == "input_text" and output["text"] == "found it", output
     pcb.assert_marker(output, expected)
-    bridge.spend.landed(bridge.model(mode), call_id, pcb.response_id(marker))
+    bridge.spend.landed(bridge.model(mode), call_id, marker)
 
 
 @pytest.mark.parametrize(("mode", "breakpoint", "expected"), _CASE_VALUES, ids=_CASE_IDS)
@@ -269,7 +269,7 @@ def test_assistant_list_marker(bridge: _Bridge, mode: Mode, breakpoint: JsonValu
     (earlier,) = pcb.content_of(pcb.input_items(request), "assistant")
     assert earlier["type"] == "output_text" and earlier["text"] == "earlier answer", earlier
     pcb.assert_marker(earlier, expected)
-    bridge.spend.landed(bridge.model(mode), call_id, pcb.response_id(marker))
+    bridge.spend.landed(bridge.model(mode), call_id, marker)
 
 
 def test_injected_system_marker_survives_a_trailing_audio_block(bridge: _Bridge) -> None:
@@ -285,7 +285,7 @@ def test_injected_system_marker_survives_a_trailing_audio_block(bridge: _Bridge)
     assert audio["type"] == "input_text", audio
     assert string_value(audio["text"]).startswith("{'type': 'input_audio'"), audio
     pcb.assert_marker(audio, pcb.EXPLICIT)
-    bridge.spend.landed(bridge.injecting_on, call_id, pcb.response_id(marker))
+    bridge.spend.landed(bridge.injecting_on, call_id, marker)
 
 
 def test_injected_marker_on_a_string_system_message(bridge: _Bridge) -> None:
@@ -300,7 +300,7 @@ def test_injected_marker_on_a_string_system_message(bridge: _Bridge) -> None:
     assert body["prompt_cache_options"] == {"mode": "explicit"}, body
     system_block: Final = pcb.single_block(pcb.input_items(request), "system")
     assert system_block == {"type": "input_text", "text": "Answer briefly", "prompt_cache_breakpoint": pcb.EXPLICIT}
-    bridge.spend.landed(bridge.injecting_off, call_id, pcb.response_id(marker))
+    bridge.spend.landed(bridge.injecting_off, call_id, marker)
 
 
 def _anthropic(bridge: _Bridge) -> anthropic.Anthropic:
@@ -362,13 +362,13 @@ def test_native_responses_request_never_enters_the_bridge(bridge: _Bridge) -> No
     )
     assert response.status_code == 200, response.text
     body: Final = rv.JSON_OBJECT.validate_json(response.text)
-    assert rv.same_response(string_value(body["id"]), pcb.response_id(marker)), body
+    assert pcb.answers(string_value(body["id"]), marker), body
     assert rv.answer(marker) in response.text, response.text
     request: Final = pcb.posted(bridge.wire, marker)
     _wire_body(request)
     on_wire: Final = pcb.single_block(pcb.input_items(request), "user")
     assert on_wire == pcb.marked(block, _UNKNOWN_KEY), on_wire
-    bridge.spend.landed(bridge.on, response.headers["x-litellm-call-id"], pcb.response_id(marker))
+    bridge.spend.landed(bridge.on, response.headers["x-litellm-call-id"], marker)
 
 
 @pytest.mark.parametrize("breakpoint", _MALFORMED_VALUES, ids=_MALFORMED_IDS)
@@ -376,7 +376,7 @@ def test_malformed_marker_is_dropped_under_drop_params(bridge: _Bridge, breakpoi
     marker: Final = uuid.uuid4().hex
     call_id: Final = _completion(_chat(bridge, bridge.on, [_user(marker, breakpoint)]), marker)
     pcb.assert_marker(_user_block_on_wire(bridge, marker), None)
-    bridge.spend.landed(bridge.on, call_id, pcb.response_id(marker))
+    bridge.spend.landed(bridge.on, call_id, marker)
 
 
 @pytest.mark.parametrize("breakpoint", _MALFORMED_VALUES, ids=_MALFORMED_IDS)
@@ -384,7 +384,7 @@ def test_malformed_marker_passes_verbatim_without_drop_params(bridge: _Bridge, b
     marker: Final = uuid.uuid4().hex
     call_id: Final = _completion(_chat(bridge, bridge.off, [_user(marker, breakpoint)]), marker)
     pcb.assert_marker(_user_block_on_wire(bridge, marker), breakpoint)
-    bridge.spend.landed(bridge.off, call_id, pcb.response_id(marker))
+    bridge.spend.landed(bridge.off, call_id, marker)
 
 
 def test_two_marked_blocks_are_both_carried(bridge: _Bridge) -> None:
@@ -399,7 +399,7 @@ def test_two_marked_blocks_are_both_carried(bridge: _Bridge) -> None:
     first, second = pcb.content_of(pcb.input_items(request), "user")
     assert first == {"type": "input_text", "text": pcb.prompt(marker), "prompt_cache_breakpoint": pcb.EXPLICIT}
     assert second == {"type": "input_text", "text": "and more", "prompt_cache_breakpoint": pcb.EXPLICIT_30M}
-    bridge.spend.landed(bridge.on, call_id, pcb.response_id(marker))
+    bridge.spend.landed(bridge.on, call_id, marker)
 
 
 def test_wrong_key_is_refused_before_the_wire(bridge: _Bridge) -> None:
@@ -427,7 +427,7 @@ def test_upstream_error_reaches_the_caller_once(bridge: _Bridge, mode: Mode, sta
     follow_up: Final = uuid.uuid4().hex
     call_id: Final = _completion(_chat(bridge, bridge.model(mode), [_user(follow_up, pcb.EXPLICIT)]), follow_up)
     pcb.assert_marker(_user_block_on_wire(bridge, follow_up), pcb.EXPLICIT)
-    bridge.spend.landed(bridge.model(mode), call_id, pcb.response_id(follow_up))
+    bridge.spend.landed(bridge.model(mode), call_id, follow_up)
 
 
 def test_null_drop_params_on_the_deployment_means_off(bridge: _Bridge) -> None:
@@ -436,7 +436,7 @@ def test_null_drop_params_on_the_deployment_means_off(bridge: _Bridge) -> None:
         model: Final = scenario.model(model=pcb.MODEL, api_base=bridge.api_base, drop_params=None)
         call_id: Final = _completion(_chat(bridge, model, [_user(marker, "yes")]), marker)
         pcb.assert_marker(_user_block_on_wire(bridge, marker), "yes")
-        bridge.spend.landed(model, call_id, pcb.response_id(marker))
+        bridge.spend.landed(model, call_id, marker)
 
 
 @pytest.mark.parametrize("mode", ("on", "off"))
@@ -446,7 +446,7 @@ def test_null_or_missing_marker_sends_a_plain_block(bridge: _Bridge, shape: str,
     block: Final = pcb.marked(pcb.text(pcb.prompt(marker)), None) if shape == "null" else pcb.text(pcb.prompt(marker))
     call_id: Final = _completion(_chat(bridge, bridge.model(mode), [{"role": "user", "content": [block]}]), marker)
     assert _user_block_on_wire(bridge, marker) == {"type": "input_text", "text": pcb.prompt(marker)}
-    bridge.spend.landed(bridge.model(mode), call_id, pcb.response_id(marker))
+    bridge.spend.landed(bridge.model(mode), call_id, marker)
 
 
 async def _send_marked(client: httpx.AsyncClient, key: str, model: str, marker: str) -> httpx.Response:
@@ -494,7 +494,7 @@ async def test_flipping_drop_params_mid_burst_keeps_every_marked_request_answere
         flipped: Final = eventually(lambda: _probe_marker(bridge, model), lambda seen: seen == "yes", seconds=70)
         assert flipped == "yes"
         for marker, response in zip(markers, responses, strict=True):
-            bridge.spend.landed(model, response.headers["x-litellm-call-id"], pcb.response_id(marker))
+            bridge.spend.landed(model, response.headers["x-litellm-call-id"], marker)
 
 
 def test_three_identical_marked_requests_are_each_sent_and_logged(bridge: _Bridge) -> None:
@@ -507,4 +507,4 @@ def test_three_identical_marked_requests_are_each_sent_and_logged(bridge: _Bridg
     for request in posts:
         pcb.assert_marker(pcb.single_block(pcb.input_items(request), "user"), pcb.EXPLICIT)
     for call_id in call_ids:
-        bridge.spend.landed(bridge.on, call_id, pcb.response_id(marker))
+        bridge.spend.landed(bridge.on, call_id, marker)

@@ -29,6 +29,7 @@ INJECTION: Final[Mapping[str, JsonValue]] = {
     "prompt_cache_options": {"mode": "explicit"},
 }
 _SCRIPTED_FAILURE: Final = re.compile(r"fail-(\d{3})")
+_MINTED_RESPONSE: Final = re.compile(r"^resp_([0-9a-f]{32})-[0-9a-f]{32}$")
 _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 
 Kind: TypeAlias = Literal["text", "image_url", "file", "input_audio"]
@@ -49,7 +50,7 @@ def _scripted(request: Request) -> Reply:
     if failure is not None:
         return rv.error(int(failure.group(1)), f"scripted {failure.group(1)} marker-{marker}", "scripted_failure")
     return responses_reply(
-        f"resp_{marker or uuid.uuid4().hex}",
+        f"resp_{marker or uuid.uuid4().hex}-{uuid.uuid4().hex}",
         string_value(body["model"]),
         rv.answer(marker),
         stream=body.get("stream") is True,
@@ -59,8 +60,15 @@ def _scripted(request: Request) -> Reply:
 respond: Final = answering_model_discovery(_scripted)
 
 
-def response_id(marker: str) -> str:
-    return f"resp_{marker}"
+def response_marker(identity: str) -> str | None:
+    minted: Final = tuple(
+        found for candidate in rv.response_identities(identity) if (found := _MINTED_RESPONSE.match(candidate))
+    )
+    return minted[0].group(1) if minted else None
+
+
+def answers(identity: str, marker: str) -> bool:
+    return response_marker(identity) == marker
 
 
 def prompt(marker: str) -> str:
@@ -161,7 +169,7 @@ class SpendLogs:
         return ROWS.validate_python(cursor.fetchall())
 
     def landed(
-        self, model: str, call_id: str, identity: str | None, *, status: str = "success", seconds: float = 70
+        self, model: str, call_id: str, marker: str | None, *, status: str = "success", seconds: float = 70
     ) -> dict[str, JsonValue]:
         rows: Final = eventually(
             lambda: self.rows_for(model),
@@ -172,7 +180,7 @@ class SpendLogs:
         assert len(matching) == 1, rows
         (row,) = matching
         assert row["status"] == status, row
-        assert identity is None or rv.same_response(string_value(row["request_id"]), identity), (row, identity)
+        assert marker is None or answers(string_value(row["request_id"]), marker), (row, marker)
         return row
 
 
