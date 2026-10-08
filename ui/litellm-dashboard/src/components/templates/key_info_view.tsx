@@ -718,7 +718,8 @@ export default function KeyInfoView({
                     accessToken={accessToken}
                     canModify={canModifyKey}
                     onKeyDataUpdate={handleQuickKeyDataUpdate}
-                    buttonClassName="size-7"
+                    buttonVariant="outline"
+                    showEditLabel
                   />
                 </div>
                 <div className="mt-2">
@@ -784,7 +785,8 @@ export default function KeyInfoView({
                     canModify={canModifyKey}
                     canEditModels={!isTeamAdminEditingMember}
                     onKeyDataUpdate={handleQuickKeyDataUpdate}
-                    buttonClassName="size-7"
+                    buttonVariant="outline"
+                    showEditLabel
                   />
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2">

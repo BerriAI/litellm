@@ -289,7 +289,7 @@ export const getKeyTableColumns = ({
       const permissionContext = { userRole, userId, key, teams: allTeams };
       const canModify = canModifyKey(permissionContext);
       return (
-        <div className="group/editable relative flex min-w-0 items-center gap-1">
+        <div className="group/editable flex min-w-0 items-center gap-1">
           <div className="min-w-0 flex-1">
             <SpendBudgetCell
               spend={key.spend}
@@ -305,7 +305,7 @@ export const getKeyTableColumns = ({
             keyData={key}
             accessToken={accessToken}
             canModify={canModify}
-            buttonClassName="absolute right-0 top-1/2 -translate-y-1/2 bg-background"
+            buttonClassName="shrink-0"
           />
         </div>
       );
@@ -356,7 +356,7 @@ export const getKeyTableColumns = ({
       const isMemberKey = isTeamAdminEditingMemberKey(memberKeyContext);
 
       return (
-        <div className="group/editable relative flex min-w-0 items-start">
+        <div className="group/editable flex min-w-0 items-start gap-1">
           <div className="min-w-0 flex-1">
             <ModelsCell models={key.models} allowedRoutes={key.allowed_routes} keyType={key.key_type} />
           </div>
@@ -368,7 +368,7 @@ export const getKeyTableColumns = ({
             userRole={userRole}
             canModify={canModify}
             canEditModels={!isMemberKey}
-            buttonClassName="absolute right-0 top-0 bg-background"
+            buttonClassName="shrink-0"
           />
         </div>
       );

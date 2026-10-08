@@ -103,7 +103,6 @@ describe("key quick edit popovers", () => {
     expect(keyUpdateCall).toHaveBeenCalledWith("access-token", {
       key: "key-token",
       max_budget: 50,
-      budget_duration: "30d",
     });
   });
 
@@ -119,7 +118,6 @@ describe("key quick edit popovers", () => {
     expect(keyUpdateCall).toHaveBeenCalledWith("access-token", {
       key: "key-token",
       max_budget: null,
-      budget_duration: "30d",
     });
   });
 

@@ -1,7 +1,9 @@
+import { canonicalBudgetDuration } from "@/components/templates/keyEditFieldNormalizers";
+
 export type BudgetQuickEditPayload = {
   key: string;
   max_budget: number | null;
-  budget_duration: string | null;
+  budget_duration?: string | null;
 };
 
 export type BudgetQuickEditResult =
@@ -15,13 +17,22 @@ export type ModelsQuickEditPayload = {
 
 export const budgetQuickEditPayload = (
   token: string,
-  input: { maxBudget: string; budgetDuration: string | null },
+  input: {
+    maxBudget: string;
+    budgetDuration: string | null;
+    currentBudgetDuration: string | null | undefined;
+  },
 ): BudgetQuickEditResult => {
   const rawBudget = input.maxBudget.trim();
+  const durationUpdate =
+    input.budgetDuration !== canonicalBudgetDuration(input.currentBudgetDuration)
+      ? { budget_duration: input.budgetDuration }
+      : {};
+
   if (rawBudget === "") {
     return {
       kind: "ok",
-      payload: { key: token, max_budget: null, budget_duration: input.budgetDuration },
+      payload: { key: token, max_budget: null, ...durationUpdate },
     };
   }
 
@@ -32,7 +43,7 @@ export const budgetQuickEditPayload = (
 
   return {
     kind: "ok",
-    payload: { key: token, max_budget: maxBudget, budget_duration: input.budgetDuration },
+    payload: { key: token, max_budget: maxBudget, ...durationUpdate },
   };
 };
 

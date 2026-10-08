@@ -22,6 +22,8 @@ interface KeyModelsQuickEditProps {
   canEditModels: boolean;
   onKeyDataUpdate?: (updated: Partial<KeyResponse>) => void;
   buttonClassName?: string;
+  buttonVariant?: "ghost" | "outline";
+  showEditLabel?: boolean;
 }
 
 export function KeyModelsQuickEdit({
@@ -34,6 +36,8 @@ export function KeyModelsQuickEdit({
   canEditModels,
   onKeyDataUpdate,
   buttonClassName,
+  buttonVariant = "ghost",
+  showEditLabel = false,
 }: KeyModelsQuickEditProps) {
   const [open, setOpen] = useState(false);
   const [selectedModels, setSelectedModels] = useState<string[]>(keyData.models ?? []);
@@ -74,12 +78,13 @@ export function KeyModelsQuickEdit({
         render={
           <Button
             type="button"
-            variant="ghost"
-            size="icon-xs"
+            variant={buttonVariant}
+            size={showEditLabel ? "sm" : "icon-xs"}
             aria-label="Edit models"
-            className={`opacity-0 transition-opacity group-hover/editable:opacity-100 focus-visible:opacity-100 ${buttonClassName ?? ""}`}
+            className={`${showEditLabel ? "" : "text-muted-foreground opacity-50 transition-opacity group-hover/editable:opacity-100 focus-visible:opacity-100"} ${buttonClassName ?? ""}`}
           >
             <Pencil aria-hidden="true" />
+            {showEditLabel && "Edit"}
           </Button>
         }
       />

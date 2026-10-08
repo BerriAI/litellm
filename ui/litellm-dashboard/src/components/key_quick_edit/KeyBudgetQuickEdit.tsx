@@ -18,6 +18,8 @@ interface KeyBudgetQuickEditProps {
   canModify: boolean;
   onKeyDataUpdate?: (updated: Partial<KeyResponse>) => void;
   buttonClassName?: string;
+  buttonVariant?: "ghost" | "outline";
+  showEditLabel?: boolean;
 }
 
 export function KeyBudgetQuickEdit({
@@ -26,6 +28,8 @@ export function KeyBudgetQuickEdit({
   canModify,
   onKeyDataUpdate,
   buttonClassName,
+  buttonVariant = "ghost",
+  showEditLabel = false,
 }: KeyBudgetQuickEditProps) {
   const inputId = useId();
   const durationId = useId();
@@ -49,7 +53,11 @@ export function KeyBudgetQuickEdit({
     event.preventDefault();
     if (mutation.isPending) return;
 
-    const result = budgetQuickEditPayload(keyData.token || keyData.token_id, { maxBudget, budgetDuration });
+    const result = budgetQuickEditPayload(keyData.token || keyData.token_id, {
+      maxBudget,
+      budgetDuration,
+      currentBudgetDuration: keyData.budget_duration,
+    });
     if (result.kind === "invalid") {
       setValidationError(result.message);
       return;
@@ -75,12 +83,13 @@ export function KeyBudgetQuickEdit({
         render={
           <Button
             type="button"
-            variant="ghost"
-            size="icon-xs"
+            variant={buttonVariant}
+            size={showEditLabel ? "sm" : "icon-xs"}
             aria-label="Edit budget"
-            className={`opacity-0 transition-opacity group-hover/editable:opacity-100 focus-visible:opacity-100 ${buttonClassName ?? ""}`}
+            className={`${showEditLabel ? "" : "text-muted-foreground opacity-50 transition-opacity group-hover/editable:opacity-100 focus-visible:opacity-100"} ${buttonClassName ?? ""}`}
           >
             <Pencil aria-hidden="true" />
+            {showEditLabel && "Edit"}
           </Button>
         }
       />
