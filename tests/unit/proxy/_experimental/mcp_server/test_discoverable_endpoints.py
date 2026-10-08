@@ -11414,7 +11414,9 @@ def test_gateway_authorize_routes_forward_server_scope(
     sealed_flow: Final = flow_cookies[f"{CONNECT_FLOW_COOKIE_PREFIX}{flow}"].value
     decoded_flow: Final = decrypt_value_helper(sealed_flow, "gateway_connect_flow", return_original_value=False)
     assert isinstance(decoded_flow, str)
-    assert json.loads(decoded_flow)["resource_server_ids"] == ["scope-server-id"]
+    flow_payload: Final = json.loads(decoded_flow)
+    assert flow_payload["resource_server_id"] == "scope-server-id"
+    assert "resource_server_ids" not in flow_payload
 
 
 def _consent_flow_handle(page: str) -> str:

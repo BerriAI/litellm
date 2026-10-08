@@ -562,7 +562,7 @@ def _is_aggregate_resource(request: Request, resource: str) -> bool:
     if canonical is None:
         return False
     base: Final = canonicalize_url_identity(get_request_base_url(request))
-    return canonical == f"{base}/mcp"
+    return canonical in (base, f"{base}/mcp")
 
 
 def _gateway_flow_server(name: str) -> MCPServer | None:

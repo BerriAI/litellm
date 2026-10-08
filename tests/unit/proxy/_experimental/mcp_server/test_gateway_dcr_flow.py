@@ -1263,7 +1263,8 @@ async def test_scoped_authorize_runs_connect_page_with_sealed_scope():
 
 
 @pytest.mark.asyncio
-async def test_aggregate_scope_seals_server_through_redemption_and_refresh() -> None:
+@pytest.mark.parametrize("resource", ["https://llm.example.com/mcp", "https://llm.example.com"])
+async def test_aggregate_scope_seals_server_through_redemption_and_refresh(resource: str) -> None:
     from unittest.mock import patch
 
     client_id: Final = (await _register([REDIRECT_URI]))["client_id"]
@@ -1272,7 +1273,7 @@ async def test_aggregate_scope_seals_server_through_redemption_and_refresh() -> 
         manager.get_mcp_server_by_identifier.return_value = github
         response: Final = _scoped_authorize(
             client_id,
-            "https://llm.example.com/mcp",
+            resource,
             scope="litellm:mcp_server:github",
         )
     assert response.status_code == 303
@@ -1286,7 +1287,7 @@ async def test_aggregate_scope_seals_server_through_redemption_and_refresh() -> 
         code,
         client_id,
         cache=cache,
-        resource="https://llm.example.com/mcp",
+        resource=resource,
     )
     assert token_response.status_code == 200
     payload: Final = json.loads(token_response.body)
@@ -1298,7 +1299,7 @@ async def test_aggregate_scope_seals_server_through_redemption_and_refresh() -> 
         cache=cache,
         grant_type="refresh_token",
         refresh_token=payload["refresh_token"],
-        resource="https://llm.example.com/mcp",
+        resource=resource,
     )
     assert rotated.status_code == 200
     assert _opened_principal(json.loads(rotated.body)).resource_server_ids == ("github-id",)
