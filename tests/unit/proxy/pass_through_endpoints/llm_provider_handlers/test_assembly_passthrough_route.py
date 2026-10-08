@@ -1,6 +1,5 @@
 import asyncio
 import json
-import time
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Final, cast
@@ -22,15 +21,26 @@ _UPSTREAM: Final = "https://api.assemblyai.com/v2/transcript"
 _AUDIO_URL: Final = "https://assembly.ai/wildfires.mp3"
 
 
+def _is_transcript_log(payload: StandardLoggingPayload, transcript_id: str) -> bool:
+    response: Final = payload["response"]
+    return isinstance(response, dict) and response.get("id") == transcript_id
+
+
 class _SuccessRecorder(CustomLogger):
-    def __init__(self) -> None:
+    def __init__(self, transcript_id: str, loop: asyncio.AbstractEventLoop) -> None:
         super().__init__()
-        self.payloads: Final[list[StandardLoggingPayload]] = []
+        self.transcript_id: Final = transcript_id
+        self.loop: Final = loop
+        self.logged: Final = asyncio.Event()
+        self.payloads: tuple[StandardLoggingPayload, ...] = ()
 
     async def async_log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
-        self.payloads.append(cast(StandardLoggingPayload, kwargs["standard_logging_object"]))
+        payload: Final = cast(StandardLoggingPayload, kwargs["standard_logging_object"])
+        self.payloads = (*self.payloads, payload)
+        if _is_transcript_log(payload, self.transcript_id):
+            self.loop.call_soon_threadsafe(self.logged.set)
 
 
 def _request(method: str, path: str, body: bytes = b"") -> Request:
@@ -55,36 +65,28 @@ def _request(method: str, path: str, body: bytes = b"") -> Request:
     return Request(scope, receive)
 
 
-def _transcript_logs(recorder: _SuccessRecorder, transcript_id: str) -> tuple[StandardLoggingPayload, ...]:
-    return tuple(
-        payload
-        for payload in recorder.payloads
-        if isinstance(payload["response"], dict) and payload["response"].get("id") == transcript_id
-    )
-
-
-async def _wait_for_success_log(recorder: _SuccessRecorder, transcript_id: str) -> StandardLoggingPayload:
-    deadline: Final = time.monotonic() + 10
-    while not _transcript_logs(recorder, transcript_id) and time.monotonic() < deadline:
-        await asyncio.sleep(0.01)
-    logged: Final = _transcript_logs(recorder, transcript_id)
-    assert len(logged) == 1, f"AssemblyAI success log for {transcript_id} emitted {len(logged)} times"
-    return logged[0]
-
-
-@pytest.fixture
-def recorder(monkeypatch: pytest.MonkeyPatch) -> _SuccessRecorder:
-    success_recorder: Final = _SuccessRecorder()
+def _install_recorder(monkeypatch: pytest.MonkeyPatch, transcript_id: str) -> _SuccessRecorder:
+    recorder: Final = _SuccessRecorder(transcript_id, asyncio.get_running_loop())
     monkeypatch.setenv("ASSEMBLYAI_API_KEY", _KEY)
-    monkeypatch.setattr(litellm, "_async_success_callback", [success_recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
     monkeypatch.setattr(litellm, "success_callback", [])
-    return success_recorder
+    return recorder
+
+
+async def _wait_for_success_log(recorder: _SuccessRecorder) -> StandardLoggingPayload:
+    await asyncio.wait_for(recorder.logged.wait(), 30)
+    logged: Final = tuple(
+        payload for payload in recorder.payloads if _is_transcript_log(payload, recorder.transcript_id)
+    )
+    assert len(logged) == 1, f"AssemblyAI success log for {recorder.transcript_id} emitted {len(logged)} times"
+    return logged[0]
 
 
 @pytest.mark.asyncio
 async def test_assemblyai_transcribe_create_poll_delete(
-    respx_mock: respx.MockRouter, httpx_transport: None, recorder: _SuccessRecorder
+    respx_mock: respx.MockRouter, httpx_transport: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    recorder: Final = _install_recorder(monkeypatch, "tr_1")
     create_route: Final = respx_mock.post(_UPSTREAM).mock(
         return_value=httpx.Response(200, json={"id": "tr_1", "status": "queued", "audio_url": _AUDIO_URL})
     )
@@ -103,7 +105,7 @@ async def test_assemblyai_transcribe_create_poll_delete(
         fastapi_response=Response(),
         user_api_key_dict=admin,
     )
-    await _wait_for_success_log(recorder, "tr_1")
+    await _wait_for_success_log(recorder)
     poll: Final = await assemblyai_proxy_route(
         endpoint="v2/transcript/tr_1",
         request=_request("GET", "/assemblyai/v2/transcript/tr_1"),
@@ -135,8 +137,9 @@ async def test_assemblyai_transcribe_create_poll_delete(
 
 @pytest.mark.asyncio
 async def test_assemblyai_transcribe_with_non_admin_key_logs_key_identity(
-    respx_mock: respx.MockRouter, httpx_transport: None, recorder: _SuccessRecorder
+    respx_mock: respx.MockRouter, httpx_transport: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    recorder: Final = _install_recorder(monkeypatch, "tr_9")
     create_route: Final = respx_mock.post(_UPSTREAM).mock(
         return_value=httpx.Response(200, json={"id": "tr_9", "status": "queued", "audio_url": _AUDIO_URL})
     )
@@ -157,7 +160,7 @@ async def test_assemblyai_transcribe_with_non_admin_key_logs_key_identity(
         fastapi_response=Response(),
         user_api_key_dict=non_admin,
     )
-    logged: Final = await _wait_for_success_log(recorder, "tr_9")
+    logged: Final = await _wait_for_success_log(recorder)
 
     assert isinstance(response, Response)
     assert response.status_code == 200, response.body

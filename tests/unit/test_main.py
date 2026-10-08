@@ -25,6 +25,7 @@ import litellm
 from litellm import acompletion, completion
 from litellm import main as litellm_main
 from litellm.constants import CONTROL_OPTIONS_KEY
+from litellm.caching.base_cache import BaseCache
 from litellm.caching.caching import Cache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
@@ -5891,6 +5892,19 @@ async def test_speech_openai_returns_binary_audio(
     assert response.content == b"ID3-fake-mp3"
 
 
+class _SignallingCache(Cache):
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+        super().__init__()
+        self.loop: Final = loop
+        self.written: Final = asyncio.Event()
+
+    async def async_add_cache(
+        self, result: object, dynamic_cache_object: BaseCache | None = None, **kwargs: object
+    ) -> None:
+        await super().async_add_cache(result, dynamic_cache_object=dynamic_cache_object, **kwargs)
+        self.loop.call_soon_threadsafe(self.written.set)
+
+
 GETTYSBURG_WAV: Final = ("gettysburg.wav", b"RIFF\x00\x00\x00\x00WAVE-gettysburg", "audio/wav")
 EAGLE_WAV: Final = ("eagle.wav", b"RIFF\x00\x00\x00\x00WAVE-eagle", "audio/wav")
 
@@ -5899,7 +5913,7 @@ async def test_transcription_caching_hit_same_file_miss_different_file(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    cache: Final = Cache()
+    cache: Final = _SignallingCache(asyncio.get_running_loop())
     monkeypatch.setattr(litellm, "cache", cache)
     route: Final = respx_mock.post("https://api.openai.com/v1/audio/transcriptions").mock(
         side_effect=[
@@ -5909,10 +5923,7 @@ async def test_transcription_caching_hit_same_file_miss_different_file(
     )
 
     response_1: Final = await litellm.atranscription(model="openai/whisper-1", file=GETTYSBURG_WAV, api_key="fake-key")
-    deadline: Final = asyncio.get_running_loop().time() + 10
-    while not cache.cache.cache_dict and asyncio.get_running_loop().time() < deadline:
-        await asyncio.sleep(0.01)
-    assert cache.cache.cache_dict
+    await asyncio.wait_for(cache.written.wait(), 30)
 
     response_2: Final = await litellm.atranscription(model="openai/whisper-1", file=GETTYSBURG_WAV, api_key="fake-key")
     assert response_2._hidden_params["cache_hit"] is True
@@ -5929,17 +5940,21 @@ async def test_whisper_log_pre_call_fires_once(respx_mock: respx.MockRouter, mon
     respx_mock.post("https://api.openai.com/v1/audio/transcriptions").mock(
         return_value=httpx.Response(200, json={"text": "hello"})
     )
-    logged_models: Final[list[str]] = []
 
     class _PreCallRecorder(CustomLogger):
-        def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
-            logged_models.append(model)
+        def __init__(self) -> None:
+            super().__init__()
+            self.models: tuple[str, ...] = ()
 
-    monkeypatch.setattr(litellm, "callbacks", [_PreCallRecorder()])
+        def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
+            self.models = (*self.models, model)
+
+    recorder: Final = _PreCallRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
 
     await litellm.atranscription(model="openai/whisper-1", file=GETTYSBURG_WAV, api_key="fake-key")
 
-    assert logged_models == ["whisper-1"]
+    assert recorder.models == ("whisper-1",)
 
 
 @pytest.mark.parametrize("model", ["gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"])

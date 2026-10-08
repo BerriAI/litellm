@@ -1,6 +1,6 @@
 import asyncio
 import json
-import time
+import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Final, cast
@@ -901,23 +901,28 @@ class TestVertexAILivePassthroughErrorHandling:
 
 
 class _SuccessRecorder(CustomLogger):
-    def __init__(self) -> None:
+    def __init__(self, api_base: str, loop: asyncio.AbstractEventLoop) -> None:
         super().__init__()
-        self.payloads: Final[list[StandardLoggingPayload]] = []
+        self.api_base: Final = api_base
+        self.loop: Final = loop
+        self.logged: Final = asyncio.Event()
+        self.payloads: tuple[StandardLoggingPayload, ...] = ()
 
     async def async_log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
-        self.payloads.append(cast(StandardLoggingPayload, kwargs["standard_logging_object"]))
+        payload: Final = cast(StandardLoggingPayload, kwargs["standard_logging_object"])
+        self.payloads = (*self.payloads, payload)
+        if payload["api_base"] == self.api_base:
+            self.loop.call_soon_threadsafe(self.logged.set)
 
 
-_GENERATE_CONTENT_ENDPOINT: Final = (
-    "v1/projects/p1/locations/us-central1/publishers/google/models/gemini-2.0-flash:generateContent"
-)
+def _generate_content_endpoint(project: str) -> str:
+    return f"v1/projects/{project}/locations/us-central1/publishers/google/models/gemini-2.0-flash:generateContent"
 
 
-def _vertex_request(body: bytes) -> Request:
-    path: Final = f"/vertex_ai/{_GENERATE_CONTENT_ENDPOINT}"
+def _vertex_request(endpoint: str, body: bytes) -> Request:
+    path: Final = f"/vertex_ai/{endpoint}"
     scope: Final = {
         "type": "http",
         "http_version": "1.1",
@@ -943,11 +948,13 @@ def _vertex_request(body: bytes) -> Request:
 async def test_vertex_ai_generate_content_spendlog(
     respx_mock: respx.MockRouter, httpx_transport: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    recorder: Final = _SuccessRecorder()
+    endpoint: Final = _generate_content_endpoint(f"p-{uuid.uuid4().hex}")
+    upstream_url: Final = f"https://us-central1-aiplatform.googleapis.com/{endpoint}"
+    recorder: Final = _SuccessRecorder(upstream_url, asyncio.get_running_loop())
     monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
     monkeypatch.setattr(litellm, "success_callback", [])
     contents: Final = [{"role": "user", "parts": [{"text": "hi"}]}]
-    route: Final = respx_mock.post(f"https://us-central1-aiplatform.googleapis.com/{_GENERATE_CONTENT_ENDPOINT}").mock(
+    route: Final = respx_mock.post(upstream_url).mock(
         return_value=httpx.Response(
             200,
             json={
@@ -960,8 +967,8 @@ async def test_vertex_ai_generate_content_spendlog(
     )
 
     response: Final = await vertex_proxy_route(
-        endpoint=_GENERATE_CONTENT_ENDPOINT,
-        request=_vertex_request(json.dumps({"contents": contents}).encode()),
+        endpoint=endpoint,
+        request=_vertex_request(endpoint, json.dumps({"contents": contents}).encode()),
         fastapi_response=Response(),
         user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token", user_role=LitellmUserRoles.PROXY_ADMIN),
     )
@@ -969,16 +976,15 @@ async def test_vertex_ai_generate_content_spendlog(
     assert response.status_code == 200
     call_id: Final = response.headers.get("x-litellm-call-id")
     assert call_id
-    deadline: Final = time.monotonic() + 10
-    while not any(payload["id"] == call_id for payload in recorder.payloads) and time.monotonic() < deadline:
-        await asyncio.sleep(0.01)
+    await asyncio.wait_for(recorder.logged.wait(), 30)
     assert route.call_count == 1
     outbound: Final = route.calls[0].request
     assert outbound.headers["authorization"] == "Bearer client-google-token"
     assert json.loads(outbound.content)["contents"] == contents
-    matching: Final = tuple(payload for payload in recorder.payloads if payload["id"] == call_id)
+    matching: Final = tuple(payload for payload in recorder.payloads if payload["api_base"] == upstream_url)
     assert len(matching) == 1, recorder.payloads
     logged: Final = matching[0]
+    assert logged["id"] == call_id
     assert logged["response_cost"] > 0
     assert "gemini" in logged["model"]
     assert logged["custom_llm_provider"] == "vertex_ai"
