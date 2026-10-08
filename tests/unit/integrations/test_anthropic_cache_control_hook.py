@@ -3738,6 +3738,14 @@ class TestPromptCacheBreakpointCapability:
         )
         assert supports_openai_prompt_cache_breakpoint("gpt-5.6") is False
 
+    @pytest.mark.parametrize("model", ["gpt-4.1", "gpt-5.6"])
+    @pytest.mark.parametrize("flag", ["true", 1, "false", 0])
+    def test_listed_model_with_an_odd_typed_flag_is_not_eligible(self, monkeypatch, model, flag):
+        monkeypatch.setitem(
+            litellm.model_cost, model, {**litellm.model_cost[model], "supports_prompt_cache_breakpoint": flag}
+        )
+        assert supports_openai_prompt_cache_breakpoint(model) is False
+
 
     def test_published_map_without_the_flag_still_injects_on_gpt_5_6(self, monkeypatch):
         unflagged = {k: v for k, v in litellm.model_cost["gpt-5.6"].items() if k != "supports_prompt_cache_breakpoint"}
@@ -3768,6 +3776,25 @@ class TestPromptCacheBreakpointCapability:
     def test_unlisted_model_falls_back_to_the_version_rule(self, model, expected):
         assert model not in litellm.model_cost
         assert supports_openai_prompt_cache_breakpoint(model) is expected
+
+    def test_a_null_prompt_cache_options_takes_the_implicit_default_on_both_paths(self):
+        points = [{"location": "message", "role": "system"}]
+
+        _, _, chat_params = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model="openai/gpt-5.6",
+            messages=[{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+            non_default_params={"cache_control_injection_points": copy.deepcopy(points), "prompt_cache_options": None},
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert chat_params["prompt_cache_options"] == {"mode": "implicit"}
+
+        kwargs = {"cache_control_injection_points": copy.deepcopy(points), "prompt_cache_options": None}
+        AnthropicCacheControlHook.maybe_inject_cache_control(
+            [{"role": "user", "content": "hi"}], "sys", kwargs, model="gpt-5.6", custom_llm_provider="openai"
+        )
+        assert kwargs["prompt_cache_options"] == {"mode": "implicit"}
 
 
 class TestHostedOpenAIDialectFlag:
@@ -3803,6 +3830,14 @@ class TestHostedOpenAIDialectFlag:
 
     def test_flag_set_false_keeps_the_deployment_ineligible(self, monkeypatch):
         self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle", flag=False)
+        assert (
+            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "bedrock_mantle")
+            is False
+        )
+
+    @pytest.mark.parametrize("flag", ["true", 1, "false", 0])
+    def test_an_odd_typed_flag_keeps_the_deployment_ineligible(self, monkeypatch, flag):
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle", flag=flag)
         assert (
             AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(self.MANTLE_MODEL, "bedrock_mantle")
             is False

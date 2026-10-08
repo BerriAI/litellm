@@ -106,7 +106,7 @@ def _model_map_prompt_cache_breakpoint_flag(model: str) -> bool | None:
 
     entries: Final = (litellm.model_cost.get(key) for key in (model, model.rsplit("/", 1)[-1]))
     flags: Final = (entry.get("supports_prompt_cache_breakpoint") for entry in entries if isinstance(entry, dict))
-    return next((bool(flag) for flag in flags if flag is not None), None)
+    return next((flag is True for flag in flags if flag is not None), None)
 
 
 def _hosted_entry_flag(entry: Mapping[str, object], resolve_provider: Callable[[], str | None]) -> bool | None:
@@ -114,7 +114,7 @@ def _hosted_entry_flag(entry: Mapping[str, object], resolve_provider: Callable[[
     entry_provider: Final = entry.get("litellm_provider")
     if flag is None or entry_provider is None or entry_provider == "openai":
         return None
-    return bool(flag) if entry_provider == resolve_provider() else None
+    return (flag is True) if entry_provider == resolve_provider() else None
 
 
 def _hosted_openai_dialect_flag(
@@ -335,8 +335,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if (
             openai_dialect
             and AnthropicCacheControlHook.count_request_cache_breakpoints(processed_messages) > breakpoints_before
+            and non_default_params.get("prompt_cache_options") is None
         ):
-            non_default_params.setdefault("prompt_cache_options", PromptCacheOptions(mode="implicit"))
+            non_default_params["prompt_cache_options"] = PromptCacheOptions(mode="implicit")
 
         # Points this pass did not place: non-message ones for the provider transform, and
         # the deferred role-targeted ones. Deferring is what reaches the Responses API's
@@ -1088,8 +1089,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             AnthropicCacheControlHook.count_request_cache_breakpoints(messages, system) - breakpoints_before
         )
         AnthropicCacheControlHook.record_gateway_injection(kwargs, breakpoints_added)
-        if openai_dialect and breakpoints_added > 0:
-            kwargs.setdefault("prompt_cache_options", PromptCacheOptions(mode="implicit"))
+        if openai_dialect and breakpoints_added > 0 and kwargs.get("prompt_cache_options") is None:
+            kwargs["prompt_cache_options"] = PromptCacheOptions(mode="implicit")
         if remaining:
             kwargs["cache_control_injection_points"] = remaining
         return messages, system
