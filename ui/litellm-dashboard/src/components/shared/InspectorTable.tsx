@@ -66,16 +66,14 @@ function Grid({ className, children, ...props }: ComponentProps<"table">) {
 function Header({ hidden = false }: { readonly hidden?: boolean }) {
   const { table } = useInspectorTable();
   return (
-    <TableHeader
-      className={hidden ? "sr-only" : "sticky top-0 z-sticky bg-[color-mix(in_oklab,var(--muted)_40%,var(--card))]"}
-    >
+    <TableHeader className={hidden ? "sr-only" : "sticky top-0 z-sticky bg-card"}>
       {table.getHeaderGroups().map((group) => (
-        <tr key={group.id} className="h-8 border-border text-xs tracking-wider text-muted-foreground uppercase">
+        <tr key={group.id} className="h-9 border-border text-xs text-muted-foreground">
           {group.headers.map(({ id, column, isPlaceholder, getContext }) => (
             <TableHead
               key={id}
               className={cn(
-                "h-auto px-3 text-muted-foreground",
+                "h-auto px-3 font-normal text-muted-foreground",
                 column.columnDef.meta?.numeric && NUMERIC,
                 column.columnDef.meta?.headerClassName,
               )}
