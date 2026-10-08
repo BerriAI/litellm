@@ -1,7 +1,5 @@
-use std::collections::BTreeSet;
-
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
-use litellm_host_python::{from_py, lookup};
+use litellm_host_python::from_py;
 use litellm_http::transport::Error as TransportError;
 use litellm_inference::RouteError;
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
@@ -14,9 +12,8 @@ use crate::{
 };
 
 pub(super) struct InferenceHost {
-    pub request: Py<PyDict>,
+    pub bound: Py<PyDict>,
     module: &'static str,
-    defaulted: BTreeSet<String>,
 }
 
 pub(super) struct ProjectedCall {
@@ -25,32 +22,34 @@ pub(super) struct ProjectedCall {
     pub params: Map<String, Value>,
 }
 
+impl ProjectedCall {
+    pub fn streams(&self) -> bool {
+        self.params.get("stream") == Some(&Value::Bool(true))
+    }
+}
+
 impl InferenceHost {
-    pub fn new(
-        request: Bound<'_, PyDict>,
-        module: &'static str,
-        kwargs: &Bound<'_, PyDict>,
-    ) -> PyResult<Self> {
-        Ok(Self {
-            defaulted: super::parameters::defaulted_keys(&request, kwargs)?,
-            request: request.unbind(),
+    pub fn new(bound: Bound<'_, PyDict>, module: &'static str) -> Self {
+        Self {
+            bound: bound.unbind(),
             module,
-        })
+        }
     }
 
     pub fn project(
         &self,
         py: Python<'_>,
-        arguments: &Bound<'_, PyDict>,
+        hooked: &Bound<'_, PyDict>,
         input: &str,
     ) -> PyResult<ProjectedCall> {
-        let argument = |name: &str| self.argument(py, arguments, name);
+        let request = super::parameters::merged_request(self.bound.bind(py), hooked)?;
+        let field = |name: &str| super::parameters::field(&request, name);
         let string = |name: &str| -> PyResult<Option<String>> {
-            argument(name)?.map(|value| value.extract()).transpose()
+            field(name)?.map(|value| value.extract()).transpose()
         };
-        let params = self.parameters(py, arguments, input)?;
-        let timeout = argument("timeout")?
-            .or(argument("request_timeout")?)
+        let params = super::parameters::provider_parameters(py, &request, input)?;
+        let timeout = field("timeout")?
+            .or(field("request_timeout")?)
             .map(|value| python_timeout_seconds(py, value.unbind()))
             .transpose()?
             .flatten();
@@ -74,44 +73,17 @@ impl InferenceHost {
                     .or(string("base_url")?.filter(|base| !base.is_empty()))
                     .or(default_base),
                 custom_llm_provider,
-                extra_headers: argument("extra_headers")?
+                extra_headers: field("extra_headers")?
                     .map(|value| from_py(&value))
                     .transpose()?,
                 timeout: optional_timeout(timeout),
             },
             input: from_py(
-                &argument(input)?
+                &field(input)?
                     .ok_or_else(|| PyValueError::new_err(format!("{input} is required")))?,
             )?,
-            params,
+            params: params.into(),
         })
-    }
-
-    pub fn argument<'py>(
-        &self,
-        py: Python<'py>,
-        arguments: &Bound<'py, PyDict>,
-        name: &str,
-    ) -> PyResult<Option<Bound<'py, PyAny>>> {
-        Ok(lookup(arguments, self.request.bind(py).as_any(), name)?
-            .filter(|value| !value.is_none()))
-    }
-
-    pub fn parameters(
-        &self,
-        py: Python<'_>,
-        arguments: &Bound<'_, PyDict>,
-        input: &str,
-    ) -> PyResult<Map<String, Value>> {
-        super::parameters::provider_parameters(
-            py,
-            arguments,
-            self.request.bind(py),
-            &self.defaulted,
-            &[input],
-            &["metadata"],
-        )
-        .map(Into::into)
     }
 
     pub fn response(&self, py: Python<'_>, response: &impl Serialize) -> PyResult<Py<PyAny>> {
@@ -137,7 +109,7 @@ impl InferenceHost {
         let mapped = py
             .import(self.module)?
             .getattr("map_failure")?
-            .call1((native.value(py), self.request.bind(py)))?;
+            .call1((native.value(py), self.bound.bind(py)))?;
         Ok(PyErr::from_value(mapped))
     }
 }

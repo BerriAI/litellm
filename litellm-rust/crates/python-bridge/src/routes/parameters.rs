@@ -1,74 +1,61 @@
-use std::collections::BTreeSet;
-
 use litellm_core_utils::{call_arguments::CallArguments, params::is_control_param};
-use litellm_host_python::{from_py, lookup};
+use litellm_host_python::from_py;
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 use serde_json::{Map, Value};
 
-/// Names whose `None` came from a signature default rather than the caller.
-pub(super) fn defaulted_keys(
-    bound: &Bound<'_, PyDict>,
-    kwargs: &Bound<'_, PyDict>,
-) -> PyResult<BTreeSet<String>> {
-    bound
-        .iter()
-        .filter(|(_, value)| value.is_none())
-        .map(|(key, _)| {
-            let name: String = key.extract()?;
-            Ok((!kwargs.contains(&name)?).then_some(name))
-        })
-        .filter_map(PyResult::transpose)
-        .collect()
+const PROVIDER_FORWARDED: &[&str] = &["metadata"];
+
+pub(super) fn merged_request<'py>(
+    bound: &Bound<'py, PyDict>,
+    hooked: &Bound<'py, PyDict>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let request = bound.copy()?;
+    request.update(hooked.as_mapping())?;
+    Ok(request)
+}
+
+pub(super) fn field<'py>(
+    request: &Bound<'py, PyDict>,
+    name: &str,
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    Ok(request.get_item(name)?.filter(|value| !value.is_none()))
 }
 
 pub(super) fn provider_parameters(
     py: Python<'_>,
-    prepared: &Bound<'_, PyDict>,
-    bound: &Bound<'_, PyDict>,
-    defaulted: &BTreeSet<String>,
-    inputs: &[&str],
-    provider_owned: &[&str],
+    request: &Bound<'_, PyDict>,
+    input: &str,
 ) -> PyResult<CallArguments> {
     let owned = py
         .import("litellm.types.utils")?
         .getattr("is_litellm_owned_kwarg")?;
-    project_parameters(
-        prepared,
-        bound,
-        defaulted,
-        inputs,
-        provider_owned,
-        &|name| owned.call1((name,))?.extract(),
-    )
+    project_parameters(request, input, &|name| owned.call1((name,))?.extract())
 }
 
 fn project_parameters(
-    prepared: &Bound<'_, PyDict>,
-    bound: &Bound<'_, PyDict>,
-    defaulted: &BTreeSet<String>,
-    inputs: &[&str],
-    provider_owned: &[&str],
+    request: &Bound<'_, PyDict>,
+    input: &str,
     owned: &impl Fn(&str) -> PyResult<bool>,
 ) -> PyResult<CallArguments> {
     let is_provider_field = |name: &str| -> PyResult<bool> {
-        if inputs.contains(&name) || is_control_param(name) {
+        if name == input || is_control_param(name) {
             return Ok(false);
         }
-        Ok(provider_owned.contains(&name) || !owned(name)?)
+        Ok(PROVIDER_FORWARDED.contains(&name) || !owned(name)?)
     };
-    let names = bound
-        .keys()
+    let fields = request
         .iter()
-        .chain(prepared.keys().iter())
-        .map(|key| key.extract::<String>())
-        .collect::<PyResult<BTreeSet<_>>>()?;
-    let fields = names
-        .iter()
-        .map(|name| provider_field(prepared, bound, defaulted, &is_provider_field, name))
+        .filter(|(_, value)| !value.is_none())
+        .map(|(key, value)| {
+            let name: String = key.extract()?;
+            if !is_provider_field(&name)? {
+                return Ok(None);
+            }
+            Ok(Some((name, from_py(&value)?)))
+        })
         .filter_map(PyResult::transpose)
         .collect::<PyResult<Map<String, Value>>>()?;
-    let overrides = lookup(prepared, bound.as_any(), "extra_body")?
-        .filter(|value| !value.is_none())
+    let overrides = field(request, "extra_body")?
         .map(|value| override_fields(&value, &is_provider_field))
         .transpose()?;
     let arguments: CallArguments = fields
@@ -78,25 +65,6 @@ fn project_parameters(
     arguments
         .resolve_body_overrides()
         .map_err(|error| PyValueError::new_err(error.to_string()))
-}
-
-fn provider_field(
-    prepared: &Bound<'_, PyDict>,
-    bound: &Bound<'_, PyDict>,
-    defaulted: &BTreeSet<String>,
-    is_provider_field: &impl Fn(&str) -> PyResult<bool>,
-    name: &str,
-) -> PyResult<Option<(String, Value)>> {
-    if !is_provider_field(name)? {
-        return Ok(None);
-    }
-    let Some(value) = lookup(prepared, bound.as_any(), name)? else {
-        return Ok(None);
-    };
-    if value.is_none() && defaulted.contains(name) {
-        return Ok(None);
-    }
-    Ok(Some((name.to_string(), from_py(&value)?)))
 }
 
 fn override_fields(
@@ -127,8 +95,15 @@ mod tests {
 
     use super::*;
 
+    fn dict<'py>(py: Python<'py>, source: &Value) -> Bound<'py, PyDict> {
+        to_py(py, source)
+            .unwrap()
+            .into_bound(py)
+            .cast_into()
+            .unwrap()
+    }
+
     #[rstest]
-    #[case::null(json!(null))]
     #[case::false_value(json!(false))]
     #[case::zero(json!(0))]
     #[case::nested(json!({"mode": "new", "values": [true, null, {"nested": 7}]}))]
@@ -142,74 +117,82 @@ mod tests {
         Python::initialize();
         Python::attach(|py| {
             let source = json!({"future_provider_option": extension});
-            let bound = to_py(py, &source).unwrap();
-            let bound = bound.bind(py).cast::<PyDict>().unwrap();
-            let parameters = project_parameters(
-                &PyDict::new(py),
-                bound,
-                &defaulted_keys(bound, bound).unwrap(),
-                &[],
-                &[],
-                &|_| Ok(false),
-            )
-            .unwrap();
+            let parameters =
+                project_parameters(&dict(py, &source), "messages", &|_| Ok(false)).unwrap();
             assert_eq!(serde_json::to_value(parameters).unwrap(), source);
         });
     }
 
     #[rstest]
-    fn projection_resolves_prepared_values_and_overrides_without_serializing_controls() {
+    #[case::stream("stream")]
+    #[case::temperature("temperature")]
+    #[case::unknown("future_provider_option")]
+    fn a_top_level_none_is_absent_whatever_its_name(#[case] name: &str) {
+        Python::initialize();
+        Python::attach(|py| {
+            let source = json!({name: null, "kept": 1});
+            let parameters =
+                project_parameters(&dict(py, &source), "messages", &|_| Ok(false)).unwrap();
+            assert_eq!(
+                serde_json::to_value(parameters).unwrap(),
+                json!({"kept": 1})
+            );
+        });
+    }
+
+    #[test]
+    fn hook_rewrites_win_over_bound_values() {
+        Python::initialize();
+        Python::attach(|py| {
+            let bound = dict(
+                py,
+                &json!({"temperature": 0.25, "top_p": 0.9, "future_cleared": true, "stream": null}),
+            );
+            let hooked = dict(py, &json!({"temperature": 0.5, "future_cleared": null}));
+            let request = merged_request(&bound, &hooked).unwrap();
+            let parameters = project_parameters(&request, "messages", &|_| Ok(false)).unwrap();
+            assert_eq!(
+                serde_json::to_value(parameters).unwrap(),
+                json!({"temperature": 0.5, "top_p": 0.9})
+            );
+            assert!(field(&request, "future_cleared").unwrap().is_none());
+            assert_eq!(bound.len(), 4);
+        });
+    }
+
+    #[test]
+    fn projection_resolves_overrides_without_serializing_controls() {
         Python::initialize();
         Python::attach(|py| {
             let locals = PyDict::new(py);
             py.run(
                 c"
 opaque = object()
-kwargs = {'future_null': None, 'drop_params': True}
-bound = {'model': 'resolved', 'messages': [], 'temperature': 0.25,
-         'future_default': None, 'future_null': None, 'future_cleared': True,
-         'drop_params': True, 'base_url': 'https://ignored.example',
-         'metadata': {'user_id': 'keep'}, 'callbacks': [opaque], 'api_key': opaque}
-prepared = {'future_cleared': None, 'temperature': 0.5,
-            'extra_body': {'temperature': 0.75, 'future_override': None,
-                           'model': 'ignored', 'messages': ['ignored'],
-                           'litellm_metadata': opaque, 'callbacks': [opaque], 'api_key': opaque}}
+request = {'model': 'resolved', 'messages': [], 'temperature': 0.25,
+           'drop_params': True, 'base_url': 'https://ignored.example',
+           'metadata': {'user_id': 'keep'}, 'litellm_trace_id': 'owned',
+           'callbacks': [opaque], 'api_key': opaque,
+           'extra_body': {'temperature': 0.75, 'future_override': None,
+                          'model': 'ignored', 'messages': ['ignored'],
+                          'litellm_metadata': opaque, 'callbacks': [opaque], 'api_key': opaque}}
 ",
                 Some(&locals),
                 Some(&locals),
             )
             .unwrap();
-            let dict = |name: &str| {
-                locals
-                    .get_item(name)
-                    .unwrap()
-                    .unwrap()
-                    .cast_into::<PyDict>()
-                    .unwrap()
-            };
-            let (kwargs, bound, prepared) = (dict("kwargs"), dict("bound"), dict("prepared"));
-            let defaulted = defaulted_keys(&bound, &kwargs).unwrap();
-            assert_eq!(defaulted, BTreeSet::from(["future_default".to_string()]));
-            let parameters = project_parameters(
-                &prepared,
-                &bound,
-                &defaulted,
-                &["messages"],
-                &["metadata"],
-                &|name| Ok(name.starts_with("litellm_") || name == "metadata"),
-            )
+            let request = locals
+                .get_item("request")
+                .unwrap()
+                .unwrap()
+                .cast_into::<PyDict>()
+                .unwrap();
+            let parameters = project_parameters(&request, "messages", &|name| {
+                Ok(name.starts_with("litellm_") || name == "metadata")
+            })
             .unwrap();
             assert_eq!(
                 serde_json::to_value(parameters).unwrap(),
-                json!({"temperature": 0.75, "future_null": null, "future_cleared": null,
-                       "future_override": null, "metadata": {"user_id": "keep"}})
-            );
-            assert!(
-                bound
-                    .get_item("api_key")
-                    .unwrap()
-                    .unwrap()
-                    .is(locals.get_item("opaque").unwrap().unwrap())
+                json!({"temperature": 0.75, "future_override": null, "metadata": {"user_id": "keep"}})
             );
         });
     }
@@ -222,16 +205,8 @@ prepared = {'future_cleared': None, 'temperature': 0.5,
     fn invalid_overrides_are_terminal(#[case] overrides: Value) {
         Python::initialize();
         Python::attach(|py| {
-            let bound = to_py(py, &json!({"extra_body": overrides})).unwrap();
-            let error = project_parameters(
-                &PyDict::new(py),
-                bound.bind(py).cast::<PyDict>().unwrap(),
-                &BTreeSet::new(),
-                &[],
-                &[],
-                &|_| Ok(false),
-            )
-            .unwrap_err();
+            let request = dict(py, &json!({"extra_body": overrides}));
+            let error = project_parameters(&request, "messages", &|_| Ok(false)).unwrap_err();
             assert!(error.is_instance_of::<PyValueError>(py));
         });
     }
