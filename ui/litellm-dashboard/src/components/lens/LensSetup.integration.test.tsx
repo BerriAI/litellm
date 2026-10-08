@@ -19,7 +19,7 @@ const worker = () => ({
   scope: data.lenses[0].scope,
 });
 
-function serve({ enabled = false, traces = false, requests = false, connected = false } = {}) {
+function serve({ enabled = false, traces = false, requests = false, connected = false, storageReady = true } = {}) {
   list.mockResolvedValue({ lenses: [], workers: connected ? [worker()] : [], tracing_enabled: enabled });
   network.mockImplementation(async (input, init) => {
     const { path, method, body, query } = await readRequest(input, init);
@@ -28,7 +28,7 @@ function serve({ enabled = false, traces = false, requests = false, connected = 
         url: "https://traces.test",
         configured: enabled,
         connected: enabled,
-        status: { storage_ready: true, credentials_ready: true },
+        status: { storage_ready: storageReady, credentials_ready: true },
       };
       return Response.json(service);
     }
@@ -146,6 +146,19 @@ describe("Lens introduction", () => {
 });
 
 describe("Lens setup journey", () => {
+  it("waits for storage readiness before completing installation", async () => {
+    serve({ enabled: true, storageReady: false });
+    const user = userEvent.setup();
+    renderWorkspace();
+    const installation = await screen.findByRole("region", { name: /Install Lens/ });
+    expect(await within(installation).findByText(/trace storage is unavailable/)).toBeVisible();
+    expect(screen.queryByText("Trace storage is connected")).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Your agent framework" })).not.toBeInTheDocument();
+    serve({ enabled: true });
+    await user.click(within(installation).getByRole("button", { name: "Check setup" }));
+    expect(await screen.findByRole("combobox", { name: "Your agent framework" })).toBeVisible();
+  });
+
   it.each(["/lens", "/lens/activity/available"])(
     "keeps recorded traces visible while %s is pending",
     async (pendingPath) => {

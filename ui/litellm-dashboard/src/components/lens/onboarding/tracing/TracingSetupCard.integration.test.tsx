@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { act, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { chooseSelectOption, renderWithProviders, testQueryClient } from "@/../tests/test-utils";
@@ -279,6 +279,29 @@ describe("TracingSetupCard", () => {
       expect(screen.queryByRole("button", { name: "Generate tracing key" })).not.toBeInTheDocument();
     },
   );
+
+  it("preserves the framework and uncopied key across a background service outage", async () => {
+    const user = userEvent.setup();
+    await renderCard();
+    await chooseSelectOption(user, screen.getByRole("combobox", { name: "Your agent framework" }), "LangGraph");
+    await user.click(screen.getByRole("button", { name: "Generate tracing key" }));
+    await screen.findByText("Your tracing key");
+    const ready = testQueryClient.getQueryData(["lens-service", "sk-admin"]);
+    const unavailable = {
+      configured: true,
+      connected: false,
+      url: "https://traces.test",
+      status: { storage_ready: false },
+    };
+    act(() => testQueryClient.setQueryData(["lens-service", "sk-admin"], unavailable));
+    expect(await screen.findByText(/Lens is configured, but LiteLLM cannot reach it/)).toBeVisible();
+    act(() => testQueryClient.setQueryData(["lens-service", "sk-admin"], ready));
+    expect(await screen.findByRole("combobox", { name: "Your agent framework" })).toHaveTextContent("LangGraph");
+    expect(screen.getByText("Your tracing key")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Copy tracing configuration" }));
+    expect(copyToClipboard).toHaveBeenLastCalledWith(tracingEnvSnippet("https://traces.test", SECRET));
+    expect(apiClient.post).toHaveBeenCalledOnce();
+  });
 
   it("shows the copyable configuration without another disclosure and includes the generated key", async () => {
     const user = userEvent.setup();

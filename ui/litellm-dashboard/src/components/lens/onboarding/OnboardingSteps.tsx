@@ -3,7 +3,7 @@
 import { useId, useRef, useState, type ReactNode } from "react";
 import { ArrowRight, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { TracingSetupFields } from "@/components/lens/onboarding/tracing/TracingSetupCard";
+import { TracingSetupFields, useLensService } from "@/components/lens/onboarding/tracing/TracingSetupCard";
 import { cn } from "@/lib/cva.config";
 import { useLensAccessToken } from "../data/LensServices";
 import type { LensReadiness } from "../hooks/useLensReadiness";
@@ -11,17 +11,17 @@ import { initialSetupStep } from "../model/readiness";
 import { StepIndicator, type StepState } from "../ui/StepIndicator";
 import { useOnboarding } from "./OnboardingContext";
 
-type StepProps = { state: LensReadiness; goTo: (step: number) => void };
+type StepProps = { state: LensReadiness; goTo: (step: number) => void; storageReady: boolean };
 
 function useLocked() {
   const { readOnly, canInvestigate } = useOnboarding();
   return readOnly || !canInvestigate;
 }
 
-function StorageStep({ state, goTo }: StepProps) {
+function StorageStep({ state, goTo, storageReady }: StepProps) {
   const { readOnly, openTrace } = useOnboarding();
   const accessToken = useLensAccessToken();
-  if (!state.tracingEnabled)
+  if (!storageReady)
     return (
       <>
         <TracingSetupFields
@@ -153,7 +153,7 @@ function InvestigationStep({ state }: StepProps) {
 interface StepDefinition {
   readonly title: string;
   readonly description: string;
-  readonly complete: (state: LensReadiness) => boolean;
+  readonly complete: (state: LensReadiness, storageReady: boolean) => boolean;
   readonly Content: (props: StepProps) => ReactNode;
 }
 
@@ -161,7 +161,7 @@ const STEPS: readonly StepDefinition[] = [
   {
     title: "Install Lens",
     description: "Enable Lens in your Helm or Docker deployment.",
-    complete: (state) => state.tracingEnabled,
+    complete: (_state, storageReady) => storageReady,
     Content: StorageStep,
   },
   {
@@ -201,7 +201,11 @@ export function OnboardingSteps({
   const id = useId();
   const listRef = useRef<HTMLOListElement>(null);
   const offset = includeTracing ? 0 : 2;
+  const accessToken = useLensAccessToken();
+  const service = useLensService(accessToken);
+  const storageReady = Boolean(service.data?.connected && service.data.status.storage_ready && service.data.url);
   const [step, setStep] = useState(() => Math.max(offset, initialSetupStep(state)));
+  const visibleStep = !storageReady && step === 1 ? 0 : step;
   const goTo = (index: number) => {
     setStep(index);
     listRef.current?.querySelector<HTMLButtonElement>(`[aria-controls="${id}-${index}"]`)?.focus();
@@ -214,7 +218,7 @@ export function OnboardingSteps({
     >
       {STEPS.slice(offset).map(({ title, description, complete, Content }, index) => {
         const stepIndex = index + offset;
-        const open = Math.max(offset, step) === stepIndex;
+        const open = Math.max(offset, visibleStep) === stepIndex;
         return (
           <li key={title}>
             <h3>
@@ -226,7 +230,7 @@ export function OnboardingSteps({
                 onClick={() => setStep(stepIndex)}
                 className="group flex w-full items-start gap-4 p-5 text-left outline-none hover:bg-muted/30 focus-visible:bg-muted/50 sm:p-6"
               >
-                <StepIndicator index={index} state={stepState(complete(state), open)} />
+                <StepIndicator index={index} state={stepState(complete(state, storageReady), open)} />
                 <span className="min-w-0 flex-1">
                   <span
                     className={cn(
@@ -251,7 +255,7 @@ export function OnboardingSteps({
               hidden={!open}
               className="px-5 pb-6 sm:pr-6 sm:pb-7 sm:pl-17"
             >
-              <Content state={state} goTo={goTo} />
+              <Content state={state} goTo={goTo} storageReady={storageReady} />
             </div>
           </li>
         );

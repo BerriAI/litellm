@@ -422,9 +422,15 @@ interface ConnectAgentProps {
   onCheck: () => void;
   readOnly: boolean;
   canMintTracingKey: boolean;
+  framework: string;
+  setFramework: (framework: string) => void;
+  installer: Installer;
+  setInstaller: (installer: Installer) => void;
+  tracingKey: string | null;
+  setTracingKey: (key: string) => void;
 }
 
-function useLensService(accessToken: string) {
+export function useLensService(accessToken: string) {
   return useQuery({
     queryKey: ["lens-service", accessToken],
     queryFn: () => apiClient.get<components["schemas"]["ServiceConnection"]>("/lens/service", { accessToken }),
@@ -563,13 +569,16 @@ function ConnectAgent({
   onCheck,
   readOnly,
   canMintTracingKey,
+  framework,
+  setFramework,
+  installer,
+  setInstaller,
+  tracingKey,
+  setTracingKey,
 }: ConnectAgentProps) {
   const proxyUrl = getProxyBaseUrl().replace(/\/$/, "");
   const connection = useLensService(accessToken);
   const traceUrl = connection.data?.url ?? "";
-  const [framework, setFramework] = useState(FRAMEWORKS[0].id);
-  const [installer, setInstaller] = useState<Installer>("pip");
-  const [tracingKey, setTracingKey] = useState<string | null>(null);
   const guide = FRAMEWORKS.find((f) => f.id === framework) ?? FRAMEWORKS[0];
   const install = guide.install?.startsWith("pip install ")
     ? PY_INSTALL[installer](guide.install.slice("pip install ".length))
@@ -740,6 +749,9 @@ export function TracingSetupFields({
   readOnly = false,
   canMintTracingKey = false,
 }: TracingSetupProps) {
+  const [framework, setFramework] = useState(FRAMEWORKS[0].id);
+  const [installer, setInstaller] = useState<Installer>("pip");
+  const [tracingKey, setTracingKey] = useState<string | null>(null);
   const [checked, setChecked] = useState(false);
   const connection = useLensService(accessToken);
   const check = () => {
@@ -768,6 +780,12 @@ export function TracingSetupFields({
     return <EnableTracing connection={connection.data} checking={checking || connection.isFetching} onCheck={check} />;
   return (
     <ConnectAgent
+      framework={framework}
+      setFramework={setFramework}
+      installer={installer}
+      setInstaller={setInstaller}
+      tracingKey={tracingKey}
+      setTracingKey={setTracingKey}
       accessToken={accessToken}
       onOpenTrace={onOpenTrace}
       connected={connected}

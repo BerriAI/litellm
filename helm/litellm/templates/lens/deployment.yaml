@@ -49,11 +49,11 @@ spec:
                   key: {{ .Values.lensWorker.serviceTokenSecret.key | quote }}
             {{- if include "litellm.lensWorker.bundledClickhouse" . }}
             - name: CLICKHOUSE_HOST
-              value: {{ printf "%s-lens-clickhouse" (include "litellm.fullname" .) | quote }}
+              value: {{ include "litellm.lensWorker.clickhouseName" . | quote }}
             - name: CLICKHOUSE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ printf "%s-lens-clickhouse" (include "litellm.fullname" .) | quote }}
+                  name: {{ include "litellm.lensWorker.clickhouseName" . | quote }}
                   key: password
             {{- else }}
             - name: CLICKHOUSE_URL

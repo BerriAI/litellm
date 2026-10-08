@@ -1,5 +1,5 @@
 {{- if include "litellm.lensWorker.bundledClickhouse" . }}
-{{- $name := printf "%s-lens-clickhouse" (include "litellm.fullname" .) }}
+{{- $name := include "litellm.lensWorker.clickhouseName" . }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -32,6 +32,10 @@ spec:
         app.kubernetes.io/component: lens-clickhouse
     spec:
       automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 101
@@ -59,6 +63,13 @@ spec:
           ports:
             - name: http
               containerPort: 8123
+          startupProbe:
+            httpGet:
+              path: /ping
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 60
           readinessProbe:
             httpGet:
               path: /ping
@@ -67,7 +78,7 @@ spec:
             httpGet:
               path: /ping
               port: http
-            initialDelaySeconds: 30
+            timeoutSeconds: 3
           resources:
             {{- toYaml .Values.lensWorker.clickhouse.resources | nindent 12 }}
           volumeMounts:

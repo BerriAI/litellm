@@ -602,7 +602,9 @@ it.each([false, true])(
     const user = userEvent.setup();
     renderWithProviders(<InvestigationsView />);
     const guide = within(await screen.findByRole("region", { name: "Get Lens running" }));
-    expect(guide.getByRole("button", { name: /Send your first trace/ })).toHaveAttribute("aria-expanded", "true");
+    await waitFor(() =>
+      expect(guide.getByRole("button", { name: /Send your first trace/ })).toHaveAttribute("aria-expanded", "true"),
+    );
     expect(await guide.findByRole("button", { name: "Check for traces" })).toBeVisible();
     await user.click(guide.getByRole("button", { name: /Connect a worker/ }));
     expect(guide.getByRole("button", { name: "Connect worker" })).toBeDisabled();

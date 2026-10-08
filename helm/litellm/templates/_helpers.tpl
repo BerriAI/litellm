@@ -555,3 +555,7 @@ shutdown drain window.
 {{- fail "lensWorker.publicUrl is required when there is no single ingress hostname" -}}
 {{- end -}}
 {{- end -}}
+
+{{- define "litellm.lensWorker.clickhouseName" -}}
+{{- printf "%s-lens-clickhouse" (include "litellm.fullname" . | trunc 48 | trimSuffix "-") -}}
+{{- end -}}

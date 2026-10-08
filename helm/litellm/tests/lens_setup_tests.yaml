@@ -97,5 +97,56 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: lensWorker.clickhouseSecret.name is required
+  - it: keeps storage names valid and uses the same name for the connection
+    set:
+      fullnameOverride: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    asserts:
+      - equal:
+          path: metadata.name
+          value: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-lens-clickhouse
+        template: lens/clickhouse.yaml
+        documentIndex: 0
+      - equal:
+          path: spec.serviceName
+          value: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-lens-clickhouse
+        template: lens/clickhouse.yaml
+        documentIndex: 1
+      - equal:
+          path: metadata.name
+          value: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-lens-clickhouse
+        template: lens/secrets.yaml
+        documentIndex: 1
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CLICKHOUSE_HOST
+            value: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-lens-clickhouse
+        template: lens/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CLICKHOUSE_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-lens-clickhouse
+                key: password
+        template: lens/deployment.yaml
+  - it: allows cold storage startup and inherits registry credentials
+    template: lens/clickhouse.yaml
+    documentIndex: 1
+    set:
+      imagePullSecrets: [{name: registry-auth}]
+    asserts:
+      - equal:
+          path: spec.template.spec.imagePullSecrets
+          value: [{name: registry-auth}]
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe
+          value:
+            httpGet: {path: /ping, port: http}
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 60
+
 values:
   - ./values/required.yaml
