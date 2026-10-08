@@ -117,7 +117,7 @@ tests:
     lensWorker.clickhouseSecret.name: lens-storage
   asserts:
   - failedTemplate:
-      errorMessage: lensWorker.publicUrl is required
+      errorMessage: lensWorker.publicUrl is required when there is no single ingress hostname
 - it: omits Lens connection settings when disabled in deployment.yaml
   template: deployment.yaml
   asserts:

@@ -33,6 +33,7 @@ pub type InsertRow = BTreeMap<String, Shared<Value>>;
 pub enum InsertTable {
     OtelTraces,
     SpendLogs,
+    LensFeedback,
 }
 
 impl InsertTable {
@@ -40,6 +41,7 @@ impl InsertTable {
         match value {
             "otel_traces" => Ok(Self::OtelTraces),
             "spend_logs" => Ok(Self::SpendLogs),
+            "lens_feedback" => Ok(Self::LensFeedback),
             _ => Err(Error::InvalidTable),
         }
     }
@@ -48,6 +50,7 @@ impl InsertTable {
         match self {
             Self::OtelTraces => "otel_traces",
             Self::SpendLogs => "spend_logs",
+            Self::LensFeedback => "lens_feedback",
         }
     }
 }

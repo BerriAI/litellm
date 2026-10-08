@@ -6,13 +6,16 @@ const SAMPLE_READ_LIMITS: ReadLimits = ReadLimits {
     ..litellm_storage_clickhouse::READ_LIMITS
 };
 
-pub const LENS_QUERIES: [litellm_traces::ReadQuery; 6] = [
+pub const LENS_QUERIES: [litellm_traces::ReadQuery; 9] = [
     litellm_traces::ReadQuery::TraceAgents,
     litellm_traces::ReadQuery::Availability,
     litellm_traces::ReadQuery::Agents,
     litellm_traces::ReadQuery::Sample,
     litellm_traces::ReadQuery::Content,
     litellm_traces::ReadQuery::Evidence,
+    litellm_traces::ReadQuery::FeedbackTarget,
+    litellm_traces::ReadQuery::Feedback,
+    litellm_traces::ReadQuery::FeedbackSummary,
 ];
 
 #[macro_rules_attribute::apply(wire_type)]
@@ -338,4 +341,109 @@ impl Query for LensEvidence {
     type Row = LensEvidenceRow;
 
     const SQL: &'static str = include_str!("../../query/lens_evidence.sql");
+}
+
+pub struct LensFeedbackTarget;
+
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Debug)]
+#[serde(deny_unknown_fields)]
+pub struct LensFeedbackTargetParams {
+    #[serde(flatten)]
+    pub access: LensAccessParams,
+    pub trace_id: String,
+    pub trace_ref: String,
+}
+
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Debug)]
+#[cfg_attr(feature = "schema", schemars(rename = "FeedbackTargetRow"))]
+pub struct LensFeedbackTargetRow {
+    pub team_id: String,
+    pub key_hash: String,
+    pub trace_ref: String,
+}
+
+impl Query for LensFeedbackTarget {
+    type Params = LensFeedbackTargetParams;
+    type Row = LensFeedbackTargetRow;
+
+    const SQL: &'static str = include_str!("../../query/lens_feedback_target.sql");
+}
+
+pub struct LensFeedback;
+
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Debug)]
+#[serde(deny_unknown_fields)]
+pub struct LensFeedbackParams {
+    #[serde(flatten)]
+    pub access: LensAccessParams,
+    pub trace_id: String,
+    pub trace_ref: String,
+}
+
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Debug)]
+#[cfg_attr(feature = "schema", schemars(rename = "FeedbackRow"))]
+pub struct LensFeedbackRow {
+    pub trace_id: String,
+    pub trace_ref: String,
+    pub author: String,
+    #[serde(deserialize_with = "super::number::deserialize")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::wire_schema::u64_number")
+    )]
+    pub score: u64,
+    pub comment: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl Query for LensFeedback {
+    type Params = LensFeedbackParams;
+    type Row = LensFeedbackRow;
+
+    const SQL: &'static str = include_str!("../../query/lens_feedback.sql");
+}
+
+pub struct LensFeedbackSummary;
+
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Debug)]
+#[serde(deny_unknown_fields)]
+pub struct LensFeedbackSummaryParams {
+    #[serde(flatten)]
+    pub access: LensAccessParams,
+    pub trace_ids: Vec<String>,
+}
+
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Debug)]
+#[cfg_attr(feature = "schema", schemars(rename = "FeedbackSummaryRow"))]
+pub struct LensFeedbackSummaryRow {
+    pub trace_id: String,
+    pub trace_ref: String,
+    #[serde(deserialize_with = "super::number::deserialize")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::wire_schema::u64_number")
+    )]
+    pub count: u64,
+    #[serde(deserialize_with = "super::number::deserialize")]
+    pub average: f64,
+    #[serde(deserialize_with = "super::number::deserialize")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "crate::wire_schema::u64_number")
+    )]
+    pub lowest: u64,
+}
+
+impl Query for LensFeedbackSummary {
+    type Params = LensFeedbackSummaryParams;
+    type Row = LensFeedbackSummaryRow;
+
+    const SQL: &'static str = include_str!("../../query/lens_feedback_summary.sql");
 }
