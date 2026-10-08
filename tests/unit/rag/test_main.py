@@ -464,11 +464,11 @@ async def test_aquery_forwards_provider_retrieval_config_and_router_to_search():
     )
 
     fake_search = AsyncMock(
-        return_value=VectorStoreSearchResponse(object="vector_store.search_results.page", search_query="q", data=[])
+        return_value=VectorStoreSearchResponse(
+            object="vector_store.search_results.page", search_query="q", data=[]
+        )
     )
-    with patch(
-        "litellm.vector_stores.asearch", new=fake_search
-    ):  # test-quality-ok: asearch is the boundary the forwarding contract under test targets
+    with patch("litellm.vector_stores.asearch", new=fake_search):  # test-quality-ok: asearch is the boundary the forwarding contract under test targets
         response = await litellm.aquery(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": "hello"}],
@@ -510,11 +510,11 @@ async def test_aquery_minimal_retrieval_config_forwards_no_extras():
     from litellm.types.vector_stores import VectorStoreSearchResponse
 
     fake_search = AsyncMock(
-        return_value=VectorStoreSearchResponse(object="vector_store.search_results.page", search_query="q", data=[])
+        return_value=VectorStoreSearchResponse(
+            object="vector_store.search_results.page", search_query="q", data=[]
+        )
     )
-    with patch(
-        "litellm.vector_stores.asearch", new=fake_search
-    ):  # test-quality-ok: asearch is the boundary the forwarding contract under test targets
+    with patch("litellm.vector_stores.asearch", new=fake_search):  # test-quality-ok: asearch is the boundary the forwarding contract under test targets
         await litellm.aquery(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": "hello"}],
@@ -544,11 +544,11 @@ async def test_aquery_does_not_forward_connection_override_keys_to_search():
     from litellm.types.vector_stores import VectorStoreSearchResponse
 
     fake_search = AsyncMock(
-        return_value=VectorStoreSearchResponse(object="vector_store.search_results.page", search_query="q", data=[])
+        return_value=VectorStoreSearchResponse(
+            object="vector_store.search_results.page", search_query="q", data=[]
+        )
     )
-    with patch(
-        "litellm.vector_stores.asearch", new=fake_search
-    ):  # test-quality-ok: asearch is the boundary the forwarding contract under test targets
+    with patch("litellm.vector_stores.asearch", new=fake_search):  # test-quality-ok: asearch is the boundary the forwarding contract under test targets
         await litellm.aquery(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": "hello"}],
@@ -585,7 +585,9 @@ async def test_aquery_forwards_vector_store_params_to_search_but_not_completion(
     from litellm.types.vector_stores import VectorStoreSearchResponse
 
     fake_search = AsyncMock(
-        return_value=VectorStoreSearchResponse(object="vector_store.search_results.page", search_query="q", data=[])
+        return_value=VectorStoreSearchResponse(
+            object="vector_store.search_results.page", search_query="q", data=[]
+        )
     )
     fake_completion = AsyncMock(
         return_value=ModelResponse(
