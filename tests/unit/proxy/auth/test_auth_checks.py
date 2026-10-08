@@ -150,12 +150,12 @@ async def test_team_require_trace_id_accepts_supported_trace_carriers(
 @pytest.mark.parametrize("route", ["/v1/traces", "/v1/logs", "/v1/traces/query"])
 @pytest.mark.asyncio
 async def test_team_require_trace_id_accepts_trace_telemetry_routes(route: str) -> None:
-    await _run_team_trace_id_check(
+    assert await _run_team_trace_id_check(
         route=route,
         method="POST",
         request_body={},
         team_metadata={"require_trace_id": True},
-    )
+    ) is True
 
 
 @pytest.mark.asyncio
@@ -187,11 +187,11 @@ async def test_team_require_trace_id_rejects_overridden_body_metadata_on_chat() 
 async def test_team_require_trace_id_accepts_effective_metadata_on_responses_route(
     request_body: dict[str, object],
 ) -> None:
-    await _run_team_trace_id_check(
+    assert await _run_team_trace_id_check(
         route="/v1/responses",
         request_body=request_body,
         team_metadata={"require_trace_id": True},
-    )
+    ) is True
 
 
 @pytest.mark.parametrize(
@@ -230,12 +230,12 @@ async def test_team_require_trace_id_rejects_fallback_carriers_when_litellm_trac
 
 @pytest.mark.asyncio
 async def test_team_require_trace_id_accepts_header_on_mcp_with_empty_body() -> None:
-    await _run_team_trace_id_check(
+    assert await _run_team_trace_id_check(
         route="/mcp/",
         request_body={},
         headers={"x-litellm-trace-id": "trace-mcp-123"},
         team_metadata={"require_trace_id": True},
-    )
+    ) is True
 
 
 @pytest.mark.parametrize(
@@ -268,12 +268,12 @@ async def test_team_require_trace_id_rejects_nonheader_carriers_on_pass_through_
 
 @pytest.mark.asyncio
 async def test_team_require_trace_id_accepts_header_on_pass_through_route() -> None:
-    await _run_team_trace_id_check(
+    assert await _run_team_trace_id_check(
         route="/anthropic/v1/messages",
         request_body={},
         headers={"x-litellm-trace-id": "trace-provider-123"},
         team_metadata={"require_trace_id": True},
-    )
+    ) is True
 
 
 @pytest.mark.parametrize(
@@ -424,7 +424,7 @@ async def test_team_require_trace_id_exempts_methods_routes_and_disabled_teams(
     method: str,
     team_metadata: Mapping[str, object] | None,
 ) -> None:
-    await _run_team_trace_id_check(route=route, method=method, team_metadata=team_metadata)
+    assert await _run_team_trace_id_check(route=route, method=method, team_metadata=team_metadata) is True
 
 
 @pytest.mark.parametrize("customer_spend, customer_budget", [(0, 10), (10, 0)])
