@@ -26,6 +26,7 @@ data-url = "0.3.2"
 futures-util.workspace = true
 reqwest.workspace = true
 serde.workspace = true
+percent-encoding.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
 serde_path_to_error = "0.1"
 serde_with.workspace = true
@@ -37,6 +38,7 @@ url.workspace = true
 
 [dev-dependencies]
 litellm-http = { workspace = true, features = ["test-support"] }
+litellm-auth-aws.workspace = true
 aws-smithy-eventstream = "=0.61.4"
 aws-smithy-types = "1.6.1"
 rstest.workspace = true

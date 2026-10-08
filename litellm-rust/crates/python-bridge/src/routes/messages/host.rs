@@ -193,6 +193,8 @@ impl MessagesPythonHost {
         Ok(MessagesShaping {
             capabilities,
             settings,
+            bedrock_connection: None,
+            bedrock_request_metadata: None,
         })
     }
 

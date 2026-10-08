@@ -2,7 +2,13 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use litellm_host::call::CallOutput;
-use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
+use litellm_llms::{
+    base_llm::messages::context::MessagesModelCapabilities,
+    bedrock::{
+        messages::connection::BedrockMessagesConnection,
+        request_metadata::BedrockRequestMetadataInput,
+    },
+};
 use litellm_llms_types::{
     formats::messages::{MessagesRequest, MessagesResponse},
     headers::ProviderSpecificHeaders,
@@ -40,6 +46,10 @@ pub struct MessagesShaping {
     pub capabilities: MessagesModelCapabilities,
     #[serde(flatten)]
     pub settings: MessagesSettings,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bedrock_connection: Option<BedrockMessagesConnection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bedrock_request_metadata: Option<BedrockRequestMetadataInput>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -135,6 +145,37 @@ mod tests {
                     max: false,
                 },
             },
+            ..MessagesShaping::default()
+        },
+    )]
+    #[case::bedrock_inputs(
+        json!({
+            "bedrock_connection": {
+                "api_base": "https://projected.test",
+                "region": "us-east-2",
+                "model_id": "override/model",
+                "workspace_id": "trusted-project"
+            },
+            "bedrock_request_metadata": {
+                "allowed_fields": ["user_api_key_alias", "spend_logs_metadata"],
+                "sources": [{"identity": [["user_api_key_alias", "prod-key"]], "spend_logs": []}]
+            }
+        }),
+        MessagesShaping {
+            bedrock_connection: Some(BedrockMessagesConnection {
+                api_base: Some("https://projected.test".to_string()),
+                region: Some("us-east-2".to_string()),
+                model_id: Some("override/model".to_string()),
+                workspace_id: Some("trusted-project".to_string()),
+            }),
+            bedrock_request_metadata: Some(BedrockRequestMetadataInput {
+                allowed_fields: vec!["user_api_key_alias".to_string(), "spend_logs_metadata".to_string()],
+                sources: vec![litellm_llms::bedrock::request_metadata::BedrockMetadataSource {
+                    identity: vec![("user_api_key_alias".to_string(), "prod-key".to_string())],
+                    spend_logs: vec![],
+                }],
+            }),
+            ..MessagesShaping::default()
         },
     )]
     fn shaping_deserializes_with_defaults_for_absent_fields(
@@ -160,5 +201,18 @@ mod tests {
             serialized["capabilities"],
             serde_json::to_value(expected.capabilities).unwrap()
         );
+        if expected.bedrock_connection.is_none() {
+            assert_eq!(serialized.get("bedrock_connection"), None);
+        }
+        if expected.bedrock_request_metadata.is_none() {
+            assert_eq!(serialized.get("bedrock_request_metadata"), None);
+        }
+    }
+
+    #[rstest]
+    fn default_shaping_serializes_without_bedrock_keys() {
+        let serialized = serde_json::to_value(MessagesShaping::default()).unwrap();
+        assert_eq!(serialized.get("bedrock_connection"), None);
+        assert_eq!(serialized.get("bedrock_request_metadata"), None);
     }
 }
