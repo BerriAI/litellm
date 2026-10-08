@@ -21,6 +21,20 @@ FLAG: Final = "LITELLM_DISABLE_LAZY_ROUTES"
 WARMUP_PATH: Final = "/lazy/warm/{name}"
 
 
+def test_cimd_metadata_is_available_before_any_oauth_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(FLAG, "false")
+    monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com")
+    app: Final = FastAPI()
+    attach_lazy_features(app)
+
+    with TestClient(app) as client:
+        response: Final = client.get("/oauth/client-metadata.json")
+
+    assert response.status_code == 200
+    assert response.json()["client_id"] == "https://gateway.example.com/oauth/client-metadata.json"
+    assert response.json()["redirect_uris"] == ["https://gateway.example.com/callback"]
+
+
 class _Operation(BaseModel):
     tags: tuple[str, ...]
 
