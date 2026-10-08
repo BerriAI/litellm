@@ -9,6 +9,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.redact_messages import REDACTED_BY_LITELLM
 from litellm.types.utils import Usage
 
 _OPENAI_URL: Final = "https://api.openai.com/v1/chat/completions"
@@ -117,8 +118,9 @@ async def test_logged_stream_usage_equals_the_final_chunk_usage_with_include_usa
 async def test_logged_stream_usage_equals_the_usage_chunk_without_stream_options(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:
-    client_usage, payload, _ = await _stream_and_record(monkeypatch, respx_mock, include_usage=False)
+    client_usage, payload, body = await _stream_and_record(monkeypatch, respx_mock, include_usage=False)
 
+    assert body["stream_options"] == {"include_usage": True}
     _assert_logged_usage_matches(client_usage, payload)
 
 
@@ -131,4 +133,4 @@ async def test_logged_stream_usage_survives_message_redaction(
     client_usage, payload, _ = await _stream_and_record(monkeypatch, respx_mock, include_usage=False)
 
     _assert_logged_usage_matches(client_usage, payload)
-    assert payload["messages"] != [{"role": "user", "content": "Hello, how are you?" * 100}]
+    assert payload["messages"] == [{"role": "user", "content": REDACTED_BY_LITELLM}]

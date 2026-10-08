@@ -203,7 +203,7 @@ async def test_daily_report_lists_router_latency_after_success_and_failures_afte
     assert (after_success, after_failure) == (True, True)
     assert len(texts) == 2
     assert "Most Failed Requests:*\n\n\tNone\n" in texts[0]
-    assert f"1. Deployment: `openai/gpt-5-mini`, Latency per output token: `" in texts[0]
+    assert "1. Deployment: `openai/gpt-5-mini`, Latency per output token: `" in texts[0]
     assert f"1. Deployment: `openai/gpt-5-mini`, Failed Requests: `1`,  API Base: `{_DAILY_BASE}`" in texts[1]
     assert "Top Slowest Deployments:*\n\n\tNone\n" in texts[1]
 

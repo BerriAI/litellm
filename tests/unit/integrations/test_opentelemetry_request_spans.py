@@ -99,6 +99,7 @@ async def test_otel_callback_emits_the_request_and_raw_provider_spans(
     streaming: bool, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("OTEL_SEMCONV_STABILITY_OPT_IN", raising=False)
     exporter: Final = _SignallingExporter(asyncio.get_running_loop())
     tracer_provider: Final = TracerProvider()
     tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
@@ -135,7 +136,10 @@ async def test_otel_callback_emits_the_request_and_raw_provider_spans(
     assert request_attributes["gen_ai.request.temperature"] == 0.1
     assert request_attributes["llm.is_streaming"] == str(streaming)
     assert request_attributes["llm.user"] == "OTEL_USER"
-    assert request_attributes["gen_ai.usage.total_tokens"] == 10
+    assert request_attributes["gen_ai.response.id"] == "chatcmpl-otel"
+    assert request_attributes["gen_ai.usage.input_tokens"] == _USAGE["prompt_tokens"]
+    assert request_attributes["gen_ai.usage.output_tokens"] == _USAGE["completion_tokens"]
+    assert request_attributes["gen_ai.usage.total_tokens"] == _USAGE["total_tokens"]
     raw_attributes: Final = spans["raw_gen_ai_request"].attributes or {}
     expected_raw: Final = _RAW_STREAMING_ATTRIBUTES if streaming else _RAW_NON_STREAMING_ATTRIBUTES
     assert all(raw_attributes.get(name) is not None for name in expected_raw)
