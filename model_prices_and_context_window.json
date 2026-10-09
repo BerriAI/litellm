@@ -31293,6 +31293,42 @@
             "video"
         ]
     },
+    "github_copilot/claude-fable-5": {
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages"
+        ],
+        "supports_adaptive_thinking": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "thinking_always_on": true
+    },
+    "github_copilot/claude-fable-5.1": {
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages"
+        ],
+        "supports_adaptive_thinking": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "thinking_always_on": true
+    },
     "github_copilot/claude-haiku-4.5": {
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_read_input_token_cost": 1e-07,
@@ -31308,76 +31344,166 @@
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_vision": true
     },
-    "github_copilot/claude-opus-4.5": {
+    "github_copilot/claude-haiku-5.5": {
+        "cache_creation_input_token_cost": 1.25e-07,
+        "cache_creation_input_token_cost_above_100k_tokens": 6.25e-07,
+        "cache_read_input_token_cost": 1e-08,
+        "cache_read_input_token_cost_above_100k_tokens": 5e-08,
+        "input_cost_per_token": 1e-07,
+        "input_cost_per_token_above_100k_tokens": 5e-07,
         "litellm_provider": "github_copilot",
         "max_input_tokens": 128000,
         "max_output_tokens": 16000,
         "max_tokens": 16000,
         "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "output_cost_per_token_above_100k_tokens": 2.5e-06,
+        "source": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/models-and-pricing.yml",
         "supported_endpoints": [
-            "/v1/chat/completions"
+            "/v1/chat/completions",
+            "/v1/messages"
         ],
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "supports_vision": true,
-        "supports_output_config": true
-    },
-    "github_copilot/claude-opus-4.6-fast": {
         "supports_adaptive_thinking": true,
-        "supports_legacy_thinking": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "thinking_always_on": false
+    },
+    "github_copilot/claude-opus-4.8": {
         "litellm_provider": "github_copilot",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 16000,
-        "max_tokens": 16000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages"
+        ],
+        "supports_adaptive_thinking": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "github_copilot/claude-opus-4.8-fast": {
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages"
+        ],
+        "supports_adaptive_thinking": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "github_copilot/claude-opus-5": {
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages"
+        ],
+        "supports_adaptive_thinking": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "github_copilot/claude-opus-5.5": {
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages"
+        ],
+        "supports_adaptive_thinking": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "thinking_always_on": true
+    },
+    "github_copilot/claude-sonnet-5": {
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages"
+        ],
+        "supports_adaptive_thinking": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "github_copilot/claude-sonnet-5.5": {
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages"
+        ],
+        "supports_adaptive_thinking": true,
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true,
+        "thinking_always_on": true
+    },
+    "github_copilot/gemini-3.7-flash": {
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
         "mode": "chat",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_vision": true
     },
-    "github_copilot/claude-opus-41": {
+    "github_copilot/gemini-3.8-flash": {
         "litellm_provider": "github_copilot",
-        "max_input_tokens": 80000,
-        "max_output_tokens": 16000,
-        "max_tokens": 16000,
-        "mode": "chat",
-        "supported_endpoints": [
-            "/v1/chat/completions"
-        ],
-        "supports_vision": true
-    },
-    "github_copilot/claude-sonnet-4": {
-        "cache_creation_input_token_cost": 3.75e-06,
-        "cache_read_input_token_cost": 3e-07,
-        "input_cost_per_token": 3e-06,
-        "litellm_provider": "github_copilot",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 16000,
-        "max_tokens": 16000,
-        "mode": "chat",
-        "output_cost_per_token": 1.5e-05,
-        "supported_endpoints": [
-            "/v1/chat/completions"
-        ],
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "supports_vision": true
-    },
-    "github_copilot/claude-sonnet-4.5": {
-        "litellm_provider": "github_copilot",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 16000,
-        "max_tokens": 16000,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
         "mode": "chat",
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_vision": true
     },
     "github_copilot/gpt-3.5-turbo": {
@@ -31504,21 +31630,6 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true
     },
-    "github_copilot/gpt-5": {
-        "litellm_provider": "github_copilot",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 128000,
-        "max_tokens": 128000,
-        "mode": "chat",
-        "supported_endpoints": [
-            "/v1/chat/completions",
-            "/v1/responses"
-        ],
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "supports_response_schema": true,
-        "supports_vision": true
-    },
     "github_copilot/gpt-5-mini": {
         "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_token": 2.5e-07,
@@ -31528,50 +31639,6 @@
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 2e-06,
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "supports_response_schema": true,
-        "supports_vision": true
-    },
-    "github_copilot/gpt-5.1": {
-        "litellm_provider": "github_copilot",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 64000,
-        "max_tokens": 64000,
-        "mode": "chat",
-        "supported_endpoints": [
-            "/v1/chat/completions",
-            "/v1/responses"
-        ],
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "supports_response_schema": true,
-        "supports_vision": true
-    },
-    "github_copilot/gpt-5.1-codex-max": {
-        "litellm_provider": "github_copilot",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 128000,
-        "max_tokens": 128000,
-        "mode": "responses",
-        "supported_endpoints": [
-            "/v1/responses"
-        ],
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "supports_response_schema": true,
-        "supports_vision": true
-    },
-    "github_copilot/gpt-5.2": {
-        "litellm_provider": "github_copilot",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 64000,
-        "max_tokens": 64000,
-        "mode": "chat",
-        "supported_endpoints": [
-            "/v1/chat/completions",
-            "/v1/responses"
-        ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_response_schema": true,
@@ -31591,40 +31658,188 @@
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_vision": true
     },
-    "github_copilot/mai-code-1-flash": {
-        "cache_read_input_token_cost": 7.5e-08,
-        "input_cost_per_token": 7.5e-07,
+    "github_copilot/gpt-5.4": {
         "litellm_provider": "github_copilot",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 64000,
-        "max_tokens": 64000,
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
         "mode": "chat",
-        "output_cost_per_token": 4.5e-06,
         "supported_endpoints": [
-            "/v1/chat/completions"
+            "/v1/chat/completions",
+            "/v1/responses"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_response_schema": true
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true
     },
-    "github_copilot/mai-code-1-flash-internal": {
-        "cache_read_input_token_cost": 7.5e-08,
-        "input_cost_per_token": 7.5e-07,
+    "github_copilot/gpt-5.4-mini": {
         "litellm_provider": "github_copilot",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 64000,
-        "max_tokens": 64000,
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "github_copilot/gpt-5.5": {
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "github_copilot/gpt-5.6-luna": {
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "github_copilot/gpt-5.6-sol": {
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "github_copilot/gpt-5.6-terra": {
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "github_copilot/gpt-6-astra": {
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "github_copilot/gpt-6-luna": {
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "github_copilot/gpt-6-sol": {
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "github_copilot/gpt-6.1-sol": {
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 272000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "github_copilot/kimi-k3": {
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 917504,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 4.5e-06,
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "github_copilot/mai-code-1.1-flash": {
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true
     },
     "github_copilot/text-embedding-3-small": {
         "litellm_provider": "github_copilot",
@@ -70440,6 +70655,9 @@
     },
     "global.xai.grok-4.7": {
         "supports_regex_lookaround": false,
+        "supported_endpoints": ["/v1/chat/completions"],
+        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
+        "supports_bedrock_runtime_chat_completions_response_format": true,
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_flex": 2.5e-07,
         "cache_read_input_token_cost_priority": 8.75e-07,
@@ -70463,6 +70681,9 @@
     },
     "us.xai.grok-4.7": {
         "supports_regex_lookaround": false,
+        "supported_endpoints": ["/v1/chat/completions"],
+        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
+        "supports_bedrock_runtime_chat_completions_response_format": true,
         "cache_read_input_token_cost": 5.5e-07,
         "cache_read_input_token_cost_flex": 2.75e-07,
         "cache_read_input_token_cost_priority": 9.625e-07,
@@ -71882,6 +72103,13 @@
         "prompt_cache_min_tokens": 512,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
     },
+    "microsoft_365_copilot/chat": {
+        "litellm_provider": "microsoft_365_copilot",
+        "mode": "chat",
+        "supports_mid_conversation_system": true,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0
+    },
     "openrouter/inclusionai/ling-3.0-flash-sante": {
         "cache_read_input_token_cost": 8.4e-09,
         "input_cost_per_token": 4.2e-08,
@@ -71975,27 +72203,5 @@
         "supported_endpoints": [
             "/v1/responses"
         ]
-    },
-    "github_copilot/claude-haiku-5.5": {
-        "cache_creation_input_token_cost": 1.25e-07,
-        "cache_creation_input_token_cost_above_100k_tokens": 6.25e-07,
-        "cache_read_input_token_cost": 1e-08,
-        "cache_read_input_token_cost_above_100k_tokens": 5e-08,
-        "input_cost_per_token": 1e-07,
-        "input_cost_per_token_above_100k_tokens": 5e-07,
-        "litellm_provider": "github_copilot",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 16000,
-        "max_tokens": 16000,
-        "mode": "chat",
-        "output_cost_per_token": 5e-07,
-        "output_cost_per_token_above_100k_tokens": 2.5e-06,
-        "source": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/models-and-pricing.yml",
-        "supported_endpoints": [
-            "/v1/chat/completions"
-        ],
-        "supports_function_calling": true,
-        "supports_parallel_function_calling": true,
-        "supports_vision": true
     }
 }
