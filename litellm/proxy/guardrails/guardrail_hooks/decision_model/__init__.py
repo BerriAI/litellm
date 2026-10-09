@@ -60,6 +60,7 @@ def initialize_guardrail(litellm_params: LitellmParams, guardrail: Guardrail) ->
             if "unreachable_fallback" in litellm_params.model_fields_set
             else "fail_closed"
         ),
+        max_input_chars=litellm_params.max_input_chars or 24000,
     )
     litellm.logging_callback_manager.add_litellm_callback(  # pyright: ignore[reportUnknownMemberType]  # callback manager is untyped
         _callback

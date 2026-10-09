@@ -60,6 +60,19 @@ def _resolve_checks(checks: tuple[DecisionModelCheck, ...]) -> tuple[DecisionMod
     return resolved
 
 
+_ELISION_MARKER: Final = "\n[... middle of input omitted ...]\n"
+
+
+def _elide_middle(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= len(_ELISION_MARKER):
+        return text[:max_chars]
+    budget: Final = max_chars - len(_ELISION_MARKER)
+    head: Final = budget // 2
+    return text[:head] + _ELISION_MARKER + text[len(text) - (budget - head) :]
+
+
 def _predicate_verdict(answer: object | None, check: DecisionModelCheck) -> _CheckVerdict:
     if isinstance(answer, OpenAIPredicateAnswer):
         return {
@@ -89,6 +102,7 @@ class DecisionModelGuardrail(CustomGuardrail):
         event_hook: GuardrailEventHooks | tuple[GuardrailEventHooks, ...] | Mode | None = None,
         default_on: bool = False,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
+        max_input_chars: int = 24000,
         router_provider: Callable[[], Router | None] | None = None,
     ) -> None:
         super().__init__(  # pyright: ignore[reportUnknownMemberType]  # base init takes untyped **kwargs
@@ -102,6 +116,7 @@ class DecisionModelGuardrail(CustomGuardrail):
         self.decision_model = decision_model
         self.checks = _resolve_checks(tuple(checks))
         self.unreachable_fallback = unreachable_fallback
+        self.max_input_chars = max_input_chars
         self._router_provider = router_provider or default_router_provider
 
     @classmethod
@@ -203,9 +218,10 @@ class DecisionModelGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
-        text: Final = "\n".join(inputs.get("texts") or [])
-        if not text:
+        joined: Final = "\n".join(inputs.get("texts") or [])
+        if not joined:
             return inputs
+        text: Final = _elide_middle(joined, self.max_input_chars)
         start_time: Final = time()
 
         try:

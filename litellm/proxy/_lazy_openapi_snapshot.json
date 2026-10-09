@@ -11661,6 +11661,18 @@
               "description": "Will mask response content if guardrail makes any changes",
               "title": "Mask Response Content"
             },
+            "max_input_chars": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Character budget for text sent to the guardrail's model. Implemented by guardrail='decision_model'.",
+              "title": "Max Input Chars"
+            },
             "model": {
               "anyOf": [
                 {
@@ -14171,6 +14183,18 @@
               ],
               "description": "Will mask response content if guardrail makes any changes",
               "title": "Mask Response Content"
+            },
+            "max_input_chars": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Character budget for text sent to the guardrail's model. Implemented by guardrail='decision_model'.",
+              "title": "Max Input Chars"
             },
             "metadata": {
               "anyOf": [

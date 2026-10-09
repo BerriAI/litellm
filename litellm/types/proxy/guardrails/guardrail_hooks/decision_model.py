@@ -72,6 +72,11 @@ class DecisionModelGuardrailConfigModel(GuardrailConfigModel[BaseModel]):
             "above its threshold blocks (action 'block') or is recorded (action 'log')."
         ),
     )
+    max_input_chars: int = Field(
+        default=24000,
+        gt=0,
+        description="Character budget for the text sent to the decision model. Longer text keeps its first and last halves and drops the middle, so instructions at either end stay visible",
+    )
 
     @staticmethod
     def ui_friendly_name() -> str:
