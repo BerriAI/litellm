@@ -3279,6 +3279,28 @@ def test_cost_per_token_resolves_per_second_rate_precedence(
     ) == pytest.approx((expected_rate * 1.5, 0.0))
 
 
+def test_completion_cost_prefers_a_direct_row_over_the_together_size_bucket(monkeypatch) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    model: Final = "openrouter/togethercomputer/direct-row-4b"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 3e-08,
+                "output_cost_per_token": 0.0,
+                "litellm_provider": "openrouter",
+                "mode": "chat",
+            }
+        }
+    )
+    response: Final = ModelResponse(model=model, usage=Usage(prompt_tokens=100, completion_tokens=0, total_tokens=100))
+
+    assert litellm.completion_cost(completion_response=response, custom_llm_provider="openrouter") == pytest.approx(
+        100 * 3e-08
+    )
+
+
 def _logging_obj_with_call_window(duration_ms: float) -> Logging:
     start_time: Final = datetime.datetime(2026, 9, 21, 12, 0, 0)
     logging_obj: Final = Logging(

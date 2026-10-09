@@ -323,6 +323,58 @@ def test_custom_token_pricing_bills_cached_decisions_input_tokens_once(
     )
 
 
+_OPENROUTER_DECISIONS_URL: Final = "https://openrouter.ai/api/alpha/decisions"
+_PERPLEXITY_DECISIONS_URL: Final = "https://api.perplexity.ai/v1/decisions"
+_DECISIONS_MODELS_PRICED_FROM_THE_VENDOR_CATALOGS: Final[tuple[tuple[str, str], ...]] = (
+    ("openrouter/cloudflare/clef", _OPENROUTER_DECISIONS_URL),
+    ("openrouter/cloudflare/clef-flash", _OPENROUTER_DECISIONS_URL),
+    ("openrouter/inception/mercury-decide", _OPENROUTER_DECISIONS_URL),
+    ("openrouter/inception/mercury-decide:free", _OPENROUTER_DECISIONS_URL),
+    ("openrouter/jaredpalmer/kev-4b", _OPENROUTER_DECISIONS_URL),
+    ("openrouter/liquid/d1", _OPENROUTER_DECISIONS_URL),
+    ("openrouter/openai/gpt-6-luna-decisions", _OPENROUTER_DECISIONS_URL),
+    ("openrouter/perplexity/pplx-decider-v1.1-27b", _OPENROUTER_DECISIONS_URL),
+    ("openrouter/respan/span-01", _OPENROUTER_DECISIONS_URL),
+    ("openrouter/respan/span-01-lite", _OPENROUTER_DECISIONS_URL),
+    ("openrouter/respan/span-01-lite:free", _OPENROUTER_DECISIONS_URL),
+    ("openrouter/togethercomputer/tev1-4b-experimental", _OPENROUTER_DECISIONS_URL),
+    ("openrouter/typesafe/jev-1.13", _OPENROUTER_DECISIONS_URL),
+    ("openrouter/upstage/solar-decide", _OPENROUTER_DECISIONS_URL),
+    ("openrouter/upstage/solar-decide-flash", _OPENROUTER_DECISIONS_URL),
+    ("openrouter/~typesafe/jev-latest", _OPENROUTER_DECISIONS_URL),
+    ("perplexity/pplx-decider-v1-27b", _PERPLEXITY_DECISIONS_URL),
+    ("perplexity/pplx-decider-v1.1-27b", _PERPLEXITY_DECISIONS_URL),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("model", "vendor_url"), _DECISIONS_MODELS_PRICED_FROM_THE_VENDOR_CATALOGS)
+async def test_openrouter_and_perplexity_decisions_models_bill_their_cost_map_row(
+    model: str,
+    vendor_url: str,
+    respx_mock: respx.MockRouter,
+) -> None:
+    vendor_model_echo: Final = f"{model.split('/', 1)[1]}-20261006"
+    respx_mock.post(vendor_url).respond(json={**_RESPONSE, "model": vendor_model_echo})
+
+    response: Final = await litellm.adecisions(
+        model=model,
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        api_key="caller-key",
+    )
+
+    cost: Final = litellm.completion_cost(completion_response=response)
+    row: Final = litellm.model_cost[model]
+    expected_cost: Final = _INPUT_TOKENS * float(row["input_cost_per_token"]) + _OUTPUT_TOKENS * float(
+        row["output_cost_per_token"]
+    )
+
+    assert response.model == vendor_model_echo
+    assert cost == pytest.approx(expected_cost)
+    assert (cost > 0) == (float(row["input_cost_per_token"]) > 0)
+
+
 def test_decisions_response_hidden_params_getter_preserves_mutable_identity() -> None:
     response: Final = DecisionsResponse(model="decider", answers={}, usage=None)
 
