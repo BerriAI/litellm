@@ -2373,6 +2373,28 @@ class TestCommonRequestProcessingHelpers:
         plain: Final = proxy_exception_from_route_error(ValueError("boom"))
         assert (plain.code, plain.type, plain.message) == ("500", "internal_server_error", "boom")
 
+    async def test_proxy_exception_from_route_error_redacts_internal_details(self) -> None:
+        from litellm.proxy.common_request_processing import (
+            proxy_exception_from_route_error,
+        )
+
+        notice: Final = bug_report_notice(build_bug_report(RuntimeError("boom"), surface="sdk"))
+        exc: Final = litellm.APIConnectionError(
+            message=(
+                "OpenAIException - postgresql://litellm_internal:S3cr3tPGPass@10.20.30.40:5432/litellm_prod "
+                f"(config file /etc/litellm/secrets/db.yaml)\n{notice}"
+            ),
+            model="gpt-5.4-mini",
+            llm_provider="openai",
+        )
+        mapped: Final = proxy_exception_from_route_error(exc)
+        assert mapped.code == "500"
+        assert "OpenAIException" in mapped.message
+        assert "REDACTED" in mapped.message
+        leaked: Final = ("S3cr3tPGPass", "litellm_internal", "10.20.30.40", "/etc/litellm/secrets/db.yaml")
+        assert [value for value in leaked if value in mapped.message] == []
+        assert ISSUE_URL_BASE not in mapped.message
+
     async def test_create_streaming_response_first_chunk_error_string_code(self):
         """
         Test that when the first chunk contains a string error code, a JSON error response is returned

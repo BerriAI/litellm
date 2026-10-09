@@ -638,7 +638,9 @@ def proxy_exception_from_route_error(exc: Exception) -> ProxyException:
     carried_code: Final = attribute_of(exc, "code")
     provider_fields: Final = attribute_of(exc, "provider_specific_fields")
     return ProxyException(
-        message=message if isinstance(message, str) else str(exc),
+        message=redact_internal_details_from_client_message(
+            strip_bug_report_notice(message) if isinstance(message, str) else str(exc)
+        ),
         type=openai_error_type(exc, error_status),
         param=openai_error_param(exc),
         code=error_status,
