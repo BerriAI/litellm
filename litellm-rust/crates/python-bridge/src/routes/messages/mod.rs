@@ -1,14 +1,14 @@
 mod host;
 
 use host::MessagesPythonHost;
-use litellm_callbacks_legacy_python::LoggingOperation;
+use litellm_host::call::Operation;
 use pyo3::prelude::*;
 
 use super::NativeCall;
 
 fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyResult<Py<PyAny>> {
     let (arguments, hooks) =
-        crate::routes::call_hooks(py, LoggingOperation::Messages, &call, asynchronous)?;
+        crate::routes::call_hooks(py, Operation::Messages, &call, asynchronous)?;
     crate::routes::run_public_call(
         py,
         arguments,

@@ -8,10 +8,11 @@ pub(crate) mod responses;
 pub(crate) mod token_counter;
 pub(crate) mod traces;
 
-use litellm_callbacks_legacy_python::{LegacyLogging, LoggingOperation, PublicCall};
+use litellm_callbacks_legacy_python::{LegacyLogging, PublicCall};
+use litellm_host::call::Operation;
 use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol};
 use litellm_host_python::{
-    HookChain, PythonBinding, PythonCallHooks, PythonHostCalls, effective_py_args,
+    HookChain, Hooks, PythonBinding, PythonCallHooks, PythonHostCalls, effective_py_args,
 };
 use pyo3::{
     prelude::*,
@@ -49,7 +50,7 @@ fn mapping_dict<'py>(value: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> 
 
 fn call_hooks(
     py: Python<'_>,
-    operation: LoggingOperation,
+    operation: Operation,
     call: &NativeCall<'_>,
     asynchronous: bool,
 ) -> PyResult<(Py<PyDict>, impl PythonCallHooks + use<>)> {
@@ -87,9 +88,11 @@ where
             start(py, arguments, request).map(crate::logger::LoggedMachine::new)
         },
         host,
-        HookChain::new()
-            .with(hooks)
-            .with(crate::preflight::SdkPolicy),
+        HookChain::new().layer(
+            py,
+            |_: Python<'_>, ()| [Hooks::new(hooks), Hooks::new(crate::preflight::SdkPolicy)],
+            (),
+        ),
         arguments,
         crate::lifecycle::call_options(asynchronous),
     )

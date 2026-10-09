@@ -60,6 +60,11 @@ pub(super) trait ChainHooks: PythonOwned {
         py: Python<'_>,
         result: PyResult<Py<PyAny>>,
     ) -> PyResult<ChainStep<Py<PyDict>>>;
+    fn prepare_request(
+        &mut self,
+        py: Python<'_>,
+        arguments: Py<PyDict>,
+    ) -> PyResult<ChainStep<Py<PyDict>>>;
     fn before_provider_request(
         &mut self,
         py: Python<'_>,
@@ -94,6 +99,15 @@ pub(super) trait ChainHooks: PythonOwned {
 }
 
 impl<H: PythonCallHooks> ChainHooks for HookAdapter<H> {
+    fn prepare_request(
+        &mut self,
+        py: Python<'_>,
+        arguments: Py<PyDict>,
+    ) -> PyResult<ChainStep<Py<PyDict>>> {
+        let step = self.hooks.prepare_request(py, arguments)?;
+        Ok(self.step(step, Continuation::Arguments))
+    }
+
     fn prepare_arguments(
         &mut self,
         py: Python<'_>,

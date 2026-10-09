@@ -8,6 +8,14 @@ use crate::{
     protocol::Protocol,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Operation {
+    Completion,
+    Responses,
+    Messages,
+    Ocr,
+}
+
 pub enum CallOutput<Response, Head, Chunk, Error> {
     Complete(Response),
     Stream {

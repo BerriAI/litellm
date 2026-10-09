@@ -67,6 +67,7 @@ enum Pending<L> {
     Host,
     Native,
     Arguments(HookResume<L, Py<PyDict>>),
+    Request(HookResume<L, Py<PyDict>>),
     Wire(HookResume<L, Box<WireRequest>>, Reply<WireRequest>),
     Response(HookResume<L, Py<PyAny>>),
     Event(HookResume<L, ()>, EventNext),
@@ -233,6 +234,12 @@ where
                     Err(error) => self.hook_failed(py, error),
                 }
             }
+            (Some(Pending::Request(resume)), Some(result)) => {
+                match resume(&mut self.hooks, py, result) {
+                    Ok(step) => self.on_request(py, step),
+                    Err(error) => self.failure(py, error, FailureOrigin::Call),
+                }
+            }
             (Some(Pending::Wire(resume, reply)), Some(result)) => {
                 let step = resume(&mut self.hooks, py, result);
                 match step {
@@ -266,6 +273,23 @@ where
         match step {
             HookStep::Await(awaitable, resume) => {
                 self.pending = Some(Pending::Arguments(resume));
+                Ok(ExecutionStep::Await(awaitable))
+            }
+            HookStep::Ready(arguments) => match self.hooks.prepare_request(py, arguments) {
+                Ok(step) => self.on_request(py, step),
+                Err(error) => self.failure(py, error, FailureOrigin::Call),
+            },
+        }
+    }
+
+    fn on_request(
+        &mut self,
+        py: Python<'_>,
+        step: HookStep<L, Py<PyDict>>,
+    ) -> PyResult<ExecutionStep> {
+        match step {
+            HookStep::Await(awaitable, resume) => {
+                self.pending = Some(Pending::Request(resume));
                 Ok(ExecutionStep::Await(awaitable))
             }
             HookStep::Ready(arguments) => {
@@ -955,8 +979,10 @@ mod tests {
     enum HookScript {
         Plain,
         RewriteArguments,
+        RewriteRequest,
         ObserveArguments,
         FailBegin,
+        FailRequest,
         ReplaceResponse,
         FailAfterSuccess,
         CancelTerminal,
@@ -969,6 +995,23 @@ mod tests {
     }
 
     impl CallHooks<PythonRuntime> for SyntheticHooks {
+        fn prepare_request(
+            &mut self,
+            py: Python<'_>,
+            arguments: Py<PyDict>,
+        ) -> PyResult<HookStep<Self, Py<PyDict>>> {
+            if matches!(self.script, HookScript::FailRequest) {
+                return Err(PyValueError::new_err("request preparation failed"));
+            }
+            if matches!(self.script, HookScript::RewriteRequest) {
+                let prepared = arguments.bind(py).copy()?;
+                prepared.set_item("prepared", "hook")?;
+                prepared.set_item("api_key", "hook-key")?;
+                return Ok(HookStep::Ready(prepared.unbind()));
+            }
+            Ok(HookStep::Ready(arguments))
+        }
+
         fn prepare_arguments(
             &mut self,
             _: Python<'_>,
@@ -1031,7 +1074,9 @@ mod tests {
                 HookScript::Plain
                 | HookScript::ObserveArguments
                 | HookScript::RewriteArguments
+                | HookScript::RewriteRequest
                 | HookScript::FailBegin
+                | HookScript::FailRequest
                 | HookScript::CancelTerminal
                 | HookScript::FailTerminal => Ok(HookStep::Ready(response)),
             }
@@ -1184,7 +1229,10 @@ mod tests {
     #[rstest::rstest]
     #[case::synchronous(false)]
     #[case::asynchronous(true)]
-    fn composed_hooks_share_prepared_arguments_and_one_execution(#[case] asynchronous: bool) {
+    fn composed_hooks_share_prepared_arguments_and_one_execution(
+        #[case] asynchronous: bool,
+        #[values(HookScript::RewriteArguments, HookScript::RewriteRequest)] rewrite: HookScript,
+    ) {
         let _guard = PYTHON_GLOBALS
             .lock()
             .unwrap_or_else(|error| error.into_inner());
@@ -1196,10 +1244,17 @@ mod tests {
                 log: Log(log.0.clone()),
                 script,
             };
-            let hooks = crate::HookChain::new()
-                .with(hook(HookScript::ObserveArguments))
-                .with(hook(HookScript::RewriteArguments))
-                .with(hook(HookScript::ReplaceResponse));
+            let hooks = crate::HookChain::new().layer(
+                py,
+                |_: Python<'_>, ()| {
+                    [
+                        crate::Hooks::new(hook(HookScript::ObserveArguments)),
+                        crate::Hooks::new(hook(rewrite)),
+                        crate::Hooks::new(hook(HookScript::ReplaceResponse)),
+                    ]
+                },
+                (),
+            );
             let result = run_call(
                 py,
                 move |_, _, request| Ok(success_machine()(request)),
@@ -1463,6 +1518,7 @@ mod tests {
 
     #[rstest::rstest]
     #[case::preparation(HookScript::FailBegin, OpScript::Answer)]
+    #[case::request_preparation(HookScript::FailRequest, OpScript::Answer)]
     #[case::native_decode(HookScript::Plain, OpScript::RejectRequestNatively)]
     #[case::python_decode(HookScript::Plain, OpScript::RaiseRequestPython)]
     fn startup_failures_release_the_factory_without_constructing_a_machine(
@@ -1499,6 +1555,9 @@ mod tests {
                 asynchronous,
             );
             assert!(result.is_err());
+            if matches!(script, HookScript::FailRequest) {
+                assert!(log.iter().any(|event| event.starts_with("failed:Call:")));
+            }
             assert!(!constructed.load(Ordering::SeqCst));
             assert!(released.load(Ordering::SeqCst));
             assert_eq!(
@@ -2029,12 +2088,19 @@ mod tests {
                     classifier_fails: false,
                     pending_reply: None,
                 },
-                crate::HookChain::new()
-                    .with(SyntheticHooks {
-                        log: Log(log.0.clone()),
-                        script: HookScript::RewriteArguments,
-                    })
-                    .with(ArgumentPolicy::Inherit),
+                crate::HookChain::new().layer(
+                    py,
+                    |_: Python<'_>, ()| {
+                        [
+                            crate::Hooks::new(SyntheticHooks {
+                                log: Log(log.0.clone()),
+                                script: HookScript::RewriteArguments,
+                            }),
+                            crate::Hooks::new(ArgumentPolicy::Inherit),
+                        ]
+                    },
+                    (),
+                ),
                 arguments.clone().unbind(),
                 call_options(asynchronous),
             );
@@ -2151,9 +2217,16 @@ mod tests {
                 },
                 HookScript::Plain,
                 |hooks| {
-                    crate::HookChain::new()
-                        .with(hooks)
-                        .with(ArgumentPolicy::Reject(raised.clone_ref(py)))
+                    crate::HookChain::new().layer(
+                        py,
+                        |_: Python<'_>, ()| {
+                            [
+                                crate::Hooks::new(hooks),
+                                crate::Hooks::new(ArgumentPolicy::Reject(raised.clone_ref(py))),
+                            ]
+                        },
+                        (),
+                    )
                 },
                 call_options(asynchronous),
             );
@@ -2194,9 +2267,16 @@ mod tests {
                 },
                 HookScript::Plain,
                 |hooks| {
-                    crate::HookChain::new()
-                        .with(hooks)
-                        .with(ArgumentPolicy::Inherit)
+                    crate::HookChain::new().layer(
+                        py,
+                        |_: Python<'_>, ()| {
+                            [
+                                crate::Hooks::new(hooks),
+                                crate::Hooks::new(ArgumentPolicy::Inherit),
+                            ]
+                        },
+                        (),
+                    )
                 },
                 call_options(asynchronous),
             );
