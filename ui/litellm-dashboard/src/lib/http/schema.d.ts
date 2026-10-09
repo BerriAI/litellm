@@ -5589,6 +5589,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/gateway/errors/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Request Error Activity
+         * @description Failed requests over time by HTTP status, and the keys, teams, users and
+         *     model groups they land on. Deployment-wide, so admin-only.
+         */
+        get: operations["get_request_error_activity_gateway_errors_activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/gemini/{endpoint}": {
         parameters: {
             query?: never;
@@ -33068,6 +33089,11 @@ export interface components {
              */
             by_route: components["schemas"]["GatewayRequestBreakdownEntry"][];
             /**
+             * By Status Code
+             * @default []
+             */
+            by_status_code: components["schemas"]["GatewayRequestStatusCodeEntry"][];
+            /**
              * Total Failed Requests
              * @default 0
              */
@@ -33109,6 +33135,16 @@ export interface components {
              * @default 0
              */
             successful_requests: number;
+        };
+        /** GatewayRequestStatusCodeEntry */
+        GatewayRequestStatusCodeEntry: {
+            /**
+             * Failed Requests
+             * @default 0
+             */
+            failed_requests: number;
+            /** Status Code */
+            status_code: number;
         };
         /** GenerateKeyRequest */
         GenerateKeyRequest: {
@@ -43212,6 +43248,116 @@ export interface components {
             };
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * RequestErrorActivityResponse
+         * @description Response for GET /gateway/errors/activity.
+         */
+        RequestErrorActivityResponse: {
+            /**
+             * By Date
+             * @default []
+             */
+            by_date: components["schemas"]["RequestErrorDailyEntry"][];
+            /**
+             * By Key
+             * @default []
+             */
+            by_key: components["schemas"]["RequestErrorEntityEntry"][];
+            /**
+             * By Model
+             * @default []
+             */
+            by_model: components["schemas"]["RequestErrorEntityEntry"][];
+            /**
+             * By Status Code
+             * @default []
+             */
+            by_status_code: components["schemas"]["RequestErrorStatusCodeEntry"][];
+            /**
+             * By Team
+             * @default []
+             */
+            by_team: components["schemas"]["RequestErrorEntityEntry"][];
+            /**
+             * By User
+             * @default []
+             */
+            by_user: components["schemas"]["RequestErrorEntityEntry"][];
+            /**
+             * Total Failed Requests
+             * @default 0
+             */
+            total_failed_requests: number;
+            /**
+             * Total Successful Requests
+             * @default 0
+             */
+            total_successful_requests: number;
+        };
+        /** RequestErrorDailyEntry */
+        RequestErrorDailyEntry: {
+            /**
+             * By Status Code
+             * @default []
+             */
+            by_status_code: components["schemas"]["RequestErrorStatusCodeEntry"][];
+            /**
+             * Client Errors
+             * @default 0
+             */
+            client_errors: number;
+            /** Date */
+            date: string;
+            /**
+             * Failed Requests
+             * @default 0
+             */
+            failed_requests: number;
+            /**
+             * Server Errors
+             * @default 0
+             */
+            server_errors: number;
+            /**
+             * Successful Requests
+             * @default 0
+             */
+            successful_requests: number;
+        };
+        /** RequestErrorEntityEntry */
+        RequestErrorEntityEntry: {
+            /**
+             * Api Requests
+             * @default 0
+             */
+            api_requests: number;
+            /**
+             * Failed Requests
+             * @default 0
+             */
+            failed_requests: number;
+            /** Id */
+            id: string;
+            /** Label */
+            label?: string | null;
+            /** Top Status Code */
+            top_status_code?: number | null;
+            /**
+             * Top Status Code Requests
+             * @default 0
+             */
+            top_status_code_requests: number;
+        };
+        /** RequestErrorStatusCodeEntry */
+        RequestErrorStatusCodeEntry: {
+            /**
+             * Failed Requests
+             * @default 0
+             */
+            failed_requests: number;
+            /** Status Code */
+            status_code: number;
         };
         /**
          * RequestType
@@ -60014,6 +60160,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GatewayRequestActivityResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_request_error_activity_gateway_errors_activity_get: {
+        parameters: {
+            query?: {
+                /** @description Start date in YYYY-MM-DD format */
+                start_date?: string | null;
+                /** @description End date in YYYY-MM-DD format */
+                end_date?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequestErrorActivityResponse"];
                 };
             };
             /** @description Validation Error */
