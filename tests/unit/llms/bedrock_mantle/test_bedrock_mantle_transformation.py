@@ -1042,3 +1042,18 @@ async def test_mantle_signing_runs_off_the_event_loop():
 
     assert "Authorization" in signed
     assert probe.served_during_refresh is True
+
+
+@pytest.mark.parametrize("missing", ["botocore", "unrelated_dependency"])
+def test_mantle_signing_reports_only_missing_aws_dependency(missing):
+    config = BedrockMantleChatConfig()
+    failure = ModuleNotFoundError("missing dependency", name=missing)
+    with patch.dict("os.environ", {}, clear=True), patch("builtins.__import__", side_effect=failure):
+        with pytest.raises(ImportError) as error:
+            config.sign_request(headers={}, optional_params={}, request_data={},
+                                api_base="https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions", api_key="")
+    if missing == "botocore":
+        assert "pip install boto3" in str(error.value)
+        assert error.value.__cause__ is failure
+    else:
+        assert error.value is failure
