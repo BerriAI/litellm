@@ -5564,14 +5564,14 @@ def _convert_teams_to_response_models(
             keys_count = counts.get(team_dict.get("team_id") or "", 0)
             team_list.append(
                 TeamListItem.model_validate(
-                    cast(
+                    cast(  # cast-ok: TeamListItem validates the Prisma model dump
                         object,
                         {
                             **team_dict,
                             "members_count": members_count,
                             "keys_count": keys_count,
                         },
-                    )  # cast-ok: TeamListItem validates the Prisma model dump
+                    )
                 )
             )
     return team_list
@@ -5625,9 +5625,9 @@ def _team_member_default_budget_id(
     )
     if member_budget is not None and member_budget.max_budget is not None:
         return None
-    metadata: Final = cast(
+    metadata: Final = cast(  # cast-ok: team metadata is stored as a JSON object
         "dict[str, object] | None", team.metadata
-    )  # cast-ok: team metadata is stored as a JSON object
+    )
     if metadata is None:
         return None
     budget_id: Final = metadata.get("team_member_budget_id")
@@ -5669,11 +5669,11 @@ async def _enrich_team_list_with_caller_membership(
     teams: Sequence[TeamListItem],
     caller_user_id: str | None,
     now: datetime,
-) -> list[TeamListItem]:
+) -> tuple[TeamListItem, ...]:
     if caller_user_id is None:
-        return [team.model_copy(update={"caller_membership": None}) for team in teams]
+        return tuple(team.model_copy(update={"caller_membership": None}) for team in teams)
     if not teams:
-        return []
+        return ()
 
     page_team_ids: Final = tuple(team.team_id for team in teams)
     membership_rows: Final[Sequence[_TeamListMembershipRow]] = await _team_membership_db(prisma_client).find_many(
@@ -5698,7 +5698,7 @@ async def _enrich_team_list_with_caller_membership(
         else ()
     )
     budgets_by_id: Final = {row.budget_id: row for row in default_budget_rows}
-    return [
+    return tuple(
         team.model_copy(
             update={
                 "caller_membership": _team_list_caller_membership(
@@ -5711,7 +5711,7 @@ async def _enrich_team_list_with_caller_membership(
             }
         )
         for team in teams
-    ]
+    )
 
 
 async def _enforce_list_team_v2_access(
@@ -5827,10 +5827,7 @@ async def list_team_v2(
     sort_order: str = fastapi.Query(default="asc", description="Sort order ('asc' or 'desc')"),
     status: str | None = fastapi.Query(default=None, description="Filter by status (e.g. 'deleted')"),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-) -> dict[
-    str,
-    int | list[TeamListItem] | list[TeamListItem | LiteLLM_TeamTable | LiteLLM_DeletedTeamTable],
-]:
+) -> Mapping[str, int | Sequence[TeamListItem | LiteLLM_TeamTable | LiteLLM_DeletedTeamTable]]:
     """
     Get a paginated list of teams with filtering and sorting options.
 
