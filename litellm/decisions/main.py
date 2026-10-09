@@ -164,7 +164,6 @@ def _prepare_call(
         api_key=api_key,
     )
     provider_config: Final = _provider_config(upstream_model, provider)
-    canonical_model: Final = provider_config.canonical_model(upstream_model)
     if not upstream_model:
         raise litellm.BadRequestError(
             message="A model name is required for the Decisions API",
@@ -177,6 +176,10 @@ def _prepare_call(
             model=model,
             llm_provider=provider,
         )
+    try:
+        canonical_model: Final = provider_config.canonical_model(upstream_model)
+    except ValueError as error:
+        raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
     try:
         request_safety_identifier: Final = _request_safety_identifier(safety_identifier, kwargs)
         request: Final = _validate_request(

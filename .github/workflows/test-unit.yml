@@ -300,6 +300,7 @@ jobs:
               tests/unit/llms/lm_studio
               tests/unit/llms/manus
               tests/unit/llms/meta_llama
+              tests/unit/llms/microsoft_365_copilot
               tests/unit/llms/minimax
               tests/unit/llms/mistral
               tests/unit/llms/modelscope
@@ -454,7 +455,6 @@ jobs:
 
           - shard: enterprise-repositories-secrets
             test-path: >-
-              tests/proxy_behavior/lens/test_connection.py
               tests/unit/enterprise/enterprise_callbacks/test_callback_controls.py
               tests/unit/enterprise/enterprise_callbacks/test_llm_guard.py
               tests/unit/enterprise/enterprise_callbacks/test_secret_detection.py
@@ -923,7 +923,7 @@ jobs:
 
           - shard: lens-python-310
             test-path: >-
-              tests/unit/proxy/lens/test_inference.py
+              tests/unit/proxy/lens
             python-version: "3.10"
             workers: 0
             reruns: 0

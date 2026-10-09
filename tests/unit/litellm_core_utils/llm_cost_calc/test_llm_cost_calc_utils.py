@@ -1437,21 +1437,47 @@ def test_generic_cost_per_token_tier_without_cache_rates_bills_cache_at_the_tier
         litellm.model_cost.pop(model, None)
 
 
-def test_generic_cost_per_token_tier_without_a_1hr_cache_rate_bills_the_tier_cache_creation_rate():
-    model = "litellm-test-tiered-no-1hr-cache-rate"
-    custom_llm_provider = "openrouter"
+@pytest.mark.parametrize(
+    ("cache_rates", "expected_write_rate"),
+    [
+        pytest.param({"cache_creation_input_token_cost": 3.0}, 3.0, id="missing-hourly"),
+        pytest.param(
+            {"cache_creation_input_token_cost": 3.0, "cache_creation_input_token_cost_above_1hr": None},
+            3.0,
+            id="null-hourly",
+        ),
+        pytest.param(
+            {"cache_creation_input_token_cost": 3.0, "cache_creation_input_token_cost_above_1hr": 0.0},
+            0.0,
+            id="free-hourly",
+        ),
+        pytest.param(
+            {"cache_creation_input_token_cost": 3.0, "cache_creation_input_token_cost_above_1hr": 5.0},
+            5.0,
+            id="priced-hourly",
+        ),
+        pytest.param({"cache_creation_input_token_cost": 0.0}, 0.0, id="free-ordinary"),
+        pytest.param({}, 1.0, id="missing-both"),
+    ],
+)
+@pytest.mark.parametrize("one_hour_tokens", [10, 20])
+def test_generic_cost_per_token_tier_1hr_cache_rate_preserves_zero_and_fallback(
+    cache_rates: Mapping[str, float | None], expected_write_rate: float, one_hour_tokens: int
+) -> None:
+    model: Final = "litellm-test-tiered-1hr-cache-rate"
     litellm.register_model(
         {
             model: {
-                "litellm_provider": custom_llm_provider,
+                "litellm_provider": "openrouter",
                 "mode": "chat",
-                "cache_creation_input_token_cost_above_1hr": 9e-05,
+                "cache_creation_input_token_cost_above_1hr": 9.0,
                 "tiered_pricing": [
                     {
                         "range": [0, 128000],
-                        "input_cost_per_token": 7e-07,
-                        "output_cost_per_token": 3.5e-06,
-                        "cache_creation_input_token_cost": 8.75e-07,
+                        "input_cost_per_token": 1.0,
+                        "output_cost_per_token": 2.0,
+                        "cache_read_input_token_cost": 0.1,
+                        **cache_rates,
                     }
                 ],
             }
@@ -1459,27 +1485,32 @@ def test_generic_cost_per_token_tier_without_a_1hr_cache_rate_bills_the_tier_cac
     )
 
     try:
-        usage = Usage(
-            prompt_tokens=1000,
+        usage: Final = Usage(
+            prompt_tokens=100,
             completion_tokens=10,
-            total_tokens=1010,
+            total_tokens=110,
             prompt_tokens_details=PromptTokensDetailsWrapper(
-                cache_creation_tokens=800,
+                cached_tokens=40,
+                cache_creation_tokens=20,
                 cache_creation_token_details=CacheCreationTokenDetails(
-                    ephemeral_5m_input_tokens=300, ephemeral_1h_input_tokens=500
+                    ephemeral_5m_input_tokens=20 - one_hour_tokens, ephemeral_1h_input_tokens=one_hour_tokens
                 ),
             ),
         )
-        prompt_cost, completion_cost = generic_cost_per_token(
-            model=model,
-            usage=usage,
-            custom_llm_provider=custom_llm_provider,
+        costs: Final = generic_cost_per_token(model=model, usage=usage, custom_llm_provider="openrouter")
+        breakdown: Final = get_token_type_cost_breakdown(
+            model=model, usage=usage, custom_llm_provider="openrouter"
         )
 
-        tier_cache_creation_rate = 8.75e-07
-        expected_prompt = (200 * 7e-07) + (800 * tier_cache_creation_rate)
-        assert round(prompt_cost, 12) == round(expected_prompt, 12)
-        assert round(completion_cost, 12) == round(10 * 3.5e-06, 12)
+        ordinary_rate: Final = cache_rates.get("cache_creation_input_token_cost")
+        expected_write_cost: Final = (
+            (20 - one_hour_tokens) * (ordinary_rate if ordinary_rate is not None else 1.0)
+            + one_hour_tokens * expected_write_rate
+        )
+        assert costs == pytest.approx((40 * 1.0 + 40 * 0.1 + expected_write_cost, 10 * 2.0))
+        assert breakdown.cache_creation_cost == pytest.approx(expected_write_cost)
+        assert breakdown.rates is not None
+        assert breakdown.rates.cache_creation_input_token_cost_above_1hr == expected_write_rate
     finally:
         litellm.model_cost.pop(model, None)
 

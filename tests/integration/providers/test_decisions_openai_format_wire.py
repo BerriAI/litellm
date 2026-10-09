@@ -158,6 +158,15 @@ _PROVIDERS: Final = (
         "cloudflare/@cf/cloudflare/clef",
     ),
     _Provider("hosted_vllm", "hosted_vllm/Qwen/Qwen3-0.6B", "/v1/systemone", "Qwen/Qwen3-0.6B", None, False, None),
+    _Provider(
+        "databricks",
+        "databricks/databricks-openjev-qwen35-4b",
+        "/databricks-openjev-qwen35-4b/invocations",
+        "databricks-openjev-qwen35-4b",
+        _API_KEY,
+        False,
+        None,
+    ),
     _Provider("openai", "openai/gpt-6-luna", "/v1/decisions", "gpt-6-luna", _API_KEY, False, "gpt-6-luna", True),
 )
 _SYSTEM_ONE_PROVIDERS: Final = tuple(provider for provider in _PROVIDERS if not provider.speaks_openai)

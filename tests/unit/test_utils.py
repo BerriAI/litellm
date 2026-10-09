@@ -2553,6 +2553,54 @@ class TestGetValidModelsWithCLI:
             assert headers.get("Authorization") == "Bearer sk-test-cli-key-123"
 
 
+@respx.mock
+def test_get_valid_models_bedrock_lists_what_the_deployment_credentials_can_invoke(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    region: Final = "eu-west-3"
+    deployment: Final = LiteLLM_Params(
+        model="bedrock/*",
+        aws_access_key_id="AKIAIOSFODNN7EXAMPLE",
+        aws_secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        aws_region_name=region,
+    )
+    expected_scope: Final = f"/{region}/bedrock/aws4_request"
+
+    def signed_by_the_deployment(request: httpx.Request, body: Mapping[str, object]) -> httpx.Response:
+        authorization: Final = request.headers.get("authorization", "")
+        if not authorization.startswith("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/"):
+            return httpx.Response(403, json={"message": "not signed with the deployment's key"})
+        if expected_scope not in authorization:
+            return httpx.Response(403, json={"message": "not signed for the deployment's region"})
+        return httpx.Response(200, json=body)
+
+    respx.get(
+        f"https://bedrock.{region}.amazonaws.com/foundation-models", params={"byInferenceType": "ON_DEMAND"}
+    ).mock(
+        side_effect=lambda request: signed_by_the_deployment(
+            request, {"modelSummaries": [{"modelId": "amazon.nova-micro-v1:0"}]}
+        )
+    )
+    respx.get(
+        f"https://bedrock.{region}.amazonaws.com/inference-profiles",
+        params={"typeEquals": "SYSTEM_DEFINED"},
+    ).mock(
+        side_effect=lambda request: signed_by_the_deployment(
+            request,
+            {
+                "inferenceProfileSummaries": [
+                    {"inferenceProfileId": "eu.anthropic.claude-sonnet-4-5-20250929-v1:0", "status": "ACTIVE"}
+                ]
+            },
+        )
+    )
+
+    assert litellm.get_valid_models(
+        check_provider_endpoint=True, custom_llm_provider="bedrock", litellm_params=deployment
+    ) == ["amazon.nova-micro-v1:0", "eu.anthropic.claude-sonnet-4-5-20250929-v1:0"]
+
+
 class TestIsCachedMessage:
     """Test is_cached_message function for context caching detection.
 
@@ -4096,15 +4144,6 @@ ANTHROPIC_REEXPORT_CACHE_MIN: Final = {
     "databricks/databricks-claude-sonnet-4": 1024,
     "databricks/databricks-claude-sonnet-4-5": 1024,
     "databricks/databricks-claude-sonnet-4-6": 1024,
-    "openrouter/anthropic/claude-haiku-4.5": 4096,
-    "openrouter/anthropic/claude-opus-4": 1024,
-    "openrouter/anthropic/claude-opus-4.1": 1024,
-    "openrouter/anthropic/claude-opus-4.5": 4096,
-    "openrouter/anthropic/claude-opus-4.6": 4096,
-    "openrouter/anthropic/claude-opus-4.7": 2048,
-    "openrouter/anthropic/claude-sonnet-4": 1024,
-    "openrouter/anthropic/claude-sonnet-4.5": 1024,
-    "openrouter/anthropic/claude-sonnet-4.6": 1024,
     "replicate/anthropic/claude-4-sonnet": 1024,
     "replicate/anthropic/claude-4.5-haiku": 4096,
     "replicate/anthropic/claude-4.5-sonnet": 1024,

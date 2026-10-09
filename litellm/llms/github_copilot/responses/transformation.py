@@ -9,7 +9,12 @@ https://github.com/caozhiyuan/copilot-api
 """
 
 import os
-from typing import TYPE_CHECKING, Any, Final
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    cast,  # noqa: TID251  # narrows untyped request dicts at the session boundary
+)
 
 import litellm
 from litellm._logging import verbose_logger
@@ -30,7 +35,9 @@ from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
     get_copilot_default_headers,
+    pin_session_authorization,
 )
+from ..per_user_auth import require_github_copilot_user_session
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -199,11 +206,14 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         - copilot-vision-request if vision content detected
         - User-provided extra_headers (merged with priority)
         """
+        user_session: Final = require_github_copilot_user_session(
+            cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
+        )
+        default_headers: Final = get_copilot_default_headers(user_session.token) if user_session is not None else None
         try:
             # Get GitHub Copilot API key via OAuth
-            api_key: Final = self.authenticator.get_api_key()
-
-            if not api_key:
+            api_key: Final = self.authenticator.get_api_key() if default_headers is None else ""
+            if default_headers is None and not api_key:
                 raise AuthenticationError(
                     model=model,
                     llm_provider="github_copilot",
@@ -211,10 +221,14 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 )
 
             # Get default headers (from copilot-api configuration)
-            default_headers: Final = get_copilot_default_headers(api_key)
+            copilot_headers: Final = default_headers or get_copilot_default_headers(api_key)
 
             # Merge with existing headers (user's extra_headers take priority)
-            merged_headers: Final = {**default_headers, **headers}
+            merged_headers: Final = cast(  # cast-ok: both spreads are str-valued header dicts
+                "dict[str, str]", {**copilot_headers, **headers}
+            )
+            if user_session is not None:
+                pin_session_authorization(merged_headers, user_session.token)
 
             # Analyze input to determine additional headers
             input_param: Final = self._get_input_from_params(litellm_params)
@@ -249,9 +263,12 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         Get the complete URL for GitHub Copilot Responses API endpoint.
         """
-        # Use provided api_base or fall back to authenticator's base or default
+        user_session: Final = require_github_copilot_user_session(
+            cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
+        )
         effective_api_base = (
-            api_base
+            (user_session.api_base if user_session is not None else None)
+            or api_base
             or self.authenticator.get_api_base()
             or os.getenv("GITHUB_COPILOT_API_BASE")
             or DEFAULT_GITHUB_COPILOT_API_BASE
@@ -341,9 +358,9 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
             return "user"
 
         # If input is a list, analyze items
-        if isinstance(input_param, list):
+        if isinstance(input_param, list):  # pyright: ignore[reportUnnecessaryIsInstance]  # items arrive from untyped request params
             for item in input_param:
-                if not isinstance(item, dict):
+                if not isinstance(item, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # items arrive from untyped request params
                     continue
 
                 # Check if item has no role (agent-initiated)
@@ -352,7 +369,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
                 # Check if role is assistant (agent-initiated)
                 role = item.get("role")
-                if isinstance(role, str) and role.lower() == "assistant":
+                if isinstance(role, str) and role.lower() == "assistant":  # pyright: ignore[reportUnnecessaryIsInstance]  # role arrives from untyped request params
                     return "agent"
 
         # Default to user-initiated

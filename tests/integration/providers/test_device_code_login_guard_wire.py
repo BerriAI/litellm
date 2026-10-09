@@ -41,9 +41,9 @@ _MODELS: Final[Mapping[tuple[Provider, Endpoint], str]] = MappingProxyType(
         ("chatgpt", "chat"): "chatgpt/gpt-5.6-terra",
         ("chatgpt", "responses"): "chatgpt/gpt-5.6-terra",
         ("chatgpt", "messages"): "chatgpt/gpt-5.6-terra",
-        ("copilot", "chat"): "github_copilot/gpt-5.2",
-        ("copilot", "responses"): "github_copilot/gpt-5.2",
-        ("copilot", "messages"): "github_copilot/claude-sonnet-4.5",
+        ("copilot", "chat"): "github_copilot/gpt-5.4",
+        ("copilot", "responses"): "github_copilot/gpt-5.4",
+        ("copilot", "messages"): "github_copilot/claude-sonnet-5.5",
     }
 )
 _REFUSALS: Final[Mapping[Provider, str]] = MappingProxyType(
@@ -469,9 +469,9 @@ _ROUTES: Final = (
         "/v1/embeddings",
         {"model": "github_copilot/text-embedding-3-small", "input": "login"},
     ),
-    _Route("copilot-completions", "copilot", "/v1/completions", {"model": "github_copilot/gpt-5.2", "prompt": "login"}),
+    _Route("copilot-completions", "copilot", "/v1/completions", {"model": "github_copilot/gpt-5.4", "prompt": "login"}),
     _Route(
-        "copilot-images", "copilot", "/v1/images/generations", {"model": "github_copilot/gpt-5.2", "prompt": "login"}
+        "copilot-images", "copilot", "/v1/images/generations", {"model": "github_copilot/gpt-5.4", "prompt": "login"}
     ),
 )
 

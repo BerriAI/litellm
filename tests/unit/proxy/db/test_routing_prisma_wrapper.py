@@ -697,7 +697,7 @@ def test_writer_get_rds_iam_token_defaults_port_when_unset(monkeypatch, unset_da
 
     captured: Dict[str, Any] = {}
 
-    def fake_generate(db_host=None, db_port=None, db_user=None):
+    def fake_generate(db_host=None, db_port=None, db_user=None, *, region=None):
         captured["port"] = db_port
         return "TOKEN"
 
@@ -730,7 +730,7 @@ def test_writer_get_rds_iam_token_uses_database_host_env_vars(monkeypatch, unset
 
     captured: Dict[str, Any] = {}
 
-    def fake_generate(db_host=None, db_port=None, db_user=None):
+    def fake_generate(db_host=None, db_port=None, db_user=None, *, region=None):
         captured["host"] = db_host
         captured["port"] = db_port
         captured["user"] = db_user
@@ -770,7 +770,7 @@ def test_reader_iam_refresh_uses_parsed_endpoint(monkeypatch):
 
     captured: Dict[str, Any] = {}
 
-    def fake_generate(db_host=None, db_port=None, db_user=None):
+    def fake_generate(db_host=None, db_port=None, db_user=None, *, region=None):
         captured["host"] = db_host
         captured["port"] = db_port
         captured["user"] = db_user
@@ -1136,3 +1136,61 @@ def test_prisma_client_premints_an_entra_token_for_the_reader(monkeypatch):
     assert isinstance(client.db._reader.token_auth, AzureEntraTokenAuth)
     assert isinstance(client.db._writer.token_auth, AzureEntraTokenAuth)
     assert isinstance(client.db._writer, PrismaWrapper)
+
+
+@pytest.mark.parametrize("opaque_hosts", [False, True])
+@pytest.mark.parametrize(
+    ("writer_override", "reader_override"),
+    [(None, None), ("eu-west-1", None), (None, "us-west-2"), (" eu-west-1 ", "us-west-2"), ("", "  ")],
+)
+def test_rds_regions_survive_reader_url_startup_and_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+    opaque_hosts: bool,
+    writer_override: str | None,
+    reader_override: str | None,
+) -> None:
+    from urllib.parse import unquote
+
+    from litellm.proxy.db.db_url_settings import DatabaseURLSettings
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+    from litellm.proxy.utils import PrismaClient
+
+    for key in tuple(os.environ):
+        if key.startswith(("AWS_", "DATABASE_", "AZURE_POSTGRESQL_", "LITELLM_PGBOUNCER")):
+            monkeypatch.delenv(key)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
+    monkeypatch.setenv("AWS_REGION", "ap-south-1")
+    monkeypatch.setenv("IAM_TOKEN_DB_AUTH", "true")
+    for key, value in (("AWS_RDS_REGION", writer_override), ("AWS_RDS_READ_REPLICA_REGION", reader_override)):
+        if value is not None:
+            monkeypatch.setenv(key, value)
+    writer_host: Final = "writer.internal" if opaque_hosts else "w.abc.us-east-1.rds.amazonaws.com"
+    reader_host: Final = "reader.internal" if opaque_hosts else "r.abc.ap-northeast-1.rds.amazonaws.com"
+    monkeypatch.setenv("DATABASE_HOST", writer_host)
+    monkeypatch.setenv("DATABASE_USER", "iam_user")
+    monkeypatch.setenv("DATABASE_NAME", "litellm")
+    monkeypatch.setenv("DATABASE_URL", "")
+    monkeypatch.setenv("DATABASE_URL_READ_REPLICA", f"postgresql://iam_user@{reader_host}:5432/litellm?sslmode=require")
+    monkeypatch.setitem(sys.modules, "prisma", MagicMock())
+    writer_url: Final = DatabaseURLSettings.from_env().build_writer_url()
+    assert writer_url is not None
+    monkeypatch.setenv("DATABASE_URL", writer_url)
+    client: Final = PrismaClient(database_url=writer_url, proxy_logging_obj=MagicMock())
+    assert isinstance(client.db, RoutingPrismaWrapper)
+    writer_region: Final = (writer_override or "").strip() or ("ap-south-1" if opaque_hosts else "us-east-1")
+    reader_region: Final = (reader_override or "").strip() or ("ap-south-1" if opaque_hosts else "ap-northeast-1")
+    for url, host, region in (
+        (writer_url, writer_host, writer_region),
+        (os.environ["DATABASE_URL_READ_REPLICA"], reader_host, reader_region),
+        (client.db.writer.get_rds_iam_token(), writer_host, writer_region),
+        (client.db.reader.get_rds_iam_token(), reader_host, reader_region),
+    ):
+        assert url is not None
+        password: Final = urlsplit(url).password
+        assert password is not None
+        token: Final = unquote(password)
+        assert token.split("?", 1)[0] == f"{host}:5432/"
+        assert parse_qs(urlsplit(token).query)["X-Amz-Credential"][0].split("/")[2] == region
+    assert parse_qs(urlsplit(os.environ["DATABASE_URL_READ_REPLICA"]).query)["sslmode"] == ["require"]
+    assert os.environ["AWS_REGION"] == "ap-south-1"
