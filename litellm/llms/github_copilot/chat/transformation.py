@@ -1,7 +1,7 @@
 import json
 import os
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # spread dict loses the role literal without a cast
 
 import httpx
 

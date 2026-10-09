@@ -8,7 +8,14 @@ from collections import OrderedDict
 from collections.abc import Mapping, MutableMapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Literal,
+    TypeAlias,
+    cast,  # noqa: TID251  # narrows untyped deployment and credential payloads
+)
 
 from fastapi import HTTPException, Request
 from pydantic import TypeAdapter
