@@ -1309,6 +1309,87 @@ def _choice_tool_call_delta_chunk(choice_index: int, tool_call: dict[str, object
     return {"choices": [{"index": choice_index, "delta": {"tool_calls": [tool_call]}}]}
 
 
+@pytest.mark.parametrize("as_dict", (False, True))
+@pytest.mark.parametrize(
+    "first_name,last_name,expected_name", (("get_", "widget", "get_widget"), ("echo", "echo", "echoecho"))
+)
+def test_get_combined_tool_content_joins_function_name_deltas(
+    as_dict: bool, first_name: str, last_name: str, expected_name: str
+) -> None:
+    calls: Final = (
+        ChatCompletionDeltaToolCall(
+            index=0, id="call_fragmented", type="function", function=Function(name=first_name, arguments='{"id":')
+        ),
+        ChatCompletionDeltaToolCall(index=0, function=Function(name=last_name, arguments="17}")),
+    )
+    chunks: Final = [_tool_call_delta_chunk(call.model_dump(exclude_none=True) if as_dict else call) for call in calls]
+    combined: Final = ChunkProcessor(chunks).get_combined_tool_content(chunks)
+
+    assert combined == [
+        ChatCompletionMessageToolCall(
+            id="call_fragmented", type="function", function=Function(name=expected_name, arguments='{"id":17}')
+        )
+    ]
+
+
+@pytest.mark.parametrize("as_dict", (False, True))
+@pytest.mark.parametrize(
+    "first_id,last_id,expected_id", (("call_", "fragmented", "call_fragmented"), ("aa", "aa", "aaaa"))
+)
+def test_get_combined_tool_content_joins_tool_id_deltas(
+    as_dict: bool, first_id: str, last_id: str, expected_id: str
+) -> None:
+    calls: Final = (
+        ChatCompletionDeltaToolCall(
+            index=0, id=first_id, type="function", function=Function(name="get_widget", arguments='{"id":')
+        ),
+        ChatCompletionDeltaToolCall(index=0, id=last_id, function=Function(arguments="17}")),
+    )
+    chunks: Final = [_tool_call_delta_chunk(call.model_dump(exclude_none=True) if as_dict else call) for call in calls]
+    combined: Final = ChunkProcessor(chunks).get_combined_tool_content(chunks)
+
+    assert combined == [
+        ChatCompletionMessageToolCall(
+            id=expected_id, type="function", function=Function(name="get_widget", arguments='{"id":17}')
+        )
+    ]
+
+
+@pytest.mark.parametrize("separate_choices", (False, True))
+def test_get_combined_tool_content_keeps_interleaved_metadata_with_its_choice_and_tool_index(
+    separate_choices: bool,
+) -> None:
+    second_choice, second_tool = (1, 0) if separate_choices else (0, 1)
+    chunks: Final = [
+        _choice_tool_call_delta_chunk(
+            0, {"index": 0, "id": "call_", "type": "function", "function": {"name": "get_", "arguments": '{"slot":"'}}
+        ),
+        _choice_tool_call_delta_chunk(
+            second_choice,
+            {
+                "index": second_tool,
+                "id": "call_",
+                "type": "function",
+                "function": {"name": "get_", "arguments": '{"slot":"'},
+            },
+        ),
+        _choice_tool_call_delta_chunk(
+            second_choice, {"index": second_tool, "id": "beta", "function": {"name": "beta", "arguments": 'beta"}'}}
+        ),
+        _choice_tool_call_delta_chunk(
+            0, {"index": 0, "id": "alpha", "function": {"name": "alpha", "arguments": 'alpha"}'}}
+        ),
+    ]
+    combined: Final = ChunkProcessor(chunks).get_combined_tool_content(chunks)
+
+    assert combined == [
+        ChatCompletionMessageToolCall(
+            id="call_alpha", function=Function(name="get_alpha", arguments='{"slot":"alpha"}')
+        ),
+        ChatCompletionMessageToolCall(id="call_beta", function=Function(name="get_beta", arguments='{"slot":"beta"}')),
+    ]
+
+
 def test_get_combined_tool_content_keeps_each_choices_arguments_apart_when_choices_share_a_tool_index():
     processor = ChunkProcessor.__new__(ChunkProcessor)
     chunks = [
