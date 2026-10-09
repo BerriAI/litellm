@@ -157,12 +157,13 @@ _PROVIDERS: Final = (
         True,
         "cloudflare/@cf/cloudflare/clef",
     ),
+    _Provider("hosted_vllm", "hosted_vllm/Qwen/Qwen3-0.6B", "/v1/systemone", "Qwen/Qwen3-0.6B", None, False, None),
     _Provider("openai", "openai/gpt-6-luna", "/v1/decisions", "gpt-6-luna", _API_KEY, False, "gpt-6-luna", True),
 )
-_SYSTEM_ONE_PROVIDERS: Final = _PROVIDERS[:5]
+_SYSTEM_ONE_PROVIDERS: Final = tuple(provider for provider in _PROVIDERS if not provider.speaks_openai)
 _PERPLEXITY: Final = _PROVIDERS[0]
 _TYPESAFE: Final = _PROVIDERS[1]
-_OPENAI: Final = _PROVIDERS[5]
+_OPENAI: Final = next(provider for provider in _PROVIDERS if provider.speaks_openai)
 _PREDICATE: Final[dict[str, JsonValue]] = {"type": "predicate", "name": "q", "instructions": "Is it?"}
 _INVALID_BODIES: Final[tuple[tuple[str, dict[str, JsonValue]], ...]] = (
     ("missing questions", {"input": _INPUT}),
