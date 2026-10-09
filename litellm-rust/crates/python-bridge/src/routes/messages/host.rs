@@ -65,14 +65,9 @@ fn merge_headers(
     (!merged.is_empty()).then_some(merged)
 }
 
-/// The litellm params Python falls back to module globals for when a call does not name
-/// them, the way `VertexBase.safe_get_vertex_ai_project` reads `litellm.vertex_project`.
-const MODULE_GLOBALS: [&str; 2] = ["vertex_project", "vertex_location"];
-
+/// Reads `litellm.<name>`, the module global a param spec names, the way
+/// `VertexBase.get_vertex_ai_project` reads `litellm.vertex_project`.
 fn module_global<'py>(py: Python<'py>, name: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
-    if !MODULE_GLOBALS.contains(&name) {
-        return Ok(None);
-    }
     let module = match py.import("litellm") {
         Ok(module) => module,
         Err(error) if missing_module(py, &error, "litellm")? => return Ok(None),
@@ -83,19 +78,18 @@ fn module_global<'py>(py: Python<'py>, name: &str) -> PyResult<Option<Bound<'py,
 }
 
 /// The caller's litellm params, read from the kwargs by the names the typed params declare,
-/// so a key the configs do not read is never converted; a name the call leaves out falls
-/// back to its module global, which is the host's concern and never reaches Rust by name.
+/// so a key the configs do not read is never converted; a spec whose spellings the call all
+/// leaves out falls back to the module global it names, which stays the host's concern.
 fn project_litellm_params<'py>(
     argument: impl Fn(&str) -> PyResult<Option<Bound<'py, PyAny>>>,
     global: impl Fn(&str) -> PyResult<Option<Bound<'py, PyAny>>>,
 ) -> PyResult<Result<LitellmParams, Error>> {
-    Ok(litellm_params(project_optional_fields(
-        LitellmParams::fields(),
-        |name| match argument(name)? {
-            Some(value) => Ok(Some(value)),
-            None => global(name),
-        },
-    )?))
+    let fields = project_optional_fields(LitellmParams::fields(), &argument)?;
+    let globals = LitellmParams::specs()
+        .filter(|spec| !spec.wire.iter().any(|name| fields.contains_key(*name)))
+        .filter_map(|spec| spec.module_global);
+    let folded = project_optional_fields(globals, &global)?;
+    Ok(litellm_params(fields.into_iter().chain(folded).collect()))
 }
 
 fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
@@ -442,13 +436,23 @@ mod tests {
         assert_projection(kwargs, globals, expected);
     }
 
-    #[test]
-    fn only_the_names_python_reads_from_globals_are_consulted() {
-        Python::initialize();
-        Python::attach(|py| {
-            assert_eq!(MODULE_GLOBALS, ["vertex_project", "vertex_location"]);
-            assert!(module_global(py, "aws_region_name").unwrap().is_none());
-        });
+    #[rstest]
+    #[case::a_global_without_a_spec_is_never_read(
+        json!({"model": "m"}),
+        json!({"aws_region_name": "eu-central-1", "api_key": "k"}),
+        Ok(json!({"model": "m"})),
+    )]
+    #[case::only_the_spec_named_global_is_read(
+        json!({"model": "m"}),
+        json!({"vertex_ai_project": "legacy-global", "vertex_project": "from-global"}),
+        Ok(json!({"model": "m", "vertex_project": "from-global"})),
+    )]
+    fn only_the_globals_the_specs_name_are_consulted(
+        #[case] kwargs: Value,
+        #[case] globals: Value,
+        #[case] expected: Result<Value, ()>,
+    ) {
+        assert_projection(kwargs, globals, expected);
     }
 
     fn assert_projection(kwargs: Value, globals: Value, expected: Result<Value, ()>) {
