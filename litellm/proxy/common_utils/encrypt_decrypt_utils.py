@@ -190,7 +190,10 @@ def decrypt_if_encrypted_with(value: str, signing_key: str) -> str | None:
 # A legacy nacl ciphertext is base64url(nonce(24) || MAC(16) || plaintext), so it is
 # never shorter than 40 bytes once decoded.
 _NACL_MIN_SEALED_BYTES: Final = 40
-_BASE64URL_PADDED: Final = re.compile(r"[A-Za-z0-9_-]+={0,2}")
+# The two alphabets _legacy_ciphertext_bytes accepts: base64url (current rows) and standard
+# base64 (older rows). A real ciphertext uses exactly one, so a mixed value such as a model path
+# "org/model-name" is never treated as ciphertext.
+_BASE64_ALPHABETS: Final = (re.compile(r"[A-Za-z0-9_-]+={0,2}"), re.compile(r"[A-Za-z0-9+/]+={0,2}"))
 
 
 def is_undecryptable_ciphertext(value: object, signing_key: str | None) -> bool:
@@ -202,9 +205,9 @@ def is_undecryptable_ciphertext(value: object, signing_key: str | None) -> bool:
     if not isinstance(value, str) or not signing_key:
         return False
     if not value.startswith(V2_GCM_PREFIX):
-        if len(value) % 4 != 0 or _BASE64URL_PADDED.fullmatch(value) is None:
+        if len(value) % 4 != 0 or not any(alphabet.fullmatch(value) for alphabet in _BASE64_ALPHABETS):
             return False
-        if len(base64.urlsafe_b64decode(value)) < _NACL_MIN_SEALED_BYTES:
+        if len(_legacy_ciphertext_bytes(value)) < _NACL_MIN_SEALED_BYTES:
             return False
     return decrypt_if_encrypted_with(value=value, signing_key=signing_key) is None
 

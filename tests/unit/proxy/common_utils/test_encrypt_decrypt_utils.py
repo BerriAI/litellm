@@ -280,9 +280,32 @@ def test_is_undecryptable_ciphertext_flags_value_written_under_another_key(
     assert is_undecryptable_ciphertext(value=ciphertext, signing_key="sk-old-master-key") is False
 
 
+def test_is_undecryptable_ciphertext_flags_standard_base64_row_under_another_key() -> None:
+    # The nonce is random, so draw until the standard-alphabet characters actually appear.
+    candidates = (
+        base64.b64encode(encrypt_value(value="sk-provider-secret-" + "x" * 64, signing_key="sk-old-master-key")).decode(
+            "utf-8"
+        )
+        for _ in range(200)
+    )
+    ciphertext = next(c for c in candidates if "+" in c or "/" in c)
+    assert is_undecryptable_ciphertext(value=ciphertext, signing_key="sk-salt-aes-1234") is True
+    assert is_undecryptable_ciphertext(value=ciphertext, signing_key="sk-old-master-key") is False
+
+
 @pytest.mark.parametrize(
     "value",
-    ["gpt-4o", "openai/gpt-4o", "os.environ/OPENAI_API_KEY", "", "abcd", 12, None, "https://example.com/v1"],
+    [
+        "gpt-4o",
+        "openai/gpt-4o",
+        "os.environ/OPENAI_API_KEY",
+        "",
+        "abcd",
+        12,
+        None,
+        "https://example.com/v1",
+        "huggingface/meta-llama/Meta-Llama-3-70B-Instruct-fine-tuned-abcd",
+    ],
 )
 def test_is_undecryptable_ciphertext_ignores_plaintext(value: object) -> None:
     assert is_undecryptable_ciphertext(value=value, signing_key="sk-salt-aes-1234") is False
