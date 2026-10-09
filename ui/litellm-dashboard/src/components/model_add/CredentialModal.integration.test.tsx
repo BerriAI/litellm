@@ -483,6 +483,39 @@ describe("CredentialModal public JWKS for a LiteLLM-signed Anthropic credential"
     expect(await navigator.clipboard.readText()).toBe(shown.textContent);
   });
 
+  it("waits for a fresh JWKS instead of offering the one cached from an earlier open", async () => {
+    const rotatedJwks = { keys: [{ ...jwks.keys[0], kid: "kid-2", n: "rotated-modulus" }] };
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const modal = (open: boolean) => (
+      <QueryClientProvider client={queryClient}>
+        {open && (
+          <CredentialModal
+            open
+            mode="edit"
+            existingCredential={signedCredential}
+            onCancel={vi.fn()}
+            onSubmit={vi.fn()}
+          />
+        )}
+      </QueryClientProvider>
+    );
+    respondWith(200, jwks);
+    const { rerender } = render(modal(true));
+    await screen.findByLabelText("Public JWKS");
+    rerender(modal(false));
+
+    const rotated = Promise.withResolvers<Response>();
+    fetchMock.mockReturnValue(rotated.promise);
+    rerender(modal(true));
+
+    expect(await screen.findByText("Loading JWKS...")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy JWKS" })).not.toBeInTheDocument();
+
+    rotated.resolve(Response.json(rotatedJwks));
+
+    expect(JSON.parse((await screen.findByLabelText("Public JWKS")).textContent ?? "")).toEqual(rotatedJwks);
+  });
+
   it("shows why the proxy cannot build the JWKS", async () => {
     respondWith(400, { detail: { error: "anthropic_issuer_signing_key_ref did not resolve to a PEM private key" } });
     renderModal({ mode: "edit", existingCredential: signedCredential });

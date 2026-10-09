@@ -8,7 +8,7 @@ const SavedJwks = ({ credentialName }: { credentialName: string }) => {
   const jwks = $api.useQuery("get", "/credentials/{credential_name}/jwks", {
     params: { path: { credential_name: credentialName } },
   });
-  if (jwks.isPending) {
+  if (jwks.isPending || !jwks.isFetchedAfterMount) {
     return <p className="text-sm text-muted-foreground">Loading JWKS...</p>;
   }
   if (jwks.isError) {
