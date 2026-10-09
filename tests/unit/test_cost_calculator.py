@@ -4126,16 +4126,16 @@ def test_completion_cost_base_model_ignores_regional_row(_local_model_cost_map):
         model="my-bedrock-deployment",
         usage={"prompt_tokens": 1000, "completion_tokens": 0, "total_tokens": 1000},
     )
-    response._hidden_params = {"custom_llm_provider": "bedrock", "region_name": "eu-central-1"}
-    flat = litellm.model_cost["anthropic.claude-instant-v1"]
-    regional = litellm.model_cost["bedrock/eu-central-1/anthropic.claude-instant-v1"]
+    response._hidden_params = {"custom_llm_provider": "bedrock", "region_name": "us-gov-west-1"}
+    flat = litellm.model_cost["amazon.titan-text-express-v1"]
+    regional = litellm.model_cost["bedrock/us-gov-west-1/amazon.titan-text-express-v1"]
     assert flat["input_cost_per_token"] != regional["input_cost_per_token"]
 
     assert litellm.completion_cost(
         completion_response=response,
         model="my-bedrock-deployment",
         custom_llm_provider="bedrock",
-        base_model="anthropic.claude-instant-v1",
+        base_model="amazon.titan-text-express-v1",
     ) == pytest.approx(1000 * flat["input_cost_per_token"])
 
 
