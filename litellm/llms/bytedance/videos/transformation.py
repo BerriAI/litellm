@@ -253,8 +253,8 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         if custom_llm_provider and video_obj.id:
             video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, model)
 
-        duration: Final = (
-            float(video_obj.seconds) if video_obj.seconds else float(DEFAULT_BYTEDANCE_VIDEO_DURATION_SECONDS)
+        duration: Final = max(
+            0.0, float(video_obj.seconds) if video_obj.seconds else float(DEFAULT_BYTEDANCE_VIDEO_DURATION_SECONDS)
         )
         usage_data: dict[str, object] = {"duration_seconds": duration}
         if request_data:
@@ -324,8 +324,8 @@ class ByteDanceVideoConfig(BaseVideoConfig):
             video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, None)
 
         usage_data: dict[str, object] = dict(response_data.get("usage") or {})
-        duration: Final = (
-            float(video_obj.seconds) if video_obj.seconds else float(DEFAULT_BYTEDANCE_VIDEO_DURATION_SECONDS)
+        duration: Final = max(
+            0.0, float(video_obj.seconds) if video_obj.seconds else float(DEFAULT_BYTEDANCE_VIDEO_DURATION_SECONDS)
         )
         usage_data["duration_seconds"] = duration
         res = response_data.get("resolution")

@@ -639,6 +639,39 @@ class TestByteDanceVideoTransformation:
         assert result.id == "task-abc-123"
         assert result.status == "failed"
 
+    def test_negative_duration_clamped_to_zero_in_create_response(self):
+        """seconds=-1 (auto duration) must not produce negative cost."""
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.json.return_value = {"id": "task-neg-dur"}
+
+        result = self.config.transform_video_create_response(
+            model="dreamina-seedance-2-0-260128",
+            raw_response=mock_response,
+            logging_obj=self.mock_logging_obj,
+            custom_llm_provider="bytedance",
+            request_data={"model": "dreamina-seedance-2-0-260128", "duration": -1},
+        )
+
+        assert result.usage["duration_seconds"] == 0.0
+
+    def test_negative_duration_clamped_to_zero_in_status_response(self):
+        """Negative duration from provider must not produce negative cost."""
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.json.return_value = {
+            "id": "task-neg-dur",
+            "status": "succeeded",
+            "duration": -1,
+            "created_at": 1719000000,
+            "updated_at": 1719000060,
+        }
+
+        result = self.config.transform_video_status_retrieve_response(
+            raw_response=mock_response,
+            logging_obj=self.mock_logging_obj,
+        )
+
+        assert result.usage["duration_seconds"] == 0.0
+
     def test_unsupported_operations_raise(self):
         with pytest.raises(NotImplementedError):
             self.config.transform_video_remix_request("vid", "prompt", "base", GenericLiteLLMParams(), {})
