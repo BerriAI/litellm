@@ -1,21 +1,27 @@
 """
 Tests for RAG proxy endpoints.
-
-Covers:
-- internal_user_viewer restriction: can only ingest to existing vector stores (must provide vector_store_id)
 """
 
 import io
 import json
+from collections.abc import Iterator, Mapping
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import TypeAdapter
 from fastapi.testclient import TestClient
 
 import litellm
+from litellm import Router
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
+from litellm.types.vector_stores import VectorStoreSearchResponse
+
+_TEAM_PROVIDER_KEY: Final = "team-openai-key"
+_REGISTRY_PROVIDER_KEY: Final = "registry-openai-key"
+_TEAM_ID: Final = "team-a"
 
 
 @pytest.fixture
@@ -48,31 +54,32 @@ def client_internal_user():
         app.dependency_overrides = original_overrides
 
 
-def test_internal_user_viewer_rag_ingest_without_vector_store_id_rejected(
-    client_internal_user_viewer,
-):
-    """
-    internal_user_viewer cannot create new vector stores - must provide vector_store_id.
-    """
-    # Form upload without vector_store_id (would create new store)
-    response = client_internal_user_viewer.post(
-        "/v1/rag/ingest",
-        files={"file": ("sample.txt", io.BytesIO(b"test content"), "text/plain")},
-        data={
-            "request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'
-        },
-    )
+@pytest.fixture
+def client_team_a() -> Iterator[TestClient]:
+    mock_auth: Final = UserAPIKeyAuth(user_id="test_team_user", team_id=_TEAM_ID)
+    original_overrides: Final = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides = original_overrides
 
-    assert response.status_code == 403
-    detail = response.json()
-    assert "detail" in detail
-    error_msg = (
-        detail["detail"]["error"]
-        if isinstance(detail["detail"], dict)
-        else str(detail["detail"])
-    )
-    assert "internal_user_viewer" in error_msg
-    assert "vector_store_id" in error_msg
+
+def test_internal_user_viewer_rag_ingest_without_vector_store_id_allowed(client_internal_user_viewer):
+    with patch(
+        "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+        new_callable=AsyncMock,
+        return_value={"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    ) as mock_aingest:
+        response = client_internal_user_viewer.post(
+            "/v1/rag/ingest",
+            files={"file": ("sample.txt", io.BytesIO(b"test content"), "text/plain")},
+            data={"request": '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'},
+        )
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["status"] == "completed"
+    mock_aingest.assert_awaited_once()
 
 
 def test_internal_user_viewer_rag_ingest_with_vector_store_id_passes_check(
@@ -177,6 +184,8 @@ def test_rag_ingest_blocks_clientside_credentials(client_internal_user, blocked_
     assert blocked_field in str(
         body
     ), f"Response should mention '{blocked_field}': {body}"
+
+
 class TestRagIngestSSRFBlocked:
     """
     aws_sts_endpoint and related credential-redirect fields must be rejected
@@ -318,6 +327,250 @@ def _patched_prisma_client(prisma_client):
         "litellm.proxy.proxy_server.prisma_client",
         prisma_client,
     )
+
+
+def _team_provider_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "openai/team-provider",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": _TEAM_PROVIDER_KEY,
+                    "api_base": "https://team-openai.example/v1",
+                },
+                "model_info": {"team_id": _TEAM_ID},
+            },
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "completion-key",
+                    "mock_response": "hello",
+                },
+            },
+        ]
+    )
+
+
+def _managed_openai_store(vector_store_id: str, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        "vector_store_id": vector_store_id,
+        "custom_llm_provider": "openai",
+        "litellm_credential_name": None,
+        "litellm_params": dict(litellm_params),
+    }
+
+
+def _rag_query_search_kwargs(
+    client: TestClient,
+    *,
+    vector_store_id: str,
+    managed_store: Mapping[str, object] | None,
+    router: Router,
+) -> Mapping[str, object]:
+    mock_registry = MagicMock()
+    mock_registry.get_litellm_managed_vector_store_from_registry.return_value = managed_store
+    fake_search = AsyncMock(
+        return_value=VectorStoreSearchResponse(object="vector_store.search_results.page", search_query="q", data=[])
+    )
+
+    with (
+        patch("litellm.vector_stores.asearch", new=fake_search),
+        patch.object(litellm, "vector_store_registry", mock_registry),
+        patch("litellm.proxy.proxy_server.llm_router", router),
+        patch(
+            "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
+            new=AsyncMock(return_value=True),
+        ),
+        _patched_prisma_client(None),
+    ):
+        response = client.post(
+            "/v1/rag/query",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hello"}],
+                "retrieval_config": {"vector_store_id": vector_store_id, "custom_llm_provider": "openai"},
+            },
+        )
+
+    assert response.status_code == 200, response.json()
+    fake_search.assert_awaited_once()
+    return TypeAdapter(dict[str, object]).validate_python(fake_search.await_args.kwargs)
+
+
+def test_rag_ingest_forwards_team_provider_credentials_without_persisting_them(client_team_a):
+    router = _team_provider_router()
+    save_helper = AsyncMock()
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", router),
+        _patched_prisma_client(MagicMock()),
+        patch(
+            "litellm.proxy.rag_endpoints.endpoints._save_vector_store_to_db_from_rag_ingest",
+            new=save_helper,
+        ),
+    ):
+        response = client_team_a.post(
+            "/v1/rag/ingest",
+            **_ingest_form({"custom_llm_provider": "openai"}),
+        )
+
+    assert response.status_code == 200, response.json()
+    forwarded = mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]
+    assert forwarded["api_key"] == _TEAM_PROVIDER_KEY
+    assert forwarded["api_base"] == "https://team-openai.example/v1"
+    save_helper.assert_awaited_once()
+    persisted = save_helper.await_args.kwargs["ingest_options"]["vector_store"]
+    assert persisted == {"custom_llm_provider": "openai"}
+
+
+def test_rag_ingest_caller_credential_name_suppresses_team_provider_credentials(client_team_a):
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        _patched_prisma_client(None),
+    ):
+        response = client_team_a.post(
+            "/v1/rag/ingest",
+            **_ingest_form({"custom_llm_provider": "openai", "litellm_credential_name": "caller-openai"}),
+        )
+
+    assert response.status_code == 200, response.json()
+    forwarded = mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]
+    assert forwarded["litellm_credential_name"] == "caller-openai"
+    assert "api_key" not in forwarded
+
+
+def test_rag_ingest_managed_store_credentials_override_team_provider_credentials(client_team_a):
+    managed_store = _managed_openai_store("registry-store-with-key", {"api_key": _REGISTRY_PROVIDER_KEY})
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        managed_store,
+        {"status": "completed", "vector_store_id": "registry-store-with-key", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        patch(
+            "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
+            new=AsyncMock(return_value=True),
+        ),
+        _patched_prisma_client(None),
+    ):
+        response = client_team_a.post(
+            "/v1/rag/ingest",
+            **_ingest_form({"vector_store_id": "registry-store-with-key"}),
+        )
+
+    assert response.status_code == 200, response.json()
+    forwarded = mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]
+    assert forwarded["api_key"] == _REGISTRY_PROVIDER_KEY
+    assert forwarded["api_key"] != _TEAM_PROVIDER_KEY
+
+
+def test_rag_ingest_managed_store_without_credentials_uses_team_provider_credentials(client_team_a):
+    managed_store = _managed_openai_store("registry-store-without-key", {})
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        managed_store,
+        {"status": "completed", "vector_store_id": "registry-store-without-key", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        patch(
+            "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
+            new=AsyncMock(return_value=True),
+        ),
+        _patched_prisma_client(None),
+    ):
+        response = client_team_a.post(
+            "/v1/rag/ingest",
+            **_ingest_form({"vector_store_id": "registry-store-without-key"}),
+        )
+
+    assert response.status_code == 200, response.json()
+    forwarded = mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]
+    assert forwarded["api_key"] == _TEAM_PROVIDER_KEY
+
+
+def test_rag_ingest_failed_upstream_status_is_returned_without_persisting_store(client_internal_user):
+    save_helper = AsyncMock()
+    with (
+        patch(
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aingest",
+            new=AsyncMock(
+                return_value={
+                    "status": "failed",
+                    "error": "unauthorized",
+                    "error_status_code": 401,
+                }
+            ),
+        ),
+        patch("litellm.vector_store_registry", None),
+        _patched_prisma_client(MagicMock()),
+        patch(
+            "litellm.proxy.rag_endpoints.endpoints._save_vector_store_to_db_from_rag_ingest",
+            new=save_helper,
+        ),
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/ingest",
+            **_ingest_form({"custom_llm_provider": "openai"}),
+        )
+
+    assert response.status_code == 401, response.json()
+    assert response.json() == {"detail": {"error": "unauthorized"}}
+    save_helper.assert_not_awaited()
+
+
+def test_rag_query_forwards_team_provider_credentials_to_unmanaged_search(client_team_a):
+    search_kwargs = _rag_query_search_kwargs(
+        client_team_a,
+        vector_store_id="provider-native-store",
+        managed_store=None,
+        router=_team_provider_router(),
+    )
+
+    assert search_kwargs["api_key"] == _TEAM_PROVIDER_KEY
+
+
+def test_rag_query_managed_store_credentials_override_team_provider_credentials(client_team_a):
+    search_kwargs = _rag_query_search_kwargs(
+        client_team_a,
+        vector_store_id="registry-store-with-key",
+        managed_store=_managed_openai_store("registry-store-with-key", {"api_key": _REGISTRY_PROVIDER_KEY}),
+        router=_team_provider_router(),
+    )
+
+    assert search_kwargs["api_key"] == _REGISTRY_PROVIDER_KEY
+    assert search_kwargs["api_key"] != _TEAM_PROVIDER_KEY
+
+
+def test_rag_query_managed_store_without_credentials_uses_team_provider_credentials(client_team_a):
+    search_kwargs = _rag_query_search_kwargs(
+        client_team_a,
+        vector_store_id="registry-store-without-key",
+        managed_store=_managed_openai_store("registry-store-without-key", {}),
+        router=_team_provider_router(),
+    )
+
+    assert search_kwargs["api_key"] == _TEAM_PROVIDER_KEY
 
 
 def test_rag_ingest_resolves_registry_store_provider_and_params(client_internal_user):

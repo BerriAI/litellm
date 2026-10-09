@@ -1693,6 +1693,7 @@ class JWTAuthManager:
         from litellm.proxy.proxy_server import llm_router
 
         denied_pass_through_team: LiteLLM_TeamTable | None = None
+        route_denied_team_id: str | None = None  # rebind-ok: retain route-denied team while checking all claims
 
         if not team_ids:
             if (
@@ -1735,7 +1736,9 @@ class JWTAuthManager:
                             user_route=route,
                             litellm_proxy_roles=jwt_handler.litellm_jwtauth,
                         )
-                        if is_allowed and not JWTAuthManager._team_has_passthrough_route_access(
+                        if not is_allowed:
+                            route_denied_team_id = team_id
+                        elif not JWTAuthManager._team_has_passthrough_route_access(
                             team_object=team_object,
                             route=route,
                             request_method=request_method,
@@ -1758,7 +1761,13 @@ class JWTAuthManager:
             # Claim resolved but no model access, or fallback disabled — deny.
             raise HTTPException(
                 status_code=403,
-                detail=f"No team has access to the requested model: {requested_model}. Checked teams={team_ids}. Check `/models` to see all available models.",
+                detail=(
+                    f"Team {route_denied_team_id} can access model {requested_model} but route {route} "
+                    "is not in litellm_jwtauth.team_allowed_routes"
+                    if route_denied_team_id is not None
+                    else f"No team has access to the requested model: {requested_model}. "
+                    f"Checked teams={team_ids}. Check `/models` to see all available models."
+                ),
             )
 
         # No claim team resolved and fallback enabled — defer to fallback.
