@@ -81942,5 +81942,21 @@
         "mode": "evaluation",
         "output_cost_per_token": 4.2e-08,
         "source": "https://prices.azure.com/api/retail/prices?$filter=productName eq 'Microsoft Decision Models'"
+    },
+    "gpt-rosalind-discovery": {
+        "cache_read_input_token_cost": 5e-07,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-05,
+        "source": "https://developers.openai.com/api/docs/pricing"
+    },
+    "chatgpt/gpt-rosalind-discovery": {
+        "litellm_provider": "chatgpt",
+        "mode": "responses",
+        "source": "https://developers.openai.com/api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/responses"
+        ]
     }
 }
