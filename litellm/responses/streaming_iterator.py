@@ -1514,6 +1514,17 @@ def _add_text_like_part_events(
 _BACKFILL_EXCLUDED_ITEM_KEYS: Final = frozenset({"phase", "logprobs"})
 
 
+def _strip_sse_part(part: object) -> object:
+    """Copy an untyped provider SSE content-part dict without provider-internal keys."""
+    if not isinstance(part, dict):
+        return part
+    stripped: Final[dict[str, object]] = {}  # mutable-ok: rebuilt per part
+    for key, value in part.items():  # pyright: ignore[reportUnknownVariableType]  # untyped SSE payload
+        if isinstance(key, str) and key not in _BACKFILL_EXCLUDED_ITEM_KEYS:
+            stripped[key] = value
+    return stripped
+
+
 def _strip_provider_internal_item_fields(item: object) -> object:
     """Return a copy of a streamed output item without provider-internal fields.
 
@@ -1529,7 +1540,7 @@ def _strip_provider_internal_item_fields(item: object) -> object:
     content: Final = cleaned.get("content")
     if isinstance(content, list):
         cleaned["content"] = [
-            _strip_provider_internal_item_fields(
+            _strip_sse_part(
                 part  # pyright: ignore[reportUnknownArgumentType]  # raw SSE part
             )
             if isinstance(part, dict)
