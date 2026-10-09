@@ -425,15 +425,16 @@ async def test_execute_tool_calls_passes_litellm_call_id_and_trace_id_to_functio
 ):
     """
     Regression test for ae4d92ad...:
-    Ensure litellm_call_id / litellm_trace_id are forwarded into function_setup kwargs.
+    Ensure litellm_call_id / litellm_trace_id are forwarded into function_setup kwargs,
+    the call id as the parent: each tool log needs its own SpendLogs request_id.
     """
     _setup_proxy_logging(monkeypatch)
     call_tool_mock = _setup_mcp_call_environment(monkeypatch)
 
-    captured = {}
+    captured = []
 
     def fake_function_setup(*_args, **kwargs):
-        captured.update(kwargs)
+        captured.append(kwargs)
         return None, None
 
     # NOTE: Don't patch via dotted string path here because `litellm.responses`
@@ -443,7 +444,7 @@ async def test_execute_tool_calls_passes_litellm_call_id_and_trace_id_to_functio
     monkeypatch.setattr(handler_module, "function_setup", fake_function_setup)
 
     tool_name = "deepwiki-read_wiki_structure"
-    tool_calls = [{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}]
+    tool_calls = [{"id": f"call-{i}", "function": {"name": tool_name, "arguments": "{}"}} for i in range(2)]
 
     await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
         tool_server_map={tool_name: "deepwiki"},
@@ -454,10 +455,10 @@ async def test_execute_tool_calls_passes_litellm_call_id_and_trace_id_to_functio
     )
 
     # Ensure the tool call was attempted (sanity)
-    assert call_tool_mock.await_count == 1
+    assert call_tool_mock.await_count == 2
 
-    assert captured.get("litellm_call_id") == "cid"
-    assert captured.get("litellm_trace_id") == "tid"
+    assert len({c["litellm_call_id"] for c in captured} | {"cid"}) == 3
+    assert all(c["litellm_trace_id"] == "tid" and c["metadata"]["parent_litellm_call_id"] == "cid" for c in captured)
 
 
 @pytest.mark.asyncio
