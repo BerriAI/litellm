@@ -45055,12 +45055,20 @@
         "output_cost_per_token": 2.8e-07
     },
     "perplexity/pplx-decider-v1-27b": {
-        "input_cost_per_token": 4e-08,
+        "input_cost_per_token": 2e-08,
         "litellm_provider": "perplexity",
         "max_input_tokens": 262144,
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
-        "source": "https://docs.perplexity.ai/api-reference/decisions-post"
+        "source": "https://docs.perplexity.ai/docs/getting-started/pricing"
+    },
+    "perplexity/pplx-decider-v1.1-27b":     {
+        "input_cost_per_token": 2e-08,
+        "litellm_provider": "perplexity",
+        "max_input_tokens": 262144,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.perplexity.ai/docs/getting-started/pricing"
     },
     "perplexity/sonar": {
         "input_cost_per_token": 1e-06,
@@ -73573,6 +73581,123 @@
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
         "source": "https://openrouter.ai/typesafe/jev-1.13"
+    },
+    "openrouter/cloudflare/clef":     {
+        "input_cost_per_token": 2.4e-07,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 65536,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://openrouter.ai/cloudflare/clef"
+    },
+    "openrouter/cloudflare/clef-flash":     {
+        "input_cost_per_token": 2.1e-08,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 65536,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://openrouter.ai/cloudflare/clef-flash"
+    },
+    "openrouter/inception/mercury-decide":     {
+        "input_cost_per_token": 2e-08,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 65536,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://openrouter.ai/inception/mercury-decide"
+    },
+    "openrouter/inception/mercury-decide:free":     {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 65536,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://openrouter.ai/inception/mercury-decide:free"
+    },
+    "openrouter/jaredpalmer/kev-4b":     {
+        "input_cost_per_token": 4.2e-08,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 8192,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://openrouter.ai/jaredpalmer/kev-4b"
+    },
+    "openrouter/liquid/d1":     {
+        "input_cost_per_token": 4e-08,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 65536,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://openrouter.ai/liquid/d1"
+    },
+    "openrouter/openai/gpt-6-luna-decisions":     {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 1050000,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://openrouter.ai/openai/gpt-6-luna-decisions"
+    },
+    "openrouter/perplexity/pplx-decider-v1.1-27b":     {
+        "input_cost_per_token": 2e-08,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 262144,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://openrouter.ai/perplexity/pplx-decider-v1.1-27b"
+    },
+    "openrouter/respan/span-01":     {
+        "input_cost_per_token": 2e-08,
+        "litellm_provider": "openrouter",
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://openrouter.ai/respan/span-01"
+    },
+    "openrouter/respan/span-01-lite":     {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "openrouter",
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://openrouter.ai/respan/span-01-lite"
+    },
+    "openrouter/respan/span-01-lite:free":     {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "openrouter",
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://openrouter.ai/respan/span-01-lite:free"
+    },
+    "openrouter/togethercomputer/tev1-4b-experimental":     {
+        "input_cost_per_token": 4.2e-08,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 32768,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://openrouter.ai/togethercomputer/tev1-4b-experimental"
+    },
+    "openrouter/upstage/solar-decide":     {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 524288,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://openrouter.ai/upstage/solar-decide"
+    },
+    "openrouter/upstage/solar-decide-flash":     {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 524288,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://openrouter.ai/upstage/solar-decide-flash"
+    },
+    "openrouter/~typesafe/jev-latest":     {
+        "input_cost_per_token": 4.2e-08,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 64000,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://openrouter.ai/~typesafe/jev-latest"
     },
     "openrouter/typesafe/jev-router": {
         "input_cost_per_token": 0,
