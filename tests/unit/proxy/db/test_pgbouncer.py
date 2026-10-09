@@ -357,10 +357,10 @@ def _wait_until(condition: Callable[[], bool], timeout_seconds: float = 5.0) -> 
 
 
 class TestPgBouncerProcess:
-    def test_start_waits_for_the_listener_and_stop_ends_it(self, tmp_path: Path):
+    def test_start_waits_for_the_listener_and_stop_ends_it(self, socket_dir: Path):
         port: Final = _free_port()
         pooler: Final = PgBouncerProcess(
-            argv=(str(_fake_pooler(tmp_path, port)),), port=port, socket_path=unix_socket_path(tmp_path, port)
+            argv=(str(_fake_pooler(socket_dir, port)),), port=port, socket_path=unix_socket_path(socket_dir, port)
         )
         assert pooler.start() is None
         assert _listening(port)
@@ -371,12 +371,12 @@ class TestPgBouncerProcess:
         with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)
 
-    def test_a_crashed_pooler_is_restarted_with_a_new_pid(self, tmp_path: Path):
+    def test_a_crashed_pooler_is_restarted_with_a_new_pid(self, socket_dir: Path):
         port: Final = _free_port()
         pooler: Final = PgBouncerProcess(
-            argv=(str(_fake_pooler(tmp_path, port)),),
+            argv=(str(_fake_pooler(socket_dir, port)),),
             port=port,
-            socket_path=unix_socket_path(tmp_path, port),
+            socket_path=unix_socket_path(socket_dir, port),
             restart_delay_seconds=0.1,
         )
         assert pooler.start() is None
@@ -388,17 +388,17 @@ class TestPgBouncerProcess:
         assert _wait_until(lambda: not _listening(port))
 
     def test_a_failed_restart_is_retried_until_the_pooler_is_back(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+        self, socket_dir: Path, caplog: pytest.LogCaptureFixture
     ):
         port: Final = _free_port()
-        script: Final = _fake_pooler(tmp_path, port)
+        script: Final = _fake_pooler(socket_dir, port)
         pooler: Final = PgBouncerProcess(
-            argv=(str(script),), port=port, socket_path=unix_socket_path(tmp_path, port), restart_delay_seconds=0.1
+            argv=(str(script),), port=port, socket_path=unix_socket_path(socket_dir, port), restart_delay_seconds=0.1
         )
         assert pooler.start() is None
         first_pid: Final = pooler.pid
         assert first_pid is not None
-        hidden: Final = script.rename(tmp_path / "hidden")
+        hidden: Final = script.rename(socket_dir / "hidden")
         with caplog.at_level(logging.ERROR, logger=verbose_proxy_logger.name):
             os.kill(first_pid, signal.SIGKILL)
             assert _wait_until(lambda: any("could not be restarted" in record.message for record in caplog.records))
@@ -408,15 +408,17 @@ class TestPgBouncerProcess:
         pooler.stop()
         assert _wait_until(lambda: not _listening(port))
 
-    def test_a_replacement_that_never_listens_is_replaced_again(self, tmp_path: Path, caplog: pytest.LogCaptureFixture):
+    def test_a_replacement_that_never_listens_is_replaced_again(
+        self, socket_dir: Path, caplog: pytest.LogCaptureFixture
+    ):
         port: Final = _free_port()
-        port_file: Final = tmp_path / "port"
+        port_file: Final = socket_dir / "port"
         port_file.write_text(str(port))
-        script: Final = _fake_pooler(tmp_path, port, port_file=port_file)
+        script: Final = _fake_pooler(socket_dir, port, port_file=port_file)
         pooler: Final = PgBouncerProcess(
             argv=(str(script),),
             port=port,
-            socket_path=unix_socket_path(tmp_path, port),
+            socket_path=unix_socket_path(socket_dir, port),
             restart_delay_seconds=0.1,
             ready_timeout_seconds=2.0,
         )
@@ -435,12 +437,12 @@ class TestPgBouncerProcess:
         pooler.stop()
         assert _wait_until(lambda: not _listening(port))
 
-    def test_stopping_during_the_restart_delay_leaves_no_pooler_behind(self, tmp_path: Path):
+    def test_stopping_during_the_restart_delay_leaves_no_pooler_behind(self, socket_dir: Path):
         port: Final = _free_port()
         pooler: Final = PgBouncerProcess(
-            argv=(str(_fake_pooler(tmp_path, port)),),
+            argv=(str(_fake_pooler(socket_dir, port)),),
             port=port,
-            socket_path=unix_socket_path(tmp_path, port),
+            socket_path=unix_socket_path(socket_dir, port),
             restart_delay_seconds=0.3,
         )
         assert pooler.start() is None
@@ -453,12 +455,12 @@ class TestPgBouncerProcess:
         assert not _listening(port)
         assert pooler.pid == first_pid
 
-    def test_a_stopped_pooler_is_not_restarted(self, tmp_path: Path, caplog: pytest.LogCaptureFixture):
+    def test_a_stopped_pooler_is_not_restarted(self, socket_dir: Path, caplog: pytest.LogCaptureFixture):
         port: Final = _free_port()
         pooler: Final = PgBouncerProcess(
-            argv=(str(_fake_pooler(tmp_path, port)),),
+            argv=(str(_fake_pooler(socket_dir, port)),),
             port=port,
-            socket_path=unix_socket_path(tmp_path, port),
+            socket_path=unix_socket_path(socket_dir, port),
             restart_delay_seconds=0.1,
         )
         assert pooler.start() is None
@@ -468,31 +470,31 @@ class TestPgBouncerProcess:
         assert not _listening(port)
         assert caplog.records == []
 
-    def test_a_pooler_that_exits_during_startup_is_reported(self, tmp_path: Path):
+    def test_a_pooler_that_exits_during_startup_is_reported(self, socket_dir: Path):
         port: Final = _free_port()
         pooler: Final = PgBouncerProcess(
-            argv=(str(_fake_pooler(tmp_path, port, exit_immediately=True)),),
+            argv=(str(_fake_pooler(socket_dir, port, exit_immediately=True)),),
             port=port,
-            socket_path=unix_socket_path(tmp_path, port),
+            socket_path=unix_socket_path(socket_dir, port),
         )
         outcome: Final = pooler.start()
         assert isinstance(outcome, PgBouncerError)
         assert "status 3" in outcome.reason
 
-    def test_a_missing_binary_is_reported(self, tmp_path: Path):
+    def test_a_missing_binary_is_reported(self, socket_dir: Path):
         outcome: Final = PgBouncerProcess(
-            argv=("/nonexistent/pgbouncer",), port=_free_port(), socket_path=tmp_path / "sock"
+            argv=("/nonexistent/pgbouncer",), port=_free_port(), socket_path=socket_dir / "sock"
         ).start()
         assert isinstance(outcome, PgBouncerError)
         assert "/nonexistent/pgbouncer" in outcome.reason
 
-    def test_a_port_owned_by_someone_else_is_refused_before_spawning(self, tmp_path: Path):
+    def test_a_port_owned_by_someone_else_is_refused_before_spawning(self, socket_dir: Path):
         with socket.socket() as squatter:
             squatter.bind(("127.0.0.1", 0))
             squatter.listen()
             port: Final = _bound_port(squatter)
             pooler: Final = PgBouncerProcess(
-                argv=(str(_fake_pooler(tmp_path, port)),), port=port, socket_path=unix_socket_path(tmp_path, port)
+                argv=(str(_fake_pooler(socket_dir, port)),), port=port, socket_path=unix_socket_path(socket_dir, port)
             )
             outcome: Final = pooler.start()
         assert isinstance(outcome, PgBouncerError)
@@ -500,13 +502,13 @@ class TestPgBouncerProcess:
         assert pooler.pid is None
 
     def test_a_replacement_waits_until_a_squatter_leaves_the_port(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+        self, socket_dir: Path, caplog: pytest.LogCaptureFixture
     ):
         port: Final = _free_port()
         pooler: Final = PgBouncerProcess(
-            argv=(str(_fake_pooler(tmp_path, port)),),
+            argv=(str(_fake_pooler(socket_dir, port)),),
             port=port,
-            socket_path=unix_socket_path(tmp_path, port),
+            socket_path=unix_socket_path(socket_dir, port),
             restart_delay_seconds=0.5,
         )
         assert pooler.start() is None
@@ -524,12 +526,12 @@ class TestPgBouncerProcess:
         pooler.stop()
         assert _wait_until(lambda: not _listening(port))
 
-    def test_a_listener_that_grabs_the_port_after_the_spawn_is_not_taken_for_the_pooler(self, tmp_path: Path):
+    def test_a_listener_that_grabs_the_port_after_the_spawn_is_not_taken_for_the_pooler(self, socket_dir: Path):
         port: Final = _free_port()
         pooler: Final = PgBouncerProcess(
-            argv=(str(_fake_pooler(tmp_path, port, bind_delay_seconds=0.5)),),
+            argv=(str(_fake_pooler(socket_dir, port, bind_delay_seconds=0.5)),),
             port=port,
-            socket_path=unix_socket_path(tmp_path, port),
+            socket_path=unix_socket_path(socket_dir, port),
             ready_timeout_seconds=3.0,
         )
         with socket.socket() as squatter, ThreadPoolExecutor(max_workers=1) as starter:
@@ -542,12 +544,12 @@ class TestPgBouncerProcess:
         assert isinstance(outcome, PgBouncerError)
         assert "exited with status 1" in outcome.reason
 
-    def test_a_port_served_by_a_stranger_while_the_pooler_is_still_starting_is_reported(self, tmp_path: Path):
+    def test_a_port_served_by_a_stranger_while_the_pooler_is_still_starting_is_reported(self, socket_dir: Path):
         port: Final = _free_port()
         pooler: Final = PgBouncerProcess(
-            argv=(str(_fake_pooler(tmp_path, port, bind_delay_seconds=30.0)),),
+            argv=(str(_fake_pooler(socket_dir, port, bind_delay_seconds=30.0)),),
             port=port,
-            socket_path=unix_socket_path(tmp_path, port),
+            socket_path=unix_socket_path(socket_dir, port),
             ready_timeout_seconds=0.5,
         )
         with socket.socket() as squatter, ThreadPoolExecutor(max_workers=1) as starter:
@@ -564,12 +566,12 @@ class TestPgBouncerProcess:
         with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)
 
-    def test_a_pooler_that_never_listens_times_out(self, tmp_path: Path):
+    def test_a_pooler_that_never_listens_times_out(self, socket_dir: Path):
         port: Final = _free_port()
         pooler: Final = PgBouncerProcess(
-            argv=(str(_fake_pooler(tmp_path, _free_port())),),
+            argv=(str(_fake_pooler(socket_dir, _free_port())),),
             port=port,
-            socket_path=unix_socket_path(tmp_path, port),
+            socket_path=unix_socket_path(socket_dir, port),
             ready_timeout_seconds=0.5,
         )
         outcome: Final = pooler.start()
@@ -798,25 +800,25 @@ class TestStartInContainerPgBouncer:
         assert "no Azure credential" in outcome.reason
         assert not _listening(port)
 
-    def test_a_renewed_token_is_written_and_picked_up_by_the_running_and_by_a_restarted_pooler(self, tmp_path: Path):
+    def test_a_renewed_token_is_written_and_picked_up_by_the_running_and_by_a_restarted_pooler(self, socket_dir: Path):
         port: Final = _free_port()
-        auth_log: Final = tmp_path / "auth.log"
+        auth_log: Final = socket_dir / "auth.log"
         plan: Final = plan_pgbouncer(
-            "postgresql://app@db/litellm", PgBouncerSettings(enabled=True, port=port), tmp_path, None
+            "postgresql://app@db/litellm", PgBouncerSettings(enabled=True, port=port), socket_dir, None
         )
         assert isinstance(plan, PgBouncerPlan), plan
-        ini_path: Final = write_pgbouncer_ini(plan, tmp_path, None)
-        write_userlist(plan.userlist("first"), tmp_path, None)
+        ini_path: Final = write_pgbouncer_ini(plan, socket_dir, None)
+        write_userlist(plan.userlist("first"), socket_dir, None)
         pooler: Final = PgBouncerProcess(
-            argv=(str(_fake_pooler(tmp_path, port, auth_log=auth_log)), str(ini_path)),
+            argv=(str(_fake_pooler(socket_dir, port, auth_log=auth_log)), str(ini_path)),
             port=port,
-            socket_path=unix_socket_path(tmp_path, port),
+            socket_path=unix_socket_path(socket_dir, port),
             restart_delay_seconds=0.1,
         )
         assert pooler.start() is None
         first_pid: Final = pooler.pid
         assert first_pid is not None
-        install_pgbouncer_token(plan, tmp_path, None, pooler, "second")
+        install_pgbouncer_token(plan, socket_dir, None, pooler, "second")
         assert _wait_until(lambda: auth_log.read_text().count("\n") == 2)
         os.kill(first_pid, signal.SIGKILL)
         assert _wait_until(lambda: pooler.pid not in (None, first_pid) and _listening(port))

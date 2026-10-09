@@ -4,9 +4,11 @@ import asyncio
 import copy
 import inspect
 import os
+import shutil
 import tempfile
 import warnings
 from collections.abc import Awaitable, Callable, Iterator
+from pathlib import Path
 from typing import Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -229,6 +231,19 @@ def pytest_runtest_teardown(item, nextitem):
             setattr(proxy_server, name, snapshot[name])
         elif name in vars(proxy_server):
             delattr(proxy_server, name)
+
+
+@pytest.fixture
+def socket_dir() -> Iterator[Path]:
+    """A directory whose unix socket paths fit the kernel's sun_path limit, which pytest's tmp_path exceeds on macOS."""
+    directory: Final = Path(tempfile.mkdtemp(prefix="sock"))
+    yield directory
+    shutil.rmtree(directory)
+
+
+@pytest.fixture
+def socket_path(socket_dir: Path) -> Path:
+    return socket_dir / "spend.sock"
 
 
 @pytest.fixture
