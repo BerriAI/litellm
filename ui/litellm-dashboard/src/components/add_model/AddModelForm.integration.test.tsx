@@ -422,8 +422,32 @@ describe("AddModelForm", () => {
       expect(providerSelect).toBeDisabled();
     });
 
+    it("saves an OpenAI federated credential and attaches it to the model", async () => {
+      const user = userEvent.setup();
+      const props = await renderAsRole("proxy_admin", Providers.OpenAI);
+
+      await user.click(screen.getByRole("button", { name: "Use workload identity federation" }));
+      expect(await screen.findByRole("combobox", { name: /^Authentication:/ })).toHaveTextContent(
+        "Workload identity federation",
+      );
+      fill("Credential Name:", "openai-federated");
+      fill(/Service Account ID/, "svc_new");
+      await user.click(screen.getByRole("button", { name: "Add Credential" }));
+
+      await waitFor(() => {
+        expect(credentialCreateCall).toHaveBeenCalledWith("test-access-token", {
+          credential_name: "openai-federated",
+          credential_values: { openai_service_account_id: "svc_new" },
+          credential_info: { custom_llm_provider: Providers.OpenAI },
+        });
+      });
+      await waitFor(() => {
+        expect(props.form.getValues("litellm_credential_name")).toBe("openai-federated");
+      });
+    });
+
     it("is not offered for a provider without federation support", async () => {
-      await renderAsRole("proxy_admin", Providers.OpenAI);
+      await renderAsRole("proxy_admin", Providers.OpenAI_Compatible);
 
       expect(screen.queryByRole("button", { name: "Use workload identity federation" })).not.toBeInTheDocument();
     });

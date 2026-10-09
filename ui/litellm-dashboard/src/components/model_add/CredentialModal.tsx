@@ -19,18 +19,19 @@ import { Providers } from "../provider_info_helpers";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { resetCredentialFormOnProviderChange, withoutRestrictedFields } from "./credential_form_helpers";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import AnthropicFederationFields from "./AnthropicFederationFields";
+import FederationFields from "./FederationFields";
+import { DEFAULT_IDENTITY_SOURCE, inferIdentitySource, type IdentitySourceId } from "./anthropic_federation";
 import {
   buildCreateCredentialValues,
   buildCredentialPatch,
   buildProviderChangePatch,
+  federatedProviderOf,
   inferAuthMethod,
-  inferIdentitySource,
-  isAnthropicProvider,
   isFederatedCredential,
-  type AnthropicAuthMethod,
-  type IdentitySourceId,
-} from "./anthropic_federation";
+  providerFieldValidators,
+  selectionFor,
+  type AuthMethod,
+} from "./credential_federation";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const providerOptions: SearchSelectOption[] = Object.entries(Providers).map(([providerEnum, providerDisplayName]) => ({
@@ -39,11 +40,11 @@ const providerOptions: SearchSelectOption[] = Object.entries(Providers).map(([pr
   icon: <Logo provider={providerEnum} label={providerDisplayName} className="w-5 h-5" />,
 }));
 
-const AUTH_METHOD_SELECT_ID = "anthropic_auth_method";
+const AUTH_METHOD_SELECT_ID = "credential_auth_method";
 const API_KEY_FIELDS: readonly string[] = ["api_key"];
 const NO_HIDDEN_FIELDS: readonly string[] = [];
 
-const authMethodItems: { value: AnthropicAuthMethod; label: string }[] = [
+const authMethodItems: { value: AuthMethod; label: string }[] = [
   { value: "api_key", label: "API key" },
   { value: "federation", label: "Workload identity federation" },
 ];
@@ -55,7 +56,7 @@ interface CredentialModalProps {
   mode: "add" | "edit";
   existingCredential?: CredentialItem | null;
   initialProvider?: string | null;
-  initialAuthMethod?: AnthropicAuthMethod;
+  initialAuthMethod?: AuthMethod;
   providerLocked?: boolean;
 }
 
@@ -94,18 +95,16 @@ export default function CredentialModal({
   );
   const storedProvider = existingCredential?.credential_info.custom_llm_provider ?? null;
   const storedValues: Record<string, unknown> = existingCredential?.credential_values ?? {};
-  const storedSelection = {
-    authMethod: inferAuthMethod(storedValues),
-    identitySource: inferIdentitySource(storedValues),
-  };
-  const [authMethod, setAuthMethod] = useState<AnthropicAuthMethod>(
-    existingCredential ? storedSelection.authMethod : initialAuthMethod ?? "api_key",
+  const storedAuthMethod = inferAuthMethod(storedValues);
+  const storedIdentitySource = isFederatedCredential(storedValues)
+    ? inferIdentitySource(storedValues)
+    : DEFAULT_IDENTITY_SOURCE;
+  const storedSelection = selectionFor(federatedProviderOf(storedProvider), storedAuthMethod, storedIdentitySource);
+  const [authMethod, setAuthMethod] = useState<AuthMethod>(
+    existingCredential ? storedAuthMethod : initialAuthMethod ?? "api_key",
   );
-  const [identitySource, setIdentitySource] = useState<IdentitySourceId>(
-    isFederatedCredential(storedValues) ? storedSelection.identitySource : "token_file",
-  );
-  const isAnthropic = isAnthropicProvider(selectedProvider);
-  const selection = { authMethod: isAnthropic ? authMethod : ("api_key" as const), identitySource };
+  const [identitySource, setIdentitySource] = useState<IdentitySourceId>(storedIdentitySource);
+  const selection = selectionFor(federatedProviderOf(selectedProvider), authMethod, identitySource);
 
   const initialValues = initialFormValues(existingCredential, initialProvider);
 
@@ -117,6 +116,13 @@ export default function CredentialModal({
     resetFields: () => form.reset(isEdit && !sameProvider(provider, storedProvider) ? {} : initialValues),
     setFieldValue: (field: string, value: unknown) => form.setValue(field, value),
   });
+
+  const changeProvider = (provider: string | null) => {
+    const backToStored = isEdit && sameProvider(provider, storedProvider);
+    setAuthMethod(backToStored ? storedAuthMethod : "api_key");
+    setIdentitySource(backToStored ? storedIdentitySource : DEFAULT_IDENTITY_SOURCE);
+    resetCredentialFormOnProviderChange(formAdapterFor(provider), provider, setSelectedProvider);
+  };
 
   const handleSubmit = async () => {
     const isValid = await form.trigger(registry.mountedNames() as string[]);
@@ -192,24 +198,24 @@ export default function CredentialModal({
                     disabled={providerLocked}
                     onValueChange={(value) => {
                       control.onChange(value);
-                      resetCredentialFormOnProviderChange(formAdapterFor(value), value, setSelectedProvider);
+                      changeProvider(value);
                     }}
                   />
                 )}
               </MountedFormField>
 
-              {isAnthropic && (
+              {federatedProviderOf(selectedProvider) !== null && (
                 <div className="mb-4 flex flex-col gap-2">
                   <label htmlFor={AUTH_METHOD_SELECT_ID} className="text-sm font-medium">
                     {labelWithHint(
                       "Authentication:",
-                      "Workload identity federation exchanges an identity token for a short-lived Anthropic access token, so no API key is stored.",
+                      "Workload identity federation exchanges an identity token for a short-lived access token from the provider, so no API key is stored.",
                     )}
                   </label>
                   <Select
                     items={authMethodItems}
                     value={authMethod}
-                    onValueChange={(value) => setAuthMethod(value as AnthropicAuthMethod)}
+                    onValueChange={(value) => setAuthMethod(value as AuthMethod)}
                   >
                     <SelectTrigger id={AUTH_METHOD_SELECT_ID} className="w-full">
                       <SelectValue />
@@ -228,11 +234,12 @@ export default function CredentialModal({
               <ProviderSpecificFields
                 selectedProvider={selectedProvider}
                 hiddenFieldKeys={selection.authMethod === "federation" ? API_KEY_FIELDS : NO_HIDDEN_FIELDS}
+                fieldValidators={providerFieldValidators(selection)}
               />
 
               {selection.authMethod === "federation" && (
-                <AnthropicFederationFields
-                  identitySource={identitySource}
+                <FederationFields
+                  selection={selection}
                   onIdentitySourceChange={setIdentitySource}
                   storedValues={storedValues}
                 />
