@@ -1,6 +1,7 @@
+use litellm_auth::VertexParams;
 use litellm_auth_gcp::{
-    SECRET_NAMES, VertexConfig, constants::VERTEXAI_PROJECT_ENV, get_vertex_ai_location,
-    get_vertex_ai_project, get_vertex_ai_project_from_credentials,
+    VertexConfig, get_vertex_ai_location, get_vertex_ai_project,
+    get_vertex_ai_project_from_credentials, secret_names,
 };
 use litellm_http::request::has_header;
 use litellm_llms_types::{
@@ -63,12 +64,7 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
         let config = VertexConfig::from_params(&litellm_params.vertex);
         let project = get_vertex_ai_project(&config, env_lookup)
             .or_else(|| get_vertex_ai_project_from_credentials(&config, env_lookup))
-            .ok_or(Error::Auth(litellm_auth::Error::MissingSetting {
-                provider: "Vertex AI",
-                setting: "project",
-                param: "vertex_project",
-                environment_variables: &[VERTEXAI_PROJECT_ENV],
-            }))?;
+            .ok_or_else(|| Error::Auth(VertexParams::PROJECT.missing("Vertex AI")))?;
         let location = get_vertex_ai_location(&config, env_lookup)
             .unwrap_or_else(|| DEFAULT_VERTEX_LOCATION.to_string());
         complete_vertex_anthropic_url(api_base, &project, &location, model, stream)
@@ -110,7 +106,7 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
     }
 
     fn secret_names(&self) -> &'static [&'static str] {
-        SECRET_NAMES
+        secret_names()
     }
 
     /// A forwarded bearer is sent as is; otherwise a Google access token for the configured
@@ -242,7 +238,6 @@ fn vertex_feature_betas(request: &MessagesRequest) -> BetaSet {
 
 #[cfg(test)]
 mod tests {
-    use litellm_auth_gcp::VertexParams;
     use rstest::rstest;
     use serde_json::json;
 
@@ -436,15 +431,14 @@ mod tests {
 
         assert!(matches!(
             error,
-            Error::Auth(litellm_auth::Error::MissingSetting {
-                setting: "project",
-                param: "vertex_project",
-                ..
+            Error::Auth(litellm_auth::Error::MissingParam {
+                provider: "Vertex AI",
+                spec: &VertexParams::PROJECT,
             })
         ));
         assert_eq!(
             error.to_string(),
-            "Missing Vertex AI project - pass vertex_project or set VERTEXAI_PROJECT"
+            "Missing Vertex AI project - pass vertex_project or vertex_ai_project, set litellm.vertex_project, or set VERTEXAI_PROJECT"
         );
     }
 

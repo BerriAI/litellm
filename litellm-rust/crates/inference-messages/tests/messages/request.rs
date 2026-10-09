@@ -1,4 +1,4 @@
-use litellm_auth_gcp::VertexParams;
+use litellm_auth::VertexParams;
 use litellm_llms::base_llm::messages::context::{MessagesModelCapabilities, SupportedEffortTiers};
 use litellm_llms_types::{
     headers::{ProviderSpecificHeader, ProviderSpecificHeaders},
