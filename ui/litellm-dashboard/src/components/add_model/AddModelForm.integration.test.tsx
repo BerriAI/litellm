@@ -150,7 +150,7 @@ const createTestProps = (userRole = "proxy_admin", userId = "user-1", isTeamAdmi
   const credentials: CredentialItem[] = [
     {
       credential_name: "test-credential",
-      credential_alias: "Prod OpenAI",
+      display_name: "Prod OpenAI",
       credential_values: {},
       credential_info: {
         custom_llm_provider: "openai",
@@ -305,13 +305,14 @@ describe("AddModelForm", () => {
       const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
       mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
       const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
-      renderWithProviders(<AddModelForm {...createTestProps()} />);
+      const props = createTestProps();
+      renderWithProviders(<AddModelForm {...props} />);
       const input = await screen.findByPlaceholderText("Select or search for existing credentials");
       await user.click(input);
-      return { user, input };
+      return { user, input, form: props.form };
     };
 
-    it("shows each credential's name and alias together", async () => {
+    it("shows each credential's display name and credential name together", async () => {
       await openPicker();
 
       const option = await screen.findByRole("option", { name: /test-credential/ });
@@ -319,7 +320,7 @@ describe("AddModelForm", () => {
       expect(option).toHaveTextContent("Prod OpenAI");
     });
 
-    it("filters by the alias, not only the name", async () => {
+    it("filters by the display name, not only the credential name", async () => {
       const { user, input } = await openPicker();
 
       await user.type(input, "prod open");
@@ -327,13 +328,14 @@ describe("AddModelForm", () => {
       expect(await screen.findByRole("option", { name: /test-credential/ })).toBeInTheDocument();
     });
 
-    it("selecting by alias sets litellm_credential_name to the credential name", async () => {
-      const { user, input } = await openPicker();
+    it("selecting by display name sets litellm_credential_name to the credential name", async () => {
+      const { user, input, form } = await openPicker();
 
       await user.type(input, "prod open");
       await user.click(await screen.findByRole("option", { name: /test-credential/ }));
 
-      expect(input).toHaveValue("test-credential");
+      expect(input).toHaveValue("Prod OpenAI");
+      expect(form.getValues("litellm_credential_name")).toBe("test-credential");
       expect(screen.queryByText("OR")).not.toBeInTheDocument();
     });
   });

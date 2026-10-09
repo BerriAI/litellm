@@ -6,13 +6,16 @@ import { Copy, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { CredentialItem } from "@/components/networking";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 import { DataTableSortHeader } from "@/components/shared/DataTable";
+import { credentialLabel } from "@/components/shared/credentialOptions";
 import { IdentityCell } from "@/components/shared/table_cells";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -51,6 +54,7 @@ interface CredentialRowActionsProps {
 }
 
 function CredentialRowActions({ credential, onEdit, onDelete }: CredentialRowActionsProps) {
+  const configOwned = credential.source === "config";
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -61,7 +65,21 @@ function CredentialRowActions({ credential, onEdit, onDelete }: CredentialRowAct
         <MoreHorizontal className="size-4" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-52">
-        <DropdownMenuItem data-testid="credential-action-edit" onClick={() => onEdit(credential)}>
+        {configOwned && (
+          <>
+            <DropdownMenuGroup>
+              <DropdownMenuLabel data-testid="credential-config-owned-hint">
+                Defined in config.yaml. Edit the file to change or delete it.
+              </DropdownMenuLabel>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+          </>
+        )}
+        <DropdownMenuItem
+          data-testid="credential-action-edit"
+          disabled={configOwned}
+          onClick={() => onEdit(credential)}
+        >
           <Pencil />
           Edit
         </DropdownMenuItem>
@@ -76,6 +94,7 @@ function CredentialRowActions({ credential, onEdit, onDelete }: CredentialRowAct
         <DropdownMenuItem
           variant="destructive"
           data-testid="credential-action-delete"
+          disabled={configOwned}
           onClick={() => onDelete(credential)}
         >
           <Trash2 />
@@ -100,29 +119,20 @@ export const getCredentialsTableColumns = ({
   const dataColumns: ColumnDef<CredentialItem>[] = [
     {
       id: "credential_name",
-      accessorKey: "credential_name",
+      accessorFn: credentialLabel,
       meta: { title: "Credential Name" },
       header: ({ column }) => <DataTableSortHeader column={column} title="Credential Name" />,
       size: 260,
       enableSorting: true,
       cell: ({ row }) => (
-        <IdentityCell title={row.original.credential_name} className="max-w-72" titleClassName="font-medium" />
+        <IdentityCell
+          title={credentialLabel(row.original)}
+          subtitle={row.original.display_name ? row.original.credential_name : undefined}
+          badge={row.original.source === "config" ? <Badge variant="outline">Config</Badge> : undefined}
+          className="max-w-72"
+          titleClassName="font-medium"
+        />
       ),
-    },
-    {
-      id: "credential_alias",
-      accessorKey: "credential_alias",
-      meta: { title: "Alias" },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Alias" />,
-      size: 200,
-      enableSorting: true,
-      cell: ({ row }) => {
-        const alias = row.original.credential_alias;
-        if (!alias) {
-          return <span className="text-sm text-muted-foreground">-</span>;
-        }
-        return <span className="truncate text-sm">{alias}</span>;
-      },
     },
     {
       id: "provider",

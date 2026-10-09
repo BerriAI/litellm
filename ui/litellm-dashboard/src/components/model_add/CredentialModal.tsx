@@ -62,6 +62,22 @@ interface CredentialModalProps {
 const sameProvider = (left: string | null | undefined, right: string | null | undefined): boolean =>
   (left ?? "").toLowerCase() === (right ?? "").toLowerCase();
 
+const DISPLAY_NAME_MAX_LENGTH = 255;
+
+const displayNameChange = (
+  value: unknown,
+  existingCredential: CredentialItem | null | undefined,
+): { display_name?: string | null } => {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  if (!existingCredential) {
+    return trimmed ? { display_name: trimmed } : {};
+  }
+  if (trimmed === (existingCredential.display_name ?? "")) {
+    return {};
+  }
+  return { display_name: trimmed || null };
+};
+
 const initialFormValues = (
   existingCredential: CredentialItem | null | undefined,
   initialProvider: string | null | undefined,
@@ -69,6 +85,7 @@ const initialFormValues = (
   if (existingCredential) {
     return {
       credential_name: existingCredential.credential_name,
+      display_name: existingCredential.display_name ?? "",
       custom_llm_provider: existingCredential.credential_info.custom_llm_provider,
       ...Object.fromEntries(
         Object.entries(existingCredential.credential_values || {}).map(([key, value]) => [key, value ?? null]),
@@ -127,6 +144,7 @@ export default function CredentialModal({
     const meta = {
       credential_name: values.credential_name,
       custom_llm_provider: values.custom_llm_provider,
+      ...displayNameChange(values.display_name, existingCredential),
     };
     if (!isEdit) {
       onSubmit({ ...meta, ...buildCreateCredentialValues(withoutRestrictedFields(values), selection) }, []);
@@ -170,8 +188,32 @@ export default function CredentialModal({
                     value={typeof control.value === "string" ? control.value : ""}
                     onChange={control.onChange}
                     onBlur={control.onBlur}
-                    placeholder="Enter a friendly name for these credentials"
+                    placeholder="Unique name that models reference this credential by"
                     disabled={isEdit}
+                  />
+                )}
+              </MountedFormField>
+
+              <MountedFormField
+                label="Display Name:"
+                name="display_name"
+                rules={{
+                  validate: {
+                    maxLength: (value: unknown) =>
+                      typeof value !== "string" ||
+                      value.trim().length <= DISPLAY_NAME_MAX_LENGTH ||
+                      `Display name must be at most ${DISPLAY_NAME_MAX_LENGTH} characters`,
+                  },
+                }}
+                className="mb-4"
+              >
+                {(control) => (
+                  <Input
+                    id={control.id}
+                    value={typeof control.value === "string" ? control.value : ""}
+                    onChange={control.onChange}
+                    onBlur={control.onBlur}
+                    placeholder="e.g. Production OpenAI"
                   />
                 )}
               </MountedFormField>

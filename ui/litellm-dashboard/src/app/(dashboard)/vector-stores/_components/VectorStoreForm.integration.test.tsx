@@ -33,7 +33,7 @@ const renderForm = () =>
       credentials={[
         {
           credential_name: "bedrock-prod",
-          credential_alias: "Bedrock Prod",
+          display_name: "Bedrock Prod",
           credential_info: {},
           credential_values: {},
         },

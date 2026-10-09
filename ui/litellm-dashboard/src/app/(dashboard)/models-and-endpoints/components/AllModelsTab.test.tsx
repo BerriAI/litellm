@@ -82,6 +82,13 @@ vi.mock("../../hooks/models/useModelCostMap", () => ({
 }));
 
 const mockTeams = [{ team_id: "team-1", team_alias: "Engineering" }];
+const mockCredentials = [
+  { credential_name: "openai-prod", display_name: "Prod OpenAI", credential_values: {}, credential_info: {} },
+];
+vi.mock("../../hooks/credentials/useCredentials", () => ({
+  useCredentials: () => ({ data: { credentials: mockCredentials }, isLoading: false }),
+}));
+
 vi.mock("../../hooks/teams/useTeams", () => ({
   useTeams: () => ({ data: mockTeams, isLoading: false, error: null, refetch: vi.fn() }),
 }));

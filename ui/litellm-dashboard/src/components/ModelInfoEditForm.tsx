@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SearchSelect } from "@/components/shared/SearchSelect";
-import { credentialOptions } from "@/components/shared/credentialOptions";
+import { credentialLabelsByName, credentialOptions } from "@/components/shared/credentialOptions";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -347,6 +347,9 @@ const ChipList: React.FC<{ values: unknown; emptyLabel: string }> = ({ values, e
   );
 };
 
+const attachedCredentialLabel = (credentialName: string | null | undefined, credentials: CredentialItem[]): string =>
+  credentialName ? credentialLabelsByName(credentials).get(credentialName) ?? credentialName : "Manual";
+
 const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
   localModelData,
   modelData,
@@ -647,7 +650,9 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
                   )}
                 </FormField>
               ) : (
-                <Display>{localModelData.litellm_params?.litellm_credential_name || "Manual"}</Display>
+                <Display>
+                  {attachedCredentialLabel(localModelData.litellm_params?.litellm_credential_name, credentialsList)}
+                </Display>
               )}
             </div>
 

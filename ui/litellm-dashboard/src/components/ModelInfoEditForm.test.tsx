@@ -17,24 +17,28 @@ vi.mock("@/components/networking", async (importOriginal) => {
 const credentialsList: CredentialItem[] = [
   {
     credential_name: "openai-main",
-    credential_alias: "Main OpenAI",
+    display_name: "Main OpenAI",
     credential_values: {},
     credential_info: { custom_llm_provider: "openai" },
   },
 ];
 
-const renderEditing = (onSubmit = vi.fn().mockResolvedValue(undefined)) =>
+const renderForm = ({
+  onSubmit = vi.fn().mockResolvedValue(undefined),
+  isEditing = true,
+  litellmParams = { model: "gpt-4o" } as Record<string, unknown>,
+} = {}) =>
   render(
     <ModelInfoEditForm
       localModelData={{
         model_name: "gpt-4o",
-        litellm_params: { model: "gpt-4o" },
+        litellm_params: litellmParams,
         model_info: {},
       }}
       modelData={{ model_info: {} }}
       teamAlias={null}
       accessToken="test-token"
-      isEditing={true}
+      isEditing={isEditing}
       isSaving={false}
       isWildcardModel={false}
       ptuCostAttributionEnabled={false}
@@ -52,10 +56,10 @@ const renderEditing = (onSubmit = vi.fn().mockResolvedValue(undefined)) =>
   );
 
 describe("ModelInfoEditForm existing-credentials picker", () => {
-  it("shows the alias beside the name, searches by alias, and submits the name", async () => {
+  it("shows the display name beside the credential name, searches by it, and submits the name", async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
-    renderEditing(onSubmit);
+    renderForm({ onSubmit });
 
     const picker = await screen.findByPlaceholderText("Select or search for existing credentials");
     await user.click(picker);
@@ -70,5 +74,24 @@ describe("ModelInfoEditForm existing-credentials picker", () => {
 
     await vi.waitFor(() => expect(onSubmit).toHaveBeenCalled());
     expect(onSubmit.mock.calls[0][0].litellm_credential_name).toBe("openai-main");
+  });
+
+  it("shows the attached credential's display name when not editing", () => {
+    renderForm({ isEditing: false, litellmParams: { model: "gpt-4o", litellm_credential_name: "openai-main" } });
+
+    expect(screen.getByText("Main OpenAI")).toBeInTheDocument();
+    expect(screen.queryByText("openai-main")).not.toBeInTheDocument();
+  });
+
+  it("falls back to the credential name, then Manual, when not editing", () => {
+    const { unmount } = renderForm({
+      isEditing: false,
+      litellmParams: { model: "gpt-4o", litellm_credential_name: "not-listed" },
+    });
+    expect(screen.getByText("not-listed")).toBeInTheDocument();
+    unmount();
+
+    renderForm({ isEditing: false });
+    expect(screen.getByText("Manual")).toBeInTheDocument();
   });
 });
