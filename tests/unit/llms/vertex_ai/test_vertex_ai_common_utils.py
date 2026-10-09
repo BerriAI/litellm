@@ -1908,5 +1908,8 @@ def host_zone(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -
     ],
 )
 @pytest.mark.usefixtures("host_zone")
-def test_convert_vertex_datetime_to_openai_datetime_is_the_utc_epoch_on_any_host_zone(vertex_datetime, utc_epoch):
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="switching the process timezone needs time.tzset()")
+def test_convert_vertex_datetime_to_openai_datetime_is_the_utc_epoch_on_any_host_zone(
+    vertex_datetime: str, utc_epoch: int
+) -> None:
     assert convert_vertex_datetime_to_openai_datetime(vertex_datetime) == utc_epoch

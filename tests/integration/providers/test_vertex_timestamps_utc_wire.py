@@ -185,8 +185,11 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
 
 
 def _config_allowing(directory: Path, api: Wire) -> Path:
-    configuration: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    configuration["litellm_settings"]["user_url_allowed_hosts"] = [urlsplit(api.url).netloc]
+    shipped: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    configuration: Final = {
+        **shipped,
+        "litellm_settings": {**shipped["litellm_settings"], "user_url_allowed_hosts": [urlsplit(api.url).netloc]},
+    }
     path: Final = directory / "vertex-utc.yaml"
     path.write_text(yaml.safe_dump(configuration))
     return path
