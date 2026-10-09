@@ -26,7 +26,13 @@ from litellm.litellm_core_utils.ptu_pricing import ptu_config_error
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
-from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.types.router import (
+    Deployment,
+    DeploymentTypedDict,
+    LiteLLM_Params,
+    LiteLLMParamsTypedDict,
+    ModelInfo,
+)
 from litellm.utils import (
     _invalidate_model_cost_lowercase_map,
     reapply_runtime_model_cost_registrations,
@@ -3239,16 +3245,18 @@ _COLLIDING_MODEL_INFO: Final = {
 }
 
 
-def _colliding_id_deployment(model_id: str, custom_llm_provider: str) -> dict:
-    return {
-        "model_name": "nvidia/zai-org/glm-5.2",
-        "litellm_params": {
-            "model": "zai-org/GLM-5.2",
-            "api_base": "https://inference.baseten.co/v1",
-            "custom_llm_provider": custom_llm_provider,
-        },
-        "model_info": {"id": model_id, **_COLLIDING_MODEL_INFO},
-    }
+def _colliding_id_deployment(model_id: str, custom_llm_provider: str) -> DeploymentTypedDict:
+    litellm_params: Final = LiteLLMParamsTypedDict(
+        model="zai-org/GLM-5.2",
+        api_base="https://inference.baseten.co/v1",
+        custom_llm_provider=custom_llm_provider,
+    )
+    model_info: Final[dict] = {"id": model_id, **_COLLIDING_MODEL_INFO}
+    return DeploymentTypedDict(
+        model_name="nvidia/zai-org/glm-5.2",
+        litellm_params=litellm_params,
+        model_info=model_info,
+    )
 
 
 @pytest.mark.parametrize("model_id", ("baseten/zai-org/glm-5.2",))
