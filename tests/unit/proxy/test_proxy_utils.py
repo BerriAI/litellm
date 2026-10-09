@@ -2599,8 +2599,8 @@ async def test_during_call_hook_parallel_execution():
     cache = DualCache()
     proxy_logging = ProxyLogging(user_api_key_cache=cache)
     execution_order = []
-    guardrail_count = 3
-    all_started = asyncio.Event()
+    guardrail_count: Final = 3
+    all_started: Final = asyncio.Event()
 
     class TestGuardrail(CustomGuardrail):
         def __init__(self, name):
