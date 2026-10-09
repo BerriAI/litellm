@@ -8939,7 +8939,7 @@ async def get_available_models_for_user(
 
     from litellm.proxy.auth.auth_checks import customer_can_call_model
 
-    return [  # mutable-ok: callers consume the public list[str] return contract
+    return [
         model
         for model in visible_models
         if customer_can_call_model(

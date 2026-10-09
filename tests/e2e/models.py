@@ -191,10 +191,12 @@ class KeyInfoResponse(BaseModel):
 
 class CustomerNewBody(BaseModel):
     user_id: str
+    models: list[str] | None = None
 
 
 class CustomerResponse(BaseModel):
     user_id: str | None = None
+    models: list[str] | None = None
 
 
 class CustomerInfoParams(BaseModel):
