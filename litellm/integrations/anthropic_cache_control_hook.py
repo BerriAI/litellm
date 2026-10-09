@@ -109,6 +109,15 @@ def supports_openai_prompt_cache_breakpoint(model: str) -> bool:
     return version >= OPENAI_PROMPT_CACHE_BREAKPOINT_MIN_GPT_VERSION
 
 
+def supports_prompt_cache_breakpoint_for_provider(model: str, custom_llm_provider: str | None) -> bool:
+    """Use the deployment's own provider-keyed row, the same source the hook reads."""
+    resolve_provider: Final = (
+        AnthropicCacheControlHook._resolve_provider  # pyright: ignore[reportPrivateUsage]  # reuse the hook's resolver
+    )
+    hosted_flag: Final = _hosted_openai_dialect_flag(model, custom_llm_provider, resolve_provider)
+    return hosted_flag if hosted_flag is not None else supports_openai_prompt_cache_breakpoint(model)
+
+
 def _model_map_prompt_cache_breakpoint_flag(model: str) -> bool | None:
     import litellm
 

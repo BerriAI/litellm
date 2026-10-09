@@ -4247,6 +4247,50 @@ def test_prompt_cache_breakpoint_survives_chat_to_responses_conversion(
     assert request["prompt_cache_options"] == cache_breakpoint
 
 
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "keep_marker"),
+    [
+        ("openai.gpt-5.6-sol", "bedrock_mantle", True),
+        ("openai.gpt-5.4", "bedrock_mantle", False),
+        ("openai.gpt-5.6-sol", "azure_ai", False),
+    ],
+    ids=("flagged-hosted-deployment", "unflagged-hosted-deployment", "provider-without-flag"),
+)
+def test_transform_request_uses_provider_keyed_prompt_cache_breakpoint_flag(
+    model: str, custom_llm_provider: str, keep_marker: bool
+) -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    cache_breakpoint: Final = {"mode": "explicit"}
+    messages: Final = [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "Stable prefix", "prompt_cache_breakpoint": cache_breakpoint}],
+        },
+        {"role": "user", "content": "Hi"},
+    ]
+
+    request: Final = handler.transform_request(
+        model=model,
+        messages=messages,
+        optional_params={},
+        litellm_params={"custom_llm_provider": custom_llm_provider},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert request["input"][0] == {
+        "type": "message",
+        "role": "system",
+        "content": [
+            {
+                "type": "input_text",
+                "text": "Stable prefix",
+                **({"prompt_cache_breakpoint": cache_breakpoint} if keep_marker else {}),
+            }
+        ],
+    }
+
+
 def test_prompt_cache_breakpoint_read_tolerates_non_string_content_block_keys() -> None:
     handler: Final = LiteLLMResponsesTransformationHandler()
     # Non-string keys are not JSON-representable but are accepted by chat completion

@@ -25,7 +25,10 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 import litellm
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
-from litellm.integrations.anthropic_cache_control_hook import supports_openai_prompt_cache_breakpoint
+from litellm.integrations.anthropic_cache_control_hook import (
+    supports_openai_prompt_cache_breakpoint,
+    supports_prompt_cache_breakpoint_for_provider,
+)
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     responses_reasoning_items_from_thinking_blocks,
@@ -737,15 +740,16 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         model: str,
         messages: list["AllMessageValues"],
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         headers: dict,
         litellm_logging_obj: "LiteLLMLoggingObj",
         client: object | None = None,
     ) -> dict:
         base_model: Final = litellm_params.get("base_model")
-        supports_prompt_cache_breakpoint: Final = supports_openai_prompt_cache_breakpoint(model) or (
-            isinstance(base_model, str) and bool(base_model) and supports_openai_prompt_cache_breakpoint(base_model)
-        )
+        custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
+        supports_prompt_cache_breakpoint: Final = supports_prompt_cache_breakpoint_for_provider(
+            model, custom_llm_provider if isinstance(custom_llm_provider, str) else None
+        ) or (isinstance(base_model, str) and bool(base_model) and supports_openai_prompt_cache_breakpoint(base_model))
         converted_input_items, converted_instructions = self.convert_chat_completion_messages_to_responses_api(
             messages,
             drop_params=bool(litellm_params.get("drop_params") or litellm.drop_params),
