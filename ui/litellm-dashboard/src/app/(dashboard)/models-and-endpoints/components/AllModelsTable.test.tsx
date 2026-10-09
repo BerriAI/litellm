@@ -157,6 +157,19 @@ describe("AllModelsTable", () => {
     expect(screen.getByText("Manual")).toBeInTheDocument();
   });
 
+  it("renders the credential's display name when one is set and keeps the name as the tooltip", () => {
+    render(
+      <AllModelsTable
+        {...baseProps}
+        credentialLabels={new Map([["openai-prod", "Prod OpenAI"]])}
+        data={[makeModel({ litellm_params: { model: "openai/gpt-4", litellm_credential_name: "openai-prod" } })]}
+      />,
+    );
+    expect(screen.getByText("Prod OpenAI")).toBeInTheDocument();
+    expect(screen.queryByText("openai-prod")).not.toBeInTheDocument();
+    expect(screen.getByTitle("openai-prod")).toBeInTheDocument();
+  });
+
   it("shows 'Defined in config' for a config model and the creator for a DB model", () => {
     const { rerender } = render(<AllModelsTable {...baseProps} />);
     expect(screen.getByText("alice")).toBeInTheDocument();

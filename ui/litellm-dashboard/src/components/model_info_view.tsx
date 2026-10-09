@@ -28,6 +28,7 @@ import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
 import ReuseCredentialsModal from "./model_add/reuse_credentials";
+import { credentialLabelsByName } from "./shared/credentialOptions";
 import { toast } from "@/lib/toast";
 import {
   CredentialItem,
@@ -808,7 +809,10 @@ export default function ModelInfoView({
             <DialogHeader>
               <DialogTitle>Using Existing Credential</DialogTitle>
             </DialogHeader>
-            <p className="text-sm">{modelData.litellm_params.litellm_credential_name}</p>
+            <p className="text-sm">
+              {credentialLabelsByName(credentialsList).get(modelData.litellm_params.litellm_credential_name ?? "") ??
+                modelData.litellm_params.litellm_credential_name}
+            </p>
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsCredentialModalOpen(false)}>
                 Cancel

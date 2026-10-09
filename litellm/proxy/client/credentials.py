@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from typing import Any, Final
+from urllib.parse import quote
 
 import requests
 
@@ -73,6 +74,7 @@ class CredentialsManagementClient:
         credential_info: Mapping[str, object],
         credential_values: Mapping[str, object],
         return_request: bool = False,
+        display_name: str | None = None,
     ) -> dict[str, Any] | requests.Request:
         """
         Create a new credential.
@@ -97,6 +99,7 @@ class CredentialsManagementClient:
             "credential_name": credential_name,
             "credential_info": credential_info,
             "credential_values": credential_values,
+            **({} if display_name is None else {"display_name": display_name}),
         }
 
         request: Final = requests.Request("POST", url, headers=self._get_headers(), json=data)
@@ -137,6 +140,30 @@ class CredentialsManagementClient:
         url: Final = f"{self._base_url}/credentials/{credential_name}"
 
         request: Final = requests.Request("DELETE", url, headers=self._get_headers())
+
+        if return_request:
+            return request
+
+        session: Final = requests.Session()
+        try:
+            response: Final = session.send(request.prepare(), timeout=self._timeout)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 401:
+                raise UnauthorizedError(e)
+            raise
+
+    def update_display_name(
+        self,
+        credential_name: str,
+        display_name: str | None,
+        return_request: bool = False,
+    ) -> Mapping[str, object] | requests.Request:
+        url: Final = f"{self._base_url}/credentials/{quote(credential_name, safe='')}"
+        data: Final[Mapping[str, object]] = {"display_name": display_name, "credential_info": {}}
+
+        request: Final = requests.Request("PATCH", url, headers=self._get_headers(), json=data)
 
         if return_request:
             return request
