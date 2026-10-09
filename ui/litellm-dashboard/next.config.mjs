@@ -28,6 +28,7 @@ const nextConfig = {
       }
     : {}),
   output: devProxyUrl ? undefined : "export",
+  agentRules: false,
   typescript: { tsconfigPath: "tsconfig.production.json" },
   experimental: {
     useTypeScriptCli: false,
