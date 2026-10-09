@@ -41,7 +41,6 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import (
     LiteLLM_ProjectTable,
-    LiteLLM_TeamTable,
     NewProjectRequest,
     UpdateProjectRequest,
     DeleteProjectRequest,

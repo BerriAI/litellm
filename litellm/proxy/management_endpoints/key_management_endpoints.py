@@ -1525,8 +1525,11 @@ async def _common_key_generation_helper(
         data_json=data_json,
         prisma_client=prisma_client,
     )
-    created_object_permission_id: Final[str | None] = (
-        cast(str | None, data_json.get("object_permission_id")) if should_create_object_permission else None
+    written_object_permission_id: Final = data_json.get("object_permission_id")
+    created_object_permission_id: Final = (
+        written_object_permission_id
+        if should_create_object_permission and isinstance(written_object_permission_id, str)
+        else None
     )
 
     _validate_key_alias_format(key_alias=data_json.get("key_alias", None))
@@ -1873,15 +1876,15 @@ async def _check_key_project_team(
     project_id: str,
     key_team_id: str | None,
     prisma_client: PrismaClient,
-) -> None:
+) -> str | None:
     project_record: Final = await _writer_project_table(prisma_client).find_unique(where={"project_id": project_id})
     if project_record is None:
-        return
+        return None
 
     project_obj: Final = LiteLLM_ProjectTable.model_validate(record_to_dict(project_record))
 
     if project_obj.team_id is None or project_obj.team_id == key_team_id:
-        return
+        return project_obj.team_id
 
     raise KeyProjectTeamMismatchError(
         status_code=400,
@@ -1903,23 +1906,50 @@ async def _check_key_project_team_on_mutation(
     data: UpdateKeyRequest | RegenerateKeyRequest,
     existing_key_row: LiteLLM_VerificationToken,
     prisma_client: PrismaClient,
-) -> None:
+) -> str | None:
     fields_set: Final = data.model_fields_set
     team_changed: Final = "team_id" in fields_set and data.team_id != existing_key_row.team_id
     project_changed: Final = "project_id" in fields_set and data.project_id != existing_key_row.project_id
     if not team_changed and not project_changed:
-        return
+        return None
 
     project_id: Final = data.project_id if "project_id" in fields_set else existing_key_row.project_id
     if project_id is None:
-        return
+        return None
 
     team_id: Final = data.team_id if "team_id" in fields_set else existing_key_row.team_id
-    await _check_key_project_team(
+    return await _check_key_project_team(
         project_id=project_id,
         key_team_id=team_id,
         prisma_client=prisma_client,
     )
+
+
+async def _check_caller_in_project_team(
+    project_team_id: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    team_table: Final = await get_team_object(
+        team_id=project_team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=user_api_key_dict.parent_otel_span,
+        check_db_only=True,
+    )
+    if get_caller_team_role(team_table=team_table, user_api_key_dict=user_api_key_dict) is None:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": (
+                    f"Only a proxy admin or a member of team {project_team_id} can attach a key to a project "
+                    "owned by that team."
+                )
+            },
+        )
 
 
 def check_org_key_model_specific_limits(
@@ -5855,11 +5885,18 @@ async def _execute_virtual_key_regeneration(
         {field: value for field, value in non_default_values.items() if field != "object_permission"}
     )
     if data is not None:
-        await _check_key_project_team_on_mutation(
+        project_team_id: Final = await _check_key_project_team_on_mutation(
             data=data,
             existing_key_row=key_in_db,
             prisma_client=prisma_client,
         )
+        if project_team_id is not None:
+            await _check_caller_in_project_team(
+                project_team_id=project_team_id,
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+            )
     update_values: Final = await _write_prepared_key_update_object_permission(
         data_json=key_update_values,
         upsert=object_permission_upsert,
