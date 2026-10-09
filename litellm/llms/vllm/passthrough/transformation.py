@@ -23,9 +23,6 @@ class VLLMPassthroughConfig(VLLMModelInfo, BasePassthroughConfig):
     ) -> tuple["URL", str]:
         base_target_url: Final = self.get_api_base(api_base)
 
-        if base_target_url is None:
-            raise Exception("VLLM api base not found")
-
         return (
             self.format_url(endpoint, base_target_url, request_query_params),
             base_target_url,

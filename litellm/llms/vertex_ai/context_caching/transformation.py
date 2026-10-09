@@ -6,6 +6,8 @@ Why separate file? Make it easy to see how transformation works
 
 import re
 from collections.abc import Sequence
+from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Final, Literal
 
 from litellm.types.llms.openai import AllMessageValues
@@ -14,8 +16,8 @@ from litellm.utils import is_cached_message
 
 from ..common_utils import get_supports_system_message
 from ..gemini.transformation import (
-    _gemini_convert_messages_with_history,
-    _transform_system_message,
+    gemini_convert_messages_with_history,
+    transform_system_message,
 )
 
 
@@ -57,7 +59,7 @@ def extract_ttl_from_cached_messages(messages: list[AllMessageValues]) -> str | 
         messages: List of messages to extract TTL from
 
     Returns:
-        Optional[str]: TTL string in format "3600s" or None if not found/invalid
+        Optional[str]: TTL normalized to Gemini's "<seconds>s" form, or None if not found/invalid
     """
     for message in messages:
         if not is_cached_message(message):
@@ -79,40 +81,29 @@ def extract_ttl_from_cached_messages(messages: list[AllMessageValues]) -> str | 
             if cache_control.get("type") != "ephemeral":
                 continue
 
-            ttl = cache_control.get("ttl")
-            if ttl and _is_valid_ttl_format(ttl):
-                return str(ttl)
+            normalized_ttl = _normalize_ttl_to_seconds(cache_control.get("ttl"))
+            if normalized_ttl is not None:
+                return normalized_ttl
 
     return None
 
 
-def _is_valid_ttl_format(ttl: str) -> bool:
-    """
-    Validate TTL format. Should be a string ending with 's' for seconds.
-    Examples: "3600s", "7200s", "1.5s"
+_TTL_PATTERN: Final = re.compile(r"^([0-9]*\.?[0-9]+)([smh])$")
+_TTL_UNIT_SECONDS: Final = MappingProxyType({"s": 1, "m": 60, "h": 3600})
+_LAST_EXPIRY_GOOGLE_ACCEPTS: Final = datetime(9999, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
 
-    Args:
-        ttl: TTL string to validate
 
-    Returns:
-        bool: True if valid format, False otherwise
-    """
+def _normalize_ttl_to_seconds(ttl: object) -> str | None:
     if not isinstance(ttl, str):
-        return False
-
-    # TTL should end with 's' and contain a valid number before it
-    pattern: Final = r"^([0-9]*\.?[0-9]+)s$"
-    match: Final = re.match(pattern, ttl)
-
-    if not match:
-        return False
-
-    try:
-        # Ensure the numeric part is valid and positive
-        numeric_part: Final = float(match.group(1))
-        return numeric_part > 0
-    except ValueError:
-        return False
+        return None
+    match: Final = _TTL_PATTERN.match(ttl)
+    if match is None:
+        return None
+    seconds: Final = round(float(match.group(1)) * _TTL_UNIT_SECONDS[match.group(2)], 9)
+    longest_ttl: Final = (_LAST_EXPIRY_GOOGLE_ACCEPTS - datetime.now(timezone.utc)).total_seconds()
+    if not 0 < seconds <= longest_ttl:
+        return None
+    return f"{seconds:.9f}".rstrip("0").rstrip(".") + "s"
 
 
 def separate_cached_messages(
@@ -180,11 +171,11 @@ def transform_openai_messages_to_gemini_context_caching(
 
     supports_system_message: Final = get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider)
 
-    transformed_system_messages, new_messages = _transform_system_message(
+    transformed_system_messages, new_messages = transform_system_message(
         supports_system_message=supports_system_message, messages=messages
     )
 
-    transformed_messages: Final = _gemini_convert_messages_with_history(
+    transformed_messages: Final = gemini_convert_messages_with_history(
         messages=new_messages,
         model=model,
         custom_llm_provider=custom_llm_provider,

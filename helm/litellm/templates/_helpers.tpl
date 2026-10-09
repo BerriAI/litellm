@@ -257,6 +257,14 @@ IAM_TOKEN_DB_AUTH / AZURE_POSTGRESQL_AUTH toggle that only the writer sets.
 - name: DATABASE_SCHEMA
   value: {{ .schema | quote }}
 {{- end }}
+{{- if .sslMode }}
+- name: DATABASE_SSLMODE
+  value: {{ .sslMode | quote }}
+{{- end }}
+{{- if .sslRootCert }}
+- name: DATABASE_SSLROOTCERT
+  value: {{ .sslRootCert | quote }}
+{{- end }}
 {{- if and .useIAMAuth .useAzureEntraAuth }}
 {{- fail "database.writer.useIAMAuth and database.writer.useAzureEntraAuth are mutually exclusive: the database password can only come from one token source" }}
 {{- end }}
@@ -361,6 +369,20 @@ harmless no-op for the Job and authoritative for the app pods.
 {{- end -}}
 
 {{/*
+In-container PgBouncer env for the gateway container. Under IAM or Entra auth the pooler mints and renews the database token itself.
+*/}}
+{{- define "litellm.connectionPoolEnv" -}}
+{{- with .Values.database.connectionPool -}}
+- name: LITELLM_PGBOUNCER_ENABLED
+  value: "true"
+- name: LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS
+  value: {{ required "database.connectionPool.maxDbConnections is required when the pool is enabled" .maxDbConnections | quote }}
+- name: LITELLM_PGBOUNCER_MAX_CLIENT_CONN
+  value: {{ required "database.connectionPool.maxClientConn is required when the pool is enabled" .maxClientConn | quote }}
+{{- end }}
+{{- end -}}
+
+{{/*
 PodDisruptionBudget shared by gateway, backend, and ui.
 
 Invoke with a dict:
@@ -440,4 +462,101 @@ ImplementationSpecific
 {{- else -}}
 {{- .pathType -}}
 {{- end -}}
+{{- end -}}
+
+{{- define "litellm.gateway.prometheusMultiprocDir" -}}/tmp/litellm_prometheus_multiproc{{- end -}}
+
+{{/*
+Directory of the collector's unix socket, shared by the gateway and
+collector containers through an emptyDir. Empty when the sidecar is off
+or gateway.collector.address is a tcp://127.0.0.1:<port> address.
+*/}}
+{{- define "litellm.lensWorker.image" -}}
+{{- if .Values.lensWorker.image.digest -}}
+{{- if not (regexMatch "^sha256:[0-9a-f]{64}$" .Values.lensWorker.image.digest) -}}
+{{- fail "lensWorker.image.digest must be sha256 followed by 64 lowercase hex characters" -}}
+{{- end -}}
+{{- printf "%s@%s" .Values.lensWorker.image.repository .Values.lensWorker.image.digest -}}
+{{- else -}}
+{{- $backendTag := .Values.backend.image.tag | default .Chart.AppVersion -}}
+{{- $releaseTag := ternary (printf "v%s" $backendTag) $backendTag (regexMatch "^[0-9]" $backendTag) -}}
+{{- $tag := .Values.lensWorker.image.tag | default $releaseTag -}}
+{{- $repository := .Values.lensWorker.image.repository -}}
+{{- if and (hasPrefix "sha-" $tag) (eq $repository "ghcr.io/berriai/litellm-lens-worker") -}}
+{{- $repository = "ghcr.io/berriai/litellm-lens-worker-dev" -}}
+{{- end -}}
+{{- printf "%s:%s" $repository $tag -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "litellm.gateway.collectorSocketDir" -}}
+{{- if and .Values.gateway.collector.enabled (hasPrefix "unix://" .Values.gateway.collector.address) -}}
+{{- dir (trimPrefix "unix://" .Values.gateway.collector.address) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+LITELLM_COLLECTOR_* env shared by the producer (gateway container) and the
+consumer (collector container), so both agree on the transport and the
+shutdown drain window.
+*/}}
+{{- define "litellm.gateway.collectorEnv" -}}
+{{- with .Values.gateway.collector }}
+- name: LITELLM_COLLECTOR_ENABLED
+  value: "true"
+- name: LITELLM_COLLECTOR_ADDRESS
+  value: {{ .address | quote }}
+- name: LITELLM_COLLECTOR_BUFFER_SIZE
+  value: {{ .bufferSize | quote }}
+- name: LITELLM_COLLECTOR_ON_UNAVAILABLE
+  value: {{ .onUnavailable | quote }}
+- name: LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS
+  value: {{ .drainTimeoutSeconds | quote }}
+{{- end }}
+{{- end -}}
+
+{{- define "litellm.lensConnectionEnv" -}}
+{{- if .Values.lensWorker.enabled }}
+- name: LITELLM_LENS_URL
+  value: {{ printf "http://%s-lens-worker:%v" (include "litellm.fullname" .) .Values.lensWorker.service.port | quote }}
+- name: LITELLM_LENS_PUBLIC_URL
+  value: {{ include "litellm.lensWorker.publicUrl" . | quote }}
+- name: LITELLM_LENS_SERVICE_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "litellm.lensWorker.serviceTokenSecretName" . | quote }}
+      key: {{ .Values.lensWorker.serviceTokenSecret.key | quote }}
+{{- end }}
+{{- end -}}
+
+{{- define "litellm.lensWorker.labels" -}}
+{{- $labels := include "litellm.commonLabels" . | fromYaml -}}
+{{- $_ := set $labels "app.kubernetes.io/name" (printf "%s-lens-worker" (include "litellm.name" . | trunc 51 | trimSuffix "-")) -}}
+{{- toYaml $labels -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.serviceTokenSecretName" -}}
+{{- .Values.lensWorker.serviceTokenSecret.name | default (printf "%s-lens-service" (include "litellm.fullname" .)) -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.bundledClickhouse" -}}
+{{- if and .Values.lensWorker.enabled .Values.lensWorker.clickhouse.enabled (not .Values.lensWorker.clickhouseSecret.name) -}}true{{- end -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.publicUrl" -}}
+{{- if .Values.lensWorker.publicUrl -}}
+{{- .Values.lensWorker.publicUrl -}}
+{{- else if .Values.lensWorker.ingress.enabled -}}
+{{- $tls := or (not (empty .Values.lensWorker.ingress.tls)) (hasKey .Values.lensWorker.ingress.annotations "alb.ingress.kubernetes.io/certificate-arn") -}}
+{{- printf "%s://%s" (ternary "https" "http" $tls) (required "lensWorker.ingress.host is required" .Values.lensWorker.ingress.host) -}}
+{{- else if and .Values.ingress.enabled .Values.ingress.host -}}
+{{- $tls := or (not (empty .Values.ingress.tls)) (hasKey .Values.ingress.annotations "alb.ingress.kubernetes.io/certificate-arn") -}}
+{{- printf "%s://%s/lens-ingest" (ternary "https" "http" $tls) .Values.ingress.host -}}
+{{- else -}}
+{{- fail "lensWorker.publicUrl is required when there is no single ingress hostname" -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.clickhouseName" -}}
+{{- printf "%s-lens-clickhouse" (include "litellm.fullname" . | trunc 47 | trimSuffix "-") -}}
 {{- end -}}

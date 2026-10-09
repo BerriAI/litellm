@@ -27,13 +27,17 @@ from litellm.types.utils import (
     GuardrailTracingDetail,
 )
 
-from .base import AZURE_CONTENT_SAFETY_TEXT_RECORD_LENGTH, AzureGuardrailBase
+from .base import (  # noqa: F401  # legacy module exports
+    _RESPONSES_API_CALL_TYPES,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    AZURE_CONTENT_SAFETY_TEXT_RECORD_LENGTH,
+    RESPONSES_API_CALL_TYPES,
+    AzureGuardrailBase,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.guardrails import LitellmParams
-    from litellm.types.llms.openai import AllMessageValues
     from litellm.types.proxy.guardrails.guardrail_hooks.azure.azure_prompt_shield import (
         AzurePromptShieldGuardrailResponse,
     )
@@ -250,11 +254,10 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
             "Azure Prompt Shield: Running pre-call prompt scan, on call_type: %s",
             call_type,
         )
-        new_messages: Final[list[AllMessageValues] | None] = data.get("messages")
-        if new_messages is None:
+        if call_type not in RESPONSES_API_CALL_TYPES and data.get("messages") is None:
             verbose_proxy_logger.warning("Azure Prompt Shield: not running guardrail. No messages in data")
             return data
-        user_prompt: Final = self.get_user_prompt(new_messages)
+        user_prompt: Final = self.get_user_prompt_from_request(data, call_type)
 
         if user_prompt:
             verbose_proxy_logger.debug("Azure Prompt Shield: User prompt: %s", user_prompt)
@@ -299,7 +302,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
     def _record_billing_usage(self, usage: Mapping[str, int]) -> None:
         """Stash this invocation's usage counters for the ``_process_*`` call the
         decorator runs next in the same asyncio task; overwrites any leftover."""
-        _billing_usage_stash.set(dict(usage) if usage else None)  # mutable-ok: fresh snapshot, popped by _process_*
+        _billing_usage_stash.set(dict(usage) if usage else None)
 
     def _pop_billing_tracing_detail(self) -> GuardrailTracingDetail | None:
         """Build the billing tracing detail from the stashed usage counters, priced
@@ -338,10 +341,10 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         estimated cost) and the ``azure`` provider label to the recorded guardrail
         information. Follows the OpenAI moderation override pattern
         (openai/moderations.py)."""
-        guardrail_response: Final[dict | str] = (  # mutable-ok: mirrors CustomGuardrail._process_response
-            ("mask" if self._inputs_were_modified(original_inputs, response) else "allow")
-            if original_inputs is not None and isinstance(response, dict)
-            else ({} if response is None else response)  # mutable-ok: empty placeholder, never mutated
+        guardrail_response: Final = self._summarize_guardrail_response(
+            response=response,
+            original_inputs=original_inputs,
+            event_type=event_type,
         )
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=guardrail_response,

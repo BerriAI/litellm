@@ -7,7 +7,7 @@ from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.utils import _add_path_to_api_base
+from litellm.utils import add_path_to_api_base
 
 
 class VLLMError(BaseLLMException):
@@ -45,7 +45,7 @@ class VLLMModelInfo(BaseLLMModelInfo):
         return headers
 
     @staticmethod
-    def get_api_base(api_base: str | None = None) -> str | None:
+    def get_api_base(api_base: str | None = None) -> str:
         api_base = api_base or get_secret_str("VLLM_API_BASE")
         if api_base is None:
             raise ValueError("VLLM_API_BASE is not set.")
@@ -63,18 +63,9 @@ class VLLMModelInfo(BaseLLMModelInfo):
         api_base = VLLMModelInfo.get_api_base(api_base)
         endpoint: Final = "/v1/models"
 
-        url: Final = _add_path_to_api_base(api_base, endpoint)
-        response: Final = (
-            litellm.module_level_client.get(
-                url=url,
-                headers={  # mutable-ok: optional authentication headers
-                    "x-api-key": api_key,
-                    "Authorization": f"Bearer {api_key}",
-                },
-            )
-            if api_key is not None
-            else litellm.module_level_client.get(url=url)
-        )
+        url: Final = add_path_to_api_base(api_base, endpoint)
+        headers: Final = {"x-api-key": api_key, "Authorization": f"Bearer {api_key}"} if api_key is not None else None
+        response: Final = litellm.module_level_client.get(url=url, headers=headers)
 
         response.raise_for_status()
 

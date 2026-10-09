@@ -35,16 +35,6 @@ def _check_wildcard_routing(model: str) -> bool:
     return False
 
 
-def _provider_supports_model_discovery(provider: str) -> bool:
-    if provider in litellm.models_by_provider:
-        return True
-    try:
-        llm_provider: Final = LlmProviders(provider)
-    except ValueError:
-        return False
-    return ProviderConfigManager.get_provider_model_info(model=None, provider=llm_provider) is not None
-
-
 def get_provider_models(provider: str, litellm_params: LiteLLM_Params | None = None) -> list[str] | None:
     """
     Returns the list of known models by provider
@@ -52,10 +42,17 @@ def get_provider_models(provider: str, litellm_params: LiteLLM_Params | None = N
     if provider == "*":
         return get_valid_models(litellm_params=litellm_params)
 
-    if _provider_supports_model_discovery(provider):
+    if provider in litellm.models_by_provider:
         provider_models: Final = get_valid_models(custom_llm_provider=provider, litellm_params=litellm_params)
         return provider_models
-    return None
+
+    try:
+        llm_provider: Final = LlmProviders(provider)
+    except ValueError:
+        return None
+    if ProviderConfigManager.get_provider_model_info(model=None, provider=llm_provider) is None:
+        return None
+    return get_valid_models(custom_llm_provider=provider, litellm_params=litellm_params)
 
 
 def _get_models_from_access_groups(
@@ -272,6 +269,24 @@ def _hydrate_litellm_credential_name(
     return litellm_params
 
 
+_KNOWN_PROVIDERS: Final = frozenset(provider.value for provider in LlmProviders)
+
+
+def _prefix_wildcard_model(model: str, wildcard_provider_prefix: str, provider: str) -> str:
+    if model.startswith(wildcard_provider_prefix):
+        return model
+    # `get_provider_models` returns provider-prefixed ids (e.g. "ollama/gemma3:1b").
+    # When the wildcard uses a custom prefix (e.g. "ollama_server1/*" to distinguish
+    # multiple instances), replace that existing provider prefix instead of stacking
+    # both, which would otherwise yield an uncallable "ollama_server1/ollama/gemma3:1b".
+    # Only strip the leading segment when it is a known provider, so ids whose first
+    # segment is an org rather than a provider (e.g. "meta-llama/Llama-3-8B") keep it.
+    leading, sep, model_suffix = model.partition("/")
+    if sep and leading in _KNOWN_PROVIDERS and (provider in litellm.models_by_provider or leading == provider):
+        return f"{wildcard_provider_prefix}/{model_suffix}"
+    return f"{wildcard_provider_prefix}/{model}"
+
+
 def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_Params | None = None) -> list[str]:
     wildcard_model_to_expand: Final = (
         litellm_params.model
@@ -314,23 +329,7 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
             # add model prefix to wildcard models
             wildcard_models = [f"{model_prefix}{model}" for model in wildcard_models]
 
-    known_providers: Final = {provider.value for provider in LlmProviders}
-    suffix_appended_wildcard_models: Final = []
-    for model in wildcard_models:
-        if not model.startswith(wildcard_provider_prefix):
-            # `get_provider_models` returns provider-prefixed ids (e.g. "ollama/gemma3:1b").
-            # When the wildcard uses a custom prefix (e.g. "ollama_server1/*" to distinguish
-            # multiple instances), replace that existing provider prefix instead of stacking
-            # both, which would otherwise yield an uncallable "ollama_server1/ollama/gemma3:1b".
-            # Only strip the leading segment when it is a known provider, so ids whose first
-            # segment is an org rather than a provider (e.g. "meta-llama/Llama-3-8B") keep it.
-            leading, sep, model_suffix = model.partition("/")
-            if sep and leading in known_providers and (provider in litellm.models_by_provider or leading == provider):
-                model = f"{wildcard_provider_prefix}/{model_suffix}"
-            else:
-                model = f"{wildcard_provider_prefix}/{model}"
-        suffix_appended_wildcard_models.append(model)
-    return suffix_appended_wildcard_models or []
+    return [_prefix_wildcard_model(model, wildcard_provider_prefix, provider) for model in wildcard_models]
 
 
 def expand_wildcard_deployments_for_model_info(
@@ -343,11 +342,11 @@ def expand_wildcard_deployments_for_model_info(
     on top of that: a wildcard deployment like model_name="*" / litellm_params.model="openai/*"
     becomes one entry per known openai model, matching /v1/models behaviour.
     """
-    expanded: Final[list[dict[str, Any]]] = []
+    expanded: Final[list[dict[str, object]]] = []
     for deployment in deployments:
         model_name = str(deployment.get("model_name") or "")
         raw_params = deployment.get("litellm_params")
-        litellm_params_dict: dict[str, Any] = raw_params if isinstance(raw_params, dict) else {}
+        litellm_params_dict: dict[str, object] = raw_params if isinstance(raw_params, dict) else {}
         litellm_model = str(litellm_params_dict.get("model") or "")
 
         # Determine the wildcard pattern to expand.

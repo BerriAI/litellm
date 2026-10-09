@@ -5,20 +5,26 @@ from __future__ import annotations
 import math
 from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain
+from itertools import chain, islice
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 
+from fastapi import HTTPException
 from openai import OpenAIError
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 from litellm.exceptions import BudgetExceededError
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.utils import ProxyLogging
     from litellm.router import Router
 
 Vector: TypeAlias = tuple[float, ...]
+
+DEFAULT_MAX_CACHED_VECTORS: Final = 5000
+"""Ceiling on how many (embedding model, text) vectors one index keeps; the least recently searched are evicted first."""
 
 
 class Embedder(Protocol):
@@ -30,16 +36,26 @@ class EmbeddingFailed:
     reason: str
 
 
-class _EmbeddingItem(BaseModel):
+class _EmbeddingItem(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     embedding: tuple[float, ...]
 
 
-class _EmbeddingData(BaseModel):
+class _EmbeddingData(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     data: tuple[_EmbeddingItem, ...]
+
+
+class _EmbeddingRequest(LiteLLMBaseModel):
+    """The /embeddings-shaped request as the pre-call hooks (rate limits, budgets, guardrails) hand it back."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    model: str
+    input: tuple[str, ...]
+    metadata: dict[str, object]  # mutable-ok: the router mutates the metadata dict it is handed
 
 
 def cosine_similarity(left: Vector, right: Vector) -> float:
@@ -51,29 +67,46 @@ def cosine_similarity(left: Vector, right: Vector) -> float:
 def embedding_spend_metadata(user_api_key_dict: UserAPIKeyAuth) -> dict[str, object]:  # mutable-ok: router mutates it
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
-    return {  # mutable-ok: the router mutates the metadata dict it is handed
+    return {
         **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict),
-        "user_api_key": user_api_key_dict.api_key,
+        "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
     }
 
 
-def router_embedder(router: Router, embedding_model: str, user_api_key_dict: UserAPIKeyAuth) -> Embedder:
+def router_embedder(
+    router: Router, embedding_model: str, user_api_key_dict: UserAPIKeyAuth, proxy_logging_obj: ProxyLogging
+) -> Embedder:
+    """Embeds through the router after the same key rate-limit, budget and guardrail pre-call hooks /embeddings runs."""
+
     async def embed(texts: Sequence[str]) -> Sequence[Vector]:
-        batch: Final = list(texts)  # mutable-ok: Router.aembedding accepts only str | list input
+        request: Final = {
+            "model": embedding_model,
+            "input": list(texts),
+            "metadata": embedding_spend_metadata(user_api_key_dict),
+        }
+        processed: Final = _EmbeddingRequest.model_validate(
+            await proxy_logging_obj.pre_call_hook(
+                user_api_key_dict=user_api_key_dict, data=request, call_type="aembedding"
+            )
+        )
         response: Final = await router.aembedding(
-            model=embedding_model, input=batch, metadata=embedding_spend_metadata(user_api_key_dict)
+            model=processed.model,
+            input=list(processed.input),
+            metadata=processed.metadata,
         )
         return tuple(item.embedding for item in _EmbeddingData.model_validate(response.model_dump()).data)
 
     return embed
 
 
-_NO_VECTORS: Final[Mapping[str, Vector]] = MappingProxyType({})
+_CacheKey: TypeAlias = tuple[str, str]
 
 
 async def _embed_all(embed: Embedder, texts: Sequence[str]) -> tuple[Vector, ...] | EmbeddingFailed:
     try:
         vectors: Final = tuple(await embed(texts))
+    except HTTPException:
+        raise
     except (OpenAIError, ValueError, BudgetExceededError) as exc:
         return EmbeddingFailed(reason=f"embedding the search query failed: {exc}")
     if len(vectors) != len(texts):
@@ -111,20 +144,34 @@ async def _embed_query_and_texts(
 
 
 class SemanticTextIndex:
-    """Caches one vector per distinct text per embedding model, so repeat searches only embed the query."""
+    """Caches one vector per distinct text per embedding model, so repeat searches only embed the query.
 
-    def __init__(self) -> None:
-        self._vectors: Mapping[str, Mapping[str, Vector]] = MappingProxyType({})
+    Holds at most ``max_entries`` vectors across all models: once full, the texts no recent search touched go first."""
 
-    def _merged(self, embedding_model: str, embedded: _Embedded) -> Mapping[str, Vector]:
-        kept: Final = MappingProxyType(
+    def __init__(self, max_entries: int = DEFAULT_MAX_CACHED_VECTORS) -> None:
+        self._max_entries: Final = max_entries
+        self._vectors: Mapping[_CacheKey, Vector] = MappingProxyType({})
+
+    def _cached(self, embedding_model: str) -> Mapping[str, Vector]:
+        return MappingProxyType(
+            {text: vector for (model, text), vector in self._vectors.items() if model == embedding_model}
+        )
+
+    def _merged(self, embedding_model: str, embedded: _Embedded, texts: Sequence[str]) -> Mapping[_CacheKey, Vector]:
+        dimension: Final = len(embedded.query_vector)
+        touched: Final = MappingProxyType({(embedding_model, text): embedded.vectors[text] for text in texts})
+        untouched: Final = MappingProxyType(
             {
-                text: vector
-                for text, vector in self._vectors.get(embedding_model, _NO_VECTORS).items()
-                if len(vector) == len(embedded.query_vector)
+                key: vector
+                for key, vector in chain(
+                    self._vectors.items(),
+                    (((embedding_model, text), vector) for text, vector in embedded.vectors.items()),
+                )
+                if key not in touched and (key[0] != embedding_model or len(vector) == dimension)
             }
         )
-        return MappingProxyType({**kept, **embedded.vectors})
+        ordered: Final = MappingProxyType({**untouched, **touched})
+        return MappingProxyType(dict(islice(ordered.items(), max(len(ordered) - self._max_entries, 0), None)))
 
     async def scores(
         self, query: str, texts: Sequence[str], embed: Embedder, embedding_model: str
@@ -132,11 +179,10 @@ class SemanticTextIndex:
         """Cosine similarity of `query` to each entry of `texts`, in the same order."""
         if not texts:
             return ()
-        cached: Final = self._vectors.get(embedding_model, _NO_VECTORS)
-        embedded: Final = await _embed_query_and_texts(embed, query, texts, cached)
+        embedded: Final = await _embed_query_and_texts(embed, query, texts, self._cached(embedding_model))
         if isinstance(embedded, EmbeddingFailed):
             return embedded
         if not _same_dimension(embedded.query_vector, embedded.vectors, texts):
             return EmbeddingFailed(reason=f"embedding model {embedding_model} returned vectors of mixed dimensions")
-        self._vectors = MappingProxyType({**self._vectors, embedding_model: self._merged(embedding_model, embedded)})
+        self._vectors = self._merged(embedding_model, embedded, texts)
         return tuple(cosine_similarity(embedded.query_vector, embedded.vectors[text]) for text in texts)

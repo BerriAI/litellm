@@ -2,17 +2,31 @@ import asyncio
 import json
 from collections.abc import Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Final
+from typing import Final, Protocol
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import TypeAdapter
 
-if TYPE_CHECKING:
-    from litellm.proxy.utils import PrismaClient
+from litellm.proxy._types import LiteLLMRoutes
+from litellm.types.llms.base import LiteLLMBaseModel
 
 UNKNOWN_CALL_TYPE: Final = "Unknown"
+INFO_ROUTES_JSON: Final = json.dumps(LiteLLMRoutes.info_routes.value)
 
 
-class CacheActivityGroup(BaseModel):
+class _SupportsQueryRaw(Protocol):
+    """The single database operation the cache-activity queries issue."""
+
+    async def query_raw(self, query: str, *args: object) -> Sequence[object]: ...
+
+
+class _SupportsRawQueryDb(Protocol):
+    """A prisma client handle, narrowed to the raw-query surface used here."""
+
+    @property
+    def db(self) -> _SupportsQueryRaw: ...
+
+
+class CacheActivityGroup(LiteLLMBaseModel):
     call_type: str
     api_requests: int
     cache_hits: int
@@ -21,7 +35,7 @@ class CacheActivityGroup(BaseModel):
     generated_completion_tokens: int
 
 
-class CacheActivityTotals(BaseModel):
+class CacheActivityTotals(LiteLLMBaseModel):
     api_requests: int
     cache_hits: int
     failed_requests: int
@@ -29,19 +43,19 @@ class CacheActivityTotals(BaseModel):
     cache_hit_ratio: float
 
 
-class CacheActivityFilterOptions(BaseModel):
+class CacheActivityFilterOptions(LiteLLMBaseModel):
     key_aliases: list[str]
     models: list[str]
 
 
-class CacheActivityErrorBucket(BaseModel):
+class CacheActivityErrorBucket(LiteLLMBaseModel):
     call_type: str
     error_code: str
     error_class: str
     count: int
 
 
-class CacheActivityResponse(BaseModel):
+class CacheActivityResponse(LiteLLMBaseModel):
     groups: list[CacheActivityGroup]
     totals: CacheActivityTotals
     filter_options: CacheActivityFilterOptions
@@ -69,6 +83,7 @@ GROUPS_SQL: Final = """
             OR COALESCE(vt."key_alias", 'Unnamed Key') IN (SELECT jsonb_array_elements_text($3::jsonb)))
         AND ($4::jsonb = '[]'::jsonb
             OR sl."model" IN (SELECT jsonb_array_elements_text($4::jsonb)))
+        AND sl."call_type" NOT IN (SELECT jsonb_array_elements_text($5::jsonb))
     GROUP BY 1
     ORDER BY (COUNT(*)) DESC
 """
@@ -89,6 +104,7 @@ ERROR_BREAKDOWN_SQL: Final = """
             OR COALESCE(vt."key_alias", 'Unnamed Key') IN (SELECT jsonb_array_elements_text($3::jsonb)))
         AND ($4::jsonb = '[]'::jsonb
             OR sl."model" IN (SELECT jsonb_array_elements_text($4::jsonb)))
+        AND sl."call_type" NOT IN (SELECT jsonb_array_elements_text($5::jsonb))
     GROUP BY 1, 2, 3
     ORDER BY (COUNT(*)) DESC
 """
@@ -100,6 +116,7 @@ KEY_ALIAS_OPTIONS_SQL: Final = """
     WHERE
         sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
         AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+        AND sl."call_type" NOT IN (SELECT jsonb_array_elements_text($3::jsonb))
     ORDER BY 1
 """
 
@@ -110,15 +127,16 @@ MODEL_OPTIONS_SQL: Final = """
         sl."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
         AND sl."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
         AND sl."model" != ''
+        AND sl."call_type" NOT IN (SELECT jsonb_array_elements_text($3::jsonb))
     ORDER BY 1
 """
 
 
-class _KeyAliasRow(BaseModel):
+class _KeyAliasRow(LiteLLMBaseModel):
     key_alias: str
 
 
-class _ModelRow(BaseModel):
+class _ModelRow(LiteLLMBaseModel):
     model: str
 
 
@@ -143,7 +161,7 @@ def compute_totals(groups: Sequence[CacheActivityGroup]) -> CacheActivityTotals:
 
 
 async def get_cache_activity(
-    prisma_client: "PrismaClient",
+    prisma_client: _SupportsRawQueryDb,
     start_date: datetime,
     end_date: datetime,
     key_aliases: Sequence[str],
@@ -152,10 +170,12 @@ async def get_cache_activity(
     key_aliases_json: Final = json.dumps(list(key_aliases))
     models_json: Final = json.dumps(list(models))
     group_rows, error_rows, key_alias_rows, model_rows = await asyncio.gather(
-        prisma_client.db.query_raw(GROUPS_SQL, start_date, end_date, key_aliases_json, models_json),
-        prisma_client.db.query_raw(ERROR_BREAKDOWN_SQL, start_date, end_date, key_aliases_json, models_json),
-        prisma_client.db.query_raw(KEY_ALIAS_OPTIONS_SQL, start_date, end_date),
-        prisma_client.db.query_raw(MODEL_OPTIONS_SQL, start_date, end_date),
+        prisma_client.db.query_raw(GROUPS_SQL, start_date, end_date, key_aliases_json, models_json, INFO_ROUTES_JSON),
+        prisma_client.db.query_raw(
+            ERROR_BREAKDOWN_SQL, start_date, end_date, key_aliases_json, models_json, INFO_ROUTES_JSON
+        ),
+        prisma_client.db.query_raw(KEY_ALIAS_OPTIONS_SQL, start_date, end_date, INFO_ROUTES_JSON),
+        prisma_client.db.query_raw(MODEL_OPTIONS_SQL, start_date, end_date, INFO_ROUTES_JSON),
     )
     groups: Final = _groups_adapter.validate_python(group_rows or [])
     return CacheActivityResponse(

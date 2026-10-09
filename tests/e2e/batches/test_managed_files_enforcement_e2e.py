@@ -5,7 +5,7 @@ whose config enables it. The main ephemeral stack can never run with it on: the
 flag would 400 every files_settings-routed upload in the rest of the suite. The
 PR gate instead reconfigures the same stack sequentially after the main run and
 executes only this file with E2E_MANAGED_FILES_STACK set; without that env every
-test here is deselected (see conftest.py, mirroring the weekly marker).
+test here is deselected (see OPT_IN_MARKERS in tests/e2e/conftest.py).
 
 Pins: an upload without target_model_names is rejected 400, an upload that also
 carries a model param is rejected 400, a raw provider file id is rejected 400 on
@@ -21,9 +21,11 @@ from typing import Iterator
 import pytest
 
 from batch_client import BatchClient, FileObject
-from capabilities import batch_model_name, is_managed_id, openai_batch_params
+from batch_cleanup import cleanup_file
+from capabilities import OPENAI_BATCH_BACKEND, batch_model_name, is_managed_id, openai_batch_params
 from e2e_config import unique_marker
 from e2e_http import FileUploadForm, Result, UnknownApiError, unwrap
+from e2e_metadata import Domain, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 
 pytestmark = [pytest.mark.e2e, pytest.mark.managed_files]
@@ -63,6 +65,12 @@ def managed_model(client: BatchClient) -> Iterator[str]:
 
 
 @pytest.mark.covers(UPLOAD_ROW)
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.FILES,
+    )
+)
 def test_upload_without_target_model_names_rejected(
     client: BatchClient, scoped_key: str, managed_model: str
 ) -> None:
@@ -75,6 +83,12 @@ def test_upload_without_target_model_names_rejected(
 
 
 @pytest.mark.covers(UPLOAD_ROW)
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.FILES,
+    )
+)
 def test_upload_with_model_param_rejected(
     client: BatchClient, scoped_key: str, managed_model: str
 ) -> None:
@@ -88,12 +102,26 @@ def test_upload_with_model_param_rejected(
 
 
 @pytest.mark.covers(ISOLATION_ROW)
+@meta(
+    Subject(
+        domain=Domain.PROXY_AUTH,
+        route=Route.FILES,
+    )
+)
 def test_raw_provider_file_id_rejected(client: BatchClient, scoped_key: str) -> None:
     result = client.retrieve_file("file-e2e-raw-provider-id", key=scoped_key)
     expect_api_error(result, 400, "Raw provider file ids cannot be used")
 
 
 @pytest.mark.covers(ISOLATION_ROW)
+@meta(
+    Subject(
+        domain=Domain.PROXY_AUTH,
+        route=Route.FILES,
+        providers=(Provider.OPENAI,),
+        models=(OPENAI_BATCH_BACKEND,),
+    )
+)
 def test_cross_user_managed_id_denied_owner_allowed(
     client: BatchClient, resources: ResourceManager, managed_model: str
 ) -> None:
@@ -108,7 +136,7 @@ def test_cross_user_managed_id_denied_owner_allowed(
             key=owner_key,
         )
     )
-    resources.defer(lambda: client.delete_file(uploaded.id, key=owner_key))
+    resources.defer(lambda: cleanup_file(client, uploaded.id, key=owner_key))
     assert is_managed_id(uploaded.id), f"expected a managed unified file id, got {uploaded.id}"
 
     denied = client.retrieve_file(uploaded.id, key=other_key)

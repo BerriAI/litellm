@@ -1,0 +1,30 @@
+[package]
+name = "litellm-inference-chat"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+futures-util.workspace = true
+litellm-auth = { workspace = true, features = ["aws", "azure", "gcp"] }
+litellm-cache-response.workspace = true
+litellm-core-utils.workspace = true
+litellm-host.workspace = true
+litellm-http.workspace = true
+litellm-inference.workspace = true
+litellm-llms.workspace = true
+litellm-llms-types.workspace = true
+litellm-secrets.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
+tracing.workspace = true
+
+[dev-dependencies]
+litellm-cache-memory.workspace = true
+litellm-host-native.workspace = true
+litellm-http = { workspace = true, features = ["test-support"] }
+litellm-inference-testing.workspace = true
+litellm-tracing.workspace = true
+rstest.workspace = true
+tokio.workspace = true
+wiremock.workspace = true

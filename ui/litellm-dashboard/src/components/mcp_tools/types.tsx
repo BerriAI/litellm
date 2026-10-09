@@ -321,6 +321,8 @@ export interface MCPServerCostInfo {
 // Define MCP provider info
 export interface MCPInfo {
   server_name: string;
+  is_public?: boolean;
+  is_public_explicit?: boolean;
   description?: string;
   logo_url?: string;
   mcp_server_cost_info?: MCPServerCostInfo | null;
@@ -405,8 +407,11 @@ export interface MCPToolsViewerProps {
   extraHeaders?: string[] | null;
 }
 
+export const MCP_REACHABLE_DESCRIPTION = "Server responded. Authentication and tools were not checked";
+
 export interface MCPServer {
   server_id: string;
+  is_config?: boolean;
   server_name?: string | null;
   alias?: string | null;
   description?: string | null;
@@ -434,7 +439,7 @@ export interface MCPServer {
   updated_by: string;
   extra_headers?: string[] | null;
   static_headers?: Record<string, string> | null;
-  status?: "healthy" | "unhealthy" | "unknown";
+  status?: "healthy" | "reachable" | "unhealthy" | "unknown";
   last_health_check?: string | null;
   health_check_error?: string | null;
   teams?: Team[];
@@ -448,6 +453,7 @@ export interface MCPServer {
   oauth_passthrough?: boolean;
   dcr_bridge?: boolean | null;
   max_concurrent_requests?: number | null;
+  rpm?: number | null;
   /** Redacted to null in server responses; present when constructing a server locally. */
   credentials?: Record<string, unknown> | null;
 
@@ -517,6 +523,7 @@ export interface MCPServerProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
+  isViewOnly?: boolean;
 }
 
 export interface MCPToolsetTool {
@@ -559,4 +566,51 @@ export interface MCPSubmissionsSummary {
   active: number;
   rejected: number;
   items: MCPServer[];
+}
+
+export interface MCPGatewaySession {
+  session_id_prefix: string;
+  client_name: string | null;
+  client_version: string | null;
+  user_id: string | null;
+  user_email: string | null;
+  key_alias: string | null;
+  team_id: string | null;
+  team_alias: string | null;
+  client_ip: string | null;
+  idle_seconds: number;
+  in_flight_requests: number;
+}
+
+export interface MCPGatewaySessionGroupCount {
+  label: string | null;
+  count: number;
+}
+
+export interface MCPGatewaySessionsResponse {
+  worker_pid: number;
+  total_sessions: number;
+  by_client: MCPGatewaySessionGroupCount[];
+  by_user: MCPGatewaySessionGroupCount[];
+  sessions: MCPGatewaySession[];
+}
+
+export interface MCPGatewaySessionsTerminateResponse {
+  worker_pid: number;
+  terminated_sessions: number;
+  sessions: MCPGatewaySession[];
+}
+
+export type MCPGatewaySessionSelector =
+  | { session_id_prefix: string; user_id?: undefined }
+  | { user_id: string; session_id_prefix?: undefined };
+
+export type MCPServerUserCredentialType = "oauth2" | "byok";
+
+export interface MCPServerUserCredentialListItem {
+  user_id: string;
+  credential_type: MCPServerUserCredentialType;
+  expires_at: string | null;
+  connected_at: string | null;
+  updated_at: string;
 }

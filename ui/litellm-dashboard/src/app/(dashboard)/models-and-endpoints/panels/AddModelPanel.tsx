@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useForm } from "react-hook-form";
+import { useMemo, useState } from "react";
+import { useForm, useWatch } from "react-hook-form";
 import { useQueryClient } from "@tanstack/react-query";
 import AddModelForm from "@/components/add_model/AddModelForm";
 import { handleAddModelSubmit } from "@/components/add_model/handle_add_model_submit";
@@ -23,11 +23,15 @@ export default function AddModelPanel() {
   const form = useForm<MountedFormValues>({ mode: "onChange", defaultValues: INITIAL_VALUES });
   const registry = useMountRegistry();
   const queryClient = useQueryClient();
-  const { data: modelCostMapData } = useModelCostMap();
+  const { data: modelCostMapData } = useModelCostMap(true, true);
   const { data: credentialsResponse } = useCredentials();
   const { data: teams } = useTeams();
-  const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.Anthropic);
-  const [providerModels, setProviderModels] = useState<string[]>([]);
+  const [selectedProvider, setSelectedProvider] = useState<string | null>(Providers.Anthropic);
+  const pickedProvider = useWatch({ control: form.control, name: "custom_llm_provider" });
+  const providerModels = useMemo(
+    () => (typeof pickedProvider === "string" ? getProviderModels(pickedProvider, modelCostMapData) : []),
+    [pickedProvider, modelCostMapData],
+  );
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["models", "list"] });
@@ -57,7 +61,6 @@ export default function AddModelPanel() {
       selectedProvider={selectedProvider}
       setSelectedProvider={setSelectedProvider}
       providerModels={providerModels}
-      setProviderModelsFn={(provider) => setProviderModels(getProviderModels(provider, modelCostMapData))}
       getPlaceholder={getPlaceholder}
       showAdvancedSettings={showAdvancedSettings}
       setShowAdvancedSettings={setShowAdvancedSettings}
