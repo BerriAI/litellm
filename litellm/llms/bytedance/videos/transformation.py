@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Final, TypeAlias
 
 import httpx
 from httpx._types import RequestFiles
@@ -27,12 +27,12 @@ if TYPE_CHECKING:
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
-    LiteLLMLoggingObj = Any
+    LiteLLMLoggingObj = object
 
-BYTEDANCE_DEFAULT_API_BASE = "https://ark.ap-southeast.bytepluses.com"
-BYTEDANCE_API_PATH_PREFIX = "/api/v3/contents/generations/tasks"
+_BYTEDANCE_DEFAULT_API_BASE: Final[str] = "https://ark.ap-southeast.bytepluses.com"
+_BYTEDANCE_API_PATH_PREFIX: Final[str] = "/api/v3/contents/generations/tasks"
 
-SEEDANCE_STATUS_MAP = {
+_SEEDANCE_STATUS_MAP: Final[dict[str, str]] = {
     "queued": "queued",
     "running": "in_progress",
     "succeeded": "completed",
@@ -41,12 +41,17 @@ SEEDANCE_STATUS_MAP = {
     "expired": "failed",
 }
 
+_VideoParams: TypeAlias = dict[str, object]
+_VideoHeaders: TypeAlias = dict[str, str]
+_ContentItem: TypeAlias = dict[str, object]
+_SupportedParams: TypeAlias = list[str]
+
 
 class ByteDanceVideoConfig(BaseVideoConfig):
     def __init__(self) -> None:
         super().__init__()
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> _SupportedParams:
         return [
             "model",
             "prompt",
@@ -69,8 +74,8 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         video_create_optional_params: VideoCreateOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
-        mapped_params: dict[str, Any] = {}
+    ) -> _VideoParams:
+        mapped_params: _VideoParams = {}
 
         if "input_reference" in video_create_optional_params:
             mapped_params["input_reference"] = video_create_optional_params["input_reference"]
@@ -103,7 +108,7 @@ class ByteDanceVideoConfig(BaseVideoConfig):
             if key in video_create_optional_params:
                 mapped_params[key] = video_create_optional_params[key]
 
-        supported_openai_params = self.get_supported_openai_params(model)
+        supported_openai_params: Final = self.get_supported_openai_params(model)
         for key, value in video_create_optional_params.items():
             if key not in supported_openai_params and key not in mapped_params:
                 mapped_params[key] = value
@@ -143,7 +148,7 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         litellm_params: dict,
     ) -> str:
         if api_base is None:
-            api_base = BYTEDANCE_DEFAULT_API_BASE
+            api_base = _BYTEDANCE_DEFAULT_API_BASE
         return api_base.rstrip("/")
 
     def transform_video_create_request(
@@ -154,15 +159,16 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         video_create_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[dict, RequestFiles, str]:
-        content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+    ) -> tuple[_VideoParams, RequestFiles, str]:
+        content: list[_ContentItem] = [{"type": "text", "text": prompt}]
 
-        input_reference = video_create_optional_request_params.pop("input_reference", None)
-        last_frame = video_create_optional_request_params.pop("last_frame", None)
-        reference_images = video_create_optional_request_params.pop("reference_images", None)
+        # Read without mutating the caller's dict
+        input_reference: Final = video_create_optional_request_params.get("input_reference")
+        last_frame: Final = video_create_optional_request_params.get("last_frame")
+        reference_images: Final = video_create_optional_request_params.get("reference_images")
 
-        has_frame_mode = input_reference is not None or last_frame is not None
-        has_reference_mode = reference_images is not None and len(reference_images) > 0
+        has_frame_mode: Final = input_reference is not None or last_frame is not None
+        has_reference_mode: Final = reference_images is not None and len(reference_images) > 0
         if has_frame_mode and has_reference_mode:
             raise ValueError(
                 "Seedance API does not allow first_frame/last_frame and reference_images "
@@ -189,33 +195,28 @@ class ByteDanceVideoConfig(BaseVideoConfig):
             )
 
         if reference_images is not None:
-            for ref_url in reference_images:
-                content.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": str(ref_url)},
-                        "role": "reference_image",
-                    }
-                )
+            content.extend(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": str(ref_url)},
+                    "role": "reference_image",
+                }
+                for ref_url in reference_images
+            )
 
-        request_data: dict[str, Any] = {
+        request_data: _VideoParams = {
             "model": model,
             "content": content,
         }
 
-        if "ratio" in video_create_optional_request_params:
-            request_data["ratio"] = video_create_optional_request_params.pop("ratio")
-        if "duration" in video_create_optional_request_params:
-            request_data["duration"] = video_create_optional_request_params.pop("duration")
-        if "resolution" in video_create_optional_request_params:
-            request_data["resolution"] = video_create_optional_request_params.pop("resolution")
-
+        # Carry over mapped params (ratio, duration, resolution, and any extras)
+        _SKIP_KEYS: Final = frozenset({"input_reference", "last_frame", "reference_images"})
         for key, value in video_create_optional_request_params.items():
-            if key not in request_data:
+            if key not in _SKIP_KEYS and key not in request_data:
                 request_data[key] = value
 
-        files_list: list[tuple[str, Any]] = []
-        full_url = f"{api_base}{BYTEDANCE_API_PATH_PREFIX}"
+        files_list: list[tuple[str, object]] = []
+        full_url: Final = f"{api_base}{_BYTEDANCE_API_PATH_PREFIX}"
 
         return request_data, files_list, full_url
 
@@ -225,13 +226,13 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> VideoObject:
-        response_data = raw_response.json()
+        response_data: Final = raw_response.json()
 
-        task_id = response_data.get("id", "")
+        task_id: Final[str] = response_data.get("id", "")
 
-        video_data: dict[str, Any] = {
+        video_data: _VideoParams = {
             "id": task_id,
             "object": "video",
             "status": "queued",
@@ -241,20 +242,21 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         if request_data:
             if "model" in request_data:
                 video_data["model"] = request_data["model"]
-            if "ratio" in request_data:
-                ratio = request_data["ratio"]
-                if isinstance(ratio, str) and ":" in ratio:
-                    video_data["size"] = ratio.replace(":", "x")
+            ratio = request_data.get("ratio")
+            if isinstance(ratio, str) and ":" in ratio:
+                video_data["size"] = ratio.replace(":", "x")
             if "duration" in request_data:
                 video_data["seconds"] = str(request_data["duration"])
 
-        video_obj = VideoObject(**video_data)  # type: ignore[arg-type]
+        video_obj: Final = VideoObject(**video_data)  # pyright: ignore[reportCallIssue]  # dynamic dict → dataclass
 
         if custom_llm_provider and video_obj.id:
             video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, model)
 
-        duration = float(video_obj.seconds) if video_obj.seconds else float(DEFAULT_BYTEDANCE_VIDEO_DURATION_SECONDS)
-        usage_data: dict[str, Any] = {"duration_seconds": duration}
+        duration: Final = (
+            float(video_obj.seconds) if video_obj.seconds else float(DEFAULT_BYTEDANCE_VIDEO_DURATION_SECONDS)
+        )
+        usage_data: dict[str, object] = {"duration_seconds": duration}
         if request_data:
             res = request_data.get("resolution")
             if res is not None and str(res).strip() != "":
@@ -264,7 +266,7 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         return video_obj
 
     def _map_seedance_status(self, status: str) -> str:
-        return SEEDANCE_STATUS_MAP.get(status.lower(), "queued")
+        return _SEEDANCE_STATUS_MAP.get(status.lower(), "queued")
 
     def transform_video_status_retrieve_request(
         self,
@@ -273,9 +275,9 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> tuple[str, dict]:
-        original_video_id = extract_original_video_id(video_id)
-        encoded_video_id = encode_url_path_segment(original_video_id, field_name="video_id")
-        url = f"{api_base}{BYTEDANCE_API_PATH_PREFIX}/{encoded_video_id}"
+        original_video_id: Final = extract_original_video_id(video_id)
+        encoded_video_id: Final = encode_url_path_segment(original_video_id, field_name="video_id")
+        url: Final = f"{api_base}{_BYTEDANCE_API_PATH_PREFIX}/{encoded_video_id}"
         return url, {}
 
     def transform_video_status_retrieve_response(
@@ -283,10 +285,11 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
+        client: HTTPHandler | None = None,
     ) -> VideoObject:
-        response_data = raw_response.json()
+        response_data: Final = raw_response.json()
 
-        video_data: dict[str, Any] = {
+        video_data: _VideoParams = {
             "id": response_data.get("id", ""),
             "object": "video",
             "status": self._map_seedance_status(response_data.get("status", "queued")),
@@ -312,16 +315,18 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         if "model" in response_data:
             video_data["model"] = response_data["model"]
 
-        if "error" in response_data and response_data["error"]:
+        if response_data.get("error"):
             video_data["error"] = response_data["error"]
 
-        video_obj = VideoObject(**video_data)  # type: ignore[arg-type]
+        video_obj: Final = VideoObject(**video_data)  # pyright: ignore[reportCallIssue]  # dynamic dict → dataclass
 
         if custom_llm_provider and video_obj.id:
             video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, None)
 
-        usage_data: dict[str, Any] = response_data.get("usage", {})
-        duration = float(video_obj.seconds) if video_obj.seconds else float(DEFAULT_BYTEDANCE_VIDEO_DURATION_SECONDS)
+        usage_data: dict[str, object] = dict(response_data.get("usage") or {})
+        duration: Final = (
+            float(video_obj.seconds) if video_obj.seconds else float(DEFAULT_BYTEDANCE_VIDEO_DURATION_SECONDS)
+        )
         usage_data["duration_seconds"] = duration
         res = response_data.get("resolution")
         if res is not None and str(res).strip() != "":
@@ -338,12 +343,12 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         headers: dict,
         variant: str | None = None,
     ) -> tuple[str, dict]:
-        original_video_id = extract_original_video_id(video_id)
-        encoded_video_id = encode_url_path_segment(original_video_id, field_name="video_id")
-        url = f"{api_base}{BYTEDANCE_API_PATH_PREFIX}/{encoded_video_id}"
+        original_video_id: Final = extract_original_video_id(video_id)
+        encoded_video_id: Final = encode_url_path_segment(original_video_id, field_name="video_id")
+        url: Final = f"{api_base}{_BYTEDANCE_API_PATH_PREFIX}/{encoded_video_id}"
         return url, {}
 
-    def _extract_video_url_from_response(self, response_data: dict[str, Any]) -> str:
+    def _extract_video_url_from_response(self, response_data: dict[str, object]) -> str:
         content = response_data.get("content")
         if isinstance(content, dict):
             video_url = content.get("video_url")
@@ -355,7 +360,7 @@ class ByteDanceVideoConfig(BaseVideoConfig):
             raise ValueError(f"Video is still processing (status: {status}). Please wait and try again.")
         if status == "failed":
             error = response_data.get("error", {})
-            message = error.get("message", "Unknown error") if error else "Unknown error"
+            message = error.get("message", "Unknown error") if isinstance(error, dict) else "Unknown error"
             raise ValueError(f"Video generation failed: {message}")
 
         raise ValueError("Video URL not found in response. Video may not be ready yet.")
@@ -365,11 +370,11 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> bytes:
-        response_data = raw_response.json()
-        video_url = self._extract_video_url_from_response(response_data)
+        response_data: Final = raw_response.json()
+        video_url: Final = self._extract_video_url_from_response(response_data)
 
-        httpx_client: HTTPHandler = get_httpx_client()
-        video_response = httpx_client.get(video_url)
+        httpx_client: Final[HTTPHandler] = get_httpx_client()
+        video_response: Final = httpx_client.get(video_url)
         video_response.raise_for_status()
 
         return video_response.content
@@ -379,13 +384,13 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> bytes:
-        response_data = raw_response.json()
-        video_url = self._extract_video_url_from_response(response_data)
+        response_data: Final = raw_response.json()
+        video_url: Final = self._extract_video_url_from_response(response_data)
 
-        async_httpx_client: AsyncHTTPHandler = get_async_httpx_client(
+        async_httpx_client: Final[AsyncHTTPHandler] = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.BYTEDANCE,
         )
-        video_response = await async_httpx_client.get(video_url)
+        video_response: Final = await async_httpx_client.get(video_url)
         video_response.raise_for_status()
 
         return video_response.content
@@ -397,7 +402,7 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        extra_body: dict[str, Any] | None = None,
+        extra_body: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         raise NotImplementedError("Video remix is not supported for ByteDance")
 
@@ -417,7 +422,7 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
-        extra_query: dict[str, Any] | None = None,
+        extra_query: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         raise NotImplementedError("Video listing is not supported for ByteDance")
 
@@ -436,9 +441,9 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> tuple[str, dict]:
-        original_video_id = extract_original_video_id(video_id)
-        encoded_video_id = encode_url_path_segment(original_video_id, field_name="video_id")
-        url = f"{api_base}{BYTEDANCE_API_PATH_PREFIX}/{encoded_video_id}"
+        original_video_id: Final = extract_original_video_id(video_id)
+        encoded_video_id: Final = encode_url_path_segment(original_video_id, field_name="video_id")
+        url: Final = f"{api_base}{_BYTEDANCE_API_PATH_PREFIX}/{encoded_video_id}"
         return url, {}
 
     def transform_video_delete_response(
@@ -446,13 +451,13 @@ class ByteDanceVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> VideoObject:
-        response_data = raw_response.json()
+        response_data: Final = raw_response.json()
         return VideoObject(
             id=response_data.get("id", ""),
             object="video",
             status="failed",
             created_at=response_data.get("created_at", 0),
-        )  # type: ignore[arg-type]
+        )  # pyright: ignore[reportCallIssue]  # dynamic dict → dataclass
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         from ...base_llm.chat.transformation import BaseLLMException
