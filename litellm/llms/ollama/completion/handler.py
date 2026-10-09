@@ -33,7 +33,11 @@ def _prepare_ollama_embedding_payload(
     special_optional_params: Final = ["truncate", "options", "keep_alive", "dimensions"]
 
     for k, v in optional_params.items():
-        if k in special_optional_params:
+        if k == "options" and isinstance(v, dict):
+            data[k] = (
+                {**v, **accumulated_options} if isinstance(accumulated_options := data.get("options"), dict) else {**v}
+            )
+        elif k in special_optional_params:
             data[k] = v
         else:
             data.setdefault("options", {})

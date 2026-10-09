@@ -1,8 +1,14 @@
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from litellm.llms.ollama.completion.handler import ollama_aembeddings, ollama_embeddings
+from litellm.llms.ollama.completion.handler import (
+    _prepare_ollama_embedding_payload,
+    ollama_aembeddings,
+    ollama_embeddings,
+)
 from litellm.types.utils import EmbeddingResponse
 
 
@@ -26,12 +32,47 @@ def mock_encoding():
     return mock
 
 
+@pytest.mark.parametrize("options_first", [True, False])
+def test_embedding_options_merge_without_mutating_caller(options_first: bool) -> None:
+    options: Final = {"num_ctx": 1024, "num_batch": 4}
+    optional_params: Final = (
+        {"options": options, "num_batch": 8, "truncate": False}
+        if options_first
+        else {"num_batch": 8, "options": options, "truncate": False}
+    )
+
+    payload: Final = _prepare_ollama_embedding_payload("test-model", ["hello"], optional_params)
+
+    assert payload == {
+        "model": "test-model",
+        "input": ["hello"],
+        "options": {"num_ctx": 1024, "num_batch": 8},
+        "truncate": False,
+    }
+    assert options == {"num_ctx": 1024, "num_batch": 4}
+
+
+@pytest.mark.parametrize(
+    ("optional_params", "expected_options"),
+    [
+        ({"options": {"num_ctx": 1024}}, {"num_ctx": 1024}),
+        ({"num_batch": 8}, {"num_batch": 8}),
+        ({"options": {}, "num_batch": 8}, {"num_batch": 8}),
+    ],
+)
+def test_embedding_options_single_source(
+    optional_params: Mapping[str, object], expected_options: Mapping[str, object]
+) -> None:
+    payload: Final = _prepare_ollama_embedding_payload("test-model", ["hello"], optional_params)
+
+    assert payload == {"model": "test-model", "input": ["hello"], "options": expected_options}
+
+
 def test_ollama_embeddings(mock_response_data, mock_embedding_response, mock_encoding):
     with (
         patch("litellm.module_level_client.post") as mock_post,
         patch("litellm.OllamaConfig.get_config", return_value={"truncate": 512}),
     ):
-
         mock_response = MagicMock()
         mock_response.json.return_value = mock_response_data
         mock_post.return_value = mock_response
@@ -53,19 +94,14 @@ def test_ollama_embeddings(mock_response_data, mock_embedding_response, mock_enc
 
 
 @pytest.mark.asyncio
-async def test_ollama_aembeddings(
-    mock_response_data, mock_embedding_response, mock_encoding
-):
+async def test_ollama_aembeddings(mock_response_data, mock_embedding_response, mock_encoding):
     mock_response = AsyncMock()
     # Make json() a regular synchronous method, not async
     mock_response.json = MagicMock(return_value=mock_response_data)
     with (
-        patch(
-            "litellm.module_level_aclient.post", return_value=mock_response
-        ) as mock_post,
+        patch("litellm.module_level_aclient.post", return_value=mock_response) as mock_post,
         patch("litellm.OllamaConfig.get_config", return_value={"truncate": 512}),
     ):
-
         response = await ollama_aembeddings(
             api_base="http://localhost:11434",
             model="test-model",
@@ -92,7 +128,6 @@ def test_prompt_eval_fallback_when_missing(mock_embedding_response, mock_encodin
         patch("litellm.module_level_client.post") as mock_post,
         patch("litellm.OllamaConfig.get_config", return_value={}),
     ):
-
         mock_response = MagicMock()
         mock_response.json.return_value = response_data
         mock_post.return_value = mock_response
