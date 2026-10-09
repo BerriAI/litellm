@@ -271,14 +271,14 @@ def test_databricks_non_claude_single_text_block_reaches_upstream_as_string(
             "databricks-meta-llama-3-3-70b-instruct",
             [{"type": "text", "text": "Reply in JSON", "cache_control": {"type": "ephemeral"}}],
             [{"type": "text", "text": "Reply in JSON", "cache_control": {"type": "ephemeral"}}],
-            id="B1-unchanged-by-this-pr-cache-control",
+            id="B1-cache-control-stays-list",
         ),
         pytest.param(
             "two-text-blocks",
             "databricks-meta-llama-3-3-70b-instruct",
             [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}],
             [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}],
-            id="B2-unchanged-by-this-pr-two-text-blocks",
+            id="B2-two-text-blocks-stays-list",
         ),
         pytest.param(
             "text-and-image",
@@ -291,18 +291,18 @@ def test_databricks_non_claude_single_text_block_reaches_upstream_as_string(
                 {"type": "text", "text": "Reply in JSON"},
                 {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
             ],
-            id="B3-unchanged-by-this-pr-text-and-image",
+            id="B3-text-and-image-stays-list",
         ),
         pytest.param(
             "claude",
             "databricks-claude-opus-5-5",
             [{"type": "text", "text": "Reply in JSON"}],
             [{"type": "text", "text": "Reply in JSON"}],
-            id="B4-unchanged-by-this-pr-claude",
+            id="B4-claude-stays-list",
         ),
     ],
 )
-def test_databricks_list_content_unchanged_by_this_pr(
+def test_databricks_list_content_stays_list(
     gateway: Gateway,
     case: str,
     provider_model: str,
