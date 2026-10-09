@@ -3,6 +3,7 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use moka::sync::Cache;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
@@ -539,16 +540,83 @@ fn is_bedrock_region(value: &str) -> bool {
             .all(|char| char.is_ascii_alphanumeric() || char == '-')
 }
 
+/// The `aws_*` fields of Python's `GenericLiteLLMParams`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AwsParams {
+    #[serde(default)]
+    pub aws_access_key_id: Option<String>,
+    #[serde(default)]
+    pub aws_secret_access_key: Option<String>,
+    #[serde(default)]
+    pub aws_session_token: Option<String>,
+    #[serde(default)]
+    pub aws_region_name: Option<String>,
+    #[serde(default)]
+    pub aws_session_name: Option<String>,
+    #[serde(default)]
+    pub aws_profile_name: Option<String>,
+    #[serde(default)]
+    pub aws_role_name: Option<String>,
+    #[serde(default)]
+    pub aws_web_identity_token: Option<String>,
+    #[serde(default)]
+    pub aws_sts_endpoint: Option<String>,
+    #[serde(default)]
+    pub aws_external_id: Option<String>,
+    #[serde(default)]
+    pub aws_bedrock_runtime_endpoint: Option<String>,
+}
+
+impl AwsParams {
+    /// The wire names of every field, for hosts that project them out of a caller's kwargs.
+    pub const FIELDS: [&'static str; 11] = [
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "aws_region_name",
+        "aws_session_name",
+        "aws_profile_name",
+        "aws_role_name",
+        "aws_web_identity_token",
+        "aws_sts_endpoint",
+        "aws_external_id",
+        "aws_bedrock_runtime_endpoint",
+    ];
+
+    /// Reads the string-valued `aws_*` keys of an untyped params map, ignoring anything else.
+    pub fn from_optional_params(optional_params: &Map<String, Value>) -> Self {
+        let value = |key: &str| {
+            optional_params
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        };
+        Self {
+            aws_access_key_id: value("aws_access_key_id"),
+            aws_secret_access_key: value("aws_secret_access_key"),
+            aws_session_token: value("aws_session_token"),
+            aws_region_name: value("aws_region_name"),
+            aws_session_name: value("aws_session_name"),
+            aws_profile_name: value("aws_profile_name"),
+            aws_role_name: value("aws_role_name"),
+            aws_web_identity_token: value("aws_web_identity_token"),
+            aws_sts_endpoint: value("aws_sts_endpoint"),
+            aws_external_id: value("aws_external_id"),
+            aws_bedrock_runtime_endpoint: value("aws_bedrock_runtime_endpoint"),
+        }
+    }
+}
+
 /// The region a caller configured: `aws_region_name`, then the model's own
 /// region, then the environment. Each service decides what a missing one means.
 pub fn resolve_aws_region(
     model_region: Option<&str>,
-    optional_params: &Map<String, Value>,
+    params: &AwsParams,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
-    optional_params
-        .get("aws_region_name")
-        .and_then(Value::as_str)
+    params
+        .aws_region_name
+        .as_deref()
         .or(model_region)
         .map(str::to_string)
         .or_else(|| env_lookup(AWS_REGION_NAME))
@@ -557,36 +625,29 @@ pub fn resolve_aws_region(
 
 pub fn resolve_bedrock_region(
     model_region: Option<&str>,
-    optional_params: &Map<String, Value>,
+    params: &AwsParams,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> String {
-    resolve_aws_region(model_region, optional_params, env_lookup)
+    resolve_aws_region(model_region, params, env_lookup)
         .unwrap_or_else(|| DEFAULT_BEDROCK_REGION.to_string())
 }
 
 pub fn aws_auth_config(
-    optional_params: &Map<String, Value>,
+    params: &AwsParams,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> AwsAuthConfig {
-    let value = |key: &str| {
-        optional_params
-            .get(key)
-            .and_then(Value::as_str)
-            .map(str::to_string)
-    };
-    let env = |key: &str| env_lookup(key);
+    let pick = |value: &Option<String>, key: &str| value.clone().or_else(|| env_lookup(key));
     AwsAuthConfig {
-        access_key_id: value("aws_access_key_id").or_else(|| env("AWS_ACCESS_KEY_ID")),
-        secret_access_key: value("aws_secret_access_key").or_else(|| env("AWS_SECRET_ACCESS_KEY")),
-        session_token: value("aws_session_token").or_else(|| env("AWS_SESSION_TOKEN")),
-        region_name: value("aws_region_name").or_else(|| env(AWS_REGION_NAME)),
-        session_name: value("aws_session_name").or_else(|| env("AWS_SESSION_NAME")),
-        profile_name: value("aws_profile_name").or_else(|| env("AWS_PROFILE_NAME")),
-        role_name: value("aws_role_name").or_else(|| env("AWS_ROLE_NAME")),
-        web_identity_token: value("aws_web_identity_token")
-            .or_else(|| env("AWS_WEB_IDENTITY_TOKEN")),
-        sts_endpoint: value("aws_sts_endpoint").or_else(|| env("AWS_STS_ENDPOINT")),
-        external_id: value("aws_external_id").or_else(|| env("AWS_EXTERNAL_ID")),
+        access_key_id: pick(&params.aws_access_key_id, "AWS_ACCESS_KEY_ID"),
+        secret_access_key: pick(&params.aws_secret_access_key, "AWS_SECRET_ACCESS_KEY"),
+        session_token: pick(&params.aws_session_token, "AWS_SESSION_TOKEN"),
+        region_name: pick(&params.aws_region_name, AWS_REGION_NAME),
+        session_name: pick(&params.aws_session_name, "AWS_SESSION_NAME"),
+        profile_name: pick(&params.aws_profile_name, "AWS_PROFILE_NAME"),
+        role_name: pick(&params.aws_role_name, "AWS_ROLE_NAME"),
+        web_identity_token: pick(&params.aws_web_identity_token, "AWS_WEB_IDENTITY_TOKEN"),
+        sts_endpoint: pick(&params.aws_sts_endpoint, "AWS_STS_ENDPOINT"),
+        external_id: pick(&params.aws_external_id, "AWS_EXTERNAL_ID"),
     }
 }
 
@@ -599,13 +660,10 @@ pub enum AwsCredentialSource {
 }
 
 impl AwsCredentialSource {
-    pub fn from_params(
-        optional_params: &Map<String, Value>,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Self {
-        match host_supplied_credentials(optional_params) {
+    pub fn from_params(params: &AwsParams, env_lookup: &dyn Fn(&str) -> Option<String>) -> Self {
+        match host_supplied_credentials(params) {
             Some(credentials) => Self::HostSupplied(credentials),
-            None => Self::Chain(aws_auth_config(optional_params, env_lookup)),
+            None => Self::Chain(aws_auth_config(params, env_lookup)),
         }
     }
 
@@ -629,20 +687,20 @@ impl AwsCredentialSource {
 /// state, where an unrelated `AWS_ROLE_NAME` or `AWS_PROFILE_NAME` in the
 /// environment outranks explicit keys in [`classify_auth`] and the two sides
 /// would sign as different principals.
-pub fn host_supplied_credentials(optional_params: &Map<String, Value>) -> Option<Credentials> {
-    let value = |key: &str| {
-        optional_params
-            .get(key)
-            .and_then(Value::as_str)
+pub fn host_supplied_credentials(params: &AwsParams) -> Option<Credentials> {
+    let value = |value: &Option<String>| {
+        value
+            .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
+            .map(str::to_string)
     };
-    let access_key_id = value("aws_access_key_id")?;
-    let secret_access_key = value("aws_secret_access_key")?;
+    let access_key_id = value(&params.aws_access_key_id)?;
+    let secret_access_key = value(&params.aws_secret_access_key)?;
     Some(Credentials::new(
         access_key_id,
         secret_access_key,
-        value("aws_session_token").map(str::to_string),
+        value(&params.aws_session_token),
         None,
         "litellm-host-supplied",
     ))
@@ -667,8 +725,8 @@ mod tests {
             recorded.lock().unwrap().insert(name.to_string());
             None
         };
-        resolve_aws_region(None, &Map::new(), &env);
-        aws_auth_config(&Map::new(), &env);
+        resolve_aws_region(None, &AwsParams::default(), &env);
+        aws_auth_config(&AwsParams::default(), &env);
         assert!(
             seen.lock()
                 .unwrap()
@@ -679,16 +737,19 @@ mod tests {
 
     #[test]
     fn a_region_comes_from_the_call_then_the_model_then_the_environment() {
-        let params = Map::from_iter([("aws_region_name".to_string(), Value::from("eu-west-1"))]);
+        let params = AwsParams {
+            aws_region_name: Some("eu-west-1".into()),
+            ..AwsParams::default()
+        };
         let region_name = |key: &str| (key == AWS_REGION_NAME).then(|| "ap-south-1".to_string());
         let region = |key: &str| (key == AWS_REGION).then(|| "sa-east-1".to_string());
 
         let resolved = [
             resolve_aws_region(Some("us-east-2"), &params, &region_name),
-            resolve_aws_region(Some("us-east-2"), &Map::new(), &region_name),
-            resolve_aws_region(None, &Map::new(), &region_name),
-            resolve_aws_region(None, &Map::new(), &region),
-            resolve_aws_region(None, &Map::new(), &no_env),
+            resolve_aws_region(Some("us-east-2"), &AwsParams::default(), &region_name),
+            resolve_aws_region(None, &AwsParams::default(), &region_name),
+            resolve_aws_region(None, &AwsParams::default(), &region),
+            resolve_aws_region(None, &AwsParams::default(), &no_env),
         ];
 
         assert_eq!(
@@ -696,8 +757,27 @@ mod tests {
             ["eu-west-1", "us-east-2", "ap-south-1", "sa-east-1", "none"]
         );
         assert_eq!(
-            resolve_bedrock_region(None, &Map::new(), &no_env),
+            resolve_bedrock_region(None, &AwsParams::default(), &no_env),
             DEFAULT_BEDROCK_REGION
+        );
+    }
+
+    #[test]
+    fn fields_name_every_param_once_and_in_declaration_order() {
+        let filled: Map<String, Value> = AwsParams::FIELDS
+            .iter()
+            .map(|name| (name.to_string(), Value::from(format!("value-of-{name}"))))
+            .collect();
+        let typed = AwsParams::from_optional_params(&filled);
+        let serialized = serde_json::to_value(&typed).unwrap();
+        assert_eq!(
+            serialized.as_object().unwrap().keys().collect::<Vec<_>>(),
+            AwsParams::FIELDS.iter().collect::<Vec<_>>()
+        );
+        assert_eq!(serialized, Value::Object(filled.clone()));
+        assert_eq!(
+            serde_json::from_value::<AwsParams>(Value::Object(filled)).unwrap(),
+            typed
         );
     }
 

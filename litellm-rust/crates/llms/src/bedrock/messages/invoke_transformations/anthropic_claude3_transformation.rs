@@ -7,7 +7,7 @@ use crate::{
 use futures_util::StreamExt;
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_auth_aws::{
-    AwsCredentialSource, bedrock_model_id_and_region,
+    AwsCredentialSource, AwsParams, bedrock_model_id_and_region,
     constants::{
         AWS_BEARER_TOKEN_BEDROCK, AWS_BEDROCK_RUNTIME_ENDPOINT, AWS_DEFAULT_REGION, AWS_REGION,
         AWS_REGION_NAME, BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE,
@@ -78,7 +78,7 @@ fn invoke_url(
 ) -> String {
     let (model_id, model_region) =
         bedrock_model_id_and_region(model.strip_prefix(INVOKE_MODEL_PREFIX).unwrap_or(model));
-    let region = resolve_bedrock_region(model_region.as_deref(), &Map::new(), env_lookup);
+    let region = resolve_bedrock_region(model_region.as_deref(), &AwsParams::default(), env_lookup);
     let endpoint = api_base
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -149,7 +149,7 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         }
         let (_, model_region) =
             bedrock_model_id_and_region(model.strip_prefix(INVOKE_MODEL_PREFIX).unwrap_or(model));
-        let params = Map::new();
+        let params = AwsParams::default();
         Ok(ValidatedEnvironment {
             headers,
             auth: AuthScheme::AwsSigV4 {

@@ -584,9 +584,11 @@ fn leaves_a_complete_converse_url_untouched() {
 
 #[test]
 fn host_supplied_credentials_outrank_ambient_profile_and_role_state() {
-    use litellm_auth_aws::host_supplied_credentials;
+    use litellm_auth_aws::{AwsParams, host_supplied_credentials};
 
-    let supplied = params(json!({
+    let aws = |value: Value| AwsParams::from_optional_params(&params(value));
+
+    let supplied = aws(json!({
         "aws_access_key_id": "AKIAHOST",
         "aws_secret_access_key": "hostsecret",
         "aws_session_token": "hosttoken"
@@ -598,12 +600,12 @@ fn host_supplied_credentials_outrank_ambient_profile_and_role_state() {
 
     // Without a full static pair there is nothing to honor, so the core falls
     // back to deriving credentials itself.
-    assert!(host_supplied_credentials(&params(json!({"aws_access_key_id": "AKIA"}))).is_none());
+    assert!(host_supplied_credentials(&aws(json!({"aws_access_key_id": "AKIA"}))).is_none());
     assert!(
-        host_supplied_credentials(&params(
+        host_supplied_credentials(&aws(
             json!({"aws_access_key_id": "  ", "aws_secret_access_key": "s"})
         ))
         .is_none()
     );
-    assert!(host_supplied_credentials(&Map::new()).is_none());
+    assert!(host_supplied_credentials(&AwsParams::default()).is_none());
 }

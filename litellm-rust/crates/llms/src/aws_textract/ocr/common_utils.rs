@@ -1,5 +1,5 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
-use litellm_auth_aws::{AwsCredentialSource, SigV4Signer, resolve_aws_region};
+use litellm_auth_aws::{AwsCredentialSource, AwsParams, SigV4Signer, resolve_aws_region};
 use litellm_http::outbound::RequestSigner;
 use serde::{Deserialize, Serialize};
 use strum::{EnumString, IntoStaticStr, VariantNames};
@@ -237,18 +237,17 @@ pub(super) async fn environment(
     operation: TextractOperation,
 ) -> Result<TextractEnvironment, Error> {
     let env_lookup = |name: &str| request.connection.secret(name);
-    let region =
-        resolve_aws_region(None, &request.optional_params, &env_lookup).ok_or_else(|| {
-            Error::InvalidRequest(
-                "Missing AWS region - pass aws_region_name or set AWS_REGION_NAME or AWS_REGION"
-                    .into(),
-            )
-        })?;
+    let params = AwsParams::from_optional_params(&request.optional_params);
+    let region = resolve_aws_region(None, &params, &env_lookup).ok_or_else(|| {
+        Error::InvalidRequest(
+            "Missing AWS region - pass aws_region_name or set AWS_REGION_NAME or AWS_REGION".into(),
+        )
+    })?;
     let signer = SigV4Signer::resolve(
         auth,
         region.clone(),
         TEXTRACT_SERVICE,
-        AwsCredentialSource::from_params(&request.optional_params, &env_lookup),
+        AwsCredentialSource::from_params(&params, &env_lookup),
         &env_lookup,
     )
     .await
