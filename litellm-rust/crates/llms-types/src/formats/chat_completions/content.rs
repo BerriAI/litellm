@@ -2,7 +2,7 @@ use serde_json::{Map, Value};
 
 use crate::formats::messages::{CacheControl, CitationsConfig, ContentSource};
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ChatContentPart {
     Text {
@@ -58,21 +58,21 @@ pub enum ChatContentPart {
     },
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct PromptCacheBreakpoint {
     pub mode: PromptCacheMode,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Copy, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PromptCacheMode {
     Explicit,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(untagged)]
 pub enum ChatMediaUrl {
     Url(String),
@@ -80,7 +80,7 @@ pub enum ChatMediaUrl {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ChatMediaUrlParameters {
     pub url: String,
     pub detail: Option<String>,
@@ -90,7 +90,7 @@ pub struct ChatMediaUrlParameters {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ChatInputAudio {
     pub data: String,
     pub format: String,
@@ -99,7 +99,7 @@ pub struct ChatInputAudio {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ChatFile {
     pub file_data: Option<String>,
@@ -113,7 +113,7 @@ pub struct ChatFile {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ChatVideoMetadata {
     pub fps: Option<serde_json::Number>,
@@ -124,7 +124,7 @@ pub struct ChatVideoMetadata {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ChatLogprobs {
     pub content: Option<Vec<ChatTokenLogprob>>,
@@ -134,7 +134,7 @@ pub struct ChatLogprobs {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ChatTokenLogprob {
     pub token: String,
     pub logprob: serde_json::Number,
@@ -145,7 +145,7 @@ pub struct ChatTokenLogprob {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ChatTopLogprob {
     pub token: String,
     pub logprob: serde_json::Number,

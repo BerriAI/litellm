@@ -2,7 +2,7 @@ use serde_json::{Map, Value};
 
 use crate::formats::messages::CacheControl;
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MinimaxMessagesContentBlock {
     Image(MinimaxMediaBlock),
@@ -15,7 +15,7 @@ pub enum MinimaxMessagesContentBlock {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct MinimaxMediaBlock {
     pub source: MinimaxMediaSource,
     pub cache_control: Option<CacheControl>,
@@ -23,7 +23,7 @@ pub struct MinimaxMediaBlock {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MinimaxMediaSource {
     Base64 {
@@ -40,7 +40,7 @@ pub enum MinimaxMediaSource {
 }
 
 #[serde_with::skip_serializing_none]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct MinimaxMediaOptions {
     pub detail: Option<MinimaxMediaDetail>,
@@ -50,7 +50,7 @@ pub struct MinimaxMediaOptions {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(rename_all = "snake_case")]
 pub enum MinimaxMediaDetail {
     Low,
