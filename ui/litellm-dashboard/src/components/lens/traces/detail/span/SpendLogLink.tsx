@@ -35,13 +35,14 @@ export function SpendLogLink({
   const [open, setOpen] = useState(false);
   const requestId = span.spend_log_request_id ?? null;
   const logQuery = useSpanRequestLog(accessToken, requestId, traceStartMs + span.start_offset_ms, open);
-  const reason = unmatchedReason(span);
+  const estimated = span.cost_source === "estimated" && span.spend != null;
+  const reason = estimated ? "Estimated from reported usage and LiteLLM model pricing" : unmatchedReason(span);
 
   if (requestId == null) {
     if (!reason) return null;
     return (
       <span className="inline-flex items-center gap-1 text-xs text-muted-foreground" title={reason}>
-        Cost <span className="font-medium text-foreground">not matched</span>
+        Cost <span className="font-medium text-foreground">{estimated ? "estimated" : "not matched"}</span>
       </span>
     );
   }

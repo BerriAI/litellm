@@ -158,6 +158,7 @@ export function SpanRow({ row, ctx }: { row: SpanRowData; ctx: RowContext }) {
   const failed = span.status === "error";
   const hint = ctx.layout === "tree" ? subtitle(row, ctx.filtering) : "";
   const modelChip = span.type === "llm" && span.model !== span.name ? span.model : null;
+  const hasCost = span.spend != null || span.spend_match != null;
   return (
     <SpanHoverCard facts={spanFacts(span)} traceStartMs={ctx.traceStartMs}>
       <RowFrame
@@ -178,9 +179,9 @@ export function SpanRow({ row, ctx }: { row: SpanRowData; ctx: RowContext }) {
             </span>
           )}
           {ctx.layout === "tree" && <span className={META}>{fmtMs(span.duration_ms)}</span>}
-          {ctx.layout === "tree" && span.spend_match != null && (
+          {ctx.layout === "tree" && hasCost && (
             <span className={META} data-testid="step-cost">
-              {span.spend_match === "matched" && span.spend != null ? formatCost(span.spend) : "—"}
+              {span.spend != null ? formatCost(span.spend, span.cost_source === "estimated") : "—"}
             </span>
           )}
           {hint && (

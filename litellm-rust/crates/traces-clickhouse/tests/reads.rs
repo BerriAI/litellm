@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use litellm_http::Client;
-use litellm_traces::query::named::ReadAccessParams;
-use litellm_traces_cache::{ReadError, TraceReader};
+use litellm_traces::query::named::{ReadAccessParams, TracePageSpansParams, TraceSpansParams};
+use litellm_traces_cache::{ReadError, TraceReader, TraceStore};
 use litellm_traces_clickhouse::{ClickHouseTraces, Connection, InsertTable, insert_rows};
 use rstest::rstest;
 use serde_json::json;
@@ -19,6 +19,188 @@ fn make_reader(client: &Client, connection: Connection) -> (TraceReader, ClickHo
         TraceReader::new(litellm_storage_clickhouse::READ_LIMITS.response_bytes),
         ClickHouseTraces::new(client.clone(), connection),
     )
+}
+
+#[rstest]
+#[case::reported(true)]
+#[case::absent(false)]
+#[tokio::test]
+async fn pricing_attributes_survive_both_storage_reads_without_synthesized_usage(
+    #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+    #[case] reported: bool,
+) -> TestResult {
+    let fixture = migrated_database?;
+    let client = &fixture.database.client;
+    let writer = Connection::writer(&fixture.database.url)?;
+    let expected: BTreeMap<String, String> = [
+        ("gen_ai.provider.name", "anthropic"),
+        ("gen_ai.request.model", "test-alias"),
+        ("gen_ai.response.model", "test-model"),
+        ("gen_ai.operation.name", "chat"),
+        ("gen_ai.usage.cache_read.input_tokens", "70"),
+        ("gen_ai.usage.cache_write.input_tokens", "10"),
+        ("gen_ai.usage.reasoning.output_tokens", "5"),
+        ("gen_ai.usage.input_tokens.audio", "7"),
+        (
+            "anthropic.usage.cache_creation.ephemeral_1h_input_tokens",
+            "10",
+        ),
+        ("anthropic.response.service_tier", "standard"),
+        ("gen_ai.openai.response.service_tier", "priority"),
+        ("openai.request.service_tier", "auto"),
+    ]
+    .into_iter()
+    .chain(reported.then_some(("gen_ai.usage.input_tokens", "100")))
+    .map(|(key, value)| (key.into(), value.into()))
+    .collect();
+    let stored: BTreeMap<_, _> = expected
+        .clone()
+        .into_iter()
+        .chain([
+            ("gen_ai.input.messages".into(), "private prompt".into()),
+            ("arbitrary.attribute".into(), "unrelated".into()),
+        ])
+        .collect();
+    insert_rows(
+        client,
+        &writer,
+        DATABASE,
+        InsertTable::OtelTraces,
+        vec![BTreeMap::from([
+            ("Timestamp".into(), json!(1_790_000_000_000_000_000_i64)),
+            ("TraceId".into(), json!("pricing-trace")),
+            ("SpanId".into(), json!("call")),
+            ("ObservationType".into(), json!("llm")),
+            ("TeamId".into(), json!("team-a")),
+            ("ApiKeyHash".into(), json!("key-a")),
+            ("SpanAttributes".into(), json!(stored)),
+        ])],
+    )
+    .await?;
+    let connection = Connection::reader(&fixture.database.url, DATABASE)?;
+    let (reader, store) = make_reader(client, connection);
+    let access = ReadAccessParams {
+        all_teams: true,
+        user_id: String::new(),
+        team_ids: Vec::new(),
+    };
+    let listed = reader
+        .list_traces(&store, &access, 0, 2_000_000_000_000, None, 50)
+        .await?;
+    let trace_ref = &listed.data[0].trace_ref;
+    let detail = store
+        .trace_spans(
+            &TraceSpansParams {
+                access: access.clone(),
+                trace_id: "pricing-trace".into(),
+                trace_ref: trace_ref.clone(),
+            },
+            2_000_000_000_000,
+        )
+        .await?;
+    let batch = store
+        .run_spans(
+            &TracePageSpansParams {
+                access,
+                trace_refs: vec![trace_ref.clone()],
+                start_ms: 0,
+                end_ms: 2_000_000_000_000,
+            },
+            2_000_000_000_000,
+        )
+        .await?;
+    assert_eq!(detail.len(), 1);
+    assert_eq!(batch.len(), 1);
+    assert_eq!(detail[0].pricing_attributes, expected);
+    assert_eq!(batch[0].pricing_attributes, expected);
+    assert_eq!(detail[0].input_tokens, if reported { 100 } else { 0 });
+    Ok(())
+}
+
+#[rstest]
+#[case::messages("", "response", "[]".into(), "", true)]
+#[case::framework("langchain", "response", "[]".into(), "", false)]
+#[case::conflicting("", "different", "[]".into(), "", false)]
+#[case::oversized("", "response", format!("[\"{}\"]", "x".repeat(16384)), "", false)]
+#[case::truncated("", "response", "[{…[truncated 10 bytes]".into(), "", false)]
+#[case::langsmith("", "response", "[]".into(), "langsmith", false)]
+#[case::partial_result("", "response", r#"{"generations":[[{"message":{"content":"first","response_metadata":{"id":"response"}}}],[{"message":{"content":"missing ID"}}]]}"#.into(), "", false)]
+#[case::flattened("", "response", "[]".into(), "flattened", false)]
+#[case::retained_output("", "response", "[]".into(), "retained", false)]
+#[tokio::test]
+async fn historical_dual_format_calls_are_repaired_without_rewriting_storage(
+    #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+    #[case] framework: &str,
+    #[case] response_id: &str,
+    #[case] output: String,
+    #[case] recording: &str,
+    #[case] priced: bool,
+) -> TestResult {
+    let fixture = migrated_database?;
+    let client = &fixture.database.client;
+    let writer = Connection::writer(&fixture.database.url)?;
+    let attributes: BTreeMap<_, _> = [
+        ("openinference.span.kind", "LLM"),
+        ("gen_ai.operation.name", "chat"),
+        ("gen_ai.response.id", response_id),
+    ].into_iter().chain((recording == "langsmith").then_some(("langsmith.span.kind", "llm")))
+    .chain((recording == "flattened").then_some(("llm.output_messages.0.message.content", "answer")))
+    .chain(matches!(recording, "flattened" | "retained").then_some(("output.value", r#"{"generations":[[{"message":{"content":"first","response_metadata":{"id":"response"}}}],[{"message":{"content":"missing ID"}}]]}"#))).collect();
+    insert_rows(
+        client,
+        &writer,
+        DATABASE,
+        InsertTable::OtelTraces,
+        vec![BTreeMap::from([
+            ("Timestamp".into(), json!(1_790_000_000_000_000_000_i64)),
+            ("TraceId".into(), json!("historical")),
+            ("SpanId".into(), json!("call")),
+            ("ObservationType".into(), json!("llm")),
+            ("Framework".into(), json!(framework)),
+            ("TeamId".into(), json!("team-a")),
+            ("ApiKeyHash".into(), json!("key-a")),
+            ("SpanAttributes".into(), json!(attributes)),
+            ("Output".into(), json!(output)),
+            ("CallKeys".into(), json!(["provider_response:response"])),
+            ("CallEvidence".into(), json!("partial")),
+        ])],
+    )
+    .await?;
+    insert_rows(
+        client,
+        &writer,
+        DATABASE,
+        InsertTable::SpendLogs,
+        vec![BTreeMap::from([
+            ("request_id".into(), json!("gateway")),
+            ("response_id".into(), json!("response")),
+            ("team_id".into(), json!("team-a")),
+            ("api_key".into(), json!("key-a")),
+            ("start_time".into(), json!(1_790_000_000_000_i64)),
+            ("end_time".into(), json!(1_790_000_000_001_i64)),
+            ("spend".into(), json!(0.5)),
+        ])],
+    )
+    .await?;
+    let connection = Connection::reader(&fixture.database.url, DATABASE)?;
+    let (reader, store) = make_reader(client, connection);
+    let access = ReadAccessParams {
+        all_teams: true,
+        user_id: String::new(),
+        team_ids: Vec::new(),
+    };
+    let listed = reader
+        .list_traces(&store, &access, 0, 2_000_000_000_000, None, 50)
+        .await?;
+    let summary = &listed.data[0];
+    let detail = reader
+        .get_trace(&store, &access, &summary.trace_id, &summary.trace_ref)
+        .await?
+        .ok_or("missing historical trace")?;
+    assert_eq!(summary.spend, priced.then_some(0.5));
+    assert_eq!(detail.summary.spend, summary.spend);
+    assert_eq!(summary.priced_calls, u64::from(priced));
+    Ok(())
 }
 
 #[rstest]

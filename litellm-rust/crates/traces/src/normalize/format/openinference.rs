@@ -56,7 +56,7 @@ fn role(context: &SpanContext<'_>) -> Option<RoleEvidence> {
 
 /// LLM instrumentations record the provider response as `output.value`: a raw response is one
 /// request (`id`); a LangChain `LLMResult` carries one per prompt.
-fn calls(output: &str) -> CallEvidence {
+pub(crate) fn recorded_calls(output: &str) -> CallEvidence {
     let Ok(value) = serde_json::from_str::<Value>(output) else {
         return CallEvidence::Unknown;
     };
@@ -66,6 +66,13 @@ fn calls(output: &str) -> CallEvidence {
         return CallEvidence::complete(CallKey::ProviderResponse(id.to_owned()));
     }
     messages::langchain_result(&value).map_or(CallEvidence::Unknown, |result| result.calls)
+}
+
+pub(crate) fn calls(output: &str, attributes: &BTreeMap<String, String>) -> CallEvidence {
+    match recorded_calls(output) {
+        CallEvidence::Unknown => super::genai::calls(attributes),
+        calls => calls,
+    }
 }
 
 /// `llm.<direction>_messages.*` when the instrumentation flattened the messages, else `raw`.
@@ -112,7 +119,7 @@ impl Format for OpenInference {
                 output: output.text,
                 tool_call_id: present(attributes, &["tool.id"]),
                 calls: if role == Some(RoleEvidence::Declared(ObservationType::Llm)) {
-                    calls(attr(attributes, "output.value"))
+                    calls(attr(attributes, "output.value"), attributes)
                 } else {
                     CallEvidence::Unknown
                 },

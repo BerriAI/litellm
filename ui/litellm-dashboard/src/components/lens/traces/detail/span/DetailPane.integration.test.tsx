@@ -313,6 +313,29 @@ describe("DetailPane", () => {
     expect(screen.getByText("Cost").parentElement).toHaveTextContent("Cost$0.0005");
   });
 
+  it.each([
+    { spend: 0, label: "$0.00 est." },
+    { spend: 0.0002, label: "$0.0002 est." },
+  ])("labels an estimated cost of $spend in the header and request details", async ({ spend, label }) => {
+    const user = userEvent.setup();
+    const estimated: SpanFields = {
+      ...llmFields,
+      spend,
+      cost_source: "estimated",
+      spend_log_request_id: null,
+      spend_match: "no_call_id",
+    };
+    renderPane(spanRow(span(estimated)));
+    expect(screen.getByText(label)).toBeVisible();
+    expect(screen.getByTitle("Estimated from reported usage and LiteLLM model pricing")).toHaveTextContent(
+      "Cost estimated",
+    );
+    expect(screen.queryByText("not matched")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Open LiteLLM spend log/ })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Request" }));
+    expect(screen.getByRole("region", { name: "Usage" })).toHaveTextContent(label);
+  });
+
   it("summarizes a ×N group with its failure pattern", () => {
     const members = Array.from({ length: 12 }, (_, i) => {
       const timedOut: SpanFields = {
@@ -491,7 +514,14 @@ describe("SpanHoverCard", () => {
   it("shows absolute Start / End times and the agent tag after hovering the row", async () => {
     const user = userEvent.setup();
     const traceStartMs = Date.parse(trace.summary.start_time);
-    const timed = span({ span_id: "timed", start_offset_ms: 2000, duration_ms: 3000 });
+    const timedFields: SpanFields = {
+      span_id: "timed",
+      start_offset_ms: 2000,
+      duration_ms: 3000,
+      spend: 0.0002,
+      cost_source: "estimated",
+    };
+    const timed = span(timedFields);
     renderWithProviders(
       <SpanHoverCard facts={spanFacts(timed)} traceStartMs={traceStartMs}>
         <button type="button">row</button>
@@ -503,6 +533,7 @@ describe("SpanHoverCard", () => {
     const time = within(card).getByRole("region", { name: "Time" });
     expect(time).toHaveTextContent(`Start${absoluteTime(traceStartMs, 2000)}`);
     expect(time).toHaveTextContent(`End${absoluteTime(traceStartMs, 5000)}`);
+    expect(within(card).getByRole("region", { name: "Usage" })).toHaveTextContent("$0.0002 est.");
     expect(within(card).getByRole("region", { name: "Tags" })).toHaveTextContent("agent:support_triage_agent");
   });
 });

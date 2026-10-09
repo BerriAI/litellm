@@ -51,6 +51,7 @@ export interface HoverFacts {
   durationMs: number;
   tokens: number;
   spend: number | null;
+  estimated: boolean;
   error: string | null;
   failed: boolean;
   tags: readonly string[];
@@ -66,6 +67,7 @@ export const spanFacts = (span: Span): HoverFacts => ({
   durationMs: span.duration_ms,
   tokens: span.input_tokens + span.output_tokens,
   spend: span.spend ?? null,
+  estimated: span.cost_source === "estimated",
   error: span.error ?? null,
   failed: span.status === "error",
   tags: agentTags(span.agent),
@@ -82,6 +84,7 @@ export const groupFacts = (row: GroupRowData): HoverFacts => {
     durationMs: end - start,
     tokens: row.members.reduce((sum, m) => sum + m.input_tokens + m.output_tokens, 0),
     spend: null,
+    estimated: false,
     error: row.members.find((m) => m.status === "error" && m.error)?.error ?? null,
     failed: row.failedCount > 0,
     tags: agentTags(row.agent),
@@ -142,7 +145,7 @@ function HoverCardBody({ facts, traceStartMs }: { facts: HoverFacts; traceStartM
         <FactSection title="Usage">
           <dl className="flex flex-col gap-1.5">
             {facts.tokens > 0 && <Fact label="Tokens" value={fmtTok(facts.tokens)} />}
-            {facts.spend != null && <Fact label="Cost" value={formatCost(facts.spend)} />}
+            {facts.spend != null && <Fact label="Cost" value={formatCost(facts.spend, facts.estimated)} />}
           </dl>
         </FactSection>
       )}

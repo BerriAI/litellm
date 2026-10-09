@@ -177,6 +177,9 @@ fn trace_span(span: DecodedSpan) -> TraceSpansRow {
         })
         .unwrap_or_default();
     TraceSpansRow {
+        pricing_attributes: Default::default(),
+        gen_ai_response_id: String::new(),
+        openinference_output: None,
         trace_id: span.trace_id,
         original_trace_id: String::new(),
         span_id: span.span_id,
@@ -291,6 +294,9 @@ fn unrelated_transport(call: &TraceSpansRow) -> TraceSpansRow {
         model: String::new(),
         input_tokens: 0,
         output_tokens: 0,
+        pricing_attributes: Default::default(),
+        gen_ai_response_id: String::new(),
+        openinference_output: None,
         litellm_request_id: String::new(),
         call_keys: vec![CallKey::Transport],
         call_evidence: Some(CallEvidenceKind::Complete),

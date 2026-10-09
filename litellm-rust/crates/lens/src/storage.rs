@@ -1,7 +1,7 @@
 use crate::Error;
 use litellm_http::Client;
 use litellm_traces::{QueryScope, ReadQuery, query::named::ReadAccessParams};
-use litellm_traces_cache::TraceReader;
+use litellm_traces_cache::{TraceCostEstimator, TraceReader};
 use litellm_traces_clickhouse::{ClickHouseTraces, Config, Parameter, QueryReaders};
 use serde::Deserialize;
 use serde_json::Value;
@@ -98,6 +98,14 @@ impl Storage {
             self.config.retention_days(),
         )
         .await?)
+    }
+
+    pub fn with_cost_estimator(mut self, estimator: Arc<dyn TraceCostEstimator>) -> Self {
+        self.reader = Arc::new(TraceReader::with_estimator(
+            litellm_storage_clickhouse::READ_LIMITS.response_bytes,
+            estimator,
+        ));
+        self
     }
 
     pub async fn read(&self, request: Read) -> Result<Value, Error> {

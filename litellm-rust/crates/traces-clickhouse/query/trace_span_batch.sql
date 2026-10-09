@@ -7,6 +7,21 @@ SELECT o.TraceId AS trace_id, o.SpanAttributes['lens.original_trace_id'] AS orig
        toUnixTimestamp64Nano(o.Timestamp) AS start_ns, o.Duration AS duration_ns,
        o.ServiceName AS service, o.InputPreview AS input_preview, o.Model AS model,
        o.InputTokens AS input_tokens, o.OutputTokens AS output_tokens,
+       mapFilter((key, value) -> startsWith(key, 'gen_ai.usage.')
+           OR startsWith(key, 'anthropic.usage.cache_creation.')
+           OR key IN ('gen_ai.request.model', 'gen_ai.response.model', 'gen_ai.provider.name', 'gen_ai.system',
+                      'gen_ai.operation.name', 'gen_ai.output.type', 'openai.request.service_tier',
+                      'openai.response.service_tier', 'gen_ai.openai.request.service_tier',
+                      'gen_ai.openai.response.service_tier', 'anthropic.response.service_tier'),
+           o.SpanAttributes) AS pricing_attributes,
+       o.SpanAttributes['gen_ai.response.id'] AS gen_ai_response_id,
+       if(o.CallEvidence = 'partial' AND o.Framework = ''
+          AND lowerUTF8(o.SpanAttributes['openinference.span.kind']) = 'llm'
+          AND o.ScopeName != 'langsmith' AND NOT mapContains(o.SpanAttributes, 'langsmith.span.kind')
+          AND NOT mapContains(o.SpanAttributes, 'output.value')
+          AND NOT arrayExists(key -> startsWith(key, 'llm.output_messages'), mapKeys(o.SpanAttributes))
+          AND length(o.Output) <= 16384,
+          CAST(o.Output, 'Nullable(String)'), NULL) AS openinference_output,
        o.LiteLLMRequestId AS litellm_request_id,
        o.CallKeys AS call_keys, o.CallEvidence AS call_evidence,
        -- Rows written before ToolCallId keep the call id only in their attributes.

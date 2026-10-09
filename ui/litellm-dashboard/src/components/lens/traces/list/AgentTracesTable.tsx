@@ -44,10 +44,10 @@ interface AgentTracesTableProps {
   onSetUpTracing: () => void;
 }
 
-export const formatCost = (cost: number): string => {
-  if (cost === 0) return "$0.00";
-  if (cost < 0.01) return `$${cost.toFixed(4)}`;
-  return `$${cost.toFixed(2)}`;
+export const formatCost = (cost: number, estimated = false): string => {
+  const precision = cost !== 0 && cost < 0.01 ? 4 : 2;
+  const label = `$${cost.toFixed(precision)}`;
+  return estimated ? `${label} est.` : label;
 };
 
 type RunCost = { label: string; partial: { short: string; long: string } | null };
@@ -56,11 +56,13 @@ export const runCost = ({
   spend,
   priced_calls,
   llm_calls,
-}: Pick<TraceSummary, "spend" | "priced_calls" | "llm_calls">): RunCost | null => {
+  estimated_calls = 0,
+}: Pick<TraceSummary, "spend" | "priced_calls" | "llm_calls" | "estimated_calls">): RunCost | null => {
   if (spend == null || priced_calls === 0) return null;
-  if (priced_calls >= llm_calls) return { label: formatCost(spend), partial: null };
+  const label = formatCost(spend, estimated_calls > 0);
+  if (priced_calls >= llm_calls) return { label, partial: null };
   return {
-    label: `≥ ${formatCost(spend)}`,
+    label: `≥ ${label}`,
     partial: { short: `${priced_calls}/${llm_calls} priced`, long: `${priced_calls} of ${llm_calls} calls priced` },
   };
 };
@@ -68,11 +70,19 @@ export const runCost = ({
 function CostCell({ run }: { run: TraceSummary }) {
   const cost = runCost(run);
   if (!cost) return "—";
-  if (!cost.partial) return cost.label;
+  if (!cost.partial && !run.estimated_calls) return cost.label;
+  const title = [
+    cost.partial?.long,
+    run.estimated_calls
+      ? `Includes estimates for ${run.estimated_calls} ${run.estimated_calls === 1 ? "call" : "calls"}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
-    <span className="inline-flex items-baseline gap-1.5" title={cost.partial.long}>
+    <span className="inline-flex items-baseline gap-1.5" title={title}>
       {cost.label}
-      <span className="text-xs text-muted-foreground">{cost.partial.short}</span>
+      {cost.partial && <span className="text-xs text-muted-foreground">{cost.partial.short}</span>}
     </span>
   );
 }

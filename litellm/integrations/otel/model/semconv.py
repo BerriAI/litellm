@@ -480,6 +480,12 @@ def resolve_provider(custom_llm_provider: str | None) -> str:
     return mapped.value if mapped is not None else custom_llm_provider
 
 
+def litellm_provider_candidates(provider: str) -> frozenset[str]:
+    resolved: Final = resolve_provider(provider)
+    mapped: Final = frozenset(native for native, standard in _PROVIDER_BY_LITELLM.items() if standard.value == resolved)
+    return mapped or frozenset({provider})
+
+
 def resolve_operation(call_type: str | None) -> GenAIOperation:
     """Map a litellm ``call_type`` to a ``gen_ai.operation.name`` value.
 

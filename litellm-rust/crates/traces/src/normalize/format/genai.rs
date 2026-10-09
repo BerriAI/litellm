@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use super::{Extraction, Format, Payload, SpanFacts};
 use crate::{
     Error,
@@ -47,6 +49,19 @@ impl Operation {
             Self::Embeddings => ObservationType::Embedding,
             Self::Retrieval => ObservationType::Retriever,
         }
+    }
+}
+
+pub(crate) fn calls(attributes: &BTreeMap<String, String>) -> CallEvidence {
+    let role = attr(attributes, "gen_ai.operation.name")
+        .parse::<Operation>()
+        .ok()
+        .map(Operation::role);
+    match (role, present(attributes, &["gen_ai.response.id"])) {
+        (Some(ObservationType::Llm), Some(id)) => {
+            CallEvidence::complete(CallKey::ProviderResponse(id))
+        }
+        _ => CallEvidence::Unknown,
     }
 }
 
@@ -114,16 +129,10 @@ impl Format for GenAi {
         let input = payload(context, &INPUT_KEYS);
         let output = payload(context, &OUTPUT_KEYS);
         let role = Operation::from_context(context).map(Operation::role);
-        let calls = match (role, present(attributes, &["gen_ai.response.id"])) {
-            (Some(ObservationType::Llm), Some(id)) => {
-                CallEvidence::complete(CallKey::ProviderResponse(id))
-            }
-            _ => CallEvidence::Unknown,
-        };
         Ok(Extraction {
             facts: SpanFacts {
                 role: role.map(RoleEvidence::Declared),
-                calls,
+                calls: calls(attributes),
                 model: present(
                     attributes,
                     &["gen_ai.request.model", "gen_ai.response.model"],

@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use indexmap::IndexMap;
 use time::OffsetDateTime;
@@ -7,13 +7,15 @@ use crate::{
     normalize::ObservationType,
     query::named::{ListTracesRow, SpendByResponseIdsRow as SpendRow, TraceSpansRow},
     view::{
-        AgentNode, RunSource, RunSourceType, Span, SpanStatus, SpendMatch, Trace, TraceSummary,
+        AgentNode, CostSource, RunSource, RunSourceType, Span, SpanStatus, SpendMatch, Trace,
+        TraceSummary,
     },
 };
 
 use super::{
+    cost::{self, CallCost, total},
     resolution::{Resolution, agent_label},
-    spend::{Requests, request_cost, total},
+    spend::request_cost,
 };
 
 const NANOS_PER_MS: f64 = 1_000_000.0;
@@ -22,7 +24,12 @@ fn optional(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_owned())
 }
 
-fn span(resolution: &Resolution<'_>, index: usize, trace_start_ns: i64) -> Span {
+fn span(
+    resolution: &Resolution<'_>,
+    costs: &BTreeMap<usize, CallCost<'_>>,
+    index: usize,
+    trace_start_ns: i64,
+) -> Span {
     let row = resolution.row(index);
     let status = resolution.status_source(index);
     let (requests, spend_match) = if let Some(matched) = resolution.call_match(index) {
@@ -30,9 +37,15 @@ fn span(resolution: &Resolution<'_>, index: usize, trace_start_ns: i64) -> Span 
     } else {
         (resolution.requests(index).complete_requests(), None)
     };
-    let spend = requests
-        .as_ref()
-        .and_then(|requests| request_cost(requests));
+    let selected = costs.get(&index);
+    let spend = selected.and_then(CallCost::amount).or_else(|| {
+        requests
+            .as_ref()
+            .and_then(|requests| request_cost(requests))
+    });
+    let cost_source = selected
+        .map(CallCost::source)
+        .or_else(|| spend.map(|_| CostSource::Gateway));
     let spend_log_request_id = match (spend_match, requests.as_deref()) {
         (Some(SpendMatch::Matched), Some([request])) => Some(request.request_id.clone()),
         _ => None,
@@ -56,12 +69,13 @@ fn span(resolution: &Resolution<'_>, index: usize, trace_start_ns: i64) -> Span 
         output_tokens: row.output_tokens,
         litellm_request_id: optional(&row.litellm_request_id),
         spend,
+        cost_source,
         spend_log_request_id,
         spend_match,
     }
 }
 
-fn agents(resolution: &Resolution<'_>) -> Vec<AgentNode> {
+fn agents(resolution: &Resolution<'_>, costs: &BTreeMap<usize, CallCost<'_>>) -> Vec<AgentNode> {
     let graph = &resolution.graph;
     let mut entries: IndexMap<&str, Vec<usize>> = IndexMap::new();
     for index in (0..graph.rows.len()).filter(|index| resolution.is_agent(*index)) {
@@ -82,10 +96,10 @@ fn agents(resolution: &Resolution<'_>) -> Vec<AgentNode> {
             entries.entry(&row.agent).or_default().push(index);
         }
     }
-    let calls: Vec<(&str, Option<Requests<'_>>)> = resolution
+    let calls: Vec<(&str, Option<&CallCost<'_>>)> = resolution
         .model_calls
         .iter()
-        .map(|call| (resolution.owner(*call), resolution.call_requests(*call)))
+        .map(|call| (resolution.owner(*call), costs.get(call)))
         .collect();
     let tools = resolution.unique_tools();
     entries
@@ -95,12 +109,12 @@ fn agents(resolution: &Resolution<'_>) -> Vec<AgentNode> {
                 let label = agent_label(resolution.row(ancestor));
                 (resolution.is_agent(ancestor) && label != name).then(|| label.to_owned())
             });
-            let owned_calls: Vec<Option<Requests<'_>>> = calls
+            let owned_calls: Vec<Option<&CallCost<'_>>> = calls
                 .iter()
                 .filter(|(owner, _)| *owner == name)
-                .map(|(_, requests)| requests.clone())
+                .map(|(_, cost)| *cost)
                 .collect();
-            let priced = total(&owned_calls);
+            let priced = total(owned_calls.iter().flatten().copied());
             AgentNode {
                 name: name.to_owned(),
                 parent_agent,
@@ -117,6 +131,7 @@ fn agents(resolution: &Resolution<'_>) -> Vec<AgentNode> {
                     / NANOS_PER_MS,
                 spend: priced.spend,
                 priced_calls: priced.priced_calls,
+                estimated_calls: priced.estimated_calls,
             }
         })
         .collect()
@@ -165,32 +180,38 @@ pub fn resolve_trace(
     rows: &[TraceSpansRow],
     spend: &[SpendRow],
 ) -> Option<Trace> {
+    resolve_trace_with_estimates(trace_id, trace_ref, rows, spend, &BTreeMap::new())
+}
+
+pub fn resolve_trace_with_estimates(
+    trace_id: &str,
+    trace_ref: &str,
+    rows: &[TraceSpansRow],
+    spend: &[SpendRow],
+    estimates: &BTreeMap<String, f64>,
+) -> Option<Trace> {
     let first = rows.first()?;
     let resolution = Resolution::new(rows, spend);
+    let costs = cost::selected(&resolution, estimates);
     let trace_start_ns = rows.iter().map(|row| row.start_ns).min()?;
     let trace_end_ns = rows
         .iter()
         .map(|row| i128::from(row.start_ns) + i128::from(row.duration_ns))
         .max()?;
     let spans: Vec<Span> = (0..rows.len())
-        .map(|index| span(&resolution, index, trace_start_ns))
+        .map(|index| span(&resolution, &costs, index, trace_start_ns))
         .collect();
     let root = (0..rows.len())
         .find(|index| resolution.graph.is_root(*index))
         .unwrap_or_default();
-    let agents = agents(&resolution);
+    let agents = agents(&resolution, &costs);
     let calls = &resolution.model_calls;
     let counted: Vec<&TraceSpansRow> = if calls.is_empty() {
         rows.iter().collect()
     } else {
         calls.iter().map(|call| &rows[*call]).collect()
     };
-    let priced = total(
-        &calls
-            .iter()
-            .map(|call| resolution.call_requests(*call))
-            .collect::<Vec<_>>(),
-    );
+    let priced = total(costs.values());
     let first_input = spans
         .iter()
         .zip(rows)
@@ -241,6 +262,7 @@ pub fn resolve_trace(
         models: sorted_unique(calls.iter().map(|call| rows[*call].model.as_str())),
         spend: priced.spend,
         priced_calls: priced.priced_calls,
+        estimated_calls: priced.estimated_calls,
         source: source(&rows[root]).or_else(|| {
             rows.iter()
                 .filter_map(|row| Some((row.start_ns, source(row)?)))
@@ -285,6 +307,7 @@ pub fn listed_summary(row: &ListTracesRow) -> TraceSummary {
         models: row.models.clone(),
         spend: None,
         priced_calls: 0,
+        estimated_calls: 0,
         source: None,
     }
 }

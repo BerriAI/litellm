@@ -125,6 +125,7 @@ describe("runCost", () => {
     },
     { spend: null, priced_calls: 0, llm_calls: 20, expected: null },
     { spend: 0, priced_calls: 0, llm_calls: 0, expected: null },
+    { spend: 0, priced_calls: 1, llm_calls: 1, estimated_calls: 1, expected: { label: "$0.00 est.", partial: null } },
   ])("prices $priced_calls of $llm_calls calls", ({ expected, ...summary }) => {
     expect(runCost(summary)).toEqual(expected);
   });
@@ -163,6 +164,13 @@ describe("AgentTracesTable cost cell", () => {
 
   it("shows a dash when no call is priced", () => {
     expect(costCell({ spend: null, priced_calls: 0 })).toHaveTextContent("—");
+  });
+
+  it("labels a mixed estimated subtotal without losing partial coverage", () => {
+    const cell = costCell({ spend: 0.38, priced_calls: 18, estimated_calls: 2 });
+    expect(cell).toHaveTextContent("≥ $0.38 est.");
+    expect(cell).toHaveTextContent("18/20 priced");
+    expect(within(cell).getByTitle("18 of 20 calls priced · Includes estimates for 2 calls")).toBeVisible();
   });
 });
 

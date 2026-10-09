@@ -188,11 +188,56 @@ impl CallEvidence {
                 CallEvidenceKind::Complete
             })
         };
+        let kind = if kind == CallEvidenceKind::Partial && Self::restored_openinference(row, &keys)
+        {
+            CallEvidenceKind::Complete
+        } else {
+            kind
+        };
         match kind {
             CallEvidenceKind::Complete => Self::Complete(keys),
             CallEvidenceKind::Partial => Self::Partial(keys),
             CallEvidenceKind::Unknown => Self::Unknown,
         }
+    }
+
+    fn restored_openinference(
+        row: &crate::query::named::TraceSpansRow,
+        keys: &BTreeSet<CallKey>,
+    ) -> bool {
+        let Some(output) = row.openinference_output.as_deref() else {
+            return false;
+        };
+        if !row.framework.is_empty()
+            || row.kind != ObservationType::Llm
+            || output.len() > 16 * 1024
+            || serde_json::from_str::<serde::de::IgnoredAny>(output).is_err()
+            || format::openinference::recorded_calls(output) != CallEvidence::Unknown
+        {
+            return false;
+        }
+        let attributes = BTreeMap::from([
+            ("gen_ai.response.id".into(), row.gen_ai_response_id.clone()),
+            (
+                "gen_ai.operation.name".into(),
+                attr(&row.pricing_attributes, "gen_ai.operation.name").into(),
+            ),
+        ]);
+        let CallEvidence::Complete(mut restored) =
+            format::openinference::calls(output, &attributes)
+        else {
+            return false;
+        };
+        let gateway: Vec<_> = keys
+            .iter()
+            .filter(|key| matches!(key, CallKey::LiteLlmRequest(_)))
+            .cloned()
+            .collect();
+        if gateway.len() > 1 {
+            return false;
+        }
+        restored.extend(gateway);
+        &restored == keys
     }
 
     pub(crate) fn complete(key: CallKey) -> Self {

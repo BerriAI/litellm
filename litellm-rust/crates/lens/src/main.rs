@@ -2,6 +2,7 @@ use litellm_lens::{
     State, Storage, auth,
     config::{Config, http_client},
     control::Control,
+    pricing::GatewayTraceCosts,
     provision, router,
     worker::Worker,
 };
@@ -47,10 +48,16 @@ async fn run() -> Result<(), litellm_lens::Error> {
     let client = http_client()?;
     let control = Control::new(
         client.clone(),
-        config.proxy_url,
+        config.proxy_url.clone(),
         config.worker_token.clone(),
     );
-    let storage = Storage::new(config.storage, client.clone(), config.service_token.clone());
+    let estimator = GatewayTraceCosts::new(Control::new(
+        client.clone(),
+        config.proxy_url,
+        config.service_token.clone(),
+    ));
+    let storage = Storage::new(config.storage, client.clone(), config.service_token.clone())
+        .with_cost_estimator(Arc::new(estimator));
     let state = Arc::new(State::new(storage, config.service_token.clone()));
     let listener = tokio::net::TcpListener::bind(config.address).await?;
     let auth_task = tokio::spawn(auth::refresh_loop(

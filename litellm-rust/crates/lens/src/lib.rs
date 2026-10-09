@@ -10,6 +10,7 @@ mod ingest;
 pub mod journal;
 pub mod model;
 pub mod pipeline;
+pub mod pricing;
 pub mod sandbox;
 mod storage;
 pub mod worker;

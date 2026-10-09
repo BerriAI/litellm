@@ -9141,6 +9141,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/lens/internal/trace-costs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Calculate Trace Costs */
+        post: operations["calculate_trace_costs_lens_internal_trace_costs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/lens/preview/sample": {
         parameters: {
             query?: never;
@@ -26144,6 +26161,8 @@ export interface components {
         AgentNode: {
             /** Duration Ms */
             duration_ms: number;
+            /** Estimated Calls */
+            estimated_calls?: number;
             /** Invocations */
             invocations: number;
             /** Llm Calls */
@@ -46186,6 +46205,8 @@ export interface components {
         Span: {
             /** Agent */
             agent: string;
+            /** Cost Source */
+            cost_source?: ("gateway" | "estimated") | null;
             /** Duration Ms */
             duration_ms: number;
             /** Error */
@@ -48175,6 +48196,25 @@ export interface components {
             /** Agents */
             agents: components["schemas"]["TraceAgent"][];
         };
+        /** TraceCostInput */
+        TraceCostInput: {
+            /** Attributes */
+            attributes: {
+                [key: string]: string;
+            };
+            /** Start Ns */
+            start_ns: number;
+        };
+        /** TraceCostsRequest */
+        TraceCostsRequest: {
+            /** Calls */
+            calls: components["schemas"]["TraceCostInput"][];
+        };
+        /** TraceCostsResponse */
+        TraceCostsResponse: {
+            /** Costs */
+            costs: (number | null)[];
+        };
         /** TraceFeedback */
         TraceFeedback: {
             /** Feedback */
@@ -48488,6 +48528,8 @@ export interface components {
             duration_ms: number;
             /** Error Count */
             error_count: number;
+            /** Estimated Calls */
+            estimated_calls?: number;
             /** Frameworks */
             frameworks?: string[];
             /** Input Preview */
@@ -63978,6 +64020,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IngestionSnapshot"];
+                };
+            };
+        };
+    };
+    calculate_trace_costs_lens_internal_trace_costs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TraceCostsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceCostsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

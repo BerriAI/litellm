@@ -84,6 +84,28 @@ describe("RunView", () => {
     expect(header).not.toHaveTextContent("Completed");
   });
 
+  it("shows estimated costs in the run totals and tree without a gateway match", async () => {
+    const modelSpan = research.spans.find((span) => span.type === "llm")!;
+    const estimated: Span = {
+      ...modelSpan,
+      name: "estimated-call",
+      parent_span_id: rootSpanId(research),
+      spend: 0.002,
+      cost_source: "estimated",
+      spend_match: "no_call_id",
+      spend_log_request_id: null,
+    };
+    renderRun({
+      ...research,
+      spans: [research.spans.find((span) => span.parent_span_id === null)!, estimated],
+      summary: { ...research.summary, spend: 0.02, priced_calls: 2, llm_calls: 3, estimated_calls: 1 },
+    });
+    const header = await screen.findByRole("banner");
+    expect(header).toHaveTextContent("≥ $0.02 est. · 2 of 3 calls priced");
+    const row = screen.getByRole("treeitem", { name: /estimated-call/ });
+    expect(within(row).getByTestId("step-cost")).toHaveTextContent("$0.0020 est.");
+  });
+
   it("shows the agent name with the SDK logo in the run header instead of the generic agent icon", async () => {
     renderRun({
       ...research,

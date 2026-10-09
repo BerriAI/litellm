@@ -1,5 +1,9 @@
 use std::sync::Arc;
 
+#[derive(Clone, Copy, Debug, thiserror::Error)]
+#[error("trace cost estimation is unavailable")]
+pub struct EstimateUnavailable;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("trace snapshot serialization failed")]

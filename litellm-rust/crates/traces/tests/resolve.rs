@@ -1,9 +1,10 @@
 use litellm_traces::{
-    AgentNode, RunSourceType, SpanStatus, SpendMatch, iso_time, listed_summary,
+    AgentNode, CostSource, RunSourceType, SpanStatus, SpendMatch, iso_time, listed_summary,
     query::named::{ListTracesRow, SpendByResponseIdsRow, TraceSpansRow},
-    resolve_trace,
+    resolve_trace, resolve_trace_with_estimates, trace_cost_inputs,
 };
-use rstest::rstest;
+use rstest::{fixture, rstest};
+use std::collections::BTreeMap;
 
 const T0: i64 = 1_790_742_989_000_000_000;
 const MS: i64 = 1_000_000;
@@ -29,6 +30,9 @@ fn row(span_id: &str, parent: &str, name: &str, kind: &str, agent: &str) -> Trac
         model: String::new(),
         input_tokens: 0,
         output_tokens: 0,
+        pricing_attributes: Default::default(),
+        gen_ai_response_id: String::new(),
+        openinference_output: None,
         litellm_request_id: String::new(),
         call_keys: Vec::new(),
         call_evidence: None,
@@ -54,6 +58,9 @@ fn llm(span_id: &str, parent: &str, agent: &str, response_id: &str) -> TraceSpan
         model: "claude-sonnet-4-5".into(),
         input_tokens: 100,
         output_tokens: 20,
+        pricing_attributes: Default::default(),
+        gen_ai_response_id: String::new(),
+        openinference_output: None,
         litellm_request_id: response_id.into(),
         call_evidence: Some(litellm_traces::CallEvidenceKind::Complete),
         ..at(row(span_id, parent, "ChatOpenAI", "llm", agent), 1, 100)
@@ -275,6 +282,7 @@ fn repeated_subagent_invocations_aggregate_into_one_node() {
             duration_ms: 1000.0,
             spend: None,
             priced_calls: 0,
+            estimated_calls: 0,
         }
     );
     let researcher = &trace.agents[1];
@@ -1965,4 +1973,308 @@ fn provider_request_id_cannot_match_a_message_id_of_the_same_value() {
     let trace = resolve_trace("trace", "ref", &[call], &rows).unwrap();
     assert_eq!(trace.summary.spend, None);
     assert_eq!(trace.spans[0].spend_match, Some(SpendMatch::NoSpendLog));
+}
+
+#[fixture]
+fn quoted() -> TraceSpansRow {
+    TraceSpansRow {
+        pricing_attributes: BTreeMap::from([
+            ("gen_ai.request.model".into(), "test-model".into()),
+            ("gen_ai.usage.input_tokens".into(), "100".into()),
+            ("gen_ai.usage.output_tokens".into(), "20".into()),
+        ]),
+        ..llm("call", "", "agent", "response")
+    }
+}
+
+#[rstest]
+#[case::paid(Some(0.25))]
+#[case::free(Some(0.0))]
+#[case::unknown(None)]
+fn trace_estimates_preserve_known_zero_and_unknown(
+    quoted: TraceSpansRow,
+    #[case] amount: Option<f64>,
+) {
+    let estimates = amount
+        .map(|amount| BTreeMap::from([("call".into(), amount)]))
+        .unwrap_or_default();
+    let trace = resolve_trace_with_estimates("trace", "ref", &[quoted], &[], &estimates).unwrap();
+    assert_eq!(trace.summary.spend, amount);
+    assert_eq!(trace.summary.priced_calls, u64::from(amount.is_some()));
+    assert_eq!(trace.summary.estimated_calls, u64::from(amount.is_some()));
+    assert_eq!(
+        trace.agents[0].estimated_calls,
+        trace.summary.estimated_calls
+    );
+    assert_eq!(
+        trace.spans[0].cost_source,
+        amount.map(|_| CostSource::Estimated)
+    );
+    assert_eq!(trace.spans[0].spend_match, Some(SpendMatch::NoSpendLog));
+    assert_eq!(trace.spans[0].spend_log_request_id, None);
+    assert!(trace.gateway_spend_pending);
+}
+
+#[rstest]
+#[case::paid(Some(0.5), 0.5, CostSource::Gateway)]
+#[case::free(Some(0.0), 0.0, CostSource::Gateway)]
+#[case::pending(None, 0.25, CostSource::Estimated)]
+fn gateway_amount_precedes_estimates(
+    quoted: TraceSpansRow,
+    #[case] gateway: Option<f64>,
+    #[case] expected: f64,
+    #[case] source: CostSource,
+) {
+    let records = [SpendByResponseIdsRow {
+        spend: gateway,
+        ..spend("request", "response", 0.0)
+    }];
+    let inputs = trace_cost_inputs(std::slice::from_ref(&quoted), &records);
+    assert_eq!(inputs.is_empty(), gateway.is_some());
+    let trace = resolve_trace_with_estimates(
+        "trace",
+        "ref",
+        &[quoted],
+        &records,
+        &BTreeMap::from([("call".into(), 0.25)]),
+    )
+    .unwrap();
+    assert_eq!(trace.summary.spend, Some(expected));
+    assert_eq!(trace.spans[0].cost_source, Some(source));
+    assert_eq!(trace.summary.estimated_calls, u64::from(gateway.is_none()));
+    assert_eq!(trace.gateway_spend_pending, gateway.is_none());
+}
+
+#[rstest]
+#[case::duplicate(false, Some(0.25), 2)]
+#[case::conflicting_usage(true, None, 0)]
+fn duplicate_response_estimates_require_matching_evidence(
+    quoted: TraceSpansRow,
+    #[case] conflicting: bool,
+    #[case] expected: Option<f64>,
+    #[case] estimated_calls: u64,
+) {
+    let mut duplicate = TraceSpansRow {
+        span_id: "second".into(),
+        ..quoted.clone()
+    };
+    if conflicting {
+        duplicate
+            .pricing_attributes
+            .insert("gen_ai.usage.input_tokens".into(), "200".into());
+    }
+    let rows = [quoted, duplicate];
+    let inputs = trace_cost_inputs(&rows, &[]);
+    assert_eq!(inputs.len(), usize::from(!conflicting));
+    let trace = resolve_trace_with_estimates(
+        "trace",
+        "ref",
+        &rows,
+        &[],
+        &BTreeMap::from([("call".into(), 0.25), ("second".into(), 0.25)]),
+    )
+    .unwrap();
+    assert_eq!(trace.summary.spend, expected);
+    assert_eq!(trace.summary.estimated_calls, estimated_calls);
+    assert_eq!(trace.agents[0].spend, expected);
+}
+
+#[rstest]
+#[case::wrapper(false, Some(0.25))]
+#[case::missing_retry(true, None)]
+fn wrapper_estimates_never_double_count_or_hide_missing_attempts(
+    quoted: TraceSpansRow,
+    #[case] retry: bool,
+    #[case] expected: Option<f64>,
+) {
+    let wrapper = TraceSpansRow {
+        span_id: "wrapper".into(),
+        call_keys: if retry {
+            vec![
+                litellm_traces::CallKey::ProviderResponse("retry".into()),
+                litellm_traces::CallKey::ProviderResponse("response".into()),
+            ]
+        } else {
+            Vec::new()
+        },
+        ..quoted.clone()
+    };
+    let rows = [
+        wrapper,
+        TraceSpansRow {
+            parent_span_id: "wrapper".into(),
+            ..quoted
+        },
+    ];
+    let inputs = trace_cost_inputs(&rows, &[]);
+    assert_eq!(inputs.len(), usize::from(!retry));
+    let trace = resolve_trace_with_estimates(
+        "trace",
+        "ref",
+        &rows,
+        &[],
+        &BTreeMap::from([("call".into(), 0.25), ("wrapper".into(), 0.5)]),
+    )
+    .unwrap();
+    assert_eq!(trace.summary.spend, expected);
+    assert_eq!(trace.summary.llm_calls, 1);
+    assert_eq!(trace.spans[0].cost_source, None);
+}
+
+#[rstest]
+fn mixed_cost_sources_preserve_partial_coverage(quoted: TraceSpansRow) {
+    let rows = [
+        quoted.clone(),
+        TraceSpansRow {
+            span_id: "gateway".into(),
+            litellm_request_id: "gateway-response".into(),
+            ..quoted.clone()
+        },
+        TraceSpansRow {
+            span_id: "unknown".into(),
+            litellm_request_id: String::new(),
+            pricing_attributes: BTreeMap::new(),
+            ..quoted
+        },
+    ];
+    let trace = resolve_trace_with_estimates(
+        "trace",
+        "ref",
+        &rows,
+        &[spend("gateway", "gateway-response", 0.5)],
+        &BTreeMap::from([("call".into(), 0.25)]),
+    )
+    .unwrap();
+    assert_eq!(trace.summary.spend, Some(0.75));
+    assert_eq!(
+        (
+            trace.summary.llm_calls,
+            trace.summary.priced_calls,
+            trace.summary.estimated_calls
+        ),
+        (3, 2, 1)
+    );
+    assert_eq!(trace.agents[0].spend, trace.summary.spend);
+    assert_eq!(trace.agents[0].estimated_calls, 1);
+}
+
+#[rstest]
+#[case::same_usage(false)]
+#[case::missing_duplicate_usage(true)]
+fn gateway_priced_duplicates_never_add_estimated_cost(
+    quoted: TraceSpansRow,
+    #[case] missing_usage: bool,
+) {
+    let rows = [
+        TraceSpansRow {
+            span_id: "wrapper".into(),
+            ..quoted.clone()
+        },
+        TraceSpansRow {
+            parent_span_id: "wrapper".into(),
+            ..quoted.clone()
+        },
+        TraceSpansRow {
+            span_id: "duplicate".into(),
+            pricing_attributes: if missing_usage {
+                BTreeMap::new()
+            } else {
+                quoted.pricing_attributes.clone()
+            },
+            ..quoted
+        },
+    ];
+    let logs = [spend("gateway", "response", 0.5)];
+    assert!(trace_cost_inputs(&rows, &logs).is_empty());
+    let trace = resolve_trace_with_estimates(
+        "trace",
+        "ref",
+        &rows,
+        &logs,
+        &BTreeMap::from([("call".into(), 0.25), ("duplicate".into(), 0.25)]),
+    )
+    .unwrap();
+    assert_eq!(
+        (trace.summary.spend, trace.summary.estimated_calls),
+        (Some(0.5), 0)
+    );
+    assert_eq!(trace.spans[1].cost_source, Some(CostSource::Gateway));
+    assert_eq!(trace.spans[2].cost_source, Some(CostSource::Gateway));
+}
+
+#[rstest]
+fn duplicate_with_missing_usage_blocks_the_shared_estimate(quoted: TraceSpansRow) {
+    let rows = [
+        quoted.clone(),
+        TraceSpansRow {
+            span_id: "duplicate".into(),
+            pricing_attributes: BTreeMap::new(),
+            ..quoted
+        },
+    ];
+    assert!(trace_cost_inputs(&rows, &[]).is_empty());
+    let trace = resolve_trace_with_estimates(
+        "trace",
+        "ref",
+        &rows,
+        &[],
+        &BTreeMap::from([("call".into(), 0.25)]),
+    )
+    .unwrap();
+    assert_eq!(trace.summary.spend, None);
+}
+
+#[rstest]
+#[case::messages(Some(r#"[{"role":"assistant","content":"answer"}]"#), "response", true)]
+#[case::missing(None, "response", false)]
+#[case::truncated(
+    Some("[{\"role\":\"assistant\"…[truncated 1 bytes]"),
+    "response",
+    false
+)]
+#[case::conflicting_id(Some("[]"), "other-response", false)]
+#[case::actual_partial(Some(r#"{"generations":[[{"message":{"content":"first","response_metadata":{"id":"response"}}}],[{"message":{"content":"missing ID"}}]]}"#), "response", false)]
+fn historical_mixed_format_evidence_restores_only_complete_matching_calls(
+    quoted: TraceSpansRow,
+    #[case] output: Option<&str>,
+    #[case] response_id: &str,
+    #[case] eligible: bool,
+    #[values(false, true)] gateway: bool,
+) {
+    let row = TraceSpansRow {
+        call_evidence: Some(litellm_traces::CallEvidenceKind::Partial),
+        gen_ai_response_id: response_id.into(),
+        openinference_output: output.map(str::to_owned),
+        pricing_attributes: quoted
+            .pricing_attributes
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .chain([("gen_ai.operation.name".into(), "chat".into())])
+            .collect(),
+        ..quoted
+    };
+    let logs: Vec<_> = gateway
+        .then(|| spend("gateway", "response", 0.5))
+        .into_iter()
+        .collect();
+    let trace = resolve_trace_with_estimates(
+        "trace",
+        "ref",
+        &[row],
+        &logs,
+        &BTreeMap::from([("call".into(), 0.25)]),
+    )
+    .unwrap();
+    assert_eq!(
+        trace.summary.spend,
+        eligible.then_some(if gateway { 0.5 } else { 0.25 })
+    );
+    assert_eq!(
+        trace.spans[0].cost_source,
+        eligible.then_some(if gateway {
+            CostSource::Gateway
+        } else {
+            CostSource::Estimated
+        })
+    );
 }

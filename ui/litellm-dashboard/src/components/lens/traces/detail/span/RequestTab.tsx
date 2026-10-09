@@ -24,7 +24,7 @@ export function RequestTab({ span, accessToken, traceStartMs }: RequestTabProps)
 
   const usage = fieldEntries([
     ["model", span.model ?? "—"],
-    ["cost", span.spend == null ? "—" : formatCost(span.spend)],
+    ["cost", span.spend == null ? "—" : formatCost(span.spend, span.cost_source === "estimated")],
     ["input_tokens", fmtTok(span.input_tokens)],
     ["output_tokens", fmtTok(span.output_tokens)],
     ["total_tokens", fmtTok(span.input_tokens + span.output_tokens)],

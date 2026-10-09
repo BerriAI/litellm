@@ -7,6 +7,14 @@
           "format": "double",
           "type": "number"
         },
+        "estimated_calls": {
+          "default": 0,
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer",
+          "x-python-optional": true
+        },
         "invocations": {
           "format": "uint64",
           "maximum": 18446744073709551615,
@@ -56,9 +64,17 @@
         "tool_calls",
         "duration_ms",
         "spend",
-        "priced_calls"
+        "priced_calls",
+        "estimated_calls"
       ],
       "type": "object"
+    },
+    "CostSource": {
+      "enum": [
+        "gateway",
+        "estimated"
+      ],
+      "type": "string"
     },
     "RunSource": {
       "description": "The conversation that started the run, from the `agent.source.*` span attributes.",
@@ -101,6 +117,17 @@
       "properties": {
         "agent": {
           "type": "string"
+        },
+        "cost_source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CostSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "x-python-optional": true
         },
         "duration_ms": {
           "format": "double",
@@ -280,6 +307,14 @@
           "minimum": 0,
           "type": "integer"
         },
+        "estimated_calls": {
+          "default": 0,
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer",
+          "x-python-optional": true
+        },
         "frameworks": {
           "items": {
             "type": "string"
@@ -396,7 +431,8 @@
         "output_tokens",
         "models",
         "spend",
-        "priced_calls"
+        "priced_calls",
+        "estimated_calls"
       ],
       "type": "object"
     }

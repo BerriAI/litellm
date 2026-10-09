@@ -921,6 +921,7 @@ fn langsmith_response_id_is_complete_without_legacy_payloads(
 
 #[rstest]
 #[case::langsmith("langsmith", "langsmith.span.kind", "llm")]
+#[case::openinference("", "openinference.span.kind", "LLM")]
 #[case::logfire("logfire", "events", "[]")]
 #[case::traceloop("custom", "traceloop.span.kind", "llm")]
 #[case::vercel("ai", "ai.operationId", "ai.generateText")]
@@ -946,6 +947,43 @@ fn convention_markers_keep_genai_call_evidence(
         .collect::<Vec<_>>();
     let marked = decode(span, scope, &marked_attributes, vec![]).unwrap();
     assert_eq!(marked.normalized.calls, plain.normalized.calls);
+}
+
+#[rstest]
+#[case::message_array(json!([{ "role": "assistant", "content": "answer" }]), true)]
+#[case::partial_result(json!({"generations": [
+    [{"message": {"content": "first", "response_metadata": {"id": "response"}}}],
+    [{"message": {"content": "missing ID"}}]
+]}), false)]
+fn mixed_openinference_genai_preserves_actual_partial_results(
+    span: Span,
+    #[case] output: Value,
+    #[case] complete: bool,
+    #[values(false, true)] gateway: bool,
+) {
+    let output = output.to_string();
+    let attributes: Vec<_> = [
+        ("openinference.span.kind", "LLM"),
+        ("gen_ai.operation.name", "chat"),
+        ("gen_ai.response.id", "response"),
+        ("output.value", output.as_str()),
+    ]
+    .into_iter()
+    .chain(gateway.then_some(("litellm.call_id", "gateway")))
+    .collect();
+    let decoded = decode(span, "", &attributes, vec![]).unwrap();
+    assert_eq!(
+        decoded.normalized.calls.kind(),
+        if complete {
+            litellm_traces::CallEvidenceKind::Complete
+        } else {
+            litellm_traces::CallEvidenceKind::Partial
+        }
+    );
+    assert_eq!(
+        decoded.normalized.calls.key_set().unwrap().len(),
+        if gateway { 2 } else { 1 }
+    );
 }
 
 #[rstest]

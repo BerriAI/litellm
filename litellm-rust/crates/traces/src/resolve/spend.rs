@@ -337,27 +337,3 @@ pub(super) fn unique<'a>(requests: impl IntoIterator<Item = &'a SpendRow>) -> Re
         .into_values()
         .collect()
 }
-
-pub(super) struct Priced {
-    pub(super) spend: Option<f64>,
-    pub(super) priced_calls: u64,
-}
-
-pub(super) fn total(calls: &[Option<Requests<'_>>]) -> Priced {
-    let priced: Vec<&Requests<'_>> = calls
-        .iter()
-        .flatten()
-        .filter(|requests| request_cost(requests).is_some())
-        .collect();
-    let spend = if priced.is_empty() {
-        None
-    } else {
-        request_cost(&unique(
-            priced.iter().flat_map(|requests| requests.iter().copied()),
-        ))
-    };
-    Priced {
-        spend,
-        priced_calls: priced.len() as u64,
-    }
-}

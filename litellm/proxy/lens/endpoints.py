@@ -9,6 +9,7 @@ from typing import Annotated, Final, Protocol, TypeAlias
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import AwareDatetime, Field
 
@@ -81,6 +82,7 @@ from litellm.proxy.lens.state import (
     scheduled_window,
     summarized,
 )
+from litellm.proxy.lens.trace_costs import TraceCostsRequest, TraceCostsResponse, trace_costs
 from litellm.proxy.tracing_runtime import provide_storage
 from litellm.router import Router
 from litellm.tracing.remote import LensConnection, bounded_response
@@ -285,6 +287,11 @@ async def revoke_ingestion_key(key_id: str, auth: Auth) -> bool:
 async def ingestion_credentials(service: ServiceAuth, response: Response) -> IngestionSnapshot:
     response.headers["Cache-Control"] = "no-store"
     return await credential_snapshot()
+
+
+@router.post("/internal/trace-costs", response_model=TraceCostsResponse)
+def calculate_trace_costs(request: TraceCostsRequest, service: ServiceAuth) -> JSONResponse:
+    return JSONResponse(content=trace_costs(request).model_dump(mode="json"), headers={"Cache-Control": "no-store"})
 
 
 async def assigned(lens_id: str, job_id: str, worker: Worker, attempt: int = 1) -> tuple[Lens, Job]:

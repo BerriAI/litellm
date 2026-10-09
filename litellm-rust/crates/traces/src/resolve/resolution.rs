@@ -151,7 +151,7 @@ impl<'a> Resolution<'a> {
             .any(|matched| matched.spend_pending)
     }
 
-    fn resolve_call_match(&self, call: usize) -> CallMatch<'a> {
+    pub(super) fn call_sources(&self, call: usize) -> Vec<usize> {
         let wrappers = self.graph.ancestors(call).into_iter().filter(|ancestor| {
             self.kind(*ancestor) == ObservationType::Llm
                 && self
@@ -163,8 +163,13 @@ impl<'a> Resolution<'a> {
                             || self.kind(descendant) != ObservationType::Llm
                     })
         });
-        let sources: Vec<_> = std::iter::once(call)
-            .chain(wrappers)
+        std::iter::once(call).chain(wrappers).collect()
+    }
+
+    fn resolve_call_match(&self, call: usize) -> CallMatch<'a> {
+        let sources: Vec<_> = self
+            .call_sources(call)
+            .into_iter()
             .map(|source| self.requests(source))
             .collect();
         let transports: Vec<_> = self
@@ -209,7 +214,7 @@ impl<'a> Resolution<'a> {
         }
     }
 
-    fn transports(&self, call: usize) -> Vec<usize> {
+    pub(super) fn transports(&self, call: usize) -> Vec<usize> {
         let is_transport = |index: &usize| {
             self.row(*index)
                 .call_keys

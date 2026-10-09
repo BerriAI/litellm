@@ -1027,6 +1027,55 @@ async def test_internal_service_authentication_is_separate_from_gateway_keys(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("credential,status", (("x" * 32, 200), ("sk-user", 401), ("lens-worker", 401), (None, 401)))
+async def test_trace_cost_endpoint_requires_service_auth_and_returns_uncached_estimates(
+    monkeypatch: pytest.MonkeyPatch, credential: str | None, status: int
+) -> None:
+    from fastapi import FastAPI
+
+    from litellm.proxy.lens.endpoints import router
+
+    monkeypatch.setenv("LITELLM_LENS_URL", "http://lens")
+    monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "x" * 32)
+    model: Final = "openai/lens-endpoint-cost"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 1,
+                "output_cost_per_token": 2,
+            }
+        }
+    )
+    app: Final = FastAPI()
+    app.include_router(router)
+    headers: Final = {} if credential is None else {"Authorization": f"Bearer {credential}"}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://gateway") as client:
+        response: Final = await client.post(
+            "/lens/internal/trace-costs",
+            headers=headers,
+            json={
+                "calls": [
+                    {
+                        "start_ns": 0,
+                        "attributes": {
+                            "gen_ai.request.model": model,
+                            "gen_ai.usage.input_tokens": "3",
+                            "gen_ai.usage.output_tokens": "2",
+                        },
+                    }
+                ]
+            },
+        )
+    assert response.status_code == status, response.text
+    if status == 200:
+        assert response.json() == {"costs": [3 * 1 + 2 * 2]}
+        assert response.headers["Cache-Control"] == "no-store"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "status,content,connected",
     (

@@ -57,6 +57,11 @@ class TestAzureModelRouterDetection:
         assert is_azure_model_router(model) == expected
 
 
+@pytest.mark.parametrize("provider,expected", ((None, True), ("azure", True), ("azure_ai", True), ("openai", False)))
+def test_model_router_recognition_can_be_scoped_to_its_provider(provider: str | None, expected: bool) -> None:
+    assert is_azure_model_router("model_router/deployment", custom_llm_provider=provider) is expected
+
+
 class TestAzureModelRouterPrefix:
     """Test Azure Model Router prefix stripping."""
 

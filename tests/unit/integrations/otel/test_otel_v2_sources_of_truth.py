@@ -38,6 +38,7 @@ from litellm.integrations.otel.model.payloads import (
     RequestIdentity,
     _upstream_address_port,
 )
+from litellm.integrations.otel.model.semconv import litellm_provider_candidates
 from litellm.integrations.otel.model.spans import (
     SPAN_REGISTRY,
     LiteLLMSpanKind,
@@ -212,6 +213,22 @@ def test_provider_resolution():
     # unknown providers pass through verbatim (semconv allows provider-specific)
     assert resolve_provider("my_custom_llm") == "my_custom_llm"
     assert resolve_provider(None) == ""
+
+
+@pytest.mark.parametrize(
+    "provider,candidates",
+    (
+        ("bedrock", frozenset({"bedrock", "bedrock_converse"})),
+        ("vertex_ai", frozenset({"vertex_ai", "vertex_ai_beta"})),
+        ("vertex_ai_beta", frozenset({"vertex_ai", "vertex_ai_beta"})),
+        ("cohere", frozenset({"cohere", "cohere_chat"})),
+        ("openai", frozenset({"openai", "text-completion-openai"})),
+        ("custom-provider", frozenset({"custom-provider"})),
+    ),
+)
+def test_reverse_provider_mapping_preserves_collapsed_aliases(provider: str, candidates: frozenset[str]) -> None:
+    assert litellm_provider_candidates(resolve_provider(provider)) == candidates
+    assert litellm_provider_candidates(provider) == candidates
 
 
 def test_operation_resolution():

@@ -1,22 +1,25 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::{
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
 };
 
 use litellm_traces::{
-    CallEvidenceKind, CallKey, ObservationType, SpanStatus,
+    CallEvidenceKind, CallKey, CostSource, ObservationType, SpanStatus, TraceCostInput,
     query::named::{
         ListTracesParams, ListTracesRow, ReadAccessParams, SpanDetailParams, SpanDetailRow,
         SpanErrorParams, SpanErrorRow, SpendByResponseIdsParams, SpendByResponseIdsRow,
         TraceIdentityParams, TracePageSpansParams, TraceSpansParams, TraceSpansRow,
     },
 };
-use litellm_traces_cache::{LIVE_TTL, ReadError, StoreError, TraceReader, TraceStore};
-use rstest::rstest;
+use litellm_traces_cache::{
+    EstimateFuture, EstimateUnavailable, LIVE_TTL, ReadError, StoreError, TraceCostEstimator,
+    TraceReader, TraceStore,
+};
+use rstest::{fixture, rstest};
 
 const START_NS: i64 = 1_790_742_989_000_000_000;
 
@@ -282,6 +285,9 @@ fn span(index: usize) -> TraceSpansRow {
         model: String::new(),
         input_tokens: 0,
         output_tokens: 0,
+        pricing_attributes: Default::default(),
+        gen_ai_response_id: String::new(),
+        openinference_output: None,
         litellm_request_id: String::new(),
         call_keys: Vec::new(),
         call_evidence: None,
@@ -923,4 +929,387 @@ async fn concurrent_pages_of_an_evicted_snapshot_share_one_storage_read() {
     assert_eq!(left.unwrap().unwrap().spans[0].span_id, "span-1");
     assert_eq!(right.unwrap().unwrap().spans[0].span_id, "span-1");
     assert_eq!(store.calls(Operation::TraceSpans), 1);
+}
+
+#[derive(Clone, Copy)]
+enum QuoteMode {
+    Fixed(Option<f64>),
+    InputTokens,
+    Unavailable,
+    WrongCount,
+    Slow,
+    FirstBatchOnly,
+}
+
+struct FakeEstimator {
+    mode: Mutex<QuoteMode>,
+    calls: Mutex<Vec<Vec<TraceCostInput>>>,
+}
+
+impl TraceCostEstimator for FakeEstimator {
+    fn estimate(&self, calls: Vec<TraceCostInput>) -> EstimateFuture<'_> {
+        let mode = *self.mode.lock().unwrap();
+        self.calls.lock().unwrap().push(calls.clone());
+        let batch_number = self.calls.lock().unwrap().len();
+        Box::pin(async move {
+            match mode {
+                QuoteMode::Fixed(cost) => Ok(vec![cost; calls.len()]),
+                QuoteMode::InputTokens => Ok(calls
+                    .iter()
+                    .map(|call| {
+                        call.attributes
+                            .get("gen_ai.usage.input_tokens")
+                            .and_then(|value| value.parse().ok())
+                    })
+                    .collect()),
+                QuoteMode::Unavailable => Err(EstimateUnavailable),
+                QuoteMode::FirstBatchOnly if batch_number > 1 => Err(EstimateUnavailable),
+                QuoteMode::FirstBatchOnly => Ok(vec![Some(0.25); calls.len()]),
+                QuoteMode::WrongCount => Ok(Vec::new()),
+                QuoteMode::Slow => {
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    Ok(vec![Some(0.25); calls.len()])
+                }
+            }
+        })
+    }
+}
+
+#[fixture]
+fn estimator() -> Arc<FakeEstimator> {
+    Arc::new(FakeEstimator {
+        mode: Mutex::new(QuoteMode::Fixed(Some(0.25))),
+        calls: Mutex::new(Vec::new()),
+    })
+}
+
+fn costed_span(index: usize) -> TraceSpansRow {
+    TraceSpansRow {
+        kind: ObservationType::Llm,
+        pricing_attributes: BTreeMap::from([
+            ("gen_ai.request.model".into(), "test-model".into()),
+            ("gen_ai.usage.input_tokens".into(), "100".into()),
+            ("gen_ai.usage.output_tokens".into(), "20".into()),
+            ("gen_ai.usage.cache_read.input_tokens".into(), "70".into()),
+            ("gen_ai.usage.cache_write.input_tokens".into(), "10".into()),
+            ("gen_ai.usage.reasoning.output_tokens".into(), "5".into()),
+        ]),
+        ..span(index)
+    }
+}
+
+#[rstest]
+#[case::paid(Some(0.25))]
+#[case::free(Some(0.0))]
+#[case::unknown(None)]
+#[tokio::test]
+async fn trace_and_list_share_estimated_costs_and_preserve_raw_usage(
+    estimator: Arc<FakeEstimator>,
+    #[case] amount: Option<f64>,
+) {
+    *estimator.mode.lock().unwrap() = QuoteMode::Fixed(amount);
+    let rows = vec![span(0), costed_span(1)];
+    let attributes = rows[1].pricing_attributes.clone();
+    let store = FakeStore::with_spans("ref", rows.clone());
+    store.set_list_runs(vec![run("trace", "ref")]);
+    store.set_run_spans(rows);
+    let reader = TraceReader::with_estimator(usize::MAX, estimator.clone());
+    let detail = reader
+        .get_trace(&store, &access(), "trace", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    let list = reader
+        .list_traces(&store, &access(), 0, i64::MAX, None, 2)
+        .await
+        .unwrap();
+    assert_eq!(detail.summary.spend, amount);
+    assert_eq!(detail.summary, list.data[0]);
+    assert_eq!(detail.summary.estimated_calls, u64::from(amount.is_some()));
+    assert_eq!(
+        detail.spans[1].cost_source,
+        amount.map(|_| CostSource::Estimated)
+    );
+    let calls = estimator.calls.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0][0].attributes, attributes);
+    assert_eq!(calls[1][0].attributes, attributes);
+    assert_eq!(calls[0][0].start_ns, START_NS + 1_000_000);
+}
+
+#[rstest]
+#[tokio::test]
+async fn absent_usage_is_not_synthesized_from_normalized_zero_columns(
+    estimator: Arc<FakeEstimator>,
+) {
+    *estimator.mode.lock().unwrap() = QuoteMode::InputTokens;
+    let row = TraceSpansRow {
+        pricing_attributes: BTreeMap::from([("gen_ai.request.model".into(), "test-model".into())]),
+        ..costed_span(0)
+    };
+    let expected = row.pricing_attributes.clone();
+    let store = FakeStore::with_spans("ref", vec![row]);
+    let trace = TraceReader::with_estimator(usize::MAX, estimator.clone())
+        .get_trace(&store, &access(), "trace", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(trace.summary.spend, None);
+    assert_eq!(estimator.calls.lock().unwrap()[0][0].attributes, expected);
+}
+
+#[rstest]
+#[case::paid(0.5)]
+#[case::free(0.0)]
+#[tokio::test]
+async fn late_gateway_cost_replaces_estimate_while_pinned_pages_keep_their_snapshot(
+    estimator: Arc<FakeEstimator>,
+    #[case] amount: f64,
+) {
+    let rows = vec![
+        span(0),
+        TraceSpansRow {
+            call_keys: vec![CallKey::ProviderResponse("response".into())],
+            call_evidence: Some(CallEvidenceKind::Complete),
+            ..costed_span(1)
+        },
+    ];
+    let store = FakeStore::with_spans("ref", rows.clone());
+    store.set_list_runs(vec![run("trace", "ref")]);
+    store.set_run_spans(rows);
+    let reader = TraceReader::with_estimator(usize::MAX, estimator.clone());
+    let original = reader
+        .get_trace_page(&store, &access(), "trace", "ref", None, 1)
+        .await
+        .unwrap()
+        .unwrap();
+    let listed = reader
+        .list_traces(&store, &access(), 0, i64::MAX, None, 2)
+        .await
+        .unwrap();
+    assert_eq!(original.summary.spend, Some(0.25));
+    assert_eq!(listed.data[0].estimated_calls, 1);
+    store.state.lock().unwrap().spend = vec![spend_row("response", amount)];
+    tokio::time::sleep(LIVE_TTL + Duration::from_millis(200)).await;
+    let refreshed = reader
+        .get_trace(&store, &access(), "trace", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    let listed = reader
+        .list_traces(&store, &access(), 0, i64::MAX, None, 2)
+        .await
+        .unwrap();
+    assert_eq!(refreshed.summary.spend, Some(amount));
+    assert_eq!(refreshed.summary.estimated_calls, 0);
+    assert_eq!(refreshed.spans[1].cost_source, Some(CostSource::Gateway));
+    assert_eq!(listed.data[0], refreshed.summary);
+    assert_eq!(estimator.calls.lock().unwrap().len(), 2);
+    let pinned = reader
+        .get_trace_page(
+            &store,
+            &access(),
+            "trace",
+            "ref",
+            original.next_cursor.as_deref(),
+            1,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(pinned.summary, original.summary);
+    assert_eq!(pinned.spans[0].cost_source, Some(CostSource::Estimated));
+}
+
+#[rstest]
+#[case::unavailable(QuoteMode::Unavailable)]
+#[case::wrong_count(QuoteMode::WrongCount)]
+#[case::negative(QuoteMode::Fixed(Some(-0.5)))]
+#[case::nan(QuoteMode::Fixed(Some(f64::NAN)))]
+#[case::infinity(QuoteMode::Fixed(Some(f64::INFINITY)))]
+#[tokio::test]
+async fn failed_estimates_preserve_gateway_cost_and_retry_quiet_traces(
+    estimator: Arc<FakeEstimator>,
+    #[case] mode: QuoteMode,
+) {
+    *estimator.mode.lock().unwrap() = mode;
+    let rows = vec![
+        span(0),
+        costed_span(1),
+        TraceSpansRow {
+            call_keys: vec![CallKey::ProviderResponse("response".into())],
+            call_evidence: Some(CallEvidenceKind::Complete),
+            ..costed_span(2)
+        },
+    ];
+    let store = FakeStore::with_spans("ref", rows.clone());
+    store.set_list_runs(vec![run("trace", "ref")]);
+    store.set_run_spans(rows);
+    store.state.lock().unwrap().spend = vec![spend_row("response", 0.5)];
+    let reader = TraceReader::with_estimator(usize::MAX, estimator.clone());
+    let original = reader
+        .get_trace(&store, &access(), "trace", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    let listed = reader
+        .list_traces(&store, &access(), 0, i64::MAX, None, 2)
+        .await
+        .unwrap();
+    assert_eq!(
+        (original.summary.spend, original.summary.priced_calls),
+        (Some(0.5), 1)
+    );
+    assert_eq!(listed.data[0], original.summary);
+    assert_eq!(original.spans[1].cost_source, None);
+    assert_eq!(original.spans[2].cost_source, Some(CostSource::Gateway));
+    *estimator.mode.lock().unwrap() = QuoteMode::Fixed(Some(0.25));
+    tokio::time::sleep(LIVE_TTL + Duration::from_millis(200)).await;
+    let recovered = reader
+        .get_trace(&store, &access(), "trace", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    let listed = reader
+        .list_traces(&store, &access(), 0, i64::MAX, None, 2)
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            recovered.summary.spend,
+            recovered.summary.priced_calls,
+            recovered.summary.estimated_calls
+        ),
+        (Some(0.75), 2, 1)
+    );
+    assert_eq!(listed.data[0], recovered.summary);
+    assert_eq!(estimator.calls.lock().unwrap().len(), 4);
+}
+
+#[rstest]
+#[tokio::test]
+async fn large_traces_quote_bounded_batches(estimator: Arc<FakeEstimator>) {
+    let store = FakeStore::with_spans(
+        "ref",
+        std::iter::once(span(0))
+            .chain((1..=129).map(costed_span))
+            .collect(),
+    );
+    let trace = TraceReader::with_estimator(usize::MAX, estimator.clone())
+        .get_trace(&store, &access(), "trace", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(trace.summary.spend, Some(129.0 * 0.25));
+    assert_eq!(trace.summary.estimated_calls, 129);
+    let sizes: Vec<_> = estimator
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .map(Vec::len)
+        .collect();
+    assert_eq!(sizes, [128, 1]);
+}
+
+#[rstest]
+#[tokio::test]
+async fn slow_estimator_has_a_total_read_deadline(estimator: Arc<FakeEstimator>) {
+    *estimator.mode.lock().unwrap() = QuoteMode::Slow;
+    let store = FakeStore::with_spans("ref", vec![costed_span(0)]);
+    let reader = TraceReader::with_estimator(usize::MAX, estimator);
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        reader.get_trace(&store, &access(), "trace", "ref"),
+    )
+    .await;
+    assert_eq!(result.unwrap().unwrap().unwrap().summary.spend, None);
+}
+
+#[rstest]
+#[tokio::test]
+async fn identical_span_ids_in_different_runs_receive_their_own_quotes(
+    estimator: Arc<FakeEstimator>,
+) {
+    *estimator.mode.lock().unwrap() = QuoteMode::InputTokens;
+    let rows: Vec<_> = [("trace-a", "1"), ("trace-b", "2")]
+        .into_iter()
+        .map(|(trace_id, tokens)| TraceSpansRow {
+            trace_id: trace_id.into(),
+            pricing_attributes: BTreeMap::from([(
+                "gen_ai.usage.input_tokens".into(),
+                tokens.into(),
+            )]),
+            ..costed_span(0)
+        })
+        .collect();
+    let store = FakeStore::default();
+    store.set_list_runs(vec![run("trace-a", "ref-a"), run("trace-b", "ref-b")]);
+    store.set_run_spans(rows);
+    let page = TraceReader::with_estimator(usize::MAX, estimator.clone())
+        .list_traces(&store, &access(), 0, i64::MAX, None, 2)
+        .await
+        .unwrap();
+    assert_eq!(page.data[0].spend, Some(1.0));
+    assert_eq!(page.data[1].spend, Some(2.0));
+    assert_eq!(estimator.calls.lock().unwrap().len(), 1);
+}
+
+#[rstest]
+#[tokio::test]
+async fn later_batch_failure_preserves_completed_quotes(estimator: Arc<FakeEstimator>) {
+    *estimator.mode.lock().unwrap() = QuoteMode::FirstBatchOnly;
+    let store = FakeStore::with_spans(
+        "ref",
+        std::iter::once(span(0))
+            .chain((1..=129).map(costed_span))
+            .collect(),
+    );
+    let trace = TraceReader::with_estimator(usize::MAX, estimator)
+        .get_trace(&store, &access(), "trace", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(trace.summary.spend, Some(128.0 * 0.25));
+    assert_eq!(
+        (trace.summary.llm_calls, trace.summary.estimated_calls),
+        (129, 128)
+    );
+}
+
+#[rstest]
+#[case::boundary(64, 128, 512, true)]
+#[case::too_many(65, 128, 512, false)]
+#[case::long_key(1, 129, 512, false)]
+#[case::long_value(1, 128, 513, false)]
+#[tokio::test]
+async fn oversized_attribute_maps_stay_unknown_without_an_rpc(
+    estimator: Arc<FakeEstimator>,
+    #[case] entries: usize,
+    #[case] key_length: usize,
+    #[case] value_length: usize,
+    #[case] accepted: bool,
+) {
+    let pricing_attributes = (0..entries)
+        .map(|index| {
+            (
+                format!("{index:02}{}", "k".repeat(key_length - 2)),
+                "v".repeat(value_length),
+            )
+        })
+        .collect();
+    let store = FakeStore::with_spans(
+        "ref",
+        vec![TraceSpansRow {
+            pricing_attributes,
+            ..costed_span(0)
+        }],
+    );
+    let trace = TraceReader::with_estimator(usize::MAX, estimator.clone())
+        .get_trace(&store, &access(), "trace", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(trace.summary.spend, accepted.then_some(0.25));
+    assert_eq!(estimator.calls.lock().unwrap().len(), usize::from(accepted));
 }

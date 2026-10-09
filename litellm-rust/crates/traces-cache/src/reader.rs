@@ -1,12 +1,13 @@
 use std::{sync::Arc, time::Duration};
 
 use crate::{
-    ReadError, Snapshot, SnapshotCache, SnapshotKey, StoreError, TraceStore,
+    ReadError, Snapshot, SnapshotCache, SnapshotKey, StoreError, TraceCostEstimator, TraceStore,
     cache::{Freshness, ListCache},
     cursor::{
         ErrorPosition, SpanPosition, decode_cursor, encode_cursor, error_position, trace_position,
     },
     list::{list_summaries, run_batches},
+    pricing::estimates,
     spend::spend,
 };
 use litellm_traces::{
@@ -16,7 +17,7 @@ use litellm_traces::{
         TraceSpansParams,
     },
     request::{TRACE_PAGE_SIZE_MAX, TRACE_PAGE_SIZE_MIN},
-    resolve_trace, to_ui_content,
+    resolve_trace_with_estimates, to_ui_content,
 };
 
 pub const MAX_GRAPH_BYTES: usize = 64 * 1024 * 1024;
@@ -51,6 +52,7 @@ pub struct TraceReader {
     snapshots: SnapshotCache,
     pub(super) lists: ListCache,
     response_bytes: usize,
+    pub(super) estimator: Option<Arc<dyn TraceCostEstimator>>,
 }
 
 impl TraceReader {
@@ -59,6 +61,14 @@ impl TraceReader {
             snapshots: SnapshotCache::new(MAX_GRAPH_BYTES, SNAPSHOT_IDLE),
             lists: ListCache::new(),
             response_bytes,
+            estimator: None,
+        }
+    }
+
+    pub fn with_estimator(response_bytes: usize, estimator: Arc<dyn TraceCostEstimator>) -> Self {
+        Self {
+            estimator: Some(estimator),
+            ..Self::new(response_bytes)
         }
     }
 
@@ -211,17 +221,18 @@ impl TraceReader {
                     .await
                     .map_err(|error| Miss::Read(map_store_error(error)))?;
                 let spend_rows = spend(store, access, &rows).await;
-                resolve_trace(
-                    trace_id,
-                    trace_ref,
-                    &rows,
-                    spend_rows.as_deref().unwrap_or_default(),
-                )
-                .map(|trace| {
-                    let freshness = Freshness::of(&rows, &trace, snapshot_ms);
-                    (trace, freshness)
-                })
-                .ok_or(Miss::Absent)
+                let spend_rows = spend_rows.as_deref().unwrap_or_default();
+                let (costs, retry) = estimates(self, &[(&rows, spend_rows)]).await;
+                resolve_trace_with_estimates(trace_id, trace_ref, &rows, spend_rows, &costs[0])
+                    .map(|trace| {
+                        let freshness = if retry {
+                            Freshness::Live
+                        } else {
+                            Freshness::of(&rows, &trace, snapshot_ms)
+                        };
+                        (trace, freshness)
+                    })
+                    .ok_or(Miss::Absent)
             })
             .await
     }

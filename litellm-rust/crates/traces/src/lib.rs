@@ -38,12 +38,15 @@ pub use otlp::{
 };
 pub use query::ReadQuery;
 pub use query_access::QueryScope;
-pub use resolve::{SpendLookup, iso_time, listed_summary, resolve_trace};
+pub use resolve::{
+    SpendLookup, TraceCostInput, iso_time, listed_summary, resolve_trace,
+    resolve_trace_with_estimates, trace_cost_inputs,
+};
 pub use shared::{Shared, SharedIdentity};
 pub use tenant::Tenant;
 pub use truncate::{truncate_messages, truncate_value};
 pub use ui::{ChatRole, UiContent, UiField, UiMessage, UiToolCall, to_ui_content};
 pub use view::{
-    AgentNode, RunSource, RunSourceType, Span, SpanDetail, SpanErrorPage, SpanStatus, SpendMatch,
-    Trace, TracePage, TraceSummary,
+    AgentNode, CostSource, RunSource, RunSourceType, Span, SpanDetail, SpanErrorPage, SpanStatus,
+    SpendMatch, Trace, TracePage, TraceSummary,
 };

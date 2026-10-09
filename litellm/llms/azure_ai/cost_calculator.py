@@ -11,7 +11,7 @@ from litellm.types.utils import Usage
 from litellm.utils import get_model_info
 
 
-def is_azure_model_router(model: str) -> bool:
+def is_azure_model_router(model: str, custom_llm_provider: str | None = None) -> bool:
     """
     Check if the model is Azure AI Foundry Model Router.
 
@@ -27,6 +27,8 @@ def is_azure_model_router(model: str) -> bool:
     Returns:
         bool: True if this is a model router model
     """
+    if custom_llm_provider is not None and custom_llm_provider not in ("azure", "azure_ai"):
+        return False
     model_lower: Final = model.lower()
     return "model-router" in model_lower or "model_router" in model_lower or model_lower == "azure-model-router"
 

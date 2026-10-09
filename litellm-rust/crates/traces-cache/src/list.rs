@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::{
     ReadError, SnapshotKey, TraceReader, TraceStore,
     cache::{Freshness, ListedRun},
+    pricing::estimates,
     reader::{map_store_error, now_ms},
     spend::{spend, spend_window, spend_within},
     store::StoreError,
@@ -10,7 +11,7 @@ use crate::{
 use litellm_traces::{
     TraceSummary, listed_summary,
     query::named::{ListTracesRow, ReadAccessParams, TracePageSpansParams, TraceSpansRow},
-    resolve_trace,
+    resolve_trace_with_estimates,
 };
 
 const RUNS_PER_SPAN_READ: usize = 16;
@@ -152,7 +153,7 @@ async fn resolve_runs<S: TraceStore>(
             )
         })
         .collect();
-    Ok(runs
+    let sources: Vec<_> = runs
         .iter()
         .map(|row| {
             let spans = by_run
@@ -161,10 +162,25 @@ async fn resolve_runs<S: TraceStore>(
                 .unwrap_or_default();
             let spend =
                 spend_window(spans).map_or(&[][..], |window| spend_within(&spend_rows, window));
-            resolve_trace(&row.trace_id, &row.trace_ref, spans, spend).map(|trace| {
-                let freshness = Freshness::of(spans, &trace, snapshot_ms);
-                ListedRun::Resolved(Box::new(trace.summary), freshness)
-            })
+            (spans, spend)
+        })
+        .collect();
+    let (costs, retry) = estimates(reader, &sources).await;
+    Ok(runs
+        .iter()
+        .zip(sources)
+        .zip(costs)
+        .map(|((row, (spans, spend)), costs)| {
+            resolve_trace_with_estimates(&row.trace_id, &row.trace_ref, spans, spend, &costs).map(
+                |trace| {
+                    let freshness = if retry {
+                        Freshness::Live
+                    } else {
+                        Freshness::of(spans, &trace, snapshot_ms)
+                    };
+                    ListedRun::Resolved(Box::new(trace.summary), freshness)
+                },
+            )
         })
         .collect())
 }
