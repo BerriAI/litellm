@@ -3279,7 +3279,7 @@ def test_cost_per_token_resolves_per_second_rate_precedence(
     ) == pytest.approx((expected_rate * 1.5, 0.0))
 
 
-def test_completion_cost_prefers_a_direct_row_over_the_together_size_bucket(monkeypatch) -> None:
+def test_completion_cost_prefers_a_direct_row_over_the_together_size_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
