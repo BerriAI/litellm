@@ -32,6 +32,7 @@ from litellm.constants import (
     SESSION_ID_OMITTED_METADATA_KEY,
     X_LITELLM_DISABLE_CALLBACKS,
 )
+from litellm.integrations.custom_guardrail import without_server_streaming_classification
 from litellm.litellm_core_utils.core_helpers import is_codex_user_agent
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
@@ -65,7 +66,10 @@ from litellm.proxy.common_utils.callback_utils import (
     get_metadata_variable_name_from_kwargs,
     strip_callback_config,
 )
-from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
+    _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    safe_get_request_headers,
+)
 from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
 from litellm.types.integrations.anthropic_cache_control_hook import GATEWAY_INJECTED_CACHE_METADATA_KEY
 
@@ -151,6 +155,27 @@ def _session_id_from_baggage(baggage: str) -> str | None:
     return None
 
 
+def _caller_trace_field(data: Mapping[str, object], metadata_variable_name: str, field: str) -> str | None:
+    """The caller's value for a trace-control field, counted only when it is a
+    usable id: a non-empty string. An explicitly empty/unusable value on the
+    active metadata container still shadows the promoted requester value, but
+    neither ever counts as "the caller supplied this field" on its own, so a
+    numeric session id or an empty string cannot suppress the W3C header
+    fallback or satisfy a missing-session-id policy."""
+    active: Final = data.get(metadata_variable_name)
+    if isinstance(active, Mapping) and field in active:
+        active_map: Final = cast(Mapping[str, object], active)  # cast-ok: isinstance above, free-form JSON values
+        active_value: Final = active_map[field]
+        return active_value if isinstance(active_value, str) and active_value else None
+    promoted: Final = metadata_variable_name == "litellm_metadata" and field in LITELLM_TRACE_CONTROL_METADATA_FIELDS
+    requester: Final = data.get("metadata")
+    if not promoted or not isinstance(requester, Mapping):
+        return None
+    requester_map: Final = cast(Mapping[str, object], requester)  # cast-ok: isinstance above, free-form JSON values
+    requester_value: Final = requester_map.get(field)
+    return requester_value if isinstance(requester_value, str) and requester_value else None
+
+
 def _stampable_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str | None:
     """Only proxy-validated keys are stamped, proven by the unforgeable
     via_virtual_key marker AND a known non-secret shape: the sha256 hex digest
@@ -182,6 +207,10 @@ def _sanitize_for_log(value: object) -> str:
         text = repr(value)
     # Strip CR/LF characters commonly used for log injection
     return text.replace("\r", "").replace("\n", "")
+
+
+def sanitize_for_log(value: object) -> str:
+    return _sanitize_for_log(value)
 
 
 from litellm.router import Router
@@ -261,6 +290,9 @@ LITELLM_TRACE_CONTROL_METADATA_FIELDS: Final = frozenset(
 _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "weights",
     "_router_weights",
+    "fallback_depth",
+    "_target_order",
+    "attempted_targets",
     "proxy_server_request",
     "standard_logging_object",
     "secret_fields",
@@ -639,7 +671,7 @@ def _strip_router_reserved_metadata(
             )
 
 
-def _get_metadata_variable_name(request: Request) -> str:
+def get_metadata_variable_name(request: Request) -> str:
     """
     Helper to return what the "metadata" field should be called in the request data
 
@@ -651,6 +683,9 @@ def _get_metadata_variable_name(request: Request) -> str:
     from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
 
     return metadata_variable_name_for_route(get_request_route(request))
+
+
+_get_metadata_variable_name: Final = get_metadata_variable_name
 
 
 def metadata_variable_name_for_route(route: str) -> Literal["metadata", "litellm_metadata"]:
@@ -833,11 +868,22 @@ def apply_missing_session_id_policy(
         ):
             metadata["session_id"] = body_session_id
         return
-    if data.get("litellm_session_id") or metadata.get("session_id"):
+    caller_session_id: Final = _caller_trace_field(data, _metadata_variable_name, "session_id")
+    if caller_session_id is not None:
+        # Consumers that read the root field (router fallbacks, spend logs,
+        # sandbox reuse) otherwise see no session and mint a uuid4 per request.
+        if not data.get("litellm_session_id"):
+            data["litellm_session_id"] = caller_session_id  # rebind-ok: data is an out-param
+        return
+    if data.get("litellm_session_id"):
         return
     match policy:
         case "generate":
-            session_id: Final = str(data.get("litellm_trace_id") or metadata.get("trace_id") or uuid.uuid4())
+            session_id: Final = str(
+                data.get("litellm_trace_id")
+                or _caller_trace_field(data, _metadata_variable_name, "trace_id")
+                or uuid.uuid4()
+            )
             data["litellm_session_id"] = session_id  # rebind-ok: data is an out-param
             data.setdefault("litellm_trace_id", session_id)
             metadata["session_id"] = session_id
@@ -941,7 +987,7 @@ def convert_key_logging_metadata_to_callback(
     return team_callback_settings_obj
 
 
-def _get_validated_callback_metadata(item: dict, *, source: str) -> AddTeamCallback | None:
+def get_validated_callback_metadata(item: dict, *, source: str) -> AddTeamCallback | None:
     try:
         return AddTeamCallback(**item)
     except (PydanticValidationError, ValueError) as e:
@@ -951,6 +997,9 @@ def _get_validated_callback_metadata(item: dict, *, source: str) -> AddTeamCallb
             _sanitize_for_log(str(e)),
         )
         return None
+
+
+_get_validated_callback_metadata: Final = get_validated_callback_metadata
 
 
 class KeyAndTeamLoggingSettings:
@@ -971,7 +1020,7 @@ class KeyAndTeamLoggingSettings:
         return None
 
 
-def _get_dynamic_logging_metadata(
+def get_dynamic_logging_metadata(
     user_api_key_dict: UserAPIKeyAuth, proxy_config: ProxyConfig
 ) -> TeamCallbackMetadata | None:
     callback_settings_obj: TeamCallbackMetadata | None = None
@@ -986,7 +1035,7 @@ def _get_dynamic_logging_metadata(
     #########################################################################################
     if key_dynamic_logging_settings is not None:
         for item in key_dynamic_logging_settings:
-            callback = _get_validated_callback_metadata(item=item, source="key-level")
+            callback = get_validated_callback_metadata(item=item, source="key-level")
             if callback is None:
                 continue
             callback_settings_obj = convert_key_logging_metadata_to_callback(
@@ -998,7 +1047,7 @@ def _get_dynamic_logging_metadata(
     #########################################################################################
     elif team_dynamic_logging_settings is not None:
         for item in team_dynamic_logging_settings:
-            callback = _get_validated_callback_metadata(item=item, source="team-level")
+            callback = get_validated_callback_metadata(item=item, source="team-level")
             if callback is None:
                 continue
             callback_settings_obj = convert_key_logging_metadata_to_callback(
@@ -1030,6 +1079,9 @@ def _get_dynamic_logging_metadata(
             team_id=user_api_key_dict.team_id, proxy_config=proxy_config
         )
     return callback_settings_obj
+
+
+_get_dynamic_logging_metadata: Final = get_dynamic_logging_metadata
 
 
 _TENANT_OTEL_PARAMS: Final = TypeAdapter(StandardCallbackDynamicParams)
@@ -1123,7 +1175,7 @@ def resolve_tenant_otel_destinations(
     callbacks: Final = tuple(
         callback
         for item in entries
-        if (callback := _get_validated_callback_metadata(item=item, source="otel-destination")) is not None
+        if (callback := get_validated_callback_metadata(item=item, source="otel-destination")) is not None
         if callback.callback_name.lower() not in disabled
     )
     return tuple(
@@ -1440,7 +1492,7 @@ class LiteLLMProxyRequestSetup:
         """
         Add headers to the LLM call by model group
         """
-        from litellm.proxy.auth.auth_checks import _check_model_access_helper
+        from litellm.proxy.auth.auth_checks import check_model_access_helper
         from litellm.proxy.proxy_server import llm_router
 
         data_model: Final = data.get("model")
@@ -1449,7 +1501,7 @@ class LiteLLMProxyRequestSetup:
             data_model is not None
             and litellm.model_group_settings is not None
             and litellm.model_group_settings.forward_client_headers_to_llm_api is not None
-            and _check_model_access_helper(
+            and check_model_access_helper(
                 model=data_model,
                 llm_router=llm_router,
                 models=litellm.model_group_settings.forward_client_headers_to_llm_api,
@@ -1584,16 +1636,28 @@ class LiteLLMProxyRequestSetup:
         # Last-resort fallback: the W3C standards for trace/session propagation
         # (https://www.w3.org/TR/trace-context/, https://www.w3.org/TR/baggage/).
         # Lower priority than everything above - only fires when neither the
-        # explicit litellm headers nor the Anthropic-metadata path found
-        # anything - but lets a caller's existing traceparent/baggage headers
-        # (from real OTel instrumentation) correlate with litellm's own logs
-        # instead of generating an unrelated trace_id.
+        # explicit litellm headers, the Anthropic-metadata path, nor the
+        # caller's own request metadata set the field to a DIFFERENT usable id
+        # - but lets a caller's existing traceparent/baggage headers (from
+        # real OTel instrumentation) correlate with litellm's own logs instead
+        # of generating an unrelated trace_id.
         normalized_headers: Final = MappingProxyType({k.lower(): v for k, v in headers.items() if isinstance(k, str)})
         if "litellm_trace_id" not in data:
             traceparent: Final = normalized_headers.get("traceparent")
             if isinstance(traceparent, str):
                 trace_id_from_traceparent: Final = _trace_id_from_traceparent(traceparent)
-                if trace_id_from_traceparent:
+                # The caller's metadata wins over the header fallback unless
+                # both carry the same id: stamping the root field then claims
+                # nothing the caller did not already ask for, and keeps the
+                # W3C-correlated root trace id instead of a generated uuid4.
+                caller_trace_id: Final = _caller_trace_field(
+                    cast(Mapping[str, object], data),  # cast-ok: request body is a str-keyed JSON object
+                    _metadata_variable_name,
+                    "trace_id",
+                )
+                if trace_id_from_traceparent and (
+                    caller_trace_id is None or caller_trace_id == trace_id_from_traceparent
+                ):
                     metadata_from_headers["trace_id"] = trace_id_from_traceparent
                     data["litellm_trace_id"] = trace_id_from_traceparent  # rebind-ok: data is an out-param
                     verbose_proxy_logger.debug(
@@ -1603,7 +1667,14 @@ class LiteLLMProxyRequestSetup:
             baggage: Final = normalized_headers.get("baggage")
             if isinstance(baggage, str):
                 session_id_from_baggage: Final = _session_id_from_baggage(baggage)
-                if session_id_from_baggage:
+                caller_session_id: Final = _caller_trace_field(
+                    cast(Mapping[str, object], data),  # cast-ok: request body is a str-keyed JSON object
+                    _metadata_variable_name,
+                    "session_id",
+                )
+                if session_id_from_baggage and (
+                    caller_session_id is None or caller_session_id == session_id_from_baggage
+                ):
                     metadata_from_headers["session_id"] = session_id_from_baggage
                     data["litellm_session_id"] = session_id_from_baggage  # rebind-ok: data is an out-param
                     verbose_proxy_logger.debug("Extracted session_id from W3C baggage header")
@@ -1745,7 +1816,7 @@ class LiteLLMProxyRequestSetup:
 
         ## KEY-LEVEL SPEND LOGS / TAGS
         if "tags" in key_metadata and key_metadata["tags"] is not None:
-            data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
+            data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup.merge_tags(
                 request_tags=data[_metadata_variable_name].get("tags"),
                 tags_to_add=key_metadata["tags"],
             )
@@ -1793,8 +1864,8 @@ class LiteLLMProxyRequestSetup:
             team_spend_logs_metadata=team_metadata.get("spend_logs_metadata"),
             request_spend_logs_metadata=metadata.get("spend_logs_metadata"),
         )
-        tags: Final = LiteLLMProxyRequestSetup._merge_tags(
-            request_tags=LiteLLMProxyRequestSetup._merge_tags(
+        tags: Final = LiteLLMProxyRequestSetup.merge_tags(
+            request_tags=LiteLLMProxyRequestSetup.merge_tags(
                 request_tags=request_tags if isinstance(request_tags, list) else None,
                 tags_to_add=team_tags if isinstance(team_tags, list) else None,
             ),
@@ -1826,7 +1897,7 @@ class LiteLLMProxyRequestSetup:
         return {**(team_values or {}), **(request_values or {})}
 
     @staticmethod
-    def _merge_tags(request_tags: list | None, tags_to_add: list | None) -> list:
+    def merge_tags(request_tags: list | None, tags_to_add: list | None) -> list:
         """
         Helper function to merge two lists of tags, ensuring no duplicates.
 
@@ -1848,6 +1919,8 @@ class LiteLLMProxyRequestSetup:
                     final_tags.append(tag)
 
         return final_tags
+
+    _merge_tags = merge_tags
 
     @staticmethod
     def add_team_based_callbacks_from_config(
@@ -1938,7 +2011,7 @@ class LiteLLMProxyRequestSetup:
         metadata: Final = _normalized_metadata_slot(request_data, _metadata_variable_name)
 
         existing_tags: Final = metadata.get("tags")
-        metadata["tags"] = LiteLLMProxyRequestSetup._merge_tags(
+        metadata["tags"] = LiteLLMProxyRequestSetup.merge_tags(
             request_tags=existing_tags if isinstance(existing_tags, list) else None,
             tags_to_add=key_tags,
         )
@@ -1968,7 +2041,7 @@ class LiteLLMProxyRequestSetup:
         # No allow_client_tags opt-in: caller-supplied tags always flow
         # into metadata.tags (see add_litellm_data_to_request). The pre-auth
         # merge mirrors that so _tag_max_budget_check sees the same tags.
-        headers: Final = _safe_get_request_headers(request=request)
+        headers: Final = safe_get_request_headers(request=request)
         raw_header_tags: Final = headers.get("x-litellm-tags")
         if not raw_header_tags:
             return
@@ -1990,7 +2063,7 @@ class LiteLLMProxyRequestSetup:
         metadata: Final = _normalized_metadata_slot(request_data, _metadata_variable_name)
 
         existing_tags: Final = metadata.get("tags")
-        metadata["tags"] = LiteLLMProxyRequestSetup._merge_tags(
+        metadata["tags"] = LiteLLMProxyRequestSetup.merge_tags(
             request_tags=existing_tags if isinstance(existing_tags, list) else None,
             tags_to_add=header_tags,
         )
@@ -2029,7 +2102,9 @@ def refresh_proxy_server_request_body_snapshot(
         | _TRANSPORT_ONLY_CREDENTIAL_KEYS
         | _CALLBACK_CREDENTIAL_KEYS
     )
-    body: Final = {k: v for k, v in data.items() if k not in _body_snapshot_exclude}
+    body: Final = {
+        k: v for k, v in without_server_streaming_classification(data).items() if k not in _body_snapshot_exclude
+    }
     proxy_server_request["body"] = body
     if guardrails_applied and isinstance(logging_obj, Logging):
         metadata: Final = data.get(get_metadata_variable_name_from_kwargs(data))
@@ -2088,7 +2163,7 @@ async def add_litellm_data_to_request(
             if _mk.startswith("user_api_key_"):
                 del _user_metadata[_mk]
 
-    _raw_headers: Final[dict[str, str]] = RedactedDict(_safe_get_request_headers(request))
+    _raw_headers: Final[dict[str, str]] = RedactedDict(safe_get_request_headers(request))
 
     forward_llm_auth = False
     if general_settings:
@@ -2162,7 +2237,7 @@ async def add_litellm_data_to_request(
     }
 
     safe_add_api_version_from_query_params(data, request)
-    _metadata_variable_name: Final = _get_metadata_variable_name(request)
+    _metadata_variable_name: Final = get_metadata_variable_name(request)
     if data.get(_metadata_variable_name, None) is None:
         data[_metadata_variable_name] = {}
 
@@ -2494,7 +2569,7 @@ async def add_litellm_data_to_request(
     )
 
     if tags is not None:
-        data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
+        data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup.merge_tags(
             request_tags=data[_metadata_variable_name].get("tags"),
             tags_to_add=tags,
         )
@@ -2506,7 +2581,7 @@ async def add_litellm_data_to_request(
         else None
     )
     if _caller_body_tags:
-        data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(  # rebind-ok: matches file idiom
+        data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup.merge_tags(  # rebind-ok: matches file idiom
             request_tags=data[_metadata_variable_name].get("tags"),
             tags_to_add=_caller_body_tags,
         )
@@ -2523,7 +2598,7 @@ async def add_litellm_data_to_request(
     )
 
     # Team Callbacks controls
-    callback_settings_obj: Final = _get_dynamic_logging_metadata(
+    callback_settings_obj: Final = get_dynamic_logging_metadata(
         user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
     )
     if callback_settings_obj is not None:
@@ -3004,7 +3079,7 @@ def _enforced_params_check(
     return True
 
 
-def _add_guardrails_from_key_or_team_metadata(
+def add_guardrails_from_key_or_team_metadata(
     key_metadata: dict | None,
     team_metadata: dict | None,
     data: dict,
@@ -3024,7 +3099,7 @@ def _add_guardrails_from_key_or_team_metadata(
         project_metadata: The project metadata dictionary to check for guardrails
 
     """
-    from litellm.proxy.utils import _premium_user_check
+    from litellm.proxy.utils import premium_user_check
 
     # Initialize guardrails set (avoiding duplicates)
     combined_guardrails: Final = set()
@@ -3032,24 +3107,27 @@ def _add_guardrails_from_key_or_team_metadata(
     # Add key-level guardrails first
     if key_metadata and "guardrails" in key_metadata:
         if isinstance(key_metadata["guardrails"], list) and len(key_metadata["guardrails"]) > 0:
-            _premium_user_check()
+            premium_user_check()
             combined_guardrails.update(key_metadata["guardrails"])
 
     # Add team-level guardrails (set automatically handles duplicates)
     if team_metadata and "guardrails" in team_metadata:
         if isinstance(team_metadata["guardrails"], list) and len(team_metadata["guardrails"]) > 0:
-            _premium_user_check()
+            premium_user_check()
             combined_guardrails.update(team_metadata["guardrails"])
 
     # Add project-level guardrails (set automatically handles duplicates)
     if project_metadata and "guardrails" in project_metadata:
         if isinstance(project_metadata["guardrails"], list) and len(project_metadata["guardrails"]) > 0:
-            _premium_user_check()
+            premium_user_check()
             combined_guardrails.update(project_metadata["guardrails"])
 
     # Set combined guardrails in metadata as list
     if combined_guardrails:
         data[metadata_variable_name]["guardrails"] = list(combined_guardrails)
+
+
+_add_guardrails_from_key_or_team_metadata: Final = add_guardrails_from_key_or_team_metadata
 
 
 def _add_guardrails_from_policies_in_metadata(
@@ -3077,7 +3155,7 @@ def _add_guardrails_from_policies_in_metadata(
     from litellm._logging import verbose_proxy_logger
     from litellm.proxy.policy_engine.policy_registry import get_policy_registry
     from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
-    from litellm.proxy.utils import _premium_user_check
+    from litellm.proxy.utils import premium_user_check
     from litellm.types.proxy.policy_engine import PolicyMatchContext
 
     # Collect policy names from key and team metadata
@@ -3086,19 +3164,19 @@ def _add_guardrails_from_policies_in_metadata(
     # Add key-level policies first
     if key_metadata and "policies" in key_metadata:
         if isinstance(key_metadata["policies"], list) and len(key_metadata["policies"]) > 0:
-            _premium_user_check()
+            premium_user_check()
             policy_names.update(key_metadata["policies"])
 
     # Add team-level policies
     if team_metadata and "policies" in team_metadata:
         if isinstance(team_metadata["policies"], list) and len(team_metadata["policies"]) > 0:
-            _premium_user_check()
+            premium_user_check()
             policy_names.update(team_metadata["policies"])
 
     # Add project-level policies
     if project_metadata and "policies" in project_metadata:
         if isinstance(project_metadata["policies"], list) and len(project_metadata["policies"]) > 0:
-            _premium_user_check()
+            premium_user_check()
             policy_names.update(project_metadata["policies"])
 
     if not policy_names:
@@ -3166,7 +3244,7 @@ def add_guardrails_from_auth_metadata(
     metadata_variable_name: str,
 ) -> None:
     """Resolve key, team, and project guardrails, direct and via policies, onto the request metadata."""
-    _add_guardrails_from_key_or_team_metadata(
+    add_guardrails_from_key_or_team_metadata(
         key_metadata=user_api_key_dict.metadata,
         team_metadata=user_api_key_dict.team_metadata,
         project_metadata=user_api_key_dict.project_metadata,

@@ -63,7 +63,7 @@ def _failed_line(index: int) -> str:
     )
 
 
-def _batch_routes(model: str) -> RoutedResponse:
+def batch_routes(model: str) -> RoutedResponse:
     output_lines: Final = (
         _succeeded_line(1, model, **FIRST_LINE),
         _succeeded_line(2, model, **SECOND_LINE),
@@ -139,7 +139,7 @@ def _batches_total_tokens(endpoints: dict[str, object] | None) -> int | None:
     return int(total_tokens) if isinstance(total_tokens, (int, float, str)) else None
 
 
-def _input_file(model: str) -> bytes:
+def batch_input_file(model: str) -> bytes:
     return (
         "\n".join(
             json.dumps(
@@ -166,13 +166,13 @@ def test_completed_batch_spend_row_records_reasoning_tokens_and_error_file_failu
     with gateway.scenario() as scenario:
         key: Final = scenario.key()
         scenario_id: Final = f"batch-accounting-{uuid.uuid4().hex[:12]}"
-        handle: Final = register_scenario(scenario_id, _batch_routes("gpt-4o-mini"))
+        handle: Final = register_scenario(scenario_id, batch_routes("gpt-4o-mini"))
         scenario.cleanups.callback(delete_scenario, handle)
         model: Final = scenario.model(api_base=handle.api_base())
         file_response: Final = gateway.request_multipart(
             "/v1/files",
             {"purpose": "batch", "model": model},
-            {"file": ("in.jsonl", _input_file(model), "application/jsonl")},
+            {"file": ("in.jsonl", batch_input_file(model), "application/jsonl")},
             key=key,
         )
         assert file_response.status_code == 200, file_response.text
@@ -235,7 +235,7 @@ BATCH_SPEND: Final = (BATCH_PROMPT_TOKENS * INPUT_COST_PER_TOKEN + BATCH_COMPLET
 def test_completed_batch_spend_lands_under_batches_in_team_endpoint_activity(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         scenario_id: Final = f"batch-endpoint-{uuid.uuid4().hex[:12]}"
-        handle: Final = register_scenario(scenario_id, _batch_routes("gpt-4o-mini"))
+        handle: Final = register_scenario(scenario_id, batch_routes("gpt-4o-mini"))
         scenario.cleanups.callback(delete_scenario, handle)
         model: Final = scenario.model(
             api_base=handle.api_base(),
@@ -247,7 +247,7 @@ def test_completed_batch_spend_lands_under_batches_in_team_endpoint_activity(gat
         file_response: Final = gateway.request_multipart(
             "/v1/files",
             {"purpose": "batch", "model": model},
-            {"file": ("in.jsonl", _input_file(model), "application/jsonl")},
+            {"file": ("in.jsonl", batch_input_file(model), "application/jsonl")},
             key=key,
         )
         assert file_response.status_code == 200, file_response.text

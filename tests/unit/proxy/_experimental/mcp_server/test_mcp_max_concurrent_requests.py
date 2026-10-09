@@ -57,7 +57,7 @@ def _patch_client_with_tracker(manager: MCPServerManager, tracker: _ConcurrencyT
 
         return _ProbeClient()
 
-    return patch.object(manager, "_create_mcp_client", side_effect=fake_create_mcp_client)
+    return patch.object(manager, "create_mcp_client", side_effect=fake_create_mcp_client)
 
 
 async def _fire(manager: MCPServerManager, server: MCPServer, n: int) -> None:

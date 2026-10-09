@@ -53,15 +53,17 @@ from litellm.proxy.db.health_check_latest import (
     query_latest_health_checks,
 )
 from litellm.proxy.db.proxy_worker_heartbeat import count_live_proxy_workers
-from litellm.proxy.health_check import (
+from litellm.proxy.health_check import (  # noqa: F401  # legacy module exports
     ADMIN_ONLY_HEALTH_DISPLAY_PARAMS,
-    _clean_endpoint_data,
-    _update_litellm_params_for_health_check,
+    _clean_endpoint_data,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _update_litellm_params_for_health_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    clean_endpoint_data,
     deployments_targeted_by_name,
     health_check_filter_kwargs_from_general_settings,
     perform_health_check,
     resolve_health_check_mode,
     run_with_timeout,
+    update_litellm_params_for_health_check,
 )
 from litellm.proxy.middleware.admission_control_middleware import (
     get_admission_control_stats,
@@ -634,7 +636,7 @@ async def health_services_endpoint(
         )
 
 
-def _convert_health_check_to_dict(check) -> dict:
+def convert_health_check_to_dict(check) -> dict:
     """Convert health check database record to dictionary format"""
     return {
         "health_check_id": check.health_check_id,
@@ -650,6 +652,9 @@ def _convert_health_check_to_dict(check) -> dict:
         "checked_at": check.checked_at.isoformat() if check.checked_at else None,
         "created_at": check.created_at.isoformat() if check.created_at else None,
     }
+
+
+_convert_health_check_to_dict: Final = convert_health_check_to_dict
 
 
 def _check_prisma_client():
@@ -883,7 +888,7 @@ async def _save_health_check_results_if_changed(
     return all(row is not None for row in rows)
 
 
-async def _save_background_health_checks_to_db(
+async def save_background_health_checks_to_db(
     prisma_client,
     model_list: list,
     healthy_endpoints: list,
@@ -939,6 +944,9 @@ async def _save_background_health_checks_to_db(
         verbose_proxy_logger.warning("Failed to save background health checks to database: %s", db_error)
         # Continue execution - don't let database save failure break health checks
         return False
+
+
+_save_background_health_checks_to_db: Final = save_background_health_checks_to_db
 
 
 _PROXY_ADMIN_ROLES: Final = frozenset(
@@ -1353,7 +1361,7 @@ async def health_check_history_endpoint(
         )
 
         # Convert to dict format for JSON response using helper function
-        history_data: Final = [_convert_health_check_to_dict(check) for check in history]
+        history_data: Final = [convert_health_check_to_dict(check) for check in history]
 
         return {
             "health_checks": history_data,
@@ -1385,7 +1393,7 @@ async def latest_health_checks_endpoint(
 
         # Convert to dict format for JSON response using helper function
         checks_data: Final = {
-            (check.model_id if check.model_id else check.model_name): _convert_health_check_to_dict(check)
+            (check.model_id if check.model_id else check.model_name): convert_health_check_to_dict(check)
             for check in latest_checks
         }
 
@@ -1783,7 +1791,7 @@ async def _get_health_readiness_details(
                 "cache": cache_type,
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
-                "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
+                "use_aiohttp_transport": AsyncHTTPHandler.should_use_aiohttp_transport(),
                 "log_level": log_level_name,
                 "is_detailed_debug": is_detailed_debug,
                 "show_no_redis_warning": show_no_redis_warning,
@@ -1796,7 +1804,7 @@ async def _get_health_readiness_details(
                 "cache": cache_type,
                 "litellm_version": version,
                 "success_callbacks": success_callback_names,
-                "use_aiohttp_transport": AsyncHTTPHandler._should_use_aiohttp_transport(),
+                "use_aiohttp_transport": AsyncHTTPHandler.should_use_aiohttp_transport(),
                 "log_level": log_level_name,
                 "is_detailed_debug": is_detailed_debug,
                 "show_no_redis_warning": show_no_redis_warning,
@@ -2070,6 +2078,7 @@ async def test_model_connection(
         "responses",
         "anthropic_messages",
         "ocr",
+        "evaluation",
     ]
     | None = fastapi.Body(
         None,
@@ -2234,7 +2243,7 @@ async def test_model_connection(
             stored_params=_OBJECT_MAPPING.validate_python(config_litellm_params),
             request_params=_OBJECT_MAPPING.validate_python(request_litellm_params),
         )
-        litellm_params = _update_litellm_params_for_health_check(
+        litellm_params = update_litellm_params_for_health_check(
             model_info=dict(probe_model_info),
             litellm_params=litellm_params,
         )
@@ -2272,7 +2281,7 @@ async def test_model_connection(
         )
 
         # Clean the result for display
-        cleaned_result: Final = _clean_endpoint_data({**litellm_params, **result}, details=True)
+        cleaned_result: Final = clean_endpoint_data({**litellm_params, **result}, details=True)
 
         return {
             "status": "error" if "error" in result else "success",

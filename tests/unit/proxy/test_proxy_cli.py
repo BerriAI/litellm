@@ -611,7 +611,7 @@ class TestProxyInitializationHelpers:
                 },
             ),
             patch(
-                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers.get_default_unvicorn_init_args"
             ) as mock_get_args,
         ):
             mock_get_args.return_value = {
@@ -717,7 +717,7 @@ class TestProxyInitializationHelpers:
                 },
             ),
             patch(
-                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers.get_default_unvicorn_init_args"
             ) as mock_get_args,
         ):
             mock_get_args.side_effect = lambda *a, **k: {
@@ -810,7 +810,7 @@ class TestProxyInitializationHelpers:
                 },
             ),
             patch(  # test-quality-ok: same isolation as the sibling CLI tests above
-                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers.get_default_unvicorn_init_args"
             ) as mock_get_args,
         ):
             mock_get_args.side_effect = lambda *a, **k: {
@@ -939,7 +939,7 @@ class TestProxyInitializationHelpers:
                 },
             ),
             patch(
-                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers.get_default_unvicorn_init_args"
             ) as mock_get_args,
             patch(
                 "litellm.proxy.proxy_cli.append_query_params",
@@ -1069,7 +1069,7 @@ class TestProxyInitializationHelpers:
                 },
             ),
             patch(
-                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers.get_default_unvicorn_init_args"
             ) as mock_get_args,
             patch(
                 "litellm.proxy.proxy_cli.append_query_params",
@@ -1190,7 +1190,7 @@ class TestProxyInitializationHelpers:
                 },
             ),
             patch(
-                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers.get_default_unvicorn_init_args"
             ) as mock_get_args,
             patch(
                 "litellm.proxy.proxy_cli.append_query_params",
@@ -1283,7 +1283,7 @@ class TestProxyInitializationHelpers:
                 },
             ),
             patch(
-                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers.get_default_unvicorn_init_args"
             ) as mock_get_args,
             patch(
                 "litellm.proxy.proxy_cli.append_query_params",
@@ -1362,7 +1362,7 @@ class TestProxyInitializationHelpers:
                 },
             ),
             patch(
-                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers.get_default_unvicorn_init_args"
             ) as mock_get_args,
             patch(
                 "litellm.proxy.proxy_cli.append_query_params",
@@ -1421,7 +1421,7 @@ class TestProxyInitializationHelpers:
                 },
             ),
             patch(
-                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers.get_default_unvicorn_init_args"
             ) as mock_get_args,
         ):
             mock_get_args.return_value = {
@@ -1482,10 +1482,10 @@ class TestProxyInitializationHelpers:
                 },
             ),
             patch(
-                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers.get_default_unvicorn_init_args"
             ) as mock_get_args,
             patch(
-                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._is_port_in_use",
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers.is_port_in_use",
                 return_value=False,
             ),
         ):
@@ -1557,10 +1557,10 @@ class TestProxyInitializationHelpers:
                 },
             ),
             patch(
-                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers.get_default_unvicorn_init_args"
             ) as mock_get_args,
             patch(
-                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._is_port_in_use",
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers.is_port_in_use",
                 return_value=False,
             ),
         ):
@@ -1624,7 +1624,7 @@ class TestProxyInitializationHelpers:
                 },
             ),
             patch(
-                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers.get_default_unvicorn_init_args"
             ) as mock_get_args,
         ):
             mock_get_args.return_value = {
@@ -1682,7 +1682,7 @@ class TestProxyInitializationHelpers:
                 },
             ),
             patch(
-                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers.get_default_unvicorn_init_args"
             ) as mock_get_args,
         ):
             mock_get_args.return_value = {
@@ -1710,7 +1710,7 @@ class TestProxyInitializationHelpers:
             assert call_args[1]["limit_max_requests"] == 1000
             assert call_args[1]["limit_max_requests_jitter"] == 50
 
-    @patch("litellm.proxy.proxy_cli.ProxyInitializationHelpers._run_gunicorn_server")
+    @patch("litellm.proxy.proxy_cli.ProxyInitializationHelpers.run_gunicorn_server")
     @patch("uvicorn.run")
     @patch("builtins.print")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
@@ -1742,7 +1742,7 @@ class TestProxyInitializationHelpers:
                 },
             ),
             patch(
-                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers.get_default_unvicorn_init_args"
             ) as mock_get_args,
         ):
             mock_get_args.return_value = {
@@ -2019,7 +2019,7 @@ class TestProxyInitializationHelpers:
                     {"litellm.proxy.proxy_server": mock_proxy_server_module},
                 ),
                 patch(
-                    "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+                    "litellm.proxy.proxy_cli.ProxyInitializationHelpers.get_default_unvicorn_init_args"
                 ) as mock_get_args,
             ):
                 mock_get_args.return_value = {
@@ -2084,7 +2084,7 @@ class TestQueryEngineReaperWiring:
                 "litellm.proxy.proxy_cli.start_query_engine_reaper"
             ) as mock_start_reaper,
             patch(
-                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers.get_default_unvicorn_init_args"
             ) as mock_get_args,
         ):
             mock_get_args.return_value = {
@@ -2184,7 +2184,7 @@ class TestRunServerDbSetup:
                 },
             ),
             patch(
-                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers.get_default_unvicorn_init_args"
             ) as mock_get_args,
         ):
             mock_get_args.return_value = {
@@ -2261,7 +2261,7 @@ class TestRunServerDbSetup:
                 },
             ),
             patch(  # test-quality-ok: same isolation as the sibling CLI tests above
-                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers.get_default_unvicorn_init_args"
             ) as mock_get_args,
         ):
             mock_get_args.return_value = {
@@ -2378,7 +2378,7 @@ class TestRunServerDbSetup:
                 },
             ),
             patch(
-                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers.get_default_unvicorn_init_args"
             ) as mock_get_args,
         ):
             mock_get_args.return_value = {
@@ -2747,7 +2747,7 @@ class TestRunServerDbSetup:
                 {"proxy_server": mock_proxy_module, "litellm.proxy.proxy_server": mock_proxy_module},
             ),
             patch(
-                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers.get_default_unvicorn_init_args"
             ) as mock_get_args,
             outcome as exc_info,
         ):
@@ -3439,7 +3439,7 @@ class TestTokenAuthCliFlags:
             patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database"),
             patch("uvicorn.run"),
             patch(
-                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers.get_default_unvicorn_init_args"
             ) as mock_get_args,
         ):
             mock_get_args.return_value = {

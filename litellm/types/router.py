@@ -5,7 +5,7 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 import datetime
 import enum
 from collections.abc import Container, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -21,7 +21,7 @@ from typing import (
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, JsonValue, field_validator, model_validator
 from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_checkable
 
 from litellm._logging import verbose_logger
@@ -503,6 +503,10 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     use_xai_oauth: bool | None = Field(
         default=False,
         description="Use stored xAI OAuth credentials when no xAI API key is configured.",
+    )
+    fireworks_forward_user_id: bool | None = Field(
+        default=None,
+        description="Send the LiteLLM user id of the calling key as the `user` field on Fireworks AI chat, responses and messages requests.",
     )
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: bool | None = False
@@ -1223,6 +1227,7 @@ class BaselineRouteStamp:
     router_name: str
     baseline_model: str
     baseline_deployment_id: str
+    request_parameters: Mapping[str, JsonValue] | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)

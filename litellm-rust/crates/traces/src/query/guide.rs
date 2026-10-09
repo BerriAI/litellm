@@ -1,6 +1,6 @@
 use askama::Template;
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::response_type)]
 #[cfg_attr(feature = "schema", schemars(rename = "TraceQueryExample"))]
 pub struct Example {
     pub name: String,

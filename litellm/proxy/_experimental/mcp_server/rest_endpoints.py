@@ -37,7 +37,10 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     outcome_wire_value,
 )
 from litellm.proxy._experimental.mcp_server.faults.traversal import iter_exception_tree
-from litellm.proxy._experimental.mcp_server.oauth_utils import _redact_mcp_resource_url
+from litellm.proxy._experimental.mcp_server.oauth_utils import (  # noqa: F401  # legacy module exports
+    _redact_mcp_resource_url,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    redact_mcp_resource_url,
+)
 from litellm.proxy._experimental.mcp_server.result_conversion import WireCompat, complete_call_tool_result
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     acting_user_auth,
@@ -55,6 +58,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.responses.mcp.request_context import MCPRequestContext
 
 if TYPE_CHECKING:
@@ -63,7 +67,10 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._experimental.mcp_server.db import OAuthCredentialPayload
     from litellm.proxy.utils import ProxyLogging
-from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
+    _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    safe_get_request_headers,
+)
 from litellm.types.mcp import MCPAuth
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
 
@@ -143,7 +150,7 @@ def _known_connection_error_message(exc: BaseException, url: str | None, timeout
     if isinstance(exc, TimeoutError):
         return (
             "Failed to connect to MCP server: no valid MCP response received from "
-            f"{_redact_mcp_resource_url(url) or 'the server'} "
+            f"{redact_mcp_resource_url(url) or 'the server'} "
             f"within {timeout_seconds:.0f}s. Check that the LiteLLM proxy can reach this URL "
             "from its network (DNS, egress rules, firewalls) and that the server answers MCP requests."
         )
@@ -222,8 +229,9 @@ if MCP_AVAILABLE:
     from litellm.llms.litellm_proxy.skills.skill_search import (
         DEFAULT_SKILL_SEARCH_TOP_K,
     )
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-        _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: F401  # legacy module exports
+        _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+        UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,
         ListedToolsCaller,
         global_mcp_server_manager,
     )
@@ -241,8 +249,9 @@ if MCP_AVAILABLE:
         filter_tools_by_key_team_permissions,
         fire_mcp_tool_call_failure_logging,
     )
-    from litellm.proxy._experimental.mcp_server.server import (
-        _apply_toolset_scope,
+    from litellm.proxy._experimental.mcp_server.server import (  # noqa: F401  # legacy module exports
+        _apply_toolset_scope,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+        apply_toolset_scope,
         reject_disallowed_mcp_client,
     )
     from litellm.proxy._experimental.mcp_server.tool_catalog_guard import (
@@ -368,7 +377,7 @@ if MCP_AVAILABLE:
             virtual_mcp_server_auth_headers,
             virtual_raw_headers,
         ) = _extract_mcp_headers_from_request(request, MCPRequestHandler)
-        virtual_oauth2_headers: Final = MCPRequestHandler._get_oauth2_headers_from_headers(request.headers)
+        virtual_oauth2_headers: Final = MCPRequestHandler.get_oauth2_headers_from_headers(request.headers)
         if tool_name == MCP_TOOL_SEARCH_TOOL_NAME:
             return await handle_mcp_tool_search(
                 query=tool_arguments.get("query", ""),
@@ -655,7 +664,7 @@ if MCP_AVAILABLE:
             if (
                 _server is not None
                 and _rest_client_ip is not None
-                and not global_mcp_server_manager._is_server_accessible_from_ip(_server, _rest_client_ip)
+                and not global_mcp_server_manager.is_server_accessible_from_ip(_server, _rest_client_ip)
             ):
                 raise HTTPException(
                     status_code=403,
@@ -706,7 +715,7 @@ if MCP_AVAILABLE:
         record_listing: bool,
     ) -> list[MCPTool]:
         return list(
-            await global_mcp_server_manager._get_tools_from_server(
+            await global_mcp_server_manager.get_tools_from_server(
                 server=server,
                 mcp_auth_header=server_auth_header,
                 extra_headers=extra_headers,
@@ -737,6 +746,8 @@ if MCP_AVAILABLE:
         """
         from litellm.proxy.proxy_server import proxy_logging_obj
 
+        if apply_tool_filters and proxy_logging_obj is not None:
+            await proxy_logging_obj.enforce_mcp_server_rate_limits(user_api_key_auth, server)
         listed_generation: Final = global_mcp_server_manager.listed_tools_generation(server.server_id)
         tools: Final = await _list_server_tools(
             server,
@@ -853,7 +864,7 @@ if MCP_AVAILABLE:
             if (
                 _server is not None
                 and rest_client_ip is not None
-                and not global_mcp_server_manager._is_server_accessible_from_ip(_server, rest_client_ip)
+                and not global_mcp_server_manager.is_server_accessible_from_ip(_server, rest_client_ip)
             ):
                 raise HTTPException(
                     status_code=403,
@@ -899,6 +910,8 @@ if MCP_AVAILABLE:
             # Surface the upstream 401/403 to the caller so it can emit the
             # matching status code and WWW-Authenticate challenge; that is what
             # lets standards-compliant MCP clients run the upstream OAuth flow.
+            raise
+        except ProxyRateLimitError:
             raise
         except MCPServerListError as e:
             fault: Final = classify_list_exception(e)
@@ -948,7 +961,7 @@ if MCP_AVAILABLE:
                 status_code=404,
                 detail=f"Toolset '{toolset_name}' not found",
             )
-        return await _apply_toolset_scope(user_api_key_dict, toolset.toolset_id)
+        return await apply_toolset_scope(user_api_key_dict, toolset.toolset_id)
 
     @router.get("/tools/list", dependencies=[Depends(user_api_key_auth)])
     @catalog_operation(global_manager)
@@ -1029,8 +1042,8 @@ if MCP_AVAILABLE:
             # Extract auth headers from request
             headers: Final = request.headers
             raw_headers_from_request: Final = dict(headers)
-            mcp_auth_header: Final = MCPRequestHandler._get_mcp_auth_header_from_headers(headers)
-            mcp_server_auth_headers: Final = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers)
+            mcp_auth_header: Final = MCPRequestHandler.get_mcp_auth_header_from_headers(headers)
+            mcp_server_auth_headers: Final = MCPRequestHandler.get_mcp_server_auth_headers_from_headers(headers)
 
             auth_contexts: Final = await build_effective_auth_contexts(user_api_key_dict)
 
@@ -1288,7 +1301,7 @@ if MCP_AVAILABLE:
                 if target_server is not None:
                     user_oauth_extra_headers = await _get_user_oauth_extra_headers(target_server, user_api_key_dict)
                 caller_oauth2_headers: Final = (
-                    MCPRequestHandler._get_oauth2_headers_from_headers(request.headers)
+                    MCPRequestHandler.get_oauth2_headers_from_headers(request.headers)
                     if target_server is not None and target_server.auth_type in _CLIENT_FORWARDED_TOKEN_AUTH_TYPES
                     else None
                 )
@@ -1391,9 +1404,10 @@ if MCP_AVAILABLE:
     # /health/tools/list -> List tools from MCP server
     # For these routes users will dynamically pass the MCP connection params, they don't need to be on the MCP registry
     ########################################################
-    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (  # noqa: F401  # legacy module exports
         NewMCPServerRequest,
-        _inherit_credentials_from_existing_server,
+        _inherit_credentials_from_existing_server,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+        inherit_credentials_from_existing_server,
     )
 
     def _extract_credentials(
@@ -1456,7 +1470,7 @@ if MCP_AVAILABLE:
             saved_origin is not None and saved_origin == preview_origin
         )
         request: Final = (
-            _inherit_credentials_from_existing_server(new_mcp_server_request) if may_inherit else new_mcp_server_request
+            inherit_credentials_from_existing_server(new_mcp_server_request) if may_inherit else new_mcp_server_request
         )
         mcp_auth_header: Final = (
             request.credentials.get("auth_value")
@@ -1467,8 +1481,8 @@ if MCP_AVAILABLE:
         # when the primary x-litellm-api-key header is absent, the Authorization value is the
         # caller's LiteLLM key, not an upstream token, and must never be forwarded upstream.
         oauth2_headers: Final = (
-            MCPRequestHandler._get_oauth2_headers_from_headers(headers)
-            if request.auth_type in _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES
+            MCPRequestHandler.get_oauth2_headers_from_headers(headers)
+            if request.auth_type in UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES
             and headers.get(MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_PRIMARY)
             else None
         )
@@ -1559,7 +1573,7 @@ if MCP_AVAILABLE:
                 instructions=request.instructions,
             )
 
-            stdio_env: Final = global_mcp_server_manager._build_stdio_env(server_model, raw_headers)
+            stdio_env: Final = global_mcp_server_manager.build_stdio_env(server_model, raw_headers)
 
             # For M2M OAuth servers, drop the incoming Authorization header so that
             # resolve_mcp_auth can auto-fetch a token via client_credentials.
@@ -1612,7 +1626,7 @@ if MCP_AVAILABLE:
             )
 
             with anyio.fail_after(timeout_seconds):
-                client: Final = await global_mcp_server_manager._create_mcp_client(
+                client: Final = await global_mcp_server_manager.create_mcp_client(
                     server=server_model,
                     mcp_auth_header=mcp_auth_header,
                     extra_headers=merged_headers,
@@ -1643,7 +1657,7 @@ if MCP_AVAILABLE:
     async def _preview_openapi_tools(spec_path: str) -> dict:
         """Generate tool previews from an OpenAPI spec without creating a server."""
         from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
-            _OPENAPI_TOOL_NAME_MAX_LEN,
+            OPENAPI_TOOL_NAME_MAX_LEN,
             build_input_schema,
             load_openapi_spec_async,
             resolve_operation_params,
@@ -1676,7 +1690,7 @@ if MCP_AVAILABLE:
                     while unique in used_names:
                         n += 1
                         suffix = f"_{n}"
-                        unique = op_id[: _OPENAPI_TOOL_NAME_MAX_LEN - len(suffix)] + suffix
+                        unique = op_id[: OPENAPI_TOOL_NAME_MAX_LEN - len(suffix)] + suffix
                     op_id = unique
                     used_names.add(op_id)
                     summary = operation.get("summary", "")
@@ -1733,7 +1747,7 @@ if MCP_AVAILABLE:
             _test_connection_operation,
             mcp_auth_header=staged.mcp_auth_header,
             oauth2_headers=staged.oauth2_headers,
-            raw_headers=_safe_get_request_headers(request),
+            raw_headers=safe_get_request_headers(request),
         )
 
     @router.post("/test/tools/list", dependencies=[Depends(user_api_key_auth)])
@@ -1792,5 +1806,5 @@ if MCP_AVAILABLE:
             _list_tools_operation,
             mcp_auth_header=staged.mcp_auth_header,
             oauth2_headers=staged.oauth2_headers,
-            raw_headers=_safe_get_request_headers(request),
+            raw_headers=safe_get_request_headers(request),
         )

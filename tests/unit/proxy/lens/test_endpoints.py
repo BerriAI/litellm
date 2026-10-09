@@ -1,30 +1,43 @@
+import asyncio
+from collections.abc import AsyncGenerator, Callable, Mapping
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
 
+import httpx
 import pytest
 from fastapi import HTTPException
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import Router
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.lens.endpoints import (
+    claim_due,
+    get_signals,
     list_agents,
+    put_signals,
     read_reviews,
     result,
     run_settings,
     run_window,
     trace_findings,
+    trace_signal_statuses,
     user_scope,
     validate_model,
+    validate_signal_model,
     watchable,
     watching,
     worker_supports_model,
 )
+from litellm.proxy.lens.endpoints import (
+    sample as worker_sample,
+)
 from litellm.proxy.lens.models import (
     ActivitySelection,
     Coverage,
+    Execution,
     Lens,
     LensSettings,
     Result,
@@ -35,17 +48,31 @@ from litellm.proxy.lens.models import (
     Scope,
     TraceFindingsRequest,
     TraceIdentity,
+    Worker,
 )
-from litellm.proxy.lens.repository import Row
+from litellm.proxy.lens.repository import Database, DueLens, Row
+from litellm.proxy.lens.signals import SignalConfig, StoredTraceSignal
 from litellm.proxy.lens.state import claim_job, queue_job, replace_job
-from tests.unit.proxy.lens.test_agent_workspace import execution
+from litellm.rust_bridge.trace.generated.models import ExecutionRow, LensSampleParams
+from litellm.rust_bridge.trace.storage import ClickHouseStorage
+from litellm.tracing.remote import RemoteTraceStore
 from tests.unit.proxy.lens.test_state import NOW, lens, worker
+
+
+def execution(identity: str) -> Execution:
+    return Execution(
+        id=identity, source="traces", trace_id=identity, team_id="", name=identity, start_time="", span_count=1
+    )
 
 
 class ResultDatabase:
     def __init__(self, stored: Lens) -> None:
         self.stored = stored
         self.completed: tuple[ReviewVersion, ...] = ()
+
+    @asynccontextmanager
+    async def transaction(self) -> AsyncGenerator[Database]:
+        yield self
 
     async def query_raw(self, query: str, *args: object) -> tuple[Row, ...]:
         if query.startswith("SELECT data FROM"):
@@ -62,6 +89,162 @@ class ResultDatabase:
         assert isinstance(payload, str)
         self.completed = TypeAdapter(tuple[ReviewVersion, ...]).validate_json(payload)
         return len(self.completed)
+
+
+class SignalStatusDatabase:
+    def __init__(self, config: SignalConfig, rows: Mapping[str, StoredTraceSignal]) -> None:
+        self.config: Final = config
+        self.rows: Final = rows
+        self.saved: Final[asyncio.Queue[tuple[object, ...]]] = asyncio.Queue()
+
+    async def query_raw(self, query: str, *args: object) -> object:
+        if '"LiteLLM_LensSignalConfig"' in query:
+            return ({"data": self.config.model_dump(mode="json")},)
+        payload: Final = args[0]
+        assert isinstance(payload, str)
+        requested: Final = TypeAdapter(tuple[TraceIdentity, ...]).validate_json(payload)
+        return tuple(
+            {"data": row.model_dump(mode="json")}
+            for identity in requested
+            if (row := self.rows.get(identity.trace_id)) is not None
+        )
+
+    async def execute_raw(self, query: str, *args: object) -> int:
+        await self.saved.put(args)
+        return 1
+
+
+def signal_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "decision",
+                "litellm_params": {"model": "openai/test-decision", "api_key": "test-key"},
+                "model_info": {"mode": "evaluation"},
+            },
+            {
+                "model_name": "chat",
+                "litellm_params": {"model": "openai/test-chat", "api_key": "test-key"},
+                "model_info": {"mode": "chat"},
+            },
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ("cancelled", "expired", "reclaimed", "reassigned"))
+async def test_result_cannot_commit_after_losing_ownership_during_evidence_validation(
+    monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    from litellm.proxy import proxy_server
+    from tests.unit.proxy.lens.test_state import finding
+
+    claimed: Final = claim_job(queue_job(lens(), NOW, "job"), worker(), NOW)
+    active: Final = claimed.jobs[0].model_copy(
+        update={
+            "lease_until": datetime.max.replace(tzinfo=timezone.utc),
+            "sample": Sample(executions=(execution("run"),), eligible=1),
+        }
+    )
+    competing: Final = active.model_copy(
+        update={
+            "status": "cancelled" if change == "cancelled" else "running",
+            "lease_until": NOW if change == "expired" else active.lease_until,
+            "attempts": 2 if change == "reclaimed" else 1,
+            "worker_id": "other-worker" if change == "reassigned" else active.worker_id,
+        }
+    )
+    db: Final = ResultDatabase(replace_job(claimed, active))
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+
+    async def evidence(request: httpx.Request) -> httpx.Response:
+        db.stored = replace_job(db.stored, competing)
+        return httpx.Response(200, json={"data": [{"count": 1}]})
+
+    async with httpx.AsyncClient(base_url="http://lens.test", transport=httpx.MockTransport(evidence)) as client:
+        saved: Final = await result(
+            "lens",
+            "job",
+            Result(
+                coverage=Coverage(screened=1, investigated=1),
+                findings=(finding("run"),),
+                assessments=(RunAssessment(execution_id="run"),),
+                review_versions=(ReviewVersion(execution_id="run", content_version="v1"),),
+            ),
+            worker(),
+            ClickHouseStorage(RemoteTraceStore(client)),
+        )
+    assert saved.jobs[0] == competing
+    assert saved.findings == ()
+    assert db.completed == ()
+
+
+@pytest.mark.asyncio
+async def test_worker_sample_retries_oversized_pages_and_keeps_all_executions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    claimed: Final = claim_job(queue_job(lens(), NOW, "job"), worker(), NOW)
+    active: Final = claimed.jobs[0].model_copy(update={"lease_until": datetime.max.replace(tzinfo=timezone.utc)})
+    db: Final = ResultDatabase(replace_job(claimed, active))
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+    rows: Final = tuple(
+        ExecutionRow(
+            source="traces",
+            trace_id=trace_id,
+            team_id="team",
+            name=trace_id,
+            start_time="",
+            span_count=1,
+            root_seen=1,
+            eligible=3,
+            selected=3,
+            selection_key=trace_id,
+        )
+        for trace_id in ("trace-1", "trace-2", "trace-3")
+    )
+
+    class SampleStorage:
+        def __init__(self) -> None:
+            self.limits: tuple[int, ...] = ()
+
+        async def lens_sample(self, parameters: LensSampleParams) -> tuple[ExecutionRow, ...]:
+            self.limits = (*self.limits, parameters.limit)
+            if parameters.limit > 2_500:
+                raise RuntimeError("ClickHouse query exceeded the response size limit")
+            return rows
+
+    storage: Final = SampleStorage()
+    selected: Final = await worker_sample("lens", "job", worker(), storage)
+    assert storage.limits == (10_000, 5_000, 2_500)
+    assert tuple(execution.trace_id for execution in selected.executions) == ("trace-1", "trace-2", "trace-3")
+    assert selected.selected == 3
+
+
+@pytest.mark.asyncio
+async def test_worker_sample_propagates_response_too_large_at_minimum_page_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    claimed: Final = claim_job(queue_job(lens(), NOW, "job"), worker(), NOW)
+    active: Final = claimed.jobs[0].model_copy(update={"lease_until": datetime.max.replace(tzinfo=timezone.utc)})
+    db: Final = ResultDatabase(replace_job(claimed, active))
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+
+    class SampleStorage:
+        def __init__(self) -> None:
+            self.limits: tuple[int, ...] = ()
+
+        async def lens_sample(self, parameters: LensSampleParams) -> tuple[ExecutionRow, ...]:
+            self.limits = (*self.limits, parameters.limit)
+            raise RuntimeError("ClickHouse query exceeded the response size limit")
+
+    storage: Final = SampleStorage()
+    with pytest.raises(RuntimeError, match="response size limit"):
+        await worker_sample("lens", "job", worker(), storage)
+    assert storage.limits == (10_000, 5_000, 2_500, 1_250, 625, 312, 156, 100)
 
 
 @pytest.mark.asyncio
@@ -394,6 +577,144 @@ async def test_trace_finding_counts_require_investigation_read_access() -> None:
     assert error.value.status_code == 403
 
 
+@pytest.mark.asyncio
+async def test_signal_endpoints_return_statuses_in_request_order_for_admin_viewers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    config: Final = SignalConfig(model="decision")
+    rows: Final = {
+        "pending": StoredTraceSignal(
+            trace_id="pending",
+            config_key=config.key(),
+            span_count=1,
+            claimed_until=NOW + timedelta(minutes=1),
+            data={"status": "pending", "scores": {}, "model": "decision", "error": ""},
+        ),
+        "classified": StoredTraceSignal(
+            trace_id="classified",
+            config_key=config.key(),
+            span_count=1,
+            classified_at=NOW,
+            data={
+                "status": "classified",
+                "scores": {"user_frustration": 0.7, "missing_capability": 0.8},
+                "model": "decision",
+                "error": "",
+            },
+        ),
+        "failed": StoredTraceSignal(
+            trace_id="failed",
+            config_key=config.key(),
+            span_count=1,
+            classified_at=NOW,
+            data={"status": "failed", "scores": {}, "model": "decision", "error": "classification failed"},
+        ),
+        "stale": StoredTraceSignal(
+            trace_id="stale",
+            config_key="old-config",
+            span_count=1,
+            classified_at=NOW,
+            data={
+                "status": "classified",
+                "scores": {"user_frustration": 1.0},
+                "model": "old",
+                "error": "",
+            },
+        ),
+    }
+    database: Final = SignalStatusDatabase(config, rows)
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=database))
+    viewer: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+    request: Final = TraceFindingsRequest(
+        traces=tuple(
+            TraceIdentity(trace_id=trace_id) for trace_id in ("failed", "classified", "missing", "pending", "stale")
+        )
+    )
+
+    assert await get_signals(viewer) == config
+    results: Final = await trace_signal_statuses(request, viewer)
+
+    assert tuple((result.trace_id, result.status) for result in results) == (
+        ("failed", "failed"),
+        ("classified", "classified"),
+        ("missing", "unclassified"),
+        ("pending", "pending"),
+        ("stale", "unclassified"),
+    )
+    assert tuple((flag.signal_id, flag.name, flag.score) for flag in results[1].flags) == (
+        ("missing_capability", "Missing capability", 0.8),
+        ("user_frustration", "User frustration", 0.7),
+    )
+
+
+@pytest.mark.asyncio
+async def test_signal_endpoints_require_connected_postgres(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+
+    with pytest.raises(HTTPException) as error:
+        await get_signals(auth)
+
+    assert error.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_put_signals_saves_config_for_admin(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    database: Final = SignalStatusDatabase(SignalConfig(), {})
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=database))
+    monkeypatch.setattr(proxy_server, "llm_router", signal_router())
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    body: Final = SignalConfig(model="decision", threshold=0.7)
+
+    assert await put_signals(body, auth) == body
+
+    saved: Final = await database.saved.get()
+    assert saved[0] == "global"
+    assert isinstance(saved[1], str)
+    assert SignalConfig.model_validate_json(saved[1]) == body
+
+
+def test_signal_model_requires_a_ready_router() -> None:
+    with pytest.raises(HTTPException) as error:
+        validate_signal_model(SignalConfig(model="decision"), None)
+
+    assert error.value.status_code == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", (LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY))
+async def test_put_signals_rejects_non_admin_roles(role: LitellmUserRoles) -> None:
+    auth: Final = UserAPIKeyAuth(user_role=role)
+    with pytest.raises(HTTPException) as error:
+        await put_signals(SignalConfig(model="decision"), auth)
+    assert error.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ("chat", "unconfigured"))
+async def test_put_signals_rejects_chat_and_unknown_model_groups(monkeypatch: pytest.MonkeyPatch, model: str) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", signal_router())
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with pytest.raises(HTTPException) as error:
+        await put_signals(SignalConfig(model=model), auth)
+
+    assert error.value.status_code == 400
+    assert error.value.detail == "Choose a System 1 model (evaluation mode) configured on this proxy"
+
+
+def test_signal_model_accepts_only_evaluation_mode_groups() -> None:
+    assert validate_signal_model(SignalConfig(model="decision"), signal_router()) is None
+
+
 @pytest.mark.parametrize(
     "role",
     (LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, LitellmUserRoles.TEAM),
@@ -530,11 +851,9 @@ def test_run_now_with_a_lookback_scans_that_lookback_instead_of_since_last_run()
 
 @pytest.mark.parametrize("provider", (False, True))
 def test_model_errors_reach_worker_with_status_and_redacted_provider_message(provider: bool) -> None:
-    import httpx
 
     from litellm.proxy._types import ProxyException
     from litellm.proxy.lens.endpoints import model_failure
-    from litellm.proxy.lens.worker import failure_message
 
     message: Final = "Token rate limit exceeded. api_key=secret-example-value-123456 Retry in 60 seconds."
     error: Final = model_failure(
@@ -542,15 +861,10 @@ def test_model_errors_reach_worker_with_status_and_redacted_provider_message(pro
         if provider
         else HTTPException(429, message, headers={"retry-after": "60"})
     )
-    request: Final = httpx.Request("POST", "https://proxy.test/lens/worker/lens/run/model")
-    response: Final = httpx.Response(error.status_code, json={"detail": error.detail}, request=request)
-    with pytest.raises(httpx.HTTPStatusError) as caught:
-        response.raise_for_status()
-    diagnostic: Final = failure_message(caught.value)
-    assert diagnostic.startswith("Model request failed (HTTP 429):")
-    assert "Token rate limit exceeded." in diagnostic
-    assert "Retry in 60 seconds." in diagnostic
-    assert "secret-example" not in diagnostic
+    assert error.status_code == 429
+    assert "Token rate limit exceeded." in error.detail["lens_error"]
+    assert "Retry in 60 seconds." in error.detail["lens_error"]
+    assert "secret-example" not in error.detail["lens_error"]
     assert error.headers == {"retry-after": "60"}
 
 
@@ -624,3 +938,232 @@ async def test_unknown_gateway_release_refuses_registration_and_claims(monkeypat
         await claim(worker(), protocol_version=PROTOCOL_VERSION, worker_release="")
     assert claim_error.value.status_code == 503
     assert claim_error.value.detail == registration_error.value.detail
+
+
+@pytest.mark.asyncio
+async def test_claim_due_pages_through_more_than_a_thousand_full_pages() -> None:
+    candidate_lens: Final = lens()
+
+    def candidate_page(page_number: int, size: int) -> tuple[DueLens, ...]:
+        return tuple(
+            DueLens(
+                lens=candidate_lens.model_copy(update={"id": f"lens-{page_number * 20 + offset:05}"}),
+                due_at=NOW,
+            )
+            for offset in range(size)
+        )
+
+    full_pages: Final = tuple(candidate_page(page_number, 20) for page_number in range(1_200))
+    pages: Final = (*full_pages, candidate_page(1_200, 1))
+    assigned_worker: Final = worker()
+
+    class PagingRepository:
+        def __init__(self) -> None:
+            self.after_calls: tuple[DueLens | None, ...] = ()
+
+        async def due(
+            self, scope: Scope, now: datetime, limit: int, after: DueLens | None = None
+        ) -> tuple[DueLens, ...]:
+            assert scope == assigned_worker.scope
+            assert now == NOW
+            assert limit == 20
+            self.after_calls = (*self.after_calls, after)
+            return pages[len(self.after_calls) - 1]
+
+        async def sync_due(self, lens: Lens) -> None:
+            return None
+
+        async def update(
+            self, lens_id: str, transform: Callable[[Lens], Lens], attempts: int, *, changed_only: bool
+        ) -> Lens | None:
+            raise AssertionError("Unsupported models must not update candidates")
+
+    async def reject_model(_worker: Worker, _settings: LensSettings) -> bool:
+        return False
+
+    repository: Final = PagingRepository()
+    claim: Final = await claim_due(assigned_worker, NOW, repository, reject_model)
+    expected_after: Final = (None, *(page[-1] for page in pages[:-1]))
+
+    assert claim is None
+    assert len(repository.after_calls) == 1_201
+    assert repository.after_calls == expected_after
+
+
+@pytest.mark.asyncio
+async def test_compatible_worker_without_an_analysis_key_waits_without_claiming_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.lens.endpoints import claim
+    from litellm.proxy.lens.release import PROTOCOL_VERSION
+
+    monkeypatch.setenv("LITELLM_RELEASE_TAG", "v1.2.3")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    unassigned: Final = worker().model_copy(update={"analysis_key_id": None})
+    assert await claim(unassigned, protocol_version=PROTOCOL_VERSION, worker_release="v1.2.3") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "configured,credential,expected", ((False, "x" * 32, 503), (True, "wrong", 401), (True, "x" * 32, None))
+)
+async def test_internal_service_authentication_is_separate_from_gateway_keys(
+    monkeypatch: pytest.MonkeyPatch, configured: bool, credential: str, expected: int | None
+) -> None:
+    from fastapi.security import HTTPAuthorizationCredentials
+
+    from litellm.proxy.lens.endpoints import service_auth
+
+    monkeypatch.setenv("LITELLM_LENS_URL", "http://lens" if configured else "")
+    monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "x" * 32)
+    credentials: Final = HTTPAuthorizationCredentials(scheme="Bearer", credentials=credential)
+    if expected is None:
+        assert await service_auth(credentials) is None
+    else:
+        with pytest.raises(HTTPException) as failure:
+            await service_auth(credentials)
+        assert failure.value.status_code == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status,content,connected",
+    (
+        (200, b'{"storage_ready":true,"credentials_ready":true,"release":"v1.2.3","protocol_version":2}', True),
+        (503, b"private storage details", False),
+        (200, b"invalid JSON", False),
+        (200, b"x" * 17000, False),
+    ),
+    ids=("ready", "unavailable", "invalid-json", "oversized-response"),
+)
+@pytest.mark.usefixtures("httpx_transport")
+async def test_service_status_uses_internal_auth_and_only_advertises_the_public_url(
+    monkeypatch: pytest.MonkeyPatch, status: int, content: bytes, connected: bool
+) -> None:
+    import respx
+
+    from litellm.proxy.lens.endpoints import service_connection, user_scope
+
+    monkeypatch.setenv("LITELLM_LENS_URL", "http://lens/private-prefix")
+    monkeypatch.setenv("LITELLM_LENS_PUBLIC_URL", "https://traces.example/lens-ingest/")
+    monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "x" * 32)
+    with respx.mock as network:
+        route: Final = network.get("http://lens/private-prefix/internal/status").respond(status, content=content)
+        result: Final = await service_connection(UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER))
+    assert result.url == "https://traces.example/lens-ingest"
+    assert result.connected is connected
+    assert result.configured is True
+    assert result.status.storage_ready is connected
+    assert route.calls[0].request.headers["Authorization"] == "Bearer " + "x" * 32
+    assert "private storage details" not in result.model_dump_json()
+
+    with pytest.raises(HTTPException) as denied:
+        user_scope(UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER))
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url,configured", (("", False), ("http://lens", True)))
+async def test_service_setup_distinguishes_missing_installation_from_incomplete_configuration(
+    monkeypatch: pytest.MonkeyPatch, url: str, configured: bool
+) -> None:
+    from litellm.proxy.lens.endpoints import service_connection
+
+    monkeypatch.setenv("LITELLM_LENS_URL", url)
+    monkeypatch.delenv("LITELLM_LENS_SERVICE_TOKEN", raising=False)
+    monkeypatch.setenv("LITELLM_RELEASE_TAG", "v1.2.3")
+    result: Final = await service_connection(UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER))
+    assert result.configured is configured
+    assert result.connected is False
+    assert result.release == "v1.2.3"
+    assert result.status.storage_ready is False
+
+
+@pytest.mark.asyncio
+async def test_credential_snapshot_excludes_expired_keys_and_disables_caching(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import AsyncMock
+
+    from fastapi import Response
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.lens.endpoints import ingestion_credentials
+    from litellm.proxy.lens.ingestion import IngestionCredential, IngestionKeyCreated, IngestionKeyRequest, new_key
+
+    created: Final = new_key(IngestionKeyRequest(team_id="team"), "owner")
+    assert isinstance(created, IngestionKeyCreated)
+    current: Final = created.record
+    expired: Final = current.model_copy(update={"id": "expired", "expires_at": 1})
+    db: Final = SimpleNamespace(
+        query_raw=AsyncMock(return_value=tuple(Row(data=key.model_dump(mode="json")) for key in (current, expired)))
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+    response: Final = Response()
+    snapshot: Final = await ingestion_credentials(None, response)
+    assert snapshot.keys == (
+        IngestionCredential(token_hash=current.tenant.api_key_hash, tenant=current.tenant, expires_at=None),
+    )
+    assert response.headers["Cache-Control"] == "no-store"
+    assert snapshot.issued_at >= int(current.created_at.timestamp())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("accepted", (True, False))
+@pytest.mark.usefixtures("httpx_transport")
+async def test_created_ingestion_keys_report_activation_only_after_the_service_acknowledges(
+    monkeypatch: pytest.MonkeyPatch, accepted: bool
+) -> None:
+    import hashlib
+    import json
+    from unittest.mock import AsyncMock, MagicMock
+
+    import respx
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.lens.endpoints import create_ingestion_key, list_ingestion_keys, revoke_ingestion_key
+    from litellm.proxy.lens.ingestion import IngestionKey, IngestionKeyRequest
+
+    db: Final = SimpleNamespace(query_raw=AsyncMock(return_value=()), execute_raw=AsyncMock(return_value=1))
+    context: Final = AsyncMock()
+    context.__aenter__.return_value = db
+    db.tx = MagicMock(return_value=context)
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=db))
+    monkeypatch.setenv("LITELLM_LENS_URL", "http://lens")
+    monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "x" * 32)
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="owner")
+    with respx.mock as network:
+        route: Final = network.post("http://lens/internal/credentials").respond(204 if accepted else 503)
+        created: Final = await create_ingestion_key(IngestionKeyRequest(name="Agent", team_id="team"), auth)
+        assert created.active is accepted
+        persisted: Final = IngestionKey.model_validate_json(db.execute_raw.call_args.args[2])
+        assert persisted == created.record
+        assert persisted.tenant.api_key_hash == hashlib.sha256(created.key.encode()).hexdigest()
+        assert persisted.tenant.user_id == "owner"
+        assert persisted.tenant.team_id == "team"
+        assert created.key not in persisted.model_dump_json()
+        db.query_raw.return_value = (Row(data=persisted.model_dump(mode="json")),)
+        assert await list_ingestion_keys(auth) == (persisted,)
+        db.query_raw.return_value = ()
+        assert await revoke_ingestion_key(persisted.id, auth)
+        assert db.execute_raw.call_args.args == ('DELETE FROM "LiteLLM_LensIngestionKey" WHERE id=$1', persisted.id)
+        assert json.loads(route.calls[-1].request.content)["keys"] == []
+
+
+@pytest.mark.asyncio
+async def test_ingestion_keys_reject_expired_requests_and_read_only_admins(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.lens.endpoints import create_ingestion_key
+    from litellm.proxy.lens.ingestion import IngestionKeyRequest
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    with pytest.raises(HTTPException) as expired:
+        await create_ingestion_key(
+            IngestionKeyRequest(expires_at=datetime(2000, 1, 1, tzinfo=timezone.utc)),
+            UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    assert expired.value.status_code == 422
+    with pytest.raises(HTTPException) as forbidden:
+        await create_ingestion_key(
+            IngestionKeyRequest(), UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+        )
+    assert forbidden.value.status_code == 403

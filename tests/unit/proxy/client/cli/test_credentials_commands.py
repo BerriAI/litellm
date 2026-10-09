@@ -108,6 +108,7 @@ def test_acreate_credential_success(cli_runner, mock_credentials_client):
         "test-cred",
         {"custom_llm_provider": "azure"},
         {"api_key": "test-key"},
+        display_name=None,
     )
 
 
@@ -215,3 +216,55 @@ def test_aget_credential_success(cli_runner, mock_credentials_client):
     output_data = json.loads(result.output)
     assert output_data == mock_response
     mock_instance.get.assert_called_once_with("test-cred")
+
+
+def test_list_credentials_table_shows_display_name_and_source(cli_runner, mock_credentials_client):
+    mock_credentials_client.return_value.list.return_value = {
+        "credentials": [
+            {"credential_name": "openai-prod", "display_name": "Prod OpenAI", "source": "db", "credential_info": {}},
+            {"credential_name": "from-yaml", "display_name": None, "source": "config", "credential_info": {}},
+        ]
+    }
+
+    result = cli_runner.invoke(cli, ["credentials", "list"])
+
+    assert result.exit_code == 0
+    assert "Prod OpenAI" in result.output
+    assert "config" in result.output
+    assert "None" not in result.output
+
+
+def test_create_credential_forwards_the_display_name(cli_runner, mock_credentials_client):
+    mock_instance = mock_credentials_client.return_value
+    mock_instance.create.return_value = {"success": True}
+
+    result = cli_runner.invoke(
+        cli,
+        ["credentials", "create", "openai-prod", "--info", "{}", "--values", "{}", "--display-name", "Prod OpenAI"],
+    )
+
+    assert result.exit_code == 0
+    mock_instance.create.assert_called_once_with("openai-prod", {}, {}, display_name="Prod OpenAI")
+
+
+@pytest.mark.parametrize(
+    ("flags", "expected"),
+    [(["--display-name", "Prod OpenAI"], "Prod OpenAI"), (["--clear-display-name"], None)],
+)
+def test_update_credential_sets_or_clears_the_display_name(cli_runner, mock_credentials_client, flags, expected):
+    mock_instance = mock_credentials_client.return_value
+    mock_instance.update_display_name.return_value = {"success": True}
+
+    result = cli_runner.invoke(cli, ["credentials", "update", "openai-prod", *flags])
+
+    assert result.exit_code == 0, result.output
+    mock_instance.update_display_name.assert_called_once_with("openai-prod", expected)
+
+
+@pytest.mark.parametrize("flags", [[], ["--display-name", "Prod", "--clear-display-name"]])
+def test_update_credential_requires_exactly_one_display_name_flag(cli_runner, mock_credentials_client, flags):
+    result = cli_runner.invoke(cli, ["credentials", "update", "openai-prod", *flags])
+
+    assert result.exit_code != 0
+    assert "exactly one" in result.output
+    mock_credentials_client.return_value.update_display_name.assert_not_called()

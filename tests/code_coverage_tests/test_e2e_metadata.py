@@ -2,7 +2,7 @@
 
 Harness logic, so it lives here rather than under tests/e2e, which holds only
 tests that drive a live proxy. The harness modules are imported off
-``PYTHONPATH=tests/e2e``, the way the Code Quality workflow's
+``PYTHONPATH=tests/e2e``, the way the lint workflow's code-quality job's
 test_e2e_metadata step runs this file. Call order, the failing test's last step,
 the per-test reset and the JUnit attach are pinned end to end in
 test_e2e_junit_report.py.
@@ -17,6 +17,7 @@ import re
 import string
 import sys
 import threading
+import time
 import warnings
 from collections import Counter
 from collections.abc import Callable, Generator, Iterator, Mapping
@@ -44,6 +45,7 @@ from e2e_metadata import (
     environment_secrets,
     meta,
     step,
+    step_properties,
     subject_properties,
 )
 from junit_properties import package_from_nodeid, result_properties, source_from_item
@@ -318,6 +320,15 @@ class TestStepRecording:
             warnings.simplefilter("always")
             delete_team()
         assert [Path(warning.filename).name for warning in caught] == [Path(__file__).name]
+
+    def test_a_harness_wait_the_test_calls_directly_is_a_step_in_its_report(self) -> None:
+        """A test that only waits through a bare harness helper, never a typed
+        client, still has that wait in its JUnit story. The stamp is old enough
+        that the helper returns without sleeping."""
+        from e2e_config import PROPAGATION_TIMEOUT, settle_propagation
+
+        settle_propagation(written_at=time.monotonic() - PROPAGATION_TIMEOUT)
+        assert step_properties() == (("step", "Wait for the last control-plane write to reach every proxy replica"),)
 
 
 class _KeyBody(BaseModel):

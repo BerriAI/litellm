@@ -118,6 +118,7 @@ from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
     convert_model_response_to_streaming,
 )
+from litellm.llms.base_llm.chat.transformation import with_attribution_headers
 from litellm.llms.bedrock.common_utils import (
     BedrockModelInfo,
     bedrock_route_for_request,
@@ -211,7 +212,7 @@ from .litellm_core_utils.prompt_templates.factory import (
 from .litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
-from .llms.azure.azure import AzureChatCompletion, _check_dynamic_azure_params
+from .llms.azure.azure import AzureChatCompletion, check_dynamic_azure_params
 from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
 from .llms.azure.completion.handler import AzureTextCompletion
 from .llms.azure_ai.anthropic.handler import AzureAnthropicChatCompletion
@@ -1318,6 +1319,7 @@ def _register_custom_pricing_for_request(
         },
         persist_across_reloads=False,
         warning_display_name=shared_key,
+        custom_llm_provider=custom_llm_provider,
     )
 
 
@@ -1361,7 +1363,7 @@ def _complete_azure(ctx: CompletionDispatchContext) -> _CompletionDispatchResult
 
     dynamic_params = False
     if client is not None and (isinstance(client, openai.AzureOpenAI) or isinstance(client, openai.AsyncAzureOpenAI)):
-        dynamic_params = _check_dynamic_azure_params(
+        dynamic_params = check_dynamic_azure_params(
             azure_client_params={"api_version": api_version},
             azure_client=client,
         )
@@ -2634,6 +2636,11 @@ def _complete_custom_openai(
     )
 
     headers = headers or litellm.headers
+    outbound_headers: Final = (
+        headers
+        if provider_config is None
+        else with_attribution_headers(provider_config.get_attribution_headers(), headers)
+    )
 
     # Add GitHub Copilot headers (same as /responses endpoint does)
     if custom_llm_provider == "github_copilot":
@@ -2685,7 +2692,7 @@ def _complete_custom_openai(
                 acompletion=acompletion,
                 stream=stream,
                 api_key=api_key,
-                headers=headers,
+                headers=outbound_headers,
                 client=client,
                 provider_config=provider_config,
             )
@@ -2693,7 +2700,7 @@ def _complete_custom_openai(
             response = openai_chat_completions.completion(
                 model=model,
                 messages=messages,
-                headers=headers,
+                headers=outbound_headers,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 api_key=api_key,
@@ -2716,7 +2723,7 @@ def _complete_custom_openai(
             input=messages,
             api_key=api_key,
             original_response=str(e),
-            additional_args={"headers": headers},
+            additional_args={"headers": outbound_headers},
         )
         raise e
 
@@ -2726,7 +2733,7 @@ def _complete_custom_openai(
             input=messages,
             api_key=api_key,
             original_response=response,
-            additional_args={"headers": headers},
+            additional_args={"headers": outbound_headers},
         )
 
     return response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch contract
@@ -5068,7 +5075,7 @@ def _complete_langgraph(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
     (
         api_base,
         api_key,
-    ) = LangGraphConfig()._get_openai_compatible_provider_info(
+    ) = LangGraphConfig().get_openai_compatible_provider_info(
         api_base=api_base or litellm.api_base,
         api_key=api_key or litellm.api_key,
     )
@@ -5117,7 +5124,7 @@ def _complete_langflow(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
     (
         api_base,
         api_key,
-    ) = LangFlowConfig()._get_openai_compatible_provider_info(
+    ) = LangFlowConfig().get_openai_compatible_provider_info(
         api_base=api_base or litellm.api_base,
         api_key=api_key or litellm.api_key,
     )
@@ -5731,6 +5738,7 @@ def completion(
                     *ANTHROPIC_WIF_KWARGS_KEYS,
                     *OPENAI_WIF_KWARGS_KEYS,
                     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
+                    "fireworks_forward_user_id",
                 )
                 if key in kwargs
             },
@@ -6372,6 +6380,10 @@ def embedding(
     """
     azure: Final = kwargs.get("azure", None)
     client: Final = kwargs.pop("client", None)
+    drop_params_kwarg: Final = (
+        cast(object, kwargs["drop_params"]) if "drop_params" in kwargs else None  # cast-ok: untyped request kwargs
+    )
+    drop_unsupported_params: Final = litellm.drop_params is True or normalize_drop_params(drop_params_kwarg) is True
     shared_session: Final = kwargs.get("shared_session", None)
     max_retries: Final = kwargs.get("max_retries", None)
     litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
@@ -6852,6 +6864,7 @@ def embedding(
                 api_base=api_base,
                 client=client,
                 extra_headers=headers,
+                drop_params=drop_unsupported_params,
             )
 
         elif custom_llm_provider == "vertex_ai":
@@ -6904,6 +6917,7 @@ def embedding(
                     api_base=api_base,
                     client=client,
                     extra_headers=headers,
+                    drop_params=drop_unsupported_params,
                 )
             elif (
                 "image" in optional_params
@@ -7846,7 +7860,7 @@ async def amoderation(
     if openai_client is None or not isinstance(openai_client, AsyncOpenAI):
         # call helper to get OpenAI client
         # _get_openai_client maintains in-memory caching logic for OpenAI clients
-        _openai_client: AsyncOpenAI = openai_chat_completions._get_openai_client(
+        _openai_client: AsyncOpenAI = openai_chat_completions.get_openai_client(
             is_async=True,
             api_key=api_key,
             api_base=optional_params.api_base or _dynamic_api_base,

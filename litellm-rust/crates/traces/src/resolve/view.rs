@@ -6,7 +6,9 @@ use time::OffsetDateTime;
 use crate::{
     normalize::ObservationType,
     query::named::{ListTracesRow, SpendByResponseIdsRow as SpendRow, TraceSpansRow},
-    view::{AgentNode, Span, SpanStatus, SpendMatch, Trace, TraceSummary},
+    view::{
+        AgentNode, RunSource, RunSourceType, Span, SpanStatus, SpendMatch, Trace, TraceSummary,
+    },
 };
 
 use super::{
@@ -23,8 +25,8 @@ fn optional(value: &str) -> Option<String> {
 fn span(resolution: &Resolution<'_>, index: usize, trace_start_ns: i64) -> Span {
     let row = resolution.row(index);
     let status = resolution.status_source(index);
-    let (requests, spend_match) = if let Some((requests, matched)) = resolution.call_match(index) {
-        (requests.clone(), Some(*matched))
+    let (requests, spend_match) = if let Some(matched) = resolution.call_match(index) {
+        (matched.requests.clone(), Some(matched.state))
     } else {
         (resolution.requests(index).complete_requests(), None)
     };
@@ -138,6 +140,16 @@ pub fn iso_time(ms: i64) -> String {
     )
 }
 
+fn source(row: &TraceSpansRow) -> Option<RunSource> {
+    row.source_url.starts_with("https://").then(|| RunSource {
+        kind: serde_json::from_value(serde_json::Value::from(row.source_type.as_str()))
+            .unwrap_or(RunSourceType::Custom),
+        url: row.source_url.clone(),
+        title: row.source_title.clone(),
+        user: row.source_user.clone(),
+    })
+}
+
 fn sorted_unique<'a>(values: impl Iterator<Item = &'a str>) -> Vec<String> {
     values
         .filter(|value| !value.is_empty())
@@ -229,8 +241,15 @@ pub fn resolve_trace(
         models: sorted_unique(calls.iter().map(|call| rows[*call].model.as_str())),
         spend: priced.spend,
         priced_calls: priced.priced_calls,
+        source: source(&rows[root]).or_else(|| {
+            rows.iter()
+                .filter_map(|row| Some((row.start_ns, source(row)?)))
+                .min_by_key(|(start_ns, _)| *start_ns)
+                .map(|(_, source)| source)
+        }),
     };
     Some(Trace {
+        gateway_spend_pending: resolution.gateway_spend_pending(),
         summary,
         agents,
         spans,
@@ -266,5 +285,6 @@ pub fn listed_summary(row: &ListTracesRow) -> TraceSummary {
         models: row.models.clone(),
         spend: None,
         priced_calls: 0,
+        source: None,
     }
 }

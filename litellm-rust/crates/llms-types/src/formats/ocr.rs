@@ -5,7 +5,7 @@ use serde_with::serde_as;
 
 use crate::serde_compat::{FiniteF64, LaxI64};
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type")]
 pub enum OcrDocument {
     #[serde(rename = "document_url")]
@@ -49,7 +49,7 @@ impl OcrDocument {
     }
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Copy, Default, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum OcrResponseFormat {
@@ -59,7 +59,7 @@ pub enum OcrResponseFormat {
 }
 
 #[serde_as]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct OcrPageDimensions {
     #[serde_as(deserialize_as = "Option<LaxI64>")]
@@ -70,7 +70,7 @@ pub struct OcrPageDimensions {
     pub width: Option<i64>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct OcrPageImage {
     pub image_base64: Option<String>,
@@ -80,7 +80,7 @@ pub struct OcrPageImage {
 }
 
 #[serde_as]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct OcrPage {
     #[serde_as(deserialize_as = "LaxI64")]
@@ -93,7 +93,7 @@ pub struct OcrPage {
 }
 
 #[serde_as]
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct OcrUsageInfo {
     #[serde_as(deserialize_as = "Option<LaxI64>")]
@@ -108,7 +108,7 @@ pub struct OcrUsageInfo {
     pub extra_fields: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct LiteLLMOcrResponse {
     pub pages: Vec<OcrPage>,
     pub model: String,
@@ -149,4 +149,16 @@ impl LiteLLMOcrResponse {
 
 fn ocr_object() -> String {
     "ocr".into()
+}
+
+#[serde_with::skip_serializing_none]
+#[macro_rules_attribute::apply(crate::wire_type)]
+#[derive(Default)]
+pub struct OcrBoundingBox {
+    pub top_left_x: Option<serde_json::Number>,
+    pub top_left_y: Option<serde_json::Number>,
+    pub bottom_right_x: Option<serde_json::Number>,
+    pub bottom_right_y: Option<serde_json::Number>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
