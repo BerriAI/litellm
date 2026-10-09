@@ -927,9 +927,9 @@ class LangFuseLogger:
                 name=trace_params.get("name"),
                 user_id=trace_params.get("user_id"),
                 session_id=trace_params.get("session_id"),
-                version=trace_params.get("version"),
+                version=cap_payload(cast("object", trace_params.get("version")), max_field_bytes),
                 release=trace_params.get("release"),
-                tags=trace_params.get("tags"),
+                tags=cap_payload(cast("object", trace_params.get("tags")), max_field_bytes),
                 metadata=cap_payload(cast("object", trace_params.get("metadata")), max_field_bytes),
                 public=trace_public,
                 input=None
