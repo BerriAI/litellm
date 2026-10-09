@@ -3434,6 +3434,7 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror 2.0.19",
  "tokio",
+ "veil",
 ]
 
 [[package]]
@@ -3696,6 +3697,7 @@ name = "litellm-config"
 version = "0.1.0"
 dependencies = [
  "litellm-auth-types",
+ "litellm-router-types",
  "rstest",
  "serde",
  "serde_json",
@@ -4361,6 +4363,17 @@ dependencies = [
  "litellm-inference",
  "litellm-inference-messages",
  "rstest",
+]
+
+[[package]]
+name = "litellm-router-types"
+version = "0.1.0"
+dependencies = [
+ "litellm-auth-types",
+ "rstest",
+ "serde",
+ "serde_json",
+ "serde_with",
 ]
 
 [[package]]
