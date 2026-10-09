@@ -108,6 +108,31 @@ class _UsageObject(Protocol):
     def get(self, key: Literal["cache_creation_input_tokens", "cache_read_input_tokens"], /) -> int | None: ...
 
 
+def _usage_token_value(usage_obj: object, standard_name: str, decision_name: str | None = None) -> int:
+    """
+    Read a token count from a usage object, tolerating dict-like and Pydantic usage models.
+
+    Decisions responses (DecisionsUsage/OpenAIDecisionUsage) are Pydantic models
+    without a dict ``.get`` and name their counts ``input_tokens``/``output_tokens``
+    (and ``cached_tokens``/``cache_write_tokens``). Fall back to those names when the
+    standard OpenAI-style attribute is absent.
+
+    Args:
+        usage_obj: Usage object from an LLM/decisions response.
+        standard_name: OpenAI-style attribute name (e.g. ``prompt_tokens``).
+        decision_name: Optional decisions-response field to fall back to.
+
+    Returns:
+        int: The token count, defaulting to 0.
+    """
+    value = getattr(usage_obj, standard_name, None)
+    if value is None and hasattr(usage_obj, "get"):
+        value = cast(dict[str, object], usage_obj).get(standard_name)
+    if value is None and decision_name is not None:
+        value = getattr(usage_obj, decision_name, None)
+    return value or 0
+
+
 def _extract_cache_read_input_tokens(usage_obj) -> int:
     """
     Extract cache_read_input_tokens from usage object.
@@ -124,7 +149,7 @@ def _extract_cache_read_input_tokens(usage_obj) -> int:
     Returns:
         int: Number of cached tokens read, defaults to 0
     """
-    cache_read_input_tokens = usage_obj.get("cache_read_input_tokens") or 0
+    cache_read_input_tokens = _usage_token_value(usage_obj, "cache_read_input_tokens", "cached_tokens")
 
     # Check prompt_tokens_details.cached_tokens (used by Gemini and other providers)
     if hasattr(usage_obj, "prompt_tokens_details"):
@@ -820,11 +845,13 @@ class LangFuseLogger:
                 if _usage_obj:
                     # Safely get usage values, defaulting None to 0 for Langfuse compatibility.
                     # Some providers may return null for token counts.
-                    prompt_tokens: Final = getattr(_usage_obj, "prompt_tokens", None) or 0
-                    completion_tokens: Final = getattr(_usage_obj, "completion_tokens", None) or 0
-                    total_tokens: Final = getattr(_usage_obj, "total_tokens", None) or 0
+                    prompt_tokens: Final = _usage_token_value(_usage_obj, "prompt_tokens", "input_tokens")
+                    completion_tokens: Final = _usage_token_value(_usage_obj, "completion_tokens", "output_tokens")
+                    total_tokens: Final = _usage_token_value(_usage_obj, "total_tokens")
 
-                    cache_creation_input_tokens: Final = _usage_obj.get("cache_creation_input_tokens") or 0
+                    cache_creation_input_tokens: Final = _usage_token_value(
+                        _usage_obj, "cache_creation_input_tokens", "cache_write_tokens"
+                    )
                     cache_read_input_tokens: Final = _extract_cache_read_input_tokens(_usage_obj)
 
                     usage = {
