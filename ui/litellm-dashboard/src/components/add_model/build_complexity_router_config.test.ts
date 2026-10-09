@@ -141,6 +141,7 @@ describe("buildComplexityRouterConfig", () => {
     { model: "   " },
     { provider: "laya" as const, model: "unsupported" },
     { provider: "bespoke" as const, model: "unsupported" },
+    { provider: "cloudflare" as const, model: "unsupported" },
     { timeout_ms: 0 },
     { timeout_ms: 1.5 },
     { timeout_ms: Number.NaN },
@@ -159,6 +160,10 @@ describe("buildComplexityRouterConfig", () => {
     ["bespoke", "nimble-latest"],
     ["bespoke", "nimble"],
     ["bespoke", "bespokelabs/Bespoke-Nimble-9B"],
+    ["cloudflare", "clef"],
+    ["cloudflare", "clef-flash"],
+    ["strands_decider", "strands-decider-2B-hobson-v19"],
+    ["strands_decider", "custom-strands-checkpoint"],
     ["jev", "custom-jev-model"],
     [undefined, "custom-jev-model"],
   ] as const)("accepts %s model %s before saving or testing", (provider, model) => {
@@ -177,6 +182,10 @@ describe("buildComplexityRouterConfig", () => {
     ["laya", "english", true],
     ["bespoke", "nimble-latest", false],
     ["bespoke", "nimble-latest", true],
+    ["strands_decider", "strands-decider-2B-hobson-v19", false],
+    ["strands_decider", "strands-decider-2B-hobson-v19", true],
+    ["cloudflare", "clef", false],
+    ["cloudflare", "clef-flash", true],
   ] as const)("serializes %s/%s with shared context and no LLM config, custom tiers: %s", (provider, model, custom) => {
     const params: BuildComplexityRouterConfigParams = {
       ...baseParams,

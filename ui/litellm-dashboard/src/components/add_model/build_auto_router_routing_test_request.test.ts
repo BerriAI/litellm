@@ -52,6 +52,10 @@ describe("buildAutoRouterRoutingTestRequest", () => {
     ["bespoke", "nimble-latest", "json"],
     ["bespoke", "bespokelabs/Bespoke-Nimble-9B", "object"],
     ["bespoke", "bespokelabs/Bespoke-Nimble-9B", "json"],
+    ["strands_decider", "strands-decider-2B-hobson-v19", "object"],
+    ["strands_decider", "strands-decider-2B-hobson-v19", "json"],
+    ["cloudflare", "clef", "object"],
+    ["cloudflare", "clef-flash", "json"],
   ])("probes saved %s/%s %s configuration with custom tiers and team context", (provider, model, format) => {
     const config = {
       classifier_type: "oss_classifier",
@@ -71,7 +75,7 @@ describe("buildAutoRouterRoutingTestRequest", () => {
       buildSavedJevConnectionTestRequest(format === "json" ? JSON.stringify(config) : config, "saved-id", "team-1"),
     ).toEqual(expectedRequest);
   });
-  it.each(["laya", "bespoke"])("does not probe unsupported %s models", (provider) => {
+  it.each(["laya", "bespoke", "cloudflare"])("does not probe unsupported %s models", (provider) => {
     const config = {
       classifier_type: "oss_classifier",
       opensource_classifier_config: { provider, model: "unsupported" },

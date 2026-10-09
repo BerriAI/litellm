@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
 from pydantic import BaseModel, TypeAdapter, ValidationError, create_model
 from pydantic_core import ErrorDetails
+from typing_extensions import assert_never
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
@@ -123,6 +124,7 @@ from .jev_classifier import (
     JevClassifierClient,
     JevVerdict,
     build_jev_request,
+    decisions_classifier_client,
     jev_classifier_cost,
 )
 from .llm_v2 import LLM_V2_PROMPT_VERSION, LLMV2Decision, LLMV2TaskContext, LLMV2Verdict, llm_v2_response_format
@@ -1332,27 +1334,37 @@ class ComplexityRouter(CustomLogger):
 
     @staticmethod
     def _build_jev_client(config: OpenSourceClassifierConfig) -> JevClassifierClient:
-        if config.provider in ("laya", "bespoke"):
-            from litellm.llms.oss_decision import oss_connection
+        http_client: Final = get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint)
+        match config.provider:
+            case "laya" | "bespoke":
+                from litellm.llms.oss_decision import oss_connection
 
-            connection: Final = oss_connection(config.provider, config.api_base, config.api_key)
-            return HttpJevClassifierClient(
-                api_key=connection.api_key,
-                api_base=connection.api_base,
-                http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
-                provider=config.provider,
-            )
-        api_key: Final = config.api_key or get_secret_str("TYPESAFE_API_KEY")
-        if not api_key:
-            raise ValueError(
-                "opensource_classifier_config.api_key or TYPESAFE_API_KEY is required for classifier_type 'oss_classifier'"
-            )
-        api_base: Final = config.api_base or get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
-        return HttpJevClassifierClient(
-            api_key=api_key,
-            api_base=api_base,
-            http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
-        )
+                connection: Final = oss_connection(config.provider, config.api_base, config.api_key)
+                return HttpJevClassifierClient(
+                    api_key=connection.api_key,
+                    api_base=connection.api_base,
+                    http_client=http_client,
+                    provider=config.provider,
+                )
+            case "strands_decider" | "cloudflare":
+                return decisions_classifier_client(
+                    config.provider, config.model, config.api_base, config.api_key, http_client
+                )
+            case "jev":
+                typesafe_api_key: Final = config.api_key or get_secret_str("TYPESAFE_API_KEY")
+                if not typesafe_api_key:
+                    raise ValueError(
+                        "opensource_classifier_config.api_key or TYPESAFE_API_KEY is required for classifier_type "
+                        "'oss_classifier'"
+                    )
+                typesafe_api_base: Final = (
+                    config.api_base or get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
+                )
+                return HttpJevClassifierClient(
+                    api_key=typesafe_api_key, api_base=typesafe_api_base, http_client=http_client
+                )
+            case _:
+                assert_never(config.provider)
 
     def __init__(
         self,

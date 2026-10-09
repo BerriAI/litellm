@@ -24,6 +24,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from typing_extensions import assert_never
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -705,10 +706,21 @@ def normalize_classifier_config_aliases(config: Mapping[str, object]) -> Mapping
     return normalized
 
 
+_ENVIRONMENT_KEY_SCOPE: Final = MappingProxyType(
+    {
+        "jev": "TYPESAFE_API_KEY is only sent to TYPESAFE_API_BASE or https://api.typesafe.ai",
+        "cloudflare": "CLOUDFLARE_API_KEY is only sent to CLOUDFLARE_API_BASE or the CLOUDFLARE_ACCOUNT_ID Workers AI endpoint",
+    }
+)
+_PROVIDER_DEFAULT_MODELS: Final = MappingProxyType(
+    {"strands_decider": "strands-decider-2B-hobson-v19", "cloudflare": "clef"}
+)
+
+
 class OpenSourceClassifierConfig(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    provider: Literal["jev", "laya", "bespoke"] = "jev"
+    provider: Literal["jev", "laya", "bespoke", "strands_decider", "cloudflare"] = "jev"
     model: str = "jev-latest"
     api_key: str | None = Field(default=None, description="Provider API key; optional for self-hosted providers")
     api_base: str | None = Field(
@@ -722,6 +734,15 @@ class OpenSourceClassifierConfig(LiteLLMBaseModel):
     )
     circuit_breaker_enabled: bool = True
     circuit_breaker_cooldown_seconds: float = Field(default=30.0, gt=0.0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_the_model_from_the_provider(cls, data: object) -> object:
+        if not isinstance(data, Mapping) or "model" in data:
+            return data
+        provider: Final = data.get("provider")
+        default_model: Final = _PROVIDER_DEFAULT_MODELS.get(provider) if isinstance(provider, str) else None
+        return data if default_model is None else {**data, "model": default_model}
 
     @field_validator("provider", mode="before")
     @classmethod
@@ -746,17 +767,31 @@ class OpenSourceClassifierConfig(LiteLLMBaseModel):
 
     @model_validator(mode="after")
     def _keep_the_environment_key_on_the_environment_base(self) -> "OpenSourceClassifierConfig":
-        if self.provider in ("laya", "bespoke"):
-            from litellm.llms.oss_decision import validate_oss_api_base, validate_oss_model
+        match self.provider:
+            case "laya" | "bespoke":
+                from litellm.llms.oss_decision import validate_oss_api_base, validate_oss_model
 
-            _ = validate_oss_model(self.provider, self.model)
-            if self.api_base is not None:
-                _ = validate_oss_api_base(self.provider, self.api_base)
-            return self
+                _ = validate_oss_model(self.provider, self.model)
+                if self.api_base is not None:
+                    _ = validate_oss_api_base(self.provider, self.api_base)
+                return self
+            case "strands_decider":
+                return self
+            case "cloudflare":
+                from litellm.llms.cloudflare.decisions.transformation import CloudflareDecisionsConfig
+
+                _ = CloudflareDecisionsConfig().validate_classifier_model(self.model)
+                return self._keep_the_environment_key_home()
+            case "jev":
+                return self._keep_the_environment_key_home()
+            case _:
+                assert_never(self.provider)
+
+    def _keep_the_environment_key_home(self) -> "OpenSourceClassifierConfig":
         if self.api_base is not None and self.api_key is None:
             raise ValueError(
-                "opensource_classifier_config.api_base requires opensource_classifier_config.api_key: TYPESAFE_API_KEY is only sent "
-                "to TYPESAFE_API_BASE or https://api.typesafe.ai"
+                "opensource_classifier_config.api_base requires opensource_classifier_config.api_key: "
+                f"{_ENVIRONMENT_KEY_SCOPE[self.provider]}"
             )
         return self
 

@@ -10,6 +10,7 @@ from litellm.secret_managers.main import (
 )
 
 _RESPONSE_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+CLASSIFIER_MODELS: Final = ("clef", "clef-flash")
 
 
 class CloudflareDecisionsConfig(BaseDecisionsConfig):
@@ -32,6 +33,11 @@ class CloudflareDecisionsConfig(BaseDecisionsConfig):
 
     def request_model(self, model: str) -> str:
         return model.rsplit("/", maxsplit=1)[-1]
+
+    def validate_classifier_model(self, model: str) -> str:
+        if self.canonical_model(model) not in {self.canonical_model(known) for known in CLASSIFIER_MODELS}:
+            raise ValueError(f"cloudflare model must be one of {', '.join(CLASSIFIER_MODELS)}")
+        return model
 
     def get_complete_url(self, api_base: str, model: str) -> str:
         normalized_api_base: Final = api_base.rstrip("/")

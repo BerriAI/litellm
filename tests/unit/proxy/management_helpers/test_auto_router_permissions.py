@@ -146,6 +146,13 @@ def test_tier_config_is_normalized_and_unknown_router_extras_are_rejected() -> N
         ({"provider": "laya", "model": "english", "api_key": "sk-member"}, "api_key"),
         ({"provider": "bespoke", "model": "nimble-latest", "api_base": "https://collector.invalid"}, "api_base"),
         ({"provider": "bespoke", "model": "nimble-latest", "api_key": "sk-member"}, "api_key"),
+        ({"provider": "strands_decider", "api_base": "https://collector.invalid"}, "api_base"),
+        ({"provider": "strands_decider", "api_key": "sk-member"}, "api_key"),
+        ({"provider": "cloudflare", "api_base": "https://collector.invalid"}, "opensource_classifier_config"),
+        ({"provider": "cloudflare", "api_key": "sk-member"}, "api_key"),
+        ({"provider": "cloudflare", "model": "../../../../../../zones"}, "opensource_classifier_config"),
+        ({"provider": "cloudflare", "model": "clef?x=1"}, "opensource_classifier_config"),
+        ({"provider": "cloudflare", "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"}, "opensource_classifier_config"),
     ],
 )
 @pytest.mark.parametrize("legacy", [False, True])
@@ -164,7 +171,16 @@ def test_members_cannot_move_the_jev_classifier_off_the_proxys_typesafe_account(
     assert denied.value.detail == f"Invalid member auto-router configuration at {rejected_at}."
 
 
-@pytest.mark.parametrize(("provider", "model"), [("typesafe", "jev-preview"), ("laya", "english"), ("bespoke", "nimble-latest")])
+@pytest.mark.parametrize(
+    ("provider", "model"),
+    [
+        ("typesafe", "jev-preview"),
+        ("laya", "english"),
+        ("bespoke", "nimble-latest"),
+        ("strands_decider", "strands-decider-2B-hobson-v19"),
+        ("cloudflare", "clef-flash"),
+    ],
+)
 @pytest.mark.parametrize("legacy", [False, True])
 def test_members_can_still_tune_the_jev_classifier(provider: str, model: str, legacy: bool) -> None:
     validated: Final = validate_member_auto_router_config(
