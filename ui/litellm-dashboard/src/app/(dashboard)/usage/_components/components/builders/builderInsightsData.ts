@@ -100,9 +100,7 @@ export interface BuilderSortInput {
   spendPerPr: number | null;
 }
 
-export const teamTotals = (
-  builders: readonly BuilderTotalsInput[],
-): TeamTotals => {
+export const teamTotals = (builders: readonly BuilderTotalsInput[]): TeamTotals => {
   return {
     spend: builders.reduce((total, builder) => total + builder.spend, 0),
     prs: builders.reduce((total, builder) => total + builder.prs, 0),
@@ -122,25 +120,54 @@ export const sortBuilders = <T extends BuilderSortInput>(builders: readonly T[],
   });
 
 export const aggregateModels = (models: readonly BuilderModelEntry[]): BuilderModelEntry[] =>
-  [...models.reduce<ReadonlyMap<string, BuilderModelEntry>>((totals, entry) => {
-    const model = entry.model.replace(/^(openai|anthropic|bedrock|vertex_ai|azure)\//, "");
-    const current = totals.get(model);
-    return new Map<string, BuilderModelEntry>([
-      ...totals,
+  [
+    ...models
+      .reduce<ReadonlyMap<string, BuilderModelEntry>>((totals, entry) => {
+        const model = entry.model.replace(/^(openai|anthropic|bedrock|vertex_ai|azure)\//, "");
+        const current = totals.get(model);
+        return new Map<string, BuilderModelEntry>([
+          ...totals,
+          [
+            model,
+            {
+              model,
+              spend: (current?.spend ?? 0) + entry.spend,
+              requests: (current?.requests ?? 0) + entry.requests,
+            },
+          ] as const,
+        ]);
+      }, new Map())
+      .values(),
+  ].sort((left, right) => right.spend - left.spend);
+
+export const agentSpendShares = (agents: readonly BuilderAgentEntry[]): BuilderAgentEntry[] => {
+  const totals = agents.reduce<ReadonlyMap<string, BuilderAgentEntry>>((current, agent) => {
+    const entry = current.get(agent.id);
+    return new Map([
+      ...current,
       [
-        model,
+        agent.id,
         {
-          model,
-          spend: (current?.spend ?? 0) + entry.spend,
-          requests: (current?.requests ?? 0) + entry.requests,
+          id: agent.id,
+          requests: (entry?.requests ?? 0) + agent.requests,
+          spend: (entry?.spend ?? 0) + agent.spend,
+          share: 0,
         },
       ] as const,
     ]);
-  }, new Map()).values()].sort((left, right) => right.spend - left.spend);
+  }, new Map());
+  const totalSpend = [...totals.values()].reduce((sum, agent) => sum + agent.spend, 0);
+  if (totalSpend <= 0) return [];
+  const visible = [...totals.values()].filter((agent) => agent.spend / totalSpend >= 0.005);
+  const visibleSpend = visible.reduce((sum, agent) => sum + agent.spend, 0);
+  return visible
+    .map((agent) => ({ ...agent, share: agent.spend / visibleSpend }))
+    .sort((left, right) => right.spend - left.spend);
+};
 
 export const builderCostPerPr = (
   builder: Pick<BuilderInsightBuilder, "spend" | "prs" | "spendPerPr">,
-): number | null => (builder.prs > 0 ? (builder.spendPerPr ?? builder.spend / builder.prs) : null);
+): number | null => (builder.prs > 0 ? builder.spendPerPr ?? builder.spend / builder.prs : null);
 
 export const builderInitials = (name: string): string => {
   const parts = name.trim().split(/\s+/).filter(Boolean);

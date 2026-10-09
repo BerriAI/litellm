@@ -23,7 +23,19 @@ const markdownComponents: Components = {
   code: ({ children }) => <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">{children}</code>,
 };
 
-export function MarkdownFile({ filename, markdown }: { filename: string; markdown: string }) {
+export function MarkdownFile({
+  filename,
+  markdown,
+  variant = "compact",
+  showToolbar = true,
+  showCopy = true,
+}: {
+  filename: string;
+  markdown: string;
+  variant?: "compact" | "document";
+  showToolbar?: boolean;
+  showCopy?: boolean;
+}) {
   const [copied, setCopied] = useState(false);
 
   const copy = async () => {
@@ -33,22 +45,43 @@ export function MarkdownFile({ filename, markdown }: { filename: string; markdow
   };
 
   return (
-    <div className="overflow-hidden rounded-xl border border-border">
-      <div className="flex h-10 items-center gap-2 border-b border-border bg-muted/40 px-3">
-        <FileText aria-hidden="true" className="size-3.5 text-muted-foreground" />
-        <span className="font-mono text-xs text-muted-foreground">{filename}</span>
-        <button
-          type="button"
-          onClick={() => void copy()}
-          aria-label={`Copy ${filename}`}
-          className="ml-auto inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-background px-2 text-xs font-medium hover:bg-muted"
+    <div className={showToolbar ? "overflow-hidden rounded-xl border border-border" : undefined}>
+      {showToolbar && (
+        <div className="flex h-10 items-center gap-2 border-b border-border bg-muted/40 px-3">
+          <FileText aria-hidden="true" className="size-3.5 text-muted-foreground" />
+          <span className="font-mono text-xs text-muted-foreground">{filename}</span>
+          {showCopy && (
+            <button
+              type="button"
+              onClick={() => void copy()}
+              aria-label={`Copy ${filename}`}
+              className="ml-auto inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-background px-2 text-xs font-medium hover:bg-muted"
+            >
+              {copied ? (
+                <Check aria-hidden="true" className="size-3.5 text-success" />
+              ) : (
+                <Copy aria-hidden="true" className="size-3.5" />
+              )}
+              {copied ? "Copied" : "Copy"}
+            </button>
+          )}
+        </div>
+      )}
+      <article className="bg-background">
+        <ReactMarkdown
+          components={
+            variant === "document"
+              ? {
+                  ...markdownComponents,
+                  h1: ({ children }) => <h2 className="mb-3 text-xl font-semibold">{children}</h2>,
+                  h2: ({ children }) => <h2 className="mt-7 mb-2 text-lg font-semibold">{children}</h2>,
+                  h3: ({ children }) => <h3 className="mt-5 mb-2 text-base font-semibold">{children}</h3>,
+                }
+              : markdownComponents
+          }
         >
-          {copied ? <Check aria-hidden="true" className="size-3.5 text-success" /> : <Copy aria-hidden="true" className="size-3.5" />}
-          {copied ? "Copied" : "Copy"}
-        </button>
-      </div>
-      <article className="bg-background px-5 py-4">
-        <ReactMarkdown components={markdownComponents}>{markdown}</ReactMarkdown>
+          {markdown}
+        </ReactMarkdown>
       </article>
     </div>
   );

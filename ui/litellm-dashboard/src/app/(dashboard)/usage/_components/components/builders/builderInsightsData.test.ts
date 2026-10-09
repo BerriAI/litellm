@@ -1,11 +1,15 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   aggregateModels,
+  agentSpendShares,
   builderCostPerPr,
   builderInitials,
   builderVerdictDotClass,
   sortBuilders,
   teamTotals,
+  type BuilderAgentEntry,
+  type BuilderInsightsData,
   type BuilderTotalsInput,
 } from "./builderInsightsData";
 
@@ -91,5 +95,44 @@ describe("builderVerdictDotClass", () => {
     expect(builderVerdictDotClass("mixed")).toBe("bg-amber-500");
     expect(builderVerdictDotClass("expensive")).toBe("bg-red-500");
     expect(builderVerdictDotClass("none")).toBe("bg-muted-foreground/40");
+  });
+});
+
+describe("agentSpendShares", () => {
+  it("aggregates spend, drops agents below 0.5%, and normalizes the remaining shares", () => {
+    const shares = agentSpendShares([
+      { id: "claude-code", requests: 10, spend: 700, share: 0.7 },
+      { id: "claude-code", requests: 5, spend: 294, share: 0.294 },
+      { id: "codex", requests: 2, spend: 5, share: 0.005 },
+      { id: "custom", requests: 1, spend: 1, share: 0.001 },
+    ] satisfies BuilderAgentEntry[]);
+
+    expect(shares.map((agent) => agent.id)).toEqual(["claude-code", "codex"]);
+    expect(shares[0].spend).toBe(994);
+    expect(shares.reduce((total, agent) => total + agent.share, 0)).toBeCloseTo(1);
+  });
+});
+
+describe("builder insights sample fixture", () => {
+  it("parses the public sample asset into the dashboard data shape", () => {
+    const sample = JSON.parse(readFileSync("public/builder-insights-sample.json", "utf8")) as BuilderInsightsData;
+    const expectedVerdictCounts = { productive: 4, mixed: 2, expensive: 2, none: 2 };
+    const verdictCounts = sample.builders.reduce<Record<string, number>>(
+      (counts, builder) => ({ ...counts, [builder.verdict]: (counts[builder.verdict] ?? 0) + 1 }),
+      {},
+    );
+
+    expect(sample.window).toMatchObject({ start: "2026-09-09", end: "2026-10-08" });
+    expect(sample.builders).toHaveLength(10);
+    expect(verdictCounts).toEqual(expectedVerdictCounts);
+    expect(sample.builders.every((builder) => builder.email.endsWith("@example.com"))).toBe(true);
+    expect(sample.builders.every((builder) => builder.markdown.length > 0 && builder.verdictLine.length > 0)).toBe(
+      true,
+    );
+    expect(sample.builders.every((builder) => (builder.markdown.match(/^## /gm) ?? []).length === 4)).toBe(true);
+    expect(
+      sample.builders.some((builder) => builder.verdict === "productive" && builder.prsDevin / builder.prs > 0.8),
+    ).toBe(true);
+    expect(sample.teamMedianCostPerPr).toBe(70);
   });
 });
