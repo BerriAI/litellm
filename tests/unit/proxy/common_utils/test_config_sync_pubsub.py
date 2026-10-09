@@ -5,6 +5,7 @@ from typing import Callable, Coroutine, Iterable, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import BaseModel
 from redis.asyncio import Redis
 
 import litellm
@@ -102,8 +103,8 @@ class _ScriptedPubSubClient:
 
 
 class _QueuePubSub:
-    def __init__(self, initial_messages: Iterable[str] = ()) -> None:
-        self.queue: "asyncio.Queue[str]" = asyncio.Queue()
+    def __init__(self, initial_messages: Iterable[object] = ()) -> None:
+        self.queue: "asyncio.Queue[object]" = asyncio.Queue()
         for message in initial_messages:
             self.queue.put_nowait(message)
         self.subscribed_channels: List[str] = []
@@ -112,7 +113,7 @@ class _QueuePubSub:
     async def subscribe(self, *channels: str) -> None:
         self.subscribed_channels.extend(channels)
 
-    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> Optional[str]:
+    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> Optional[object]:
         if timeout == 0:
             try:
                 return self.queue.get_nowait()
@@ -128,7 +129,7 @@ class _QueuePubSub:
 
 
 class _BrokenPubSub(_QueuePubSub):
-    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> Optional[str]:
+    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> Optional[object]:
         raise ConnectionError("connection lost")
 
 
@@ -138,11 +139,11 @@ class _CloseFailingBrokenPubSub(_BrokenPubSub):
 
 
 class _EmptyPollsThenMessagePubSub(_QueuePubSub):
-    def __init__(self, empty_polls: int, initial_messages: Iterable[str] = ()) -> None:
+    def __init__(self, empty_polls: int, initial_messages: Iterable[object] = ()) -> None:
         super().__init__(initial_messages=initial_messages)
         self.remaining_empty_polls = empty_polls
 
-    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> Optional[str]:
+    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> Optional[object]:
         if timeout != 0 and self.remaining_empty_polls > 0:
             self.remaining_empty_polls -= 1
             return None
@@ -155,6 +156,38 @@ class _FakeClock:
 
     def __call__(self) -> float:
         return self.now
+
+
+class _VirtualTimePubSub(_QueuePubSub):
+    """Timed polls move the injected clock forward instead of waiting on the wall clock.
+
+    A delivery scheduled at a clock time is returned by the first poll whose window
+    reaches it, with the clock set to that time, so a test asserts when each resync
+    and targeted apply ran in subscriber time.
+    """
+
+    def __init__(self, clock: _FakeClock, deliveries: Iterable[Tuple[float, object]] = ()) -> None:
+        super().__init__()
+        self._clock = clock
+        self.pending: List[Tuple[float, object]] = sorted(deliveries, key=lambda delivery: delivery[0])
+
+    async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float) -> Optional[object]:
+        await asyncio.sleep(0)
+        due_by = self._clock.now + timeout
+        if self.pending and self.pending[0][0] <= due_by:
+            delivered_at, message = self.pending.pop(0)
+            self._clock.now = max(self._clock.now, delivered_at)
+            return message
+        self._clock.now = due_by
+        return None
+
+
+def _change(*model_ids: str) -> str:
+    return json.dumps({"object_type": "litellm_proxymodeltable", "model_ids": list(model_ids)})
+
+
+def _redis_delivery(message: str) -> dict:
+    return {"type": "message", "pattern": None, "channel": b"litellm_proxy.config_change", "data": message.encode()}
 
 
 class _ScriptedPubSubRedisClient(Redis):
@@ -204,7 +237,16 @@ async def test_publish_sends_object_type_json_on_channel() -> None:
     assert len(client.published) == 1
     channel, message = client.published[0]
     assert channel == "litellm_proxy.config_change"
-    assert json.loads(message) == {"object_type": "litellm_proxymodeltable"}
+    assert json.loads(message) == {"object_type": "litellm_proxymodeltable", "model_ids": []}
+
+
+async def test_publish_carries_the_written_model_ids() -> None:
+    client = _RecordingRedisClient()
+    cache = _FakeRedisCache(client)
+
+    await publish_config_change(redis_cache=cache, object_type="litellm_proxymodeltable", model_ids=("m-1", "m-2"))
+
+    assert json.loads(client.published[0][1]) == {"object_type": "litellm_proxymodeltable", "model_ids": ["m-1", "m-2"]}
 
 
 async def test_publish_uses_namespaced_channel() -> None:
@@ -235,7 +277,7 @@ async def test_publish_reaches_cluster_derived_pubsub_clients() -> None:
     await publish_config_change(redis_cache=cache, object_type="litellm_proxymodeltable")
 
     assert client.published == [
-        (CONFIG_SYNC_CHANNEL, json.dumps({"object_type": "litellm_proxymodeltable"}))
+        (CONFIG_SYNC_CHANNEL, json.dumps({"object_type": "litellm_proxymodeltable", "model_ids": []}))
     ]
 
 
@@ -312,29 +354,196 @@ class _MaxJitterRandom(random.Random):
         return b
 
 
-async def test_debounce_sleep_adds_jitter_from_injected_rng() -> None:
-    pubsub = _QueuePubSub(initial_messages=[json.dumps({"object_type": "litellm_proxymodeltable"})])
-    cache = _FakeRedisCache(_ScriptedPubSubRedisClient([pubsub]))
-    sleeps: List[float] = []
-    fired = asyncio.Event()
+def _virtual_time_subscriber(
+    pubsub: _VirtualTimePubSub,
+    clock: _FakeClock,
+    events: List[str],
+    resynced: asyncio.Event,
+    *,
+    debounce_seconds: float = 0.0,
+    jitter_max_seconds: float = 0.0,
+    min_resync_interval_seconds: float = 10.0,
+    rng: Optional[random.Random] = None,
+    expected_resyncs: int = 1,
+    apply_error: Optional[Exception] = None,
+) -> ConfigSyncSubscriber:
+    async def resync() -> None:
+        events.append(f"resync@{clock.now}")
+        if sum(event.startswith("resync@") for event in events) >= expected_resyncs:
+            resynced.set()
 
-    async def recording_sleep(seconds: float) -> None:
-        sleeps.append(seconds)
+    async def apply(model_ids: Tuple[str, ...]) -> None:
+        events.append(f"apply:{','.join(model_ids)}@{clock.now}")
+        if apply_error is not None:
+            raise apply_error
 
-    subscriber = ConfigSyncSubscriber(
-        redis_cache=cache,
-        resync_callbacks=(_recording_callback([], "resync", fired),),
-        debounce_seconds=1.0,
-        jitter_max_seconds=4.0,
-        rng=_MaxJitterRandom(),
-        sleep=recording_sleep,
+    return ConfigSyncSubscriber(
+        redis_cache=_FakeRedisCache(_ScriptedPubSubRedisClient([pubsub])),
+        resync_callbacks=(resync,),
+        apply_model_ids=apply,
+        debounce_seconds=debounce_seconds,
+        jitter_max_seconds=jitter_max_seconds,
+        min_resync_interval_seconds=min_resync_interval_seconds,
+        rng=rng,
+        monotonic=clock,
     )
 
-    subscriber.start()
-    await asyncio.wait_for(fired.wait(), timeout=5)
-    await subscriber.stop()
 
-    assert sleeps == [5.0]
+async def _run_until_resynced(subscriber: ConfigSyncSubscriber, resynced: asyncio.Event) -> None:
+    subscriber.start()
+    try:
+        await asyncio.wait_for(resynced.wait(), timeout=5)
+    finally:
+        await subscriber.stop()
+
+
+async def test_debounce_waits_out_the_jitter_from_injected_rng() -> None:
+    clock = _FakeClock()
+    pubsub = _VirtualTimePubSub(clock, deliveries=[(1000.0, _change())])
+    events: List[str] = []
+    resynced = asyncio.Event()
+    subscriber = _virtual_time_subscriber(
+        pubsub, clock, events, resynced, debounce_seconds=1.0, jitter_max_seconds=4.0, rng=_MaxJitterRandom()
+    )
+
+    await _run_until_resynced(subscriber, resynced)
+
+    assert events == ["resync@1005.0"]
+
+
+async def test_published_model_ids_apply_on_receipt_while_the_full_resync_still_debounces() -> None:
+    clock = _FakeClock()
+    pubsub = _VirtualTimePubSub(clock, deliveries=[(1000.0, _change("m-1"))])
+    events: List[str] = []
+    resynced = asyncio.Event()
+    subscriber = _virtual_time_subscriber(
+        pubsub, clock, events, resynced, debounce_seconds=1.0, jitter_max_seconds=4.0, rng=_MaxJitterRandom()
+    )
+
+    await _run_until_resynced(subscriber, resynced)
+
+    assert events == ["apply:m-1@1000.0", "resync@1005.0"]
+
+
+async def test_model_ids_published_inside_the_throttle_wait_apply_without_waiting() -> None:
+    clock = _FakeClock()
+    pubsub = _VirtualTimePubSub(
+        clock, deliveries=[(1000.0, _change()), (1004.0, _change("m-2")), (1006.0, _change("m-3", "m-4"))]
+    )
+    events: List[str] = []
+    resynced = asyncio.Event()
+    subscriber = _virtual_time_subscriber(pubsub, clock, events, resynced, expected_resyncs=2)
+
+    await _run_until_resynced(subscriber, resynced)
+
+    assert events == ["resync@1000.0", "apply:m-2@1004.0", "apply:m-3,m-4@1006.0", "resync@1010.0"]
+
+
+async def test_redis_shaped_message_applies_its_model_ids() -> None:
+    clock = _FakeClock()
+    pubsub = _VirtualTimePubSub(clock, deliveries=[(1000.0, _redis_delivery(_change("m-1")))])
+    events: List[str] = []
+    resynced = asyncio.Event()
+    subscriber = _virtual_time_subscriber(pubsub, clock, events, resynced)
+
+    await _run_until_resynced(subscriber, resynced)
+
+    assert events == ["apply:m-1@1000.0", "resync@1000.0"]
+
+
+async def test_messages_without_usable_model_ids_only_schedule_the_full_resync() -> None:
+    clock = _FakeClock()
+    pubsub = _VirtualTimePubSub(
+        clock,
+        deliveries=[
+            (1000.0, "change"),
+            (1004.0, json.dumps({"object_type": "litellm_proxymodeltable"})),
+            (1005.0, json.dumps({"object_type": "litellm_proxymodeltable", "model_ids": "m-1"})),
+            (1006.0, {"type": "message", "pattern": None, "channel": b"c", "data": 7}),
+            (1007.0, None),
+        ],
+    )
+    events: List[str] = []
+    resynced = asyncio.Event()
+    subscriber = _virtual_time_subscriber(pubsub, clock, events, resynced, expected_resyncs=2)
+
+    await _run_until_resynced(subscriber, resynced)
+
+    assert events == ["resync@1000.0", "resync@1010.0"]
+
+
+async def test_failing_targeted_apply_still_runs_the_full_resync() -> None:
+    clock = _FakeClock()
+    pubsub = _VirtualTimePubSub(clock, deliveries=[(1000.0, _change("m-1"))])
+    events: List[str] = []
+    resynced = asyncio.Event()
+    subscriber = _virtual_time_subscriber(pubsub, clock, events, resynced, apply_error=RuntimeError("db down"))
+
+    await _run_until_resynced(subscriber, resynced)
+
+    assert events == ["apply:m-1@1000.0", "resync@1000.0"]
+
+
+async def test_subscriber_without_an_apply_callback_only_resyncs() -> None:
+    clock = _FakeClock()
+    pubsub = _VirtualTimePubSub(clock, deliveries=[(1000.0, _change("m-1"))])
+    resyncs: List[str] = []
+    fired = asyncio.Event()
+    subscriber = ConfigSyncSubscriber(
+        redis_cache=_FakeRedisCache(_ScriptedPubSubRedisClient([pubsub])),
+        resync_callbacks=(_recording_callback(resyncs, "resync", fired),),
+        debounce_seconds=0.0,
+        jitter_max_seconds=0.0,
+        monotonic=clock,
+    )
+
+    await _run_until_resynced(subscriber, fired)
+
+    assert resyncs == ["resync"]
+
+
+async def test_peer_holds_every_published_row_before_its_next_full_resync() -> None:
+    publisher = _RecordingRedisClient()
+    cache = _FakeRedisCache(publisher)
+    await publish_config_change(redis_cache=cache, object_type="litellm_proxymodeltable", model_ids=("m-order-1",))
+    await publish_config_change(redis_cache=cache, object_type="litellm_proxymodeltable", model_ids=("m-order-2",))
+    on_the_wire = [_redis_delivery(message) for _, message in publisher.published]
+    clock = _FakeClock()
+    pubsub = _VirtualTimePubSub(clock, deliveries=[(1000.0, on_the_wire[0]), (1007.0, on_the_wire[1])])
+    db_rows_written_at = {"m-order-1": 1000.0, "m-order-2": 1007.0}
+    registry: set = set()
+    snapshots: List[Tuple[str, float, frozenset]] = []
+    resynced = asyncio.Event()
+
+    async def apply(model_ids: Tuple[str, ...]) -> None:
+        registry.update(model_ids)
+        snapshots.append(("apply", clock.now, frozenset(registry)))
+
+    async def resync() -> None:
+        registry.update(row for row, written_at in db_rows_written_at.items() if written_at <= clock.now)
+        snapshots.append(("resync", clock.now, frozenset(registry)))
+        if sum(kind == "resync" for kind, _, _ in snapshots) == 2:
+            resynced.set()
+
+    subscriber = ConfigSyncSubscriber(
+        redis_cache=_FakeRedisCache(_ScriptedPubSubRedisClient([pubsub])),
+        resync_callbacks=(resync,),
+        apply_model_ids=apply,
+        debounce_seconds=1.0,
+        jitter_max_seconds=5.0,
+        min_resync_interval_seconds=10.0,
+        rng=_MaxJitterRandom(),
+        monotonic=clock,
+    )
+
+    await _run_until_resynced(subscriber, resynced)
+
+    assert snapshots == [
+        ("apply", 1000.0, frozenset({"m-order-1"})),
+        ("resync", 1006.0, frozenset({"m-order-1"})),
+        ("apply", 1007.0, frozenset({"m-order-1", "m-order-2"})),
+        ("resync", 1016.0, frozenset({"m-order-1", "m-order-2"})),
+    ]
 
 
 def test_default_jitter_window_is_nonzero() -> None:
@@ -345,92 +554,43 @@ def test_default_min_resync_interval_caps_reload_rate() -> None:
     assert CONFIG_SYNC_MIN_RESYNC_INTERVAL_SECONDS > CONFIG_SYNC_JITTER_MAX_SECONDS
 
 
-def _throttled_subscriber(
-    cache: object,
-    events: List[str],
-    fired: asyncio.Event,
-    clock: _FakeClock,
-    min_resync_interval_seconds: float = 10.0,
-) -> ConfigSyncSubscriber:
-    async def recording_sleep(seconds: float) -> None:
-        events.append(f"sleep:{seconds}")
-        await asyncio.sleep(0)
-
-    async def resync() -> None:
-        events.append("resync")
-        fired.set()
-
-    return ConfigSyncSubscriber(
-        redis_cache=cache,
-        resync_callbacks=(resync,),
-        debounce_seconds=0.0,
-        jitter_max_seconds=0.0,
-        min_resync_interval_seconds=min_resync_interval_seconds,
-        sleep=recording_sleep,
-        monotonic=clock,
-    )
-
-
 async def test_resync_arriving_inside_min_interval_waits_out_the_remainder() -> None:
-    pubsub = _QueuePubSub()
-    cache = _FakeRedisCache(_ScriptedPubSubRedisClient([pubsub]))
-    events: List[str] = []
-    fired = asyncio.Event()
     clock = _FakeClock()
-    subscriber = _throttled_subscriber(cache=cache, events=events, fired=fired, clock=clock)
+    pubsub = _VirtualTimePubSub(clock, deliveries=[(1000.0, "change"), (1004.0, "change")])
+    events: List[str] = []
+    resynced = asyncio.Event()
+    subscriber = _virtual_time_subscriber(pubsub, clock, events, resynced, expected_resyncs=2)
 
-    subscriber.start()
-    pubsub.queue.put_nowait("change")
-    await asyncio.wait_for(fired.wait(), timeout=5)
-    fired.clear()
-    clock.now += 4.0
-    pubsub.queue.put_nowait("change")
-    await asyncio.wait_for(fired.wait(), timeout=5)
-    await subscriber.stop()
+    await _run_until_resynced(subscriber, resynced)
 
-    assert events == ["sleep:0.0", "resync", "sleep:0.0", "sleep:6.0", "resync"]
+    assert events == ["resync@1000.0", "resync@1010.0"]
 
 
 async def test_resync_after_min_interval_elapsed_is_not_throttled() -> None:
-    pubsub = _QueuePubSub()
-    cache = _FakeRedisCache(_ScriptedPubSubRedisClient([pubsub]))
-    events: List[str] = []
-    fired = asyncio.Event()
     clock = _FakeClock()
-    subscriber = _throttled_subscriber(cache=cache, events=events, fired=fired, clock=clock)
+    pubsub = _VirtualTimePubSub(clock, deliveries=[(1000.0, "change"), (1030.0, "change")])
+    events: List[str] = []
+    resynced = asyncio.Event()
+    subscriber = _virtual_time_subscriber(pubsub, clock, events, resynced, expected_resyncs=2)
 
-    subscriber.start()
-    pubsub.queue.put_nowait("change")
-    await asyncio.wait_for(fired.wait(), timeout=5)
-    fired.clear()
-    clock.now += 30.0
-    pubsub.queue.put_nowait("change")
-    await asyncio.wait_for(fired.wait(), timeout=5)
-    await subscriber.stop()
+    await _run_until_resynced(subscriber, resynced)
 
-    assert events == ["sleep:0.0", "resync", "sleep:0.0", "resync"]
+    assert events == ["resync@1000.0", "resync@1030.0"]
 
 
 async def test_writes_during_the_throttle_wait_collapse_into_the_next_resync() -> None:
-    pubsub = _QueuePubSub()
-    cache = _FakeRedisCache(_ScriptedPubSubRedisClient([pubsub]))
-    events: List[str] = []
-    fired = asyncio.Event()
     clock = _FakeClock()
-    subscriber = _throttled_subscriber(cache=cache, events=events, fired=fired, clock=clock)
+    pubsub = _VirtualTimePubSub(
+        clock, deliveries=[(1000.0, "change")] + [(1004.0 + offset, "change") for offset in range(5)]
+    )
+    events: List[str] = []
+    resynced = asyncio.Event()
+    subscriber = _virtual_time_subscriber(pubsub, clock, events, resynced, expected_resyncs=2)
 
-    subscriber.start()
-    pubsub.queue.put_nowait("change")
-    await asyncio.wait_for(fired.wait(), timeout=5)
-    fired.clear()
-    for _ in range(5):
-        pubsub.queue.put_nowait("change")
-    await asyncio.wait_for(fired.wait(), timeout=5)
-    await asyncio.sleep(0.1)
-    await subscriber.stop()
+    await _run_until_resynced(subscriber, resynced)
 
-    assert events.count("resync") == 2
-    assert pubsub.queue.empty()
+    assert events == ["resync@1000.0", "resync@1010.0"]
+    assert pubsub.pending == []
 
 
 async def test_polls_without_messages_do_not_trigger_resyncs() -> None:
@@ -620,11 +780,35 @@ class _AllWritesTableActions:
         return action
 
 
-def _recording_publish(calls: List[Tuple[str, str]]) -> Callable[[str], Coroutine[None, None, None]]:
-    async def publish(object_type: str) -> None:
+def _recording_publish(calls: List[Tuple[str, str]]) -> Callable[[str, Tuple[str, ...]], Coroutine[None, None, None]]:
+    async def publish(object_type: str, model_ids: Tuple[str, ...]) -> None:
         calls.append(("publish", object_type))
 
     return publish
+
+
+def _recording_publish_with_ids(
+    calls: List[Tuple[str, Tuple[str, ...]]],
+) -> Callable[[str, Tuple[str, ...]], Coroutine[None, None, None]]:
+    async def publish(object_type: str, model_ids: Tuple[str, ...]) -> None:
+        calls.append((object_type, model_ids))
+
+    return publish
+
+
+class _ModelRow(BaseModel):
+    model_id: str
+    model_name: str
+
+
+class _ModelRowTableActions:
+    def __getattr__(self, name: str) -> Callable[..., Coroutine[None, None, object]]:
+        async def action(*args: object, **kwargs: object) -> object:
+            if name.endswith("_many"):
+                return 2
+            return _ModelRow(model_id="m-1", model_name="gpt-5.2")
+
+        return action
 
 
 def test_wrapper_passes_through_unsynced_tables() -> None:
@@ -696,6 +880,46 @@ async def test_wrapper_publishes_for_every_write_action(action_name: str) -> Non
     assert publish_calls == [("publish", "litellm_guardrailstable")]
 
 
+@pytest.mark.parametrize(
+    "action_name, expected_ids",
+    [
+        ("create", ("m-1",)),
+        ("update", ("m-1",)),
+        ("upsert", ("m-1",)),
+        ("delete", ()),
+        ("create_many", ()),
+        ("update_many", ()),
+        ("delete_many", ()),
+    ],
+)
+async def test_wrapper_publishes_the_written_model_id_for_row_writes(
+    action_name: str, expected_ids: Tuple[str, ...]
+) -> None:
+    publish_calls: List[Tuple[str, Tuple[str, ...]]] = []
+    wrapped = wrap_table_actions_for_config_sync(
+        actions=_ModelRowTableActions(),
+        table_name="litellm_proxymodeltable",
+        publish=_recording_publish_with_ids(publish_calls),
+    )
+
+    await getattr(wrapped, action_name)(data={})
+
+    assert publish_calls == [("litellm_proxymodeltable", expected_ids)]
+
+
+async def test_wrapper_publishes_no_model_ids_for_other_tables() -> None:
+    publish_calls: List[Tuple[str, Tuple[str, ...]]] = []
+    wrapped = wrap_table_actions_for_config_sync(
+        actions=_ModelRowTableActions(),
+        table_name="litellm_guardrailstable",
+        publish=_recording_publish_with_ids(publish_calls),
+    )
+
+    await wrapped.create(data={})
+
+    assert publish_calls == [("litellm_guardrailstable", ())]
+
+
 async def test_model_repository_write_publishes_via_live_coordination_cache() -> None:
     from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import _set_redis_usage_cache
@@ -721,7 +945,7 @@ async def test_model_repository_write_publishes_via_live_coordination_cache() ->
     assert len(client.published) == 1
     channel, message = client.published[0]
     assert channel == CONFIG_SYNC_CHANNEL
-    assert json.loads(message) == {"object_type": "litellm_proxymodeltable"}
+    assert json.loads(message) == {"object_type": "litellm_proxymodeltable", "model_ids": ["m-1"]}
 
 
 async def test_ui_settings_write_publishes_via_live_coordination_cache() -> None:
@@ -748,7 +972,7 @@ async def test_ui_settings_write_publishes_via_live_coordination_cache() -> None
     assert len(client.published) == 1
     channel, message = client.published[0]
     assert channel == CONFIG_SYNC_CHANNEL
-    assert json.loads(message) == {"object_type": "litellm_uisettings"}
+    assert json.loads(message) == {"object_type": "litellm_uisettings", "model_ids": []}
 
 
 async def _publish_calls_for_invalidated_param(param_name: str) -> List[Tuple[str, str]]:
@@ -773,7 +997,7 @@ async def test_invalidate_config_param_publishes_params_a_resync_applies(param_n
     assert len(published) == 1
     channel, message = published[0]
     assert channel == CONFIG_SYNC_CHANNEL
-    assert json.loads(message) == {"object_type": param_name}
+    assert json.loads(message) == {"object_type": param_name, "model_ids": []}
 
 
 @pytest.mark.parametrize("param_name", _STARTUP_ONLY_CONFIG_PARAM_NAMES)
@@ -904,6 +1128,46 @@ async def test_proxy_config_subscriber_resyncs_deployments_only() -> None:
     assert calls == [("add_deployment", prisma_client, proxy_logging_obj)]
     assert config.config_sync_subscriber is None
     assert subscriber._task is None
+
+
+async def test_proxy_config_subscriber_applies_published_model_ids_from_the_db(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    rows = [MagicMock()]
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=rows)
+    router = MagicMock()
+    router.get_model_list.return_value = ["deployment"]
+    installed: List[object] = []
+
+    def install(db_models: object) -> None:
+        installed.append(db_models)
+
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", None)
+    monkeypatch.setattr(proxy_server.proxy_config, "get_credentials", AsyncMock())
+    monkeypatch.setattr(proxy_server.proxy_config, "_add_deployment", install)
+    cache = _FakeRedisCache(_ScriptedPubSubRedisClient([_QueuePubSub()]))
+    config = ProxyConfig()
+
+    config.start_config_sync_subscriber(prisma_client=prisma_client, proxy_logging_obj=MagicMock(), redis_cache=cache)
+    subscriber = config.config_sync_subscriber
+    assert subscriber is not None
+    apply = subscriber._apply_model_ids
+    assert apply is not None
+    await apply(("m-1", "m-2"))
+    await config.stop_config_sync_subscriber()
+
+    prisma_client.db.litellm_proxymodeltable.find_many.assert_awaited_once_with(
+        where={"model_id": {"in": ["m-1", "m-2"]}}
+    )
+    assert installed == [rows]
+    assert proxy_server.llm_model_list == ["deployment"]
 
 
 async def test_proxy_config_does_not_start_subscriber_without_coordination_redis() -> None:

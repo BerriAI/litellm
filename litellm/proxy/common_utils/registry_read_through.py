@@ -12,13 +12,14 @@ genuinely unknown names.
 
 import asyncio
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 
 if TYPE_CHECKING:
+    from prisma.models import LiteLLM_ProxyModelTable
     from prisma.types import (
         LiteLLM_AgentsTableInclude,
         LiteLLM_AgentsTableWhereUniqueInput,
@@ -123,6 +124,29 @@ async def _resync_model_deployments(model_name: str) -> bool:
     rows: Final = await table.find_many(where=name_filter) or await table.find_many(where=id_filter)
     if not rows:
         return False
+    return await _load_model_rows(rows)
+
+
+async def resync_model_deployments_by_ids(model_ids: tuple[str, ...]) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.repositories.model_repository import ModelRepository
+
+    if not _db_backed_registries_enabled("models"):
+        return
+    prisma_client: Final = proxy_server.prisma_client
+    assert prisma_client is not None
+    ids_filter: Final[LiteLLM_ProxyModelTableWhereInput] = {"model_id": {"in": list(model_ids)}}
+    rows: Final = await ModelRepository(prisma_client).table.find_many(where=ids_filter)
+    if not rows:
+        return
+    await _load_model_rows(rows)
+
+
+async def _load_model_rows(rows: "Sequence[LiteLLM_ProxyModelTable]") -> bool:
+    from litellm.proxy import proxy_server
+
+    prisma_client: Final = proxy_server.prisma_client
+    assert prisma_client is not None
     router: Final = proxy_server.llm_router
     if router is None:
         await proxy_server.proxy_config.add_deployment(

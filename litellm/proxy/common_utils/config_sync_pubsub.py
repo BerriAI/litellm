@@ -6,6 +6,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Final, Protocol, cast  # noqa: TID251  # untyped prisma/redis boundary needs cast
 
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+
 from litellm._logging import verbose_proxy_logger
 from litellm.repositories.prisma_protocols import RowT_co, TableActions
 
@@ -98,24 +100,65 @@ _pubsub_capable_client: Final = pubsub_capable_client
 @dataclass(frozen=True, slots=True)
 class _ConfigChangeMessage:
     object_type: str
+    model_ids: tuple[str, ...] = ()
 
 
-def _config_change_message_json(object_type: str) -> str:
-    return json.dumps(asdict(_ConfigChangeMessage(object_type=object_type)))
+@dataclass(frozen=True, slots=True)
+class _PubSubEnvelope:
+    data: str | bytes
 
 
-async def publish_config_change(redis_cache: "RedisCache | None", object_type: str) -> None:
+class _WrittenModelRow(BaseModel):
+    model_config = ConfigDict(from_attributes=True, frozen=True)
+
+    model_id: str
+
+
+_CONFIG_CHANGE_MESSAGE: Final = TypeAdapter(_ConfigChangeMessage)
+_PUBSUB_ENVELOPE: Final = TypeAdapter(_PubSubEnvelope)
+_MODEL_TABLE_NAME: Final = "litellm_proxymodeltable"
+_TARGETED_WRITE_ACTION_NAMES: Final[frozenset[str]] = frozenset({"create", "update", "upsert"})
+
+PublishConfigChange = Callable[[str, tuple[str, ...]], Awaitable[None]]
+
+
+def _config_change_message_json(object_type: str, model_ids: tuple[str, ...]) -> str:
+    return json.dumps(asdict(_ConfigChangeMessage(object_type=object_type, model_ids=model_ids)))
+
+
+def parse_config_change(message: object) -> _ConfigChangeMessage | None:
+    try:
+        payload: Final = (
+            message if isinstance(message, (str, bytes)) else _PUBSUB_ENVELOPE.validate_python(message).data
+        )
+        return _CONFIG_CHANGE_MESSAGE.validate_json(payload)
+    except ValidationError:
+        return None
+
+
+def written_model_ids(object_type: str, action_name: str, result: object) -> tuple[str, ...]:
+    if object_type != _MODEL_TABLE_NAME or action_name not in _TARGETED_WRITE_ACTION_NAMES:
+        return ()
+    try:
+        return (_WrittenModelRow.model_validate(result).model_id,)
+    except ValidationError:
+        return ()
+
+
+async def publish_config_change(
+    redis_cache: "RedisCache | None", object_type: str, model_ids: tuple[str, ...] = ()
+) -> None:
     if redis_cache is None:
         return
     try:
         client: Final = pubsub_capable_client(redis_cache)
-        await client.publish(config_sync_channel(redis_cache), _config_change_message_json(object_type))
+        await client.publish(config_sync_channel(redis_cache), _config_change_message_json(object_type, model_ids))
     except Exception as e:  # noqa: BLE001  # best-effort publish; writes must never fail on redis errors
         verbose_proxy_logger.warning("config sync publish for %s failed: %s", object_type, e)
 
 
-async def publish_config_change_for_object_type(object_type: str) -> None:
-    await publish_config_change(redis_cache=coordination_redis_cache(), object_type=object_type)
+async def publish_config_change_for_object_type(object_type: str, model_ids: tuple[str, ...] = ()) -> None:
+    await publish_config_change(redis_cache=coordination_redis_cache(), object_type=object_type, model_ids=model_ids)
 
 
 async def publish_config_param_change(param_name: str) -> None:
@@ -131,7 +174,7 @@ async def publish_config_param_change(param_name: str) -> None:
 class _PublishOnWriteActions:
     __slots__ = ("_actions", "_object_type", "_publish")
 
-    def __init__(self, actions: object, object_type: str, publish: Callable[[str], Awaitable[None]]) -> None:
+    def __init__(self, actions: object, object_type: str, publish: PublishConfigChange) -> None:
         self._actions = actions
         self._object_type = object_type
         self._publish = publish
@@ -149,7 +192,7 @@ class _PublishOnWriteActions:
             **kwargs: object,  # kwargs-ok: transparent passthrough to untyped prisma action
         ) -> object:
             result: Final = await write_action(*args, **kwargs)
-            await publish(object_type)
+            await publish(object_type, written_model_ids(object_type, name, result))
             return result
 
         return _write_then_publish
@@ -158,7 +201,7 @@ class _PublishOnWriteActions:
 def wrap_table_actions_for_config_sync(
     actions: "TableActions[RowT_co]",
     table_name: str,
-    publish: Callable[[str], Awaitable[None]] = publish_config_change_for_object_type,
+    publish: PublishConfigChange = publish_config_change_for_object_type,
 ) -> "TableActions[RowT_co]":
     if table_name not in _CONFIG_SYNCED_TABLE_NAMES:
         return actions
@@ -168,6 +211,7 @@ def wrap_table_actions_for_config_sync(
 
 class ConfigSyncSubscriber:
     __slots__ = (
+        "_apply_model_ids",
         "_backoff_initial_seconds",
         "_backoff_max_seconds",
         "_debounce_seconds",
@@ -186,6 +230,7 @@ class ConfigSyncSubscriber:
         self,
         redis_cache: "RedisCache",
         resync_callbacks: tuple[Callable[[], Awaitable[None]], ...],
+        apply_model_ids: Callable[[tuple[str, ...]], Awaitable[None]] | None = None,
         debounce_seconds: float = CONFIG_SYNC_DEBOUNCE_SECONDS,
         jitter_max_seconds: float = CONFIG_SYNC_JITTER_MAX_SECONDS,
         min_resync_interval_seconds: float = CONFIG_SYNC_MIN_RESYNC_INTERVAL_SECONDS,
@@ -197,6 +242,7 @@ class ConfigSyncSubscriber:
     ) -> None:
         self._redis_cache = redis_cache
         self._resync_callbacks = resync_callbacks
+        self._apply_model_ids = apply_model_ids
         self._debounce_seconds = debounce_seconds
         self._jitter_max_seconds = jitter_max_seconds
         self._min_resync_interval_seconds = min_resync_interval_seconds
@@ -252,28 +298,51 @@ class ConfigSyncSubscriber:
             message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=_POLL_TIMEOUT_SECONDS)
             if message is None:
                 continue
-            await self._sleep(self._debounce_seconds + self._rng.uniform(0.0, self._jitter_max_seconds))
-            await self._wait_for_min_resync_interval()
+            await self._apply(message)
+            await self._apply_until(
+                pubsub, self._monotonic() + self._debounce_seconds + self._rng.uniform(0.0, self._jitter_max_seconds)
+            )
+            await self._apply_until(pubsub, self._next_resync_at())
             await self._drain_pending(pubsub)
             await self._run_resync_callbacks()
             self._last_resync_at = self._monotonic()
 
-    async def _wait_for_min_resync_interval(self) -> None:
+    def _next_resync_at(self) -> float:
         if self._last_resync_at is None:
-            return
-        seconds_until_next_resync = self._min_resync_interval_seconds - (self._monotonic() - self._last_resync_at)
-        if seconds_until_next_resync <= 0:
-            return
-        verbose_proxy_logger.debug(
-            "config sync resync throttled for %.1fs to cap fleet-wide reload rate",
-            seconds_until_next_resync,
-        )
-        await self._sleep(seconds_until_next_resync)
+            return self._monotonic()
+        next_resync_at: Final = self._last_resync_at + self._min_resync_interval_seconds
+        throttled_for: Final = next_resync_at - self._monotonic()
+        if throttled_for > 0:
+            verbose_proxy_logger.debug(
+                "config sync resync throttled for %.1fs to cap fleet-wide reload rate",
+                throttled_for,
+            )
+        return next_resync_at
 
-    @staticmethod
-    async def _drain_pending(pubsub: ConfigSyncPubSub) -> None:
-        while await pubsub.get_message(ignore_subscribe_messages=True, timeout=0) is not None:
-            pass
+    async def _apply_until(self, pubsub: ConfigSyncPubSub, deadline: float) -> None:
+        while True:
+            remaining = deadline - self._monotonic()
+            if remaining <= 0:
+                return
+            message = await pubsub.get_message(
+                ignore_subscribe_messages=True, timeout=min(remaining, _POLL_TIMEOUT_SECONDS)
+            )
+            if message is not None:
+                await self._apply(message)
+
+    async def _drain_pending(self, pubsub: ConfigSyncPubSub) -> None:
+        while (message := await pubsub.get_message(ignore_subscribe_messages=True, timeout=0)) is not None:
+            await self._apply(message)
+
+    async def _apply(self, message: object) -> None:
+        apply: Final = self._apply_model_ids
+        change: Final = parse_config_change(message)
+        if apply is None or change is None or not change.model_ids:
+            return
+        try:
+            await apply(change.model_ids)
+        except Exception as e:  # noqa: BLE001  # the debounced full resync retries what a targeted apply could not
+            verbose_proxy_logger.warning("config sync targeted apply of %s failed: %s", change.model_ids, e)
 
     async def _run_resync_callbacks(self) -> None:
         for callback in self._resync_callbacks:

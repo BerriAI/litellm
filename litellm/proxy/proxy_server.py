@@ -485,6 +485,7 @@ from litellm.proxy.common_utils.periodic_reload_schedule import (
     write_reload_interval,
 )
 from litellm.proxy.common_utils.proxy_state import ProxyState
+from litellm.proxy.common_utils.registry_read_through import resync_model_deployments_by_ids
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.responses_stream_errors import ResponsesStreamErrorState
 from litellm.proxy.common_utils.scheduled_job_stagger import (
@@ -8452,6 +8453,7 @@ class ProxyConfig:
         subscriber: Final = ConfigSyncSubscriber(
             redis_cache=redis_cache,
             resync_callbacks=(_resync_config_from_db,),
+            apply_model_ids=resync_model_deployments_by_ids,
         )
         self.config_sync_subscriber = subscriber
         subscriber.start()

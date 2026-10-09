@@ -728,7 +728,11 @@ async def _auto_router_capability_slot(
                 limit=limit,
             )
         yield tables.litellm_proxymodeltable
-    await publish_config_change(redis_cache=coordination_redis_cache(), object_type="litellm_proxymodeltable")
+    await publish_config_change(
+        redis_cache=coordination_redis_cache(),
+        object_type="litellm_proxymodeltable",
+        model_ids=() if model_id is None else (model_id,),
+    )
 
 
 ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING: Final = "enforce_rpm_tpm_on_model_add"
