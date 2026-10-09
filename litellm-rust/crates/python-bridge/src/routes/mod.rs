@@ -10,7 +10,9 @@ pub(crate) mod traces;
 
 use litellm_callbacks_legacy_python::{LegacyLogging, LoggingOperation, PublicCall};
 use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol};
-use litellm_host_python::{HookChain, PythonBinding, PythonCallHooks, PythonHostCalls, effective};
+use litellm_host_python::{
+    HookChain, PythonBinding, PythonCallHooks, PythonHostCalls, effective_py_args,
+};
 use pyo3::{
     prelude::*,
     types::{PyDict, PyMapping, PyTuple},
@@ -31,7 +33,7 @@ pub(crate) struct NativeCall<'py> {
 impl<'py> NativeCall<'py> {
     /// The call before any hook ran, for the reads that admit or decline it.
     fn resolved(&self) -> PyResult<Bound<'py, PyDict>> {
-        effective(&self.base, &self.kwargs)
+        effective_py_args(&self.base, &self.kwargs)
     }
 }
 

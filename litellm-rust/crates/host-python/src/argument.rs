@@ -22,10 +22,11 @@ pub fn present<'py>(
 /// What `original_function(*args, **kwargs)` sees: the signature base with the keyword
 /// dict laid over it, so a rewritten keyword wins and a deleted keyword falls back to the
 /// signature default.
-pub fn effective<'py>(
+pub fn effective_py_args<'py>(
     base: &Bound<'py, PyDict>,
     kwargs: &Bound<'py, PyDict>,
 ) -> PyResult<Bound<'py, PyDict>> {
+    // Shallow copy, like the Python path: nested values stay shared with the caller.
     let merged = base.copy()?;
     merged.update(kwargs.as_mapping())?;
     Ok(merged)
@@ -128,7 +129,7 @@ mod tests {
     ) {
         crate::initialize_python();
         Python::attach(|py| {
-            let merged = effective(&dict(py, base), &dict(py, kwargs)).unwrap();
+            let merged = effective_py_args(&dict(py, base), &dict(py, kwargs)).unwrap();
             let value = merged
                 .get_item("api_key")
                 .unwrap()
@@ -145,7 +146,7 @@ mod tests {
             let base = dict(py, "{'model': 'base', 'pages': None}");
             let kwargs = PyDict::new(py);
             kwargs.set_item("document", &document).unwrap();
-            let merged = effective(&base, &kwargs).unwrap();
+            let merged = effective_py_args(&base, &kwargs).unwrap();
             merged.set_item("model", "merged").unwrap();
             assert_eq!(
                 base.get_item("model")
