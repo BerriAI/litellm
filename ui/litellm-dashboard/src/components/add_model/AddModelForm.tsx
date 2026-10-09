@@ -27,7 +27,7 @@ import {
 import type { Team } from "../key_team_helpers/key_list";
 import { type CredentialItem, type ProviderCreateInfo, credentialCreateCall, modelAvailableCall } from "../networking";
 import CredentialModal from "../model_add/CredentialModal";
-import { isAnthropicProvider } from "../model_add/anthropic_federation";
+import { federatedProviderOf } from "../model_add/credential_federation";
 import { buildCredential, withoutRestrictedFields } from "../model_add/credential_form_helpers";
 import { ProviderLogo } from "../molecules/models/ProviderLogo";
 import AccessGroupTagsCombobox from "./AccessGroupTagsCombobox";
@@ -100,7 +100,8 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   const selectedCredentialName = useWatch({ control: form.control, name: "litellm_credential_name" });
   const queryClient = useQueryClient();
   const [isFederatedCredentialModalOpen, setIsFederatedCredentialModalOpen] = useState(false);
-  const canCreateFederatedCredential = isProxyAdminRole(userRole ?? "") && isAnthropicProvider(selectedProvider);
+  const canCreateFederatedCredential =
+    isProxyAdminRole(userRole ?? "") && federatedProviderOf(selectedProvider) !== null;
 
   const handleCreateFederatedCredential = async (values: Record<string, unknown>) => {
     const credential = buildCredential(values, withoutRestrictedFields(values));
