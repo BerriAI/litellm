@@ -8,13 +8,17 @@ from dataclasses import dataclass
 from hashlib import sha256
 from typing import Final
 
+import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.client import JSON_OBJECT, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
+from integration.cost_calculation.case import CostTrackingTestCase as LiteralCostTrackingTestCase
 from integration.cost_calculation.cost_tracking_case import CostTrackingTestCase, StoredResponse
 from pydantic import BaseModel, ConfigDict
+
+pytest.register_assert_rewrite("integration.cost_calculation.runner")
 
 
 class CostBreakdown(BaseModel):
@@ -278,7 +282,7 @@ class RegisteredDeployment:
 
 def register_scenario_deployment(
     scenario: Scenario,
-    case: CostTrackingTestCase,
+    case: CostTrackingTestCase | LiteralCostTrackingTestCase,
     marker: str,
     key: str,
     *,
@@ -287,45 +291,53 @@ def register_scenario_deployment(
 ) -> RegisteredDeployment:
     control_url: Final = os.environ["INTEGRATION_UPSTREAM_URL"].rstrip("/")
     run_marker: Final = sha256(key.encode()).hexdigest()[:12]
+    default_response: Final = (
+        case.response if isinstance(case, CostTrackingTestCase) else case.mock_provider_response
+    )
     handle: Final = register_scenario(
         f"sc-{marker}{marker_suffix}-{run_marker}",
-        case.response if response is None else response,
+        default_response if response is None else response,
     )
     scenario.cleanups.callback(delete_scenario, handle)
     registered_model_name: Final = f"cost-{marker}{marker_suffix}-{run_marker}"
-    parameters: Final = {
-        "model": case.litellm_model,
-        "api_key": case.api_key,
-        "api_base": handle.api_base(),
-        **case.litellm_params,
-        **(
-            {
-                key: value
-                for key, value in (
-                    ("input_cost_per_token", case.deployment.input_cost_per_token),
-                    ("output_cost_per_token", case.deployment.output_cost_per_token),
-                )
-                if value is not None
-            }
-            if case.deployment is not None
-            else {}
-        ),
-        **(
-            {"vertex_credentials": _vertex_service_account_json(control_url)}
-            if case.rates.litellm_provider.startswith("vertex_ai")
-            else {}
-        ),
-    }
+    parameters: Final = (
+        {**case.deployment, "api_base": handle.api_base()}
+        if isinstance(case, LiteralCostTrackingTestCase)
+        else {
+            "model": case.litellm_model,
+            "api_key": case.api_key,
+            "api_base": handle.api_base(),
+            **case.litellm_params,
+            **(
+                {
+                    key: value
+                    for key, value in (
+                        ("input_cost_per_token", case.deployment.input_cost_per_token),
+                        ("output_cost_per_token", case.deployment.output_cost_per_token),
+                    )
+                    if value is not None
+                }
+                if case.deployment is not None
+                else {}
+            ),
+            **(
+                {"vertex_credentials": _vertex_service_account_json(control_url)}
+                if case.rates.litellm_provider.startswith("vertex_ai")
+                else {}
+            ),
+        }
+    )
+    model_info: Final = (
+        {"base_model": case.base_model}
+        if isinstance(case, CostTrackingTestCase) and case.base_model is not None
+        else {}
+    )
     created: Final = scenario.gateway.post(
         "/model/new",
         JSON_OBJECT.validate_python({
             "model_name": registered_model_name,
             "litellm_params": parameters,
-            "model_info": (
-                {"base_model": case.base_model}
-                if case.base_model is not None
-                else {}
-            ),
+            "model_info": model_info,
         }),
     )
     identity: Final = string_value(object_value(created["model_info"])["id"])

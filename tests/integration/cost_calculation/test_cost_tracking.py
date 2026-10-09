@@ -18,7 +18,7 @@ import httpx
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, string_value
 from integration._support.upstream import delete_scenario, register_scenario
-from integration.cost_calculation.assertions import assert_exact, assert_recount
+from integration.cost_calculation.assertions import assert_exact, assert_recount, assert_stream_has_no_error
 from integration.cost_calculation.conftest import (
     approx_equal,
     poll_cost_row,
@@ -88,19 +88,6 @@ def _multipart_request(gateway: Gateway, case: CostTrackingTestCase, model_name:
     else:
         files = {"image": ("image.png", _png_bytes(), "image/png")}
     return gateway.request_multipart(case.endpoint, fields, files, key=key)
-
-
-def _assert_stream_has_no_error(response_text: str) -> None:
-    for line in response_text.splitlines():
-        if not line.startswith("data:"):
-            continue
-        payload = line.removeprefix("data:").strip()
-        if payload == "[DONE]":
-            continue
-        parsed = JSON_OBJECT.validate_json(payload)
-        assert (
-            "error" not in parsed and parsed.get("type") not in {"error", "response.failed"}
-        ), f"stream carried an error event: {parsed}"
 
 
 def _replace_model(value: JsonValue, model_name: str) -> JsonValue:
@@ -296,7 +283,7 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
                 },
             )
         if case.response.content_type == "text/event-stream":
-            _assert_stream_has_no_error(response.text)
+            assert_stream_has_no_error(response.text)
         rows: Final = poll_rows(key, len(responses) + (prior_response_id is not None))
         if isinstance(expected, RecountExpected):
             row: Final = rows[0]

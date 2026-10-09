@@ -578,8 +578,18 @@ _LITELLM_MODELS: Final = tuple(case.litellm_model for case in _ALL_CASES)
 
 
 def data_errors() -> tuple[str, ...]:
-    case_models: Final = frozenset(case.model for case in _ALL_CASES) | frozenset(
-        case.session_model for case in REALTIME_CASES if case.session_model is not None
+    from integration._support.client import string_value
+    from integration.cost_calculation.chat_completions.bases.anthropic import CLAUDE_SONNET_5_TEST_CASE
+    from integration.cost_calculation.chat_completions.bases.openai import GPT_5_6_TEST_CASE
+
+    migrated_models: Final = frozenset(
+        string_value(case.deployment["model"]).rsplit("/", maxsplit=1)[-1]
+        for case in (CLAUDE_SONNET_5_TEST_CASE, GPT_5_6_TEST_CASE)
+    )
+    case_models: Final = (
+        frozenset(case.model for case in _ALL_CASES)
+        | frozenset(case.session_model for case in REALTIME_CASES if case.session_model is not None)
+        | migrated_models
     )
     unknown_models: Final = sorted(model for model in case_models if model not in COST_MAP)
     missing_cases: Final = sorted(model for model in COST_MAP if model not in case_models)

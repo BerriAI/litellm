@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import httpx
+from integration._support.client import JSON_OBJECT
 from integration.cost_calculation.conftest import (
     CostBreakdown,
     CostRow,
@@ -8,6 +9,19 @@ from integration.cost_calculation.conftest import (
     assert_total_is_sum_of_components,
 )
 from integration.cost_calculation.cost_tracking_case import ExactExpected, RecountExpected
+
+
+def assert_stream_has_no_error(response_text: str) -> None:
+    for line in response_text.splitlines():
+        if not line.startswith("data:"):
+            continue
+        payload = line.removeprefix("data:").strip()
+        if payload == "[DONE]":
+            continue
+        parsed = JSON_OBJECT.validate_json(payload)
+        assert (
+            "error" not in parsed and parsed.get("type") not in {"error", "response.failed"}
+        ), f"stream carried an error event: {parsed}"
 
 
 def assert_breakdown(
