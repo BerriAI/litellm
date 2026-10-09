@@ -1,17 +1,13 @@
-"""
-The complete set of fields LiteLLM telemetry can collect.
-
-Every record is a frozen dataclass whose fields are closed enums, bounded
-numbers, or hashes. A value that is not declared here cannot be exported.
-"""
-
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Final
 
 
 class TelemetryGroup(str, Enum):
-    """One switch in the telemetry settings; ``litellm.telemetry.consent.REQUIRES`` orders them"""
+    """
+    A telemetry group describes a group of metrics that can be toggled on/off separately. One
+    group may have dependencies on another.
+    """
 
     HEARTBEAT = "heartbeat"
     REQUEST_SUCCESS = "request_success"
