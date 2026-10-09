@@ -7,6 +7,9 @@ import {
   ScatterChart,
   XAxis,
   YAxis,
+  usePlotArea,
+  useXAxisScale,
+  useYAxisScale,
   type ScatterShapeProps,
   type TooltipContentProps,
   type TooltipValueType,
@@ -15,6 +18,7 @@ import { ChartContainer, ChartTooltip, type ChartConfig } from "@/components/ui/
 import { formatCompactUsd, formatUsd } from "../overview/overviewData";
 import { Panel } from "../overview/Primitives";
 import type { BuilderInsightBuilder } from "./builderInsightsData";
+import { placeScatterLabels, type ScatterLabelPoint } from "./spendVsOutputLabels";
 
 interface SpendOutputPoint {
   id: string;
@@ -26,53 +30,13 @@ interface SpendOutputPoint {
   spendPerPr: number | null;
   selected: boolean;
   mostlyDevin: boolean;
-  labelOffsetX: number;
-  labelOffsetY: number;
+  preferRightLabel: boolean;
   onSelect: (id: string) => void;
-}
-
-interface LabelBounds {
-  left: number;
-  right: number;
-  top: number;
-  bottom: number;
 }
 
 const chartConfig = {
   prs: { label: "Merged PRs", color: "var(--chart-1)" },
 } satisfies ChartConfig;
-
-const labelBoundsFor = (point: SpendOutputPoint, xMax: number, yMax: number, labelOffsetY: number): LabelBounds => {
-  const x = (Math.log(Math.max(point.spend, 500) / 500) / Math.log(xMax / 500)) * 280;
-  const y = 360 - (point.prs / yMax) * 360;
-  const width = point.firstName.length * 5.5;
-  const left = point.labelOffsetX < 0 ? x + point.labelOffsetX - width : x + point.labelOffsetX;
-  const top = y + labelOffsetY - 7;
-  return { left, right: left + width, top, bottom: top + 12 };
-};
-
-const placeLabels = (points: SpendOutputPoint[], xMax: number, yMax: number): SpendOutputPoint[] =>
-  points.reduce<{ points: SpendOutputPoint[]; bounds: LabelBounds[] }>(
-    (placed, point) => {
-      const direction = point.prs <= yMax / 2 ? -1 : 1;
-      const labelOffsetY = (step: number): number => {
-        const offset = step * direction * 14;
-        const bounds = labelBoundsFor(point, xMax, yMax, offset);
-        const overlaps = placed.bounds.some((previous) => {
-          const overlapsHorizontally = bounds.left < previous.right + 4 && bounds.right + 4 > previous.left;
-          const overlapsVertically = bounds.top < previous.bottom + 2 && bounds.bottom + 2 > previous.top;
-          return overlapsHorizontally && overlapsVertically;
-        });
-        return overlaps ? labelOffsetY(step + 1) : offset;
-      };
-      const offsetY = labelOffsetY(0);
-      return {
-        points: [...placed.points, { ...point, labelOffsetY: offsetY }],
-        bounds: [...placed.bounds, labelBoundsFor(point, xMax, yMax, offsetY)],
-      };
-    },
-    { points: [], bounds: [] },
-  ).points;
 
 function SpendOutputDot({ cx, cy, payload }: ScatterShapeProps) {
   const point = payload as SpendOutputPoint | undefined;
@@ -103,15 +67,47 @@ function SpendOutputDot({ cx, cy, payload }: ScatterShapeProps) {
         stroke={point.mostlyDevin ? "var(--chart-1)" : undefined}
         strokeWidth={point.mostlyDevin ? 1.75 : undefined}
       />
-      <text
-        x={cx + point.labelOffsetX}
-        y={cy + 3 + point.labelOffsetY}
-        textAnchor={point.labelOffsetX < 0 ? "end" : "start"}
-        fill="var(--muted-foreground)"
-        fontSize={10}
-      >
-        {point.firstName}
-      </text>
+    </g>
+  );
+}
+
+function SpendOutputLabels({ points }: { points: readonly SpendOutputPoint[] }) {
+  const plotArea = usePlotArea();
+  const xScale = useXAxisScale();
+  const yScale = useYAxisScale();
+  if (!plotArea || !xScale || !yScale) return null;
+
+  const labelPoints: ScatterLabelPoint[] = points.flatMap((point) => {
+    const centerX = xScale(point.spend);
+    const centerY = yScale(point.prs);
+    if (centerX === undefined || centerY === undefined) return [];
+    return [
+      {
+        id: point.id,
+        text: point.firstName,
+        centerX,
+        centerY,
+        dotRadius: point.selected ? 9 : 5,
+        preferRight: point.preferRightLabel,
+      },
+    ];
+  });
+  const labels = placeScatterLabels(labelPoints, plotArea);
+
+  return (
+    <g aria-hidden="true" pointerEvents="none">
+      {labels.map((label) => (
+        <text
+          key={label.id}
+          x={label.x}
+          y={label.y}
+          textAnchor={label.textAnchor}
+          fill="var(--muted-foreground)"
+          fontSize={10}
+        >
+          {label.text}
+        </text>
+      ))}
     </g>
   );
 }
@@ -160,15 +156,13 @@ export function SpendVsOutput({
       spendPerPr: builder.spendPerPr ?? (builder.prs > 0 ? builder.spend / builder.prs : null),
       selected: builder.id === selectedId,
       mostlyDevin: builder.prs > 0 && builder.prsDevin / builder.prs > 0.5,
-      labelOffsetX: builder.prs === 0 || builder.spend <= 25_000 ? 7 : -7,
-      labelOffsetY: 0,
+      preferRightLabel: builder.prs === 0 || builder.spend <= 25_000,
       onSelect,
     }));
   const maxSpend = Math.max(30_000, ...rawPoints.map((point) => point.spend));
   const xMax = maxSpend <= 30_000 ? 30_000 : Math.ceil(maxSpend / 10_000) * 10_000;
   const maxPrs = Math.max(0, ...rawPoints.map((point) => point.prs));
   const yMax = Math.max(1, maxPrs);
-  const points = placeLabels(rawPoints, xMax, yMax);
   const referenceMedian = medianSpendPerPr && medianSpendPerPr > 0 ? medianSpendPerPr : undefined;
   const referenceEndSpend =
     referenceMedian === undefined ? undefined : Math.min(xMax, yMax * referenceMedian);
@@ -234,12 +228,13 @@ export function SpendVsOutput({
           )}
           <ChartTooltip content={(props) => <SpendOutputTooltip {...props} />} />
           <Scatter
-            data={points}
+            data={rawPoints}
             dataKey="prs"
             fill="var(--chart-1)"
             shape={SpendOutputDot}
             isAnimationActive={false}
           />
+          <SpendOutputLabels points={rawPoints} />
         </ScatterChart>
       </ChartContainer>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-2 text-xs text-muted-foreground">
