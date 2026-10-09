@@ -314,15 +314,27 @@ def test_gateway_only_fields_stay_at_the_gateway_and_tags_reach_the_spend_log(ga
     with gateway.scenario() as scenario:
         handle: Final = _register(scenario, _answer_body(_PERPLEXITY))
         model: Final = _deployment(scenario, handle, _PERPLEXITY)
-        response: Final = _decide(
-            gateway, model, user="auditor", num_retries=0, temperature=0.2, metadata={"tags": [tag]}
-        )
+        response: Final = _decide(gateway, model, user="auditor", num_retries=0, metadata={"tags": [tag]})
         assert response.status_code == 200, response.text
         (call,) = _upstream_calls(gateway, handle)
         assert call["body"] == {"model": _PERPLEXITY.body_model, "state": _STATE, "questions": _QUESTIONS}
         row: Final = _spend_row(response.headers["x-litellm-call-id"])
         tags: Final = row["request_tags"]
         assert isinstance(tags, list) and tag in tags, row
+
+
+def test_unknown_fields_are_refused_unless_drop_params(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, _answer_body(_PERPLEXITY))
+        model: Final = _deployment(scenario, handle, _PERPLEXITY)
+        refused: Final = _decide(gateway, model, stream=True, temperature=0.2)
+        assert refused.status_code == 400, refused.text
+        assert "['stream', 'temperature']" in refused.text
+        assert _upstream_calls(gateway, handle) == []
+        dropped: Final = _decide(gateway, model, stream=True, temperature=0.2, drop_params=True)
+        assert dropped.status_code == 200, dropped.text
+        (call,) = _upstream_calls(gateway, handle)
+        assert call["body"] == {"model": _PERPLEXITY.body_model, "state": _STATE, "questions": _QUESTIONS}
 
 
 def test_invalid_bodies_are_refused_at_the_gateway_without_an_upstream_call(gateway: Gateway) -> None:

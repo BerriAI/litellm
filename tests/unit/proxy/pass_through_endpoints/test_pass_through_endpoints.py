@@ -7781,6 +7781,7 @@ PROXY_STAMPED_NAMES: Final = frozenset(
         "_litellm_strip_stream_usage",
         "client_side_timeout",
         "model_file_id_mapping",
+        "router_settings_override",
     )
 )
 

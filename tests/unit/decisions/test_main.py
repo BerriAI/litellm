@@ -149,7 +149,8 @@ async def test_adecisions_sends_the_provider_wire_contract(
             "AUTHORIZATION": "attacker-key",
             "Content-Type": "text/plain",
         },
-        internal_kwarg="must-not-leak",
+        user="must-not-leak",
+        metadata={"tags": ["must-not-leak"]},
     )
 
     assert route.called
@@ -175,6 +176,106 @@ async def test_adecisions_sends_the_provider_wire_contract(
     assert isinstance(response.answers["sentiment"], ChoiceAnswer)
     assert isinstance(response.answers["severity"], ScoreAnswer)
     assert response._hidden_params["custom_llm_provider"] == provider
+
+
+_OPENAI_FORMAT_FIELDS: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "input": "review",
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    }
+)
+_SYSTEMONE_FORMAT_FIELDS: Final[Mapping[str, object]] = MappingProxyType(
+    {"state": {"source": "unit-test"}, "questions": _QUESTIONS}
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_fields",
+    (_SYSTEMONE_FORMAT_FIELDS, _OPENAI_FORMAT_FIELDS),
+    ids=("systemone_format", "openai_format"),
+)
+async def test_unknown_kwargs_are_refused_before_http_unless_drop_params(
+    request_fields: Mapping[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError) as refused:
+        await litellm.adecisions(
+            model="typesafe/jev-1.13", api_key="caller-key", stream=True, temperature=0.2, **request_fields
+        )
+
+    assert refused.value.status_code == 400
+    assert "['stream', 'temperature']" in refused.value.message
+    assert not route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drop_params_source", ("request", "global"))
+async def test_unknown_kwargs_are_dropped_when_drop_params_is_set(
+    drop_params_source: str,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop_params_source == "global")
+    route: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=_RESPONSE)
+    request_drop_params: Final = {"drop_params": True} if drop_params_source == "request" else {}
+
+    response: Final = await litellm.adecisions(
+        model="typesafe/jev-1.13",
+        api_key="caller-key",
+        stream=True,
+        temperature=0.2,
+        **_SYSTEMONE_FORMAT_FIELDS,
+        **request_drop_params,
+    )
+
+    assert route.called
+    assert set(json.loads(route.calls[0].request.content)) == {"model", "state", "questions"}
+    assert isinstance(response, DecisionsResponse)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "ignored_kwargs",
+    (
+        {"stream": None, "temperature": None},
+        {"stream": False},
+        {"disable_fallbacks": True, "include_fallback_errors": True, "router_settings_override": {"num_retries": 1}},
+    ),
+    ids=("null_values", "stream_false", "proxy_fallback_controls"),
+)
+async def test_no_op_values_and_proxy_controls_are_ignored_like_chat_completions(
+    ignored_kwargs: Mapping[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model="typesafe/jev-1.13", api_key="caller-key", **ignored_kwargs, **_SYSTEMONE_FORMAT_FIELDS
+    )
+
+    assert route.called
+    assert set(json.loads(route.calls[0].request.content)) == {"model", "state", "questions"}
+    assert isinstance(response, DecisionsResponse)
+
+
+def test_sync_decisions_refuse_unknown_kwargs_the_same_way(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError) as refused:
+        litellm.decisions(model="typesafe/jev-1.13", api_key="caller-key", stream=True, **_SYSTEMONE_FORMAT_FIELDS)
+
+    assert "['stream']" in refused.value.message
+    assert not route.called
 
 
 @pytest.mark.asyncio

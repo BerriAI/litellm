@@ -54,3 +54,14 @@ def test_filter_out_litellm_params_sees_a_name_appended_to_the_public_list_after
         litellm.all_litellm_params.remove("registered_later")
 
     assert filtered == {"top_k": 2}
+
+
+def test_proxy_fallback_and_router_override_controls_are_kept_out_of_provider_params() -> None:
+    kwargs: Final = {
+        "disable_fallbacks": True,
+        "include_fallback_errors": True,
+        "router_settings_override": {"num_retries": 1},
+        "top_k": 3,
+    }
+
+    assert filter_out_litellm_params(kwargs=kwargs) == {"top_k": 3}

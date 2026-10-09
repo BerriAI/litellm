@@ -319,6 +319,7 @@ class HealthCheckHelpers:
                             model=model, custom_llm_provider=custom_llm_provider
                         ),
                         **_filter_model_params(model_params=model_params),
+                        "drop_params": True,
                     }
                 )
             ),

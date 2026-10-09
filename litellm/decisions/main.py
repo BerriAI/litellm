@@ -7,6 +7,7 @@ from pydantic import TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
@@ -29,7 +30,8 @@ from litellm.types.decisions import (
     OpenAIDecisionResponse,
     UnsupportedDecisionsRequest,
 )
-from litellm.types.utils import LlmProviders
+from litellm.types.router import LiteLLM_Params
+from litellm.types.utils import LlmProviders, is_litellm_owned_kwarg
 from litellm.utils import ProviderConfigManager, client
 
 DecisionsQuestions: TypeAlias = (
@@ -40,6 +42,7 @@ DecisionsRequestFormat: TypeAlias = DecisionsRequestBody | OpenAIDecisionRequest
 _SYSTEMONE_REQUEST_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
 _OPENAI_REQUEST_ADAPTER: Final[TypeAdapter[OpenAIDecisionRequestBody]] = TypeAdapter(OpenAIDecisionRequestBody)
 _HANDLER: Final = BaseLLMHTTPHandler()
+_GATEWAY_KWARGS: Final[frozenset[str]] = frozenset({"user"})
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -92,6 +95,26 @@ def _validate_request(
         return _SYSTEMONE_REQUEST_ADAPTER.validate_python({"state": state, "questions": questions})
     return _OPENAI_REQUEST_ADAPTER.validate_python(
         {"input": decision_input, "questions": questions, "safety_identifier": safety_identifier}
+    )
+
+
+def _is_gateway_kwarg(name: str) -> bool:
+    return name in _GATEWAY_KWARGS or name in LiteLLM_Params.model_fields or is_litellm_owned_kwarg(name)
+
+
+def _drops_params(kwargs: Mapping[str, object]) -> bool:
+    return litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True
+
+
+def _is_no_op_value(name: str, value: object) -> bool:
+    return value is None or (name == "stream" and value is False)
+
+
+def _unknown_params(kwargs: Mapping[str, object]) -> tuple[str, ...]:
+    if _drops_params(kwargs):
+        return ()
+    return tuple(
+        name for name, value in kwargs.items() if not _is_no_op_value(name, value) and not _is_gateway_kwarg(name)
     )
 
 
@@ -149,6 +172,16 @@ def _prepare_call(
             model=model,
             llm_provider=provider,
         ) from error
+    unknown_params: Final = _unknown_params(kwargs)
+    if unknown_params:
+        raise litellm.UnsupportedParamsError(
+            message=(
+                f"{provider} Decisions API does not support parameters: {list(unknown_params)}, for model={model}. "
+                "To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+            ),
+            model=model,
+            llm_provider=provider,
+        )
 
     resolved_api_base: Final = provider_config.resolve_api_base(dynamic_api_base or api_base)
     if resolved_api_base is None:

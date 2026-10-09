@@ -6,6 +6,7 @@ from collections.abc import AsyncGenerator, Iterator, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Final
+from unittest.mock import AsyncMock
 
 import pytest
 import respx
@@ -67,7 +68,15 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
                         "model": "perplexity/pplx-decider-v1-27b",
                         "api_key": "test-key",
                     },
-                }
+                },
+                {
+                    "model_name": "decider-dropping-params",
+                    "litellm_params": {
+                        "model": "perplexity/pplx-decider-v1-27b",
+                        "api_key": "test-key",
+                        "drop_params": True,
+                    },
+                },
             ]
         ),
     )
@@ -385,6 +394,182 @@ def test_openai_format_decisions_translate_through_systemone(
         "total_tokens": _INPUT_TOKENS + _OUTPUT_TOKENS,
     }
     assert float(response.headers["x-litellm-response-cost"]) > 0
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "request_body"),
+    (("/v1/systemone", _REQUEST), ("/v1/decisions", _OPENAI_FORMAT_REQUEST)),
+    ids=("systemone", "openai_format"),
+)
+def test_unknown_fields_are_refused_without_drop_params(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint: str,
+    request_body: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = client.post(endpoint, json={**request_body, "stream": True, "temperature": 0.2})
+
+    assert response.status_code == 400, response.text
+    assert "['stream', 'temperature']" in response.json()["error"]["message"]
+    assert not upstream.called
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "request_body", "upstream_response"),
+    (
+        ("/v1/systemone", _REQUEST, _RESPONSE),
+        ("/v1/decisions", _OPENAI_FORMAT_REQUEST, _SYSTEMONE_ANSWERS_FOR_OPENAI_REQUEST),
+    ),
+    ids=("systemone", "openai_format"),
+)
+@pytest.mark.parametrize("drop_params_source", ("request", "deployment"))
+def test_unknown_fields_are_dropped_when_drop_params_is_set(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint: str,
+    request_body: Mapping[str, object],
+    upstream_response: Mapping[str, object],
+    drop_params_source: str,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=upstream_response)
+    drop_params_fields: Final = (
+        {"drop_params": True} if drop_params_source == "request" else {"model": "decider-dropping-params"}
+    )
+
+    response: Final = client.post(endpoint, json={**request_body, "stream": True, **drop_params_fields})
+
+    assert response.status_code == 200, response.text
+    assert upstream.call_count == 1
+    assert "stream" not in json.loads(upstream.calls[0].request.content)
+    assert "drop_params" not in json.loads(upstream.calls[0].request.content)
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "request_body", "upstream_response"),
+    (
+        ("/v1/systemone", _REQUEST, _RESPONSE),
+        ("/v1/decisions", _OPENAI_FORMAT_REQUEST, _SYSTEMONE_ANSWERS_FOR_OPENAI_REQUEST),
+    ),
+    ids=("systemone", "openai_format"),
+)
+@pytest.mark.parametrize(
+    "ignored_fields",
+    ({"stream": None, "temperature": None}, {"stream": False}),
+    ids=("null_values", "stream_false"),
+)
+def test_no_op_valued_fields_are_ignored_without_drop_params(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint: str,
+    request_body: Mapping[str, object],
+    upstream_response: Mapping[str, object],
+    ignored_fields: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=upstream_response)
+
+    response: Final = client.post(endpoint, json={**request_body, **ignored_fields})
+
+    assert response.status_code == 200, response.text
+    assert upstream.call_count == 1
+    assert not set(ignored_fields) & set(json.loads(upstream.calls[0].request.content))
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "request_body", "upstream_response"),
+    (
+        ("/v1/systemone", _REQUEST, _RESPONSE),
+        ("/v1/decisions", _OPENAI_FORMAT_REQUEST, _SYSTEMONE_ANSWERS_FOR_OPENAI_REQUEST),
+    ),
+    ids=("systemone", "openai_format"),
+)
+def test_fallback_controls_on_the_no_router_path_do_not_reach_the_decisions_gate(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint: str,
+    request_body: Mapping[str, object],
+    upstream_response: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_model", "perplexity/pplx-decider-v1-27b")
+    monkeypatch.setenv("PERPLEXITY_API_KEY", "test-key")
+    monkeypatch.setitem(litellm.proxy.proxy_server.general_settings, "expose_fallback_errors_to_caller", True)
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=upstream_response)
+
+    response: Final = client.post(
+        endpoint,
+        json={
+            **request_body,
+            "model": "perplexity/pplx-decider-v1-27b",
+            "disable_fallbacks": True,
+            "include_fallback_errors": True,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert upstream.call_count == 1
+    assert not {"disable_fallbacks", "include_fallback_errors"} & set(json.loads(upstream.calls[0].request.content))
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "request_body", "upstream_response"),
+    (
+        ("/v1/systemone", _REQUEST, _RESPONSE),
+        ("/v1/decisions", _OPENAI_FORMAT_REQUEST, _SYSTEMONE_ANSWERS_FOR_OPENAI_REQUEST),
+    ),
+    ids=("systemone", "openai_format"),
+)
+def test_key_router_settings_with_client_side_credentials_do_not_reach_the_decisions_gate(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint: str,
+    request_body: Mapping[str, object],
+    upstream_response: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server.proxy_config,
+        "_get_hierarchical_router_settings",
+        AsyncMock(return_value={"num_retries": 1}),
+    )
+    monkeypatch.setitem(litellm.proxy.proxy_server.general_settings, "allow_client_side_credentials", True)
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=upstream_response)
+
+    response: Final = client.post(endpoint, json={**request_body, "api_base": "https://api.perplexity.ai"})
+
+    assert response.status_code == 200, response.text
+    assert upstream.call_count == 1
+    assert "router_settings_override" not in json.loads(upstream.calls[0].request.content)
+
+
+@pytest.mark.parametrize("endpoint", ("/v1/systemone", "/v1/decisions"))
+def test_proxy_chat_defaults_do_not_reach_the_decisions_gate(
+    client: TestClient,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint: str,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_temperature", 0.2)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_max_tokens", 16)
+    request_body: Final = _REQUEST if endpoint == "/v1/systemone" else _OPENAI_FORMAT_REQUEST
+    upstream_response: Final = _RESPONSE if endpoint == "/v1/systemone" else _SYSTEMONE_ANSWERS_FOR_OPENAI_REQUEST
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=upstream_response)
+
+    response: Final = client.post(endpoint, json=request_body)
+
+    assert response.status_code == 200, response.text
+    assert upstream.call_count == 1
 
 
 @pytest.mark.parametrize(

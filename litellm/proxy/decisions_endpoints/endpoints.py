@@ -18,7 +18,6 @@ _OPENAI_DECISION_REQUEST_BODY_ADAPTER: Final[TypeAdapter[OpenAIDecisionRequestBo
 )
 _GENERAL_SETTINGS_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 _OPTIONAL_STRING_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
-_OPTIONAL_FLOAT_ADAPTER: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
 
 
 async def _invalid_request(
@@ -59,7 +58,6 @@ async def _process_decisions(
         llm_router,
         proxy_config,
         proxy_logging_obj,
-        user_max_tokens,
         user_request_timeout,
         version,
     )
@@ -68,9 +66,6 @@ async def _process_decisions(
     )
     from litellm.proxy.proxy_server import (
         user_model as proxy_user_model,
-    )
-    from litellm.proxy.proxy_server import (
-        user_temperature as proxy_user_temperature,
     )
 
     data: Final = await _request_data(request, user_api_key_dict)
@@ -81,7 +76,6 @@ async def _process_decisions(
     general_settings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(proxy_general_settings)
     user_api_base: Final = _OPTIONAL_STRING_ADAPTER.validate_python(proxy_user_api_base)
     user_model: Final = _OPTIONAL_STRING_ADAPTER.validate_python(proxy_user_model)
-    user_temperature: Final = _OPTIONAL_FLOAT_ADAPTER.validate_python(proxy_user_temperature)
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
@@ -96,9 +90,9 @@ async def _process_decisions(
             select_data_generator=None,
             model=None,
             user_model=user_model,
-            user_temperature=user_temperature,
+            user_temperature=None,
             user_request_timeout=user_request_timeout,
-            user_max_tokens=user_max_tokens,
+            user_max_tokens=None,
             user_api_base=user_api_base,
             version=version,
         )
