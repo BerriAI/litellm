@@ -58,7 +58,7 @@ class CredentialsRepository:
         return CredentialItem.model_validate(
             {
                 "credential_name": data["credential_name"],
-                "credential_alias": data.get("credential_alias"),
+                "display_name": data.get("display_name"),
                 "credential_values": data.get("credential_values") or {},
                 "credential_info": data.get("credential_info") or {},
             }
