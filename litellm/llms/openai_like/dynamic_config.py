@@ -3,7 +3,9 @@ Dynamic configuration class generator for JSON-based providers.
 """
 
 from collections.abc import Coroutine
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, overload
+from urllib.parse import urlparse
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -18,6 +20,38 @@ from .json_loader import SimpleProviderConfig
 
 if TYPE_CHECKING:
     from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
+
+
+_DEFAULT_PORTS: Final = MappingProxyType({"http": 80, "https": 443})
+
+
+def _origin(url: str) -> tuple[str, str, int | None] | None:
+    parsed: Final = urlparse(url.strip())
+    if not parsed.scheme or not parsed.hostname:
+        return None
+    scheme: Final = parsed.scheme.lower()
+    return scheme, parsed.hostname.lower(), parsed.port or _DEFAULT_PORTS.get(scheme)
+
+
+def resolve_server_api_key(provider: SimpleProviderConfig, caller_api_base: str | None) -> str | None:
+    """
+    Return the server-configured key for a JSON provider. A provider that sets
+    restrict_env_key_to_trusted_base only sends it to its default base or to the
+    operator's own api_base_env override, never to a caller-chosen host.
+    """
+    server_key: Final = get_secret_str(provider.api_key_env)
+    if not server_key or not caller_api_base or not provider.restrict_env_key_to_trusted_base:
+        return server_key
+    operator_base: Final = get_secret_str(provider.api_base_env) if provider.api_base_env else None
+    trusted: Final = frozenset(
+        origin for origin in (_origin(provider.base_url), _origin(operator_base or "")) if origin is not None
+    )
+    if _origin(caller_api_base) in trusted:
+        return server_key
+    raise ValueError(
+        f"Refusing to send the server-configured {provider.api_key_env} to the caller-supplied "
+        f"api_base '{caller_api_base}'. Pass an explicit api_key when overriding api_base for {provider.slug}."
+    )
 
 
 def create_config_class(provider: SimpleProviderConfig):
@@ -67,7 +101,7 @@ def create_config_class(provider: SimpleProviderConfig):
                 resolved_base = provider.base_url
 
             # Resolve API key
-            resolved_key: Final = api_key or get_secret_str(provider.api_key_env)
+            resolved_key: Final = api_key or resolve_server_api_key(provider, api_base)
 
             return resolved_base, resolved_key
 
@@ -210,7 +244,7 @@ def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenA
             litellm_params: GenericLiteLLMParams | None,
         ) -> dict:
             litellm_params = litellm_params or GenericLiteLLMParams()
-            api_key: Final = litellm_params.api_key or get_secret_str(provider.api_key_env)
+            api_key: Final = litellm_params.api_key or resolve_server_api_key(provider, litellm_params.api_base)
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
             return headers

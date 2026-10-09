@@ -987,6 +987,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.cognition.ai/v1",
     "https://api.cortecs.ai/v1",
     "https://api.scx.ai/v1",
+    "https://alpha.sh/v1",
     "https://api.prisminference.com/v1",
     "https://api.reka.ai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
@@ -1065,6 +1066,7 @@ openai_compatible_providers: Final[list] = [
     "scx-ai",
     "prism",
     "sail",
+    "alpha",
     "reka",
 ]
 

@@ -10,6 +10,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.fallback_generalizations import (
     match_routing_generalization,
 )
+from litellm.llms.openai_like.dynamic_config import resolve_server_api_key
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.secret_managers.main import get_secret, get_secret_str
 
@@ -403,7 +404,9 @@ def get_llm_provider(
                         dynamic_api_key = get_secret_str("GIGACHAT_API_KEY")
                     elif (json_provider := JSONProviderRegistry.get_by_base_url(endpoint)) is not None:
                         custom_llm_provider = json_provider.slug
-                        dynamic_api_key = api_key if api_key is not None else get_secret_str(json_provider.api_key_env)
+                        dynamic_api_key = (
+                            api_key if api_key is not None else resolve_server_api_key(json_provider, api_base)
+                        )
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception(f"api base needs to be a string. api_base={api_base}")
