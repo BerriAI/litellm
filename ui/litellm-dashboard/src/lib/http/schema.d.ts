@@ -27803,11 +27803,15 @@ export interface components {
         Body_video_generation_v1_videos_post: {
             /** Input Reference */
             input_reference?: string | null;
+            /** Last Frame */
+            last_frame?: string | null;
         };
         /** Body_video_generation_videos_post */
         Body_video_generation_videos_post: {
             /** Input Reference */
             input_reference?: string | null;
+            /** Last Frame */
+            last_frame?: string | null;
         };
         /**
          * BreakdownMetrics
