@@ -302,6 +302,7 @@ class HealthCheckHelpers:
                         "state": prompt or "health check",
                         "questions": {"reachable": {"type": "noul", "instructions": "Is the service reachable?"}},
                         **_filter_model_params(model_params=model_params),
+                        "drop_params": True,
                     }
                 )
             ),

@@ -239,14 +239,25 @@ async def test_unknown_kwargs_are_dropped_when_drop_params_is_set(
 
 
 @pytest.mark.asyncio
-async def test_null_valued_kwargs_are_ignored_like_chat_completions(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+@pytest.mark.parametrize(
+    "ignored_kwargs",
+    (
+        {"stream": None, "temperature": None},
+        {"stream": False},
+        {"disable_fallbacks": True, "include_fallback_errors": True, "router_settings_override": {"num_retries": 1}},
+    ),
+    ids=("null_values", "stream_false", "proxy_fallback_controls"),
+)
+async def test_no_op_values_and_proxy_controls_are_ignored_like_chat_completions(
+    ignored_kwargs: Mapping[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     route: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=_RESPONSE)
 
     response: Final = await litellm.adecisions(
-        model="typesafe/jev-1.13", api_key="caller-key", stream=None, temperature=None, **_SYSTEMONE_FORMAT_FIELDS
+        model="typesafe/jev-1.13", api_key="caller-key", **ignored_kwargs, **_SYSTEMONE_FORMAT_FIELDS
     )
 
     assert route.called

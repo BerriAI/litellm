@@ -649,6 +649,32 @@ async def test_ahealth_check_evaluation_uses_configured_probe_state_and_question
 
 
 @pytest.mark.asyncio
+async def test_ahealth_check_evaluation_drops_probe_params_the_decisions_api_does_not_take(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(
+        json={
+            "model": "perplexity/pplx-decider-v1-27b",
+            "answers": {"reachable": {"type": "noul", "noul": 1.0}},
+            "usage": {"input_tokens": 12, "output_tokens": 1},
+        }
+    )
+
+    result: Final = await ahealth_check(
+        {"model": "perplexity/pplx-decider-v1-27b", "api_key": "sk-test", "max_tokens": 16, "temperature": 0.2},
+        mode=None,
+    )
+
+    assert "error" not in result, result
+    assert upstream.called
+    assert set(json.loads(upstream.calls[0].request.content)) == {"model", "state", "questions"}
+
+
+@pytest.mark.asyncio
 async def test_ahealth_check_probes_strands_through_decisions_without_mode(
     local_model_cost_map: None,
     monkeypatch: pytest.MonkeyPatch,

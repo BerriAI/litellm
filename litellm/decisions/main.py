@@ -106,10 +106,16 @@ def _drops_params(kwargs: Mapping[str, object]) -> bool:
     return litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True
 
 
+def _is_no_op_value(name: str, value: object) -> bool:
+    return value is None or (name == "stream" and value is False)
+
+
 def _unknown_params(kwargs: Mapping[str, object]) -> tuple[str, ...]:
     if _drops_params(kwargs):
         return ()
-    return tuple(name for name, value in kwargs.items() if value is not None and not _is_gateway_kwarg(name))
+    return tuple(
+        name for name, value in kwargs.items() if not _is_no_op_value(name, value) and not _is_gateway_kwarg(name)
+    )
 
 
 def _ir_request(request: DecisionsRequestFormat) -> DecisionsIRRequest:

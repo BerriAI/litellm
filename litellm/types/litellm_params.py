@@ -155,6 +155,8 @@ class DispatchOptions:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RoutingOptions:
     fallbacks: Sequence[str | Mapping[str, object]] | None = None
+    disable_fallbacks: bool | None = None
+    include_fallback_errors: bool | None = None
     context_window_fallback_dict: Mapping[str, str] | None = None
     num_retries: int | None = None
     retry_policy: "RetryPolicy | Mapping[str, object] | None" = None
@@ -377,6 +379,7 @@ class ProxyRequestState:
     strip_stream_usage: bool | None = field(default=None, metadata=wire("_litellm_strip_stream_usage"))
     client_side_timeout: bool | None = None
     model_file_id_mapping: Mapping[str, Mapping[str, str]] | None = None
+    router_settings_override: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
