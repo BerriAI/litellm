@@ -67,11 +67,14 @@ describe("SidebarUsageCard", () => {
   });
 
   it("renders an expanded seat meter reporting value and range when data loads", async () => {
+    const user = userEvent.setup();
     const { container } = renderWithClient(
       <SidebarUsageCard accessToken="token" collapsed={false} onExpandRail={() => {}} />,
     );
 
-    await screen.findByText("Enterprise usage");
+    // Card starts collapsed by default — open it first
+    await user.click(await screen.findByRole("button", { name: /Enterprise usage/i }));
+
     const meter = await screen.findByRole("meter");
     expect(meter).toHaveAttribute("aria-valuenow", "20");
     expect(meter).toHaveAttribute("aria-valuemax", "100");
@@ -85,6 +88,8 @@ describe("SidebarUsageCard", () => {
     const user = userEvent.setup();
     renderWithClient(<SidebarUsageCard accessToken="token" collapsed={false} onExpandRail={() => {}} />);
 
+    // Card starts collapsed — open it, then collapse it
+    await user.click(await screen.findByRole("button", { name: /Enterprise usage/i }));
     await screen.findByRole("meter");
     await user.click(screen.getByRole("button", { name: /Enterprise usage/i }));
 
@@ -93,10 +98,14 @@ describe("SidebarUsageCard", () => {
 
   it("flags over-limit usage with a destructive, capped indicator", async () => {
     mockGetRemainingUsers.mockResolvedValue(OVER_LIMIT_DATA);
+    const user = userEvent.setup();
 
     const { container } = renderWithClient(
       <SidebarUsageCard accessToken="token" collapsed={false} onExpandRail={() => {}} />,
     );
+
+    // Card starts collapsed — open it first
+    await user.click(await screen.findByRole("button", { name: /Enterprise usage/i }));
 
     await screen.findByRole("meter");
     const indicator = container.querySelector('[data-slot="meter-indicator"]');
