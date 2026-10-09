@@ -565,9 +565,13 @@ class SafeguardStatusAvailable(TypedDict):
     tool_uses: ReadOnly[Mapping[str, SafeguardToolUseVerdict]]
 
 
+class SafeguardStatusUnsupported(TypedDict):
+    type: ReadOnly[Literal["unsupported"]]
+
+
 class SafeguardResult(TypedDict):
     type: ReadOnly[Literal["dangerous_tool_use"]]
-    status: ReadOnly[SafeguardStatusAvailable]
+    status: ReadOnly[SafeguardStatusAvailable | SafeguardStatusUnsupported]
 
 
 class MessageDelta(TypedDict, total=False):

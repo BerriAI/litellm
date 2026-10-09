@@ -14,13 +14,18 @@ Mirrors Anthropic's native ``compact_20260112`` for non-Anthropic providers:
 
 import re
 from collections.abc import Awaitable, Mapping, Sequence
-from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Final, Optional, Protocol, TypeVar, Union, cast
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.llms.anthropic.pass_through.caller_model_checks import (
+    caller_can_call_model,
+    caller_within_model_budget,
+    caller_within_model_rate_limit,
+)
 from litellm.llms.anthropic.pass_through.utils import proxy_general_settings, proxy_spend_attribution_metadata
 from litellm.types.llms.anthropic import (
     AppliedEdit,
@@ -31,11 +36,6 @@ from litellm.types.llms.anthropic import (
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-        RateLimitDescriptor,
-        RateLimitDescriptorRateLimitObject,
-        RateLimitResponse,
-    )
     from litellm.router import Router
     from litellm.types.llms.anthropic import (
         AllAnthropicPassThroughMessageValues,
@@ -95,48 +95,6 @@ class _SummaryAcompletion(Protocol):
     ) -> "Awaitable[ModelResponse | CustomStreamWrapper]": ...
 
 
-class _CreateRateLimitDescriptors(Protocol):
-    def __call__(
-        self,
-        *,
-        user_api_key_dict: "UserAPIKeyAuth",
-        data: Mapping[str, str],
-        rpm_limit_type: object,
-        tpm_limit_type: object,
-        model_has_failures: bool,
-    ) -> "Sequence[RateLimitDescriptor]": ...
-
-
-class _AddModelRateLimitDescriptor(Protocol):
-    def __call__(
-        self,
-        *,
-        user_api_key_dict: "UserAPIKeyAuth",
-        requested_model: str,
-        descriptors: "Sequence[RateLimitDescriptor]",
-    ) -> None: ...
-
-
-class _CreateOrgRateLimitDescriptors(Protocol):
-    def __call__(
-        self, user_api_key_dict: "UserAPIKeyAuth", requested_model: str | None = None
-    ) -> "Sequence[RateLimitDescriptor]": ...
-
-
-class _GetProxyHook(Protocol):
-    def __call__(self, hook: str) -> object: ...
-
-
-class _ShouldRateLimit(Protocol):
-    def __call__(
-        self,
-        *,
-        descriptors: "Sequence[RateLimitDescriptor]",
-        parent_otel_span: object,
-        read_only: bool,
-    ) -> "Awaitable[RateLimitResponse]": ...
-
-
 def _read_summary_model_setting() -> str | None:
     """Look up the configured summarization model from proxy general_settings."""
     value: Final = proxy_general_settings().get(COMPACT_SUMMARY_MODEL_SETTING_KEY)
@@ -154,439 +112,6 @@ def _read_summary_max_tokens_setting() -> int:
     if isinstance(value, int) and value > 0:
         return value
     return COMPACT_SUMMARY_MAX_TOKENS
-
-
-async def _check_summary_model_access(
-    user_api_key_auth: Optional["UserAPIKeyAuth"],
-    summary_model: str,
-    llm_router: Optional["Router"],
-) -> bool:
-    """Return True when every model-allowlist scope on the parent request is
-    satisfied for ``summary_model``.
-
-    The summary subrequest does not pass through ``user_api_key_auth`` again,
-    so without this gate a caller whose configured scope at any of these
-    levels excludes ``context_management_summary_model`` could still get the
-    proxy to invoke that model and return its ``<summary>`` output as a
-    compaction block. Mirrors the model-scope enforcement that
-    ``litellm.proxy.auth.common_checks`` runs for the client-requested model:
-    key, team, user (personal), project, and team-member allowlists.
-
-    Returns True (allow) when ``user_api_key_auth`` is not present — SDK
-    callers and tests run outside the proxy, where no key/team policy exists.
-    Returns False when any of the active allowlists denies the summary model
-    (``ProxyException`` from ``_can_object_call_model`` / ``can_*_model``).
-    Unexpected errors during an access check fail closed but are logged
-    separately so operators can distinguish them from a real access-denied
-    response. User and project lookup failures (object missing from cache or
-    DB) skip the corresponding scope — matching ``common_checks``, which only
-    enforces a scope when its backing object can be loaded. A failed team
-    membership read (a database outage) fails closed instead, since a member
-    whose limits cannot be read must not have the summary model invoked with
-    those limits dropped.
-    """
-    if user_api_key_auth is None:
-        return True
-    try:
-        from litellm.proxy._types import ProxyException
-        from litellm.proxy.auth.auth_checks import (
-            can_object_call_model,
-            can_project_access_model,
-            can_user_call_model,
-            get_project_object,
-            get_team_membership,
-            get_user_object,
-        )
-        from litellm.proxy.proxy_server import (
-            prisma_client,
-            proxy_logging_obj,
-            user_api_key_cache,
-        )
-    except Exception:
-        return True
-
-    key_models: Final = list(getattr(user_api_key_auth, "models", None) or [])
-    team_id: Final[str | None] = getattr(user_api_key_auth, "team_id", None)
-    team_model_aliases: Final[dict[str, str] | None] = getattr(user_api_key_auth, "team_model_aliases", None)
-    team_models: Final = list(getattr(user_api_key_auth, "team_models", None) or [])
-    user_id: Final[str | None] = getattr(user_api_key_auth, "user_id", None)
-    project_id: Final[str | None] = getattr(user_api_key_auth, "project_id", None)
-
-    checks: Final[tuple[tuple[Literal["key", "team"], list[str]], ...]] = (
-        ("key", key_models),
-        ("team", team_models),
-    )
-    for object_type, models in checks:
-        if not models:
-            continue
-        try:
-            can_object_call_model(
-                model=summary_model,
-                llm_router=llm_router,
-                models=models,
-                team_model_aliases=team_model_aliases,
-                team_id=team_id,
-                object_type=object_type,
-            )
-        except ProxyException:
-            return False
-        except Exception as e:
-            verbose_logger.warning(
-                "compact_20260112: unexpected error during %s-level access "
-                "check for summary_model=%s; denying access: %s",
-                object_type,
-                summary_model,
-                e,
-            )
-            return False
-
-    if user_id is not None and prisma_client is not None:
-        try:
-            user_obj = await get_user_object(
-                user_id=user_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                user_id_upsert=False,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-        except Exception as e:
-            verbose_logger.debug(
-                "compact_20260112: user object lookup failed for "
-                "summary_model=%s access check; skipping user-level scope: %s",
-                summary_model,
-                e,
-            )
-            user_obj = None
-        if user_obj is not None:
-            try:
-                await can_user_call_model(
-                    model=summary_model,
-                    llm_router=llm_router,
-                    user_object=user_obj,
-                )
-            except ProxyException:
-                return False
-            except Exception as e:
-                verbose_logger.warning(
-                    "compact_20260112: unexpected error during user-level "
-                    "access check for summary_model=%s; denying access: %s",
-                    summary_model,
-                    e,
-                )
-                return False
-
-    if project_id is not None and prisma_client is not None:
-        try:
-            project_obj = await get_project_object(
-                project_id=project_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-        except Exception as e:
-            verbose_logger.debug(
-                "compact_20260112: project object lookup failed for "
-                "summary_model=%s access check; skipping project-level scope: %s",
-                summary_model,
-                e,
-            )
-            project_obj = None
-        if project_obj is not None and project_obj.models:
-            try:
-                can_project_access_model(
-                    model=summary_model,
-                    project_object=project_obj,
-                    llm_router=llm_router,
-                )
-            except ProxyException:
-                return False
-            except Exception as e:
-                verbose_logger.warning(
-                    "compact_20260112: unexpected error during project-level "
-                    "access check for summary_model=%s; denying access: %s",
-                    summary_model,
-                    e,
-                )
-                return False
-
-    if user_id is not None and team_id is not None and prisma_client is not None:
-        try:
-            team_membership = await get_team_membership(
-                user_id=user_id,
-                team_id=team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-        except Exception as e:
-            verbose_logger.warning(
-                "compact_20260112: team membership lookup failed for summary_model=%s access check; denying access: %s",
-                summary_model,
-                e,
-            )
-            return False
-        member_allowed_models: Final = (
-            team_membership.litellm_budget_table.allowed_models
-            if team_membership is not None and team_membership.litellm_budget_table is not None
-            else None
-        )
-        if member_allowed_models:
-            try:
-                can_object_call_model(
-                    model=summary_model,
-                    llm_router=llm_router,
-                    models=list(member_allowed_models),
-                    team_model_aliases=team_model_aliases,
-                    team_id=team_id,
-                    object_type="team",
-                )
-            except ProxyException:
-                return False
-            except Exception as e:
-                verbose_logger.warning(
-                    "compact_20260112: unexpected error during member-level "
-                    "access check for summary_model=%s; denying access: %s",
-                    summary_model,
-                    e,
-                )
-                return False
-
-    return True
-
-
-async def _check_summary_model_budget(
-    user_api_key_auth: Optional["UserAPIKeyAuth"],
-    summary_model: str,
-) -> bool:
-    """Return True when the caller is within their per-model budget for
-    ``summary_model``.
-
-    The summary subrequest never passes back through ``user_api_key_auth``, so
-    without this gate a caller whose ``model_max_budget`` for
-    ``context_management_summary_model`` is exhausted could keep consuming that
-    model via compaction. Mirrors the per-model budget enforcement that
-    ``user_api_key_auth`` runs for the client-requested model. Returns True outside the proxy or when no
-    per-model budget is configured.
-
-    Every scope is checked because the summary's spend is charged to every
-    scope: this file propagates the key, team, user and end-user budgets into the
-    subrequest's metadata, so skipping one of them would let compaction
-    increment a counter it can never be refused by.
-    """
-    if user_api_key_auth is None:
-        return True
-    try:
-        from litellm.proxy.proxy_server import model_max_budget_limiter
-    except Exception:
-        return True
-
-    model_max_budget: Final = getattr(user_api_key_auth, "model_max_budget", None)
-    token: Final = getattr(user_api_key_auth, "token", None)
-    if isinstance(model_max_budget, dict) and model_max_budget and token is not None:
-        try:
-            await model_max_budget_limiter.is_key_within_model_budget(
-                user_api_key_dict=user_api_key_auth,
-                model=summary_model,
-            )
-        except litellm.BudgetExceededError:
-            return False
-        except Exception as e:
-            verbose_logger.warning(
-                "compact_20260112: unexpected error during key model-budget check for summary_model=%s; denying: %s",
-                summary_model,
-                e,
-            )
-            return False
-
-    user_model_max_budget: Final = user_api_key_auth.user_model_max_budget
-    user_id: Final = user_api_key_auth.user_id
-    if isinstance(user_model_max_budget, dict) and user_model_max_budget and user_id is not None:
-        try:
-            await model_max_budget_limiter.is_user_within_model_budget(
-                user_id=user_id,
-                user_model_max_budget=user_model_max_budget,
-                model=summary_model,
-            )
-        except litellm.BudgetExceededError:
-            return False
-        except Exception as e:  # noqa: BLE001  # a budget gate denies on any failure, as the key and end-user scopes do
-            verbose_logger.warning(
-                "compact_20260112: unexpected error during user model-budget check for summary_model=%s; denying: %s",
-                summary_model,
-                e,
-            )
-            return False
-
-    team_model_max_budget: Final = user_api_key_auth.team_model_max_budget
-    team_id: Final = user_api_key_auth.team_id
-    if isinstance(team_model_max_budget, dict) and team_model_max_budget and team_id is not None:
-        try:
-            await model_max_budget_limiter.is_team_within_model_budget(
-                team_id=team_id,
-                team_model_max_budget=team_model_max_budget,
-                key_model_max_budget=model_max_budget if isinstance(model_max_budget, dict) else None,
-                model=summary_model,
-            )
-        except litellm.BudgetExceededError:
-            return False
-        except Exception as e:  # noqa: BLE001  # a budget gate denies on any failure, as the other scopes do
-            verbose_logger.warning(
-                "compact_20260112: unexpected error during team model-budget check for summary_model=%s; denying: %s",
-                summary_model,
-                e,
-            )
-            return False
-
-    end_user_model_max_budget: Final[dict[str, object] | None] = getattr(
-        user_api_key_auth, "end_user_model_max_budget", None
-    )
-    end_user_id: Final[str | None] = getattr(user_api_key_auth, "end_user_id", None)
-    if isinstance(end_user_model_max_budget, dict) and end_user_model_max_budget and end_user_id is not None:
-        try:
-            await model_max_budget_limiter.is_end_user_within_model_budget(
-                end_user_id=end_user_id,
-                end_user_model_max_budget=end_user_model_max_budget,
-                model=summary_model,
-            )
-        except litellm.BudgetExceededError:
-            return False
-        except Exception as e:
-            verbose_logger.warning(
-                "compact_20260112: unexpected error during end-user model-budget "
-                "check for summary_model=%s; denying: %s",
-                summary_model,
-                e,
-            )
-            return False
-
-    return True
-
-
-def _without_parallel_request_gauges(
-    descriptors: "Sequence[RateLimitDescriptor]",
-) -> "tuple[RateLimitDescriptor, ...]":
-    return tuple(_without_parallel_request_gauge(descriptor) for descriptor in descriptors)
-
-
-def _without_parallel_request_gauge(descriptor: "RateLimitDescriptor") -> "RateLimitDescriptor":
-    rate_limit: Final = descriptor.get("rate_limit")
-    if rate_limit is None or rate_limit.get("max_parallel_requests") is None:
-        return descriptor
-    windowed_limits: Final[RateLimitDescriptorRateLimitObject] = {
-        "requests_per_unit": rate_limit.get("requests_per_unit"),
-        "tokens_per_unit": rate_limit.get("tokens_per_unit"),
-        "window_size": rate_limit.get("window_size"),
-    }
-    return {**descriptor, "rate_limit": windowed_limits}
-
-
-async def _check_summary_model_rate_limit(
-    user_api_key_auth: Optional["UserAPIKeyAuth"],
-    summary_model: str,
-) -> bool:
-    """Return True when the caller is within their configured RPM/TPM limits
-    for ``summary_model``.
-
-    The summary subrequest never passes back through the proxy's pre-call
-    rate limiter, so without this gate a caller already at their key / team /
-    user RPM or TPM could still drive an extra summary-model completion per
-    allowed ``/v1/messages`` request. This mirrors the read side of
-    ``_PROXY_MaxParallelRequestsHandler_v3.async_pre_call_hook`` for the
-    summary model: it builds the same descriptor set and runs the check in
-    ``read_only`` mode so no counter is reserved or incremented — the summary
-    call's actual usage is still charged exactly once by the limiter's
-    post-call success hook (via the propagated ``litellm_metadata``).
-    ``max_parallel_requests`` gauges are left out of the check: the summary
-    call runs inside the caller's already admitted request, whose own slot
-    would otherwise count against it.
-
-    Returns True (allow) outside the proxy, when the active limiter does not
-    expose the read-only descriptor check (legacy limiter), or when the
-    descriptor set cannot be built — the deny signals are a definitive
-    ``OVER_LIMIT`` response and the limiter's own fail-closed rejection
-    (``RateLimitUnverifiableError``, raised when ``fail_closed_rate_limit_enforcement``
-    is on and the counters could not be verified), so any other internal error here
-    forwards the request uncompacted rather than blocking every summary.
-    """
-    if user_api_key_auth is None:
-        return True
-    try:
-        from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitUnverifiableError
-        from litellm.proxy.proxy_server import proxy_logging_obj
-    except Exception:
-        return True
-
-    get_proxy_hook: Final[_GetProxyHook | None] = getattr(proxy_logging_obj, "get_proxy_hook", None)
-    limiter: Final[object] = get_proxy_hook("parallel_request_limiter") if get_proxy_hook is not None else None
-    should_rate_limit_check: Final[_ShouldRateLimit | None] = getattr(limiter, "should_rate_limit", None)
-    create_descriptors: Final[_CreateRateLimitDescriptors | None] = getattr(
-        limiter, "create_rate_limit_descriptors", None
-    )
-    add_team_descriptor: Final[_AddModelRateLimitDescriptor | None] = getattr(
-        limiter, "_add_team_model_rate_limit_descriptor_from_metadata", None
-    )
-    add_project_descriptor: Final[_AddModelRateLimitDescriptor | None] = getattr(
-        limiter, "_add_project_model_rate_limit_descriptor_from_metadata", None
-    )
-    create_org_descriptors: Final[_CreateOrgRateLimitDescriptors | None] = getattr(
-        limiter, "create_organization_rate_limit_descriptor", None
-    )
-    if (
-        limiter is None
-        or should_rate_limit_check is None
-        or create_descriptors is None
-        or add_team_descriptor is None
-        or add_project_descriptor is None
-        or create_org_descriptors is None
-    ):
-        return True
-
-    try:
-        metadata: Final[Mapping[str, object]] = getattr(user_api_key_auth, "metadata", None) or {}
-        data: Final = {"model": summary_model}
-        base_descriptors: Final = create_descriptors(
-            user_api_key_dict=user_api_key_auth,
-            data=data,
-            rpm_limit_type=metadata.get("rpm_limit_type"),
-            tpm_limit_type=metadata.get("tpm_limit_type"),
-            model_has_failures=False,
-        )
-        add_team_descriptor(
-            user_api_key_dict=user_api_key_auth,
-            requested_model=summary_model,
-            descriptors=base_descriptors,
-        )
-        add_project_descriptor(
-            user_api_key_dict=user_api_key_auth,
-            requested_model=summary_model,
-            descriptors=base_descriptors,
-        )
-        descriptors: Final = _without_parallel_request_gauges(
-            (*base_descriptors, *create_org_descriptors(user_api_key_auth, summary_model))
-        )
-        if not descriptors:
-            return True
-        parent_otel_span: Final[object] = getattr(user_api_key_auth, "parent_otel_span", None)
-        response: Final[RateLimitResponse] = await should_rate_limit_check(
-            descriptors=descriptors,
-            parent_otel_span=parent_otel_span,
-            read_only=True,
-        )
-    except RateLimitUnverifiableError as e:
-        verbose_logger.warning(
-            "compact_20260112: rate-limit counters for summary_model=%s could not be verified; denying: %s",
-            summary_model,
-            e.detail,
-        )
-        return False
-    except Exception as e:
-        verbose_logger.warning(
-            "compact_20260112: unexpected error during rate-limit check for summary_model=%s; allowing: %s",
-            summary_model,
-            e,
-        )
-        return True
-    return response.get("overall_code") != "OVER_LIMIT"
 
 
 def _find_latest_compaction_index(
@@ -1201,9 +726,9 @@ async def apply_compact_20260112(
     # Phase C: summarize. ``augmented_system`` carries any prior compaction
     # summary so multi-round compaction does not lose accumulated history —
     # ``effective_messages`` only contains turns since the last compaction.
-    if not await _check_summary_model_access(
+    if not await caller_can_call_model(
         user_api_key_auth=user_api_key_auth,
-        summary_model=summary_model,
+        model=summary_model,
         llm_router=llm_router,
     ):
         verbose_logger.warning(
@@ -1217,9 +742,9 @@ async def apply_compact_20260112(
             applied_edits=[applied],
         )
 
-    if not await _check_summary_model_budget(
+    if not await caller_within_model_budget(
         user_api_key_auth=user_api_key_auth,
-        summary_model=summary_model,
+        model=summary_model,
     ):
         verbose_logger.warning(
             "compact_20260112: caller over model budget for summary_model=%s; skipping summary call",
@@ -1232,9 +757,9 @@ async def apply_compact_20260112(
             applied_edits=[applied],
         )
 
-    if not await _check_summary_model_rate_limit(
+    if not await caller_within_model_rate_limit(
         user_api_key_auth=user_api_key_auth,
-        summary_model=summary_model,
+        model=summary_model,
     ):
         verbose_logger.warning(
             "compact_20260112: caller over rate limit for summary_model=%s; skipping summary call",

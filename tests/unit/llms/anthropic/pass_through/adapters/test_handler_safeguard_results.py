@@ -182,6 +182,35 @@ async def test_stream_carries_the_verdict_inside_the_final_message_delta():
 
 
 @pytest.mark.asyncio
+async def test_classifier_reads_the_turns_before_a_compaction_block_the_agent_model_no_longer_gets():
+    backend: Final = _Backend(stream=False)
+    router: Final = _ClassifierRouter('{"verdicts": {"call_main": {"flagged": false}}}')
+    with (
+        patch("litellm.acompletion", new=backend),
+        patch("litellm.proxy.proxy_server.general_settings", {"safeguards_classifier_model": "classifier"}),
+    ):
+        await LiteLLMMessagesToCompletionTransformationHandler.async_anthropic_messages_handler(
+            max_tokens=256,
+            messages=[
+                {"role": "user", "content": "install the deps"},
+                {"role": "assistant", "content": [{"type": "compaction", "content": "Deps were requested."}]},
+                {"role": "user", "content": "go on"},
+            ],
+            model="fireworks_ai/kimi",
+            tools=[dict(BASH_TOOL)],
+            stream=False,
+            litellm_router=router,
+            litellm_metadata=dict(LITELLM_METADATA),
+            safeguards=SAFEGUARDS,
+        )
+    assert "install the deps" not in json.dumps(backend.calls[0]["messages"])
+    classifier_prompt: Final = str(router.calls[0]["messages"][1]["content"])
+    assert '{"user": "install the deps"}' in classifier_prompt
+    assert '{"conversation_summary": "Deps were requested."}' in classifier_prompt
+    assert '{"user": "go on"}' in classifier_prompt
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True])
 async def test_no_classifier_setting_means_no_results_and_no_classifier_call(stream: bool):
     backend: Final = _Backend(stream=stream)

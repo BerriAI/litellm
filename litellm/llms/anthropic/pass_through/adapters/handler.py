@@ -649,7 +649,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         effective_system: Final = polyfill_result.system if polyfill_result is not None else system
         safeguards_evaluator: Final = build_safeguards_evaluator(
             safeguards=kwargs.get("safeguards"),
-            messages=effective_messages,
+            messages=messages,
             litellm_metadata=proxy_litellm_metadata,
             user_api_key_auth=user_api_key_auth,
             llm_router=litellm_router,

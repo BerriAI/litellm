@@ -1,20 +1,22 @@
 import asyncio
 import json
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from itertools import accumulate, chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
-from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
+from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack, assert_never
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.llms.anthropic.pass_through.caller_model_checks import caller_may_use_model
 from litellm.llms.anthropic.pass_through.utils import proxy_general_settings, proxy_spend_attribution_metadata
 from litellm.types.llms.anthropic import (
     SafeguardResult,
     SafeguardStatusAvailable,
+    SafeguardStatusUnsupported,
     SafeguardToolUseEvaluated,
     SafeguardToolUseUnavailable,
     SafeguardToolUseVerdict,
@@ -47,7 +49,8 @@ _CLASSIFIER_CONTEXT_KEYS: Final = (
 )
 _GIT_STATE_KEYS: Final = ("cwd", "root", "branch", "default_branch", "visibility")
 _TRANSCRIPT_OMISSION_MARKER: Final = json.dumps({"meta": "earlier turns omitted"})
-_UnavailableReason: TypeAlias = Literal["timeout", "error", "refused", "input_too_long"]
+_UnavailableReason: TypeAlias = Literal["timeout", "error", "refused", "input_too_long", "truncated"]
+CallerModelGate: TypeAlias = Callable[[str], Awaitable[bool]]
 _MAPPING: Final = TypeAdapter(Mapping[str, object])
 _OBJECTS: Final = TypeAdapter(tuple[object, ...])
 _JSON_VALUE: Final = TypeAdapter(object)
@@ -117,6 +120,14 @@ class ToolUseUnderReview:
 
 
 @dataclass(frozen=True, slots=True)
+class TruncatedToolUse:
+    id: str
+
+
+PendingToolUse: TypeAlias = ToolUseUnderReview | TruncatedToolUse
+
+
+@dataclass(frozen=True, slots=True)
 class SafeguardsEvaluator:
     classifier_model: str
     classifier_context: str
@@ -124,11 +135,23 @@ class SafeguardsEvaluator:
     litellm_metadata: Mapping[str, object]
     allowed_model_region: str | None
     acompletion: ClassifierAcompletion
+    caller_may_use_model: CallerModelGate
     timeout_seconds: float = CLASSIFIER_TIMEOUT_SECONDS
 
-    async def evaluate(self, tool_uses: Sequence[ToolUseUnderReview]) -> Sequence[SafeguardResult]:
-        verdicts: Final[Mapping[str, SafeguardToolUseVerdict]] = await self._verdicts(tool_uses) if tool_uses else {}
-        status: Final[SafeguardStatusAvailable] = {"type": "available", "tool_uses": verdicts}
+    async def evaluate(self, tool_uses: Sequence[PendingToolUse]) -> Sequence[SafeguardResult]:
+        complete: Final = tuple(use for use in tool_uses if isinstance(use, ToolUseUnderReview))
+        if complete and not await self.caller_may_use_model(self.classifier_model):
+            verbose_logger.warning(
+                "safeguards classifier %s is outside the caller's model access, budget, or rate limit",
+                self.classifier_model,
+            )
+            unsupported: Final[SafeguardStatusUnsupported] = {"type": "unsupported"}
+            return ({"type": DANGEROUS_TOOL_USE, "status": unsupported},)
+        verdicts: Final[Mapping[str, SafeguardToolUseVerdict]] = await self._verdicts(complete) if complete else {}
+        status: Final[SafeguardStatusAvailable] = {
+            "type": "available",
+            "tool_uses": {use.id: _final_verdict(use, verdicts) for use in tool_uses},
+        }
         return ({"type": DANGEROUS_TOOL_USE, "status": status},)
 
     async def _verdicts(self, tool_uses: Sequence[ToolUseUnderReview]) -> Mapping[str, SafeguardToolUseVerdict]:
@@ -230,6 +253,10 @@ def build_safeguards_evaluator(
     if classifier_model is None:
         return None
     router_acompletion: Final[ClassifierAcompletion | None] = getattr(llm_router, "acompletion", None)
+
+    async def caller_may_use(model: str) -> bool:
+        return await caller_may_use_model(user_api_key_auth=user_api_key_auth, model=model, llm_router=llm_router)
+
     return SafeguardsEvaluator(
         classifier_model=classifier_model,
         classifier_context=render_classifier_context(request.get("classifier_context")),
@@ -237,6 +264,7 @@ def build_safeguards_evaluator(
         litellm_metadata=proxy_spend_attribution_metadata(litellm_metadata),
         allowed_model_region=getattr(user_api_key_auth, "allowed_model_region", None),
         acompletion=router_acompletion if router_acompletion is not None else litellm.acompletion,
+        caller_may_use_model=caller_may_use,
     )
 
 
@@ -299,6 +327,11 @@ def _block_line(role: str, block: object) -> str | None:
         )
     if block_type == "tool_result":
         return json.dumps({"tool_result": _tool_result_excerpt(fields.get("content"))}, default=str)
+    if block_type == "compaction":
+        summary: Final = fields.get("content")
+        return json.dumps(
+            {"conversation_summary": _clipped(summary if isinstance(summary, str) else "", TRANSCRIPT_LINE_CHAR_LIMIT)}
+        )
     return None
 
 
@@ -357,6 +390,16 @@ def _verdict_for(raw_verdict: object) -> SafeguardToolUseVerdict:
     return SafeguardToolUseEvaluated(type="evaluated", outcome="flagged", explanation=verdict.explanation)
 
 
+def _final_verdict(use: PendingToolUse, verdicts: Mapping[str, SafeguardToolUseVerdict]) -> SafeguardToolUseVerdict:
+    match use:
+        case TruncatedToolUse():
+            return _unavailable("truncated")
+        case ToolUseUnderReview():
+            return verdicts.get(use.id) or _unavailable("error")
+        case _:
+            assert_never(use)
+
+
 def _unavailable(reason: _UnavailableReason) -> SafeguardToolUseUnavailable:
     return SafeguardToolUseUnavailable(type="unavailable", reason=reason)
 
@@ -372,20 +415,22 @@ async def with_safeguard_results(
 ) -> AnthropicMessagesResponse:
     if evaluator is None:
         return response
-    blocks: Final = response.get("content") or ()
-    tool_uses: Final = tuple(
-        tool_use for tool_use in (_tool_use_under_review(block) for block in blocks) if tool_use is not None
-    )
-    results: Final = await evaluator.evaluate(tool_uses)
+    blocks: Final = tuple(response.get("content") or ())
+    cut_off_index: Final = len(blocks) - 1 if response.get("stop_reason") == "max_tokens" else None
+    candidates: Final = (_pending_tool_use(block, index == cut_off_index) for index, block in enumerate(blocks))
+    pending: Final = tuple(use for use in candidates if use is not None)
+    results: Final = await evaluator.evaluate(pending)
     stamped: Final[AnthropicMessagesResponse] = {**response, "safeguard_results": results}
     return stamped
 
 
-def _tool_use_under_review(block: object) -> ToolUseUnderReview | None:
+def _pending_tool_use(block: object, cut_off: bool) -> PendingToolUse | None:
     model_fields: Final[object] = getattr(block, "__dict__", None)
     fields: Final = _mapping(block) or _mapping(model_fields)
     if fields is None or fields.get("type") != "tool_use":
         return None
+    if cut_off:
+        return TruncatedToolUse(id=str(fields.get("id")))
     return ToolUseUnderReview(id=str(fields.get("id")), name=str(fields.get("name")), input=fields.get("input"))
 
 
@@ -396,16 +441,16 @@ class _StreamedToolUse:
     start_input: object
     partial_json: str
 
-    def under_review(self) -> ToolUseUnderReview:
-        return ToolUseUnderReview(id=self.id, name=self.name, input=self._input())
-
-    def _input(self) -> object:
+    def pending(self, cut_off: bool) -> PendingToolUse:
+        if cut_off:
+            return TruncatedToolUse(id=self.id)
         if not self.partial_json:
-            return self.start_input
+            return ToolUseUnderReview(id=self.id, name=self.name, input=self.start_input)
         try:
-            return _JSON_VALUE.validate_json(self.partial_json)
+            streamed_input: Final = _JSON_VALUE.validate_json(self.partial_json)
         except ValidationError:
-            return self.partial_json
+            return TruncatedToolUse(id=self.id)
+        return ToolUseUnderReview(id=self.id, name=self.name, input=streamed_input)
 
 
 class StreamedSafeguardResults:
@@ -414,6 +459,7 @@ class StreamedSafeguardResults:
     def __init__(self, evaluator: SafeguardsEvaluator | None) -> None:
         self._evaluator: Final = evaluator
         self._by_index: Mapping[int, _StreamedToolUse] = MappingProxyType({})
+        self._last_block_index: int | None = None
         self._results: Sequence[SafeguardResult] | None = None
 
     async def observe(self, event: Mapping[str, object]) -> Mapping[str, object]:
@@ -429,19 +475,27 @@ class StreamedSafeguardResults:
         if event_type != "message_delta":
             return event
         delta: Final = _mapping(event.get("delta"))
-        if delta is None or delta.get("stop_reason") is None:
+        stop_reason: Final = delta.get("stop_reason") if delta is not None else None
+        if delta is None or stop_reason is None:
             return event
-        return {**event, "delta": {**delta, "safeguard_results": await self._evaluated_once(self._evaluator)}}
+        results: Final = await self._evaluated_once(self._evaluator, stop_reason == "max_tokens")
+        return {**event, "delta": {**delta, "safeguard_results": results}}
 
-    async def _evaluated_once(self, evaluator: SafeguardsEvaluator) -> Sequence[SafeguardResult]:
+    async def _evaluated_once(self, evaluator: SafeguardsEvaluator, hit_max_tokens: bool) -> Sequence[SafeguardResult]:
         if self._results is None:
-            self._results = await evaluator.evaluate(tuple(use.under_review() for use in self._by_index.values()))
+            cut_off_index: Final = self._last_block_index if hit_max_tokens else None
+            self._results = await evaluator.evaluate(
+                tuple(use.pending(index == cut_off_index) for index, use in self._by_index.items())
+            )
         return self._results
 
     def _start(self, event: Mapping[str, object]) -> None:
         index: Final = event.get("index")
+        if not isinstance(index, int):
+            return
+        self._last_block_index = index
         block: Final = _mapping(event.get("content_block"))
-        if not isinstance(index, int) or block is None or block.get("type") != "tool_use":
+        if block is None or block.get("type") != "tool_use":
             return
         started: Final = _StreamedToolUse(
             id=str(block.get("id")), name=str(block.get("name")), start_input=block.get("input"), partial_json=""

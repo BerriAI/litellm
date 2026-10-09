@@ -79,6 +79,10 @@ def _provider_error(exc: Exception) -> Exception:
     return exc
 
 
+def _sse_frame(event: Mapping[str, object]) -> bytes:
+    return f"event: {event.get('type', 'message')}\ndata: {json.dumps(event)}\n\n".encode()
+
+
 def _mid_stream_error_sse_event(exc: Exception) -> bytes:
     from litellm.anthropic_interface.exceptions.exception_mapping_utils import (
         anthropic_error_sse_frame,
@@ -1049,10 +1053,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         try:
             async for chunk in self:
                 if isinstance(chunk, dict):
-                    event = await safeguard_results.observe(_SSE_EVENT.validate_python(chunk))
-                    event_type: str = str(event.get("type", "message"))
-                    payload = f"event: {event_type}\ndata: {json.dumps(event)}\n\n"
-                    yield payload.encode()
+                    yield _sse_frame(await safeguard_results.observe(_SSE_EVENT.validate_python(chunk)))
                 else:
                     yield chunk
         except Exception as e:  # noqa: BLE001  # boundary before the socket: any upstream failure becomes an Anthropic error event
