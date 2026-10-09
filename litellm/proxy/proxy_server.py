@@ -7684,6 +7684,7 @@ class ProxyConfig:
                     verbose_proxy_logger.debug("_model_list: %s", _model_list)
                     llm_router = litellm.Router(
                         model_list=_model_list,
+                        cache_responses=litellm.cache is not None,
                         router_general_settings=RouterGeneralSettings(
                             async_only_mode=True  # only init async clients
                         ),
