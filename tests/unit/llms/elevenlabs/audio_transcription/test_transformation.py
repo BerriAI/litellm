@@ -1,3 +1,6 @@
+import io
+import json
+import wave
 from collections.abc import Iterator
 from typing import Final
 
@@ -40,27 +43,260 @@ def _transform(payload: object) -> TranscriptionResponse:
     )
 
 
-def test_transform_audio_transcription_response_keeps_only_spoken_words():
+def _transform_raw(content: bytes) -> TranscriptionResponse:
+    return ElevenLabsAudioTranscriptionConfig().transform_audio_transcription_response(
+        raw_response=httpx.Response(200, content=content)
+    )
+
+
+def _word_with(**fields: object) -> dict[str, object]:
+    return {"type": "word", "text": "hi", "start": 0.0, "end": 0.5, **fields}
+
+
+NUMBER_CASES: Final = (
+    ("-0.35", -0.35),
+    ("0", 0.0),
+    ("0.0", 0.0),
+    ("-2", -2.0),
+    ("-1e-300", -1e-300),
+    ("0.3", 0.3),
+    ("1", 1.0),
+)
+NOT_FINITE_NUMBER_LITERALS: Final = (
+    "NaN",
+    "Infinity",
+    "-Infinity",
+    "true",
+    "false",
+    '"-0.5"',
+    "null",
+    "1" + "0" * 400,
+    "-1" + "0" * 400,
+    "[1]",
+)
+
+
+def test_transform_audio_transcription_response_keeps_spoken_words_with_native_metadata():
     payload = {
         "language_code": "en",
-        "text": "Hello world",
+        "text": "Hello (laughter) world",
         "words": [
-            {"type": "word", "text": "Hello", "start": 0.0, "end": 0.4, "speaker_id": "speaker_0"},
-            {"type": "spacing", "text": " ", "start": 0.4, "end": 0.5},
-            {"type": "audio_event", "text": "(laughter)", "start": 0.5, "end": 0.9},
+            {"type": "word", "text": "Hello", "start": 0.0, "end": 0.4, "speaker_id": "speaker_0", "logprob": -0.35},
+            {"type": "spacing", "text": " ", "start": 0.4, "end": 0.5, "logprob": -0.1},
+            {"type": "audio_event", "text": "(laughter)", "start": 0.5, "end": 0.9, "speaker_id": "speaker_1"},
             {"type": "word", "text": "world", "start": 0.9, "end": 1.3},
         ],
     }
 
     response = _transform(payload)
 
-    assert response.text == "Hello world"
+    assert response.text == "Hello (laughter) world"
     assert response["task"] == "transcribe"
     assert response["language"] == "en"
     assert response["words"] == [
-        {"word": "Hello", "start": 0.0, "end": 0.4},
+        {"word": "Hello", "start": 0.0, "end": 0.4, "logprob": -0.35, "speaker": "speaker_0"},
         {"word": "world", "start": 0.9, "end": 1.3},
     ]
+    assert response["audio_events"] == [{"text": "(laughter)", "start": 0.5, "end": 0.9, "speaker": "speaker_1"}]
+    assert response._hidden_params == payload
+
+
+@pytest.mark.parametrize(("literal", "expected"), NUMBER_CASES)
+def test_transform_audio_transcription_response_passes_finite_logprob_through(literal: str, expected: float):
+    body: Final = b'{"words": [{"type": "word", "text": "a", "start": 0, "end": 1, "logprob": %s}]}' % literal.encode()
+
+    logprob: Final = _transform_raw(body)["words"][0]["logprob"]
+
+    assert logprob == expected
+    assert isinstance(logprob, float)
+
+
+@pytest.mark.parametrize("literal", NOT_FINITE_NUMBER_LITERALS)
+def test_transform_audio_transcription_response_omits_unusable_logprob(literal: str):
+    body: Final = b'{"words": [{"type": "word", "text": "a", "start": 0, "end": 1, "logprob": %s}]}' % literal.encode()
+
+    response: Final = _transform_raw(body)
+
+    assert response["words"] == [{"word": "a", "start": 0, "end": 1}]
+    assert "NaN" not in json.dumps(response["words"]) and "Infinity" not in json.dumps(response["words"])
+
+
+def test_transform_audio_transcription_response_omits_absent_logprob_and_keeps_siblings():
+    body: Final = (
+        b'{"words": [{"type": "word", "text": "a", "logprob": -1.5}, {"type": "word", "text": "b"},'
+        b' {"type": "word", "text": "c", "logprob": NaN}]}'
+    )
+
+    response: Final = _transform_raw(body)
+
+    assert response["words"][0]["logprob"] == -1.5
+    assert all("logprob" not in w for w in response["words"][1:])
+
+
+@pytest.mark.parametrize(("literal", "expected"), NUMBER_CASES)
+def test_transform_audio_transcription_response_passes_finite_language_probability_through(
+    literal: str, expected: float
+):
+    response: Final = _transform_raw(b'{"language_probability": %s}' % literal.encode())
+
+    assert response["language_probability"] == expected
+    assert isinstance(response["language_probability"], float)
+
+
+@pytest.mark.parametrize("literal", NOT_FINITE_NUMBER_LITERALS)
+def test_transform_audio_transcription_response_omits_unusable_language_probability(literal: str):
+    response: Final = _transform_raw(b'{"text": "t", "language_probability": %s}' % literal.encode())
+
+    assert "language_probability" not in response
+
+
+def test_transform_audio_transcription_response_omits_absent_language_probability():
+    assert "language_probability" not in _transform({"text": "t"})
+
+
+@pytest.mark.parametrize(
+    ("literal", "expected"),
+    [("0", 0.0), ("0.0", 0.0), ("11.0", 11.0), ("17", 17.0), ("1e-300", 1e-300), ("3600.5", 3600.5)],
+)
+def test_transform_audio_transcription_response_exposes_valid_duration(literal: str, expected: float):
+    response: Final = _transform_raw(b'{"text": "t", "audio_duration_secs": %s}' % literal.encode())
+
+    assert response["duration"] == expected
+    assert isinstance(response["duration"], float)
+
+
+@pytest.mark.parametrize(
+    "literal",
+    ["-0.01", "-3", "-1e-300", "-Infinity", "NaN", "Infinity", "true", "false", '"12"', "null", "1" + "0" * 400, "[1]"],
+)
+def test_transform_audio_transcription_response_omits_invalid_duration(literal: str):
+    body: Final = (
+        b'{"text": "t", "audio_duration_secs": %s, "words": [{"type": "word", "end": 2.5}]}' % literal.encode()
+    )
+
+    assert "duration" not in _transform_raw(body)
+
+
+def test_transform_audio_transcription_response_omits_absent_duration():
+    assert "duration" not in _transform({"text": "t", "words": [_word_with(end=2.5)]})
+
+
+@pytest.mark.parametrize("speaker", ["speaker_0", "speaker_12", ""])
+def test_transform_audio_transcription_response_exposes_string_speaker_on_words_and_events(speaker: str):
+    response: Final = _transform(
+        {"words": [_word_with(speaker_id=speaker), {"type": "audio_event", "text": "(x)", "speaker_id": speaker}]}
+    )
+
+    assert response["words"][0]["speaker"] == speaker
+    assert response["audio_events"][0]["speaker"] == speaker
+
+
+@pytest.mark.parametrize("speaker", [None, 3, 0, True, ["a"], {"id": "a"}, 1.5])
+def test_transform_audio_transcription_response_omits_non_string_speaker(speaker: object):
+    response: Final = _transform(
+        {"words": [_word_with(speaker_id=speaker), {"type": "audio_event", "text": "(x)", "speaker_id": speaker}]}
+    )
+
+    assert "speaker" not in response["words"][0]
+    assert "speaker" not in response["audio_events"][0]
+
+
+def test_transform_audio_transcription_response_omits_speaker_when_missing():
+    response: Final = _transform({"words": [_word_with(), {"type": "audio_event", "text": "(x)"}]})
+
+    assert "speaker" not in response["words"][0]
+    assert "speaker" not in response["audio_events"][0]
+
+
+def test_transform_audio_transcription_response_keeps_audio_events_in_order_apart_from_words_and_spacing():
+    payload = {
+        "text": "a [music] b [applause]",
+        "words": [
+            {"type": "audio_event", "text": "[music]", "start": 0.0, "end": 1.0, "logprob": -0.2},
+            {"type": "word", "text": "a", "start": 1.0, "end": 1.2},
+            {"type": "spacing", "text": " ", "start": 1.2, "end": 1.3},
+            {"type": "word", "text": "b", "start": 1.3, "end": 1.5},
+            {"type": "audio_event", "text": "[applause]", "start": 1.5, "end": 2.5, "speaker_id": "speaker_1"},
+            {"type": "audio_event", "text": "[cough]", "start": 2.5, "end": 2.6},
+        ],
+    }
+
+    response: Final = _transform(payload)
+
+    assert response["audio_events"] == [
+        {"text": "[music]", "start": 0.0, "end": 1.0},
+        {"text": "[applause]", "start": 1.5, "end": 2.5, "speaker": "speaker_1"},
+        {"text": "[cough]", "start": 2.5, "end": 2.6},
+    ]
+    assert [w["word"] for w in response["words"]] == ["a", "b"]
+    assert response.text == "a [music] b [applause]"
+
+
+def test_transform_audio_transcription_response_defaults_missing_audio_event_fields_like_words():
+    response: Final = _transform({"words": [{"type": "audio_event"}, {"type": "word"}]})
+
+    assert response["audio_events"] == [{"text": "", "start": 0, "end": 0}]
+    assert response["words"] == [{"word": "", "start": 0, "end": 0}]
+
+
+@pytest.mark.parametrize("words", [[], [{"type": "spacing", "text": " "}], [{"type": "word", "text": "a"}]])
+def test_transform_audio_transcription_response_has_empty_audio_events_when_words_present_without_events(
+    words: list[dict[str, object]],
+):
+    assert _transform({"text": "t", "words": words})["audio_events"] == []
+
+
+@pytest.mark.parametrize("payload", [{}, {"text": "t"}, {"text": "t", "audio_duration_secs": 3.0}])
+def test_transform_audio_transcription_response_has_no_audio_events_without_words(payload: dict[str, object]):
+    assert "audio_events" not in _transform(payload)
+
+
+def test_transform_audio_transcription_response_output_is_strict_json_for_hostile_numbers():
+    body: Final = (
+        b'{"language_probability": NaN, "audio_duration_secs": Infinity, "words": ['
+        b'{"type": "word", "text": "a", "logprob": -Infinity, "speaker_id": "s"},'
+        b'{"type": "audio_event", "text": "(x)", "start": 0, "end": 1, "logprob": NaN}]}'
+    )
+
+    response: Final = _transform_raw(body)
+
+    strict: Final = json.dumps({k: response[k] for k in ("words", "audio_events", "language", "task")}, allow_nan=False)
+    assert "language_probability" not in response and "duration" not in response
+    assert "null" not in strict
+
+
+def test_transform_audio_transcription_response_matches_real_response_shape():
+    payload = {
+        "language_code": "eng",
+        "language_probability": 0.9746739864349365,
+        "text": "Four score and seven years ago (applause)",
+        "words": [
+            {"text": "Four", "start": 0.44, "end": 0.7, "type": "word", "speaker_id": "speaker_0", "logprob": -0.00017},
+            {"text": " ", "start": 0.7, "end": 0.82, "type": "spacing", "speaker_id": "speaker_0", "logprob": -0.35},
+            {"text": "score", "start": 0.82, "end": 1.12, "type": "word", "speaker_id": "speaker_0", "logprob": -0.62},
+            {
+                "text": "(applause)",
+                "start": 1.2,
+                "end": 2.0,
+                "type": "audio_event",
+                "speaker_id": "speaker_0",
+                "logprob": -0.9,
+            },
+        ],
+        "transcription_id": "abc",
+        "audio_duration_secs": 11.0,
+    }
+
+    response: Final = _transform(payload)
+
+    assert response["language"] == "eng"
+    assert response["language_probability"] == 0.9746739864349365
+    assert response["duration"] == 11.0
+    assert response["words"] == [
+        {"word": "Four", "start": 0.44, "end": 0.7, "logprob": -0.00017, "speaker": "speaker_0"},
+        {"word": "score", "start": 0.82, "end": 1.12, "logprob": -0.62, "speaker": "speaker_0"},
+    ]
+    assert response["audio_events"] == [{"text": "(applause)", "start": 1.2, "end": 2.0, "speaker": "speaker_0"}]
     assert response._hidden_params == payload
 
 
@@ -127,6 +363,39 @@ def test_transform_audio_transcription_response_wraps_malformed_payloads_with_th
         ElevenLabsAudioTranscriptionConfig().transform_audio_transcription_response(raw_response=raw_response)
 
     assert str(exc_info.value).endswith(f"\nResponse: {raw_response.text}")
+
+
+def _silent_wav(seconds: int) -> bytes:
+    buffer: Final = io.BytesIO()
+    with wave.open(buffer, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(8000)
+        wav.writeframes(b"\x00\x00" * 8000 * seconds)
+    return buffer.getvalue()
+
+
+@pytest.mark.parametrize("audio", [b"not a decodable audio file", _silent_wav(1)])
+def test_transcription_cost_uses_the_duration_in_the_elevenlabs_response(
+    audio: bytes, respx_mock: respx.MockRouter
+) -> None:
+    api_base: Final = "http://localhost:12346"
+    billed_seconds: Final = 7.5
+    respx_mock.post(f"{api_base}/v1/speech-to-text").mock(
+        return_value=httpx.Response(
+            200,
+            json={"language_code": "eng", "text": "hi", "words": [], "audio_duration_secs": billed_seconds},
+        )
+    )
+    rate: Final = litellm.get_model_info("elevenlabs/scribe_v2")["input_cost_per_second"]
+    assert rate
+
+    response: Final = litellm.transcription(
+        model="elevenlabs/scribe_v2", file=("a.wav", audio), api_base=api_base, api_key=ELEVENLABS_API_KEY
+    )
+
+    assert response["duration"] == billed_seconds
+    assert response._hidden_params["response_cost"] == pytest.approx(billed_seconds * rate)
 
 
 class TestElevenLabsAudioTranscription:

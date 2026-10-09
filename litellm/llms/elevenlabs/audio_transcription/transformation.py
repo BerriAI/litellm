@@ -2,6 +2,7 @@
 Translates from OpenAI's `/v1/audio/transcriptions` to ElevenLabs's `/v1/speech-to-text`
 """
 
+import math
 from collections.abc import Iterable, Mapping
 from typing import Final
 
@@ -26,6 +27,41 @@ from ..common_utils import ElevenLabsException
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+
+
+def _finite_float(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    try:
+        number: Final = float(value)
+    except OverflowError:
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _speaker_fields(item: Mapping[str, object]) -> Mapping[str, str]:
+    speaker: Final = item.get("speaker_id")
+    return {"speaker": speaker} if isinstance(speaker, str) else {}
+
+
+def _word_fields(item: Mapping[str, object]) -> Mapping[str, object]:
+    logprob: Final = _finite_float(item.get("logprob"))
+    return {
+        "word": item.get("text", ""),
+        "start": item.get("start", 0),
+        "end": item.get("end", 0),
+        **({} if logprob is None else {"logprob": logprob}),
+        **_speaker_fields(item),
+    }
+
+
+def _audio_event_fields(item: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        "text": item.get("text", ""),
+        "start": item.get("start", 0),
+        "end": item.get("end", 0),
+        **_speaker_fields(item),
+    }
 
 
 class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
@@ -132,19 +168,20 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             response["task"] = "transcribe"
             response["language"] = response_object.get("language_code", "unknown")
 
-            # Map ElevenLabs words to OpenAI format
             if "words" in response_object:
-                response["words"] = []
-                for word_data in _JSON_OBJECTS.validate_python(response_object["words"]):
-                    # Only include actual words, skip spacing and audio events
-                    if word_data.get("type") == "word":
-                        response["words"].append(
-                            {
-                                "word": word_data.get("text", ""),
-                                "start": word_data.get("start", 0),
-                                "end": word_data.get("end", 0),
-                            }
-                        )
+                items: Final = tuple(_JSON_OBJECTS.validate_python(response_object["words"]))
+                response["words"] = [_word_fields(item) for item in items if item.get("type") == "word"]
+                response["audio_events"] = [
+                    _audio_event_fields(item) for item in items if item.get("type") == "audio_event"
+                ]
+
+            language_probability: Final = _finite_float(response_object.get("language_probability"))
+            if language_probability is not None:
+                response["language_probability"] = language_probability
+
+            duration: Final = _finite_float(response_object.get("audio_duration_secs"))
+            if duration is not None and duration >= 0:
+                response["duration"] = duration
 
             # Store full response in hidden params
             response.hidden_params = response_json
