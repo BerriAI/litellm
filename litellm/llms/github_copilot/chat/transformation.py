@@ -1,7 +1,7 @@
 import json
 import os
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
 import httpx
 
@@ -87,9 +87,7 @@ class GithubCopilotConfig(OpenAIConfig):
         for message in messages:
             if message.get("role") == "system":
                 # Convert system message to assistant message
-                transformed_message = message.copy()
-                transformed_message["role"] = "assistant"
-                transformed_messages.append(transformed_message)
+                transformed_messages.append(cast(AllMessageValues, {**message, "role": "assistant"}))
             else:
                 transformed_messages.append(message)
 

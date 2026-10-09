@@ -2707,10 +2707,12 @@ def _per_user_oauth_configured() -> bool:
 
 
 def _fallback_entry_target_count(entry: object) -> int:
-    """Nested target names one fallback entry carries: a bare string counts 1,
-    a dict entry the sum of its value-list lengths."""
+    """Work units one fallback entry carries, floored so nothing counts as zero:
+    a bare string or any non-dict counts 1; a dict entry counts one unit per
+    key plus one per target in its value lists, so empty lists and scalar
+    values still cost what the router scan costs."""
     if isinstance(entry, dict):
-        return sum(len(value) for value in entry.values() if isinstance(value, list))
+        return sum(max(1, len(value)) if isinstance(value, list) else 1 for value in entry.values())
     return 1
 
 
@@ -2757,9 +2759,9 @@ def _index_fallback_list(fallback_list: Sequence[object]) -> _FallbackIndex:
     for entry in fallback_list:
         if isinstance(entry, dict) and entry:
             key = next(iter(entry))
-            raw: Final = entry[key]
-            values: Final = raw if isinstance(raw, list) else ([raw] if raw is not None else [])
-            targets: Final = tuple(name for value in values if (name := _fallback_target_name(value)) is not None)
+            raw = entry[key]
+            values = raw if isinstance(raw, list) else ([raw] if raw is not None else [])
+            targets = tuple(name for value in values if (name := _fallback_target_name(value)) is not None)
             if "*" in key or "/" in key:
                 fuzzy.append(entry)
             else:
@@ -2797,13 +2799,11 @@ def _fallback_edges(
         targets.update(exact.get(model_group, ()))
         if stripped is not None:
             targets.update(exact.get(stripped, ()))
-        pending: Final = tuple(index for index in range(len(fuzzy)) if (list_index, index) not in fired_fuzzy)
+        pending = tuple(index for index in range(len(fuzzy)) if (list_index, index) not in fired_fuzzy)
         if not pending:
             continue
-        resolved: Final = get_fallback_model_group(
-            fallbacks=[fuzzy[index] for index in pending], model_group=model_group
-        )[0]
-        values: Final = resolved if isinstance(resolved, list) else ([resolved] if resolved is not None else [])
+        resolved = get_fallback_model_group(fallbacks=[fuzzy[index] for index in pending], model_group=model_group)[0]
+        values = resolved if isinstance(resolved, list) else ([resolved] if resolved is not None else [])
         targets.update(name for value in values if (name := _fallback_target_name(value)) is not None)
         if resolved is not None:
             fired_fuzzy.update((list_index, index) for index in pending if _fuzzy_entry_matched(fuzzy[index], resolved))
@@ -2863,9 +2863,9 @@ def _per_user_credential_names_for_groups(
 
     names: Final[list[str]] = []  # mutable-ok: accumulates one name per per-user deployment
     for group in model_groups:
-        by_name: Final = llm_router.get_model_list(model_name=group, team_id=team_id) or ()
-        deployment_id_match: Final = llm_router.get_deployment(model_id=group)
-        deployments: Final[Sequence[object]] = (
+        by_name = llm_router.get_model_list(model_name=group, team_id=team_id) or ()
+        deployment_id_match = llm_router.get_deployment(model_id=group)
+        deployments: Sequence[object] = (
             *by_name,
             *((deployment_id_match,) if deployment_id_match is not None else ()),
         )
@@ -2882,10 +2882,10 @@ def _per_user_credential_names_for_groups(
             )
             if not isinstance(credential_name_obj, str) or not credential_name_obj or credential_name_obj in names:
                 continue
-            credential: Final = CredentialAccessor.find_credential(credential_name_obj)
+            credential = CredentialAccessor.find_credential(credential_name_obj)
             if credential is None:
                 continue
-            values: Final = cast(  # cast-ok: credential_values is a plain dict at runtime
+            values = cast(  # cast-ok: credential_values is a plain dict at runtime
                 Mapping[object, object], credential.credential_values
             )
             if values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE:

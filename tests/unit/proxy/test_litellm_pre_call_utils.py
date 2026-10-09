@@ -9343,9 +9343,20 @@ class TestResolveUserProviderCredentials:
         assert data["secret_fields"]["user_provider_credentials_user_id"] == "user-a"
 
     @pytest.mark.asyncio
-    async def test_request_fallback_entries_over_the_limit_get_a_400(self, monkeypatch):
+    @pytest.mark.parametrize(
+        "entries",
+        [
+            [{"gpt-4o": ["target-%d" % i for i in range(257)]}],
+            [{"azure/unmatched-%d" % i: []} for i in range(257)],
+            [{("k%d" % i): [] for i in range(257)}],
+            [{"m%d" % i: "t"} for i in range(257)],
+        ],
+        ids=["nested targets", "empty-list mappings", "one dict of empty lists", "scalar mappings"],
+    )
+    async def test_request_fallback_entries_over_the_limit_get_a_400(self, monkeypatch, entries):
         """The request body's fallback lists are the caller-controlled input to
-        discovery, so past 256 entries the request is refused instead of scanned."""
+        discovery, so past 256 counted work units (a key counts even when its
+        value list is empty or a scalar) the request is refused instead of scanned."""
         from fastapi import HTTPException
 
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
@@ -9355,11 +9366,7 @@ class TestResolveUserProviderCredentials:
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
-        data: Final = {
-            "model": "gpt-4o",
-            "fallbacks": [{"gpt-4o": ["target-%d" % i for i in range(257)]}],
-            "secret_fields": {},
-        }
+        data: Final = {"model": "gpt-4o", "fallbacks": entries, "secret_fields": {}}
         with pytest.raises(HTTPException) as exc:
             await _resolve_user_provider_credentials_for_request(
                 data=data,
@@ -9370,7 +9377,17 @@ class TestResolveUserProviderCredentials:
         assert getattr(exc.value, "status_code", None) == 400
 
     @pytest.mark.asyncio
-    async def test_request_fallback_entries_at_the_limit_are_accepted(self, monkeypatch):
+    @pytest.mark.parametrize(
+        "entries",
+        [
+            [{"gpt-4o": ["target-%d" % i for i in range(256)]}],
+            [{"azure/unmatched-%d" % i: []} for i in range(256)],
+            [{("k%d" % i): [] for i in range(256)}],
+            [{"m%d" % i: "t"} for i in range(256)],
+        ],
+        ids=["nested targets", "empty-list mappings", "one dict of empty lists", "scalar mappings"],
+    )
+    async def test_request_fallback_entries_at_the_limit_are_accepted(self, monkeypatch, entries):
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         self._env(monkeypatch)
@@ -9380,11 +9397,7 @@ class TestResolveUserProviderCredentials:
         router.content_policy_fallbacks = []
         router.get_model_list = MagicMock(return_value=[])
         router.get_deployment = MagicMock(return_value=None)
-        data: Final = {
-            "model": "gpt-4o",
-            "fallbacks": [{"gpt-4o": ["target-%d" % i for i in range(256)]}],
-            "secret_fields": {},
-        }
+        data: Final = {"model": "gpt-4o", "fallbacks": entries, "secret_fields": {}}
         await _resolve_user_provider_credentials_for_request(
             data=data,
             authenticated_user_id="user-a",
