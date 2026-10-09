@@ -20,6 +20,7 @@ import { Logo } from "@/components/molecules/logo/Logo";
 import { resetCredentialFormOnProviderChange, withoutRestrictedFields } from "./credential_form_helpers";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import AnthropicFederationFields from "./AnthropicFederationFields";
+import InternalIssuerJwks from "./InternalIssuerJwks";
 import {
   buildCreateCredentialValues,
   buildCredentialPatch,
@@ -28,6 +29,7 @@ import {
   inferIdentitySource,
   isAnthropicProvider,
   isFederatedCredential,
+  jwksPanelFor,
   type AnthropicAuthMethod,
   type IdentitySourceId,
 } from "./anthropic_federation";
@@ -237,6 +239,8 @@ export default function CredentialModal({
                   storedValues={storedValues}
                 />
               )}
+
+              <InternalIssuerJwks panel={jwksPanelFor(existingCredential, selection)} />
 
               <div className="flex justify-between items-center">
                 <SimpleTooltip content="Get help on our github">

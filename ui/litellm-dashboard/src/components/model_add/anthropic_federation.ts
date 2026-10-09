@@ -1,4 +1,5 @@
 import { isMaskedSecret } from "@/utils/maskedSecretUtils";
+import type { CredentialItem } from "../networking";
 
 export type AnthropicAuthMethod = "api_key" | "federation";
 
@@ -321,6 +322,25 @@ interface CredentialSelection {
   readonly authMethod: AnthropicAuthMethod;
   readonly identitySource: IdentitySourceId;
 }
+
+export type JwksPanel =
+  | { readonly kind: "hidden" }
+  | { readonly kind: "after_save" }
+  | { readonly kind: "saved"; readonly credentialName: string };
+
+export const jwksPanelFor = (storedCredential: CredentialItem | null, selection: CredentialSelection): JwksPanel => {
+  if (selection.authMethod !== "federation" || selection.identitySource !== "internal_issuer") {
+    return { kind: "hidden" };
+  }
+  if (
+    storedCredential === null ||
+    !isAnthropicProvider(storedCredential.credential_info.custom_llm_provider) ||
+    inferIdentitySource(storedCredential.credential_values) !== "internal_issuer"
+  ) {
+    return { kind: "after_save" };
+  }
+  return { kind: "saved", credentialName: storedCredential.credential_name };
+};
 
 const fixedValuesFor = (selection: CredentialSelection): Readonly<Record<string, string>> =>
   selection.authMethod === "federation" ? identitySourceById(selection.identitySource).fixedValues : {};
