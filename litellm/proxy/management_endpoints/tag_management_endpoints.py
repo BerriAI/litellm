@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Final, Protocol, TypedDict, overload
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import TypeAdapter
 
+from litellm._internal_context import service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth, user_api_key_has_admin_view
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -31,6 +32,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity,
 )
 from litellm.proxy.management_helpers.utils import handle_budget_for_entity
+from litellm.proxy.spend_tracking.spend_counter_batch import SPEND_COUNTERS_TARGET
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
     DailyTagSpendRepository,
@@ -486,7 +488,8 @@ async def update_tag(
             spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=tag.spend, ttl=60)
             if spend_counter_cache.redis_cache is not None:
                 try:
-                    await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=tag.spend, ttl=60)
+                    with service_target(SPEND_COUNTERS_TARGET):
+                        await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=tag.spend, ttl=60)
                 except Exception as redis_err:  # noqa: BLE001  # best-effort refresh: a Redis failure must not fail the request
                     # tag.name is admin-supplied; strip CR/LF before it reaches the logs so it
                     # cannot forge additional log lines.
