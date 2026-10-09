@@ -259,26 +259,32 @@ class DecisionModelGuardrail(CustomGuardrail):
             {"type": "predicate", "name": check.name, "instructions": check.instructions or ""} for check in self.checks
         ]
         semaphore: Final = self._get_decision_semaphore()
-        try:
-            responses: Final = await asyncio.gather(
-                *(self._run_checks(segment, questions, semaphore) for segment in segments)
-            )
-        except HTTPException:
-            raise
-        except Exception as call_error:  # noqa: BLE001  # any provider failure is governed by unreachable_fallback
+        results: Final = await asyncio.gather(
+            *(self._run_checks(segment, questions, semaphore) for segment in segments),
+            return_exceptions=True,
+        )
+        for result in results:
+            if isinstance(result, BaseException) and not isinstance(result, Exception):
+                raise result
+
+        responses: Final = tuple(result for result in results if isinstance(result, OpenAIDecisionResponse))
+        errors: Final = tuple(result for result in results if isinstance(result, Exception))
+        if errors and not responses:
             self._log(request_data, (), "guardrail_failed_to_respond", start_time)
-            self._handle_call_failure(call_error)
+            self._handle_call_failure(errors[0])
             return inputs
 
         verdicts: Final = self._verdicts(responses)
         flagged: Final = tuple(v for v in verdicts if v["flagged"])
-        status: Final = (
-            "guardrail_intervened"
-            if any(v["action"] == "block" for v in flagged)
-            else ("guardrail_flagged" if flagged else "success")
-        )
+        intervened: Final = any(v["action"] == "block" for v in flagged)
+        if errors and not intervened:
+            self._log(request_data, verdicts, "guardrail_failed_to_respond", start_time)
+            self._handle_call_failure(errors[0])
+            return inputs
+
+        status: Final = "guardrail_intervened" if intervened else ("guardrail_flagged" if flagged else "success")
         self._log(request_data, verdicts, status, start_time)
-        if status == "guardrail_intervened":
+        if intervened:
             raise HTTPException(
                 status_code=400,
                 detail={
