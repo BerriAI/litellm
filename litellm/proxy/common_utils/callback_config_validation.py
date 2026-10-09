@@ -241,8 +241,8 @@ def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str 
     """Validate every ``logging`` entry of a team/key metadata payload."""
     if not metadata:
         return None
-    entries: Final = metadata.get("logging")
-    if not isinstance(entries, Sequence) or isinstance(entries, (str, bytes)):
+    entries: Final = _object_sequence(metadata.get("logging"))
+    if entries is None:
         return None
     entry_vars: Final = tuple(_entry_callback_vars(entry) for entry in entries)
     named_vars: Final = tuple(zip((_entry_callback_name(entry) for entry in entries), entry_vars))
@@ -260,9 +260,22 @@ def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str 
     )
 
 
+def stored_capture_entries(logging_entries: object) -> tuple[tuple[str | None, Mapping[str, str]], ...]:
+    """The callback name and vars of every stored ``logging`` entry, for ``conflicting_capture_error``."""
+    entries: Final = _object_sequence(logging_entries) or ()
+    return tuple((_entry_callback_name(entry), _entry_callback_vars(entry)) for entry in entries)
+
+
+def _object_sequence(value: object) -> Sequence[object] | None:
+    return value if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) else None
+
+
 def _entry_callback_name(entry: object) -> str | None:
-    callback_name: Final = entry.get("callback_name") if isinstance(entry, Mapping) else None
-    return callback_name if isinstance(callback_name, str) else None
+    match entry:
+        case {"callback_name": str() as callback_name}:
+            return callback_name
+        case _:
+            return None
 
 
 def _conflicting_entry_capture_error(

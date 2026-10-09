@@ -34,6 +34,7 @@ from litellm.proxy.common_utils.callback_config_validation import (
     conflicting_capture_error,
     conflicting_span_scope_error,
     cross_entry_family_error,
+    stored_capture_entries,
 )
 from litellm.proxy.common_utils.callback_utils import (  # noqa: F401  # legacy module exports
     _CALLBACK_VAR_ENCRYPTED_PREFIX,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -355,6 +356,7 @@ async def add_team_callbacks(
         # Decrypted, because the checks compare the incoming values against
         # the stored ones and the credentials are encrypted at rest.
         decrypted_logging: Final = decrypt_callback_vars(team_metadata).get("logging")
+        stored_capture: Final = stored_capture_entries(decrypted_logging)
         stored_entries: Final = decrypted_logging if isinstance(decrypted_logging, list) else ()
         stored_entry_vars: Final = [entry.get("callback_vars") or {} for entry in stored_entries]
         scope_error: Final = conflicting_span_scope_error(data.callback_vars, stored_entry_vars)
@@ -363,7 +365,7 @@ async def add_team_callbacks(
         capture_error: Final = conflicting_capture_error(
             data.callback_name,
             data.callback_vars,
-            [(entry.get("callback_name"), entry_vars) for entry, entry_vars in zip(stored_entries, stored_entry_vars)],
+            stored_capture,
         )
         if capture_error is not None:
             raise _callback_config_error(capture_error)

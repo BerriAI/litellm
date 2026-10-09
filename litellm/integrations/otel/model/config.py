@@ -382,7 +382,7 @@ def _normalized_capture_message_content(value: object) -> object:
 
 
 class _CaptureMessageContentSettings(BaseSettings):
-    model_config = SettingsConfigDict(extra="ignore")
+    model_config = SettingsConfigDict(extra="ignore", frozen=True)
 
     capture_message_content: str = Field(
         default=CaptureMessageContent.NO_CONTENT,
