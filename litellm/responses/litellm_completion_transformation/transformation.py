@@ -2367,7 +2367,7 @@ class LiteLLMCompletionResponsesConfig:
     def convert_response_function_tool_call_to_chat_completion_tool_call(
         tool_call_item: object,
         index: int = 0,
-    ) -> dict[str, object]:  # mutable-ok: ResponsesAPIResponse.reasoning is typed as dict
+    ) -> dict[str, object]:
         """
         Convert ResponseFunctionToolCall to ChatCompletionToolCallChunk format.
 
@@ -2421,7 +2421,7 @@ class LiteLLMCompletionResponsesConfig:
     def convert_apply_patch_tool_call_to_chat_completion_tool_call(
         tool_call_item: "ResponseApplyPatchToolCall",
         index: int = 0,
-    ) -> dict[str, object]:  # mutable-ok: ResponsesAPIResponse.reasoning is typed as dict
+    ) -> dict[str, object]:
         """
         Convert ResponseApplyPatchToolCall to ChatCompletionToolCallChunk format.
 
