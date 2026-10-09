@@ -1,10 +1,10 @@
 /* @vitest-environment jsdom */
 import type { PaginationState } from "@tanstack/react-table";
-import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { act, renderWithProviders, screen } from "../../../tests/test-utils";
 import HealthCheckComponent from "./HealthCheckComponent";
 
 const mockIndividualModelHealthCheckCall = vi.fn();
@@ -58,7 +58,7 @@ function Harness({ modelData, allModelsOnProxy, rowCount = 1, onPageIndexChange 
 
 const renderHealthCheck = async (props: HarnessProps) => {
   await act(async () => {
-    render(<Harness {...props} />);
+    renderWithProviders(<Harness {...props} />);
   });
   await act(async () => {
     await new Promise((r) => setTimeout(r, 0));
@@ -87,7 +87,7 @@ describe("HealthCheckComponent", () => {
   });
 
   it("should call individualModelHealthCheckCall with model id when run health check is triggered", async () => {
-    render(
+    renderWithProviders(
       <Harness modelData={{ data: [makeModel("deployment-abc-123")] }} allModelsOnProxy={["deployment-abc-123"]} />,
     );
 
