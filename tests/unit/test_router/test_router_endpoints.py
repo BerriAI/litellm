@@ -141,9 +141,7 @@ async def test_aspeech_sets_deployment_metadata():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("include_litellm_metadata", [True, False])
-async def test_avector_store_create_keeps_caller_metadata(
-    include_litellm_metadata: bool,
-) -> None:
+async def test_avector_store_create_keeps_caller_metadata(include_litellm_metadata: bool) -> None:
     router: Final = Router(
         model_list=[
             {
