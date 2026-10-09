@@ -8,7 +8,6 @@ import {
   modelAvailableCall,
   modelHubCall,
 } from "@/components/networking";
-import { systemOneModels } from "@/components/lens/model/signals";
 import ContentFilterConfiguration from "./content_filter/ContentFilterConfiguration";
 import { type CompetitorIntentConfig } from "./content_filter/CompetitorIntentConfiguration";
 import {
@@ -282,7 +281,12 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           setAvailableModels(modelsResp.data.map((m: { id: string }) => m.id));
         }
         if (modelGroupsResp?.data) {
-          setDecisionModels(systemOneModels(modelGroupsResp.data).map((m) => m.model_group));
+          setDecisionModels(
+            modelGroupsResp.data
+              .filter((m: { model_group: string; mode?: string | null }) => m.mode === "evaluation")
+              .map((m: { model_group: string }) => m.model_group)
+              .toSorted((a: string, b: string) => a.localeCompare(b)),
+          );
         }
 
         // Populate dynamic providers from API response
