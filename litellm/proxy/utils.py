@@ -22,7 +22,6 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
-from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
@@ -3913,6 +3912,10 @@ class ProxyLogging:
 
             response_str = extract_text_from_a2a_response(response)
         if response_str is not None:
+            # Cache model-level guardrails check per-request to avoid repeated
+            # dict lookups + llm_router.get_deployment() per callback per chunk.
+            _cached_guardrail_data: dict | None = None
+            _guardrail_data_computed = False
             pipeline_gated: Final = (
                 stream_gated_guardrail_names(data, user_api_key_dict) if caps.has_guardrail else frozenset()
             )
@@ -3926,9 +3929,16 @@ class ProxyLogging:
                         # Main - V2 Guardrails implementation
                         from litellm.types.guardrails import GuardrailEventHooks
 
+                        ## CHECK FOR MODEL-LEVEL GUARDRAILS (cached per-request)
+                        if not _guardrail_data_computed:
+                            _cached_guardrail_data = check_and_merge_model_level_guardrails(
+                                data=data, llm_router=llm_router
+                            )
+                            _guardrail_data_computed = True
+
                         if (
                             callback.should_run_guardrail(
-                                data=_stream_model_level_guardrail_data(data, llm_router),  # pyright: ignore[reportUnknownArgumentType]  # the hook's data param is a bare dict
+                                data=_cached_guardrail_data,
                                 event_type=GuardrailEventHooks.post_call,
                             )
                             is not True
@@ -8216,23 +8226,6 @@ _is_valid_team_configs: Final = is_valid_team_configs
 
 def _to_ns(dt):
     return int(dt.timestamp() * 1e9)
-
-
-_GUARDRAIL_DATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
-_STREAM_MODEL_LEVEL_GUARDRAIL_DATA: Final[ContextVar[tuple[Mapping[str, object], Mapping[str, object]] | None]] = (
-    ContextVar("_STREAM_MODEL_LEVEL_GUARDRAIL_DATA", default=None)
-)
-
-
-def _stream_model_level_guardrail_data(data: Mapping[str, object], llm_router: Router | None) -> Mapping[str, object]:
-    cached: Final = _STREAM_MODEL_LEVEL_GUARDRAIL_DATA.get()
-    if cached is not None and cached[0] is data:
-        return cached[1]
-    merged: Final = _GUARDRAIL_DATA_ADAPTER.validate_python(
-        check_and_merge_model_level_guardrails(data=dict(data), llm_router=llm_router)
-    )
-    _ = _STREAM_MODEL_LEVEL_GUARDRAIL_DATA.set((data, merged))
-    return merged
 
 
 def check_and_merge_model_level_guardrails(
