@@ -4216,22 +4216,25 @@ class TestConfigBaseForHealthCheck:
         "rpm": 100,
     }
 
-    def _base(self, config, request, allow_client_side_credentials=False):
+    def _base(self, config, request, allow_client_side_credentials=False, *, selected_by_id: bool):
         from litellm.proxy.health_endpoints._health_endpoints import (
             _config_base_for_health_check,
         )
 
         return _config_base_for_health_check(
-            config, request, allow_client_side_credentials=allow_client_side_credentials
+            config,
+            request,
+            allow_client_side_credentials=allow_client_side_credentials,
+            selected_by_id=selected_by_id,
         )
 
     def test_request_without_connection_fields_inherits_config(self):
-        base = self._base(self.CONFIG, {"model": "openai/gpt-4o"})
+        base = self._base(self.CONFIG, {"model": "openai/gpt-4o"}, selected_by_id=False)
         assert base["api_key"] == "sk-configured"
         assert base["api_base"] == "https://configured.example/v1"
 
     def test_request_setting_api_base_does_not_inherit_config_credentials(self):
-        base = self._base(self.CONFIG, {"api_base": "https://caller.example/v1"})
+        base = self._base(self.CONFIG, {"api_base": "https://caller.example/v1"}, selected_by_id=False)
         assert "api_key" not in base
         assert "api_base" not in base
         assert "vertex_credentials" not in base
@@ -4245,7 +4248,7 @@ class TestConfigBaseForHealthCheck:
             "api_base": "https://new-deployment.example/v1",
             "api_key": "sk-new-deployment",
         }
-        merged = {**self._base(self.CONFIG, request), **request}
+        merged = {**self._base(self.CONFIG, request, selected_by_id=False), **request}
         assert merged["api_base"] == "https://new-deployment.example/v1"
         assert merged["api_key"] == "sk-new-deployment"
         assert "sk-configured" not in str(merged)
@@ -4254,7 +4257,7 @@ class TestConfigBaseForHealthCheck:
         """A request that redirects the destination but supplies no credential
         of its own gets none from the configuration."""
         request = {"api_base": "https://elsewhere.example"}
-        merged = {**self._base(self.CONFIG, request), **request}
+        merged = {**self._base(self.CONFIG, request, selected_by_id=False), **request}
         assert "api_key" not in merged
         assert "sk-configured" not in str(merged)
 
@@ -4262,6 +4265,7 @@ class TestConfigBaseForHealthCheck:
         base = self._base(
             {**self.CONFIG, "aws_secret_access_key": "configured-secret"},
             {"aws_bedrock_runtime_endpoint": "https://caller.example"},
+            selected_by_id=False,
         )
         assert "api_key" not in base
         assert "aws_secret_access_key" not in base
@@ -4273,6 +4277,7 @@ class TestConfigBaseForHealthCheck:
             self.CONFIG,
             {"api_base": "https://caller.example/v1"},
             allow_client_side_credentials=True,
+            selected_by_id=False,
         )
         assert base["api_key"] == "sk-configured"
 
@@ -4280,7 +4285,7 @@ class TestConfigBaseForHealthCheck:
         """A stored-credential name resolves to the same secrets downstream, so a
         request that redirects the destination must not keep it either."""
         config = {**self.CONFIG, "litellm_credential_name": "OpenAI-prod"}
-        base = self._base(config, {"api_base": "https://caller.example/v1"})
+        base = self._base(config, {"api_base": "https://caller.example/v1"}, selected_by_id=False)
         assert "litellm_credential_name" not in base
         assert "api_key" not in base
 
@@ -4291,19 +4296,28 @@ class TestConfigBaseForHealthCheck:
         base = self._base(
             config,
             {"model": "openai/gpt-4o", "litellm_credential_name": "OpenAI-prod", "custom_llm_provider": "openai"},
+            selected_by_id=False,
         )
         assert base["litellm_credential_name"] == "OpenAI-prod"
         assert base["api_key"] == "sk-configured"
 
     def test_request_naming_another_credential_does_not_inherit_config_credentials(self):
-        base = self._base(self.CONFIG, {"model": "openai/gpt-4o", "litellm_credential_name": "Another-cred"})
+        base = self._base(
+            self.CONFIG,
+            {"model": "openai/gpt-4o", "litellm_credential_name": "Another-cred"},
+            selected_by_id=False,
+        )
         assert "api_key" not in base
         assert "api_base" not in base
         assert "vertex_credentials" not in base
         assert base["rpm"] == 100
 
     def test_blank_credential_name_names_no_credential(self):
-        base = self._base(self.CONFIG, {"model": "openai/gpt-4o", "litellm_credential_name": ""})
+        base = self._base(
+            self.CONFIG,
+            {"model": "openai/gpt-4o", "litellm_credential_name": ""},
+            selected_by_id=False,
+        )
         assert base["api_key"] == "sk-configured"
 
     def test_opt_in_does_not_put_config_credentials_over_a_named_credential(self):
@@ -4311,6 +4325,7 @@ class TestConfigBaseForHealthCheck:
             self.CONFIG,
             {"model": "openai/gpt-4o", "litellm_credential_name": "Another-cred"},
             allow_client_side_credentials=True,
+            selected_by_id=False,
         )
         assert "api_key" not in base
 
@@ -4323,7 +4338,7 @@ class TestConfigBaseForHealthCheck:
             "litellm_credential_name": "configured-credential",
         }
         request: Final = {"model": "openai/gpt-4o", "api_key": "sk-request"}
-        merged: Final = {**self._base(config, request), **request}
+        merged: Final = {**self._base(config, request, selected_by_id=False), **request}
 
         assert merged["api_key"] == "sk-request"
         assert {
@@ -4346,7 +4361,7 @@ class TestConfigBaseForHealthCheck:
             "litellm_credential_name": "configured-credential",
         }
         request: Final = {"model": "openai/gpt-4o", "api_key": "sk-request"}
-        base: Final = self._base(config, request, allow_client_side_credentials=True)
+        base: Final = self._base(config, request, allow_client_side_credentials=True, selected_by_id=False)
         merged: Final = {**base, **request}
 
         assert merged["api_key"] == "sk-request"
@@ -4362,9 +4377,23 @@ class TestConfigBaseForHealthCheck:
         assert "sk-configured" not in str(merged)
 
     def test_blank_request_api_key_inherits_config_auth(self):
-        base: Final = self._base(self.CONFIG, {"model": "openai/gpt-4o", "api_key": ""})
+        base: Final = self._base(
+            self.CONFIG,
+            {"model": "openai/gpt-4o", "api_key": ""},
+            selected_by_id=False,
+        )
 
         assert base["api_key"] == "sk-configured"
+
+    def test_request_api_key_inherits_saved_endpoint_when_selected_by_id(self):
+        config: Final = {**self.CONFIG, "api_version": "test-version"}
+        request: Final = {"model": "openai/gpt-4o", "api_key": "sk-request"}
+        base: Final = self._base(config, request, selected_by_id=True)
+        merged: Final = {**base, **request}
+
+        assert merged["api_base"] == "https://configured.example/v1"
+        assert merged["api_version"] == "test-version"
+        assert merged["api_key"] == "sk-request"
 
 
 class TestTestConnectionUsesTheNamedCredential:
@@ -4569,6 +4598,64 @@ class TestTestConnectionUsesTheNamedCredential:
         assert "token_exchange_endpoint" not in model_params
         assert "client_id" not in model_params
         assert "client_secret" not in model_params
+
+    def test_request_api_key_keeps_saved_endpoint_when_deployment_selected_by_id(self):
+        from litellm.types.router import Deployment, LiteLLM_Params
+
+        model: Final = "microsoft_365_copilot/chat"
+        saved_api_base: Final = "https://configured.example/v1"
+        saved_api_version: Final = "test-version"
+        deployment: Final = Deployment(
+            model_name=model,
+            litellm_params=LiteLLM_Params(
+                model=model,
+                custom_llm_provider="microsoft_365_copilot",
+                api_key="saved-static-token",
+                api_base=saved_api_base,
+                api_version=saved_api_version,
+            ),
+            model_info={"id": "m365-deployment"},
+        )
+        app: Final = FastAPI()
+        app.include_router(_health_endpoints_module.router)
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        router: Final = MagicMock()
+        router.get_deployment.return_value = deployment
+        ahealth_check: Final = MagicMock(return_value={"status": "healthy"})
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.llm_router", router),
+            patch("litellm.proxy.proxy_server.premium_user", False),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                AsyncMock(),
+            ),
+            patch("litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check", ahealth_check),
+            patch(
+                "litellm.proxy.health_endpoints._health_endpoints.run_with_timeout",
+                AsyncMock(return_value={"status": "healthy"}),
+            ),
+        ):
+            response: Final = TestClient(app).post(
+                "/health/test_connection",
+                json={
+                    "litellm_params": {
+                        "model": model,
+                        "custom_llm_provider": "microsoft_365_copilot",
+                        "api_key": "replacement-static-token",
+                    },
+                    "model_info": {"id": "m365-deployment"},
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "success", response.text
+        model_params: Final = ahealth_check.call_args.kwargs["model_params"]
+        assert model_params["api_base"] == saved_api_base
+        assert model_params["api_version"] == saved_api_version
+        assert model_params["api_key"] == "replacement-static-token"
 
     def test_named_credentials_key_is_sent_not_the_matched_deployments_key(self, monkeypatch):
         monkeypatch.setattr(litellm, "credential_list", [self._credential(api_key=self.CREDENTIAL_KEY)])
