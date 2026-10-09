@@ -93,4 +93,6 @@ Gateway releases consume a qualified Lens release's UI, chart and image digest. 
 
 Keep the existing chart family, gateway service names, selectors, persistent volumes and credential secrets when adopting the shared Lens chart. The installation smoke workflow checks separately pinned Lens versions, gateway-only and Lens-only updates, and retained data after rollback. Its live Kubernetes run is a release qualification step, not a substitute for transferring an existing installation's Lens data
 
+When using the Helm CLI, select the [Helm migration hook settings](../helm/litellm-helm/README.md#migration-job-settings) in the gateway values file. Keep one migration controller: Helm hooks for Helm installations or ArgoCD hooks for Argo-managed installations
+
 The installation workflow requires a `gateway_baseline_ref` containing the full commit of a previously qualified gateway integration. It builds baseline gateway, backend and monolith images separately, then upgrades those images to the selected workflow commit while keeping the Lens pod UID, image ID and restart count unchanged. The split chart keeps its current UI and migration images throughout this comparison. Qualification applies to the selected source pair; it does not promise compatibility with every earlier gateway release

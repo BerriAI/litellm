@@ -190,6 +190,19 @@ Source: [GitHub Gist from troyharvey](https://gist.github.com/troyharvey/4506472
 
 The migration job supports both ArgoCD and Helm hooks to ensure database migrations run at the appropriate time during deployments.
 
+When installing or upgrading with the Helm CLI, select Helm as the migration controller in your values file:
+
+```yaml
+migrationJob:
+  hooks:
+    helm:
+      enabled: true
+    argocd:
+      enabled: false
+```
+
+Helm then runs migrations before each install or upgrade and replaces the previous migration Job through its hook lifecycle. Argo-managed installations keep the default ArgoCD hook instead. Helm ignores ArgoCD hook annotations, so using those defaults with the Helm CLI can fail when a gateway image update changes an existing Job's immutable pod template
+
 | Name                                   | Description                                                                                                          | Value   |
 | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ------- |
 | `migrationJob.enabled`                 | Enable or disable the schema migration Job                                                                           | `true`  |

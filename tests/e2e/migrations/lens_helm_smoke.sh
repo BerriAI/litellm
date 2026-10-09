@@ -148,6 +148,16 @@ gateway_pods() {
       else error("Gateway pod does not use the expected image") end'
 }
 
+migration_job() {
+  kubectl -n "$namespace" get job lens-migrations -o json \
+    | jq -e --arg image "$1" '
+      select(.metadata.annotations["helm.sh/hook"] == "pre-install,pre-upgrade")
+      | select(.metadata.annotations["helm.sh/hook-delete-policy"] == "before-hook-creation")
+      | select(.metadata.annotations["argocd.argoproj.io/hook"] == null)
+      | select(.status.succeeded == 1 and .spec.template.spec.containers[0].image == $image)
+      | .metadata.uid | select(type == "string" and length > 0)'
+}
+
 for chart in litellm-helm litellm; do
   namespace="lens-$chart"
   kubectl create namespace "$namespace"
@@ -232,6 +242,10 @@ YAML
   kubectl -n "$namespace" rollout status deployment/clickhouse --timeout=180s
   cat > "$qa_dir/common.yaml" <<'YAML'
 fullnameOverride: lens
+migrationJob:
+  hooks:
+    helm: {enabled: true}
+    argocd: {enabled: false}
 lensWorker:
   enabled: true
   image: {repository: lens-ci-worker, tag: baseline, pullPolicy: Never}
@@ -341,15 +355,22 @@ YAML
   deployment_pods lens-lens-worker > "$qa_dir/lens-pods-before.json"
   gateway_components=(monolith)
   gateway_upgrade=(--set image.tag=v0.0.0-lens-ci)
+  migration_baseline=lens-ci-monolith:v0.0.0-lens-ci-baseline
+  migration_current=lens-ci-monolith:v0.0.0-lens-ci
   if [[ "$chart" == litellm ]]; then
     gateway_components=(gateway backend)
     gateway_upgrade=(--set gateway.image.tag=v0.0.0-lens-ci --set backend.image.tag=v0.0.0-lens-ci)
+    migration_baseline=lens-ci-migrations:v0.0.0-lens-ci
+    migration_current=$migration_baseline
   fi
+  migration_before=$(migration_job "$migration_baseline")
   for component in "${gateway_components[@]}"; do
     gateway_pods "$component" v0.0.0-lens-ci-baseline > "$qa_dir/$component-before.json"
   done
   install+=("${gateway_upgrade[@]}")
   "${install[@]}" || diagnose
+  migration_after=$(migration_job "$migration_current")
+  test "$migration_before" != "$migration_after"
   kubectl -n "$namespace" get deployment lens-lens-worker -o json \
     | jq -S .spec.template > "$qa_dir/lens-after.json"
   cmp "$qa_dir/lens-before.json" "$qa_dir/lens-after.json"
