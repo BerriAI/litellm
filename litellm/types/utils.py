@@ -4269,6 +4269,7 @@ class LlmProviders(str, Enum):
     DARKBLOOM = "darkbloom"
     META = "meta"
     SAIL = "sail"
+    BOLDROUTER = "boldrouter"
     REKA = "reka"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
