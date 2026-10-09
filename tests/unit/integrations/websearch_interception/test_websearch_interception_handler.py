@@ -4,6 +4,8 @@ Unit tests for WebSearch Interception Handler
 Tests the WebSearchInterceptionLogger class and helper functions.
 """
 
+from collections.abc import Awaitable, Callable
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
@@ -813,17 +815,26 @@ async def test_deployment_hook_converts_stream_and_logging_obj_syncs():
 _STREAM_USAGE_OPTIONS = {"include_usage": True}
 
 
-async def _convert_via_deployment_hook_chat(logger, kwargs):
+_Convert = Callable[[WebSearchInterceptionLogger, dict[str, Any]], Awaitable[dict[str, Any] | None]]
+
+
+async def _convert_via_deployment_hook_chat(
+    logger: WebSearchInterceptionLogger, kwargs: dict[str, Any]
+) -> dict[str, Any] | None:
     return await logger.async_pre_call_deployment_hook(kwargs=kwargs, call_type=CallTypes.acompletion)
 
 
-async def _convert_via_deployment_hook_responses(logger, kwargs):
+async def _convert_via_deployment_hook_responses(
+    logger: WebSearchInterceptionLogger, kwargs: dict[str, Any]
+) -> dict[str, Any] | None:
     return await logger.async_pre_call_deployment_hook(
         kwargs={**kwargs, "tools": [{"type": "web_search"}]}, call_type=CallTypes.aresponses
     )
 
 
-async def _convert_via_pre_request_hook(logger, kwargs):
+async def _convert_via_pre_request_hook(
+    logger: WebSearchInterceptionLogger, kwargs: dict[str, Any]
+) -> dict[str, Any] | None:
     return await logger.async_pre_request_hook(model=kwargs["model"], messages=kwargs["messages"], kwargs=kwargs)
 
 
@@ -833,7 +844,7 @@ async def _convert_via_pre_request_hook(logger, kwargs):
     (_convert_via_deployment_hook_chat, _convert_via_deployment_hook_responses, _convert_via_pre_request_hook),
     ids=("deployment_hook_chat", "deployment_hook_responses", "pre_request_hook"),
 )
-async def test_converted_stream_moves_stream_options_out_of_the_provider_request(convert):
+async def test_converted_stream_moves_stream_options_out_of_the_provider_request(convert: _Convert):
     """Every site that flips a streamed web search request to stream=False must take
     stream_options with it: a provider that validates its body (Azure chat completions)
     rejects stream_options on a non-streaming request, so the converted kwargs carry no
