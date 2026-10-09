@@ -227,3 +227,104 @@ def test_optional_params_responses_api_allowed_openai_params():
         request_body = mock_post.call_args.kwargs
         print("request_body: ", request_body)
         assert "top_logprobs" in request_body["json"]
+
+
+def _drop_warnings(mock_warning):
+    """The formatted drop warnings only.
+
+    `verbose_logger.warning` is shared, so asserting on a raw call count would
+    make these tests fail the day something unrelated in `get_optional_params`
+    logs a warning. Filter to this message and format it, since the assertions
+    are about what the message tells the caller.
+    """
+    messages = []
+    for call in mock_warning.call_args_list:
+        template = call.args[0]
+        if "is not sending" not in template:
+            continue
+        messages.append(template % call.args[1:])
+    return messages
+
+
+@pytest.fixture
+def reset_unvalidated_param_warnings():
+    """The drop warning is deduped for the life of the process.
+
+    A test that asserts it fires has to start from an empty set, and must not
+    leave its own entries behind for the next one.
+    """
+    from litellm.utils import _unvalidated_param_warned
+
+    _unvalidated_param_warned.clear()
+    yield
+    _unvalidated_param_warned.clear()
+
+
+def test_user_param_dropped_warns_for_non_catalog_model(reset_unvalidated_param_warnings):
+    """A param that is exempt from the unsupported-param error is still dropped.
+
+    `user` is only a supported param for models in OpenAI's catalog, and it is in
+    PROVIDER_UNVALIDATED_PARAMS, so for any other model it is neither sent nor
+    refused. Reported as #45015, where per-customer spend attribution recorded
+    nothing and the caller had no way to see why.
+    """
+    with patch("litellm.utils.verbose_logger.warning") as mock_warning:
+        optional_params = get_optional_params(
+            model="Qwen3.6-35B-A3B",
+            custom_llm_provider="openai",
+            user="customer-1",
+        )
+
+    assert "user" not in optional_params
+
+    messages = _drop_warnings(mock_warning)
+    assert len(messages) == 1
+    assert "`user`" in messages[0]
+    assert "Qwen3.6-35B-A3B" in messages[0]
+    # The workaround is the point of the message; without it the warning only
+    # tells the caller that something was lost, not what to do instead.
+    assert "x-litellm-end-user-id" in messages[0]
+
+
+def test_user_param_drop_warning_is_deduped(reset_unvalidated_param_warnings):
+    """Once per (param, provider, model), not once per request."""
+    with patch("litellm.utils.verbose_logger.warning") as mock_warning:
+        for _ in range(3):
+            get_optional_params(
+                model="Qwen3.6-35B-A3B",
+                custom_llm_provider="openai",
+                user="customer-1",
+            )
+
+    assert len(_drop_warnings(mock_warning)) == 1
+
+
+def test_user_param_not_warned_when_the_model_supports_it(reset_unvalidated_param_warnings):
+    """A catalog model sends `user`, so there is nothing to warn about."""
+    with patch("litellm.utils.verbose_logger.warning") as mock_warning:
+        optional_params = get_optional_params(
+            model="gpt-4o",
+            custom_llm_provider="openai",
+            user="customer-1",
+        )
+
+    assert optional_params["user"] == "customer-1"
+    assert _drop_warnings(mock_warning) == []
+
+
+def test_exempt_transport_param_without_a_hint_does_not_warn(reset_unvalidated_param_warnings):
+    """`stream` is exempt from the same check but must stay silent.
+
+    It is a transport control rather than something a caller tracks the effect
+    of, so it is deliberately absent from UNVALIDATED_PARAM_DROP_HINTS. Without
+    this test the warning could be widened to every exempt param and nothing
+    would fail.
+    """
+    with patch("litellm.utils.verbose_logger.warning") as mock_warning:
+        get_optional_params(
+            model="Qwen3.6-35B-A3B",
+            custom_llm_provider="openai",
+            stream=True,
+        )
+
+    assert _drop_warnings(mock_warning) == []
