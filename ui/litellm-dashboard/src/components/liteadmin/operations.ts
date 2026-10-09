@@ -206,6 +206,13 @@ export function createLiteAdminOperations(context: OperationContext) {
     operation("write", "key")("key_update", "Update a virtual key", object({ key: hash, ...keyFields }), (a) =>
       apiClient.post<unknown>("/key/update", { ...auth, body: a satisfies Partial<Schemas["UpdateKeyRequest"]> }),
     ),
+    operation("write", "key", { team_id: null })(
+      "key_detach_from_team",
+      "Remove a virtual key from its team without deleting the key",
+      object({ key: hash }),
+      (a) =>
+        apiClient.post<unknown>("/key/update", { ...auth, body: a satisfies Partial<Schemas["UpdateKeyRequest"]> }),
+    ),
     operation("delete", "key")(
       "key_delete",
       "Delete virtual keys",
