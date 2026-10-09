@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+from collections.abc import Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Optional
 
@@ -54,7 +55,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         LangfuseOtelLogger._set_langfuse_specific_attributes(span=span, kwargs=kwargs, response_obj=response_obj)
 
     @staticmethod
-    def _extract_langfuse_metadata(kwargs: dict) -> dict:
+    def _extract_langfuse_metadata(kwargs: Mapping[str, Any]) -> dict:
         """
         Extracts Langfuse metadata from the standard LiteLLM kwargs structure.
 
@@ -219,7 +220,7 @@ class LangfuseOtelLogger(OpenTelemetry):
                 )
 
     @staticmethod
-    def _set_langfuse_specific_attributes(span: Span, kwargs: dict[str, Any], response_obj):
+    def _set_langfuse_specific_attributes(span: Span, kwargs: Mapping[str, Any], response_obj):
         """
         Sets Langfuse specific metadata attributes onto the OTEL span.
 
