@@ -6,6 +6,7 @@ LiteLLM_DailyGatewayRequests.
 import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
+from typing import Final
 
 import pytest
 
@@ -22,8 +23,12 @@ from litellm.types.proxy.gateway_requests import GatewayRequestCounts, GatewayRe
 from litellm.proxy.db.log_db_metrics import record_db_io
 
 
-def _today() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+_NOW: Final = datetime(2026, 3, 14, 12, 0, tzinfo=timezone.utc)
+_DAY: Final = _NOW.strftime("%Y-%m-%d")
+
+
+def _accumulator() -> GatewayRequestAccumulator:
+    return GatewayRequestAccumulator(clock=lambda: _NOW)
 
 
 def _record(accumulator: GatewayRequestAccumulator, status_code: int, **overrides) -> None:
@@ -38,16 +43,38 @@ def _record(accumulator: GatewayRequestAccumulator, status_code: int, **override
 
 
 def test_folds_repeated_requests_into_one_key():
-    acc = GatewayRequestAccumulator()
+    acc = _accumulator()
     for _ in range(3):
         _record(acc, 200)
     _record(acc, 500)
 
     snapshot = acc.drain()
     assert snapshot == {
-        GatewayRequestKey(date=_today(), category="llm", route="/chat/completions"): (
+        GatewayRequestKey(date=_DAY, category="llm", route="/chat/completions"): (
             GatewayRequestCounts(successful_requests=3, failed_requests=1)
         )
+    }
+
+
+def test_records_each_request_under_the_date_of_its_clock_read():
+    accumulator: Final = GatewayRequestAccumulator(
+        clock=iter(
+            (
+                datetime(2026, 1, 31, 23, 59, 59, 999999, tzinfo=timezone.utc),
+                datetime(2026, 2, 1, 0, 0, 0, 1, tzinfo=timezone.utc),
+            )
+        ).__next__
+    )
+    _record(accumulator, 200)
+    _record(accumulator, 200)
+
+    assert accumulator.drain() == {
+        GatewayRequestKey(date="2026-01-31", category="llm", route="/chat/completions"): GatewayRequestCounts(
+            successful_requests=1, failed_requests=0
+        ),
+        GatewayRequestKey(date="2026-02-01", category="llm", route="/chat/completions"): GatewayRequestCounts(
+            successful_requests=1, failed_requests=0
+        ),
     }
 
 
@@ -56,14 +83,14 @@ def test_folds_repeated_requests_into_one_key():
     [(200, 1, 0), (201, 1, 0), (204, 1, 0), (299, 1, 0), (300, 0, 1), (400, 0, 1), (500, 0, 1)],
 )
 def test_success_boundary_is_2xx(status_code: int, expected_successful: int, expected_failed: int):
-    acc = GatewayRequestAccumulator()
+    acc = _accumulator()
     _record(acc, status_code)
     counts = next(iter(acc.drain().values()))
     assert (counts.successful_requests, counts.failed_requests) == (expected_successful, expected_failed)
 
 
 def test_distinct_dimensions_do_not_merge():
-    acc = GatewayRequestAccumulator()
+    acc = _accumulator()
     _record(acc, 200, route="/chat/completions")
     _record(acc, 200, route="/embeddings")
     _record(acc, 200, category=BillableCategory.MCP, route="/mcp")
@@ -71,14 +98,14 @@ def test_distinct_dimensions_do_not_merge():
 
 
 def test_drain_empties_the_fold():
-    acc = GatewayRequestAccumulator()
+    acc = _accumulator()
     _record(acc, 200)
     assert len(acc.drain()) == 1
     assert acc.drain() == {}
 
 
 def test_drain_snapshot_is_not_mutated_by_later_records():
-    acc = GatewayRequestAccumulator()
+    acc = _accumulator()
     _record(acc, 200)
     snapshot = acc.drain()
     _record(acc, 200)
@@ -198,7 +225,7 @@ def test_commit_skips_the_database_entirely_when_nothing_accumulated():
 
 def test_flush_drains_and_commits():
     client = FakePrismaClient()
-    acc = GatewayRequestAccumulator()
+    acc = _accumulator()
     _record(acc, 200)
 
     asyncio.run(flush_gateway_requests(client, acc))
@@ -217,7 +244,7 @@ class ExplodingClient:
 
 
 def test_flush_swallows_commit_failure_so_the_scheduler_survives():
-    acc = GatewayRequestAccumulator()
+    acc = _accumulator()
     _record(acc, 200)
 
     asyncio.run(flush_gateway_requests(ExplodingClient(), acc))
@@ -225,7 +252,7 @@ def test_flush_swallows_commit_failure_so_the_scheduler_survives():
 
 def test_failed_flush_keeps_counts_for_the_next_attempt():
     """A dropped flush would silently undercount the SGR source of truth."""
-    acc = GatewayRequestAccumulator()
+    acc = _accumulator()
     _record(acc, 200)
     _record(acc, 500)
 
@@ -234,11 +261,11 @@ def test_failed_flush_keeps_counts_for_the_next_attempt():
     client = FakePrismaClient()
     asyncio.run(flush_gateway_requests(client, acc))
 
-    assert _rows_written(client) == [(_today(), "llm", "/chat/completions", 1, 1)]
+    assert _rows_written(client) == [(_DAY, "llm", "/chat/completions", 1, 1)]
 
 
 def test_restored_counts_merge_with_requests_recorded_meanwhile():
-    acc = GatewayRequestAccumulator()
+    acc = _accumulator()
     _record(acc, 200)
     asyncio.run(flush_gateway_requests(ExplodingClient(), acc))
 
@@ -246,7 +273,7 @@ def test_restored_counts_merge_with_requests_recorded_meanwhile():
     client = FakePrismaClient()
     asyncio.run(flush_gateway_requests(client, acc))
 
-    assert _rows_written(client) == [(_today(), "llm", "/chat/completions", 2, 0)]
+    assert _rows_written(client) == [(_DAY, "llm", "/chat/completions", 2, 0)]
 
 
 class ExplodingDBWithInFlightRequest:
@@ -266,14 +293,14 @@ class ExplodingClientWithInFlightRequest:
 
 
 def test_restore_keeps_requests_recorded_while_the_failed_write_was_in_flight():
-    acc = GatewayRequestAccumulator()
+    acc = _accumulator()
     _record(acc, 200)
     asyncio.run(flush_gateway_requests(ExplodingClientWithInFlightRequest(acc), acc))
 
     client = FakePrismaClient()
     asyncio.run(flush_gateway_requests(client, acc))
 
-    assert _rows_written(client) == [(_today(), "llm", "/chat/completions", 1, 1)]
+    assert _rows_written(client) == [(_DAY, "llm", "/chat/completions", 1, 1)]
 
 
 # ── redis buffer ──────────────────────────────────────────────────────────────
@@ -340,7 +367,7 @@ def test_non_leader_workers_push_to_redis_and_never_touch_the_database():
     redis = FakeRedis()
     client = FakePrismaClient()
     for _ in range(3):
-        acc = GatewayRequestAccumulator()
+        acc = _accumulator()
         _record(acc, 200)
         buffer, _ = _buffer(redis, leader=False)
         asyncio.run(flush_gateway_requests(client, acc, buffer))
@@ -354,21 +381,21 @@ def test_leader_folds_every_workers_snapshot_into_one_statement():
     redis = FakeRedis()
     client = FakePrismaClient()
     for _ in range(50):
-        acc = GatewayRequestAccumulator()
+        acc = _accumulator()
         _record(acc, 200)
         _record(acc, 500, route="/responses")
         buffer, _ = _buffer(redis, leader=False)
         asyncio.run(flush_gateway_requests(client, acc, buffer))
 
-    leader_acc = GatewayRequestAccumulator()
+    leader_acc = _accumulator()
     _record(leader_acc, 200)
     leader, lock = _buffer(redis, leader=True)
     asyncio.run(flush_gateway_requests(client, leader_acc, leader))
 
     assert len(client.db.statements) == 1
     assert _rows_written(client) == [
-        (_today(), "llm", "/chat/completions", 51, 0),
-        (_today(), "llm", "/responses", 0, 50),
+        (_DAY, "llm", "/chat/completions", 51, 0),
+        (_DAY, "llm", "/responses", 0, 50),
     ]
     assert redis.lists[REDIS_GATEWAY_REQUESTS_BUFFER_KEY] == []
     assert lock.held == [GATEWAY_REQUESTS_JOB_NAME]
@@ -387,7 +414,7 @@ def test_leader_keeps_the_lease_so_staggered_pods_cost_one_statement_per_interva
 
     for _interval in range(3):
         for pod in pods:
-            acc = GatewayRequestAccumulator()
+            acc = _accumulator()
             _record(acc, 200)
             asyncio.run(flush_gateway_requests(client, acc, pod))
 
@@ -403,16 +430,16 @@ def test_leader_drains_a_backlog_deeper_than_one_capped_pop():
     client = FakePrismaClient()
     workers = MAX_REDIS_BUFFER_DEQUEUE_COUNT * 2 + 1
     for _ in range(workers):
-        acc = GatewayRequestAccumulator()
+        acc = _accumulator()
         _record(acc, 200)
         buffer, _ = _buffer(redis, leader=False)
         asyncio.run(flush_gateway_requests(client, acc, buffer))
 
     leader, _ = _buffer(redis, leader=True)
-    asyncio.run(flush_gateway_requests(client, GatewayRequestAccumulator(), leader))
+    asyncio.run(flush_gateway_requests(client, _accumulator(), leader))
 
     assert len(client.db.statements) == 1
-    assert _rows_written(client) == [(_today(), "llm", "/chat/completions", workers, 0)]
+    assert _rows_written(client) == [(_DAY, "llm", "/chat/completions", workers, 0)]
     assert redis.lists[REDIS_GATEWAY_REQUESTS_BUFFER_KEY] == []
 
 
@@ -421,7 +448,7 @@ def test_leader_with_nothing_buffered_writes_nothing():
     client = FakePrismaClient()
     leader, lock = _buffer(redis, leader=True)
 
-    asyncio.run(flush_gateway_requests(client, GatewayRequestAccumulator(), leader))
+    asyncio.run(flush_gateway_requests(client, _accumulator(), leader))
 
     assert client.db.statements == []
     assert lock.released == []
@@ -430,7 +457,7 @@ def test_leader_with_nothing_buffered_writes_nothing():
 def test_leader_requeues_to_redis_when_the_database_commit_fails():
     """Counts popped from Redis are gone from every worker; a failed commit must put them back."""
     redis = FakeRedis()
-    acc = GatewayRequestAccumulator()
+    acc = _accumulator()
     _record(acc, 200)
     _record(acc, 200)
     leader, lock = _buffer(redis, leader=True)
@@ -443,8 +470,8 @@ def test_leader_requeues_to_redis_when_the_database_commit_fails():
 
     client = FakePrismaClient()
     retry, _ = _buffer(redis, leader=True)
-    asyncio.run(flush_gateway_requests(client, GatewayRequestAccumulator(), retry))
-    assert _rows_written(client) == [(_today(), "llm", "/chat/completions", 2, 0)]
+    asyncio.run(flush_gateway_requests(client, _accumulator(), retry))
+    assert _rows_written(client) == [(_DAY, "llm", "/chat/completions", 2, 0)]
 
 
 class ExplodingRedis(FakeRedis):
@@ -467,7 +494,7 @@ class UnwritableRedis(FakeRedis):
 def test_leader_keeps_popped_counts_in_memory_when_both_the_database_and_the_requeue_fail():
     """The pop removed the only copy; if Redis will not take it back the leader itself must carry it."""
     redis = FakeRedis()
-    worker_acc = GatewayRequestAccumulator()
+    worker_acc = _accumulator()
     _record(worker_acc, 200)
     _record(worker_acc, 200)
     worker, _ = _buffer(redis, leader=False)
@@ -475,7 +502,7 @@ def test_leader_keeps_popped_counts_in_memory_when_both_the_database_and_the_req
 
     degraded = UnwritableRedis()
     degraded.lists = redis.lists
-    leader_acc = GatewayRequestAccumulator()
+    leader_acc = _accumulator()
     leader, _ = _buffer(degraded, leader=True)
     asyncio.run(flush_gateway_requests(ExplodingClient(), leader_acc, leader))
     assert degraded.lists[REDIS_GATEWAY_REQUESTS_BUFFER_KEY] == []
@@ -483,13 +510,13 @@ def test_leader_keeps_popped_counts_in_memory_when_both_the_database_and_the_req
     client = FakePrismaClient()
     retry, _ = _buffer(redis, leader=True)
     asyncio.run(flush_gateway_requests(client, leader_acc, retry))
-    assert _rows_written(client) == [(_today(), "llm", "/chat/completions", 2, 0)]
+    assert _rows_written(client) == [(_DAY, "llm", "/chat/completions", 2, 0)]
 
 
 def test_leader_whose_redis_read_fails_leaves_the_pushed_rows_for_the_next_flush():
     """The scheduler job must not raise, and nothing is popped so nothing needs restoring anywhere."""
     redis = UnreadableRedis()
-    acc = GatewayRequestAccumulator()
+    acc = _accumulator()
     _record(acc, 200)
     client = FakePrismaClient()
     leader, _ = _buffer(redis, leader=True)
@@ -502,7 +529,7 @@ def test_leader_whose_redis_read_fails_leaves_the_pushed_rows_for_the_next_flush
 
 
 def test_failed_redis_push_keeps_counts_locally_for_the_next_flush():
-    acc = GatewayRequestAccumulator()
+    acc = _accumulator()
     _record(acc, 200)
     _record(acc, 500)
     buffer, lock = _buffer(ExplodingRedis(), leader=True)
@@ -511,7 +538,7 @@ def test_failed_redis_push_keeps_counts_locally_for_the_next_flush():
 
     assert lock.held == []
     assert acc.drain() == {
-        GatewayRequestKey(date=_today(), category="llm", route="/chat/completions"): (
+        GatewayRequestKey(date=_DAY, category="llm", route="/chat/completions"): (
             GatewayRequestCounts(successful_requests=1, failed_requests=1)
         )
     }
