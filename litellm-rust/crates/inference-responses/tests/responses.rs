@@ -45,8 +45,7 @@ async fn http_responses_share_execution_and_hooks(call: ResponsesCall, #[case] h
     });
     let response = if hosted {
         let HostedCompletion::Complete(response) = litellm_host_native::in_process::run_hosted(
-            responses_route(no_secrets())
-                .machine(host.request().unwrap(), Some(host.events.0.sender.clone())),
+            responses_route(no_secrets()).machine(host.request().unwrap(), None),
             host.runtime(),
         )
         .await
@@ -57,7 +56,7 @@ async fn http_responses_share_execution_and_hooks(call: ResponsesCall, #[case] h
     } else {
         let call = host.request.lock().unwrap().take().unwrap();
         let ResponsesOutput::Complete(response) = responses_route(no_secrets())
-            .execute(call, &host, Some(host.events.0.sender.clone()))
+            .execute(call, &host, None)
             .await
             .unwrap()
         else {
@@ -108,8 +107,7 @@ async fn streaming_keeps_headers_and_bytes_and_finishes_after_consumption(
     let (headers, bytes) = if hosted {
         assert_eq!(
             litellm_host_native::in_process::run_hosted(
-                responses_route(no_secrets())
-                    .machine(host.request().unwrap(), Some(host.events.0.sender.clone())),
+                responses_route(no_secrets()).machine(host.request().unwrap(), None),
                 host.runtime(),
             )
             .await
@@ -123,7 +121,7 @@ async fn streaming_keeps_headers_and_bytes_and_finishes_after_consumption(
     } else {
         let call = host.request.lock().unwrap().take().unwrap();
         let ResponsesOutput::Stream { head, chunks } = responses_route(no_secrets())
-            .execute(call, &host, Some(host.events.0.sender.clone()))
+            .execute(call, &host, None)
             .await
             .unwrap()
         else {
@@ -180,7 +178,7 @@ async fn provider_failures_emit_failure_once(
     let call = host.request.lock().unwrap().take().unwrap();
     assert!(
         responses_route(no_secrets())
-            .execute(call, &host, Some(host.events.0.sender.clone()))
+            .execute(call, &host, None)
             .await
             .is_err()
     );
@@ -291,9 +289,7 @@ async fn route_tracing_covers_native_and_hosted_outcomes(
         .instrument(async {
             if hosted {
                 litellm_host_native::in_process::run_hosted(
-                    route
-                        .clone()
-                        .machine(host.request().unwrap(), Some(host.events.0.sender.clone())),
+                    route.clone().machine(host.request().unwrap(), None),
                     host.runtime(),
                 )
                 .await

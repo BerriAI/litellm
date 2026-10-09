@@ -12,7 +12,8 @@ use rstest::rstest;
 
 use super::*;
 
-type Rewrite = Box<dyn Fn(WireRequest) -> Result<WireRequest, Error> + Send + Sync>;
+type Rewrite =
+    Box<dyn Fn(WireRequest) -> Result<WireRequest, litellm_host::error::HookError> + Send + Sync>;
 
 /// Projects like `LocalMessagesHost`, answers `before_provider_request` through `rewrite`, and keeps
 /// every event the driver emits.
@@ -63,18 +64,41 @@ impl RecordingHost {
     pub fn runtime(&self) -> litellm_host_native::in_process::Host<'_, (), Self, ()> {
         litellm_host_native::in_process::Host {
             services: &(),
-            interceptors: self,
+            hooks: self,
             stream: &(),
-            observers: Some(&self.events.sender),
         }
     }
 }
 
-impl litellm_host::lifecycle::CallObserver for RecordingHost {
-    fn observe(&self, event: litellm_host::lifecycle::CallEvent) {
-        self.events.sender.emit(event);
+impl litellm_host::hooks::NativeHooks for RecordingHost {
+    fn before_provider_request(
+        &self,
+        wire: Box<WireRequest>,
+        context: &RequestContext,
+    ) -> Result<Box<WireRequest>, litellm_host::error::HookError> {
+        self.optional_params
+            .lock()
+            .unwrap()
+            .push(context.optional_params.clone());
+        (self.rewrite)(*wire).map(Box::new)
+    }
+
+    fn result_ready(&self, facts: &ExecutionFacts) -> Result<(), litellm_host::error::HookError> {
+        self.facts.lock().unwrap().push(facts.clone());
+        if self.reject_result {
+            return Err(litellm_host::error::HookError::Rejected {
+                reason: "result rejected".into(),
+            });
+        }
+        Ok(())
+    }
+
+    fn on_event(&self, event: &litellm_host::lifecycle::CallEvent) {
+        self.events.sender.emit(event.clone());
     }
 }
+
+/// The same hooks for the direct path, which only ever sees the awaited boundaries.
 impl litellm_host::interceptors::Interceptors<<Messages as litellm_host::protocol::Protocol>::Error>
     for RecordingHost
 {
@@ -95,18 +119,17 @@ impl litellm_host::interceptors::Interceptors<<Messages as litellm_host::protoco
             .lock()
             .unwrap()
             .push(context.optional_params.clone());
-        (self.rewrite)(wire)
+        (self.rewrite)(wire).map_err(Error::from)
     }
     async fn after_provider_response(
         &self,
         raw: litellm_host::interceptors::RawResponse,
     ) -> Result<(), <Messages as litellm_host::protocol::Protocol>::Error> {
-        litellm_host::lifecycle::CallObserver::observe(
-            self,
-            litellm_host::lifecycle::CallEvent::Execution(
+        self.events
+            .sender
+            .emit(litellm_host::lifecycle::CallEvent::Execution(
                 litellm_host::lifecycle::ExecutionEvent::ProviderResponseReceived { raw },
-            ),
-        );
+            ));
         Ok(())
     }
 }
@@ -178,14 +201,14 @@ async fn rejected_results_are_not_delivered_or_cached(
                 Err(error) => Err(error),
             }
         };
-        assert_eq!(
-            result,
-            if reject {
-                Err(Error::Unsupported("result rejected"))
-            } else {
-                Ok(())
-            }
-        );
+        let expected = match (reject, hosted) {
+            (false, _) => Ok(()),
+            (true, true) => Err(Error::Hook(litellm_host::error::HookError::Rejected {
+                reason: "result rejected".into(),
+            })),
+            (true, false) => Err(Error::Unsupported("result rejected")),
+        };
+        assert_eq!(result, expected);
         assert_eq!(received(&upstream).await.len(), expected_requests);
         let facts = host.facts.lock().unwrap();
         assert_eq!(facts.len(), 1);
@@ -322,14 +345,23 @@ async fn a_before_send_failure_never_sends(call: MessagesCall) {
     let upstream = upstream([message_response()]).await;
     let host = RecordingHost::new(
         authenticated(call, upstream.uri()),
-        Box::new(|_| Err(Error::InvalidRequest("vetoed by the host".into()))),
+        Box::new(|_| {
+            Err(litellm_host::error::HookError::Rejected {
+                reason: "vetoed by the host".into(),
+            })
+        }),
     );
 
     let error = run_through(&host)
         .await
         .expect_err("the host failure fails the call");
 
-    assert_eq!(error, Error::InvalidRequest("vetoed by the host".into()));
+    assert_eq!(
+        error,
+        Error::Hook(litellm_host::error::HookError::Rejected {
+            reason: "vetoed by the host".into(),
+        })
+    );
     assert!(received(&upstream).await.is_empty());
     assert!(host.raw_responses().is_empty());
 }

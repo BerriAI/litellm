@@ -10,6 +10,7 @@ litellm-cache-response.workspace = true
 axum = { workspace = true, features = ["json", "multipart", "original-uri"] }
 base64.workspace = true
 bytes.workspace = true
+futures-util.workspace = true
 litellm-auth.workspace = true
 litellm-gateway-auth.workspace = true
 litellm-inference.workspace = true
@@ -31,7 +32,6 @@ thiserror.workspace = true
 
 [dev-dependencies]
 litellm-cache-memory.workspace = true
-futures-util.workspace = true
 tokio = { workspace = true, features = ["io-util"] }
 rstest.workspace = true
 tower = { version = "0.5.3", features = ["util"] }

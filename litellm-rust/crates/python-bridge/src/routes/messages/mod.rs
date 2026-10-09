@@ -30,25 +30,14 @@ fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyR
             );
             Ok(litellm_host::call::hosted_call(
                 request,
-                None,
-                move |(call, selection): (_, crate::cache::Selection),
-                      services,
-                      interceptors,
-                      observers| async move {
+                move |(call, selection): (_, crate::cache::Selection), services, interceptors| async move {
                     let (cache, options) = selection.attach(services);
                     let route = match cache {
                         Some(cache) => route.with_cache(cache),
                         None => route,
                     };
                     route
-                        .execute(
-                            call,
-                            &interceptors,
-                            litellm_inference::CallOptions {
-                                cache: Some(options.policy),
-                                observers,
-                            },
-                        )
+                        .execute(call, &interceptors, Some(options.policy))
                         .await
                 },
             ))

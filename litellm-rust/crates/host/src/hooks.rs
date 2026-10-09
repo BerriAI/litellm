@@ -1,6 +1,8 @@
+use std::sync::Arc;
+
 use crate::{
     error::HookError,
-    interceptors::{RawResponse, RequestContext, WireRequest},
+    interceptors::{ExecutionFacts, RawResponse, RequestContext, WireRequest},
     lifecycle::{CallEvent, Timing},
 };
 
@@ -98,16 +100,80 @@ pub trait CallHooks<R: HookRuntime>: Sized {
     ) -> Result<(), R::Error> {
         Ok(())
     }
+
+    /// The call ended before its terminal event. A runtime delivers this without awaiting
+    /// and without a result, so a hook can only record it.
+    fn on_cancelled(&mut self, _runtime: R::Context<'_>, _timing: Timing) {}
 }
 
 pub trait NativeHooks: Send + Sync {
     fn before_provider_request(
-        &mut self,
+        &self,
         wire: Box<WireRequest>,
         _context: &RequestContext,
     ) -> Result<Box<WireRequest>, HookError> {
         Ok(wire)
     }
 
-    fn on_event(&mut self, _event: &CallEvent) {}
+    fn result_ready(&self, _facts: &ExecutionFacts) -> Result<(), HookError> {
+        Ok(())
+    }
+
+    fn on_event(&self, _event: &CallEvent) {}
 }
+
+impl<T: NativeHooks + ?Sized> NativeHooks for &T {
+    fn before_provider_request(
+        &self,
+        wire: Box<WireRequest>,
+        context: &RequestContext,
+    ) -> Result<Box<WireRequest>, HookError> {
+        (**self).before_provider_request(wire, context)
+    }
+
+    fn result_ready(&self, facts: &ExecutionFacts) -> Result<(), HookError> {
+        (**self).result_ready(facts)
+    }
+
+    fn on_event(&self, event: &CallEvent) {
+        (**self).on_event(event)
+    }
+}
+
+impl<T: NativeHooks + ?Sized> NativeHooks for Arc<T> {
+    fn before_provider_request(
+        &self,
+        wire: Box<WireRequest>,
+        context: &RequestContext,
+    ) -> Result<Box<WireRequest>, HookError> {
+        (**self).before_provider_request(wire, context)
+    }
+
+    fn result_ready(&self, facts: &ExecutionFacts) -> Result<(), HookError> {
+        (**self).result_ready(facts)
+    }
+
+    fn on_event(&self, event: &CallEvent) {
+        (**self).on_event(event)
+    }
+}
+
+impl<T: NativeHooks + ?Sized> NativeHooks for Box<T> {
+    fn before_provider_request(
+        &self,
+        wire: Box<WireRequest>,
+        context: &RequestContext,
+    ) -> Result<Box<WireRequest>, HookError> {
+        (**self).before_provider_request(wire, context)
+    }
+
+    fn result_ready(&self, facts: &ExecutionFacts) -> Result<(), HookError> {
+        (**self).result_ready(facts)
+    }
+
+    fn on_event(&self, event: &CallEvent) {
+        (**self).on_event(event)
+    }
+}
+
+impl NativeHooks for () {}

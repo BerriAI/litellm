@@ -66,6 +66,6 @@ impl InferenceRoute for ChatCompletionsRoute {
         call: <ChatCompletions as Protocol>::Request,
         policy: CachePolicy,
     ) -> HostedMachine<ChatCompletions> {
-        self.machine(call, policy)
+        self.machine(call, Some(policy))
     }
 }

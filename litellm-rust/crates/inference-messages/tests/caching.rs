@@ -74,7 +74,6 @@ async fn messages_cache_identity_includes_provider_native_parameters(
                 Some(cache.clone()),
                 Some(CacheOptions::new(CacheScope::Shared)),
                 &(),
-                None,
                 || async {
                     let call = calls.fetch_add(1, Ordering::SeqCst);
                     Ok(Box::new(serde_json::from_value::<MessagesResponse>(json!({

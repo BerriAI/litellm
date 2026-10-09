@@ -75,7 +75,7 @@ async fn handle(
             ..Default::default()
         },
     )?;
-    let response = gateway.ocr.execute(call, &(), None).await?;
+    let response = gateway.ocr.execute(call, &()).await?;
     match response.provider_native_response {
         Some(native) => Ok(Value::Object(native)),
         None => Ok(response.into_json()),

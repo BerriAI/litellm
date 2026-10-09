@@ -33,26 +33,13 @@ impl super::MessagesRoute {
     pub fn machine(
         self,
         request: super::MessagesCall,
-        options: impl Into<litellm_inference::CallOptions>,
+        cache_options: Option<litellm_cache_response::CachePolicy>,
     ) -> MessagesMachine {
-        let litellm_inference::CallOptions {
-            cache: cache_options,
-            observers,
-        } = options.into();
-        hosted_call(
-            request,
-            observers,
-            move |call, _, interceptors, observers| async move {
-                let context = litellm_inference::context::CallContext::new(
-                    &interceptors,
-                    litellm_inference::CallOptions {
-                        cache: cache_options,
-                        observers,
-                    },
-                );
-                self.run(call, context).await
-            },
-        )
+        hosted_call(request, move |call, _, interceptors| async move {
+            let context =
+                litellm_inference::context::CallContext::new(&interceptors, cache_options);
+            self.run(call, context).await
+        })
     }
 }
 

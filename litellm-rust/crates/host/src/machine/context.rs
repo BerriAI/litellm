@@ -1,4 +1,3 @@
-use crate::observation::ObservationSender;
 use std::ops::ControlFlow;
 
 use litellm_coroutine::Co;
@@ -13,17 +12,15 @@ pub struct CallContext<P: Protocol> {
     pub services: HostServices<P>,
     pub interceptors: ChannelInterceptors<P>,
     pub stream: StreamSender<P>,
-    pub observers: Option<ObservationSender>,
 }
 
 impl<P: Protocol> CallContext<P> {
-    pub(super) fn new(co: Co<HostRequest<P>>, observers: Option<ObservationSender>) -> Self {
+    pub(super) fn new(co: Co<HostRequest<P>>) -> Self {
         let channel = Channel(co);
         Self {
             services: HostServices(channel.clone()),
             interceptors: ChannelInterceptors(channel.clone()),
             stream: StreamSender(channel),
-            observers,
         }
     }
 }

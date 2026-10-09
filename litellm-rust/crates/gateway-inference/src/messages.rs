@@ -54,11 +54,11 @@ async fn handle(
     };
 
     let call = project(deployment, body, headers)?;
-    let machine = route.machine(call, cache_options.policy);
+    let machine = route.machine(call, Some(cache_options.policy));
     let stream =
         Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
     let headers = crate::caching::CacheHeaders::default();
-    let response = litellm_host_http::serve(machine, (), headers.clone(), stream, None).await?;
+    let response = litellm_host_http::serve(machine, (), headers.clone(), stream).await?;
     Ok(headers.apply(response))
 }
 

@@ -1,4 +1,3 @@
-use litellm_host::{lifecycle::ExecutionEvent, observation::ObservationSender};
 use std::time::Duration;
 
 use litellm_auth::AuthServices;
@@ -21,7 +20,6 @@ pub(super) async fn execute(
     cache: Option<litellm_cache_response::ScopedCache>,
     cache_options: Option<litellm_cache_response::CachePolicy>,
     interceptors: &impl Interceptors<Error>,
-    observers: Option<&ObservationSender>,
 ) -> Result<ChatCompletionsResponse, Error> {
     let ProviderChatCompletionsRequest {
         model,
@@ -67,7 +65,6 @@ pub(super) async fn execute(
         cache.as_ref().map(|cache| cache.service.clone()),
         cache.as_ref().map(|cache| cache.options(cache_options)),
         interceptors,
-        observers,
         || async move {
             let outbound = outbound_request(
                 Authenticated {
@@ -103,14 +100,8 @@ pub(super) async fn execute(
                     body: truncate_error_body(&text),
                 }));
             }
-            let raw = RawResponse { body: text.clone() };
-            if let Some(observers) = observers {
-                observers.emit(litellm_host::lifecycle::CallEvent::Execution(
-                    ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
-                ));
-            }
             interceptors
-                .after_provider_response(raw)
+                .after_provider_response(RawResponse { body: text.clone() })
                 .await
                 .map_err(Error::post_call)?;
 
@@ -254,7 +245,6 @@ mod tests {
             None,
             None,
             &interceptors,
-            None,
         )
         .await
         .expect("chat completions call succeeds");
@@ -295,7 +285,6 @@ mod tests {
             None,
             None,
             &interceptors,
-            None,
         )
         .await
         .expect_err("the upstream failure fails the call");

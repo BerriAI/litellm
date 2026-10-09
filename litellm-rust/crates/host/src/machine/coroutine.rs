@@ -1,4 +1,3 @@
-use crate::observation::ObservationSender;
 use std::{future::Future, pin::Pin};
 
 use litellm_coroutine::{Coroutine, CoroutineState, ResumeError};
@@ -32,11 +31,10 @@ where
     R::Error: From<MachineFault>,
 {
     pub fn new(
-        observers: Option<ObservationSender>,
         execute: impl FnOnce(CallContext<R>) -> ExecuteFuture<R, C> + Send + 'static,
     ) -> Self {
         Self {
-            coroutine: Coroutine::new(move |co| execute(CallContext::new(co, observers))),
+            coroutine: Coroutine::new(move |co| execute(CallContext::new(co))),
         }
     }
 }

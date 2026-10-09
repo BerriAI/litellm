@@ -19,6 +19,8 @@ pub enum Error {
     )]
     UnknownModel(String),
     #[error(transparent)]
+    Hook(#[from] litellm_host::error::HookError),
+    #[error(transparent)]
     Route(#[from] RouteError),
     #[error(transparent)]
     Ocr(#[from] OcrError),
@@ -63,7 +65,7 @@ impl Error {
                 .http_status_code()
                 .and_then(|status| StatusCode::from_u16(status).ok())
                 .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            Self::InvalidBody(_) | Self::UnknownModel(_) => StatusCode::BAD_REQUEST,
+            Self::InvalidBody(_) | Self::UnknownModel(_) | Self::Hook(_) => StatusCode::BAD_REQUEST,
             Self::Route(RouteError::Transport(TransportError::Http { status, .. })) => {
                 StatusCode::from_u16(*status).unwrap_or(StatusCode::BAD_GATEWAY)
             }

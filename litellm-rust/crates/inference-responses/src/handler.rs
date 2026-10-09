@@ -1,5 +1,3 @@
-use litellm_host::lifecycle::ExecutionEvent;
-use litellm_host::observation::ObservationSender;
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -18,7 +16,6 @@ pub(super) async fn execute(
     cache: Option<litellm_cache_response::ScopedCache>,
     cache_options: Option<litellm_cache_response::CachePolicy>,
     interceptors: &impl Interceptors<Error>,
-    observers: Option<&ObservationSender>,
 ) -> Result<ResponsesOutput, Error> {
     let authenticated = resolve_auth(auth, request.environment, &|_| None).await?;
     let identity = litellm_host::interceptors::ProviderIdentity {
@@ -45,7 +42,6 @@ pub(super) async fn execute(
         cache.as_ref().map(|cache| cache.service.clone()),
         cache.as_ref().map(|cache| cache.options(cache_options)),
         interceptors,
-        observers,
         || async move {
             let stream = match wire.body.get("stream") {
                 None => false,
@@ -91,14 +87,8 @@ pub(super) async fn execute(
                 });
             }
             let body = response.text().await.map_err(network)?;
-            let raw = RawResponse { body: body.clone() };
-            if let Some(observers) = observers {
-                observers.emit(litellm_host::lifecycle::CallEvent::Execution(
-                    ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
-                ));
-            }
             interceptors
-                .after_provider_response(raw)
+                .after_provider_response(RawResponse { body: body.clone() })
                 .await
                 .map_err(Error::post_call)?;
             let value = serde_json::from_str(&body)

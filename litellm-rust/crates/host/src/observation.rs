@@ -8,8 +8,10 @@ use std::{
 
 use tokio::sync::mpsc;
 
-use crate::lifecycle::CallEvent;
+use crate::{hooks::NativeHooks, lifecycle::CallEvent};
 
+/// A passive subscriber: every event is queued for a receiver the host drains, and the call
+/// never waits for it. Events are dropped, and counted, when the queue is full or closed.
 #[derive(Clone)]
 pub struct ObservationSender {
     sender: mpsc::Sender<CallEvent>,
@@ -25,6 +27,12 @@ impl ObservationSender {
 
     pub fn dropped_events(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
+    }
+}
+
+impl NativeHooks for ObservationSender {
+    fn on_event(&self, event: &CallEvent) {
+        self.emit(event.clone());
     }
 }
 

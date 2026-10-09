@@ -27,11 +27,11 @@
 - Hosts assemble route objects from shared `CoreResources`, HTTP settings, and secret sources
   - each route owns its provider client and authentication dependencies
   - gateway routes live for the gateway lifetime; Python assembles routes per call from its settings snapshot
-- Calls pass `Interceptors` and an optional `ObservationSender` separately
-  - use `&()` for no hooks and `None` for no observer
+- Direct calls receive `NativeHooks`; hosted calls receive channel `Interceptors`
+  - use `&()` for no hooks
   - handlers accept `Interceptors`, never a concrete `ChannelInterceptors`
 - Construction does no work; preparation and lifecycle observation begin when the future is polled
-- Native observers receive start and terminal events through the shared call runner; a stream retains its lifecycle until exhaustion, error, or drop. Hosted routes leave terminal observation to their driver
+- Native hooks receive start and terminal events through the shared call runner; a stream retains its lifecycle until exhaustion, error, or drop. Hosted routes leave terminal observation to their driver
 - A hosted format's `route.rs` declares the concrete `Protocol` and a route method that takes a typed request and builds a `litellm_host::call::HostedMachine` with `hosted_call`; audio transcription has no hosted machine and returns its response directly
   - the shared call plumbing owns stream opening, delivery, backpressure, and detachment
   - request decoding belongs to the boundary before the machine starts

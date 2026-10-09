@@ -10,7 +10,7 @@ use axum::{
     response::Response,
 };
 use futures_util::future::BoxFuture;
-use litellm_gateway_inference::{Deployment, Gateway, router};
+use litellm_gateway_inference::{Deployment, Gateway, GatewayLayer, router};
 use litellm_http::{HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver};
 use litellm_inference::resources::CoreResources;
 use litellm_secrets::{SecretValue, source::SecretSource};
@@ -37,7 +37,7 @@ pub fn app_with_permissions(
     api_base: &str,
     permissions: litellm_gateway_auth::Permissions,
 ) -> Router {
-    configured_app(model, api_base, permissions, None, None)
+    configured_app(model, api_base, permissions, None, None, Vec::new())
 }
 
 pub fn app_with_cache(
@@ -51,6 +51,7 @@ pub fn app_with_cache(
         litellm_gateway_auth::Permissions::All,
         Some(cache),
         None,
+        Vec::new(),
     )
 }
 
@@ -66,6 +67,18 @@ pub fn app_with_cache_for_principal(
         litellm_gateway_auth::Permissions::All,
         Some(cache),
         Some(principal),
+        Vec::new(),
+    )
+}
+
+pub fn app_with_layers(model: &str, api_base: &str, layers: Vec<Arc<dyn GatewayLayer>>) -> Router {
+    configured_app(
+        model,
+        api_base,
+        litellm_gateway_auth::Permissions::All,
+        None,
+        None,
+        layers,
     )
 }
 
@@ -75,6 +88,7 @@ fn configured_app(
     permissions: litellm_gateway_auth::Permissions,
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
     principal: Option<litellm_gateway_auth::Principal>,
+    layers: Vec<Arc<dyn GatewayLayer>>,
 ) -> Router {
     let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
     let http = Resolution::from(&HttpSettings::default()).config;
@@ -98,6 +112,9 @@ fn configured_app(
         .collect(),
     )
     .unwrap();
+    let gateway = layers
+        .into_iter()
+        .fold(gateway, |gateway, layer| gateway.with_layer(layer));
     let gateway = match cache {
         Some(cache) => gateway.with_cache(cache),
         None => gateway,

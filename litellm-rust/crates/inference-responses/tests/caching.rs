@@ -168,7 +168,6 @@ async fn responses_refetches_instead_of_deserializing_another_api_response(
             Some(cache.clone()),
             Some(CacheOptions::new(CacheScope::Shared)),
             &(),
-            None,
             || async {
                 calls.fetch_add(1, Ordering::SeqCst);
                 Ok(ResponsesApiResponse {
@@ -210,7 +209,6 @@ async fn responses_cache_only_reuses_completed_responses(
             Some(cache.clone()),
             Some(CacheOptions::new(CacheScope::Shared)),
             &(),
-            None,
             || async {
                 let call = calls.fetch_add(1, Ordering::SeqCst);
                 Ok(ResponsesApiResponse {

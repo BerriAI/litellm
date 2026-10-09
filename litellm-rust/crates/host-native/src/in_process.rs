@@ -1,9 +1,9 @@
-use litellm_host::observation::ObservationSender;
 use std::{future::Future, ops::ControlFlow};
 
 use litellm_host::{
     call::{HostedCompletion, HostedMachine},
-    interceptors::Interceptors,
+    error::HookError,
+    hooks::NativeHooks,
     lifecycle::{CallEvent, FailureOrigin, Timing, epoch_seconds},
     machine::{Machine, MachineFault},
     protocol::Protocol,
@@ -36,9 +36,8 @@ impl<P: Protocol> StreamConsumer<P> for () {
 
 pub struct Host<'a, S, H, C> {
     pub services: &'a S,
-    pub interceptors: &'a H,
+    pub hooks: &'a H,
     pub stream: &'a C,
-    pub observers: Option<&'a ObservationSender>,
 }
 
 pub async fn run<M, S, H, C>(
@@ -47,8 +46,9 @@ pub async fn run<M, S, H, C>(
 ) -> Result<M::Complete, <M::Protocol as Protocol>::Error>
 where
     M: Machine,
+    <M::Protocol as Protocol>::Error: From<HookError>,
     S: HostCallHandler<M::Protocol>,
-    H: Interceptors<<M::Protocol as Protocol>::Error>,
+    H: NativeHooks,
     C: StreamConsumer<M::Protocol>,
 {
     run_with_completion(machine, host, |_| false).await
@@ -60,9 +60,9 @@ pub async fn run_hosted<P, S, H, C>(
 ) -> Result<HostedCompletion<P::Response>, P::Error>
 where
     P: Protocol,
-    P::Error: From<MachineFault>,
+    P::Error: From<MachineFault> + From<HookError>,
     S: HostCallHandler<P>,
-    H: Interceptors<P::Error>,
+    H: NativeHooks,
     C: StreamConsumer<P>,
 {
     run_with_completion(machine, host, |completion| {
@@ -78,19 +78,14 @@ async fn run_with_completion<M, S, H, C>(
 ) -> Result<M::Complete, <M::Protocol as Protocol>::Error>
 where
     M: Machine,
+    <M::Protocol as Protocol>::Error: From<HookError>,
     S: HostCallHandler<M::Protocol>,
-    H: Interceptors<<M::Protocol as Protocol>::Error>,
+    H: NativeHooks,
     C: StreamConsumer<M::Protocol>,
 {
     let start_time = epoch_seconds();
-    if let Some(observers) = host.observers {
-        observers.emit(CallEvent::Started { start_time });
-    }
-    let outcome = consume(
-        Driver::new(machine, host.services, host.interceptors),
-        host.stream,
-    )
-    .await;
+    host.hooks.on_event(&CallEvent::Started { start_time });
+    let outcome = consume(Driver::new(machine, host.services, host.hooks), host.stream).await;
     let timing = Timing {
         start_time,
         end_time: epoch_seconds(),
@@ -107,9 +102,7 @@ where
             error: (),
         },
     };
-    if let Some(observers) = host.observers {
-        observers.emit(terminal);
-    }
+    host.hooks.on_event(&terminal);
     outcome
 }
 
@@ -119,8 +112,9 @@ async fn consume<M, S, H, C>(
 ) -> Result<M::Complete, <M::Protocol as Protocol>::Error>
 where
     M: Machine,
+    <M::Protocol as Protocol>::Error: From<HookError>,
     S: HostCallHandler<M::Protocol>,
-    H: Interceptors<<M::Protocol as Protocol>::Error>,
+    H: NativeHooks,
     C: StreamConsumer<M::Protocol>,
 {
     let mut demand = ControlFlow::Continue(());

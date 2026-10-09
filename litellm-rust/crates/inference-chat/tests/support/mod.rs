@@ -153,9 +153,9 @@ impl Observations {
     }
 }
 
-impl litellm_host::lifecycle::CallObserver for CallEvents {
-    fn observe(&self, event: litellm_host::lifecycle::CallEvent) {
-        self.0.sender.emit(event);
+impl litellm_host::hooks::NativeHooks for CallEvents {
+    fn on_event(&self, event: &litellm_host::lifecycle::CallEvent) {
+        self.0.sender.emit(event.clone());
     }
 }
 
@@ -190,8 +190,27 @@ impl<P: litellm_host::protocol::Protocol> litellm_host::interceptors::Intercepto
 
     async fn after_provider_response(
         &self,
-        _: litellm_host::interceptors::RawResponse,
+        raw: litellm_host::interceptors::RawResponse,
     ) -> Result<(), P::Error> {
+        self.events
+            .0
+            .sender
+            .emit(litellm_host::lifecycle::CallEvent::Execution(
+                litellm_host::lifecycle::ExecutionEvent::ProviderResponseReceived { raw },
+            ));
+        Ok(())
+    }
+
+    async fn result_ready(
+        &self,
+        facts: litellm_host::interceptors::ExecutionFacts,
+    ) -> Result<(), P::Error> {
+        self.events
+            .0
+            .sender
+            .emit(litellm_host::lifecycle::CallEvent::Execution(
+                litellm_host::lifecycle::ExecutionEvent::ResultReady { facts },
+            ));
         Ok(())
     }
 }
@@ -211,9 +230,8 @@ where
     pub fn runtime(&self) -> litellm_host_native::in_process::Host<'_, (), Self, Self> {
         litellm_host_native::in_process::Host {
             services: &(),
-            interceptors: self,
+            hooks: self,
             stream: self,
-            observers: Some(&self.events.0.sender),
         }
     }
 }
@@ -232,13 +250,26 @@ where
         Ok(ControlFlow::Continue(()))
     }
 }
-impl<P> litellm_host::lifecycle::CallObserver for RecordingCall<P>
-where
-    P: litellm_host::protocol::Protocol<HostCall = std::convert::Infallible>,
-    P::Error: From<litellm_host::machine::MachineFault>,
-{
-    fn observe(&self, event: litellm_host::lifecycle::CallEvent) {
-        self.events.0.sender.emit(event);
+/// The same hooks for a machine-driven call: the wire rewrite the direct path applies,
+/// plus every event the driver reports.
+impl<P: litellm_host::protocol::Protocol> litellm_host::hooks::NativeHooks for RecordingCall<P> {
+    fn before_provider_request(
+        &self,
+        wire: Box<litellm_host::interceptors::WireRequest>,
+        _: &litellm_host::interceptors::RequestContext,
+    ) -> Result<Box<litellm_host::interceptors::WireRequest>, litellm_host::error::HookError> {
+        Ok(Box::new(litellm_host::interceptors::WireRequest {
+            headers: wire
+                .headers
+                .into_iter()
+                .chain([("x-hook".into(), "called".into())])
+                .collect(),
+            ..*wire
+        }))
+    }
+
+    fn on_event(&self, event: &litellm_host::lifecycle::CallEvent) {
+        self.events.0.sender.emit(event.clone());
     }
 }
 

@@ -72,28 +72,13 @@ fn duration(seconds: f64) -> Result<Duration, Error> {
 #[derive(Clone, Default)]
 pub(crate) struct CacheHeaders(std::sync::Arc<std::sync::OnceLock<String>>);
 
-impl litellm_host::interceptors::Interceptors<litellm_inference::RouteError> for CacheHeaders {
-    async fn before_provider_request(
+impl litellm_host::hooks::NativeHooks for CacheHeaders {
+    fn result_ready(
         &self,
-        wire: litellm_host::interceptors::WireRequest,
-        _: litellm_host::interceptors::RequestContext,
-    ) -> Result<litellm_host::interceptors::WireRequest, litellm_inference::RouteError> {
-        Ok(wire)
-    }
-
-    async fn after_provider_response(
-        &self,
-        _: litellm_host::interceptors::RawResponse,
-    ) -> Result<(), litellm_inference::RouteError> {
-        Ok(())
-    }
-
-    async fn result_ready(
-        &self,
-        facts: litellm_host::interceptors::ExecutionFacts,
-    ) -> Result<(), litellm_inference::RouteError> {
-        if let litellm_host::interceptors::ResultSource::Cache { key } = facts.source {
-            let _ = self.0.set(key);
+        facts: &litellm_host::interceptors::ExecutionFacts,
+    ) -> Result<(), litellm_host::error::HookError> {
+        if let litellm_host::interceptors::ResultSource::Cache { key } = &facts.source {
+            let _ = self.0.set(key.clone());
         }
         Ok(())
     }

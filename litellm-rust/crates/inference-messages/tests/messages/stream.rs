@@ -80,9 +80,8 @@ impl RecordingStreamHost {
     pub fn runtime(&self) -> litellm_host_native::in_process::Host<'_, (), Self, Self> {
         litellm_host_native::in_process::Host {
             services: &(),
-            interceptors: self,
+            hooks: self,
             stream: self,
-            observers: None,
         }
     }
 }
@@ -95,35 +94,7 @@ impl litellm_host_native::in_process::StreamConsumer<Messages> for RecordingStre
         Ok(self.record(Seen::Deliver(chunk)))
     }
 }
-impl litellm_host::lifecycle::CallObserver for RecordingStreamHost {
-    fn observe(&self, _: litellm_host::lifecycle::CallEvent) {}
-}
-impl litellm_host::interceptors::Interceptors<<Messages as litellm_host::protocol::Protocol>::Error>
-    for RecordingStreamHost
-{
-    async fn before_provider_request(
-        &self,
-        wire: litellm_host::interceptors::WireRequest,
-        _: litellm_host::interceptors::RequestContext,
-    ) -> Result<
-        litellm_host::interceptors::WireRequest,
-        <Messages as litellm_host::protocol::Protocol>::Error,
-    > {
-        Ok(wire)
-    }
-    async fn after_provider_response(
-        &self,
-        raw: litellm_host::interceptors::RawResponse,
-    ) -> Result<(), <Messages as litellm_host::protocol::Protocol>::Error> {
-        litellm_host::lifecycle::CallObserver::observe(
-            self,
-            litellm_host::lifecycle::CallEvent::Execution(
-                litellm_host::lifecycle::ExecutionEvent::ProviderResponseReceived { raw },
-            ),
-        );
-        Ok(())
-    }
-}
+impl litellm_host::hooks::NativeHooks for RecordingStreamHost {}
 
 fn streaming(call: MessagesCall, api_base: String) -> MessagesCall {
     MessagesCall {

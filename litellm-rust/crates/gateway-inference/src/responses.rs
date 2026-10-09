@@ -38,7 +38,7 @@ pub(crate) async fn create(
         extra_headers: None,
         timeout: deployment.timeout,
     };
-    let machine = route.machine(call, cache_options.policy);
+    let machine = route.machine(call, Some(cache_options.policy));
     let stream = Sse::<Responses, _, _>::new(Json, |error| {
         let error = Error::from(error);
         Bytes::from(format!(
@@ -47,6 +47,6 @@ pub(crate) async fn create(
         ))
     });
     let headers = crate::caching::CacheHeaders::default();
-    let response = litellm_host_http::serve(machine, (), headers.clone(), stream, None).await?;
+    let response = litellm_host_http::serve(machine, (), headers.clone(), stream).await?;
     Ok(headers.apply(response))
 }

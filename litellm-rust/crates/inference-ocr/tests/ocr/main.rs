@@ -58,12 +58,12 @@ fn ocr_route_with(settings: OcrSettings) -> OcrRoute {
 }
 
 async fn perform(request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error> {
-    ocr_route().execute(request, &(), None).await
+    ocr_route().execute(request, &()).await
 }
 
 async fn perform_with(host: LocalOcrHost) -> Result<LiteLLMOcrResponse, Error> {
     let result = litellm_host_native::in_process::run_hosted(
-        ocr_route().machine(host.request()?, None),
+        ocr_route().machine(host.request()?),
         host.runtime(),
     )
     .await
@@ -157,8 +157,11 @@ fn completed(
     }
 }
 
-type BeforeSend =
-    Box<dyn Fn(WireRequest, &RequestContext) -> Result<WireRequest, Error> + Send + Sync>;
+type BeforeSend = Box<
+    dyn Fn(WireRequest, &RequestContext) -> Result<WireRequest, litellm_host::error::HookError>
+        + Send
+        + Sync,
+>;
 type Observer = Box<dyn Fn(&CallEvent) + Send + Sync>;
 
 struct LocalOcrHost {
@@ -180,7 +183,10 @@ impl LocalOcrHost {
 
     fn with_before_send(
         self,
-        before_provider_request: impl Fn(WireRequest, &RequestContext) -> Result<WireRequest, Error>
+        before_provider_request: impl Fn(
+            WireRequest,
+            &RequestContext,
+        ) -> Result<WireRequest, litellm_host::error::HookError>
         + Send
         + Sync
         + 'static,
@@ -214,9 +220,8 @@ impl LocalOcrHost {
     pub fn runtime(&self) -> litellm_host_native::in_process::Host<'_, Self, Self, ()> {
         litellm_host_native::in_process::Host {
             services: self,
-            interceptors: self,
+            hooks: self,
             stream: &(),
-            observers: Some(&self.events.0.sender),
         }
     }
 }
@@ -232,34 +237,19 @@ impl litellm_host_native::services::HostCallHandler<Ocr> for LocalOcrHost {
     }
 }
 
-impl litellm_host::lifecycle::CallObserver for LocalOcrHost {
-    fn observe(&self, event: litellm_host::lifecycle::CallEvent) {
-        self.events.0.sender.emit(event);
-    }
-}
-impl litellm_host::interceptors::Interceptors<<Ocr as litellm_host::protocol::Protocol>::Error>
-    for LocalOcrHost
-{
-    async fn before_provider_request(
+impl litellm_host::hooks::NativeHooks for LocalOcrHost {
+    fn before_provider_request(
         &self,
-        wire: WireRequest,
-        context: RequestContext,
-    ) -> Result<WireRequest, Error> {
+        wire: Box<WireRequest>,
+        context: &RequestContext,
+    ) -> Result<Box<WireRequest>, litellm_host::error::HookError> {
         match &self.before_provider_request {
-            Some(before_provider_request) => before_provider_request(wire, &context),
+            Some(before_provider_request) => before_provider_request(*wire, context).map(Box::new),
             None => Ok(wire),
         }
     }
-    async fn after_provider_response(
-        &self,
-        raw: litellm_host::interceptors::RawResponse,
-    ) -> Result<(), <Ocr as litellm_host::protocol::Protocol>::Error> {
-        litellm_host::lifecycle::CallObserver::observe(
-            self,
-            litellm_host::lifecycle::CallEvent::Execution(
-                litellm_host::lifecycle::ExecutionEvent::ProviderResponseReceived { raw },
-            ),
-        );
-        Ok(())
+
+    fn on_event(&self, event: &litellm_host::lifecycle::CallEvent) {
+        self.events.0.sender.emit(event.clone());
     }
 }
