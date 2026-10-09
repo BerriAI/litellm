@@ -7,17 +7,19 @@ import {
   FEDERATION_CORE_FIELDS,
   identitySourceById,
   identitySourceOptions,
-  requiredFederationValue,
   validateFederationValueStored,
   validateIdentityTokenReference,
   validateIssuerTtlSeconds,
-  validateMaskedValueUntouched,
-  type FederationField,
   type IdentitySourceId,
 } from "./anthropic_federation";
+import type { FederatedSelection } from "./credential_federation";
+import { requiredFederationValue, validateMaskedValueUntouched, type FederationField } from "./federation_field";
+import { OPENAI_FEDERATION_FIELDS } from "./openai_federation";
 
-interface AnthropicFederationFieldsProps {
-  identitySource: IdentitySourceId;
+type FieldValidator = (value: unknown, formValues: Record<string, unknown>) => string | true;
+
+interface FederationFieldsProps {
+  selection: FederatedSelection;
   onIdentitySourceChange: (identitySource: IdentitySourceId) => void;
   storedValues: Record<string, unknown>;
 }
@@ -25,14 +27,13 @@ interface AnthropicFederationFieldsProps {
 const IDENTITY_SOURCE_SELECT_ID = "anthropic_federation_identity_source";
 const STORED_VALUE_MESSAGE_FIELD_KEY = FEDERATION_CORE_FIELDS[0].key;
 
-const fieldRules = (field: FederationField, storedValue: unknown, identitySource: IdentitySourceId) => ({
-  validate: {
-    ...(field.required ? { required: requiredFederationValue } : {}),
-    ...(field.key === STORED_VALUE_MESSAGE_FIELD_KEY ? { stored: validateFederationValueStored(identitySource) } : {}),
-    ...(field.key === "anthropic_identity_token" ? { reference: validateIdentityTokenReference } : {}),
-    ...(field.control === "integer" ? { ttl: validateIssuerTtlSeconds } : {}),
-    masked: validateMaskedValueUntouched(storedValue),
-  },
+const anthropicValidators = (
+  field: FederationField,
+  identitySource: IdentitySourceId,
+): Readonly<Record<string, FieldValidator>> => ({
+  ...(field.key === STORED_VALUE_MESSAGE_FIELD_KEY ? { stored: validateFederationValueStored(identitySource) } : {}),
+  ...(field.key === "anthropic_identity_token" ? { reference: validateIdentityTokenReference } : {}),
+  ...(field.control === "integer" ? { ttl: validateIssuerTtlSeconds } : {}),
 });
 
 const selectItems = (field: FederationField, value: unknown) => [
@@ -76,25 +77,51 @@ const renderControl = (field: FederationField, control: MountedFieldControlProps
   );
 };
 
-export default function AnthropicFederationFields({
-  identitySource,
-  onIdentitySourceChange,
-  storedValues,
-}: AnthropicFederationFieldsProps) {
-  const sourceFields = identitySourceById(identitySource).fields;
-  const identitySourceItems = identitySourceOptions(storedValues);
+interface FederationFieldInputProps {
+  field: FederationField;
+  storedValue: unknown;
+  validators?: Readonly<Record<string, FieldValidator>>;
+}
 
-  const renderField = (field: FederationField) => (
+function FederationFieldInput({ field, storedValue, validators }: FederationFieldInputProps) {
+  return (
     <MountedFormField
-      key={field.key}
       label={labelWithHint(field.label, field.tooltip)}
       name={field.key}
       required={field.required}
-      rules={fieldRules(field, storedValues[field.key], identitySource)}
+      rules={{
+        validate: {
+          ...(field.required ? { required: requiredFederationValue } : {}),
+          ...validators,
+          masked: validateMaskedValueUntouched(storedValue),
+        },
+      }}
       className="mb-4"
     >
       {(control) => renderControl(field, control)}
     </MountedFormField>
+  );
+}
+
+interface AnthropicFederationFieldsProps {
+  identitySource: IdentitySourceId;
+  onIdentitySourceChange: (identitySource: IdentitySourceId) => void;
+  storedValues: Record<string, unknown>;
+}
+
+function AnthropicFederationFields({
+  identitySource,
+  onIdentitySourceChange,
+  storedValues,
+}: AnthropicFederationFieldsProps) {
+  const identitySourceItems = identitySourceOptions(storedValues);
+  const renderField = (field: FederationField) => (
+    <FederationFieldInput
+      key={field.key}
+      field={field}
+      storedValue={storedValues[field.key]}
+      validators={anthropicValidators(field, identitySource)}
+    />
   );
 
   return (
@@ -135,7 +162,36 @@ export default function AnthropicFederationFields({
           </p>
         )}
       </div>
-      {sourceFields.map(renderField)}
+      {identitySourceById(identitySource).fields.map(renderField)}
     </>
   );
+}
+
+function OpenAIFederationFields({ storedValues }: { storedValues: Record<string, unknown> }) {
+  return (
+    <>
+      <p className="mb-4 text-sm text-muted-foreground">
+        The proxy exchanges the identity token for an OpenAI access token only when OPENAI_API_KEY is unset in its
+        environment. Otherwise it sends that key instead.
+      </p>
+      {OPENAI_FEDERATION_FIELDS.map((field) => (
+        <FederationFieldInput key={field.key} field={field} storedValue={storedValues[field.key]} />
+      ))}
+    </>
+  );
+}
+
+export default function FederationFields({ selection, onIdentitySourceChange, storedValues }: FederationFieldsProps) {
+  switch (selection.provider) {
+    case "anthropic":
+      return (
+        <AnthropicFederationFields
+          identitySource={selection.identitySource}
+          onIdentitySourceChange={onIdentitySourceChange}
+          storedValues={storedValues}
+        />
+      );
+    case "openai":
+      return <OpenAIFederationFields storedValues={storedValues} />;
+  }
 }

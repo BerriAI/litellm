@@ -318,6 +318,8 @@ export interface Organization {
 
 export interface CredentialItem {
   credential_name: string;
+  display_name?: string | null;
+  source?: "db" | "config";
   credential_values: any;
   credential_info: {
     custom_llm_provider?: string;

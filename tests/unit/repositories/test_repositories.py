@@ -1487,11 +1487,13 @@ class TestCredentialsRepository:
         repo._prisma_client.db.litellm_credentialstable._records["my-key"] = {
             "credential_id": "cred-1",
             "credential_name": "my-key",
+            "display_name": "My Key",
             "credential_values": {"api_key": "encrypted_secret"},
             "credential_info": {"provider": "openai"},
         }
         cred = await repo.find_by_name("my-key")
         assert isinstance(cred, CredentialItem)
+        assert cred.display_name == "My Key"
         assert cred.credential_values == {"api_key": "encrypted_secret"}
         assert cred.credential_info == {"provider": "openai"}
 

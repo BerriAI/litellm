@@ -2,7 +2,7 @@ import CopyButton from "@/components/shared/CopyButton";
 import { FieldDescription, FieldLegend, FieldSet } from "@/components/ui/field";
 import { $api } from "@/lib/http/api";
 import { extractProxyErrorMessage } from "@/lib/http/client";
-import type { JwksPanel } from "./anthropic_federation";
+import type { JwksPanel } from "./credential_federation";
 
 const SavedJwks = ({ credentialName }: { credentialName: string }) => {
   const jwks = $api.useQuery("get", "/credentials/{credential_name}/jwks", {
