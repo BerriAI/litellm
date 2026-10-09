@@ -311,26 +311,40 @@ def _router_default_litellm_params(
         return {}
     if model_resolves:
         return router_defaults
-    if route_type in _ROUTE_TYPES_MERGING_ONLY_LISTED_MODELS or not _router_serves_model(llm_router, model_name):
+    if route_type in _ROUTE_TYPES_MERGING_ONLY_LISTED_MODELS or not _router_serves_model(llm_router, data, model_name):
         return {}
     return router_defaults
 
 
-def _router_serves_model(llm_router: LitellmRouter, model_name: str) -> bool:
+def _router_serves_model(llm_router: LitellmRouter, data: Mapping[str, object], model_name: str) -> bool:
     """Whether dispatch reaches one of the router's deployments for a model that
     `get_model_list` does not list: a deployment id or name, an alias, a team public name,
-    an A2A agent, or any model a router fallback chain (including `*`) answers for."""
+    an A2A agent, or any model a fallback chain (including `*`) answers for."""
     return (
         _is_a2a_agent_model(model_name)
         or llm_router.is_recognized_model(model_name)
         or model_name in llm_router.deployment_names  # pyright: ignore[reportUnknownMemberType]  # Router.deployment_names is an untyped list
         or model_name in llm_router.team_public_model_names
-        or _router_falls_back_for_model(llm_router, model_name)
+        or _router_falls_back_for_model(llm_router, data, model_name)
     )
 
 
-def _router_falls_back_for_model(llm_router: LitellmRouter, model_name: str) -> bool:
-    fallbacks: Final[object] = getattr(llm_router, "fallbacks", None)
+def _router_falls_back_for_model(llm_router: LitellmRouter, data: Mapping[str, object], model_name: str) -> bool:
+    """The router reads `fallbacks` from the request kwargs before its own; key and team
+    `router_settings` fill that kwarg at dispatch when the body leaves it out."""
+    override: Final = data.get("router_settings_override")
+    override_fallbacks: Final[object] = (  # pyright: ignore[reportUnknownVariableType]  # key and team router_settings are untyped JSON
+        override.get("fallbacks")  # pyright: ignore[reportUnknownMemberType]  # key and team router_settings are untyped JSON
+        if isinstance(override, Mapping)
+        else None
+    )
+    fallbacks: Final[object] = (  # pyright: ignore[reportUnknownVariableType]  # key and team router_settings are untyped JSON
+        data.get("fallbacks")
+        if "fallbacks" in data
+        else override_fallbacks
+        if override_fallbacks is not None
+        else getattr(llm_router, "fallbacks", None)
+    )
     if not isinstance(fallbacks, list) or not fallbacks:
         return False
     chain, _ = get_fallback_model_group(fallbacks=fallbacks, model_group=model_name)  # pyright: ignore[reportUnknownArgumentType]  # Router.fallbacks is an untyped list
