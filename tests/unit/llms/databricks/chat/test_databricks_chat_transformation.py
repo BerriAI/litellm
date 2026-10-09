@@ -511,7 +511,7 @@ def test_transform_request_collapses_single_plain_text_block_for_non_claude_mode
 ) -> None:
     config: Final[DatabricksConfig] = DatabricksConfig()
     result: Final[dict[str, object]] = TypeAdapter(dict[str, object]).validate_python(
-        config.transform_request(  # pyright: ignore[reportUnknownMemberType]  # inherited hook has no return annotation
+        config.transform_request(  # pyright: ignore[reportUnknownMemberType]  # inherited hook is untyped
             model=model,
             messages=messages,
             optional_params=optional_params,

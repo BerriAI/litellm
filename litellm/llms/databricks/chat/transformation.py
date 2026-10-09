@@ -69,7 +69,7 @@ def _is_bare_assistant_message(message_dict: Mapping[str, object]) -> bool:
 
 
 def _collapse_single_text_block(message: AllMessageValues) -> AllMessageValues:
-    message_values: Final[Mapping[str, object]] = cast(  # cast-ok: AllMessageValues are TypedDict mappings
+    message_values: Final[Mapping[str, object]] = cast(  # cast-ok: TypedDict is a Mapping
         Mapping[str, object], message
     )
     content: Final[object] = message_values.get("content")
@@ -77,7 +77,7 @@ def _collapse_single_text_block(message: AllMessageValues) -> AllMessageValues:
         case [{"type": "text", "text": str() as text} as block] if (
             isinstance(block, dict)
             and len(
-                cast(Mapping[str, object], block)  # cast-ok: structural patterns leave dict keys and values unknown
+                cast(Mapping[str, object], block)  # cast-ok: mapping-pattern values are unknown
             )
             == 2
         ):
@@ -465,7 +465,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         Databricks does not support:
         - 'name' in user message.
         - litellm's internal `thinking_blocks` / `reasoning_content` on assistant messages.
-        - reading list content for non-Claude json_object "json" checks, so a single plain text block is sent as a string.
+        - non-Claude json_object "json" checks read only string content, so a single text block is sent as a string.
         """
         new_messages = []
         for idx, message in enumerate(messages):
