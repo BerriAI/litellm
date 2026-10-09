@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -36,6 +38,19 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _BflSample(TypedDict):
+    sample: NotRequired[ReadOnly[str | None]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _BflPolledResult(TypedDict):
+    result: NotRequired[ReadOnly[_BflSample]]
+
+
+_BFL_POLLED_RESULT_ADAPTER: Final = TypeAdapter(_BflPolledResult)
 
 
 _BFL_REQUEST_PARAMS: Final = (
@@ -302,12 +317,14 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         The response contains: {"status": "Ready", "result": {"sample": "https://..."}}
         """
         try:
-            response_data: Final = raw_response.json()
+            raw_response_data: Final = raw_response.json()
         except Exception as e:
             raise BlackForestLabsError(
                 status_code=raw_response.status_code,
                 message=f"Error parsing BFL response: {e}",
             )
+
+        response_data: Final = _BFL_POLLED_RESULT_ADAPTER.validate_python(raw_response_data)
 
         # Get image URL from result
         image_url: Final = response_data.get("result", {}).get("sample")

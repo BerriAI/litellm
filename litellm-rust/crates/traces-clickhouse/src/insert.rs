@@ -30,26 +30,19 @@ fn max_insert_bytes() -> Result<usize, Error> {
 
 pub type InsertRow = BTreeMap<String, Shared<Value>>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::EnumString, strum::IntoStaticStr)]
+#[strum(parse_err_ty = Error, parse_err_fn = invalid_table)]
 pub enum InsertTable {
+    #[strum(serialize = "otel_traces")]
     OtelTraces,
+    #[strum(serialize = "spend_logs")]
     SpendLogs,
+    #[strum(serialize = "lens_feedback")]
+    LensFeedback,
 }
 
-impl InsertTable {
-    pub fn parse(value: &str) -> Result<Self, Error> {
-        match value {
-            "otel_traces" => Ok(Self::OtelTraces),
-            "spend_logs" => Ok(Self::SpendLogs),
-            _ => Err(Error::InvalidTable),
-        }
-    }
-
-    fn name(&self) -> &'static str {
-        match self {
-            Self::OtelTraces => "otel_traces",
-            Self::SpendLogs => "spend_logs",
-        }
-    }
+fn invalid_table(_name: &str) -> Error {
+    Error::InvalidTable
 }
 
 pub async fn insert_rows(
@@ -78,7 +71,7 @@ pub async fn insert_shared_rows(
         client,
         connection,
         database,
-        table.name(),
+        <&'static str>::from(table),
         &token,
         body,
     )
@@ -239,7 +232,25 @@ mod tests {
     use rstest::rstest;
     use serde_json::json;
 
-    use super::{Error, shared_rows, write_rows};
+    use super::{Error, InsertTable, shared_rows, write_rows};
+
+    #[rstest]
+    #[case::otel_traces("otel_traces", InsertTable::OtelTraces)]
+    #[case::spend_logs("spend_logs", InsertTable::SpendLogs)]
+    #[case::lens_feedback("lens_feedback", InsertTable::LensFeedback)]
+    fn insert_table_parses_each_table_name(#[case] name: &str, #[case] expected: InsertTable) {
+        assert_eq!(name.parse::<InsertTable>().unwrap(), expected);
+    }
+
+    #[rstest]
+    #[case::unknown("events")]
+    #[case::case_sensitive("OTEL_TRACES")]
+    fn insert_table_rejects_unknown_names(#[case] name: &str) {
+        assert!(matches!(
+            name.parse::<InsertTable>(),
+            Err(Error::InvalidTable)
+        ));
+    }
 
     #[rstest]
     fn encoded_limit_counts_utf8_bytes_across_rows() {

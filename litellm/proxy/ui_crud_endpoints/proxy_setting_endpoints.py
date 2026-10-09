@@ -15,7 +15,7 @@ from typing import (
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError, create_model
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError, create_model, field_validator
 from pydantic.fields import FieldInfo, PydanticUndefined
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
@@ -52,6 +52,7 @@ from litellm.repositories.table_repositories import (
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.mcp import MCPToolSearchSettings
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
@@ -168,11 +169,11 @@ def _resolve_ui_theme_field(stored_values: Mapping[str, object], field_name: str
     return env_value if _is_public_http_url(env_value) else None
 
 
-class IPAddress(BaseModel):
+class IPAddress(LiteLLMBaseModel):
     ip: str
 
 
-class UIThemeConfig(BaseModel):
+class UIThemeConfig(LiteLLMBaseModel):
     """Configuration for UI theme customization"""
 
     # Logo configuration
@@ -196,7 +197,7 @@ class UIThemeConfig(BaseModel):
     )
 
 
-class SettingsResponse(BaseModel):
+class SettingsResponse(LiteLLMBaseModel):
     """Base response model for settings with values and schema information"""
 
     values: dict[str, object]
@@ -206,7 +207,7 @@ class SettingsResponse(BaseModel):
     """Schema information including descriptions and property types for UI display"""
 
 
-class _SettingsWithSchema(BaseModel):
+class _SettingsWithSchema(LiteLLMBaseModel):
     values: dict[str, object]
     field_schema: dict[str, object]
 
@@ -233,14 +234,32 @@ class UIThemeSettingsResponse(SettingsResponse):
 _TEAM_ADMIN_FIELD_ENUM: Final = tuple(sorted(SUPPORTED_TEAM_ADMIN_PERMISSIONS))
 
 
-class UISettings(BaseModel):
+def normalize_moyai_url(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("moyai_url must be a string")
+    stripped: Final = value.strip()
+    if not stripped:
+        return None
+    parsed: Final = urlparse(stripped)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("moyai_url must be an http or https URL with a host and no credentials")
+    return stripped.rstrip("/")
+
+
+class UISettings(LiteLLMBaseModel):
     """Configuration for UI-specific flags"""
 
     model_config = ConfigDict(extra="allow")
 
     disable_model_add_for_internal_users: bool = Field(
         default=False,
-        description="If true, internal users cannot add models from the UI",
+        description=(
+            "If true, internal users cannot create models or auto routers through the UI or API, "
+            "including team admins and members with auto-router management permission. "
+            "Proxy admins are exempt. Editing and deleting existing models are unchanged."
+        ),
     )
 
     disable_team_admin_delete_team_user: bool = Field(
@@ -325,6 +344,16 @@ class UISettings(BaseModel):
         description="If true, shows the Chat page in the UI sidebar, letting users chat with an LLM and connect their own MCP server credentials via OAuth.",
     )
 
+    moyai_url: str | None = Field(
+        default=None,
+        description="URL of a connected Moyai deployment. When set, the Moyai entry in the UI navigation opens this deployment instead of the Moyai landing page.",
+    )
+
+    @field_validator("moyai_url", mode="before")
+    @classmethod
+    def _validate_moyai_url(cls, value: object) -> object:
+        return normalize_moyai_url(value)
+
     team_admin_editable_team_fields: Sequence[str] = Field(
         default=(),
         description=(
@@ -363,6 +392,7 @@ ALLOWED_UI_SETTINGS_FIELDS: Final = {
     "disable_custom_api_keys",
     "disable_key_generate_for_org_admin",
     "enable_chat_ui",
+    "moyai_url",
     TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
 }
 
@@ -403,6 +433,7 @@ def _derived_ui_setting_value(key: str) -> object:
 # Flags that must be synced from the persisted UISettings into
 # general_settings at runtime (on both read and write).
 _RUNTIME_GENERAL_SETTINGS_FLAGS: Final = [
+    "disable_model_add_for_internal_users",
     "allow_public_health_readiness_details",
     "forward_client_headers_to_llm_api",
     "forward_llm_provider_auth_headers",
@@ -471,7 +502,7 @@ def _get_effective_ui_settings_class() -> type[UISettings]:
     return _EFFECTIVE_UI_SETTINGS_CLASS
 
 
-class MCPSemanticFilterSettings(BaseModel):
+class MCPSemanticFilterSettings(LiteLLMBaseModel):
     """Configuration for MCP Semantic Tool Filter"""
 
     enabled: bool = Field(
@@ -507,7 +538,7 @@ class MCPToolSearchSettingsResponse(SettingsResponse):
     """Response model for native MCP tool search settings"""
 
 
-class WebSearchInterceptionSettings(BaseModel):
+class WebSearchInterceptionSettings(LiteLLMBaseModel):
     """Configuration for server-side web search interception"""
 
     enabled: bool = Field(
@@ -1231,7 +1262,9 @@ async def update_sso_settings(
         if isinstance(stored, str):
             stored = json.loads(stored)
         if isinstance(stored, dict):
-            before_sso_data = proxy_config._decrypt_db_variables(stored)
+            before_sso_data = (  # rebind-ok: pre-existing rebinding on a rename-only line
+                proxy_config.decrypt_db_variables(stored)
+            )
 
     # Load existing config
     config: Final = await proxy_config.get_config()
@@ -1255,7 +1288,7 @@ async def update_sso_settings(
                 # Clear environment variable if value is null/empty
                 os.environ.pop(env_var_name, None)
 
-    encrypted_sso_data: Final = proxy_config._encrypt_env_variables(environment_variables=sso_data)
+    encrypted_sso_data: Final = proxy_config.encrypt_env_variables(environment_variables=sso_data)
 
     # Save to dedicated SSO table
     await _stored_sso_settings_db(SSOConfigRepository(prisma_client)).upsert(
@@ -1523,7 +1556,7 @@ async def update_mcp_semantic_filter_settings(
         from litellm.proxy.proxy_server import prisma_client, proxy_config
 
         if prisma_client is not None:
-            await proxy_config._init_semantic_filter_settings_in_db(prisma_client=prisma_client)
+            await proxy_config.init_semantic_filter_settings_in_db(prisma_client=prisma_client)
     except Exception as e:
         verbose_proxy_logger.warning("Failed to reinitialize MCP semantic filter settings immediately: %s", e)
 
@@ -1708,6 +1741,11 @@ async def get_ui_settings_cached() -> dict[str, JsonValue]:
 _UI_SETTINGS_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 
 
+def model_creation_disabled_for_internal_users(settings: Mapping[str, object]) -> bool:
+    setting: Final = "disable_model_add_for_internal_users"
+    return UISettings.model_validate({setting: settings.get(setting, False)}).disable_model_add_for_internal_users
+
+
 def apply_runtime_general_settings_flags(ui_settings: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
     """Copy the UI settings that gate runtime behavior into ``general_settings``. Returns what was applied."""
     from litellm.proxy.config_resolvers import SettingsStore
@@ -1721,17 +1759,20 @@ def apply_runtime_general_settings_flags(ui_settings: Mapping[str, JsonValue]) -
     return MappingProxyType(flags)
 
 
-async def sync_ui_settings_to_general_settings(prisma_client: object) -> Mapping[str, JsonValue]:
+async def sync_ui_settings_to_general_settings(
+    prisma_client: object, *, require_fresh: bool = False
+) -> Mapping[str, JsonValue]:
     """Re-read the persisted UI settings and apply the runtime flags to ``general_settings``.
 
     Runs on startup and on every periodic config reload: the PATCH handler only updates the pod
     that served it, so every other pod needs its own read to pick up a change without a restart.
-    Never raises. A read that fails leaves this pod on the flags it already had.
+    Background failures retain existing flags. Authorization refreshes require the writer
+    and fail closed if the current settings cannot be read.
     """
     try:
-        db_record: Final = await _ui_settings_db(UISettingsRepository(prisma_client)).find_unique(
-            where={"id": "ui_settings"}
-        )
+        db_record: Final = await _ui_settings_db(
+            UISettingsRepository(prisma_client, use_writer=require_fresh)
+        ).find_unique(where={"id": "ui_settings"})
         stored: Final = (db_record.ui_settings if db_record else None) or "{}"
         parsed: Final = (
             _UI_SETTINGS_OBJECT.validate_json(stored)
@@ -1740,6 +1781,8 @@ async def sync_ui_settings_to_general_settings(prisma_client: object) -> Mapping
         )
     except Exception as e:
         verbose_proxy_logger.warning("Could not refresh UI settings from the database: %s", e)
+        if require_fresh:
+            raise HTTPException(status_code=503, detail="Unable to verify model creation policy. Please retry.") from e
         return MappingProxyType({})
     return apply_runtime_general_settings_flags(parsed)
 

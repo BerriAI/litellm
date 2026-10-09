@@ -22,8 +22,9 @@ from litellm.proxy.db.master_key_migration import (
     reencrypt_stored_values,
     replace_ciphertexts,
 )
+from tests._master_key import MASTER_KEY
 
-PREVIOUS_KEY = "sk-1234"
+PREVIOUS_KEY = MASTER_KEY
 NEW_KEY = "sk-qa-9f2c1e7a44b0d3"
 UNRELATED_KEY = "sk-some-other-deployment"
 

@@ -44,7 +44,7 @@ class BudgetWindowState(BudgetWindow):
 class KeyLoggingCallbackVars(BaseModel):
     langfuse_public_key: str | None = Field(default=None, repr=False)
     langfuse_secret_key: str | None = Field(default=None, repr=False)
-    langfuse_host: str | None = None
+    langfuse_host: str | None = Field(default=None, repr=False)
     wandb_api_key: str | None = Field(default=None, repr=False)
     weave_project_id: str | None = None
 
@@ -658,10 +658,11 @@ class McpServerCreateBody(BaseModel):
     auth_type: str | None = None
     oauth2_flow: Literal["client_credentials", "authorization_code"] | None = None
     per_server_oauth_discovery: bool | None = None
+    issuer: str | None = None
     authorization_url: str | None = None
     token_url: str | None = None
     registration_url: str | None = None
-    credentials: McpOauthCredentials | None = None
+    credentials: McpOauthCredentials | None = Field(default=None, repr=False)
     server_name: str | None = None
     description: str | None = None
     mcp_info: McpInfo | None = None
@@ -1252,14 +1253,15 @@ class LiteLLMParamsBody(BaseModel):
     model: str
     api_key: str | None = Field(default=None, repr=False)
     litellm_credential_name: str | None = None
-    api_base: str | None = None
+    api_base: str | None = Field(default=None, repr=False)
     api_version: str | None = None
     realtime_protocol: str | None = None
     allowed_openai_params: list[str] | None = None
+    drop_params: bool | None = None
     aws_access_key_id: str | None = Field(default=None, repr=False)
     aws_secret_access_key: str | None = Field(default=None, repr=False)
     aws_region_name: str | None = None
-    aws_bedrock_runtime_endpoint: str | None = None
+    aws_bedrock_runtime_endpoint: str | None = Field(default=None, repr=False)
     vertex_project: str | None = None
     vertex_location: str | None = None
     vertex_credentials: str | None = Field(default=None, repr=False)
@@ -1286,7 +1288,7 @@ class LiteLLMParamsBody(BaseModel):
     input_cost_per_token_flex: float | None = None
     output_cost_per_token_flex: float | None = None
     cache_read_input_token_cost_flex: float | None = None
-    extra_headers: dict[str, str] | None = None
+    extra_headers: dict[str, str] | None = Field(default=None, repr=False)
     use_in_pass_through: bool | None = None
     complexity_router_config: dict[str, object] | None = None
     auto_router_config: str | None = None
@@ -1421,7 +1423,7 @@ class KeyUpdateBody(BaseModel):
     keeps its stored value, `CLEAR` sends an explicit null that clears it (`budget_duration`
     clears `budget_reset_at` with it), and `metadata` replaces the stored metadata wholesale."""
 
-    key: str
+    key: str = Field(repr=False)
     project_id: str | Cleared | None = None
     models: list[str] | None = None
     key_alias: str | None = None
