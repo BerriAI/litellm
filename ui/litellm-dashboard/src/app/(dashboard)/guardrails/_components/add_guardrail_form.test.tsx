@@ -9,7 +9,19 @@ import {
   getGuardrailUISettings,
   modelHubCall,
 } from "@/components/networking";
+import { toast } from "@/lib/toast";
 import AddGuardrailForm from "./add_guardrail_form";
+
+vi.mock("@/lib/toast", () => ({
+  toast: {
+    success: vi.fn(),
+    info: vi.fn(),
+    warning: vi.fn(),
+    error: vi.fn(),
+    fromError: vi.fn(),
+    dismiss: vi.fn(),
+  },
+}));
 
 vi.mock("@/components/networking", () => ({
   createGuardrailCall: vi.fn(),
@@ -192,6 +204,37 @@ describe("AddGuardrailForm decision model checks", () => {
 
     await user.click(await screen.findByLabelText("Remove invoice_policy"));
     expect(screen.queryByRole("checkbox", { name: "invoice_policy" })).not.toBeInTheDocument();
+  });
+
+  it("blocks create when the only check left is an unchecked custom", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(getGuardrailProviderSpecificParams).mockResolvedValue({
+      decision_model: { ui_friendly_name: "Decision Model" },
+    });
+    vi.mocked(modelHubCall).mockResolvedValue({
+      data: [{ model_group: "jev-model", mode: "evaluation" }],
+    });
+    renderWithProviders(
+      <AddGuardrailForm visible={true} onClose={vi.fn()} accessToken="test-token" onSuccess={vi.fn()} />,
+    );
+
+    await user.type(await screen.findByLabelText("Guardrail Name"), "dm-none-enabled");
+    await user.click(screen.getByLabelText("Guardrail Provider"));
+    await user.click(await screen.findByText("Decision Model"));
+    await user.click(screen.getByRole("button", { name: "Next" }));
+
+    await user.click(await screen.findByLabelText("Decision Model"));
+    await user.click(await screen.findByText("jev-model"));
+
+    await user.type(await screen.findByLabelText("Custom check name"), "invoice_policy");
+    await user.type(screen.getByLabelText("Custom check instructions"), "Does the text ask about invoices?");
+    await user.click(screen.getByRole("button", { name: "Add check" }));
+
+    await user.click(screen.getByRole("button", { name: "Unselect all" }));
+    await user.click(await screen.findByRole("button", { name: "Create Guardrail" }));
+
+    await waitFor(() => expect(vi.mocked(toast.fromError)).toHaveBeenCalledWith("Please select at least one check"));
+    expect(vi.mocked(createGuardrailCall)).not.toHaveBeenCalled();
   });
 });
 

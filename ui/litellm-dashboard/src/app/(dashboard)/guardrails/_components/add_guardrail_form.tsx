@@ -67,7 +67,11 @@ import GuardrailOptionalParams from "./guardrail_optional_params";
 import GuardrailProviderFields from "./guardrail_provider_fields";
 import LLMJudgeFields from "./llm_judge/LLMJudgeFields";
 import DecisionModelFields, { type DecisionModelCheckPreset } from "./decision_model/DecisionModelFields";
-import { buildDecisionModelParams, type DecisionModelCheckDraft } from "./decision_model/buildDecisionModelParams";
+import {
+  buildDecisionModelParams,
+  enabledDecisionChecks,
+  type DecisionModelCheckDraft,
+} from "./decision_model/buildDecisionModelParams";
 import PiiConfiguration from "./pii_configuration";
 import ToolPermissionRulesEditor, { ToolPermissionConfig } from "./tool_permission/ToolPermissionRulesEditor";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -433,7 +437,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         if (!(await form.trigger(["decision_model"]))) {
           return;
         }
-        if (decisionChecks.length === 0) {
+        if (enabledDecisionChecks(decisionChecks).length === 0) {
           toast.fromError("Please select at least one check to continue");
           return;
         }
@@ -642,7 +646,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       }
 
       if (guardrailProvider === "decision_model") {
-        if (decisionChecks.length === 0) {
+        if (enabledDecisionChecks(decisionChecks).length === 0) {
           toast.fromError("Please select at least one check");
           setLoading(false);
           return;

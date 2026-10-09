@@ -18,6 +18,10 @@ export interface DecisionModelLitellmParams {
   }>;
 }
 
+export function enabledDecisionChecks(checks: readonly DecisionModelCheckDraft[]): readonly DecisionModelCheckDraft[] {
+  return checks.filter((check) => check.enabled !== false);
+}
+
 const clampThreshold = (value: number): number => Math.min(1, Math.max(0, value));
 
 export function buildDecisionModelParams(
@@ -26,13 +30,11 @@ export function buildDecisionModelParams(
 ): DecisionModelLitellmParams {
   return {
     decision_model: decisionModel,
-    checks: checks
-      .filter((check) => check.enabled !== false)
-      .map((check) => ({
-        name: check.name,
-        ...(check.custom ? { instructions: check.instructions ?? "" } : {}),
-        action: check.action,
-        threshold: clampThreshold(check.threshold),
-      })),
+    checks: enabledDecisionChecks(checks).map((check) => ({
+      name: check.name,
+      ...(check.custom ? { instructions: check.instructions ?? "" } : {}),
+      action: check.action,
+      threshold: clampThreshold(check.threshold),
+    })),
   };
 }
