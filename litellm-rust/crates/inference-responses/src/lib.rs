@@ -6,7 +6,7 @@ pub mod types;
 pub mod websocket;
 
 mod handler;
-mod prepare;
+mod provider_config;
 
 use std::sync::Arc;
 
@@ -14,6 +14,8 @@ use litellm_auth::AuthServices;
 use litellm_host::interceptors::Interceptors;
 use litellm_secrets::source::SecretSource;
 use types::{ResponsesCall, ResponsesOutput};
+
+use crate::provider_config::resolve_provider_config;
 
 #[derive(Clone)]
 pub struct ResponsesRoute {
@@ -77,34 +79,33 @@ impl ResponsesRoute {
         observers: Option<&ObservationSender>,
     ) -> Result<ResponsesOutput, Error> {
         litellm_inference::diagnostic::call(async {
-            self.run_provider(call, cache_options, interceptors, observers)
-                .await
+            let model = call.model.clone();
+            let custom_llm_provider = call.custom_llm_provider.clone();
+            let (provider, config) =
+                resolve_provider_config(&model, custom_llm_provider.as_deref())?;
+            litellm_inference::diagnostic::provider(
+                provider.model,
+                <&'static str>::from(provider.provider),
+            );
+            let secrets = self
+                .secrets
+                .resolve(config.secret_names(call.api_key.as_deref(), call.api_base.as_deref()))
+                .await?;
+            let execute: futures_util::future::BoxFuture<'_, Result<ResponsesOutput, Error>> =
+                Box::pin(handler::execute(
+                    &self.http,
+                    &self.auth,
+                    config,
+                    provider,
+                    call,
+                    secrets,
+                    self.cache.clone(),
+                    cache_options,
+                    interceptors,
+                    observers,
+                ));
+            execute.await
         })
         .await
-    }
-
-    async fn run_provider(
-        &self,
-        call: ResponsesCall,
-        cache_options: Option<litellm_cache_response::CachePolicy>,
-        interceptors: &impl Interceptors<Error>,
-        observers: Option<&ObservationSender>,
-    ) -> Result<ResponsesOutput, Error> {
-        let request = prepare::prepare(call, self.secrets.as_ref()).await?;
-        litellm_inference::diagnostic::provider(
-            &request.context.model,
-            &request.context.custom_llm_provider,
-        );
-        let execute: futures_util::future::BoxFuture<'_, Result<ResponsesOutput, Error>> =
-            Box::pin(handler::execute(
-                &self.http,
-                &self.auth,
-                request,
-                self.cache.clone(),
-                cache_options,
-                interceptors,
-                observers,
-            ));
-        execute.await
     }
 }
