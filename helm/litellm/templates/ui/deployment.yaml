@@ -52,6 +52,11 @@ spec:
               containerPort: 3000
               protocol: TCP
           env:
+            {{- $root := include "litellm.serverRootPath" . }}
+            {{- if $root }}
+            - name: SERVER_ROOT_PATH
+              value: {{ $root | quote }}
+            {{- end }}
             {{- if .Values.ui.logLevel }}
             - name: LITELLM_LOG
               value: {{ .Values.ui.logLevel | quote }}

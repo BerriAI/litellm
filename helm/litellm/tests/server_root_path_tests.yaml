@@ -1,0 +1,74 @@
+suite: custom server root path
+templates:
+  - gateway/configmap.yaml
+  - gateway/deployment.yaml
+  - backend/deployment.yaml
+  - ui/deployment.yaml
+  - ingress.yaml
+set:
+  database.writer.host: postgres
+  database.writer.dbname: litellm
+  lens.enabled: false
+  lensWorker.enabled: false
+tests:
+  - it: configures all serving components with the same normalized prefix
+    set:
+      serverRootPath: /services/llm/
+    templates:
+      - gateway/deployment.yaml
+      - backend/deployment.yaml
+      - ui/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SERVER_ROOT_PATH
+            value: /services/llm
+  - it: routes only prefixed paths when ingress is enabled
+    template: ingress.yaml
+    set:
+      ingress.enabled: true
+      serverRootPath: /services/llm
+      ingress.extraPaths:
+        - path: /custom-provider
+    asserts:
+      - equal:
+          path: spec.rules[0].http.paths[0].path
+          value: /services/llm
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /services/llm/ui
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-ui
+                port:
+                  number: 3000
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /services/llm/
+            pathType: Exact
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-ui
+                port:
+                  number: 3000
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /services/llm/custom-provider
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway
+                port:
+                  number: 4000
+  - it: rejects traversal
+    template: ui/deployment.yaml
+    set:
+      serverRootPath: /services/../llm
+    asserts:
+      - failedTemplate:
+          errorMessage: serverRootPath must contain safe absolute path segments without traversal

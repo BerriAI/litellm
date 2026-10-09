@@ -1,3 +1,5 @@
+serverRootPath: ""
+
 # LiteLLM helm chart values
 
 nameOverride: ""
@@ -194,7 +196,7 @@ billingMetrics:
   caSecretName: ""                                    # existing Secret holding ca.crt
   exportIntervalMs: ""                                # push cadence; the proxy defaults to 60000
 
-# External Postgres connection. 
+# External Postgres connection.
 database:
   writer:
     host: ""

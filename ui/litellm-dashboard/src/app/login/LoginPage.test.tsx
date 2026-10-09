@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { setServerRootPath } from "@/lib/serverRootPath";
 import LoginPage from "./LoginPage";
 
 const mockPush = vi.fn();
@@ -69,6 +70,7 @@ const createQueryClient = () =>
 
 describe("LoginPage", () => {
   beforeEach(() => {
+    setServerRootPath("/");
     vi.clearAllMocks();
     mockPush.mockClear();
     mockReplace.mockClear();
@@ -98,12 +100,16 @@ describe("LoginPage", () => {
     });
   });
 
-  it("should call router.replace to dashboard when jwt is valid", async () => {
+  it.each([
+    ["/", "/ui"],
+    ["/services/llm/", "/services/llm/ui"],
+  ])("keeps valid-token navigation under %s", async (root, expectedPath) => {
+    setServerRootPath(root);
     const validToken = "valid-token";
     (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
       data: {
         auto_redirect_to_sso: false,
-        server_root_path: "/",
+        server_root_path: root,
         proxy_base_url: null,
         sso_configured: false,
       },
@@ -120,7 +126,7 @@ describe("LoginPage", () => {
     );
 
     await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith("/ui");
+      expect(mockReplace).toHaveBeenCalledWith(expectedPath);
     });
   });
 
@@ -235,11 +241,15 @@ describe("LoginPage", () => {
     expect(mockReplace).not.toHaveBeenCalled();
   });
 
-  it("should show Login with SSO button when sso_configured is true", async () => {
+  it.each([
+    ["/", "/ui/login/"],
+    ["/services/llm", "/services/llm/ui/login/"],
+  ])("returns SSO to the control plane UI under %s", async (root, expectedPath) => {
+    setServerRootPath(root);
     (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
       data: {
         auto_redirect_to_sso: false,
-        server_root_path: "/",
+        server_root_path: root,
         proxy_base_url: null,
         sso_configured: true,
       },
@@ -259,7 +269,10 @@ describe("LoginPage", () => {
       expect(screen.getByRole("heading", { name: "Login" })).toBeInTheDocument();
     });
 
-    expect(screen.getByRole("button", { name: "Login with SSO" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Login with SSO" }));
+    expect(mockPush).toHaveBeenCalledWith(
+      `http://localhost:4000/sso/key/generate?return_to=${encodeURIComponent(new URL(expectedPath, window.location.origin).href)}`,
+    );
   });
 
   it("should show disabled Login with SSO button with popover when sso_configured is false", async () => {

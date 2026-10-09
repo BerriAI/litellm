@@ -8,6 +8,20 @@ templates:
 - lens/service.yaml
 - lens/deployment.yaml
 tests:
+- it: passes the normalized prefix to the Lens ingestion listener
+  template: lens/deployment.yaml
+  set:
+    serverRootPath: /services/llm/
+    lensWorker.enabled: true
+    lensWorker.publicUrl: https://gateway.example/services/llm/lens-ingest
+    lensWorker.serviceTokenSecret.name: lens-service
+    lensWorker.clickhouseSecret.name: lens-storage
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: SERVER_ROOT_PATH
+        value: /services/llm
 - it: connects gateway/deployment.yaml to the shared Lens service
   template: gateway/deployment.yaml
   set: &id001

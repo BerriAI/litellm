@@ -551,7 +551,7 @@ shutdown drain window.
 {{- printf "%s://%s" (ternary "https" "http" $tls) (required "lensWorker.ingress.host is required" .Values.lensWorker.ingress.host) -}}
 {{- else if and .Values.ingress.enabled .Values.ingress.host -}}
 {{- $tls := or (not (empty .Values.ingress.tls)) (hasKey .Values.ingress.annotations "alb.ingress.kubernetes.io/certificate-arn") -}}
-{{- printf "%s://%s/lens-ingest" (ternary "https" "http" $tls) .Values.ingress.host -}}
+{{- printf "%s://%s%s/lens-ingest" (ternary "https" "http" $tls) .Values.ingress.host (include "litellm.serverRootPath" .) -}}
 {{- else -}}
 {{- fail "lensWorker.publicUrl is required when there is no single ingress hostname" -}}
 {{- end -}}
@@ -559,4 +559,12 @@ shutdown drain window.
 
 {{- define "litellm.lensWorker.clickhouseName" -}}
 {{- printf "%s-lens-clickhouse" (include "litellm.fullname" . | trunc 47 | trimSuffix "-") -}}
+{{- end -}}
+
+{{- define "litellm.serverRootPath" -}}
+{{- $root := .Values.serverRootPath | default "" | trimSuffix "/" -}}
+{{- if and $root (or (not (regexMatch "^(/[A-Za-z0-9_.~-]+)+$" $root)) (regexMatch "(^|/)\\.\\.?(/|$)" $root)) -}}
+{{- fail "serverRootPath must contain safe absolute path segments without traversal" -}}
+{{- end -}}
+{{- $root -}}
 {{- end -}}

@@ -37,6 +37,11 @@ jobs:
         with:
           category: ui
 
+      - name: Run UI runtime prefix regression tests
+        if: steps.changes.outputs.decision != 'skip'
+        working-directory: .
+        run: python3 -m unittest discover -s tests/proxy_migration_tests -p test_ui_root_path.py
+
       - name: Setup Node.js
         if: steps.changes.outputs.decision != 'skip'
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0

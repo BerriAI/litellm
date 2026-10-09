@@ -10,6 +10,16 @@ set:
     - hosts: [gateway.example]
       secretName: tls
 tests:
+  - it: derives the prefixed shared ingestion address
+    set:
+      serverRootPath: /services/llm/
+    template: gateway/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_PUBLIC_URL
+            value: https://gateway.example/services/llm/lens-ingest
   - it: derives the trace endpoint from the deployment hostname and TLS
     template: gateway/deployment.yaml
     asserts:

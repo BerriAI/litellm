@@ -57,6 +57,11 @@ spec:
               containerPort: 4001
               protocol: TCP
           env:
+            {{- $root := include "litellm.serverRootPath" . }}
+            {{- if $root }}
+            - name: SERVER_ROOT_PATH
+              value: {{ $root | quote }}
+            {{- end }}
             {{- include "litellm.lensConnectionEnv" . | nindent 12 }}
             - name: LENS_WORKER_IMAGE
               value: {{ include "litellm.lensWorker.image" . | quote }}

@@ -40,6 +40,11 @@ spec:
             capabilities:
               drop: [ALL]
           env:
+            {{- $root := include "litellm.serverRootPath" . }}
+            {{- if $root }}
+            - name: SERVER_ROOT_PATH
+              value: {{ $root | quote }}
+            {{- end }}
             - name: LITELLM_URL
               value: {{ .Values.lensWorker.url | default (printf "http://%s:%v" (include "litellm.backend.fullname" .) .Values.backend.service.port) | quote }}
             - name: LITELLM_LENS_SERVICE_TOKEN

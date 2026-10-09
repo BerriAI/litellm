@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 
+import { setServerRootPath } from "@/lib/serverRootPath";
+
 import {
   buildLoginUrlWithReturn,
   clearStoredReturnUrl,
@@ -36,6 +38,7 @@ describe("returnUrlUtils", () => {
   });
 
   afterEach(() => {
+    setServerRootPath("/");
     // Restore original location
     Object.defineProperty(window, "location", {
       value: originalLocation,
@@ -102,6 +105,24 @@ describe("returnUrlUtils", () => {
   });
 
   describe("getLoginUrl", () => {
+    it("keeps a nested root in same-origin SSO return URLs", () => {
+      setServerRootPath("/services/llm/");
+      expect(getLoginUrl()).toBe("/services/llm/ui/login/");
+      expect(new URL(getLoginUrl(), "https://platform.example.com").href).toBe(
+        "https://platform.example.com/services/llm/ui/login/",
+      );
+      expect(getLoginUrl("https://platform.example.com/services/llm/")).toBe(
+        "https://platform.example.com/services/llm/ui/login/",
+      );
+    });
+
+    it("keeps worker mount paths independent of the control plane prefix", () => {
+      setServerRootPath("/services/llm");
+      expect(getLoginUrl("https://worker.example.com")).toBe("https://worker.example.com/ui/login/");
+      expect(getLoginUrl("https://worker.example.com/worker/")).toBe("https://worker.example.com/worker/ui/login/");
+      expect(getLoginUrl("/")).toBe("/ui/login/");
+    });
+
     it("should build a relative login URL with a trailing slash", () => {
       expect(getLoginUrl()).toBe("/ui/login/");
     });

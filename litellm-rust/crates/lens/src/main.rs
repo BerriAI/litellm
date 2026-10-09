@@ -2,7 +2,7 @@ use litellm_lens::{
     State, Storage, auth,
     config::{Config, http_client},
     control::Control,
-    provision, router,
+    provision, router_with_root_path,
     worker::Worker,
 };
 use std::{io::Write, sync::Arc, time::Duration};
@@ -63,11 +63,14 @@ async fn run() -> Result<(), litellm_lens::Error> {
     let mut worker = tokio::spawn(Worker::new(control, config.release).serve());
     let (shutdown, stopping) = tokio::sync::oneshot::channel::<()>();
     let mut server = tokio::spawn(async move {
-        axum::serve(listener, router(state))
-            .with_graceful_shutdown(async {
-                let _ = stopping.await;
-            })
-            .await
+        axum::serve(
+            listener,
+            router_with_root_path(state, &config.server_root_path),
+        )
+        .with_graceful_shutdown(async {
+            let _ = stopping.await;
+        })
+        .await
     });
     let outcome = tokio::select! {
         _ = shutdown_signal() => Ok(()),

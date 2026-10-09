@@ -18,6 +18,7 @@ import { useZodForm } from "@/lib/forms/useZodForm";
 import { clearTokenCookies, getCookieFromDocument } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
 import { consumeReturnUrl, getLoginUrl, getReturnUrl, isValidReturnUrl } from "@/utils/returnUrlUtils";
+import { uiHref } from "@/utils/uiHref";
 import { CircleAlert, Info, TriangleAlert, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useState } from "react";
@@ -102,7 +103,7 @@ function LoginPageContent() {
         params.delete("code");
         const cleanSearch = params.toString();
         window.history.replaceState(null, "", window.location.pathname + (cleanSearch ? `?${cleanSearch}` : ""));
-        router.replace("/ui/?login=success");
+        router.replace(`${uiHref("")}?login=success`);
       });
       return;
     }
@@ -122,7 +123,7 @@ function LoginPageContent() {
       if (returnUrl) {
         router.replace(returnUrl);
       } else {
-        router.replace("/ui");
+        router.replace(uiHref("").replace(/\/$/, ""));
       }
       return;
     }
@@ -156,7 +157,7 @@ function LoginPageContent() {
           if (selectedWorker) {
             selectWorker(selectedWorker.worker_id);
             // Stay on the CP's UI — proxyBaseUrl already points at the worker
-            router.push("/ui/?login=success");
+            router.push(`${uiHref("")}?login=success`);
           } else {
             // Normal (non-control-plane) login — follow the server's redirect
             const returnUrl = consumeReturnUrl();
@@ -338,7 +339,7 @@ function LoginPageContent() {
                         // SSO on the worker (or this instance if no worker), always
                         // include return_to so the callback redirects back here
                         const ssoBase = selectedWorker?.url ?? getProxyBaseUrl();
-                        const returnTo = encodeURIComponent(getLoginUrl(window.location.origin));
+                        const returnTo = encodeURIComponent(new URL(getLoginUrl(), window.location.origin).href);
                         router.push(`${ssoBase}/sso/key/generate?return_to=${returnTo}`);
                       }}
                       className="w-full"

@@ -1,4 +1,5 @@
 {{- if .Values.ingress.enabled -}}
+{{- $root := include "litellm.serverRootPath" . -}}
 {{- $gatewayName := include "litellm.gateway.fullname" . -}}
 {{- $backendName := include "litellm.backend.fullname" . -}}
 {{- $uiName := include "litellm.ui.fullname" . -}}
@@ -6,6 +7,9 @@
 {{- $backendPort := .Values.backend.service.port -}}
 {{- $uiPort := .Values.ui.service.port -}}
 {{- $controller := .Values.ingress.controller | default "alb" -}}
+{{- if and $root (eq $controller "nginx") (contains "." $root) }}
+{{- fail "serverRootPath containing dots is not supported with ingress.controller=nginx; use Gateway API or a prefix without dots" }}
+{{- end }}
 {{- if not (has $controller (list "alb" "nginx")) }}
 {{- fail (printf "ingress.controller: unknown controller %q, expected one of alb, nginx" $controller) }}
 {{- end }}
@@ -44,6 +48,9 @@
     (dict "path" "/_next" "pathType" "Prefix")
     (dict "path" "/ui" "pathType" "Prefix")
 -}}
+{{- if $root }}
+{{- $uiPaths = append $uiPaths (dict "path" "/" "pathType" "Exact" "trailingSlash" true) }}
+{{- end }}
 {{- if eq $controller "alb" }}
 {{- $uiPaths = append $uiPaths (dict "path" "/*.txt" "pathType" "ImplementationSpecific") }}
 {{- end }}
@@ -118,7 +125,7 @@ spec:
           {{- range $uiPaths }}
           {{- $pathType := include "litellm.ingress.pathType" (dict "controller" $controller "path" .path "pathType" .pathType) }}
           {{- $builtinPathKeys = append $builtinPathKeys (printf "%s|%s" .path $pathType) }}
-          - path: {{ .path }}
+          - path: {{ if eq .path "/" }}{{ if .trailingSlash }}{{ printf "%s/" $root }}{{ else }}{{ $root | default "/" }}{{ end }}{{ else }}{{ printf "%s%s" $root .path }}{{ end }}
             pathType: {{ $pathType }}
             backend:
               service:
@@ -131,14 +138,14 @@ spec:
           # /test/* MCP management endpoints fall to the backend catch-all.
           # Exact /debug/memory/summary reads a serving worker's RSS (the e2e memory
           # gate); the rest of /debug/* stays on the backend.
-          - path: /test
+          - path: {{ printf "%s/test" $root }}
             pathType: Exact
             backend:
               service:
                 name: {{ $gatewayName }}
                 port:
                   number: {{ $gatewayPort }}
-          - path: /debug/memory/summary
+          - path: {{ printf "%s/debug/memory/summary" $root }}
             pathType: Exact
             backend:
               service:
@@ -148,7 +155,7 @@ spec:
           {{- range $gatewayPrefixes }}
           {{- $pathType := include "litellm.ingress.pathType" (dict "controller" $controller "path" . "pathType" "Prefix") }}
           {{- $builtinPathKeys = append $builtinPathKeys (printf "%s|%s" . $pathType) }}
-          - path: {{ . }}
+          - path: {{ printf "%s%s" $root . }}
             pathType: {{ $pathType }}
             backend:
               service:
@@ -158,7 +165,7 @@ spec:
           {{- end }}
           {{- if .Values.lensWorker.enabled }}
           {{- $builtinPathKeys = append $builtinPathKeys "/lens-ingest|Prefix" }}
-          - path: /lens-ingest
+          - path: {{ printf "%s/lens-ingest" $root }}
             pathType: Prefix
             backend:
               service:
@@ -200,7 +207,7 @@ spec:
           {{- if has (printf "%s|%s" $extra.path $pathType) $builtinPathKeys }}
           {{- fail (printf "ingress.extraPaths[%d]: path %s with pathType %s is already routed by this chart, and a duplicate would take it over rather than add to it" $idx $extra.path $pathType) }}
           {{- end }}
-          - path: {{ $extra.path | quote }}
+          - path: {{ printf "%s%s" $root $extra.path | quote }}
             pathType: {{ $pathType }}
             backend:
               service:
@@ -209,7 +216,7 @@ spec:
                   number: {{ $target.port }}
           {{- end }}
           # --- Catch-all → backend (management API: /key/*, /user/*, /team/*, ...) ---
-          - path: /
+          - path: {{ $root | default "/" }}
             pathType: Prefix
             backend:
               service:
