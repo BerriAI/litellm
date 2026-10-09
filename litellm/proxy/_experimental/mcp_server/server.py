@@ -848,6 +848,7 @@ if MCP_AVAILABLE:
                 _mcp_proxy_mode.get(),
                 wire_compat_for(ctx.protocol_version),
                 ctx.protocol_version,
+                _mcp_gateway_server_name.get(),
             )
 
     async def handle_list_tools(ctx: ServerRequestContext, params: PaginatedRequestParams) -> ListToolsResult:

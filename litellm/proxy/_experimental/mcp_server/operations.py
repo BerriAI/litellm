@@ -1885,6 +1885,54 @@ async def execute_mcp_tool(
     return await GatewayOperations().execute(operation, context)
 
 
+def resolve_requested_server(
+    *,
+    requested_server_id: str | None,
+    allowed_mcp_servers: Sequence[MCPServer],
+    scoped_server_name: str | None = None,
+) -> MCPServer | None:
+    """Resolve the server a tool call is scoped to, from server-side state only.
+
+    ``requested_server_id`` (REST) wins, then ``scoped_server_name`` — the single
+    server named by a ``/{server_name}/mcp`` path, which the legacy adapter reads
+    out of request state and puts on ``OperationContext``. Both are set
+    server-side, never from a client-supplied header, so either may be treated as
+    authoritative for routing.
+
+    This matters because the fallback is the process-wide tool_name -> server
+    mapping, which is empty until some caller has listed the server and is
+    overwritten by whichever server listed last: without a scope, one caller's
+    tools/list decides how another caller's tools/call resolves.
+
+    Both lookups stay inside ``allowed_mcp_servers``, so neither a path nor a
+    server_id can widen what the key may reach.
+    """
+    if requested_server_id:
+        by_id: Final = next(
+            (server for server in allowed_mcp_servers if server.server_id == requested_server_id),
+            None,
+        )
+        if by_id is not None:
+            return by_id
+
+    if not scoped_server_name:
+        return None
+
+    normalized_scoped_name: Final[str] = normalize_server_name(scoped_server_name)
+    return next(
+        (
+            server
+            for server in allowed_mcp_servers
+            if any(
+                normalize_server_name(identifier) == normalized_scoped_name
+                for identifier in (server.alias, server.server_name, server.name)
+                if identifier
+            )
+        ),
+        None,
+    )
+
+
 async def _execute_mcp_tool(
     name: str,
     arguments: dict[str, object],
@@ -1899,6 +1947,7 @@ async def _execute_mcp_tool(
     guardrail_context: Mapping[str, object] | None = None,
     client_ip: str | None = None,
     wire_compat: WireCompat = WireCompat.LEGACY,
+    scoped_server_name: str | None = None,
     **kwargs: Any,
 ) -> CallToolResult | InputRequiredResult:
     """
@@ -1916,6 +1965,8 @@ async def _execute_mcp_tool(
         mcp_server_auth_headers: Optional server-specific auth headers
         oauth2_headers: Optional OAuth2 headers
         raw_headers: Optional raw HTTP headers
+        scoped_server_name: Server named by a single-server ``/{server_name}/mcp``
+            path, when the request arrived on one
         **kwargs: Additional arguments (e.g., litellm_logging_obj)
 
     Returns:
@@ -1932,12 +1983,11 @@ async def _execute_mcp_tool(
     # Remove prefix from tool name for logging and processing
     original_tool_name, server_name = split_server_prefix_from_name(name)
 
-    requested_server: MCPServer | None = None
-    if requested_server_id:
-        requested_server = next(
-            (s for s in allowed_mcp_servers if s.server_id == requested_server_id),
-            None,
-        )
+    requested_server: MCPServer | None = resolve_requested_server(
+        requested_server_id=requested_server_id,
+        allowed_mcp_servers=allowed_mcp_servers,
+        scoped_server_name=scoped_server_name,
+    )
 
     name_is_prefixed = False
     if requested_server is not None and MCP_TOOL_PREFIX_SEPARATOR in name:
@@ -3138,6 +3188,7 @@ def prepare_context(
     mcp_proxy_mode: bool = False,
     wire_compat: WireCompat = WireCompat.LEGACY,
     protocol_version: str | None = None,
+    scoped_server_name: str | None = None,
 ) -> OperationContext:
     return OperationContext(
         _caller=user_api_key_auth,
@@ -3150,6 +3201,7 @@ def prepare_context(
         mcp_proxy_mode=mcp_proxy_mode,
         wire_compat=wire_compat,
         protocol_version=protocol_version,
+        scoped_server_name=scoped_server_name,
     )
 
 
@@ -3282,6 +3334,7 @@ class GatewayOperations:
                     host_progress_callback=operation.host_progress_callback,
                     guardrail_context=operation.guardrail_context,
                     wire_compat=context.wire_compat,
+                    scoped_server_name=context.scoped_server_name,
                     **operation.logging_data,
                 )
             case ListToolsRequest(params=params):

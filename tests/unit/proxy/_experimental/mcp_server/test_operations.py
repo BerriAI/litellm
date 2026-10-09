@@ -1154,6 +1154,132 @@ async def test_list_mcp_tools_records_the_catalog_only_when_asked(
     assert [tool.name for tool in listing.tools] == ["listing-slot-echo"]
     assert (listed is not None) is recorded
 
+def _mcp_server(*, server_id: str, name: str, alias: str | None = None) -> MCPServer:
+    return MCPServer(
+        server_id=server_id,
+        name=name,
+        alias=alias,
+        server_name=name,
+        url="http://localhost:1/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.none,
+    )
+
+
+class TestResolveRequestedServer:
+    """A tool call must be scoped by server-side state, not by the global
+    tool_name -> server mapping, which is last-writer-wins across callers
+    (BerriAI/litellm#44831)."""
+
+    def test_path_scope_resolves_server_when_no_server_id(self):
+        alpha: Final = _mcp_server(server_id="id-alpha", name="alpha")
+        beta: Final = _mcp_server(server_id="id-beta", name="beta")
+        resolved = operations.resolve_requested_server(
+            requested_server_id=None,
+            allowed_mcp_servers=[alpha, beta],
+            scoped_server_name="alpha",
+        )
+        assert resolved is alpha
+
+    def test_path_scope_matches_alias(self):
+        alpha: Final = _mcp_server(server_id="id-alpha", name="alpha-internal", alias="alpha")
+        resolved = operations.resolve_requested_server(
+            requested_server_id=None,
+            allowed_mcp_servers=[alpha],
+            scoped_server_name="alpha",
+        )
+        assert resolved is alpha
+
+    def test_path_scope_picks_the_path_server_when_two_share_a_tool(self):
+        # The collision case: both servers expose the same tool name, so the
+        # global mapping points at whichever listed last. The path must win.
+        alpha: Final = _mcp_server(server_id="id-alpha", name="alpha")
+        beta: Final = _mcp_server(server_id="id-beta", name="beta")
+        resolved = operations.resolve_requested_server(
+            requested_server_id=None,
+            allowed_mcp_servers=[alpha, beta],
+            scoped_server_name="beta",
+        )
+        assert resolved is beta
+
+    def test_path_scope_cannot_reach_a_server_the_key_lacks(self):
+        # Rejected path: the scope names a real server that is not in the key's
+        # allowed set, so it must not resolve. A path may narrow, never widen.
+        allowed: Final = _mcp_server(server_id="id-alpha", name="alpha")
+        resolved = operations.resolve_requested_server(
+            requested_server_id=None,
+            allowed_mcp_servers=[allowed],
+            scoped_server_name="forbidden",
+        )
+        assert resolved is None
+
+    def test_server_id_wins_over_path_scope(self):
+        alpha: Final = _mcp_server(server_id="id-alpha", name="alpha")
+        beta: Final = _mcp_server(server_id="id-beta", name="beta")
+        resolved = operations.resolve_requested_server(
+            requested_server_id="id-beta",
+            allowed_mcp_servers=[alpha, beta],
+            scoped_server_name="alpha",
+        )
+        assert resolved is beta
+
+    def test_no_scope_and_no_server_id_resolves_nothing(self):
+        alpha: Final = _mcp_server(server_id="id-alpha", name="alpha")
+        assert (
+            operations.resolve_requested_server(
+                requested_server_id=None,
+                allowed_mcp_servers=[alpha],
+            )
+            is None
+        )
+
+
+class TestScopedServerNameReachesTheResolver:
+    """The six cases above all pass even if nothing ever delivers the scope, so
+    the transport from the legacy adapter to the resolver needs its own cover."""
+
+    def test_prepare_context_carries_the_scope(self):
+        assert operations.prepare_context(scoped_server_name="alpha").scoped_server_name == "alpha"
+        assert operations.prepare_context().scoped_server_name is None
+
+    @pytest.mark.asyncio
+    async def test_tool_call_dispatch_resolves_through_the_context_scope(self, monkeypatch):
+        """prepare_context -> dispatch -> _execute_mcp_tool -> resolve_requested_server.
+
+        The call cannot complete because no upstream registry is loaded here, so
+        it is suppressed; the assertions are that the scope arrived at the
+        resolver and selected the server the path names.
+        """
+        import contextlib
+        from datetime import datetime, timezone
+
+        from litellm.proxy._experimental.mcp_server.contracts import AuthorizedToolCall
+
+        alpha: Final = _mcp_server(server_id="id-alpha", name="alpha")
+        observed: dict[str, object] = {}
+        resolve: Final = operations.resolve_requested_server
+
+        def _spy(**kwargs):
+            resolved = resolve(**kwargs)
+            observed.update(kwargs, resolved=resolved)
+            return resolved
+
+        monkeypatch.setattr(operations, "resolve_requested_server", _spy)
+        with contextlib.suppress(Exception):
+            await operations.GatewayOperations().execute(
+                AuthorizedToolCall(
+                    name="get_task_result",
+                    arguments={},
+                    allowed_mcp_servers=(alpha,),
+                    start_time=datetime.now(timezone.utc),
+                    host_progress_callback=None,
+                    guardrail_context=None,
+                    logging_data={},
+                ),
+                operations.prepare_context(scoped_server_name="alpha"),
+            )
+        assert observed["scoped_server_name"] == "alpha"
+        assert observed["resolved"] is alpha
 
 @pytest.mark.asyncio
 async def test_discovery_keeps_one_catalog_revision_across_concurrent_listings(monkeypatch):
