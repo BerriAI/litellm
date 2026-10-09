@@ -92,6 +92,11 @@ export const guardrail_provider_map: Record<string, string> = {
   DecisionModel: "decision_model",
 };
 
+// Search aliases matched alongside the provider label in the add-guardrail provider combobox
+export const guardrail_provider_search_aliases: Record<string, string[]> = {
+  decision_model: ["jev", "typesafe", "prompt injection", "jailbreak", "decision"],
+};
+
 // Function to populate provider map from API response - updates the original map
 export const populateGuardrailProviderMap = (providerParamsResponse: Record<string, any>) => {
   // Add dynamic providers from API response directly to the main map

@@ -19,6 +19,7 @@ import {
   getGuardrailProviders,
   getSupportedModesForProvider,
   guardrail_provider_map,
+  guardrail_provider_search_aliases,
   modeIncludesLoggingOnly,
   populateGuardrailProviderMap,
   populateGuardrailProviders,
@@ -750,6 +751,14 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     const showProviderFields = !usesOwnConfigurationFields;
     const providerLabels: Record<string, string> = getGuardrailProviders();
     const providerKeys = Object.keys(providerLabels);
+    const providerMatchesQuery = (key: string, query: string) => {
+      const normalized = query.toLowerCase();
+      const terms = [
+        providerLabels[key] ?? key,
+        ...(guardrail_provider_search_aliases[guardrail_provider_map[key]] ?? []),
+      ];
+      return terms.some((term) => term.toLowerCase().includes(normalized));
+    };
     const supportedModes = getSupportedModesForProvider(guardrailSettings, selectedProvider) ?? DEFAULT_MODES;
     return (
       <FieldGroup>
@@ -774,6 +783,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
             <Combobox
               items={providerKeys}
               itemToStringLabel={(key: string) => providerLabels[key] ?? key}
+              filter={providerMatchesQuery}
               value={asText(value) || null}
               onValueChange={(key: string | null) => {
                 onChange(key ?? "");

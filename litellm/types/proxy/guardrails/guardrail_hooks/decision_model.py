@@ -77,7 +77,12 @@ class DecisionModelGuardrailConfigModel(GuardrailConfigModel[BaseModel]):
     max_input_chars: int = Field(
         default=24000,
         gt=0,
-        description="Character budget for the text sent to the decision model. Longer text keeps its first and last halves and drops the middle, so instructions at either end stay visible",
+        description="Character budget for each text sent to the decision model. Texts longer than this are split into overlapping chunks that are each checked, so long inputs are fully screened",
+    )
+    max_concurrent_decision_calls: int = Field(
+        default=8,
+        gt=0,
+        description="Maximum decisions calls in flight at once across all requests on this guardrail. Calls beyond it wait for a free slot",
     )
 
     @staticmethod

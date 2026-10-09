@@ -27295,8 +27295,13 @@ export interface components {
              */
             mask_response_content?: boolean | null;
             /**
+             * Max Concurrent Decision Calls
+             * @description Maximum decisions calls in flight at once across all requests on the guardrail. Implemented by guardrail='decision_model'.
+             */
+            max_concurrent_decision_calls?: number | null;
+            /**
              * Max Input Chars
-             * @description Character budget for text sent to the guardrail's model. Implemented by guardrail='decision_model'.
+             * @description Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.
              */
             max_input_chars?: number | null;
             /**
@@ -37555,8 +37560,13 @@ export interface components {
              */
             mask_response_content?: boolean | null;
             /**
+             * Max Concurrent Decision Calls
+             * @description Maximum decisions calls in flight at once across all requests on the guardrail. Implemented by guardrail='decision_model'.
+             */
+            max_concurrent_decision_calls?: number | null;
+            /**
              * Max Input Chars
-             * @description Character budget for text sent to the guardrail's model. Implemented by guardrail='decision_model'.
+             * @description Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.
              */
             max_input_chars?: number | null;
             /**

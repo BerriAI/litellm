@@ -62,6 +62,7 @@ def initialize_guardrail(litellm_params: LitellmParams, guardrail: Guardrail) ->
         ),
         max_input_chars=litellm_params.max_input_chars or 24000,
         timeout=litellm_params.timeout,
+        max_concurrent_decision_calls=litellm_params.max_concurrent_decision_calls or 8,
     )
     litellm.logging_callback_manager.add_litellm_callback(  # pyright: ignore[reportUnknownMemberType]  # callback manager is untyped
         _callback

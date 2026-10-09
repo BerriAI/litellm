@@ -3,7 +3,10 @@ response against predicate checks and blocks when any check crosses its threshol
 
 from __future__ import annotations
 
+import asyncio
+from asyncio import AbstractEventLoop, Semaphore
 from collections.abc import Callable, Mapping, Sequence
+from itertools import chain
 from time import time
 from typing import TYPE_CHECKING, ClassVar, Final, Literal
 
@@ -37,6 +40,7 @@ class _CheckVerdict(TypedDict):
     threshold: ReadOnly[float]
     action: ReadOnly[Literal["block", "log"]]
     flagged: ReadOnly[bool]
+    reason: ReadOnly[str | None]
 
 
 def _resolve_checks(checks: tuple[DecisionModelCheck, ...]) -> tuple[DecisionModelCheck, ...]:
@@ -67,35 +71,13 @@ def _resolve_checks(checks: tuple[DecisionModelCheck, ...]) -> tuple[DecisionMod
     return resolved
 
 
-_ELISION_MARKER: Final = "\n[... middle of input omitted ...]\n"
-
-
-def _elide_middle(text: str, max_chars: int) -> str:
+def _chunk_text(text: str, max_chars: int) -> tuple[str, ...]:
+    """Split text into chunks of at most max_chars that overlap by
+    min(2000, max_chars // 4) and together cover the whole text."""
     if len(text) <= max_chars:
-        return text
-    if max_chars <= len(_ELISION_MARKER):
-        return text[:max_chars]
-    budget: Final = max_chars - len(_ELISION_MARKER)
-    head: Final = budget // 2
-    return text[:head] + _ELISION_MARKER + text[len(text) - (budget - head) :]
-
-
-def _predicate_verdict(answer: object | None, check: DecisionModelCheck) -> _CheckVerdict:
-    if isinstance(answer, OpenAIPredicateAnswer):
-        return {
-            "name": check.name,
-            "probability": answer.probability,
-            "threshold": check.threshold,
-            "action": check.action,
-            "flagged": answer.probability >= check.threshold,
-        }
-    return {
-        "name": check.name,
-        "probability": None,
-        "threshold": check.threshold,
-        "action": check.action,
-        "flagged": False,
-    }
+        return (text,)
+    step: Final = max_chars - min(2000, max_chars // 4)
+    return tuple(text[start : start + max_chars] for start in range(0, len(text) - max_chars + step, step))
 
 
 class DecisionModelGuardrail(CustomGuardrail):
@@ -114,6 +96,7 @@ class DecisionModelGuardrail(CustomGuardrail):
         max_input_chars: int = 24000,
         router_provider: Callable[[], Router | None] | None = None,
         timeout: float | None = None,
+        max_concurrent_decision_calls: int = 8,
     ) -> None:
         super().__init__(  # pyright: ignore[reportUnknownMemberType]  # base init takes untyped **kwargs
             guardrail_name=guardrail_name,
@@ -129,6 +112,8 @@ class DecisionModelGuardrail(CustomGuardrail):
         self.max_input_chars = max_input_chars
         self._router_provider = router_provider or default_router_provider
         self.timeout = timeout
+        self._max_concurrent_decision_calls = max_concurrent_decision_calls
+        self._semaphores_by_loop: dict[AbstractEventLoop, Semaphore] = {}  # mutable-ok: per-loop semaphore registry
 
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:  # mutable-ok: base signature returns list
@@ -157,27 +142,58 @@ class DecisionModelGuardrail(CustomGuardrail):
             timeout=self.timeout,
         )
 
-    async def _run_checks(self, text: str) -> OpenAIDecisionResponse:
-        questions: Final = [
-            {"type": "predicate", "name": check.name, "instructions": check.instructions or ""} for check in self.checks
-        ]
-        raw_response: Final = await self._call_decisions(text, questions)
+    def _get_decision_semaphore(self) -> asyncio.Semaphore:
+        """Per-event-loop semaphore shared by every decisions call on this instance."""
+        loop: Final = asyncio.get_running_loop()
+        existing: Final = self._semaphores_by_loop.get(loop)
+        if existing is not None:
+            return existing
+        created: Final = asyncio.Semaphore(self._max_concurrent_decision_calls)
+        self._semaphores_by_loop[loop] = created
+        return created
+
+    async def _run_checks(
+        self, text: str, questions: Sequence[Mapping[str, object]], semaphore: asyncio.Semaphore
+    ) -> OpenAIDecisionResponse:
+        async with semaphore:
+            raw_response: Final = await self._call_decisions(text, questions)
         if not isinstance(raw_response, OpenAIDecisionResponse):
             raise TypeError(f"decisions call returned {type(raw_response).__name__}, expected OpenAI format")
         return raw_response
 
-    def _verdicts(self, response: OpenAIDecisionResponse) -> tuple[_CheckVerdict, ...]:
-        answers: Final = {answer.name: answer for answer in response.answers}
-        for check in self.checks:
-            answer = answers.get(check.name)
-            if not isinstance(answer, OpenAIPredicateAnswer):
-                verbose_logger.warning(
-                    "decision_model guardrail %s: check '%s' got %s, treating as not flagged",
-                    self.guardrail_name,
-                    check.name,
-                    "no answer" if answer is None else f"a {answer.type} answer",
-                )
-        return tuple(_predicate_verdict(answers.get(check.name), check) for check in self.checks)
+    def _check_verdict(
+        self, check: DecisionModelCheck, answers_by_call: Sequence[Mapping[str | None, object]]
+    ) -> _CheckVerdict:
+        """Aggregate one check across calls: probability is the max over predicate answers;
+        a call with no predicate answer counts as unanswered, which blocks a Block check under
+        fail_closed and only warns under fail_open or for log-only checks."""
+        answers: Final = tuple(call_answers.get(check.name) for call_answers in answers_by_call)
+        probabilities: Final = tuple(
+            answer.probability for answer in answers if isinstance(answer, OpenAIPredicateAnswer)
+        )
+        missing: Final = len(probabilities) < len(answers)
+        if missing:
+            verbose_logger.warning(
+                "decision_model guardrail %s: check '%s' got no predicate answer in %d of %d decisions calls",
+                self.guardrail_name,
+                check.name,
+                len(answers) - len(probabilities),
+                len(answers),
+            )
+        probability: Final = max(probabilities) if probabilities else None
+        unanswered_block: Final = missing and check.action == "block" and self.unreachable_fallback == "fail_closed"
+        return {
+            "name": check.name,
+            "probability": probability,
+            "threshold": check.threshold,
+            "action": check.action,
+            "flagged": unanswered_block or (probability is not None and probability >= check.threshold),
+            "reason": "no_answer" if missing else None,
+        }
+
+    def _verdicts(self, responses: Sequence[OpenAIDecisionResponse]) -> tuple[_CheckVerdict, ...]:
+        answers_by_call: Final = tuple({answer.name: answer for answer in response.answers} for response in responses)
+        return tuple(self._check_verdict(check, answers_by_call) for check in self.checks)
 
     def _handle_call_failure(self, error: Exception) -> None:
         """fail_open logs and returns; fail_closed raises a generic 502 (upstream detail stays in server logs)."""
@@ -214,6 +230,7 @@ class DecisionModelGuardrail(CustomGuardrail):
                         "threshold": v["threshold"],
                         "action": v["action"],
                         "flagged": v["flagged"],
+                        "reason": v["reason"],
                     }
                     for v in verdicts
                 ],
@@ -232,14 +249,20 @@ class DecisionModelGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
-        joined: Final = "\n".join(inputs.get("texts") or [])
-        if not joined:
+        texts: Final = tuple(text for text in inputs.get("texts") or [] if text and text.strip())
+        if not texts:
             return inputs
-        text: Final = _elide_middle(joined, self.max_input_chars)
         start_time: Final = time()
 
+        segments: Final = tuple(chain.from_iterable(_chunk_text(text, self.max_input_chars) for text in texts))
+        questions: Final = [
+            {"type": "predicate", "name": check.name, "instructions": check.instructions or ""} for check in self.checks
+        ]
+        semaphore: Final = self._get_decision_semaphore()
         try:
-            response: Final = await self._run_checks(text)
+            responses: Final = await asyncio.gather(
+                *(self._run_checks(segment, questions, semaphore) for segment in segments)
+            )
         except HTTPException:
             raise
         except Exception as call_error:  # noqa: BLE001  # any provider failure is governed by unreachable_fallback
@@ -247,7 +270,7 @@ class DecisionModelGuardrail(CustomGuardrail):
             self._handle_call_failure(call_error)
             return inputs
 
-        verdicts: Final = self._verdicts(response)
+        verdicts: Final = self._verdicts(responses)
         flagged: Final = tuple(v for v in verdicts if v["flagged"])
         status: Final = (
             "guardrail_intervened"
@@ -261,11 +284,7 @@ class DecisionModelGuardrail(CustomGuardrail):
                 detail={
                     "error": "Violated decision model guardrail policy",
                     "guardrail_name": self.guardrail_name,
-                    "flagged_checks": [
-                        {"name": v["name"], "probability": v["probability"], "threshold": v["threshold"]}
-                        for v in flagged
-                        if v["action"] == "block"
-                    ],
+                    "flagged_checks": [v["name"] for v in flagged if v["action"] == "block"],
                 },
             )
         return inputs

@@ -1169,7 +1169,13 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
     max_input_chars: int | None = Field(
         default=None,
         gt=0,
-        description="Character budget for text sent to the guardrail's model. Implemented by guardrail='decision_model'.",
+        description="Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.",
+    )
+
+    max_concurrent_decision_calls: int | None = Field(
+        default=None,
+        gt=0,
+        description="Maximum decisions calls in flight at once across all requests on the guardrail. Implemented by guardrail='decision_model'.",
     )
 
     extra_headers: list[str] | None = Field(

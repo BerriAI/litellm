@@ -113,3 +113,33 @@ describe("AddGuardrailForm decision model checks", () => {
     expect(screen.queryByLabelText("Remove jailbreak")).not.toBeInTheDocument();
   });
 });
+
+describe("AddGuardrailForm provider search", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("finds Decision Model by search aliases and keeps label search working", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(getGuardrailProviderSpecificParams).mockResolvedValue({
+      decision_model: { ui_friendly_name: "Decision Model" },
+    });
+    renderWithProviders(
+      <AddGuardrailForm visible={true} onClose={vi.fn()} accessToken="test-token" onSuccess={vi.fn()} />,
+    );
+
+    const provider = await screen.findByLabelText("Guardrail Provider");
+    await user.click(provider);
+
+    await user.type(provider, "jev");
+    expect(await screen.findByText("Decision Model")).toBeInTheDocument();
+
+    await user.clear(provider);
+    await user.type(provider, "prompt injection");
+    expect(await screen.findByText("Decision Model")).toBeInTheDocument();
+
+    await user.clear(provider);
+    await user.type(provider, "presidio");
+    expect(await screen.findByText("Presidio PII")).toBeInTheDocument();
+  });
+});
