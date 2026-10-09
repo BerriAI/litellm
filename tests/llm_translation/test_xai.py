@@ -42,8 +42,10 @@ def test_xai_message_name_filtering():
 class TestXAIReasoningEffort(BaseReasoningLLMTests):
     def get_base_completion_call_args(self):
         return {
-            "model": "xai/grok-4.7",
-            "messages": [{"role": "user", "content": "Hello"}],
+            "model": "xai/grok-4.6",
+            "messages": [
+                {"role": "user", "content": "What is 17 times 23? Work it out step by step, then give the number."}
+            ],
         }
 
 

@@ -44,6 +44,7 @@ from _openinference_support import (
     _sse_json_values,
 )
 from integration._support.client import Gateway, eventually
+from integration._support.process import graceful_stop_seconds
 from integration._support.wire import Reply, Request, wire_server
 
 
@@ -333,6 +334,14 @@ def test_arize_otel_v2_f2_slow_sink_does_not_deadlock(gateway: Gateway, tmp_path
     _matching_marker_span(rig.destination, marker)
 
 
+def _has_exited(process: psutil.Process) -> bool:
+    try:
+        return process.status() == psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return True
+
+
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 def test_arize_otel_v2_f3_one_proxy_worker_can_die(gateway: Gateway, tmp_path: Path) -> None:
     markers: Final = tuple("f3-" + uuid.uuid4().hex for _ in range(8))
     release: Final = threading.Event()
@@ -380,7 +389,7 @@ def test_arize_otel_v2_f3_one_proxy_worker_can_die(gateway: Gateway, tmp_path: P
                 )
                 assert observed >= 2, observed
                 workers[0].kill()
-                assert eventually(lambda: not workers[0].is_running(), bool, seconds=10), workers[0]
+                assert eventually(lambda: _has_exited(workers[0]), bool, seconds=10), workers[0]
                 release.set()
                 in_flight: Final = tuple(
                     (marker, future.result(timeout=60)) for marker, future in zip(markers, futures, strict=True)

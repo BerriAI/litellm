@@ -18,7 +18,7 @@ import { FieldError } from "@/components/ui/field";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cva.config";
 import { isProxyAdminRole } from "@/utils/roles";
-import { MAX_INPUT_LENGTH, resolveInferenceTarget } from "./agent";
+import { getPreferredLiteAdminModel, MAX_INPUT_LENGTH, resolveInferenceTarget } from "./agent";
 import { LiteAdminConversation } from "./LiteAdminConversation";
 import { useLiteAdmin, type LiteAdminSession } from "./useLiteAdmin";
 
@@ -213,7 +213,8 @@ function LiteAdminChat({ session, open, close }: { session: LiteAdminSession; op
       available.filter((item) => isModeCompatibleWithEndpoint(item.mode, EndpointType.CHAT)),
   };
   const models = useQuery(modelQuery);
-  const selectedModel = models.data?.some((item) => item.model_group === model) ? model : null;
+  const preferredModel = model ?? getPreferredLiteAdminModel(models.data ?? []);
+  const selectedModel = models.data?.some((item) => item.model_group === preferredModel) ? preferredModel : null;
   const busy = chat.phase !== "idle";
   const tooLong = input.trim().length > MAX_INPUT_LENGTH;
   const hasValidInput = selectedModel && input.trim() && !tooLong;
