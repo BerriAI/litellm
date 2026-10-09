@@ -505,12 +505,11 @@ def fallback_lookup_groups(kwargs: Mapping[str, object], model_group: str | None
 
 def _resolved_a_specific_chain(
     fallbacks: list[Any],  # mutable-ok: mirrors get_fallback_model_group's contract
-    result: tuple[list[str] | None, int | None],  # mutable-ok: mirrors get_fallback_model_group's contract
+    lookup_group: str,
+    generic_idx: int | None,
 ) -> bool:
-    resolved, generic_idx = result
-    if resolved is None:
-        return False
-    return generic_idx is None or resolved is not fallbacks[generic_idx]["*"]
+    specific_rules: Final = fallbacks if generic_idx is None else fallbacks[:generic_idx] + fallbacks[generic_idx + 1 :]
+    return get_fallback_model_group(fallbacks=specific_rules, model_group=lookup_group)[0] is not None
 
 
 def get_fallback_model_group_for_lookup_groups(
@@ -522,7 +521,14 @@ def get_fallback_model_group_for_lookup_groups(
     only after every group missed, so a catch-all cannot shadow a later group's own chain.
     """
     results: Final = tuple(get_fallback_model_group(fallbacks=fallbacks, model_group=group) for group in lookup_groups)
-    specific: Final = next((result for result in results if _resolved_a_specific_chain(fallbacks, result)), None)
+    specific: Final = next(
+        (
+            result
+            for group, result in zip(lookup_groups, results)
+            if _resolved_a_specific_chain(fallbacks, group, result[1])
+        ),
+        None,
+    )
     if specific is not None:
         return specific
     return next((result for result in results if result[0] is not None), (None, None))

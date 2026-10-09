@@ -1396,6 +1396,15 @@ class TestOrderedFallbackLookupGroups:
         assert get_fallback_model_group_for_lookup_groups(fallbacks, ("tier9", "no-such")) == (["backup-c"], 2)
         assert get_fallback_model_group_for_lookup_groups([{"tier1": ["backup-a"]}], ("no", "nope")) == (None, None)
 
+    def test_a_string_valued_generic_rule_never_shadows_a_later_groups_own_chain(self):
+        from litellm.router_utils.fallback_event_handlers import (
+            get_fallback_model_group_for_lookup_groups,
+        )
+
+        fallbacks = [{"smart-router": "backup-b"}, {"*": "backup-c"}]
+        assert get_fallback_model_group_for_lookup_groups(fallbacks, ("tier9", "smart-router")) == (["backup-b"], None)
+        assert get_fallback_model_group_for_lookup_groups(fallbacks, ("tier9", "no-such")) == (["backup-c"], 1)
+
 
 class TestHasUnattemptedFallbackTarget:
     def test_exhausted_chain_is_not_recoverable_but_a_fresh_entry_is(self):
