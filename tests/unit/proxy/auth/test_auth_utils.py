@@ -4274,3 +4274,132 @@ def test_get_model_from_request_vertex_ai_passthrough(
 
     model = get_model_from_request(request_data, route)
     assert model == expected_model
+
+
+def test_get_end_user_id_from_request_body_always_returns_str():
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.headers = {}
+
+    request_body: Final = {"user": 123}
+    end_user_id: Final = get_end_user_id_from_request_body(request_body, dict(mock_request.headers))
+    assert end_user_id == "123"
+    assert isinstance(end_user_id, str)
+
+
+@pytest.mark.parametrize(
+    "headers, general_settings_config, request_body, expected_user_id",
+    [
+        (
+            {"X-User-ID": "header-user-123"},
+            {"user_header_name": "X-User-ID"},
+            {"user": "body-user-456"},
+            "header-user-123",
+        ),
+        (
+            {},
+            {"user_header_name": "X-User-ID"},
+            {"user": "body-user-456"},
+            "body-user-456",
+        ),
+        (
+            {"X-User-ID": "header-user-123"},
+            {},
+            {"user": "body-user-456"},
+            "body-user-456",
+        ),
+        (
+            {"X-Custom-User": "header-only-user"},
+            {"user_header_name": "X-Custom-User"},
+            {"model": "gpt-4"},
+            "header-only-user",
+        ),
+        (
+            {"X-User-ID": ""},
+            {"user_header_name": "X-User-ID"},
+            {"user": "body-user-456"},
+            "body-user-456",
+        ),
+        (
+            {"x-user-id": "lowercase-header-user"},
+            {"user_header_name": "x-user-id"},
+            {"user": "body-user-456"},
+            "lowercase-header-user",
+        ),
+        (
+            {"X-User-ID": "header-user-123"},
+            {"user_header_name": None},
+            {"user": "body-user-456"},
+            "body-user-456",
+        ),
+        (
+            {"X-User-ID": "header-user-123"},
+            {"user_header_name": 123},
+            {"user": "body-user-456"},
+            "body-user-456",
+        ),
+        (
+            {},
+            {"user_header_name": "X-User-ID"},
+            {"litellm_metadata": {"user": "litellm-user-789"}},
+            "litellm-user-789",
+        ),
+        (
+            {},
+            {"user_header_name": "X-User-ID"},
+            {"metadata": {"user_id": "metadata-user-999"}},
+            "metadata-user-999",
+        ),
+        (
+            {"X-User-ID": "header-priority"},
+            {"user_header_name": "X-User-ID"},
+            {
+                "user": "body-user",
+                "litellm_metadata": {"user": "litellm-user"},
+                "metadata": {"user_id": "metadata-user"},
+            },
+            "header-priority",
+        ),
+        (
+            {"x-user-id": "lowercase-header-user"},
+            {"user_header_name": "X-User-ID"},
+            {"user": "body-user-456"},
+            "lowercase-header-user",
+        ),
+    ],
+)
+def test_get_end_user_id_from_request_body_with_user_header_name(
+    headers, general_settings_config, request_body, expected_user_id
+):
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.headers = headers
+
+    with patch("litellm.proxy.proxy_server.general_settings", general_settings_config):
+        end_user_id: Final = get_end_user_id_from_request_body(request_body, dict(mock_request.headers))
+        assert end_user_id == expected_user_id
+
+
+def test_get_end_user_id_from_request_body_no_user_found():
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.headers = {"X-Other-Header": "some-value"}
+
+    general_settings_config: Final = {"user_header_name": "X-User-ID"}
+
+    request_body: Final = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    with patch("litellm.proxy.proxy_server.general_settings", general_settings_config):
+        end_user_id: Final = get_end_user_id_from_request_body(request_body, dict(mock_request.headers))
+        assert end_user_id is None
+
+
+def test_get_end_user_id_from_request_body_backwards_compatibility():
+    cases: Final = (
+        ({"user": "test-user-123"}, "test-user-123"),
+        ({"litellm_metadata": {"user": "litellm-user-456"}}, "litellm-user-456"),
+        ({"metadata": {"user_id": "metadata-user-789"}}, "metadata-user-789"),
+        ({"model": "gpt-4"}, None),
+    )
+    for request_body, expected_end_user_id in cases:
+        assert get_end_user_id_from_request_body(request_body) == expected_end_user_id

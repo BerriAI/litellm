@@ -8,6 +8,7 @@ import zlib
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from io import BytesIO
 from types import MappingProxyType, ModuleType, SimpleNamespace
 from typing import Final, Optional
@@ -32,6 +33,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import router as llm_passthrough_router
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
@@ -61,6 +63,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
     EndpointType,
+    PassthroughStandardLoggingPayload,
 )
 from tests._master_key import MASTER_KEY
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
@@ -9083,3 +9086,372 @@ def test_update_subpath_route_updates_registry():
                 del _registered_pass_through_routes[route_key]
 
     asyncio.run(_async_test())
+
+
+def test_init_kwargs_for_pass_through_endpoint_basic(mock_request, mock_user_api_key_dict):
+    request: Final = mock_request()
+    passthrough_payload: Final = PassthroughStandardLoggingPayload(
+        url="https://test.com",
+        request_body={},
+    )
+
+    result: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=request,
+        user_api_key_dict=mock_user_api_key_dict,
+        passthrough_logging_payload=passthrough_payload,
+        litellm_call_id="test-call-id",
+        logging_obj=LiteLLMLoggingObj(
+            model="test-model",
+            messages=[],
+            stream=False,
+            call_type="test-call-type",
+            start_time=datetime(2026, 1, 15, 12, 0, 0),
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        ),
+    )
+
+    assert result["call_type"] == "pass_through_endpoint"
+    assert result["litellm_call_id"] == "test-call-id"
+    assert result["passthrough_logging_payload"] == passthrough_payload
+
+    assert result["litellm_params"]["metadata"]["user_api_key"] == "test-key"
+    assert result["litellm_params"]["metadata"]["user_api_key_hash"] == "test-key"
+    assert result["litellm_params"]["metadata"]["user_api_key_alias"] is None
+    assert result["litellm_params"]["metadata"]["user_api_key_user_email"] is None
+    assert result["litellm_params"]["metadata"]["user_api_key_user_id"] == "test-user"
+    assert result["litellm_params"]["metadata"]["user_api_key_team_id"] == "test-team"
+    assert result["litellm_params"]["metadata"]["user_api_key_org_id"] is None
+    assert result["litellm_params"]["metadata"]["user_api_key_team_alias"] is None
+    assert result["litellm_params"]["metadata"]["user_api_key_end_user_id"] == "test-user"
+    assert result["litellm_params"]["metadata"]["user_api_key_request_route"] is None
+
+
+def test_init_kwargs_with_litellm_metadata(mock_request, mock_user_api_key_dict):
+    request: Final = mock_request()
+    parsed_body: Final = {"litellm_metadata": {"custom_field": "custom_value", "tags": ["tag1", "tag2"]}}
+    passthrough_payload: Final = PassthroughStandardLoggingPayload(
+        url="https://test.com",
+        request_body={},
+    )
+
+    result: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=request,
+        user_api_key_dict=mock_user_api_key_dict,
+        passthrough_logging_payload=passthrough_payload,
+        _parsed_body=parsed_body,
+        litellm_call_id="test-call-id",
+        logging_obj=LiteLLMLoggingObj(
+            model="test-model",
+            messages=[],
+            stream=False,
+            call_type="test-call-type",
+            start_time=datetime(2026, 1, 15, 12, 0, 0),
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        ),
+    )
+
+    metadata: Final = result["litellm_params"]["metadata"]
+    assert metadata["custom_field"] == "custom_value"
+    assert metadata["tags"] == ["tag1", "tag2"]
+    assert metadata["user_api_key"] == "test-key"
+
+
+def test_init_kwargs_with_tags_in_header(mock_request, mock_user_api_key_dict):
+    request: Final = mock_request(headers={"tags": "tag1,tag2"})
+    passthrough_payload: Final = PassthroughStandardLoggingPayload(
+        url="https://test.com",
+        request_body={},
+    )
+
+    result: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=request,
+        user_api_key_dict=mock_user_api_key_dict,
+        passthrough_logging_payload=passthrough_payload,
+        litellm_call_id="test-call-id",
+        logging_obj=LiteLLMLoggingObj(
+            model="test-model",
+            messages=[],
+            stream=False,
+            call_type="test-call-type",
+            start_time=datetime(2026, 1, 15, 12, 0, 0),
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        ),
+    )
+
+    metadata: Final = result["litellm_params"]["metadata"]
+    assert metadata["tags"] == ["tag1", "tag2"]
+
+
+athropic_request_body: Final = {
+    "model": "claude-sonnet-4-5-20250929",
+    "max_tokens": 256,
+    "messages": [{"role": "user", "content": "Hello, world tell me 2 sentences "}],
+    "litellm_metadata": {"tags": ["hi", "hello"]},
+}
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_logging_failure(mock_request, mock_user_api_key_dict):
+
+    mock_response: Final = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "application/json"}
+
+    mock_response._content = b'{"mock": "response"}'
+
+    async def mock_aread():
+        return mock_response._content
+
+    mock_response.aread = mock_aread
+
+    with (
+        patch(
+            "httpx.AsyncClient.send",
+            return_value=mock_response,
+        ),
+        patch(
+            "httpx.AsyncClient.request",
+            return_value=mock_response,
+        ),
+    ):
+        request: Final = mock_request(headers={}, method="POST", request_body=athropic_request_body)
+        response: Final = await pass_through_request(
+            request=request,
+            target="https://exampleopenaiendpoint-production.up.railway.app/v1/messages",
+            custom_headers={},
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+        assert response.status_code == 200
+
+        assert response.body == b'{"mock": "response"}'
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_logging_failure_with_stream(mock_request, mock_user_api_key_dict):
+
+    mock_response: Final = AsyncMock()
+    mock_response.status_code = 200
+
+    mock_response.headers = {
+        "content-type": "application/json",
+    }
+
+    mock_chunks: Final = [b'{"chunk": 1}', b'{"chunk": 2}']
+    mock_response.body_iterator = AsyncMock()
+    mock_response.body_iterator.__aiter__.return_value = mock_chunks
+
+    mock_response._content = b'{"mock": "response"}'
+
+    async def mock_aread():
+        return mock_response._content
+
+    mock_response.aread = mock_aread
+
+    with (
+        patch(
+            "httpx.AsyncClient.send",
+            return_value=mock_response,
+        ),
+        patch(
+            "httpx.AsyncClient.request",
+            return_value=mock_response,
+        ),
+    ):
+        request: Final = mock_request(headers={}, method="POST", request_body=athropic_request_body)
+        response: Final = await pass_through_request(
+            request=request,
+            target="https://exampleopenaiendpoint-production.up.railway.app/v1/messages",
+            custom_headers={},
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+        assert response.status_code == 200
+
+        if isinstance(response, StreamingResponse):
+            assert response.status_code == 200
+        else:
+            assert hasattr(response, "body")
+            assert response.body == b'{"mock": "response"}'
+
+
+def test_init_kwargs_filters_pricing_params(mock_request, mock_user_api_key_dict):
+    request: Final = mock_request()
+
+    parsed_body: Final = {
+        "model": "gpt-5.5",
+        "messages": [{"role": "user", "content": "test"}],
+        "input_cost_per_token": 0.00002,
+        "output_cost_per_token": 0.00002,
+        "input_cost_per_second": 0.00001,
+        "output_cost_per_second": 0.00001,
+        "cache_read_input_token_cost": 0.00005,
+        "cache_creation_input_token_cost": 0.00003,
+        "cache_creation_input_token_cost_above_1hr": 0.00004,
+        "input_cost_per_token_batches": 0.00005,
+        "output_cost_per_token_batches": 0.00006,
+        "input_cost_per_audio_token": 0.00001,
+        "output_cost_per_audio_token": 0.00001,
+        "input_cost_per_character": 0.000001,
+        "output_cost_per_character": 0.000001,
+        "input_cost_per_image": 0.001,
+        "output_cost_per_image": 0.001,
+        "tiered_pricing": [{"input_cost_per_token": 0.00001}],
+        "temperature": 0.7,
+        "max_tokens": 100,
+    }
+
+    passthrough_payload: Final = PassthroughStandardLoggingPayload(
+        url="https://api.openai.com/v1/chat/completions",
+        request_body=parsed_body.copy(),
+    )
+
+    result: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=request,
+        user_api_key_dict=mock_user_api_key_dict,
+        passthrough_logging_payload=passthrough_payload,
+        _parsed_body=parsed_body,
+        litellm_call_id="test-call-id",
+        logging_obj=LiteLLMLoggingObj(
+            model="gpt-5.5",
+            messages=[{"role": "user", "content": "test"}],
+            stream=False,
+            call_type="completion",
+            start_time=datetime(2026, 1, 15, 12, 0, 0),
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        ),
+    )
+
+    assert "input_cost_per_token" not in parsed_body
+    assert "output_cost_per_token" not in parsed_body
+    assert "input_cost_per_second" not in parsed_body
+    assert "output_cost_per_second" not in parsed_body
+    assert "cache_read_input_token_cost" not in parsed_body
+    assert "cache_creation_input_token_cost" not in parsed_body
+    assert "cache_creation_input_token_cost_above_1hr" not in parsed_body
+    assert "input_cost_per_token_batches" not in parsed_body
+    assert "output_cost_per_token_batches" not in parsed_body
+    assert "input_cost_per_audio_token" not in parsed_body
+    assert "output_cost_per_audio_token" not in parsed_body
+    assert "input_cost_per_character" not in parsed_body
+    assert "output_cost_per_character" not in parsed_body
+    assert "input_cost_per_image" not in parsed_body
+    assert "output_cost_per_image" not in parsed_body
+    assert "tiered_pricing" not in parsed_body
+
+    assert parsed_body["model"] == "gpt-5.5"
+    assert parsed_body["messages"] == [{"role": "user", "content": "test"}]
+    assert parsed_body["temperature"] == 0.7
+    assert parsed_body["max_tokens"] == 100
+
+    litellm_params: Final = result["litellm_params"]
+    assert litellm_params["input_cost_per_token"] == 0.00002
+    assert litellm_params["output_cost_per_token"] == 0.00002
+
+
+def test_init_kwargs_client_metadata_cannot_spoof_authenticated_identity(mock_request, mock_user_api_key_dict):
+    request: Final = mock_request()
+    passthrough_payload: Final = PassthroughStandardLoggingPayload(
+        url="https://test.com",
+        request_body={},
+    )
+    authenticated_key: Final = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="test-team",
+        end_user_id="test-user",
+        key_alias="real-key",
+        team_alias="Real Team",
+        user_email="real@example.com",
+        org_id="real-org",
+    )
+
+    result: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=request,
+        user_api_key_dict=authenticated_key,
+        passthrough_logging_payload=passthrough_payload,
+        litellm_call_id="test-call-id",
+        logging_obj=LiteLLMLoggingObj(
+            model="test-model",
+            messages=[],
+            stream=False,
+            call_type="test-call-type",
+            start_time=datetime(2026, 1, 15, 12, 0, 0),
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        ),
+        _parsed_body={
+            "litellm_metadata": {
+                "user_api_key_org_id": "victim-org",
+                "user_api_key_end_user_id": "victim-end-user",
+                "user_api_key_user_id": "victim-user",
+                "user_api_key_team_id": "victim-team",
+                "user_api_key_team_alias": "Victim Team",
+                "user_api_key_alias": "victim-key",
+                "user_api_key_user_email": "victim@example.com",
+            }
+        },
+    )
+
+    metadata: Final = result["litellm_params"]["metadata"]
+    assert metadata["user_api_key_user_id"] == "test-user"
+    assert metadata["user_api_key_team_id"] == "test-team"
+    assert metadata["user_api_key_team_alias"] == "Real Team"
+    assert metadata["user_api_key_alias"] == "real-key"
+    assert metadata["user_api_key_user_email"] == "real@example.com"
+    assert metadata["user_api_key_org_id"] == "real-org"
+    assert metadata["user_api_key_end_user_id"] == "test-user"
+
+
+def test_init_kwargs_no_authenticated_identity_field_is_client_settable(mock_request, mock_user_api_key_dict):
+    authenticated_key: Final = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="test-team",
+        end_user_id="test-end-user",
+        key_alias="real-key",
+        team_alias="Real Team",
+        user_email="real@example.com",
+        org_id="real-org",
+        organization_alias="Real Org",
+        project_id="real-project",
+        project_alias="Real Project",
+        spend=1.5,
+        max_budget=10.0,
+        user_spend=2.5,
+        user_max_budget=20.0,
+        team_spend=3.5,
+        team_max_budget=30.0,
+        metadata={"real": "auth-metadata"},
+    )
+    expected: Final = dict(
+        LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=authenticated_key)
+    )
+    assert len(expected) >= 20
+
+    spoofed: Final = {key: f"SPOOFED-{key}" for key in expected}
+
+    result: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request(),
+        user_api_key_dict=authenticated_key,
+        passthrough_logging_payload=PassthroughStandardLoggingPayload(url="https://test.com", request_body={}),
+        litellm_call_id="test-call-id",
+        logging_obj=LiteLLMLoggingObj(
+            model="test-model",
+            messages=[],
+            stream=False,
+            call_type="test-call-type",
+            start_time=datetime(2026, 1, 15, 12, 0, 0),
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        ),
+        _parsed_body={"litellm_metadata": dict(spoofed), "metadata": dict(spoofed)},
+    )
+
+    metadata: Final = result["litellm_params"]["metadata"]
+    survived: Final = {key: metadata.get(key) for key in expected if metadata.get(key) != expected[key]}
+    assert survived == {}, f"client-supplied values survived for: {sorted(survived)}"
