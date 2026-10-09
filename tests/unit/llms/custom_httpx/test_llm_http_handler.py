@@ -366,23 +366,22 @@ class _AgenticLoopKwargsRecorder(CustomLogger):
         self,
         response: object,
         model: str,
-        messages: list[dict],
-        tools: list[dict] | None,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]] | None,
         stream: bool,
         custom_llm_provider: str,
-        kwargs: dict,
-    ) -> tuple[bool, dict]:
+        kwargs: dict[str, object],
+    ) -> tuple[bool, dict[str, object]]:
         self.seen_kwargs = MappingProxyType(dict(kwargs))
         return False, {}
 
 
-def test_response_api_handler_sends_no_stream_options_when_web_search_forces_a_non_streaming_call(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    sent: Final[dict[str, object]] = {}
+class _SentRequestRecorder:
+    def __init__(self) -> None:
+        self.body: Mapping[str, object] = MappingProxyType({})
 
-    def respond(request: httpx.Request) -> httpx.Response:
-        sent["body"] = json.loads(request.content)
+    def respond(self, request: httpx.Request) -> httpx.Response:
+        self.body = MappingProxyType(json.loads(request.content))
         return httpx.Response(
             200,
             json={
@@ -404,6 +403,11 @@ def test_response_api_handler_sends_no_stream_options_when_web_search_forces_a_n
             },
         )
 
+
+def test_response_api_handler_sends_no_stream_options_when_web_search_forces_a_non_streaming_call(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    sent: Final = _SentRequestRecorder()
     recorder: Final = _AgenticLoopKwargsRecorder()
     monkeypatch.setattr(
         litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["azure"]), recorder]
@@ -428,11 +432,11 @@ def test_response_api_handler_sends_no_stream_options_when_web_search_forces_a_n
             stream_options={"include_obfuscation": True},
         ),
         logging_obj=logging_obj,
-        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(sent.respond))),
     )
 
-    assert sent["body"]["stream"] is False
-    assert "stream_options" not in sent["body"]
+    assert sent.body["stream"] is False
+    assert "stream_options" not in sent.body
     assert "stream_options" not in recorder.seen_kwargs
 
 
