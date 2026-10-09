@@ -1533,5 +1533,71 @@
       ]
     },
     "limitation": "Earlier full auth and paid outage checks identify gateway source bc3083. The a41b93 adapter-only production delta is covered by 27 current-source live checks. Full companion image, chart, browser and published release qualification remain separate gates."
+  },
+  "delegated_route_test_correction": {
+    "production_source": "a41b93a709b95a7fd30ed8093a9b8d799990c3ea",
+    "change": "Update the stale gateway route-check test to assert Lens authorization delegation for the canonical /lens/{id}/runs route; the Rust service still denies viewer mutations",
+    "live_receipt_sha256": "769e087ead57410ab069bb9f92d1a2b28ca448bd3e1665784b4fd3e91d964af0",
+    "live_receipt": {
+      "recorded_at": "2026-10-09T08:32:58.318Z",
+      "gateway_production_source": "a41b93a709b95a7fd30ed8093a9b8d799990c3ea",
+      "lens_source": "0b8e2c23f73588c4b3e40e850edd1bad1654c19c",
+      "harness_correction": "The initial empty traces list correctly returned422; replay uses the existing stored fixture as required by the API contract.",
+      "checks": [
+        {
+          "label": "viewer may read findings",
+          "path": "/lens/traces/findings",
+          "method": "POST",
+          "status": 200,
+          "expected": 200,
+          "body": [
+            {
+              "trace_id": "80879eada088350e1472122017387cb5",
+              "trace_ref": "50BA062E8196D4DA12E313E09A9CF6650C5BDCED8DF7051F75D86CAF7F9FBA2C",
+              "finding_count": 1
+            }
+          ],
+          "passed": true
+        },
+        {
+          "label": "viewer may not start investigation",
+          "path": "/lens/example/runs",
+          "method": "POST",
+          "status": 403,
+          "expected": 403,
+          "body": {
+            "detail": "Only proxy admins can configure or run Lens"
+          },
+          "passed": true
+        },
+        {
+          "label": "invalid gateway auth is denied",
+          "path": "/lens/example/runs",
+          "method": "POST",
+          "status": 401,
+          "expected": 401,
+          "body": {
+            "error": {
+              "message": "LiteLLM Virtual Key expected. Received=inva****tial, expected to start with 'sk-'.",
+              "type": "auth_error",
+              "param": "None",
+              "code": "401"
+            }
+          },
+          "passed": true
+        }
+      ]
+    },
+    "local_checks": {
+      "tests_passed": 891,
+      "test_paths": [
+        "tests/unit/proxy/auth/test_route_checks.py",
+        "tests/unit/proxy/lens/test_adapter.py"
+      ],
+      "test_log_sha256": "e7d972cdf54e3079ca42eacc115ff0c75b12d2a76161d5799473a0d91649f882",
+      "scoped_make_check": "passed",
+      "make_check_log_sha256": "8729c07d45d65f2af4149fae28cb3e90a92ad2eb6247b3d8e1087425d12d3455"
+    },
+    "limitation": "This followup changes only tests and evidence; production remains a41b93a709. Final companion image and deployment qualification are separate gates"
   }
 }
