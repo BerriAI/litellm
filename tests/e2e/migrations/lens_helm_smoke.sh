@@ -2,7 +2,8 @@
 set -euo pipefail
 
 qa_dir=$(mktemp -d)
-cluster=lens-install-ci
+cluster="lens-install-$(openssl rand -hex 6)"
+cluster_owned=false
 forward_pids=()
 cleanup() {
   local status=$?
@@ -13,18 +14,27 @@ cleanup() {
     if [[ -n "${namespace:-}" ]]; then diagnose || true; fi
   fi
   for pid in "${forward_pids[@]}"; do kill "$pid" 2>/dev/null || true; done
-  kind delete cluster --name "$cluster" || true
+  if [[ "$cluster_owned" == true ]]; then kind delete cluster --name "$cluster" || true; fi
   rm -rf "$qa_dir"
   return "$status"
 }
 trap cleanup EXIT
 umask 077
 export KUBECONFIG="$qa_dir/kubeconfig"
+for component in gateway backend monolith; do
+  baseline_id=$(docker image inspect "lens-ci-$component:v0.0.0-lens-ci-baseline" --format '{{.Id}}')
+  current_id=$(docker image inspect "lens-ci-$component:v0.0.0-lens-ci" --format '{{.Id}}')
+  test "$baseline_id" != "$current_id"
+done
+cluster_owned=true
 kind create cluster --name "$cluster" \
   --image kindest/node:v1.32.2@sha256:f226345927d7e348497136874b6d207e0b32cc52154ad8323129352923a3142f \
   --wait 120s
 for component in gateway backend ui migrations monolith; do
   kind load docker-image --name "$cluster" "lens-ci-$component:v0.0.0-lens-ci"
+done
+for component in gateway backend monolith; do
+  kind load docker-image --name "$cluster" "lens-ci-$component:v0.0.0-lens-ci-baseline"
 done
 test "$(docker image inspect lens-ci-worker:baseline --format '{{.Id}}')" != \
   "$(docker image inspect lens-ci-worker:upgrade --format '{{.Id}}')"
@@ -87,6 +97,32 @@ forward_bundled() {
   stop_forwards
   forward "$control" 14418 "$control_port"
   forward lens-lens-worker 14419 4318
+}
+
+deployment_pods() {
+  local selector
+  selector=$(kubectl -n "$namespace" get deployment "$1" -o json \
+    | jq -r '.spec.selector.matchLabels | to_entries | map("\(.key)=\(.value)") | join(",")')
+  test -n "$selector"
+  kubectl -n "$namespace" get pods -l "$selector" -o json \
+    | jq -S -e '[.items[] | select(.metadata.deletionTimestamp == null)
+        | {uid:.metadata.uid, images:.spec.containers | map({name,image}),
+        containers:.status.containerStatuses | map({name,imageID,restartCount,ready})}] | sort_by(.uid)
+      | if length > 0 and all(.[]; .containers | length > 0)
+          and all(.[].containers[]; .imageID != null and .imageID != "" and .ready)
+        then . else error("Ready pod runtime identity is missing") end'
+}
+
+gateway_pods() {
+  local component=$1 tag=$2 deployment="lens-$1"
+  if [[ "$component" == monolith ]]; then deployment=lens; fi
+  deployment_pods "$deployment" \
+    | jq -S -e --arg expected "lens-ci-$component:$tag" '
+      if all(.[]; any(.images[]; .image == $expected)) then
+        [.[] as $pod | $pod.images[] | select(.image == $expected) | . as $requested
+          | $pod.containers[] | select(.name == $requested.name)
+          | {uid:$pod.uid, image:$requested.image, name, imageID, restartCount, ready}]
+      else error("Gateway pod does not use the expected image") end'
 }
 
 for chart in litellm-helm litellm; do
@@ -187,7 +223,7 @@ YAML
     control=lens
     control_port=4000
     cat > "$qa_dir/chart.yaml" <<'YAML'
-image: {repository: lens-ci-monolith, tag: v0.0.0-lens-ci, pullPolicy: Never}
+image: {repository: lens-ci-monolith, tag: v0.0.0-lens-ci-baseline, pullPolicy: Never}
 masterkeySecretName: lens-secrets
 masterkeySecretKey: master-key
 envVars: {STORE_MODEL_IN_DB: "True"}
@@ -217,7 +253,7 @@ database:
 migrationJob:
   image: {repository: lens-ci-migrations, tag: v0.0.0-lens-ci, pullPolicy: Never}
 gateway:
-  image: {repository: lens-ci-gateway, tag: v0.0.0-lens-ci, pullPolicy: Never}
+  image: {repository: lens-ci-gateway, tag: v0.0.0-lens-ci-baseline, pullPolicy: Never}
   numWorkers: 1
   extraEnv: [{name: STORE_MODEL_IN_DB, value: "True"}]
   hpa: {enabled: false}
@@ -231,7 +267,7 @@ gateway:
         tracing: {enabled: true, store: {type: lens}}
 backend:
   extraEnv: [{name: STORE_MODEL_IN_DB, value: "True"}]
-  image: {repository: lens-ci-backend, tag: v0.0.0-lens-ci, pullPolicy: Never}
+  image: {repository: lens-ci-backend, tag: v0.0.0-lens-ci-baseline, pullPolicy: Never}
   hpa: {enabled: false}
   resources: {requests: {cpu: 100m, memory: 512Mi}, limits: {memory: 2Gi}}
 ui:
@@ -279,16 +315,31 @@ YAML
   saved_trace
   kubectl -n "$namespace" get deployment lens-lens-worker -o json \
     | jq -S .spec.template > "$qa_dir/lens-before.json"
-  gateway_rollout=(--set-string podAnnotations.lens-smoke-rollout=independent)
+  deployment_pods lens-lens-worker > "$qa_dir/lens-pods-before.json"
+  gateway_components=(monolith)
+  gateway_upgrade=(--set image.tag=v0.0.0-lens-ci)
   if [[ "$chart" == litellm ]]; then
-    gateway_rollout=(--set-string gateway.podAnnotations.lens-smoke-rollout=independent \
-      --set-string backend.podAnnotations.lens-smoke-rollout=independent \
-      --set-string ui.podAnnotations.lens-smoke-rollout=independent)
+    gateway_components=(gateway backend)
+    gateway_upgrade=(--set gateway.image.tag=v0.0.0-lens-ci --set backend.image.tag=v0.0.0-lens-ci)
   fi
-  "${install[@]}" "${gateway_rollout[@]}" || diagnose
+  for component in "${gateway_components[@]}"; do
+    gateway_pods "$component" v0.0.0-lens-ci-baseline > "$qa_dir/$component-before.json"
+  done
+  install+=("${gateway_upgrade[@]}")
+  "${install[@]}" || diagnose
   kubectl -n "$namespace" get deployment lens-lens-worker -o json \
     | jq -S .spec.template > "$qa_dir/lens-after.json"
   cmp "$qa_dir/lens-before.json" "$qa_dir/lens-after.json"
+  deployment_pods lens-lens-worker > "$qa_dir/lens-pods-after.json"
+  cmp "$qa_dir/lens-pods-before.json" "$qa_dir/lens-pods-after.json"
+  for component in "${gateway_components[@]}"; do
+    gateway_pods "$component" v0.0.0-lens-ci > "$qa_dir/$component-after.json"
+    before_id=$(jq -ce '[.[].imageID] | unique | if length == 1 then .[0] else error("Mixed gateway images") end' \
+      "$qa_dir/$component-before.json")
+    after_id=$(jq -ce '[.[].imageID] | unique | if length == 1 then .[0] else error("Mixed gateway images") end' \
+      "$qa_dir/$component-after.json")
+    test "$before_id" != "$after_id"
+  done
   forward_bundled
   saved_trace
   stop_forwards
@@ -297,7 +348,7 @@ YAML
   kubectl -n "$namespace" rollout status deployment/lens-lens-worker --timeout=180s
   forward "$control" 14418 "$control_port"
   saved_trace
-  printf '%s: fresh install, ingestion, Lens upgrade and rollback, independent gateway rollout, and restart passed\n' "$chart"
+  printf '%s: fresh install, ingestion, Lens upgrade and rollback, independent gateway image upgrade, and restart passed\n' "$chart"
   stop_forwards
   helm upgrade --install external-lens helm/litellm-helm/charts/lens-0.1.0-dev.0.tgz \
     -n "$namespace" --wait --timeout 5m \

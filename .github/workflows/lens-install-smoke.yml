@@ -11,6 +11,10 @@ on:
         description: Compatible Lens upgrade image at ghcr.io/berriai/lens@sha256
         required: true
         type: string
+      gateway_baseline_ref:
+        description: Previously qualified gateway source commit, full SHA
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -37,25 +41,46 @@ jobs:
             dockerfile: migrations/Dockerfile
           - component: monolith
             dockerfile: Dockerfile
+          - component: gateway
+            dockerfile: gateway/Dockerfile
+            baseline: true
+          - component: backend
+            dockerfile: backend/Dockerfile
+            baseline: true
+          - component: monolith
+            dockerfile: Dockerfile
+            baseline: true
     env:
       COMPONENT: ${{ matrix.component }}
       DOCKERFILE: ${{ matrix.dockerfile }}
+      SOURCE_REF: ${{ matrix.baseline && inputs.gateway_baseline_ref || github.sha }}
+      IMAGE_TAG: ${{ matrix.baseline && 'v0.0.0-lens-ci-baseline' || 'v0.0.0-lens-ci' }}
+      CURRENT_REF: ${{ github.sha }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           persist-credentials: false
+          ref: ${{ env.SOURCE_REF }}
+      - name: Verify the selected source
+        shell: bash -euo pipefail {0}
+        run: |
+          [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_REF"
+          if [[ "$IMAGE_TAG" == v0.0.0-lens-ci-baseline ]]; then
+            test "$SOURCE_REF" != "$CURRENT_REF"
+          fi
       - name: Build the matching release image
         run: |
-          docker build --build-arg LITELLM_RELEASE_TAG=v0.0.0-lens-ci \
-            -f "$DOCKERFILE" -t "lens-ci-$COMPONENT:v0.0.0-lens-ci" .
+          docker build --build-arg "LITELLM_RELEASE_TAG=$IMAGE_TAG" \
+            -f "$DOCKERFILE" -t "lens-ci-$COMPONENT:$IMAGE_TAG" .
       - name: Save the matching release image
         run: |
-          docker save "lens-ci-$COMPONENT:v0.0.0-lens-ci" \
-            | gzip -1 > "$RUNNER_TEMP/lens-install-$COMPONENT.tar.gz"
+          docker save "lens-ci-$COMPONENT:$IMAGE_TAG" \
+            | gzip -1 > "$RUNNER_TEMP/lens-install-$COMPONENT-$IMAGE_TAG.tar.gz"
       - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
-          name: lens-install-${{ matrix.component }}-${{ github.sha }}
-          path: ${{ runner.temp }}/lens-install-${{ matrix.component }}.tar.gz
+          name: lens-install-${{ matrix.component }}-${{ env.IMAGE_TAG }}-${{ github.sha }}
+          path: ${{ runner.temp }}/lens-install-${{ matrix.component }}-${{ env.IMAGE_TAG }}.tar.gz
           compression-level: 0
           retention-days: 3
           if-no-files-found: error
@@ -76,8 +101,7 @@ jobs:
           path: ${{ runner.temp }}/lens-install-images
       - name: Load the matching release images
         run: |
-          for component in gateway backend ui migrations monolith; do
-            archive="$RUNNER_TEMP/lens-install-images/lens-install-$component.tar.gz"
+          for archive in "$RUNNER_TEMP"/lens-install-images/lens-install-*.tar.gz; do
             gzip -dc "$archive" | docker load
             rm "$archive"
           done
