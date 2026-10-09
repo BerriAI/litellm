@@ -1981,7 +1981,30 @@ def test_key_router_settings_fallbacks_ignored_when_client_credentials_skip_the_
     )
 
 
-def test_request_body_fallbacks_replace_the_router_fallbacks_for_the_default_check() -> None:
+@pytest.mark.parametrize(
+    "request_fields",
+    [
+        pytest.param({"fallbacks": []}, id="empty-body-fallbacks"),
+        pytest.param({"fallbacks": [{"other-model": ["served"]}]}, id="body-fallbacks-for-another-model"),
+        pytest.param({"router_settings_override": {"fallbacks": []}}, id="empty-key-fallbacks"),
+    ],
+)
+def test_router_generic_fallback_keeps_router_defaults_whatever_the_request_fallbacks_say(
+    request_fields: dict[str, object],
+) -> None:
+    from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+
+    assert (
+        raise_if_required_body_param_missing(
+            route_type="anthropic_messages",
+            data={"model": "unlisted-model", "messages": [], **request_fields},
+            llm_router=_router_with_defaults({"max_tokens": 16}, fallbacks=[{"*": ["served"]}]),
+        )
+        is None
+    )
+
+
+def test_request_body_fallbacks_replace_a_model_keyed_router_fallback_for_the_default_check() -> None:
     from litellm.proxy.route_llm_request import (
         ProxyMissingRequiredParamError,
         raise_if_required_body_param_missing,
@@ -1991,7 +2014,7 @@ def test_request_body_fallbacks_replace_the_router_fallbacks_for_the_default_che
         raise_if_required_body_param_missing(
             route_type="anthropic_messages",
             data={"model": "unlisted-model", "messages": [], "fallbacks": []},
-            llm_router=_router_with_defaults({"max_tokens": 16}, fallbacks=[{"*": ["served"]}]),
+            llm_router=_router_with_defaults({"max_tokens": 16}, fallbacks=[{"unlisted-model": ["served"]}]),
         )
 
     assert exc_info.value.param == "max_tokens"

@@ -390,3 +390,18 @@ def test_unlisted_model_with_a_key_or_team_fallback_inherits_the_router_default_
         response: Final = post(prefixed_gateway.gateway, "/v1/messages", _UNLISTED_MESSAGE, key=key)
         assert response.status_code == 200, response.text
         assert one_outbound(prefixed_gateway.gateway, prefixed_gateway.identity).get("max_output_tokens") == 32
+
+
+@pytest.mark.parametrize(
+    "fallbacks",
+    (
+        pytest.param([], id="empty"),
+        pytest.param([{"audit-other-model": ["audit-fallback"]}], id="another-model"),
+    ),
+)
+def test_router_star_fallback_serves_an_unlisted_model_whatever_the_request_fallbacks_say(
+    fallback_gateway: _Wildcard, fallbacks: list[JsonValue]
+) -> None:
+    response: Final = post(fallback_gateway.gateway, "/v1/messages", {**_UNLISTED_MESSAGE, "fallbacks": fallbacks})
+    assert response.status_code == 200, response.text
+    assert one_outbound(fallback_gateway.gateway, fallback_gateway.identity).get("max_output_tokens") == 32
