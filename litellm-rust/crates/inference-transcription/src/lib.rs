@@ -52,15 +52,9 @@ impl AudioTranscriptionRoute {
                 <&'static str>::from(provider.provider),
             );
             let secrets = self.secrets.resolve(&config.secret_names()).await?;
-            let execute: futures_util::future::BoxFuture<'_, Result<Value, Error>> =
-                Box::pin(handler::execute(
-                    &self.http,
-                    &self.auth,
-                    config,
-                    provider,
-                    request,
-                    secrets,
-                ));
+            let execute: futures_util::future::BoxFuture<'_, Result<Value, Error>> = Box::pin(
+                handler::execute(&self.http, &self.auth, config, provider, request, secrets),
+            );
             execute.await
         })
         .await
