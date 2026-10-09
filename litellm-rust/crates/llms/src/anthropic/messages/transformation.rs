@@ -8,8 +8,13 @@ use litellm_llms_types::{
 };
 use serde_json::{Map, Value, json};
 
-use super::{handler::shape_anthropic_messages_request, thinking::translate_thinking};
-use crate::base_llm::messages::context::MessagesTransformContext;
+use super::{
+    handler::shape_anthropic_messages_request,
+    thinking::{translate_reasoning_effort, translate_thinking},
+};
+use crate::base_llm::messages::{
+    context::MessagesTransformContext, normalization::strip_billing_metadata,
+};
 use crate::{
     Error,
     anthropic::common_utils::{
@@ -114,15 +119,66 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThinkingSemantics {
+    Anthropic,
+    Passthrough,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BillingMetadata {
+    Forward,
+    Strip,
+}
+
+/// How a host that speaks the Anthropic Messages wire format diverges from first-party Claude.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RequestPolicy {
+    pub thinking: ThinkingSemantics,
+    pub billing_metadata: BillingMetadata,
+}
+
+pub const FIRST_PARTY_REQUEST_POLICY: RequestPolicy = RequestPolicy {
+    thinking: ThinkingSemantics::Anthropic,
+    billing_metadata: BillingMetadata::Forward,
+};
+
+/// Claude served by a cloud partner such as Azure Foundry or Bedrock.
+pub const PARTNER_HOST_REQUEST_POLICY: RequestPolicy = RequestPolicy {
+    thinking: ThinkingSemantics::Anthropic,
+    billing_metadata: BillingMetadata::Strip,
+};
+
+/// A non-Claude host that speaks the Anthropic Messages wire format.
+pub const COMPATIBLE_HOST_REQUEST_POLICY: RequestPolicy = RequestPolicy {
+    thinking: ThinkingSemantics::Passthrough,
+    billing_metadata: BillingMetadata::Strip,
+};
+
 pub(crate) fn transform_messages_request(
     request: MessagesRequest,
     context: &MessagesTransformContext,
+) -> Result<MessagesRequest, Error> {
+    transform_messages_request_with(request, context, FIRST_PARTY_REQUEST_POLICY)
+}
+
+pub(crate) fn transform_messages_request_with(
+    request: MessagesRequest,
+    context: &MessagesTransformContext,
+    policy: RequestPolicy,
 ) -> Result<MessagesRequest, Error> {
     if request.params.max_tokens.is_none() {
         return Err(Error::MissingField("max_tokens"));
     }
     let request = drop_unsupported_params(request, context)?;
-    let request = translate_thinking(request, &context.thinking)?;
+    let request = match policy.thinking {
+        ThinkingSemantics::Anthropic => translate_thinking(request, &context.thinking)?,
+        ThinkingSemantics::Passthrough => translate_reasoning_effort(request, &context.thinking)?,
+    };
+    let request = match policy.billing_metadata {
+        BillingMetadata::Forward => request,
+        BillingMetadata::Strip => strip_billing_metadata(request),
+    };
     let context_management = request
         .params
         .context_management
@@ -397,6 +453,151 @@ mod tests {
                 &MessagesTransformContext::with_lookup(capabilities, drop_params, &no_env),
             )
             .map(|transformed| serde_json::to_value(transformed).unwrap())
+    }
+
+    const BILLING_HEADER: &str = "x-anthropic-billing-header: cc_version=1";
+
+    #[fixture]
+    fn always_thinking() -> MessagesModelCapabilities {
+        MessagesModelCapabilities {
+            supports_reasoning: true,
+            thinking_always_on: true,
+            ..Default::default()
+        }
+    }
+
+    fn transform_with(
+        fields: Value,
+        capabilities: MessagesModelCapabilities,
+        policy: RequestPolicy,
+    ) -> Value {
+        let context = MessagesTransformContext::with_lookup(capabilities, false, &no_env);
+        serde_json::to_value(
+            transform_messages_request_with(request(fields), &context, policy).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[rstest]
+    #[case::first_party(FIRST_PARTY_REQUEST_POLICY, json!([
+        {"type": "text", "text": BILLING_HEADER},
+        {"type": "text", "text": "keep"}
+    ]))]
+    #[case::partner_host(PARTNER_HOST_REQUEST_POLICY, json!([{"type": "text", "text": "keep"}]))]
+    #[case::compatible_host(COMPATIBLE_HOST_REQUEST_POLICY, json!([{"type": "text", "text": "keep"}]))]
+    fn billing_metadata_follows_the_policy(
+        #[case] policy: RequestPolicy,
+        #[case] system: Value,
+        always_thinking: MessagesModelCapabilities,
+    ) {
+        let transformed = transform_with(
+            json!({"system": [
+                {"type": "text", "text": BILLING_HEADER},
+                {"type": "text", "text": "keep"}
+            ]}),
+            always_thinking,
+            policy,
+        );
+        assert_eq!(transformed, body(json!({"system": system})));
+    }
+
+    #[rstest]
+    #[case::forward_keeps_a_billing_only_system(
+        FIRST_PARTY_REQUEST_POLICY,
+        json!({"system": [{"type": "text", "text": BILLING_HEADER}]}),
+        body(json!({"system": [{"type": "text", "text": BILLING_HEADER}]}))
+    )]
+    #[case::strip_drops_a_billing_only_system(
+        PARTNER_HOST_REQUEST_POLICY,
+        json!({"system": [{"type": "text", "text": BILLING_HEADER}]}),
+        body(json!({}))
+    )]
+    #[case::forward_keeps_a_string_system(
+        FIRST_PARTY_REQUEST_POLICY,
+        json!({"system": BILLING_HEADER}),
+        body(json!({"system": BILLING_HEADER}))
+    )]
+    #[case::strip_drops_a_billing_string_system(
+        COMPATIBLE_HOST_REQUEST_POLICY,
+        json!({"system": BILLING_HEADER}),
+        body(json!({}))
+    )]
+    #[case::strip_keeps_a_plain_string_system(
+        PARTNER_HOST_REQUEST_POLICY,
+        json!({"system": "keep"}),
+        body(json!({"system": "keep"}))
+    )]
+    fn system_shape_under_billing_policy(
+        #[case] policy: RequestPolicy,
+        #[case] fields: Value,
+        #[case] expected: Value,
+        always_thinking: MessagesModelCapabilities,
+    ) {
+        assert_eq!(transform_with(fields, always_thinking, policy), expected);
+    }
+
+    #[rstest]
+    #[case::anthropic_drops_disabled_thinking(FIRST_PARTY_REQUEST_POLICY, body(json!({})))]
+    #[case::passthrough_forwards_disabled_thinking(
+        COMPATIBLE_HOST_REQUEST_POLICY,
+        body(json!({"thinking": {"type": "disabled"}}))
+    )]
+    fn disabled_thinking_follows_the_thinking_semantics(
+        #[case] policy: RequestPolicy,
+        #[case] expected: Value,
+        always_thinking: MessagesModelCapabilities,
+    ) {
+        assert_eq!(
+            transform_with(
+                json!({"thinking": {"type": "disabled"}}),
+                always_thinking,
+                policy
+            ),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::first_party(FIRST_PARTY_REQUEST_POLICY)]
+    #[case::partner_host(PARTNER_HOST_REQUEST_POLICY)]
+    #[case::compatible_host(COMPATIBLE_HOST_REQUEST_POLICY)]
+    fn every_policy_maps_reasoning_effort(
+        #[case] policy: RequestPolicy,
+        always_thinking: MessagesModelCapabilities,
+    ) {
+        assert_eq!(
+            transform_with(
+                json!({"max_tokens": 4096, "reasoning_effort": "low"}),
+                always_thinking,
+                policy
+            ),
+            body(json!({
+                "max_tokens": 4096,
+                "thinking": {"type": "enabled", "budget_tokens": ThinkingBudgets::default().low}
+            }))
+        );
+    }
+
+    #[rstest]
+    fn transform_messages_request_uses_the_first_party_policy(
+        always_thinking: MessagesModelCapabilities,
+    ) {
+        let fields = json!({
+            "system": [
+                {"type": "text", "text": BILLING_HEADER},
+                {"type": "text", "text": "keep", "cache_control": {"type": "ephemeral"}}
+            ],
+            "thinking": {"type": "disabled"},
+            "temperature": 0.3,
+            "max_tokens": 4096,
+            "reasoning_effort": "low",
+            "context_management": [{"type": "compaction", "compact_threshold": 1000}]
+        });
+        let context = MessagesTransformContext::with_lookup(always_thinking, false, &no_env);
+        assert_eq!(
+            transform_messages_request(request(fields.clone()), &context),
+            transform_messages_request_with(request(fields), &context, FIRST_PARTY_REQUEST_POLICY)
+        );
     }
 
     fn advisor_history() -> Value {
