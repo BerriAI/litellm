@@ -1,12 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+qualification_mode=${LENS_QUALIFICATION_MODE:-smoke}
+chart_selection=${LENS_HELM_CHART:-all}
+case "$qualification_mode" in smoke|boundaries|release) ;; *) printf 'LENS_QUALIFICATION_MODE must be smoke, boundaries or release\n' >&2; exit 2 ;; esac
+case "$chart_selection" in all|litellm-helm|litellm) ;; *) printf 'LENS_HELM_CHART must be all, litellm-helm or litellm\n' >&2; exit 2 ;; esac
+if [[ "$qualification_mode" == release ]]; then
+  : "${LENS_RELEASE_PROVIDER_API_KEY:?A separately authorized provider credential is required}"
+  : "${LENS_RELEASE_PROVIDER_API_BASE:?Set the authorized provider API base}"
+  : "${LENS_RELEASE_PROVIDER_MODEL:?Set the provider model explicitly}"
+  [[ "$LENS_RELEASE_PROVIDER_API_BASE" == https://* ]]
+fi
 qa_dir=$(mktemp -d)
 cluster="lens-install-$(openssl rand -hex 6)"
 cluster_owned=false
 forward_pids=()
 cleanup() {
   local status=$?
+  if declare -F qualification_finish > /dev/null; then qualification_finish "$status" || true; fi
   if (( status != 0 )); then
     for log in "$qa_dir"/*-forward.log; do
       if [[ -f "$log" ]]; then cat "$log" >&2; fi
@@ -62,7 +73,9 @@ diagnose() {
   kubectl -n "$namespace" get pods
   kubectl -n "$namespace" get services,endpoints
   kubectl -n "$namespace" get events --sort-by=.lastTimestamp | tail -30
-  kubectl -n "$namespace" logs --all-containers -l app.kubernetes.io/instance=lens --tail=50 || true
+  if [[ "$qualification_mode" == smoke ]]; then
+    kubectl -n "$namespace" logs --all-containers -l app.kubernetes.io/instance=lens --tail=50 || true
+  fi
   return 1
 }
 
@@ -158,7 +171,13 @@ migration_job() {
       | .metadata.uid | select(type == "string" and length > 0)'
 }
 
+source tests/e2e/migrations/lens_release_qualification.sh
+qualification_initialize
+if [[ "$qualification_mode" != smoke && "$chart_selection" != litellm ]]; then
+  qualification_bundled_postgres
+fi
 for chart in litellm-helm litellm; do
+  if [[ "$chart_selection" != all && "$chart_selection" != "$chart" ]]; then continue; fi
   namespace="lens-$chart"
   kubectl create namespace "$namespace"
   master_key="sk-$(openssl rand -hex 24)"
@@ -315,6 +334,7 @@ YAML
   fi
   install=(helm upgrade --install lens "helm/$chart" -n "$namespace" \
     -f "$qa_dir/common.yaml" -f "$qa_dir/chart.yaml" --wait --wait-for-jobs --timeout 8m)
+  qualification_provider_values
   "${install[@]}" || diagnose
   forward_bundled
   for attempt in $(seq 1 30); do
@@ -322,6 +342,7 @@ YAML
     sleep 1
   done
   jq -e '.connected and .status.storage_ready' "$qa_dir/status.json"
+  qualification_setup
   api /lens/tracing/keys -d '{"name":"Helm smoke"}' > "$qa_dir/key.json"
   tracing_key=$(jq -r .key "$qa_dir/key.json")
   trace_id=$(openssl rand -hex 16)
@@ -333,11 +354,13 @@ YAML
     -H "Authorization: Bearer $tracing_key" -H 'Content-Type: application/json' \
     -d "@$qa_dir/trace.json" http://127.0.0.1:14419/v1/traces
   saved_trace
+  qualification_read_boundaries baseline
   kubectl -n "$namespace" exec deployment/clickhouse -- clickhouse-client --query \
     "SELECT count() FROM existing_traces.otel_traces WHERE TraceId = '$trace_id'" | grep -qx 1
   "${install[@]}" || diagnose
   forward_bundled
   saved_trace
+  qualification_read_boundaries reapplied
   kubectl -n "$namespace" get deployments -l app.kubernetes.io/instance=lens -o json \
     | jq -S '[.items[] | select(.metadata.name != "lens-lens-worker") | {name:.metadata.name,template:.spec.template}] | sort_by(.name)' \
     > "$qa_dir/gateway-before.json"
@@ -348,9 +371,11 @@ YAML
   cmp "$qa_dir/gateway-before.json" "$qa_dir/gateway-after.json"
   forward_bundled
   saved_trace
+  qualification_read_boundaries lens-upgrade
   "${install[@]}" || diagnose
   forward_bundled
   saved_trace
+  qualification_read_boundaries lens-rollback
   kubectl -n "$namespace" get deployment lens-lens-worker -o json \
     | jq -S .spec.template > "$qa_dir/lens-before.json"
   deployment_pods lens-lens-worker > "$qa_dir/lens-pods-before.json"
@@ -387,12 +412,20 @@ YAML
   done
   forward_bundled
   saved_trace
+  qualification_read_boundaries gateway-upgrade
+  if [[ "$qualification_mode" != smoke ]]; then
+    install+=(--set lensWorker.image.tag=upgrade)
+    "${install[@]}" || diagnose
+    forward_bundled
+    qualification_read_boundaries both-candidates
+  fi
   stop_forwards
   kubectl -n "$namespace" rollout restart "deployment/$control" deployment/lens-lens-worker
   kubectl -n "$namespace" rollout status "deployment/$control" --timeout=180s
   kubectl -n "$namespace" rollout status deployment/lens-lens-worker --timeout=180s
   forward "$control" 14418 "$control_port"
   saved_trace
+  qualification_outage
   printf '%s: fresh install, ingestion, Lens upgrade and rollback, independent gateway image upgrade, and restart passed\n' "$chart"
   stop_forwards
   helm upgrade --install external-lens helm/litellm-helm/charts/lens-0.1.0-dev.0.tgz \
@@ -411,6 +444,7 @@ YAML
   forward external-lens 14419 4318
   api /lens/service | jq -e '.configured and .connected and .status.storage_ready'
   saved_trace
+  qualification_read_boundaries external-lens
   trace_id=$(openssl rand -hex 16)
   span_id=$(openssl rand -hex 8)
   jq --arg trace "$trace_id" --arg span "$span_id" \
@@ -437,6 +471,7 @@ YAML
     | jq -S '{uid:.metadata.uid,template:.spec.template}' > "$qa_dir/external-after.json"
   cmp "$qa_dir/external-before.json" "$qa_dir/external-after.json"
   printf '%s: external Lens trace reads/writes and disabled gateway behavior passed\n' "$chart"
+  qualification_record chart-lifecycle passed
   stop_forwards
   kubectl delete namespace "$namespace" --wait=true
 done
