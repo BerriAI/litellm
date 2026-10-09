@@ -301,6 +301,9 @@ class BaseDecisionsConfig(ABC):
     api_key_env: tuple[str, ...] = ()
     api_base_env: tuple[str, ...] = ()
     api_key_required: bool = True
+    health_check_questions: Mapping[str, Mapping[str, object]] = MappingProxyType(
+        {"reachable": MappingProxyType({"type": "noul", "instructions": "Is the service reachable?"})}
+    )
 
     def get_default_api_base(self) -> str | None:
         return None
