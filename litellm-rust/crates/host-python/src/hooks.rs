@@ -1,5 +1,7 @@
 mod chain;
+mod layer;
 pub use chain::{HookChain, Hooks};
+pub use layer::HookLayer;
 
 use crate::PythonOwned;
 use litellm_host::hooks::{CallHooks, HookRuntime, RuntimeCallEvent};

@@ -1,4 +1,5 @@
 use crate::{
+    error::HookError,
     interceptors::{RawResponse, RequestContext, WireRequest},
     lifecycle::{CallEvent, Timing},
 };
@@ -99,4 +100,19 @@ pub trait CallHooks<R: HookRuntime>: Sized {
     ) -> Result<(), R::Error> {
         Ok(())
     }
+}
+
+/// Hooks a Rust built-in implements. They see only what every runtime shares: the wire
+/// request and owned event snapshots. A runtime adapts them into its own hook chain, so the
+/// same built-in runs under any driver and beside that runtime's own hooks.
+pub trait NativeHooks: Send + Sync {
+    fn before_provider_request(
+        &mut self,
+        wire: Box<WireRequest>,
+        _context: &RequestContext,
+    ) -> Result<Box<WireRequest>, HookError> {
+        Ok(wire)
+    }
+
+    fn on_event(&mut self, _event: &CallEvent) {}
 }

@@ -60,12 +60,11 @@ fn call_hooks(
     let call = PublicCall::capture(&call.base, &call.args, &call.kwargs)?;
     let arguments = call.arguments(py);
     let hooks = HookChain::new()
-        .with_all(litellm_callbacks_legacy_python::hooks(
+        .layer(
             py,
-            operation,
+            &litellm_callbacks_legacy_python::LegacyLayer::new(operation, asynchronous),
             call,
-            asynchronous,
-        ))
+        )
         .with(crate::preflight::SdkPolicy);
     Ok((arguments, hooks))
 }

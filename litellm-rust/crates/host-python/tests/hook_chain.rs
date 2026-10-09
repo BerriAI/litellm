@@ -1,15 +1,19 @@
 use litellm_host::{
-    hooks::CallHooks,
+    error::HookError,
+    hooks::{CallHooks, NativeHooks},
     interceptors::{RequestContext, WireRequest},
-    lifecycle::{FailureOrigin, Timing},
+    lifecycle::{CallEvent, FailureOrigin, Timing},
 };
-use litellm_host_python::{HookChain, HookStep, PythonCallEvent, PythonOwned, PythonRuntime};
+use litellm_host_python::{
+    HookChain, HookStep, Hooks, PythonCallEvent, PythonOwned, PythonRuntime,
+};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     types::{PyDict, PyTuple},
 };
 use rstest::{fixture, rstest};
+use std::sync::{Arc, Mutex};
 
 struct ScriptHooks {
     object: Py<PyAny>,
@@ -730,5 +734,136 @@ fn builder_runs_hooks_in_append_order(
             Some(locals),
         )
         .unwrap();
+    });
+}
+
+struct Recorder {
+    name: &'static str,
+    log: Arc<Mutex<Vec<String>>>,
+    reject: bool,
+}
+
+impl NativeHooks for Recorder {
+    fn before_provider_request(
+        &mut self,
+        mut wire: Box<WireRequest>,
+        _: &RequestContext,
+    ) -> Result<Box<WireRequest>, HookError> {
+        if self.reject {
+            return Err(HookError::Rejected {
+                reason: self.name.into(),
+            });
+        }
+        wire.url.push_str(self.name);
+        Ok(wire)
+    }
+
+    fn on_event(&mut self, event: &CallEvent) {
+        let label = match event {
+            CallEvent::Started { .. } => "started",
+            CallEvent::Succeeded { .. } => "succeeded",
+            _ => "other",
+        };
+        self.log
+            .lock()
+            .unwrap()
+            .push(format!("{}:{label}", self.name));
+    }
+}
+
+fn native_chain(log: &Arc<Mutex<Vec<String>>>, rejecting: Option<&'static str>) -> HookChain {
+    ["a", "b", "c"]
+        .into_iter()
+        .fold(HookChain::new(), |chain, name| {
+            chain.with_all([Hooks::native(Recorder {
+                name,
+                log: Arc::clone(log),
+                reject: rejecting == Some(name),
+            })])
+        })
+}
+
+fn request_context() -> RequestContext {
+    RequestContext {
+        model: "m".into(),
+        custom_llm_provider: "p".into(),
+        optional_params: serde_json::json!({}),
+        secret_fields: Vec::new(),
+        api_key: None,
+    }
+}
+
+fn wire() -> Box<WireRequest> {
+    Box::new(WireRequest {
+        url: String::new(),
+        headers: Vec::new(),
+        body: serde_json::json!({}),
+    })
+}
+
+#[test]
+fn native_hooks_rewrite_the_wire_request_in_chain_order() {
+    Python::attach(|py| {
+        let log = Arc::default();
+        let mut hooks = native_chain(&log, None);
+        let step = hooks
+            .before_provider_request(py, wire(), &request_context())
+            .unwrap();
+        let HookStep::Ready(wire) = step else {
+            panic!("native hooks never suspend");
+        };
+        assert_eq!(wire.url, "abc");
+    });
+}
+
+#[test]
+fn native_hook_rejection_raises_and_stops_the_chain() {
+    Python::attach(|py| {
+        let log = Arc::default();
+        let mut hooks = native_chain(&log, Some("b"));
+        let Err(error) = hooks.before_provider_request(py, wire(), &request_context()) else {
+            panic!("the rejection must surface");
+        };
+        assert!(error.to_string().contains("a hook rejected the call: b"));
+    });
+}
+
+#[test]
+fn native_hooks_see_events_in_onion_order_and_leave_arguments_alone() {
+    Python::attach(|py| {
+        let log: Arc<Mutex<Vec<String>>> = Arc::default();
+        let mut hooks = native_chain(&log, None);
+        let arguments = PyDict::new(py).unbind();
+        let HookStep::Ready(prepared) = hooks
+            .prepare_arguments(py, arguments.clone_ref(py), 0.0)
+            .unwrap()
+        else {
+            panic!("native hooks never suspend");
+        };
+        assert!(prepared.bind(py).is(arguments.bind(py)));
+        let response = py.None();
+        let events: [PythonCallEvent<'_>; 2] = [
+            PythonCallEvent::Started { start_time: 0.0 },
+            PythonCallEvent::Succeeded {
+                timing: TIMING,
+                response: &response,
+            },
+        ];
+        for event in events {
+            let HookStep::Ready(()) = hooks.on_event(py, event).unwrap() else {
+                panic!("native hooks never suspend");
+            };
+        }
+        assert_eq!(
+            *log.lock().unwrap(),
+            [
+                "a:started",
+                "b:started",
+                "c:started",
+                "c:succeeded",
+                "b:succeeded",
+                "a:succeeded"
+            ],
+        );
     });
 }

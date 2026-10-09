@@ -1,5 +1,5 @@
 use litellm_host::{
-    hooks::CallHooks,
+    hooks::{CallHooks, NativeHooks},
     interceptors::{RawResponse, RequestContext, WireRequest},
     lifecycle::{CallEvent, ExecutionEvent, Timing},
 };
@@ -15,7 +15,9 @@ use crate::{
 };
 
 use super::adapter::{ChainHooks, ChainStep, HookAdapter};
+use super::native::NativeAdapter;
 use super::phase::{Order, Stage, transform};
+use crate::hooks::HookLayer;
 
 type OwnedEvent = CallEvent<Py<PyAny>, Py<PyBaseException>, RawResponse>;
 
@@ -26,6 +28,10 @@ pub struct Hooks(Box<dyn ChainHooks>);
 impl Hooks {
     pub fn new(hooks: impl PythonCallHooks + 'static) -> Self {
         Self(Box::new(HookAdapter::new(hooks)))
+    }
+
+    pub fn native(hooks: impl NativeHooks + 'static) -> Self {
+        Self(Box::new(NativeAdapter(hooks)))
     }
 }
 
@@ -44,6 +50,10 @@ impl HookChain {
 
     pub fn with(self, hooks: impl PythonCallHooks + 'static) -> Self {
         self.with_all([Hooks::new(hooks)])
+    }
+
+    pub fn layer<Call>(self, py: Python<'_>, layer: &impl HookLayer<Call>, call: Call) -> Self {
+        self.with_all(layer.layer(py, call))
     }
 
     pub fn with_all(mut self, hooks: impl IntoIterator<Item = Hooks>) -> Self {

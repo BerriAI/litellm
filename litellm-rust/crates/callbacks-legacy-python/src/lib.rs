@@ -17,7 +17,7 @@ mod messages_body;
 mod operation;
 mod python;
 use litellm_host::call::Operation;
-use litellm_host_python::Hooks;
+use litellm_host_python::{HookLayer, Hooks};
 use pyo3::Python;
 
 pub(crate) use adapter::LegacyLogging;
@@ -29,20 +29,31 @@ use messages_body::body_hooks;
 
 /// The legacy hooks a native call runs, outermost first: the `@client` wrapper's `Logging`,
 /// then the Python handler body the route would have run after it.
-pub fn hooks(
-    py: Python<'_>,
+pub struct LegacyLayer {
     operation: Operation,
-    call: PublicCall,
     asynchronous: bool,
-) -> impl Iterator<Item = Hooks> {
-    let body = body_hooks(py, operation, &call, asynchronous).map(Hooks::new);
-    std::iter::once(Hooks::new(LegacyLogging::new(
-        py,
-        operation,
-        call,
-        asynchronous,
-    )))
-    .chain(body)
+}
+
+impl LegacyLayer {
+    pub fn new(operation: Operation, asynchronous: bool) -> Self {
+        Self {
+            operation,
+            asynchronous,
+        }
+    }
+}
+
+impl HookLayer<PublicCall> for LegacyLayer {
+    fn layer(&self, py: Python<'_>, call: PublicCall) -> impl IntoIterator<Item = Hooks> {
+        let body = body_hooks(py, self.operation, &call, self.asynchronous).map(Hooks::new);
+        std::iter::once(Hooks::new(LegacyLogging::new(
+            py,
+            self.operation,
+            call,
+            self.asynchronous,
+        )))
+        .chain(body)
+    }
 }
 
 #[cfg(test)]
