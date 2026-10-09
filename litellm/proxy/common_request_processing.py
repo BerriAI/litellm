@@ -133,6 +133,7 @@ from litellm.types.router_weights import validate_router_weights
 
 _LateResponseT = TypeVar("_LateResponseT", bound=Response)
 _LlmCallT = TypeVar("_LlmCallT")
+_ResponseObjT: Final = TypeVar("_ResponseObjT")
 
 KNOWN_PROXY_ROUTES: Final = frozenset(
     route for member in LiteLLMRoutes for route in member.value if route.startswith("/")
@@ -1336,13 +1337,16 @@ _is_azure_model_router_request: Final = is_azure_model_router_request
 
 def _override_openai_response_model(
     *,
-    response_obj: object,
+    response_obj: _ResponseObjT,
     requested_model: str,
     log_context: str,
     return_raw_model_name: bool = False,
-) -> None:
+) -> _ResponseObjT:
     """
     Force the OpenAI-compatible `model` field in the response to match what the client requested.
+
+    Returns the response to send back: the same object restamped in place, or an aliased copy when the
+    response is a frozen pydantic model, since those refuse `setattr`.
 
     LiteLLM internally prefixes some provider/deployment model identifiers (e.g. `hosted_vllm/...`).
     That internal identifier should not be returned to clients in the OpenAI `model` field.
@@ -1364,7 +1368,7 @@ def _override_openai_response_model(
        model group name instead of the comma-separated list the client sent.
     """
     if return_raw_model_name or not requested_model:
-        return
+        return response_obj
 
     hidden_params: Final = get_hidden_params_dict(response_obj)
     if isinstance(hidden_params, dict):
@@ -1377,7 +1381,7 @@ def _override_openai_response_model(
                 log_context,
                 attempted_fallbacks,
             )
-            return
+            return response_obj
 
         # For fastest_response batch completions, use the winning model's group
         # name rather than the comma-separated list the client sent.
@@ -1396,7 +1400,7 @@ def _override_openai_response_model(
                     "%s: fastest_response detected but no model group header found, preserving actual model from response.",
                     log_context,
                 )
-                return
+                return response_obj
 
     # Check if this is an Azure Model Router request - if so, preserve the actual model used
     if is_azure_model_router_request(requested_model, hidden_params):
@@ -1404,12 +1408,13 @@ def _override_openai_response_model(
             "%s: Azure Model Router detected - preserving actual model used from response instead of overriding to router model.",
             log_context,
         )
-        return
+        return response_obj
 
-    if isinstance(response_obj, dict):
-        if "model" not in response_obj:
-            return
-        downstream_model = response_obj.get("model")
+    payload: Final[object] = response_obj
+    if isinstance(payload, dict):
+        if "model" not in payload:
+            return response_obj
+        downstream_model = payload.get("model")
         if downstream_model != requested_model:
             verbose_proxy_logger.debug(
                 "%s: response model mismatch - requested=%r downstream=%r. Overriding response['model'] to requested model.",
@@ -1417,11 +1422,11 @@ def _override_openai_response_model(
                 requested_model,
                 downstream_model,
             )
-        response_obj["model"] = requested_model
-        return
+        payload["model"] = requested_model
+        return response_obj
 
     if not hasattr(response_obj, "model"):
-        return
+        return response_obj
 
     downstream_model = getattr(response_obj, "model", None)
     if downstream_model != requested_model:
@@ -1432,10 +1437,13 @@ def _override_openai_response_model(
             downstream_model,
         )
 
+    if isinstance(response_obj, BaseModel) and response_obj.model_config.get("frozen"):
+        return response_obj.model_copy(update={"model": requested_model})
+
     try:
         setattr(response_obj, "model", requested_model)
     except Exception as e:
-        verbose_proxy_logger.debug(
+        verbose_proxy_logger.warning(
             "%s: failed to override response.model=%r on response_type=%s. error=%s",
             log_context,
             requested_model,
@@ -1443,6 +1451,7 @@ def _override_openai_response_model(
             str(e),
             exc_info=True,
         )
+    return response_obj
 
 
 _METADATA_BUCKET_KEYS: Final = ("metadata", "litellm_metadata")
@@ -2949,7 +2958,7 @@ class ProxyBaseLLMRequestProcessing:
         # Always return the client-requested model name (not provider-prefixed internal identifiers)
         # for OpenAI-compatible responses.
         if requested_model_from_client:
-            _override_openai_response_model(
+            response = _override_openai_response_model(  # rebind-ok: a frozen response comes back as an aliased copy
                 response_obj=response,
                 requested_model=requested_model_from_client,
                 log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
