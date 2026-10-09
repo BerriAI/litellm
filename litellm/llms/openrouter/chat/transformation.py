@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 
-import litellm
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException

@@ -212,11 +212,7 @@ def _format_response(response: DecisionsIRResponse, call: _DecisionsCall) -> Dec
             "model": f"{call.custom_llm_provider}/{call.model}",
             "custom_llm_provider": call.custom_llm_provider,
             "provider_response_model": f"{call.custom_llm_provider}/{call.model}",
-            **(
-                {"additional_headers": {RESPONSE_COST_HEADER: provider_cost}}
-                if provider_cost is not None
-                else {}
-            ),
+            **({"additional_headers": {RESPONSE_COST_HEADER: provider_cost}} if provider_cost is not None else {}),
         }
     )
     return formatted

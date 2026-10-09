@@ -9,15 +9,17 @@ Docs: https://openrouter.ai/docs/api/reference/responses/overview
 """
 
 from collections.abc import Mapping
-from typing import Final, cast
+from typing import Final
 
 import httpx
+from pydantic import TypeAdapter
+
 import litellm
 from litellm.litellm_core_utils.core_helpers import RESPONSE_COST_HEADER
+from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.router import GenericLiteLLMParams
 from litellm.types.llms.openai import (
     ResponseCompletedEvent,
     ResponseFailedEvent,
@@ -25,6 +27,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamingResponse,
 )
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
 
@@ -61,12 +64,12 @@ class OpenRouterResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def transform_streaming_response(
         self,
         model: str,
-        parsed_chunk: dict,
+        parsed_chunk: Mapping[str, object],
         logging_obj: LiteLLMLoggingObj,
     ) -> ResponsesAPIStreamingResponse:
         response_event: Final = super().transform_streaming_response(
             model=model,
-            parsed_chunk=parsed_chunk,
+            parsed_chunk=dict(parsed_chunk),
             logging_obj=logging_obj,
         )
         terminal_response: Final = (
@@ -86,18 +89,19 @@ class OpenRouterResponsesAPIConfig(OpenAIResponsesAPIConfig):
         cost: Final = response.usage.cost if response.usage is not None else None
         if cost is None:
             return
-        current_headers: Final = response.hidden_params.get("additional_headers")
-        additional_headers: Final = cast(
-            Mapping[str, object],
-            current_headers if isinstance(current_headers, Mapping) else {},
+        additional_headers: Final = TypeAdapter(dict[str, object]).validate_python(
+            response.hidden_params.get("additional_headers", {})
         )
-        response.hidden_params = {
-            **response.hidden_params,
-            "additional_headers": {
-                **additional_headers,
-                RESPONSE_COST_HEADER: float(cost),
+        set_hidden_params(
+            response,
+            {
+                **response.hidden_params,
+                "additional_headers": {
+                    **additional_headers,
+                    RESPONSE_COST_HEADER: float(cost),
+                },
             },
-        }
+        )
 
     def validate_environment(
         self,
