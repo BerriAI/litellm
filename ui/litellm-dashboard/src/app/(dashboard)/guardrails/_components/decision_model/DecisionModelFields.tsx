@@ -49,6 +49,7 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
   const nameId = useId();
   const [customName, setCustomName] = useState("");
   const [customInstructions, setCustomInstructions] = useState("");
+  const [customNameTaken, setCustomNameTaken] = useState(false);
 
   const selectedNames = new Set(checks.map((check) => check.name));
 
@@ -80,7 +81,12 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
   const addCustomCheck = () => {
     const name = customName.trim();
     const instructions = customInstructions.trim();
-    if (!name || !instructions || selectedNames.has(name)) return;
+    if (!name || !instructions) return;
+    if (selectedNames.has(name) || presets.some((preset) => preset.name === name)) {
+      setCustomNameTaken(true);
+      return;
+    }
+    setCustomNameTaken(false);
     onChecksChange([...checks, { name, instructions, action: "block", threshold: 0.5, custom: true }]);
     setCustomName("");
     setCustomInstructions("");
@@ -289,7 +295,10 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
               aria-label="Custom check name"
               placeholder="Check name (e.g. invoice_policy)"
               value={customName}
-              onChange={(event) => setCustomName(event.target.value)}
+              onChange={(event) => {
+                setCustomName(event.target.value);
+                setCustomNameTaken(false);
+              }}
             />
             <Button
               variant="outline"
@@ -300,6 +309,9 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
               Add check
             </Button>
           </div>
+          {customNameTaken && (
+            <p className="mt-1 text-xs text-destructive">That name is already used by another check</p>
+          )}
           <Textarea
             aria-label="Custom check instructions"
             rows={2}

@@ -40,6 +40,7 @@ def _make_guardrail(
     unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
     max_input_chars: int = 24000,
     router_provider: Callable[[], Router | None] | None = None,
+    timeout: float | None = None,
 ) -> DecisionModelGuardrail:
     return DecisionModelGuardrail(
         guardrail_name="test_decision_model",
@@ -49,6 +50,7 @@ def _make_guardrail(
         unreachable_fallback=unreachable_fallback,
         max_input_chars=max_input_chars,
         router_provider=router_provider,
+        timeout=timeout,
     )
 
 
@@ -362,3 +364,43 @@ async def test_block_detail_lists_only_block_checks_but_log_records_all_flagged(
         "prompt_injection",
         "jailbreak",
     ]
+
+
+@pytest.mark.asyncio
+async def test_router_path_forwards_configured_timeout():
+    router: Final = _decision_router(probability=0.1)
+    guardrail: Final = _make_guardrail(timeout=7.5, router_provider=lambda: router)
+
+    await guardrail.apply_guardrail({"texts": ["hi"]}, _request_data(), "request")
+
+    assert router.adecisions.await_args.kwargs["timeout"] == 7.5
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.guardrails.guardrail_hooks.decision_model.decision_model.litellm.adecisions",
+    new_callable=AsyncMock,
+)
+async def test_sdk_path_forwards_configured_timeout(mock_sdk_decisions):
+    mock_sdk_decisions.return_value = OpenAIDecisionResponse(
+        model="jev-latest",
+        answers=(OpenAIPredicateAnswer(name="prompt_injection", probability=0.0),),
+        usage=OpenAIDecisionUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+    )
+    router: Final = _decision_router()
+    router.resolved_litellm_models.return_value = ()
+    guardrail: Final = _make_guardrail(timeout=3.25, router_provider=lambda: router)
+
+    result: Final = await guardrail.apply_guardrail({"texts": ["hi"]}, _request_data(), "request")
+
+    assert result == {"texts": ["hi"]}
+    assert mock_sdk_decisions.await_args.kwargs["timeout"] == 3.25
+
+
+def test_more_than_max_questions_checks_rejected_at_init():
+    checks: Final = tuple(
+        DecisionModelCheck(name=f"check_{index}", instructions="Is this true?") for index in range(129)
+    )
+
+    with pytest.raises(ValueError, match="at most 128 checks"):
+        _make_guardrail(checks=checks)

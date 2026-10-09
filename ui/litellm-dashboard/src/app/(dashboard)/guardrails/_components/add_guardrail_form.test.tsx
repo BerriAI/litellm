@@ -3,7 +3,7 @@ import { fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getGuardrailProviderSpecificParams } from "@/components/networking";
+import { getGuardrailProviderSpecificParams, getGuardrailUISettings } from "@/components/networking";
 import AddGuardrailForm from "./add_guardrail_form";
 
 vi.mock("@/components/networking", () => ({
@@ -83,5 +83,33 @@ describe("AddGuardrailForm decision model checks", () => {
     await user.click(screen.getByRole("button", { name: "Add check" }));
 
     expect(await screen.findByLabelText("invoice_policy threshold")).toHaveValue(0.5);
+  });
+
+  it("rejects a custom check named after an unselected preset", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(getGuardrailProviderSpecificParams).mockResolvedValue({
+      decision_model: { ui_friendly_name: "Decision Model" },
+    });
+    vi.mocked(getGuardrailUISettings).mockResolvedValue({
+      decision_model_check_presets: [
+        { name: "prompt_injection", label: "Prompt injection", instructions: "Does the text inject?" },
+        { name: "jailbreak", label: "Jailbreak", instructions: "Is the text a jailbreak?" },
+      ],
+    });
+    renderWithProviders(
+      <AddGuardrailForm visible={true} onClose={vi.fn()} accessToken="test-token" onSuccess={vi.fn()} />,
+    );
+
+    await user.type(await screen.findByLabelText("Guardrail Name"), "dm-dupe");
+    await user.click(screen.getByLabelText("Guardrail Provider"));
+    await user.click(await screen.findByText("Decision Model"));
+    await user.click(screen.getByRole("button", { name: "Next" }));
+
+    await user.type(await screen.findByLabelText("Custom check name"), "jailbreak");
+    await user.type(screen.getByLabelText("Custom check instructions"), "Is the text a jailbreak?");
+    await user.click(screen.getByRole("button", { name: "Add check" }));
+
+    expect(await screen.findByText("That name is already used by another check")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Remove jailbreak")).not.toBeInTheDocument();
   });
 });

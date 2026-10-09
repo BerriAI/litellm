@@ -14,7 +14,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.llm_judge import default_router_provider, judge_target
-from litellm.types.decisions import OpenAIDecisionResponse, OpenAIPredicateAnswer
+from litellm.types.decisions import MAX_DECISION_QUESTIONS, OpenAIDecisionResponse, OpenAIPredicateAnswer
 from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.proxy.guardrails.guardrail_hooks.decision_model import (
     DECISION_MODEL_CHECK_PRESETS,
@@ -41,6 +41,10 @@ def _resolve_checks(checks: tuple[DecisionModelCheck, ...]) -> tuple[DecisionMod
     instructions present) that decide what a run sends, wherever the guardrail is built."""
     if not checks:
         raise ValueError("decision_model guardrail requires at least one check")
+    if len(checks) > MAX_DECISION_QUESTIONS:
+        raise ValueError(
+            f"decision_model guardrail supports at most {MAX_DECISION_QUESTIONS} checks, got {len(checks)}"
+        )
     names: Final = [check.name for check in checks]
     if len(set(names)) != len(names):
         raise ValueError("decision_model guardrail check names must be unique")
@@ -104,6 +108,7 @@ class DecisionModelGuardrail(CustomGuardrail):
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         max_input_chars: int = 24000,
         router_provider: Callable[[], Router | None] | None = None,
+        timeout: float | None = None,
     ) -> None:
         super().__init__(  # pyright: ignore[reportUnknownMemberType]  # base init takes untyped **kwargs
             guardrail_name=guardrail_name,
@@ -118,6 +123,7 @@ class DecisionModelGuardrail(CustomGuardrail):
         self.unreachable_fallback = unreachable_fallback
         self.max_input_chars = max_input_chars
         self._router_provider = router_provider or default_router_provider
+        self.timeout = timeout
 
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:  # mutable-ok: base signature returns list
@@ -136,12 +142,14 @@ class DecisionModelGuardrail(CustomGuardrail):
                 questions=questions,
                 num_retries=0,
                 fallbacks=[],
+                timeout=self.timeout,
             )
         return await litellm.adecisions(  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType,reportUnknownArgumentType]  # SDK dispatch returns a broad union
             model=self.decision_model,
             input=text,
             questions=questions,
             num_retries=0,
+            timeout=self.timeout,
         )
 
     async def _run_checks(self, text: str) -> OpenAIDecisionResponse:
