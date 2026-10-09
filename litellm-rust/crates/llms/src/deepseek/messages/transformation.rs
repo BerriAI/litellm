@@ -141,7 +141,6 @@ impl BaseMessagesConfig for DeepSeekAnthropicMessagesConfig {
     }
 }
 
-/// Python's `DeepSeekAnthropicMessagesConfig.get_api_key`: the param, else `DEEPSEEK_API_KEY`.
 pub fn get_api_key(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
@@ -149,8 +148,6 @@ pub fn get_api_key(
     resolve_non_empty(api_key, env_lookup, &[DEEPSEEK_API_KEY_ENV])
 }
 
-/// Python's `DeepSeekAnthropicMessagesConfig.get_api_base`: the param, else the Anthropic
-/// specific base, else the OpenAI compatible base, else DeepSeek's Anthropic endpoint.
 pub fn get_api_base(api_base: Option<&str>, env_lookup: &dyn Fn(&str) -> Option<String>) -> String {
     resolve_non_empty(
         api_base,
@@ -187,11 +184,15 @@ pub fn complete_deepseek_anthropic_url(
 /// dropped; every other tool is sent as given.
 fn sanitize_tool(tool: Recognized<MessagesTool>) -> Recognized<MessagesTool> {
     match tool {
-        Recognized::Unrecognized(Value::Object(mut fields))
+        Recognized::Unrecognized(Value::Object(fields))
             if fields.get("type").and_then(Value::as_str) == Some(CUSTOM_TOOL_TYPE) =>
         {
-            fields.remove("type");
-            Recognized::Unrecognized(Value::Object(fields))
+            Recognized::Unrecognized(Value::Object(
+                fields
+                    .into_iter()
+                    .filter(|(name, _)| name != "type")
+                    .collect(),
+            ))
         }
         other => other,
     }
@@ -343,7 +344,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[rstest]
     fn a_call_without_a_key_names_the_deepseek_variable() {
         assert!(matches!(
             validated(&[], None, &no_env).unwrap_err(),
@@ -354,7 +355,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[rstest]
     fn secret_names_cover_the_key_and_both_bases() {
         assert_eq!(
             DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG.secret_names(),
@@ -366,7 +367,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn default_headers_are_anthropic_version_and_json() {
         assert_eq!(
             DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG.default_headers(),
@@ -377,7 +378,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn the_custom_discriminator_is_dropped_and_other_tools_are_kept() {
         let body = transformed(json!({
             "model": "deepseek-v4-pro",
@@ -432,7 +433,7 @@ mod tests {
         assert_eq!(body.get("system").cloned(), expected);
     }
 
-    #[test]
+    #[rstest]
     fn thinking_history_and_params_pass_through() {
         let messages = json!([
             {"role": "user", "content": "Use the tool."},
