@@ -1762,7 +1762,12 @@ async def test_route_request_router_settings_override_skips_null_fields():
     assert "model_group_retry_policy" not in call_kwargs
 
 
-def _router_with_defaults(default_litellm_params: dict[str, object], *, wildcard_target: str | None = None):
+def _router_with_defaults(
+    default_litellm_params: dict[str, object],
+    *,
+    wildcard_target: str | None = None,
+    fallbacks: list[dict[str, list[str]]] | None = None,
+):
     import litellm
 
     wildcard: Final[tuple[dict[str, object], ...]] = (
@@ -1787,6 +1792,7 @@ def _router_with_defaults(default_litellm_params: dict[str, object], *, wildcard
         model_list=model_list,
         model_group_alias={"served-alias": "served"},
         default_litellm_params=default_litellm_params,
+        fallbacks=fallbacks,
     )
 
 
@@ -1907,6 +1913,63 @@ def test_router_default_applies_to_every_model_the_router_serves(model: str, wil
             llm_router=_router_with_defaults({"max_tokens": 16}, wildcard_target=wildcard_target),
         )
         is None
+    )
+
+
+@pytest.mark.parametrize(
+    "fallbacks",
+    [
+        pytest.param([{"*": ["served"]}], id="generic-fallback"),
+        pytest.param([{"unlisted-model": ["served"]}], id="model-keyed-fallback"),
+    ],
+)
+def test_router_default_applies_to_an_unlisted_model_a_fallback_answers_for(
+    fallbacks: list[dict[str, list[str]]],
+) -> None:
+    from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+
+    assert (
+        raise_if_required_body_param_missing(
+            route_type="anthropic_messages",
+            data={"model": "unlisted-model", "messages": []},
+            llm_router=_router_with_defaults({"max_tokens": 16}, fallbacks=fallbacks),
+        )
+        is None
+    )
+
+
+def test_router_default_ignored_for_an_unlisted_model_another_fallback_chain_covers() -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type="anthropic_messages",
+            data={"model": "unlisted-model", "messages": []},
+            llm_router=_router_with_defaults({"max_tokens": 16}, fallbacks=[{"served": ["team-internal"]}]),
+        )
+
+    assert exc_info.value.param == "max_tokens"
+
+
+@pytest.mark.asyncio
+async def test_missing_model_reaches_the_router_when_no_wildcard_matches_it() -> None:
+    llm_router: Final = MagicMock()
+    llm_router.default_deployment = None
+    llm_router.model_names = []
+    llm_router.is_recognized_model.return_value = False
+    llm_router.router_general_settings.pass_through_all_models = False
+    llm_router.pattern_router.patterns = {"anthropic/(.*)": []}
+    llm_router.pattern_router.get_deployments_by_pattern.return_value = []
+    llm_router.acompletion.return_value = "served by a fallback"
+
+    assert (
+        await route_request(
+            {"model": None, "messages": [{"role": "user", "content": "hi"}]}, llm_router, None, "acompletion"
+        )
+        == "served by a fallback"
     )
 
 

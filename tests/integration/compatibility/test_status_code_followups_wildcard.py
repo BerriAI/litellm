@@ -22,6 +22,7 @@ from integration.compatibility._status_code_audit import (
     ENDPOINT_PATHS,
     RESPONSE,
     RESPONSES_FRAMES,
+    ROUTER_DEFAULTS,
     assembled_text,
     assert_no_provider_call,
     drain_rig_upstream,
@@ -292,3 +293,56 @@ def test_fixed_target_wildcard_streams_a_request_without_a_model(
     outbound: Final = one_outbound(wildcard.gateway, wildcard.identity)
     assert outbound.get("model") == "gpt-4o-mini", outbound
     assert outbound.get("stream") is True, outbound
+
+
+@pytest.fixture(scope="module")
+def fallback_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Wildcard]:
+    """A proxy whose only wildcard is provider-prefixed (`anthropic/*`) and whose `*` fallback chain answers every
+    model nothing else serves, with router defaults the fallback deployment inherits."""
+    with gateway_from_environment() as gateway, gateway.scenario() as scenario:
+        identity, handle = register(scenario, "audit-fallback", _scripted("fixed"))
+        config: Final[dict[str, JsonValue]] = {
+            "model_list": [
+                {
+                    "model_name": "anthropic/*",
+                    "litellm_params": {"model": "anthropic/*", "api_base": handle.api_base(), "api_key": identity},
+                },
+                {
+                    "model_name": "audit-fallback",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_base": handle.api_base(),
+                        "api_key": identity,
+                    },
+                },
+            ],
+            "router_settings": {
+                "num_retries": 0,
+                "fallbacks": [{"*": ["audit-fallback"]}],
+                "default_litellm_params": ROUTER_DEFAULTS,
+            },
+        }
+        with owned_gateway(tmp_path_factory.mktemp("audit-fallback"), config) as owned:
+            yield _Wildcard(owned, identity)
+
+
+@pytest.mark.parametrize("endpoint", ("chat", "responses", "messages"))
+@pytest.mark.parametrize("shape", tuple(_MODEL_SHAPES))
+def test_missing_model_no_wildcard_matches_is_served_by_the_fallback(
+    fallback_gateway: _Wildcard, endpoint: str, shape: str
+) -> None:
+    response: Final = post(fallback_gateway.gateway, ENDPOINT_PATHS[endpoint], _body(endpoint, shape, stream=False))
+    assert response.status_code == 200, response.text
+    assert "scripted" in response.text, response.text
+
+
+def test_unlisted_model_served_by_the_fallback_inherits_the_router_default_max_tokens(
+    fallback_gateway: _Wildcard,
+) -> None:
+    response: Final = post(
+        fallback_gateway.gateway,
+        "/v1/messages",
+        {"model": "audit-unlisted-model", "messages": [{"role": "user", "content": "Hello"}]},
+    )
+    assert response.status_code == 200, response.text
+    assert one_outbound(fallback_gateway.gateway, fallback_gateway.identity).get("max_output_tokens") == 32
