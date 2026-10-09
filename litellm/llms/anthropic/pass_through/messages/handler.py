@@ -7,7 +7,7 @@
 
 import asyncio
 import contextvars
-from collections.abc import AsyncIterator, Coroutine, Iterator
+from collections.abc import AsyncIterator, Coroutine, Iterator, Sequence
 from functools import partial
 from typing import Any, Final, cast
 
@@ -23,6 +23,7 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.anthropic_messages.anthropic_request import AnthropicMetadata
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -467,6 +468,7 @@ def anthropic_messages_handler(
         custom_llm_provider=custom_llm_provider,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
+        litellm_params=litellm_params,
     )
 
     # Store agentic loop params in logging object for agentic hooks
@@ -513,7 +515,9 @@ def anthropic_messages_handler(
                 metadata=metadata,
                 stop_sequences=stop_sequences,
                 stream=stream,
-                system=system,
+                system=cast(  # cast-ok: anthropic accepts list system blocks; handler signature is narrower
+                    "str | None", system
+                ),
                 temperature=temperature,
                 thinking=thinking,
                 tool_choice=tool_choice,
@@ -557,11 +561,15 @@ def anthropic_messages_handler(
                 metadata=metadata,
                 stop_sequences=stop_sequences,
                 stream=stream,
-                system=system,
+                system=cast(  # cast-ok: anthropic accepts list system blocks; handler signature is narrower
+                    "str | None", system
+                ),
                 temperature=temperature,
                 thinking=thinking,
                 tool_choice=tool_choice,
-                tools=tools,
+                tools=cast(  # cast-ok: dict tools already fit the handler's union
+                    "list[AllAnthropicToolsValues | dict[str, object]] | None", tools
+                ),
                 top_k=top_k,
                 top_p=top_p,
                 _is_async=is_async,
@@ -583,11 +591,13 @@ def anthropic_messages_handler(
             metadata=metadata,
             stop_sequences=stop_sequences,
             stream=stream,
-            system=system,
+            system=cast(  # cast-ok: anthropic accepts list system blocks; handler signature is narrower
+                "str | None", system
+            ),
             temperature=temperature,
             thinking=thinking,
             tool_choice=tool_choice,
-            tools=tools,
+            tools=cast("list[dict[str, object]] | None", tools),  # cast-ok: dict tools fit the adapter's declared union
             top_k=top_k,
             top_p=top_p,
             _is_async=is_async,
@@ -619,7 +629,12 @@ def anthropic_messages_handler(
     )
     return base_llm_http_handler.anthropic_messages_handler(
         model=model,
-        messages=strip_provider_specific_fields_from_anthropic_messages(messages),
+        messages=cast(  # cast-ok: anthropic messages are dicts at runtime
+            "list[dict[str, object]]",
+            strip_provider_specific_fields_from_anthropic_messages(
+                cast(Sequence[object], messages)  # cast-ok: anthropic payloads arrive as untyped dicts
+            ),
+        ),
         anthropic_messages_provider_config=anthropic_messages_provider_config,
         anthropic_messages_optional_request_params=dict(anthropic_messages_optional_request_params),
         _is_async=is_async,

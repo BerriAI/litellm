@@ -438,6 +438,12 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # SDK-only field; also rejected outright in is_request_body_safe.
     "model_list",
     "vertex_ai_credentials",
+    # Per-user GitHub Copilot connection slots: the mode is decided by the
+    # stored credential's values and the caller's connection by the proxy's own
+    # secret_fields, so a body-supplied value could only spoof either.
+    "github_copilot_auth_type",
+    "user_provider_credentials",
+    "github_copilot_user_session",
     # Observability credentials, hosts, and project identifiers: derived
     # from the canonical ``_supported_callback_params`` allowlist so new
     # integrations are covered automatically. Sorted for stable iteration

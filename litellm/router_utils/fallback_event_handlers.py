@@ -156,6 +156,7 @@ def _trigger_cooldown_for_failed_deployment(
             original_exception=exception,
             deployment=deployment_id,
             time_to_cooldown=time_to_cooldown,
+            request_kwargs=kwargs,
         )
 
         verbose_router_logger.debug("Triggered cooldown for fallback deployment %s", deployment_id)

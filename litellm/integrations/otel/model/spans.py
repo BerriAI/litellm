@@ -293,6 +293,7 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_BackgroundInteractionSettlement",
         "LiteLLM_ErrorLogs",
         "LiteLLM_UserNotifications",
+        "LiteLLM_UserProviderCredentials",
         "LiteLLM_TeamMembership",
         "LiteLLM_OrganizationMembership",
         "LiteLLM_InvitationLink",

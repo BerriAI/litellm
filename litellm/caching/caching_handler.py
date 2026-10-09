@@ -107,11 +107,15 @@ def _drop_logging_obj_from_kwargs(request_kwargs: dict[str, object]) -> dict[str
 
 
 def _is_response_cache_excluded(model: str | None, kwargs: Mapping[str, object]) -> bool:
+    from litellm.llms.github_copilot.per_user_auth import is_github_copilot_per_user_request
+
     custom_llm_provider: Final = kwargs.get("custom_llm_provider")
     model_provider: Final = model.split("/", maxsplit=1)[0] if model is not None else None
     return (
-        isinstance(custom_llm_provider, str) and custom_llm_provider in RESPONSE_CACHE_EXCLUDED_PROVIDERS
-    ) or model_provider in RESPONSE_CACHE_EXCLUDED_PROVIDERS
+        (isinstance(custom_llm_provider, str) and custom_llm_provider in RESPONSE_CACHE_EXCLUDED_PROVIDERS)
+        or model_provider in RESPONSE_CACHE_EXCLUDED_PROVIDERS
+        or is_github_copilot_per_user_request(kwargs)
+    )
 
 
 def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
@@ -317,6 +321,7 @@ class LLMCachingHandler:
             None
         """
         if _is_response_cache_excluded(model=model, kwargs=kwargs):
+            self.request_kwargs = _drop_logging_obj_from_kwargs(kwargs)
             return None
 
         # Check if caching should be performed BEFORE doing expensive operations
@@ -444,6 +449,7 @@ class LLMCachingHandler:
 
         # Check if caching should be performed BEFORE doing expensive kwargs copy
         if _is_response_cache_excluded(model=model, kwargs=kwargs):
+            self.request_kwargs = _drop_logging_obj_from_kwargs(kwargs)
             return CachingHandlerResponse(cached_result=None)
         if litellm.cache is not None and self._is_call_type_supported_by_cache(original_function=original_function):
             args = args or ()
@@ -867,11 +873,11 @@ class LLMCachingHandler:
             new_kwargs.pop("metadata", None)
         model_value: Final = new_kwargs.get("model")
         model: Final = model_value if isinstance(model_value, str) else None
+        self.request_kwargs = _drop_logging_obj_from_kwargs(new_kwargs)
         if _is_response_cache_excluded(model=model, kwargs=new_kwargs):
             return None
         if new_kwargs.get("stream") is True and "cache_key" not in new_kwargs:
             new_kwargs["cache_key"] = litellm.cache.get_cache_key(**new_kwargs)
-        self.request_kwargs = _drop_logging_obj_from_kwargs(new_kwargs)
         cached_result: object | None = None
         if call_type == CallTypes.aembedding.value:
             new_kwargs["input"] = self.handle_kwargs_input_list_or_str(new_kwargs)

@@ -1740,6 +1740,9 @@ def client(original_function):
 
             ## LOAD CREDENTIALS
             load_credentials_from_list(kwargs)
+            from litellm.llms.github_copilot.per_user_auth import attach_github_copilot_user_session
+
+            attach_github_copilot_user_session(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the untyped request dict
             kwargs["litellm_logging_obj"] = logging_obj
             LLMCachingHandler: Final = _get_cached_llm_caching_handler()
             _llm_caching_handler: Final[LLMCachingHandler] = LLMCachingHandler(
@@ -2028,6 +2031,9 @@ def client(original_function):
             kwargs["litellm_logging_obj"] = logging_obj
             ## LOAD CREDENTIALS
             load_credentials_from_list(kwargs)
+            from litellm.llms.github_copilot.per_user_auth import aattach_github_copilot_user_session
+
+            await aattach_github_copilot_user_session(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the untyped request dict
             logging_obj.llm_caching_handler = _llm_caching_handler
             # [OPTIONAL] CHECK BUDGET
             if litellm.max_budget:
@@ -8301,13 +8307,18 @@ def convert_to_dict(message: BaseModel | dict) -> dict:
         raise TypeError(f"Invalid message type: {type(message)}. Expected dict or Pydantic model.")
 
 
-def convert_list_message_to_dict(messages: Sequence):
-    new_messages: Final = []
-    for message in messages:
-        convert_msg_to_dict = cast(AllMessageValues, convert_to_dict(message))
-        cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)
-        new_messages.append(cleaned_message)
-    return new_messages
+def convert_list_message_to_dict(
+    messages: Sequence[BaseModel | Mapping[str, object]],
+) -> list[dict[str, object]]:  # mutable-ok: callers mutate the returned message dicts
+    def _as_message_value(message: BaseModel | Mapping[str, object]) -> AllMessageValues:
+        return cast(  # cast-ok: message dicts satisfy the TypedDict shape
+            AllMessageValues,
+            convert_to_dict(
+                cast("BaseModel | dict[str, object]", message)  # cast-ok: messages are dicts or pydantic models at runt
+            ),
+        )
+
+    return [dict(cleanup_none_field_in_message(message=_as_message_value(message))) for message in messages]
 
 
 def validate_and_fix_openai_messages(messages: list):
@@ -8323,7 +8334,12 @@ def validate_and_fix_openai_messages(messages: list):
         if message.get("tool_calls"):
             message["tool_calls"] = jsonify_tools(tools=message["tool_calls"])
 
-        convert_msg_to_dict = cast(AllMessageValues, convert_to_dict(message))
+        convert_msg_to_dict = cast(  # cast-ok: message dicts satisfy the TypedDict shape
+            AllMessageValues,
+            convert_to_dict(
+                cast("BaseModel | dict[str, object]", message)  # cast-ok: dicts or pydantic models at runtime
+            ),
+        )
         cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)
         new_messages.append(cleaned_message)
     return validate_chat_completion_user_messages(messages=new_messages)

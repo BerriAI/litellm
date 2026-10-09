@@ -4702,9 +4702,7 @@ def test_is_llm_api_route():
     all_llm_api_routes = llm_passthrough_router.routes
 
     for route in all_llm_api_routes:
-        print("route", route)
         route_path = str(route.path)
-        print("route_path", route_path)
         assert RouteChecks.is_llm_api_route(route_path) is True
 
 
@@ -4720,3 +4718,91 @@ def test_route_matches_pattern():
         is False
     )
     assert RouteChecks._route_matches_pattern("/v1/{thread_id}/messages", "/v1/messages/thread_2345") is False
+
+
+def _scope_request(method: str, path: str) -> Request:
+    return Request({"type": "http", "method": method, "path": path, "query_string": b""})
+
+
+def _internal_user_check(route: str, method: str, role: LitellmUserRoles = LitellmUserRoles.INTERNAL_USER) -> None:
+    user_obj = LiteLLM_UserTable(user_id="u", user_email="u@x", user_role=role.value)
+    valid_token = UserAPIKeyAuth(user_id="u", user_role=role)
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=role.value,
+        route=route,
+        request=_scope_request(method, route),
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
+@pytest.mark.parametrize(
+    ("method", "route"),
+    [
+        ("GET", "/credentials/user_connections"),
+        ("POST", "/credentials/x/user_connection/start"),
+        ("POST", "/credentials/x/user_connection/poll"),
+        ("DELETE", "/credentials/x/user_connection"),
+        ("DELETE", "/credentials/a/b/user_connection"),
+    ],
+)
+def test_internal_user_credential_connection_routes_allowed(method: str, route: str) -> None:
+    assert _internal_user_check(route, method) is None
+
+
+@pytest.mark.parametrize(
+    ("method", "route"),
+    [
+        ("PATCH", "/credentials/x/user_connection"),
+        ("GET", "/credentials/by_name/x/user_connection"),
+        ("PATCH", "/credentials/x/user_connection/start"),
+        ("GET", "/credentials/x/user_connection/poll"),
+        ("DELETE", "/credentials/user_connections"),
+        ("PATCH", "/credentials/user_connections"),
+    ],
+)
+def test_internal_user_credential_connection_route_collisions_denied(method: str, route: str) -> None:
+    """A name colliding with the connection paths would fall through to the generic
+    credential CRUD handlers, so only the exact method/route pairs are allowed."""
+    with pytest.raises(Exception, match="Only proxy admin"):
+        _internal_user_check(route, method)
+
+
+@pytest.mark.parametrize(
+    ("method", "route"),
+    [
+        ("GET", "/credentials/user_connections"),
+        ("POST", "/credentials/x/user_connection/start"),
+        ("POST", "/credentials/x/user_connection/poll"),
+        ("DELETE", "/credentials/x/user_connection"),
+    ],
+)
+def test_view_only_user_denied_credential_connection_routes(method: str, route: str) -> None:
+    with pytest.raises(Exception, match="Only proxy admin"):
+        _internal_user_check(route, method, role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
+
+
+def test_user_connection_route_registration_order_wins_over_generic_credential_routes() -> None:
+    """The :path placeholders in the generic CRUD routes could swallow the
+    user_connection paths; the concrete routes must register (and match) first."""
+    from starlette.routing import Match
+
+    from litellm.proxy.credential_endpoints import endpoints as credential_endpoints
+    from litellm.proxy.proxy_server import app
+
+    for method, path, expected in (
+        ("DELETE", "/credentials/foo/user_connection", credential_endpoints.delete_user_connection),
+        ("POST", "/credentials/foo/user_connection/start", credential_endpoints.start_user_connection),
+    ):
+        scope = {"type": "http", "method": method, "path": path}
+        match = next(
+            (
+                route
+                for route in app.router.routes
+                if hasattr(route, "matches") and route.matches(scope)[0] == Match.FULL
+            ),
+            None,
+        )
+        assert match is not None, f"no route matched {method} {path}"
+        assert getattr(match, "endpoint", None) is expected

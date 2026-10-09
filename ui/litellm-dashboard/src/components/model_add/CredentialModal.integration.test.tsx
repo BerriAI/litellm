@@ -60,6 +60,15 @@ vi.mock("../networking", async () => {
           { key: "api_key", label: "Delegated Access Token", field_type: "password" },
         ],
       },
+      {
+        provider: "GITHUB_COPILOT",
+        provider_display_name: Providers.GITHUB_COPILOT,
+        litellm_provider: "github_copilot",
+        credential_fields: [
+          { key: "api_base", label: "API Base", field_type: "text" },
+          { key: "api_key", label: "API Key", field_type: "password" },
+        ],
+      },
     ]),
   };
 });
@@ -501,6 +510,63 @@ describe("CredentialModal with Anthropic workload identity federation", () => {
       },
       [],
     );
+  });
+});
+
+describe("CredentialModal with GitHub Copilot auth types", () => {
+  const perUserCopilotCredential: CredentialItem = {
+    credential_name: "copilot-per-user",
+    credential_values: { github_copilot_auth_type: "per_user_oauth" },
+    credential_info: { custom_llm_provider: "GITHUB_COPILOT" },
+  };
+
+  it("saves a per-user GitHub OAuth credential with only the auth type and no secret", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({ initialProvider: "GITHUB_COPILOT" });
+
+    expect(await screen.findByRole("combobox", { name: "Auth Type:" })).toHaveTextContent("Shared device login");
+    expect(await screen.findByLabelText("API Key")).toBeInTheDocument();
+    await chooseOption(user, /^Auth Type:/, "Per-user GitHub OAuth");
+    expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("API Base")).not.toBeInTheDocument();
+    fill("Credential Name:", "copilot-per-user");
+    await user.click(screen.getByRole("button", { name: "Add Credential" }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      {
+        credential_name: "copilot-per-user",
+        custom_llm_provider: "GITHUB_COPILOT",
+        github_copilot_auth_type: "per_user_oauth",
+      },
+      [],
+    );
+  });
+
+  it("keeps the shared device login credential free of the per-user auth type", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({ initialProvider: "GITHUB_COPILOT" });
+
+    await screen.findByLabelText("API Key");
+    fill("Credential Name:", "copilot-shared");
+    await user.click(screen.getByRole("button", { name: "Add Credential" }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      { credential_name: "copilot-shared", custom_llm_provider: "GITHUB_COPILOT" },
+      [],
+    );
+  });
+
+  it("opens a stored per-user credential on its auth type and deletes it when switched to shared", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({ mode: "edit", existingCredential: perUserCopilotCredential });
+
+    expect(await screen.findByRole("combobox", { name: "Auth Type:" })).toHaveTextContent("Per-user GitHub OAuth");
+    await chooseOption(user, /^Auth Type:/, "Shared device login");
+    await user.click(screen.getByRole("button", { name: "Update Credential" }));
+
+    const [values, valuesToDelete] = onSubmit.mock.calls[0];
+    expect(values).toEqual({ credential_name: "copilot-per-user", custom_llm_provider: "GITHUB_COPILOT" });
+    expect(valuesToDelete).toEqual(["github_copilot_auth_type"]);
   });
 });
 

@@ -9364,7 +9364,10 @@ class ProxyConfig:
 
         decrypted_credential_values: Final = {}
         for k, v in credential_object.credential_values.items():
-            decrypted_credential_values[k] = decrypted_or_stored(k, v)
+            decrypted_credential_values[k] = decrypted_or_stored(
+                k,
+                cast("str", v),  # cast-ok: credential values are str at the decrypt boundary
+            )
 
         credential_object.credential_values = decrypted_credential_values
         return credential_object

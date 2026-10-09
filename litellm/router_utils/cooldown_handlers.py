@@ -271,12 +271,25 @@ def _is_cooldown_required(
         return True
 
 
+def _is_per_user_provider_request(request_kwargs: Mapping[str, object]) -> bool:
+    from litellm.llms.github_copilot.per_user_auth import (
+        github_copilot_user_session_from,
+        is_github_copilot_per_user_request,
+    )
+
+    return (
+        is_github_copilot_per_user_request(request_kwargs)
+        or github_copilot_user_session_from(request_kwargs.get("litellm_params")) is not None
+    )
+
+
 def _should_run_cooldown_logic(
     litellm_router_instance: LitellmRouter,
     deployment: str | None,
     exception_status: str | int,
     original_exception: Exception,
     time_to_cooldown: float | None = None,
+    request_kwargs: Mapping[str, object] | None = None,
 ) -> bool:
     """
     Helper that decides if cooldown logic should be run
@@ -294,6 +307,38 @@ def _should_run_cooldown_logic(
             "Should Not Run Cooldown Logic: deployment id is none or model group can't be found."
         )
         return False
+
+    if isinstance(
+        original_exception,
+        (
+            litellm.CallerCredentialAuthenticationError,
+            litellm.CallerCredentialRateLimitError,
+        ),
+    ):
+        verbose_router_logger.debug(
+            "Should Not Run Cooldown Logic: caller-credential errors are scoped to one user's connection"
+        )
+        return False
+
+    if request_kwargs is not None and _is_per_user_provider_request(request_kwargs):
+        verbose_router_logger.debug(
+            "Should Not Run Cooldown Logic: the failure came from one caller's per-user provider session"
+        )
+        return False
+
+    if deployment is not None:
+        failed_deployment: Final = litellm_router_instance.get_deployment(model_id=deployment)
+        if failed_deployment is not None:
+            from litellm.llms.github_copilot.per_user_auth import (
+                github_copilot_per_user_credential_name,
+            )
+
+            failed_litellm_params: Final = getattr(failed_deployment, "litellm_params", None)
+            if github_copilot_per_user_credential_name(failed_litellm_params) is not None:
+                verbose_router_logger.debug(
+                    "Should Not Run Cooldown Logic: the failed deployment authenticates per caller"
+                )
+                return False
 
     #########################################################
     # If time_to_cooldown is 0 or 0.0000000, don't run cooldown logic
@@ -442,6 +487,7 @@ def set_cooldown_deployments(
     deployment: str | None = None,
     time_to_cooldown: float | None = None,
     requested_model_group: str | None = None,
+    request_kwargs: Mapping[str, object] | None = None,
 ) -> bool:
     """
     Add a model to the list of models being cooled down for that minute, if it exceeds the allowed fails / minute
@@ -463,6 +509,7 @@ def set_cooldown_deployments(
             exception_status=exception_status,
             original_exception=original_exception,
             time_to_cooldown=time_to_cooldown,
+            request_kwargs=request_kwargs,
         )
         is False
         or deployment is None

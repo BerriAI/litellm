@@ -13,6 +13,13 @@ MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_SCOPE: Final = "https://graph.micro
 # Replies depend on the caller's delegated identity, which response-cache keys do not include.
 RESPONSE_CACHE_EXCLUDED_PROVIDERS: Final = frozenset({"microsoft_365_copilot"})
 MICROSOFT_365_COPILOT_DEFAULT_TIME_ZONE: Final = "UTC"
+GITHUB_COPILOT_PER_USER_AUTH_TYPE: Final = "per_user_oauth"
+GITHUB_COPILOT_AUTH_TYPE_KEY: Final = "github_copilot_auth_type"
+GITHUB_COPILOT_USER_TOKEN_SAFETY_MARGIN_SECONDS: Final = 60
+GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS: Final = 60
+GITHUB_COPILOT_DEVICE_FLOW_CACHE_PREFIX: Final = "github_copilot_device_flow"
+USER_PROVIDER_CREDENTIAL_CACHE_PREFIX: Final = "user_provider_credential"
+USER_PROVIDER_CREDENTIAL_NOT_CONNECTED: Final = "__not_connected__"
 SERVER_STREAMING_CLASSIFICATION_KEY: Final = "litellm_server_streaming_classification"
 
 

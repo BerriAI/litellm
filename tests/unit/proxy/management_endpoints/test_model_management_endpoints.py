@@ -9581,3 +9581,188 @@ class TestFederationGateScopesToWhatTheWriteTouches:
 
         assert "deleted successfully" in result["message"]
         mock_prisma.db.litellm_proxymodeltable.delete.assert_awaited_once()
+
+
+class TestNonAdminCannotSetPerUserOauthOnModel:
+    """github_copilot_auth_type is a server-owned WIF field; a team admin must not write it
+    onto a deployment's litellm_params nor attach a per-user credential by name."""
+
+    @pytest.mark.asyncio
+    async def test_add_new_model_non_admin_cannot_set_github_copilot_auth_type(self):
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            add_new_model,
+        )
+
+        non_admin = UserAPIKeyAuth(user_id="team_admin", user_role=LitellmUserRoles.INTERNAL_USER)
+        mock_prisma = MagicMock()
+        mock_prisma.writer_db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+
+        with (
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.prisma_client", mock_prisma
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.store_model_in_db", True
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.premium_user", True
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await add_new_model(
+                    model_params=Deployment(
+                        model_name="my-model",
+                        litellm_params=LiteLLM_Params(
+                            model="github_copilot/gpt-4o",
+                            github_copilot_auth_type="per_user_oauth",
+                        ),
+                        model_info={"id": "wif-gate-copilot-1"},
+                    ),
+                    user_api_key_dict=non_admin,
+                )
+            assert "proxy admin" in str(exc_info.value.message).lower()
+            assert exc_info.value.param == "github_copilot_auth_type"
+            mock_prisma.db.litellm_proxymodeltable.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_add_new_model_admin_can_set_github_copilot_auth_type(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            add_new_model,
+        )
+
+        admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        mock_prisma = MagicMock()
+        created_row = MagicMock()
+        created_row.model_id = "wif-gate-copilot-2"
+        created_row.model_dump_json.return_value = "{}"
+        mock_prisma.db.litellm_proxymodeltable.create = AsyncMock(return_value=created_row)
+
+        with (
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.prisma_client", mock_prisma
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.store_model_in_db", True
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.premium_user", True
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.master_key", "sk-test-master"
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.llm_router",
+                MagicMock(**{"get_model_ids.return_value": ["wif-gate-copilot-2"]}),
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.proxy_config",
+                MagicMock(add_deployment=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None))),
+            ),
+        ):
+            result = await add_new_model(
+                model_params=Deployment(
+                    model_name="my-model",
+                    litellm_params=LiteLLM_Params(
+                        model="github_copilot/gpt-4o",
+                        github_copilot_auth_type="per_user_oauth",
+                    ),
+                    model_info={"id": "wif-gate-copilot-2"},
+                ),
+                user_api_key_dict=admin,
+            )
+            assert result is created_row
+
+    @pytest.mark.asyncio
+    async def test_add_new_model_non_admin_cannot_attach_a_per_user_oauth_credential(self):
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            add_new_model,
+        )
+
+        non_admin = UserAPIKeyAuth(user_id="team_admin", user_role=LitellmUserRoles.INTERNAL_USER)
+        mock_prisma = MagicMock()
+        mock_prisma.writer_db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+        per_user_credential_row = MagicMock()
+        per_user_credential_row.credential_values = {"github_copilot_auth_type": "per_user_oauth"}
+        mock_prisma.db.litellm_credentialstable.find_unique = AsyncMock(
+            return_value=per_user_credential_row
+        )
+
+        with (
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.prisma_client", mock_prisma
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.store_model_in_db", True
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.premium_user", True
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await add_new_model(
+                    model_params=Deployment(
+                        model_name="my-model",
+                        litellm_params=LiteLLM_Params(
+                            model="github_copilot/gpt-4o",
+                            litellm_credential_name="admin-copilot-cred",
+                        ),
+                        model_info={"id": "wif-gate-copilot-3"},
+                    ),
+                    user_api_key_dict=non_admin,
+                )
+            mock_prisma.db.litellm_proxymodeltable.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_add_new_model_admin_can_attach_a_per_user_oauth_credential(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            add_new_model,
+        )
+
+        admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        mock_prisma = MagicMock()
+        created_row = MagicMock()
+        created_row.model_id = "wif-gate-copilot-4"
+        created_row.model_dump_json.return_value = "{}"
+        mock_prisma.db.litellm_proxymodeltable.create = AsyncMock(return_value=created_row)
+        per_user_credential_row = MagicMock()
+        per_user_credential_row.credential_values = {"github_copilot_auth_type": "per_user_oauth"}
+        mock_prisma.db.litellm_credentialstable.find_unique = AsyncMock(
+            return_value=per_user_credential_row
+        )
+
+        with (
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.prisma_client", mock_prisma
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.store_model_in_db", True
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.premium_user", True
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.master_key", "sk-test-master"
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.llm_router",
+                MagicMock(**{"get_model_ids.return_value": ["wif-gate-copilot-4"]}),
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.proxy_config",
+                MagicMock(add_deployment=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None))),
+            ),
+        ):
+            result = await add_new_model(
+                model_params=Deployment(
+                    model_name="my-model",
+                    litellm_params=LiteLLM_Params(
+                        model="github_copilot/gpt-4o",
+                        litellm_credential_name="admin-copilot-cred",
+                    ),
+                    model_info={"id": "wif-gate-copilot-4"},
+                ),
+                user_api_key_dict=admin,
+            )
+            assert result is created_row

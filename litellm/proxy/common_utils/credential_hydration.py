@@ -9,7 +9,7 @@ import asyncio
 from collections.abc import Mapping
 from itertools import chain
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast  # noqa: TID251  # narrows untyped credential values at the decrypt boundary
 
 import litellm
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
@@ -71,7 +71,10 @@ def decrypted_or_stored(key: str, value: str) -> str:
 def _decrypted(db_credential: CredentialItem) -> CredentialItem:
     """The stored credential with every value decrypted, leaving already-plaintext values alone."""
     decrypted_values: Final = MappingProxyType(
-        {key: decrypted_or_stored(key, value) for key, value in db_credential.credential_values.items()}
+        {
+            key: decrypted_or_stored(key, cast("str", value))  # cast-ok: stored values are str
+            for key, value in db_credential.credential_values.items()
+        }
     )
     return CredentialItem(
         credential_name=db_credential.credential_name,
