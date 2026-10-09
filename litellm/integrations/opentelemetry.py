@@ -1552,10 +1552,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         Guarded to the LiteLLM-created proxy span (by name + recording) so
         externally provided parent spans are never mutated.
         """
-        litellm_params: Final = kwargs.get("litellm_params") or {}
-        metadata: Final = litellm_params.get("metadata") or {}
-        litellm_metadata: Final = litellm_params.get("litellm_metadata") or {}
-        proxy_span: Final = metadata.get("litellm_parent_otel_span") or litellm_metadata.get("litellm_parent_otel_span")
+        litellm_params: Final[dict[str, Any]] = cast(dict[str, Any], kwargs.get("litellm_params") or {})
+        metadata: Final[dict[str, Any]] = cast(dict[str, Any], litellm_params.get("metadata") or {})
+        litellm_metadata: Final[dict[str, Any]] = cast(dict[str, Any], litellm_params.get("litellm_metadata") or {})
+        proxy_span: Final[Any] = metadata.get("litellm_parent_otel_span") or litellm_metadata.get(
+            "litellm_parent_otel_span"
+        )
         if (
             proxy_span is not None
             and getattr(proxy_span, "name", None) == LITELLM_PROXY_REQUEST_SPAN_NAME
