@@ -3,7 +3,7 @@ Helper functions for health check calls.
 """
 
 import base64
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Final, Literal
 
 from litellm.llms.base_llm.ocr.transformation import DocumentType
@@ -24,10 +24,51 @@ IMAGE_EDIT_HEALTH_CHECK_PROMPT: Final = (
     "Add a small yellow star in the top right corner of this simple drawing of a blue circle on a white background"
 )
 
+ANTHROPIC_MESSAGES_HEALTH_CHECK_MAX_TOKENS: Final = 16
+
+
+def native_health_check_mode(model: str, custom_llm_provider: str | None) -> Literal["anthropic_messages"] | None:
+    if custom_llm_provider != "bedrock_mantle":
+        return None
+    from litellm.llms.bedrock_mantle.common_utils import mantle_health_check_mode
+
+    return mantle_health_check_mode(model)
+
+
+def _cost_map_mode(model: str) -> str | None:
+    import litellm
+    from litellm.litellm_core_utils.health_check_utils import OPTIONAL_STR
+
+    return OPTIONAL_STR.validate_python(litellm.model_cost.get(model, {}).get("mode"))
+
+
+def default_health_check_mode(requested_model: str, model: str, custom_llm_provider: str) -> str:
+    return (
+        native_health_check_mode(model=model, custom_llm_provider=custom_llm_provider)
+        or _cost_map_mode(requested_model)
+        or _cost_map_mode(model)
+        or "chat"
+    )
+
 
 def get_image_file_for_health_check() -> bytes:
     """Return the image used for health checks."""
     return base64.b64decode(TEST_IMAGE_BASE64)
+
+
+def _decisions_health_check_questions(model: str, custom_llm_provider: str) -> Mapping[str, Mapping[str, object]]:
+    import litellm
+    from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
+    from litellm.utils import ProviderConfigManager
+
+    provider: Final = next((member for member in litellm.LlmProviders if member.value == custom_llm_provider), None)
+    config: Final = (
+        None
+        if provider is None
+        else ProviderConfigManager.get_provider_decisions_config(model=model, provider=provider)
+    )
+    questions: Final = BaseDecisionsConfig.health_check_questions if config is None else config.health_check_questions
+    return {name: dict(question) for name, question in questions.items()}
 
 
 def _ocr_health_check_document(model: str, custom_llm_provider: str) -> DocumentType:
@@ -70,7 +111,7 @@ class HealthCheckHelpers:
         return {}
 
     @staticmethod
-    def _update_model_params_with_health_check_tracking_information(
+    def update_model_params_with_health_check_tracking_information(
         model_params: dict,
     ) -> dict:
         """
@@ -94,6 +135,10 @@ class HealthCheckHelpers:
         )
         return model_params
 
+    _update_model_params_with_health_check_tracking_information = (
+        update_model_params_with_health_check_tracking_information
+    )
+
     @staticmethod
     def _get_metadata_for_health_check_call():
         """
@@ -114,10 +159,9 @@ class HealthCheckHelpers:
         """
         Health check for batch mode.
 
-        Calls list_batches for providers that support it (openai, hosted_vllm, azure,
-        vertex_ai). For all other providers (e.g. bedrock) the batch API surface doesn't
-        include list_batches, so we fall back to acompletion to verify connectivity and
-        credential validity instead.
+        Calls list_batches for providers that support it. For all other providers (e.g. bedrock)
+        the batch API surface doesn't include list_batches, so we fall back to acompletion to
+        verify connectivity and credential validity instead.
         """
         import litellm
 
@@ -132,10 +176,9 @@ class HealthCheckHelpers:
                 litellm_params={"api_base": api_base} if api_base else None,
             )
 
-        if custom_llm_provider in LIST_BATCHES_SUPPORTED_PROVIDERS:
-            return await litellm.alist_batches(**filtered_model_params)
-        else:
+        if custom_llm_provider not in LIST_BATCHES_SUPPORTED_PROVIDERS:
             return await litellm.acompletion(**model_params)
+        return await litellm.alist_batches(**{**filtered_model_params, "custom_llm_provider": custom_llm_provider})
 
     @staticmethod
     async def _image_edit_health_check(edit_request: Callable[[], Awaitable["ImageResponse"]]) -> "ImageResponse":
@@ -169,7 +212,9 @@ class HealthCheckHelpers:
             "realtime",
             "batch",
             "responses",
+            "anthropic_messages",
             "ocr",
+            "evaluation",
         ],
         Callable,
     ]:
@@ -192,8 +237,8 @@ class HealthCheckHelpers:
         from litellm.litellm_core_utils.audio_utils.utils import (
             get_audio_file_for_health_check,
         )
-        from litellm.litellm_core_utils.health_check_utils import _filter_model_params
-        from litellm.realtime_api.main import _realtime_health_check
+        from litellm.litellm_core_utils.health_check_utils import DECISIONS_CALL_PARAMS, _filter_model_params
+        from litellm.realtime_api.main import realtime_health_check
 
         return {
             "chat": lambda: litellm.acompletion(
@@ -238,7 +283,7 @@ class HealthCheckHelpers:
                 query=prompt or "",
                 documents=["my sample text"],
             ),
-            "realtime": lambda: _realtime_health_check(
+            "realtime": lambda: realtime_health_check(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 api_base=model_params.get("api_base", None),
@@ -255,8 +300,26 @@ class HealthCheckHelpers:
                 **_filter_model_params(model_params=model_params),
                 input=prompt or "test",
             ),
+            "anthropic_messages": lambda: litellm.anthropic_messages(
+                **{
+                    "max_tokens": ANTHROPIC_MESSAGES_HEALTH_CHECK_MAX_TOKENS,
+                    "messages": [{"role": "user", "content": prompt or "test"}],
+                    **model_params,
+                }
+            ),
             "ocr": lambda: litellm.aocr(
                 **_filter_model_params(model_params=model_params),
                 document=_ocr_health_check_document(model=model, custom_llm_provider=custom_llm_provider),
+            ),
+            "evaluation": lambda: litellm.adecisions(
+                **DECISIONS_CALL_PARAMS.validate_python(
+                    {
+                        "state": prompt or "health check",
+                        "questions": _decisions_health_check_questions(
+                            model=model, custom_llm_provider=custom_llm_provider
+                        ),
+                        **_filter_model_params(model_params=model_params),
+                    }
+                )
             ),
         }

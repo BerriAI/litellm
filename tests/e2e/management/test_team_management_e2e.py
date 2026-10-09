@@ -27,6 +27,7 @@ import pytest
 from pydantic import BaseModel
 
 from e2e_config import settle_propagation, unique_marker
+from e2e_metadata import Domain, Route, Subject, meta
 from e2e_http import NoBody, PartialBody, StreamingResponse, unwrap
 from lifecycle import ResourceManager
 from management_client import ManagementClient
@@ -241,6 +242,7 @@ def _member_delete_status(client: ManagementClient, key: str, team_id: str, user
 
 class TestTeamManagementRoutes:
     @pytest.mark.covers("mgmt.team.info.happy_path")
+    @meta(Subject(domain=Domain.MANAGEMENT, route=Route.TEAM_MANAGEMENT))
     def test_info_returns_created_team_fields(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -257,6 +259,7 @@ class TestTeamManagementRoutes:
         )
 
     @pytest.mark.covers("mgmt.team.block.persists")
+    @meta(Subject(domain=Domain.MANAGEMENT, route=Route.TEAM_MANAGEMENT))
     def test_block_then_unblock_persists_to_team_info(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -278,6 +281,7 @@ class TestTeamManagementRoutes:
         )
 
     @pytest.mark.covers("mgmt.team.member_update.persists")
+    @meta(Subject(domain=Domain.MANAGEMENT, route=Route.TEAM_MANAGEMENT))
     def test_member_update_persists_role_and_budget(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -302,6 +306,7 @@ class TestTeamManagementRoutes:
         )
 
     @pytest.mark.covers("mgmt.team.member_delete.persists")
+    @meta(Subject(domain=Domain.MANAGEMENT, route=Route.TEAM_MANAGEMENT))
     def test_member_delete_persists_to_team_info(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -320,6 +325,7 @@ class TestTeamManagementRoutes:
         )
 
     @pytest.mark.covers("mgmt.team.new.admin_only")
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.TEAM_MANAGEMENT))
     def test_new_is_denied_to_non_admin_keys(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -334,6 +340,7 @@ class TestTeamManagementRoutes:
             )
 
     @pytest.mark.covers("mgmt.team.member_add.member_forbidden")
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.TEAM_MANAGEMENT))
     def test_member_add_forbidden_to_plain_member(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -348,6 +355,7 @@ class TestTeamManagementRoutes:
         )
 
     @pytest.mark.covers("mgmt.team.member_delete.member_forbidden")
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.TEAM_MANAGEMENT))
     def test_member_delete_forbidden_to_plain_member(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -458,6 +466,7 @@ class TestTeamAdminWithNoEditableFields:
     """No proxy admin has enabled a team field for team admins, which is how every proxy starts."""
 
     @pytest.mark.covers("mgmt.team.update.team_admin_forbidden_until_enabled")
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.TEAM_MANAGEMENT))
     def test_team_admin_cannot_change_any_team_setting(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -483,6 +492,7 @@ class TestTeamAdminWithTpmLimitEnabled:
     """A proxy admin has enabled tpm_limit, so a team admin may change that setting and no other."""
 
     @pytest.mark.covers("mgmt.team.update.team_admin_limited_to_enabled_fields")
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.TEAM_MANAGEMENT))
     def test_team_admin_saves_the_settings_form_with_a_new_tpm_limit(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -522,6 +532,7 @@ class TestTeamAdminWithTpmLimitEnabled:
             pytest.param(TeamSettingsChange(metadata=TeamCustomMetadata(cost_center="team-admin")), id="metadata"),
         ],
     )
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.TEAM_MANAGEMENT))
     def test_team_admin_cannot_change_a_setting_that_is_not_enabled(
         self, client: ManagementClient, resources: ResourceManager, change: TeamSettingsChange
     ) -> None:
@@ -548,6 +559,7 @@ class TestTeamAdminWithTpmLimitEnabled:
         )
 
     @pytest.mark.covers("mgmt.team.update.team_admin_resend_keeps_budget_reset")
+    @meta(Subject(domain=Domain.SPEND_BUDGETS, route=Route.TEAM_MANAGEMENT))
     def test_team_admin_resending_the_budget_settings_keeps_the_next_budget_reset(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -613,6 +625,7 @@ class TestTeamAdminWithRpmLimitAndMaxBudgetEnabled:
         "current_budget",
         [pytest.param(_TEAM_MAX_BUDGET, id="lower"), pytest.param(None, id="first-budget")],
     )
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.TEAM_MANAGEMENT))
     def test_team_admin_saves_a_new_rpm_limit_and_a_tighter_budget(
         self, client: ManagementClient, resources: ResourceManager, current_budget: float | None
     ) -> None:
@@ -649,6 +662,7 @@ class TestTeamAdminWithRpmLimitAndMaxBudgetEnabled:
             pytest.param(None, "Only a proxy admin can remove", id="remove"),
         ],
     )
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.TEAM_MANAGEMENT))
     def test_team_admin_cannot_raise_or_remove_the_budget(
         self, client: ManagementClient, resources: ResourceManager, max_budget: float | None, refusal: str
     ) -> None:
@@ -670,6 +684,7 @@ class TestTeamAdminWithRpmLimitAndMaxBudgetEnabled:
         )
 
     @pytest.mark.covers("mgmt.team.update.team_admin_cannot_grow_budget")
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.TEAM_MANAGEMENT))
     def test_team_admin_cannot_raise_an_org_team_budget_under_the_org_cap(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:

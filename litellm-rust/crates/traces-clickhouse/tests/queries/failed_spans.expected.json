@@ -1,0 +1,30 @@
+{
+  "admin": [
+    {
+      "team": "team-a",
+      "api_key": "key-a",
+      "trace_id": "01010101010101010101010101010101",
+      "span_id": "0303030303030303",
+      "message": "lookup timed out"
+    }
+  ],
+  "team": [
+    {
+      "team": "team-a",
+      "api_key": "key-a",
+      "trace_id": "01010101010101010101010101010101",
+      "span_id": "0303030303030303",
+      "message": "lookup timed out"
+    }
+  ],
+  "key": [
+    {
+      "team": "team-a",
+      "api_key": "key-a",
+      "trace_id": "01010101010101010101010101010101",
+      "span_id": "0303030303030303",
+      "message": "lookup timed out"
+    }
+  ],
+  "other_team": []
+}

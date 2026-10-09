@@ -1,55 +1,22 @@
 import asyncio
-import copy
 import json
 import logging
 import os
-from typing import Any, Optional
-from unittest.mock import MagicMock, patch
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 
 logging.basicConfig(level=logging.DEBUG)
 
 import litellm
-from litellm import completion
-from litellm.caching import InMemoryCache
 from litellm.integrations.langfuse.langfuse_sdk import resolve_trace_id
 
 litellm.num_retries = 3
 litellm.success_callback = ["langfuse"]
 os.environ["LANGFUSE_DEBUG"] = "True"
-import time
 
 import pytest
-
-
-@pytest.fixture
-def langfuse_client():
-    import langfuse
-
-    _langfuse_cache_key = (
-        f"{os.environ['LANGFUSE_PUBLIC_KEY']}-{os.environ['LANGFUSE_SECRET_KEY']}"
-    )
-    # use a in memory langfuse client for testing, RAM util on ci/cd gets too high when we init many langfuse clients
-
-    _cached_client = litellm.in_memory_llm_clients_cache.get_cache(_langfuse_cache_key)
-    if _cached_client:
-        langfuse_client = _cached_client
-    else:
-        langfuse_client = langfuse.Langfuse(
-            public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
-            secret_key=os.environ["LANGFUSE_SECRET_KEY"],
-            host=os.environ.get("LANGFUSE_HOST", "https://us.cloud.langfuse.com"),
-        )
-        litellm.in_memory_llm_clients_cache.set_cache(
-            key=_langfuse_cache_key,
-            value=langfuse_client,
-        )
-
-        print("NEW LANGFUSE CLIENT")
-
-    with patch(
-        "langfuse.Langfuse", MagicMock(return_value=langfuse_client)
-    ) as mock_langfuse_client:
-        yield mock_langfuse_client()
 
 
 def search_logs(log_file_path, num_good_logs=1):
@@ -206,53 +173,91 @@ def create_async_task(**completion_kwargs):
     return asyncio.create_task(litellm.acompletion(**completion_args))
 
 
+def _otlp_capture(exports: list[bytes]) -> type[BaseHTTPRequestHandler]:
+    class OtlpCapture(BaseHTTPRequestHandler):
+        def do_POST(self):
+            exports.append(self.rfile.read(int(self.headers.get("content-length", 0))))
+            self.send_response(200)
+            self.end_headers()
+
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *args):
+            pass
+
+    return OtlpCapture
+
+
+@pytest.fixture
+def local_langfuse():
+    exports: list[bytes] = []
+    server = HTTPServer(("127.0.0.1", 0), _otlp_capture(exports))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}", exports
+    server.shutdown()
+
+
+def _exported_spans(exports: list[bytes]):
+    for body in exports:
+        for resource_spans in ExportTraceServiceRequest.FromString(body).resource_spans:
+            for scope_spans in resource_spans.scope_spans:
+                yield from scope_spans.spans
+
+
+def _exported_attributes(exports: list[bytes], trace_id: str) -> list[dict[str, str]]:
+    return [
+        {attribute.key: attribute.value.string_value for attribute in span.attributes}
+        for span in _exported_spans(list(exports))
+        if span.trace_id.hex() == trace_id
+    ]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True])
-@pytest.mark.flaky(retries=12, delay=2)
-async def test_langfuse_logging_without_request_response(stream, langfuse_client):
-    try:
-        from litellm._uuid import uuid
+async def test_langfuse_logging_without_request_response(stream, local_langfuse, monkeypatch):
+    from litellm._uuid import uuid
 
-        _unique_trace_name = f"litellm-test-{str(uuid.uuid4())}"
-        litellm.set_verbose = True
-        litellm.turn_off_message_logging = True
-        litellm.success_callback = ["langfuse"]
-        response = await create_async_task(
-            model="gpt-3.5-turbo",
-            stream=stream,
-            metadata={"trace_id": _unique_trace_name},
-        )
-        print(response)
-        if stream:
-            async for chunk in response:
-                print(chunk)
+    langfuse_host, exports = local_langfuse
+    prompt = f"prompt-{uuid.uuid4()}"
+    answer = f"answer-{uuid.uuid4()}"
+    trace_name = f"litellm-test-{uuid.uuid4()}"
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    monkeypatch.setattr(litellm, "success_callback", ["langfuse"])
+    response = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": prompt}],
+        mock_response=answer,
+        stream=stream,
+        metadata={"trace_id": trace_name},
+        langfuse_public_key=f"pk-lf-{trace_name}",
+        langfuse_secret_key="sk-lf-local",
+        langfuse_host=langfuse_host,
+    )
+    if stream:
+        async for _ in response:
+            pass
 
-        langfuse_client.flush()
+    generations: list[dict[str, str]] = []
+    for _ in range(60):
+        generations = [
+            attributes
+            for attributes in _exported_attributes(exports, resolve_trace_id(trace_name))
+            if attributes.get("langfuse.observation.type") == "generation"
+        ]
+        if generations:
+            break
+        await asyncio.sleep(0.5)
 
-        for _ in range(30):
-            _trace_data = langfuse_client.api.observations.get_many(
-                trace_id=resolve_trace_id(_unique_trace_name),
-                type="GENERATION",
-                fields="core,io",
-            ).data
-            if _trace_data:
-                break
-            await asyncio.sleep(3)
-
-        print(f"_trace_data: {_trace_data}")
-        assert json.loads(_trace_data[0].input) == {
-            "messages": [{"content": "redacted-by-litellm", "role": "user"}]
-        }
-        assert json.loads(_trace_data[0].output) == {
-            "role": "assistant",
-            "content": "redacted-by-litellm",
-            "function_call": None,
-            "tool_calls": None,
-            "provider_specific_fields": None,
-        }
-
-    except Exception as e:
-        pytest.fail(f"An exception occurred - {e}")
+    assert len(generations) == 1, generations
+    assert json.loads(generations[0]["langfuse.observation.input"]) == {
+        "messages": [{"content": "redacted-by-litellm", "role": "user"}]
+    }
+    assert json.loads(generations[0]["langfuse.observation.output"])["content"] == "redacted-by-litellm"
+    assert all(prompt.encode() not in body and answer.encode() not in body for body in exports)
 
 
 # Get the current directory of the file being run
@@ -264,333 +269,27 @@ file_path = os.path.join(pwd, "gettysburg.wav")
 audio_file = open(file_path, "rb")
 
 
-@pytest.mark.asyncio
-@pytest.mark.flaky(retries=4, delay=2)
-@pytest.mark.skip(
-    reason="langfuse now takes 5-10 mins to get this trace. Need to figure out how to test this"
-)
-async def test_langfuse_logging_audio_transcriptions(langfuse_client):
-    """
-    Test that creates a trace with masked input and output
-    """
-    from litellm._uuid import uuid
-
-    _unique_trace_name = f"litellm-test-{str(uuid.uuid4())}"
-    litellm.set_verbose = True
-    litellm.success_callback = ["langfuse"]
-    await litellm.atranscription(
-        model="whisper-1",
-        file=audio_file,
-        metadata={
-            "trace_id": _unique_trace_name,
-        },
-    )
-
-    langfuse_client.flush()
-    await asyncio.sleep(20)
-
-    # get trace with _unique_trace_name
-    print("lookiing up trace", _unique_trace_name)
-    trace = langfuse_client.get_trace(id=_unique_trace_name)
-    generations = list(
-        reversed(langfuse_client.get_generations(trace_id=_unique_trace_name).data)
-    )
-
-    print("generations for given trace=", generations)
-
-    assert len(generations) == 1
-    assert generations[0].name == "litellm-atranscription"
-    assert generations[0].output is not None
 
 
-@pytest.mark.asyncio
-@pytest.mark.skip(
-    reason="langfuse now takes 5-10 mins to get this trace. Need to figure out how to test this"
-)
-async def test_langfuse_masked_input_output(langfuse_client):
-    """
-    Test that creates a trace with masked input and output
-    """
-    from litellm._uuid import uuid
-
-    for mask_value in [True, False]:
-        _unique_trace_name = f"litellm-test-{str(uuid.uuid4())}"
-        litellm.set_verbose = True
-        litellm.success_callback = ["langfuse"]
-        response = await create_async_task(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "This is a test"}],
-            metadata={
-                "trace_id": _unique_trace_name,
-                "mask_input": mask_value,
-                "mask_output": mask_value,
-            },
-            mock_response="This is a test response",
-        )
-        print(response)
-        expected_input = "redacted-by-litellm" if mask_value else "This is a test"
-        expected_output = (
-            "redacted-by-litellm" if mask_value else "This is a test response"
-        )
-        langfuse_client.flush()
-        await asyncio.sleep(30)
-
-        # get trace with _unique_trace_name
-        trace = langfuse_client.get_trace(id=_unique_trace_name)
-        print("trace_from_langfuse", trace)
-        generations = list(
-            reversed(langfuse_client.get_generations(trace_id=_unique_trace_name).data)
-        )
-
-        assert expected_input in str(trace.input)
-        assert expected_output in str(trace.output)
-        if len(generations) > 0:
-            assert expected_input in str(generations[0].input)
-            assert expected_output in str(generations[0].output)
 
 
-@pytest.mark.asyncio
-@pytest.mark.flaky(retries=12, delay=2)
-@pytest.mark.skip(reason="all e2e langfuse tests now run on test_langfuse_e2e_test.py")
-async def test_aaalangfuse_logging_metadata(langfuse_client):
-    """
-    Test that creates multiple traces, with a varying number of generations and sets various metadata fields
-    Confirms that no metadata that is standard within Langfuse is duplicated in the respective trace or generation metadata
-    For trace continuation certain metadata of the trace is overriden with metadata from the last generation based on the update_trace_keys field
-    Version is set for both the trace and the generation
-    Release is just set for the trace
-    Tags is just set for the trace
-    """
-    from litellm._uuid import uuid
-
-    litellm.set_verbose = True
-    litellm.success_callback = ["langfuse"]
-
-    trace_identifiers = {}
-    expected_filtered_metadata_keys = {
-        "trace_name",
-        "trace_id",
-        "existing_trace_id",
-        "trace_user_id",
-        "session_id",
-        "tags",
-        "generation_name",
-        "generation_id",
-        "prompt",
-    }
-    trace_metadata = {
-        "trace_actual_metadata_key": "trace_actual_metadata_value"
-    }  # Allows for setting the metadata on the trace
-    run_id = str(uuid.uuid4())
-    session_id = f"litellm-test-session-{run_id}"
-    trace_common_metadata = {
-        "session_id": session_id,
-        "tags": ["litellm-test-tag1", "litellm-test-tag2"],
-        "update_trace_keys": [
-            "output",
-            "trace_metadata",
-        ],  # Overwrite the following fields in the trace with the last generation's output and the trace_user_id
-        "trace_metadata": trace_metadata,
-        "gen_metadata_key": "gen_metadata_value",  # Metadata key that should not be filtered in the generation
-        "trace_release": "litellm-test-release",
-        "version": "litellm-test-version",
-    }
-    for trace_num in range(1, 3):  # Two traces
-        metadata = copy.deepcopy(trace_common_metadata)
-        trace_id = f"litellm-test-trace{trace_num}-{run_id}"
-        metadata["trace_id"] = trace_id
-        metadata["trace_name"] = trace_id
-        trace_identifiers[trace_id] = []
-        print(f"Trace: {trace_id}")
-        for generation_num in range(
-            1, trace_num + 1
-        ):  # Each trace has a number of generations equal to its trace number
-            metadata["trace_user_id"] = f"litellm-test-user{generation_num}-{run_id}"
-            generation_id = (
-                f"litellm-test-trace{trace_num}-generation-{generation_num}-{run_id}"
-            )
-            metadata["generation_id"] = generation_id
-            metadata["generation_name"] = generation_id
-            metadata["trace_metadata"][
-                "generation_id"
-            ] = generation_id  # Update to test if trace_metadata is overwritten by update trace keys
-            trace_identifiers[trace_id].append(generation_id)
-            print(f"Generation: {generation_id}")
-            response = await create_async_task(
-                model="gpt-3.5-turbo",
-                mock_response=f"{session_id}:{trace_id}:{generation_id}",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": f"{session_id}:{trace_id}:{generation_id}",
-                    }
-                ],
-                max_tokens=100,
-                temperature=0.2,
-                metadata=copy.deepcopy(
-                    metadata
-                ),  # Every generation needs its own metadata, langfuse is not async/thread safe without it
-            )
-            print(response)
-            metadata["existing_trace_id"] = trace_id
-
-            await asyncio.sleep(2)
-    langfuse_client.flush()
-    await asyncio.sleep(4)
-
-    # Tests the metadata filtering and the override of the output to be the last generation
-    for trace_id, generation_ids in trace_identifiers.items():
-        try:
-            trace = langfuse_client.get_trace(id=trace_id)
-        except Exception as e:
-            if "not found within authorized project" in str(e):
-                print(f"Trace {trace_id} not found")
-                continue
-        assert trace.id == trace_id
-        assert trace.session_id == session_id
-        assert trace.metadata != trace_metadata
-        generations = list(
-            reversed(langfuse_client.get_generations(trace_id=trace_id).data)
-        )
-        assert len(generations) == len(generation_ids)
-        assert (
-            trace.input == generations[0].input
-        )  # Should be set by the first generation
-        assert (
-            trace.output == generations[-1].output
-        )  # Should be overwritten by the last generation according to update_trace_keys
-        assert (
-            trace.metadata != generations[-1].metadata
-        )  # Should be overwritten by the last generation according to update_trace_keys
-        assert trace.metadata["generation_id"] == generations[-1].id
-        assert set(trace.tags).issuperset(trace_common_metadata["tags"])
-        print("trace_from_langfuse", trace)
-        for generation_id, generation in zip(generation_ids, generations):
-            assert generation.id == generation_id
-            assert generation.trace_id == trace_id
-            print(
-                "common keys in trace",
-                set(generation.metadata.keys()).intersection(
-                    expected_filtered_metadata_keys
-                ),
-            )
-
-            assert set(generation.metadata.keys()).isdisjoint(
-                expected_filtered_metadata_keys
-            )
-            print("generation_from_langfuse", generation)
 
 
 # test_langfuse_logging()
 
 
-@pytest.mark.skip(reason="beta test - checking langfuse output")
-def test_langfuse_logging_stream():
-    try:
-        litellm.set_verbose = True
-        response = completion(
-            model="gpt-3.5-turbo",
-            messages=[
-                {
-                    "role": "user",
-                    "content": "this is a streaming test for llama2 + langfuse",
-                }
-            ],
-            max_tokens=20,
-            temperature=0.2,
-            stream=True,
-        )
-        print(response)
-        for chunk in response:
-            pass
-            # print(chunk)
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        print(e)
 
 
 # test_langfuse_logging_stream()
 
 
-@pytest.mark.skip(reason="beta test - checking langfuse output")
-def test_langfuse_logging_custom_generation_name():
-    try:
-        litellm.set_verbose = True
-        response = completion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "Hi 👋 - i'm claude"}],
-            max_tokens=10,
-            metadata={
-                "langfuse/foo": "bar",
-                "langsmith/fizz": "buzz",
-                "prompt_hash": "asdf98u0j9131123",
-                "generation_name": "ishaan-test-generation",
-                "generation_id": "gen-id22",
-                "trace_id": "trace-id22",
-                "trace_user_id": "user-id2",
-            },
-        )
-        print(response)
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"An exception occurred - {e}")
-        print(e)
 
 
 # test_langfuse_logging_custom_generation_name()
 
 
-@pytest.mark.skip(reason="beta test - checking langfuse output")
-def test_langfuse_logging_embedding():
-    try:
-        litellm.set_verbose = True
-        litellm.success_callback = ["langfuse"]
-        response = litellm.embedding(
-            model="text-embedding-ada-002",
-            input=["gm", "ishaan"],
-        )
-        print(response)
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"An exception occurred - {e}")
-        print(e)
 
 
-@pytest.mark.skip(reason="beta test - checking langfuse output")
-def test_langfuse_logging_function_calling():
-    litellm.set_verbose = True
-    function1 = [
-        {
-            "name": "get_current_weather",
-            "description": "Get the current weather in a given location",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "location": {
-                        "type": "string",
-                        "description": "The city and state, e.g. San Francisco, CA",
-                    },
-                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-                },
-                "required": ["location"],
-            },
-        }
-    ]
-    try:
-        response = completion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "what's the weather in boston"}],
-            temperature=0.1,
-            functions=function1,
-        )
-        print(response)
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        print(e)
 
 
 # test_langfuse_logging_function_calling()
@@ -648,7 +347,7 @@ def test_langfuse_logging_tool_calling():
     ]
 
     response = litellm.completion(
-        model="gpt-3.5-turbo-1106",
+        model="gpt-6-luna",
         messages=messages,
         tools=tools,
         tool_choice="auto",  # auto is default, but we'll be explicit
@@ -656,46 +355,15 @@ def test_langfuse_logging_tool_calling():
     print("\nLLM Response1:\n", response)
     response_message = response.choices[0].message
     tool_calls = response.choices[0].message.tool_calls
+    assert response.choices[0].message.tool_calls
+    assert all(call.function.name == "get_current_weather" for call in response.choices[0].message.tool_calls)
 
 
 # test_langfuse_logging_tool_calling()
 
 
-def get_langfuse_prompt(name: str):
-    import langfuse
-    from langfuse import Langfuse
-
-    try:
-        langfuse = Langfuse(
-            public_key=os.environ["LANGFUSE_DEV_PUBLIC_KEY"],
-            secret_key=os.environ["LANGFUSE_DEV_SK_KEY"],
-            host=os.environ["LANGFUSE_HOST"],
-        )
-
-        # Get current production version of a text prompt
-        prompt = langfuse.get_prompt(name=name)
-        return prompt
-    except Exception as e:
-        raise Exception(f"Error getting prompt: {e}")
 
 
-@pytest.mark.asyncio
-@pytest.mark.skip(
-    reason="local only test, use this to verify if we can send request to litellm proxy server"
-)
-async def test_make_request():
-    response = await litellm.acompletion(
-        model="openai/llama3",
-        api_key="sk-1234",
-        base_url="http://localhost:4000",
-        messages=[{"role": "user", "content": "Hi 👋 - i'm claude"}],
-        extra_body={
-            "metadata": {
-                "tags": ["openai"],
-                "prompt": get_langfuse_prompt("test-chat"),
-            }
-        },
-    )
 
 
 import datetime
@@ -848,8 +516,9 @@ generation_params = {
 )
 def test_langfuse_prompt_type(prompt):
 
+    from unittest.mock import Mock
+
     from litellm.integrations.langfuse.langfuse import _add_prompt_to_generation_params
-    from unittest.mock import patch, MagicMock, Mock
 
     clean_metadata = {
         "prompt": {

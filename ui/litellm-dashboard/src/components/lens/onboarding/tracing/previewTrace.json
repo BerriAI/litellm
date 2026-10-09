@@ -1,0 +1,98 @@
+{
+  "name": "deep_research_agent",
+  "input_preview": "Should we store OTEL agent spans in ClickHouse or Postgres at 50k spans/sec?",
+  "span_count": 126,
+  "duration_ms": 51385,
+  "rows": [
+    {
+      "id": "5e79f3b5b504985e",
+      "name": "deep_research_agent",
+      "type": "agent",
+      "model": null,
+      "depth": 0,
+      "start_offset_ms": 0,
+      "duration_ms": 51385.4,
+      "error": false
+    },
+    {
+      "id": "83451f3235847f6c",
+      "name": "model",
+      "type": "chain",
+      "model": null,
+      "depth": 1,
+      "start_offset_ms": 1,
+      "duration_ms": 9518.2,
+      "error": false
+    },
+    {
+      "id": "8a6a1c31940d07af",
+      "name": "ChatOpenAI",
+      "type": "llm",
+      "model": "claude-sonnet-4-5",
+      "depth": 2,
+      "start_offset_ms": 6,
+      "duration_ms": 9510.8,
+      "error": false
+    },
+    {
+      "id": "f6fdd164d528fee5",
+      "name": "tools",
+      "type": "chain",
+      "model": null,
+      "depth": 1,
+      "start_offset_ms": 9520,
+      "duration_ms": 2.7,
+      "error": false
+    },
+    {
+      "id": "1526d46d48d29a09",
+      "name": "write_file",
+      "type": "tool",
+      "model": null,
+      "depth": 2,
+      "start_offset_ms": 9521,
+      "duration_ms": 0.6,
+      "error": false
+    },
+    {
+      "id": "2697122e295d91b6",
+      "name": "tools",
+      "type": "chain",
+      "model": null,
+      "depth": 1,
+      "start_offset_ms": 9523,
+      "duration_ms": 35177.7,
+      "error": false
+    },
+    {
+      "id": "b2fb3a8f5a2fce01",
+      "name": "task",
+      "type": "tool",
+      "model": null,
+      "depth": 2,
+      "start_offset_ms": 9524,
+      "duration_ms": 35176.1,
+      "error": false
+    },
+    {
+      "id": "81499b492fd93f85",
+      "name": "researcher",
+      "type": "agent",
+      "model": null,
+      "depth": 3,
+      "start_offset_ms": 9524,
+      "duration_ms": 35175.3,
+      "error": false
+    },
+    {
+      "id": "64a2c760897f3310",
+      "name": "model",
+      "type": "chain",
+      "model": null,
+      "depth": 4,
+      "start_offset_ms": 9526,
+      "duration_ms": 6071.3,
+      "error": false
+    }
+  ]
+}

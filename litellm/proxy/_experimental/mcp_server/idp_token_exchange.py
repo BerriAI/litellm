@@ -170,6 +170,11 @@ async def identity_from_subject_token(
         return _refusal_for(denied, denied.message)
     except Exception as denied:  # noqa: BLE001  # auth_jwt raises a plain Exception on signature and claim failures
         return _refusal_for(denied, denied)
+    if result.get("agent_id") is not None:
+        return SubjectTokenRefusal(
+            error="invalid_request",
+            description="Agent tokens require direct JWT authentication; this exchange supports users only",
+        )
     user_id: Final = result["user_id"]
     if user_id is None:
         return SubjectTokenRefusal(error="invalid_request", description="subject_token names no user the gateway knows")

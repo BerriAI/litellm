@@ -9,13 +9,32 @@ license = "MIT"
 repository = "https://github.com/BerriAI/litellm"
 
 [workspace.dependencies]
+litellm-config = { path = "crates/config" }
+litellm-router = { path = "crates/router" }
 litellm-tracing = { path = "crates/tracing" }
-tracing = "0.1"
-litellm-core = { path = "crates/core" }
+litellm-traces = { path = "crates/traces" }
+litellm-traces-cache = { path = "crates/traces-cache" }
+litellm-traces-clickhouse = { path = "crates/traces-clickhouse" }
+litellm-storage-clickhouse = { path = "crates/storage-clickhouse" }
+litellm-inference = { path = "crates/inference" }
+litellm-inference-transcription = { path = "crates/inference-transcription" }
+litellm-inference-responses = { path = "crates/inference-responses" }
+litellm-inference-messages = { path = "crates/inference-messages" }
+litellm-inference-chat = { path = "crates/inference-chat" }
+litellm-inference-ocr = { path = "crates/inference-ocr" }
+litellm-inference-testing = { path = "crates/inference-testing" }
+litellm-gateway-mcp = { path = "crates/gateway-mcp" }
+litellm-gateway = { path = "crates/gateway" }
+litellm-gateway-inference = { path = "crates/gateway-inference" }
+litellm-gateway-auth = { path = "crates/gateway-auth" }
+litellm-gateway-management = { path = "crates/gateway-management" }
+litellm-gateway-ui = { path = "crates/gateway-ui" }
 litellm-coroutine = { path = "crates/coroutine" }
 litellm-host = { path = "crates/host" }
+litellm-host-http = { path = "crates/host-http" }
+litellm-host-native = { path = "crates/host-native" }
 litellm-callbacks-legacy-python = { path = "crates/callbacks-legacy-python" }
-litellm-framing = { path = "crates/framer" }
+litellm-framer = { path = "crates/framer" }
 litellm-auth = { path = "crates/auth" }
 litellm-auth-types = { path = "crates/auth-types" }
 litellm-auth-aws = { path = "crates/auth-aws" }
@@ -30,8 +49,10 @@ litellm-secrets-azure = { path = "crates/secrets-azure" }
 litellm-secrets-cyberark = { path = "crates/secrets-cyberark" }
 litellm-http = { path = "crates/http" }
 litellm-llms = { path = "crates/llms" }
-litellm-types = { path = "crates/types" }
+litellm-llms-types = { path = "crates/llms-types" }
 litellm-core-utils = { path = "crates/core-utils" }
+litellm-db = { path = "crates/db" }
+litellm-db-testing = { path = "crates/db-testing" }
 litellm-cache = { path = "crates/cache" }
 litellm-cache-azure-blob = { path = "crates/cache-azure-blob" }
 litellm-cache-memory = { path = "crates/cache-memory" }
@@ -48,7 +69,13 @@ litellm-token-counter-fast = { path = "crates/token-counter-fast" }
 litellm-token-counter-huggingface = { path = "crates/token-counter-huggingface" }
 litellm-token-counter-tiktoken = { path = "crates/token-counter-tiktoken" }
 litellm-host-python = { path = "crates/host-python" }
+litellm-python-compat = { path = "crates/python-compat" }
 
+askama = { version = "0.16.1", default-features = false, features = ["derive", "std"] }
+tracing = "0.1"
+axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "multipart"] }
+axum-login = "0.18.0"
+tower-sessions = { version = "0.14.0", features = ["memory-store"] }
 bytes = "1"
 http = "1"
 google-cloud-auth = { version = "1.16.0", default-features = false }
@@ -57,12 +84,14 @@ hyper-util = { version = "0.1.20", default-features = false, features = ["client
 proptest = "1.7.0"
 pyo3 = "0.29.2"
 pyo3-async-runtimes = { version = "0.29.0", features = ["tokio-runtime"] }
-pythonize = "0.29.0"
 rand = "0.8"
+macro_rules_attribute = "0.2.3"
+schemars = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "http2", "stream"] }
 qdrant-client = { version = "1.19.0", default-features = false }
 uuid = { version = "1", features = ["v4"] }
 rstest = "0.26.1"
+wiremock = "0.6.5"
 rstest_reuse = "0.7.0"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustify = "=0.7.0"
@@ -73,6 +102,10 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
 serde_with = { version = "=3.16.1", default-features = false, features = ["std", "macros"] }
 sha2 = "0.10"
+syn = { version = "2", default-features = false }
+sqlx = { version = "0.9.0", default-features = false, features = ["json", "macros", "postgres", "runtime-tokio", "chrono", "tls-rustls-ring-native-roots"] }
+proc-macro2 = "1"
+quote = "1"
 subtle = "2"
 thiserror = "2.0"
 tokenizers = { version = "0.23.1", default-features = false, features = ["onig"] }
@@ -81,6 +114,12 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"]
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 base64 = "0.22"
+flate2 = "1"
+semver = "1"
+tar = "0.4"
+target-lexicon = "0.13.5"
+tempfile = "3"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 moka = { version = "0.12.16", features = ["future"] }
 strum = { version = "0.28.0", features = ["derive"] }
 url = "2.5.8"
@@ -90,6 +129,8 @@ time = { version = "0.3.53", features = ["parsing"] }
 criterion = "0.8.2"
 fancy-regex = "0.19.2"
 veil = "0.3.0"
+prost = "0.14.4"
+opentelemetry-proto = "0.33"
 
 [profile.release]
 opt-level = 3

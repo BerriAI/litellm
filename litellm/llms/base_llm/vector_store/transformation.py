@@ -48,8 +48,8 @@ class LiteLLMVectorStoreEmbeddingExecutor:
 
         return litellm.embedding(  # pyright: ignore[reportCallIssue, reportUnknownMemberType, reportUnknownVariableType]  # provider kwargs are intentionally dynamic
             model=model,
-            input=[query],  # mutable-ok: LiteLLM embedding requires a mutable input list
-            **dict(configuration),  # pyright: ignore[reportArgumentType]  # provider-specific embedding config is validated downstream  # mutable-ok: kwargs require a concrete dict
+            input=[query],
+            **dict(configuration),  # pyright: ignore[reportArgumentType]  # provider-specific embedding config is validated downstream
         )
 
     async def aembed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
@@ -57,8 +57,8 @@ class LiteLLMVectorStoreEmbeddingExecutor:
 
         return await litellm.aembedding(  # pyright: ignore[reportUnknownMemberType]  # provider kwargs are intentionally dynamic
             model=model,
-            input=[query],  # mutable-ok: LiteLLM embedding requires a mutable input list
-            **dict(configuration),  # pyright: ignore[reportArgumentType]  # provider-specific embedding config is validated downstream  # mutable-ok: kwargs require a concrete dict
+            input=[query],
+            **dict(configuration),  # pyright: ignore[reportArgumentType]  # provider-specific embedding config is validated downstream
         )
 
 
@@ -105,7 +105,7 @@ class RouterVectorStoreEmbeddingExecutor:
             return LiteLLMVectorStoreEmbeddingExecutor().embed(model, query, embedding_kwargs)
         return self.router.embedding(  # pyright: ignore[reportUnknownMemberType]  # Router embedding input retains a legacy untyped list
             model=model,
-            input=[query],  # mutable-ok: Router embedding requires a mutable input list
+            input=[query],
             **embedding_kwargs,  # pyright: ignore[reportArgumentType]  # provider kwargs are intentionally dynamic
         )
 
@@ -115,7 +115,7 @@ class RouterVectorStoreEmbeddingExecutor:
             return await LiteLLMVectorStoreEmbeddingExecutor().aembed(model, query, embedding_kwargs)
         return await self.router.aembedding(  # pyright: ignore[reportUnknownMemberType]  # Router embedding input retains a legacy untyped list
             model=model,
-            input=[query],  # mutable-ok: Router embedding requires a mutable input list
+            input=[query],
             **embedding_kwargs,  # pyright: ignore[reportArgumentType]  # provider kwargs are intentionally dynamic
         )
 
@@ -429,4 +429,4 @@ class BaseDirectVectorStoreConfig(BaseVectorStoreConfig):
         return BaseVectorStoreAuthCredentials()
 
     def get_vector_store_endpoints_by_type(self) -> VectorStoreIndexEndpoints:
-        return VectorStoreIndexEndpoints(read=[], write=[])  # mutable-ok: the TypedDict declares list fields
+        return VectorStoreIndexEndpoints(read=[], write=[])

@@ -14,10 +14,12 @@ import pytest
 from anthropic.types import RawMessageStreamEvent, ToolParam
 
 from e2e_config import unique_marker
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
 from sdk_clients import NO_PROXY_CACHE, SdkClients
+from structured_output import SENTIMENT_OUTPUT_FORMAT, SENTIMENT_PROMPT, assert_sentiment_json
 
 pytestmark = pytest.mark.e2e
 
@@ -55,6 +57,15 @@ class TestAzureFoundryMessages:
         return model
 
     @pytest.mark.covers("llm.messages.azure_foundry.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.AZURE_AI,),
+            models=(AZURE_FOUNDRY_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_basic_nonstream(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         model = self._register(proxy, resources)
         client = sdk.anthropic(resources.key(models=[model]))
@@ -70,6 +81,15 @@ class TestAzureFoundryMessages:
         assert text.strip(), f"/v1/messages returned no text: {message.content!r}"
 
     @pytest.mark.covers("llm.messages.azure_foundry.basic.stream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.AZURE_AI,),
+            models=(AZURE_FOUNDRY_MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_basic_stream(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         model = self._register(proxy, resources)
         client = sdk.anthropic(resources.key(models=[model]))
@@ -84,6 +104,16 @@ class TestAzureFoundryMessages:
         _assert_streamed_ok([event.type for event in stream])
 
     @pytest.mark.covers("llm.messages.azure_foundry.tool_use.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.AZURE_AI,),
+            models=(AZURE_FOUNDRY_MODEL,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_tool_use_nonstream(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         model = self._register(proxy, resources)
         client = sdk.anthropic(resources.key(models=[model]))
@@ -101,6 +131,16 @@ class TestAzureFoundryMessages:
         )
 
     @pytest.mark.covers("llm.messages.azure_foundry.tool_use.stream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.AZURE_AI,),
+            models=(AZURE_FOUNDRY_MODEL,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_tool_use_stream(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         model = self._register(proxy, resources)
         client = sdk.anthropic(resources.key(models=[model]))
@@ -120,3 +160,27 @@ class TestAzureFoundryMessages:
             event.type == "content_block_start" and event.content_block.type == "tool_use" for event in events
         ), "stream carried no tool_use block"
         assert "message_stop" in event_types, "stream never reached message_stop"
+
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.AZURE_AI,),
+            models=(AZURE_FOUNDRY_MODEL,),
+            capabilities=(Capability.RESPONSE_SCHEMA,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_output_format_returns_schema_json(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model = self._register(proxy, resources)
+        client = sdk.anthropic(resources.key(models=[model]))
+
+        message = client.messages.create(
+            model=model,
+            max_tokens=128,
+            messages=[{"role": "user", "content": SENTIMENT_PROMPT}],
+            extra_body={**NO_PROXY_CACHE, "output_format": SENTIMENT_OUTPUT_FORMAT},
+        )
+        assert_sentiment_json("".join(block.text for block in message.content if block.type == "text"))

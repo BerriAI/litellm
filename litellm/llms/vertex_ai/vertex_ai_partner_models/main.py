@@ -2,6 +2,7 @@
 ## API Handler for calling Vertex AI Partner Models
 from collections.abc import Callable
 from enum import Enum
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -109,8 +110,6 @@ class VertexAIPartnerModels(VertexBase):
         client=None,
     ):
         try:
-            import vertexai
-
             from litellm.llms.anthropic.chat import AnthropicChatCompletion
             from litellm.llms.codestral.completion.handler import (
                 CodestralTextCompletion,
@@ -119,14 +118,9 @@ class VertexAIPartnerModels(VertexBase):
         except Exception as e:
             raise VertexAIError(
                 status_code=400,
-                message=f"""vertexai import failed please run `pip install -U "google-cloud-aiplatform>=1.38"`. Got error: {e}""",
+                message=f"Failed to import a partner model handler. Got error: {e}",
             )
 
-        if not (hasattr(vertexai, "preview") or hasattr(vertexai.preview, "language_models")):
-            raise VertexAIError(
-                status_code=400,
-                message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",
-            )
         try:
             access_token, project_id = self._ensure_access_token(
                 credentials=vertex_credentials,
@@ -270,6 +264,8 @@ class VertexAIPartnerModels(VertexBase):
         vertex_project=None,
         vertex_location=None,
         vertex_credentials=None,
+        system: object | None = None,
+        tools: list[dict[str, object]] | None = None,
     ):
         """
         Count tokens for Vertex AI partner models (Anthropic Claude, Mistral, etc.)
@@ -303,6 +299,9 @@ class VertexAIPartnerModels(VertexBase):
             request_data: Final = {
                 "model": model,
                 "messages": messages,
+                **MappingProxyType(
+                    {key: value for key, value in (("system", system), ("tools", tools)) if value is not None}
+                ),
             }
 
             # Prepare litellm_params with credentials

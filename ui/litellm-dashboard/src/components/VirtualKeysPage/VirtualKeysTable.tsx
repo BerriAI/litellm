@@ -16,7 +16,8 @@ import {
   type UrlTableStateOptions,
 } from "@/components/shared/DataTable";
 import { SearchSelect } from "@/components/shared/SearchSelect";
-import { PageHeader } from "@/components/shared/PageHeader";
+import { PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
@@ -229,13 +230,15 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-6">
-      <PageHeader
-        icon={<KeyRound />}
-        title="Virtual Keys"
-        subtitle="Every key that authenticates requests to the gateway."
-        primaryAction={headerActions}
-      />
+    <PageContent>
+      <PageHeader>
+        <PageHeaderTitle>
+          <KeyRound />
+          Virtual Keys
+        </PageHeaderTitle>
+        <PageHeaderDescription>Every key that authenticates requests to the gateway.</PageHeaderDescription>
+        {headerActions != null && <PageHeaderControls>{headerActions}</PageHeaderControls>}
+      </PageHeader>
       <DataTable
         data={keyList}
         columns={columns}
@@ -338,6 +341,6 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
           </>
         )}
       />
-    </div>
+    </PageContent>
   );
 }

@@ -2,7 +2,7 @@
 
 import { Save } from "lucide-react";
 import { useWatch } from "react-hook-form";
-import { z } from "zod/v4";
+import { z } from "zod";
 
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";

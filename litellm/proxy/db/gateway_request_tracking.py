@@ -20,17 +20,19 @@ the deployment as a whole costs the primary one statement per interval.
 """
 
 import json
-from collections.abc import AsyncIterator, Iterable
-from datetime import datetime, timezone
+from collections.abc import AsyncIterator, Callable, Iterable
+from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeAlias
 
 from pydantic import TypeAdapter
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
 from litellm.constants import MAX_REDIS_BUFFER_DEQUEUE_COUNT, REDIS_GATEWAY_REQUESTS_BUFFER_KEY
+from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.middleware.billable_request_metrics_middleware import BillableCategory
 from litellm.types.proxy.gateway_requests import (
@@ -38,6 +40,9 @@ from litellm.types.proxy.gateway_requests import (
     GatewayRequestKey,
     GatewayRequestSnapshot,
 )
+from litellm.utils import get_utc_datetime
+
+_GATEWAY_REQUEST_QUEUE_TARGET: Final = "gateway_request_queue"
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -54,23 +59,20 @@ _BUFFERED_ENTRIES: Final = TypeAdapter(tuple[str | bytes, ...])
 _NO_COUNTS: Final[GatewayRequestSnapshot] = MappingProxyType({})
 
 
-def _utc_date() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-
 class GatewayRequestAccumulator:
     """Sink for the request-metrics middleware. ``record`` is sync and never awaits."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, clock: Callable[[], datetime] = get_utc_datetime) -> None:
+        self._clock: Final = clock
         self._counts: dict[GatewayRequestKey, GatewayRequestCounts] = {}  # mutable-ok: bounded fold, drained per flush
 
     def record(self, *, category: BillableCategory, route: str, status_code: int) -> None:
-        key: Final = GatewayRequestKey(date=_utc_date(), category=category.value, route=route)
+        key: Final = GatewayRequestKey(date=self._clock().strftime("%Y-%m-%d"), category=category.value, route=route)
         self._counts[key] = self._counts.get(key, _EMPTY).plus(succeeded=200 <= status_code < 300)
 
     def drain(self) -> GatewayRequestSnapshot:
         drained: Final = self._counts
-        self._counts = {}  # mutable-ok: the fold restarts empty; the drained map is handed off whole
+        self._counts = {}
         return drained
 
     def restore(self, snapshot: GatewayRequestSnapshot) -> None:
@@ -91,7 +93,7 @@ class GatewayRequestAccumulator:
         overcount on a dropped acknowledgement beats losing a whole interval to
         every database blip, so the trade is deliberate.
         """
-        self._counts = dict(fold_counts(chain(self._counts.items(), snapshot.items())))  # mutable-ok: fold replaced
+        self._counts = dict(fold_counts(chain(self._counts.items(), snapshot.items())))
 
 
 def fold_counts(items: Iterable[tuple[GatewayRequestKey, GatewayRequestCounts]]) -> GatewayRequestSnapshot:
@@ -143,7 +145,8 @@ async def commit_gateway_requests_to_db(
         return
 
     sql, params = build_gateway_requests_upsert(snapshot)
-    await prisma_client.db.execute_raw(sql, *params)  # pyright: ignore[reportAny]  # untyped prisma client
+    async with db_span("commit_gateway_requests", "LiteLLM_DailyGatewayRequests"):
+        await prisma_client.db.execute_raw(sql, *params)  # pyright: ignore[reportAny]  # untyped prisma client
 
     verbose_proxy_logger.debug(
         "Gateway request tracking - committed %d aggregated rows in one statement", len(snapshot)
@@ -166,6 +169,7 @@ class GatewayRequestRedisBuffer:
         self._redis_cache: Final = redis_cache
         self._pod_lock_manager: Final = pod_lock_manager
 
+    @with_service_target(_GATEWAY_REQUEST_QUEUE_TARGET)
     async def push(self, snapshot: GatewayRequestSnapshot) -> None:
         if not snapshot:
             return
@@ -175,6 +179,7 @@ class GatewayRequestRedisBuffer:
         )
         await self._redis_cache.async_rpush(key=REDIS_GATEWAY_REQUESTS_BUFFER_KEY, values=(json.dumps(rows),))
 
+    @with_service_target(_GATEWAY_REQUEST_QUEUE_TARGET)
     async def _pop_batch(self) -> tuple[str | bytes, ...]:
         popped: Final[object] = await self._redis_cache.async_lpop(  # pyright: ignore[reportAny]  # redis returns Any
             key=REDIS_GATEWAY_REQUESTS_BUFFER_KEY, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT

@@ -1,6 +1,7 @@
 import React, { useState } from "react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, renderWithProviders, screen } from "../../../tests/test-utils";
+import { chooseSelectOption, fireEvent, renderWithProviders, screen } from "../../../tests/test-utils";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
 import AutoRouterClassifierTabs from "./AutoRouterClassifierTabs";
@@ -96,49 +97,69 @@ function Form() {
 
 describe("JEV classifier editor", () => {
   afterEach(() => vi.mocked(useAuthorized).mockReset());
-  it("uses built-in JEV without a license and preserves custom tiers and context through reload", () => {
-    renderWithProviders(<Form />);
-    expect(screen.getByLabelText("Judge model")).toBeInTheDocument();
-    expect(screen.getByText("Reasoning Effort")).toBeInTheDocument();
-    expect(screen.getByText("Classifier Prompt")).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: "Use images for classification" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("radio", { name: /Jev Classifier/ }));
-    expect(screen.getByRole("radio", { name: /^Jev Classifier/ })).toBeChecked();
-    expect(screen.getByLabelText("Jev Model")).toHaveValue("jev-latest");
-    expect(screen.getByLabelText("Jev Instructions")).toBeEnabled();
-    expect(screen.queryByLabelText("Judge model")).not.toBeInTheDocument();
-    expect(screen.queryByText("Reasoning Effort")).not.toBeInTheDocument();
-    expect(screen.queryByText("Classifier Prompt")).not.toBeInTheDocument();
-    expect(screen.queryByRole("switch", { name: "Use images for classification" })).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Jev Model"), { target: { value: "jev-test" } });
-    fireEvent.change(screen.getByLabelText("Jev Timeout (ms)"), { target: { value: "4200" } });
-    fireEvent.change(screen.getByLabelText("Context Window Size"), { target: { value: "6" } });
-    fireEvent.change(screen.getByLabelText("Circuit breaker cooldown (seconds)"), { target: { value: "50" } });
-    fireEvent.click(screen.getByRole("switch", { name: "Classifier circuit breaker" }));
-    fireEvent.click(screen.getByRole("button", { name: "Customize tiers" }));
-    fireEvent.click(screen.getByRole("button", { name: "Save and reload" }));
-    expect(screen.getByRole("radio", { name: /Jev Classifier/ })).toBeChecked();
-    expect(screen.getByLabelText("Jev Model")).toHaveValue("jev-test");
-    expect(screen.getByLabelText("Jev Timeout (ms)")).toHaveValue(4200);
-    expect(screen.getByLabelText("Context Window Size")).toHaveValue("6");
-    expect(screen.getByRole("switch", { name: "Classifier circuit breaker" })).not.toBeChecked();
-    fireEvent.click(screen.getByRole("button", { name: "Probe current config" }));
-    expect(testAutoRouterRouting).toHaveBeenCalledWith(
-      "token",
-      expect.objectContaining({
-        complexity_router_config: expect.objectContaining({
-          classifier_type: "jev",
-          jev_classifier_config: {
-            model: "jev-test",
-            timeout_ms: 4200,
-            circuit_breaker_enabled: false,
-            circuit_breaker_cooldown_seconds: 50,
-          },
-          tiers: expect.objectContaining({ QUICK: ["fast"] }),
+  it.each([
+    ["jev", "Jev", "jev-test"],
+    ["laya", "Laya", "multilingual"],
+    ["bespoke", "Bespoke Nimble", "bespokelabs/Bespoke-Nimble-9B"],
+  ] as const)(
+    "preserves %s, custom tiers and context through save, reload and probe",
+    async (provider, label, model) => {
+      renderWithProviders(<Form />);
+      expect(screen.getByLabelText("Judge model")).toBeInTheDocument();
+      expect(screen.getByText("Reasoning Effort")).toBeInTheDocument();
+      expect(screen.getByText("Classifier Prompt")).toBeInTheDocument();
+      expect(screen.getByRole("switch", { name: "Use images for classification" })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("radio", { name: /^OSS Classifier$/ }));
+      expect(screen.getByRole("radio", { name: /^OSS Classifier$/ })).toBeChecked();
+      expect(screen.getByLabelText("Classifier Model")).toHaveValue("jev-latest");
+      expect(screen.getByLabelText("Classifier Instructions")).toBeEnabled();
+      expect(screen.queryByLabelText("Judge model")).not.toBeInTheDocument();
+      expect(screen.queryByText("Reasoning Effort")).not.toBeInTheDocument();
+      expect(screen.queryByText("Classifier Prompt")).not.toBeInTheDocument();
+      expect(screen.queryByRole("switch", { name: "Use images for classification" })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("radio", { name: "Laya" }));
+      expect(screen.getByLabelText("Classifier Model")).toHaveTextContent("english");
+      fireEvent.click(screen.getByRole("radio", { name: "Jev" }));
+      expect(screen.getByLabelText("Classifier Model")).toHaveValue("jev-latest");
+      fireEvent.click(screen.getByRole("radio", { name: label }));
+      if (provider === "bespoke") expect(screen.getByLabelText("Classifier Model")).toHaveTextContent("nimble-latest");
+      if (provider !== "jev") {
+        await chooseSelectOption(userEvent, screen.getByLabelText("Classifier Model"), model);
+      } else {
+        fireEvent.change(screen.getByLabelText("Classifier Model"), { target: { value: model } });
+      }
+      fireEvent.change(screen.getByLabelText("Classifier Timeout (ms)"), { target: { value: "4200" } });
+      fireEvent.change(screen.getByLabelText("Context Window Size"), { target: { value: "6" } });
+      fireEvent.change(screen.getByLabelText("Circuit breaker cooldown (seconds)"), { target: { value: "50" } });
+      fireEvent.click(screen.getByRole("switch", { name: "Classifier circuit breaker" }));
+      fireEvent.click(screen.getByRole("button", { name: "Customize tiers" }));
+      fireEvent.click(screen.getByRole("button", { name: "Save and reload" }));
+      expect(screen.getByRole("radio", { name: /^OSS Classifier$/ })).toBeChecked();
+      expect(screen.getByRole("radio", { name: label })).toBeChecked();
+      if (provider !== "jev") expect(screen.getByLabelText("Classifier Model")).toHaveTextContent(model);
+      else expect(screen.getByLabelText("Classifier Model")).toHaveValue(model);
+      expect(screen.getByLabelText("Classifier Timeout (ms)")).toHaveValue(4200);
+      expect(screen.getByLabelText("Context Window Size")).toHaveValue("6");
+      expect(screen.getByRole("switch", { name: "Classifier circuit breaker" })).not.toBeChecked();
+      fireEvent.click(screen.getByRole("button", { name: "Probe current config" }));
+      expect(testAutoRouterRouting).toHaveBeenCalledWith(
+        "token",
+        expect.objectContaining({
+          complexity_router_config: expect.objectContaining({
+            classifier_type: "oss_classifier",
+            opensource_classifier_config: {
+              provider,
+              model,
+              timeout_ms: 4200,
+              circuit_breaker_enabled: false,
+              circuit_breaker_cooldown_seconds: 50,
+            },
+            tiers: expect.objectContaining({ QUICK: ["fast"] }),
+          }),
         }),
-      }),
-    );
-  });
+      );
+    },
+  );
 
   it("allows licensed instructions and can restore built-in instructions", () => {
     const authorized = useAuthorized();
@@ -152,10 +173,10 @@ describe("JEV classifier editor", () => {
       return <JevEditor value={value} onChange={setValue} />;
     };
     renderWithProviders(<LicensedForm />);
-    expect(screen.getByLabelText("Jev Instructions")).toBeEnabled();
-    fireEvent.change(screen.getByLabelText("Jev Instructions"), { target: { value: "New instructions" } });
-    expect(screen.getByLabelText("Jev Instructions")).toHaveValue("New instructions");
-    fireEvent.click(screen.getByRole("button", { name: "Restore built-in Jev instructions" }));
-    expect(screen.getByLabelText("Jev Instructions")).toHaveValue("");
+    expect(screen.getByLabelText("Classifier Instructions")).toBeEnabled();
+    fireEvent.change(screen.getByLabelText("Classifier Instructions"), { target: { value: "New instructions" } });
+    expect(screen.getByLabelText("Classifier Instructions")).toHaveValue("New instructions");
+    fireEvent.click(screen.getByRole("button", { name: "Restore built-in instructions" }));
+    expect(screen.getByLabelText("Classifier Instructions")).toHaveValue("");
   });
 });

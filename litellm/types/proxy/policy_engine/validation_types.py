@@ -8,7 +8,9 @@ validation results.
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
 class PolicyValidationErrorType(str, Enum):
@@ -24,7 +26,7 @@ class PolicyValidationErrorType(str, Enum):
     INVALID_SYNTAX = "invalid_syntax"
 
 
-class PolicyValidationError(BaseModel):
+class PolicyValidationError(LiteLLMBaseModel):
     """
     Represents a validation error or warning for a policy.
     """
@@ -44,7 +46,7 @@ class PolicyValidationError(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class PolicyValidationResponse(BaseModel):
+class PolicyValidationResponse(LiteLLMBaseModel):
     """
     Response from policy validation.
 
@@ -66,7 +68,7 @@ class PolicyValidationResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class PolicyValidateRequest(BaseModel):
+class PolicyValidateRequest(LiteLLMBaseModel):
     """
     Request body for the /policy/validate endpoint.
     """

@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.104.0"
+version = "1.106.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.15"
@@ -29,11 +29,13 @@ dependencies = [
     "click>=8.0.0,<9.0",
     "jinja2>=3.1.6,<4.0",
     "aiohttp>=3.14.2,<4.0",
+    "async-timeout>=4.0.3,<6.0; python_version < '3.11'",
     "pydantic>=2.11.0,<3.0.0; python_version < '3.14'",
     "pydantic>=2.12.0,<3.0.0; python_version >= '3.14'",
     "pydantic-settings>=2.14.1,<3.0",
     "jsonschema>=4.0.0,<5.0",
     "boto3>=1.43.1,<2.0",
+    "typing-extensions>=4.13.0,<5.0",
 ]
 
 [project.urls]
@@ -75,8 +77,8 @@ proxy = [
     "mcp>=2.2.0,<3",
     "httpx2>=2.5.0,<3",
     "pydantic>=2.12.0,<3",
-    "litellm-proxy-extras==0.4.102",
-    "litellm-enterprise==0.1.71",
+    "litellm-proxy-extras==0.4.108",
+    "litellm-enterprise==0.1.76",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
@@ -205,10 +207,6 @@ dev = [
     "tomli==2.4.1; python_version < '3.11'",
     "pytest-mock==3.15.1",
     "pytest-asyncio==1.3.0",
-    "pytest-postgresql==7.0.2",
-    # pytest-postgresql imports psycopg v3 during pytest startup. Keep the base
-    # package and the binary wheel in the default dev environment so local
-    # pytest works without requiring a system libpq install.
     "psycopg==3.3.3",
     "psycopg-binary==3.3.3",
     "pytest-xdist==3.8.0",
@@ -245,10 +243,15 @@ e2e-dev = [
     "psutil==7.2.2",
     "mcp>=2.2.0,<3",
 ]
+admin-mcp = [
+    "litellm-admin-mcp @ https://github.com/BerriAI/liteadmin-mcp/archive/d35ec9c19c117d4c50cc1eccf6ce1296aac25a1a.tar.gz#sha256=86b930f6706fb2da10d53d1798ee7fd14e44fb0afdef0da122cf0e6bb88fa2c3 ; python_version >= '3.12'",
+]
 proxy-dev = [
+    { include-group = "admin-mcp" },
     "prisma==0.11.0",
     "hypercorn==0.17.3",
     "prometheus-client==0.20.0",
+    "sentry-sdk==2.21.0",
     "opentelemetry-api==1.33.1",
     "opentelemetry-sdk==1.33.1",
     "opentelemetry-exporter-otlp==1.33.1",
@@ -257,6 +260,7 @@ proxy-dev = [
     "a2a-sdk==1.1.0",
 ]
 ci = [
+    "psutil==7.2.2",
     # These are lazily imported at call sites; keep them out of core deps to
     # avoid bloating the base SDK install (google-generativeai pulls grpcio +
     # protobuf, Pillow is a compiled C extension).
@@ -316,11 +320,16 @@ include = [
     "litellm/proxy/_experimental/out/**",
     "litellm/router_strategy/complexity_router/artifacts/*.json",
     "litellm/router_strategy/complexity_router/fuse_presets.json",
-    "litellm/proxy/client/cli/commands/codex_base_instructions.md",
+    "litellm/proxy/model_insights_tasks.json",
+    "litellm/proxy/common_utils/codex_base_instructions.md",
+    "litellm/proxy/common_utils/codex_bundled_models_0.159.3.json",
+    "litellm/proxy/lens/prompts/*.md",
 ]
 exclude = [
     "litellm/proxy/enterprise",
     "litellm/proxy/enterprise/**",
+    "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/guardrail_benchmarks",
+    "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/guardrail_benchmarks/**",
     "**/__pycache__",
     "**/__pycache__/**",
     "**/.pytest_cache",
@@ -330,6 +339,14 @@ exclude = [
 ]
 
 [tool.uv]
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "rust-toolchain.toml" },
+    { file = ".cargo/config.toml" },
+    { file = "litellm-rust/Cargo.lock" },
+    { file = "litellm-rust/Cargo.toml" },
+    { file = "litellm-rust/crates/**/*" },
+]
 constraint-dependencies = [
     "tornado>=6.5.8",
     "aiohttp>=3.14.2,<4.0",
@@ -355,12 +372,13 @@ litellm-enterprise = { workspace = true }
 members = ["enterprise", "litellm-proxy-extras"]
 
 [tool.commitizen]
-version = "1.104.0"
+version = "1.106.0"
 version_files = [
     "pyproject.toml:^version",
 ]
 
 [tool.pytest.ini_options]
+pythonpath = ["scripts"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 markers = [
@@ -393,7 +411,7 @@ paths_to_mutate = [
 # a mutation score is only meaningful against the tests that claim to cover
 # the mutated code anyway.
 tests_dir = [
-    "tests/test_litellm/proxy/management_endpoints/",
+    "tests/unit/proxy/management_endpoints/",
 ]
 also_copy = [
     "litellm/",
@@ -419,7 +437,7 @@ pytest_add_cli_args = [
     "-p", "no:pytest-retry",
     "-p", "no:rerunfailures",
     "-p", "no:xdist",
-    "--ignore=tests/test_litellm/proxy/management_endpoints/test_saml_sso.py",
+    "--ignore=tests/unit/proxy/management_endpoints/test_saml_sso.py",
 ]
 
 [tool.coverage.run]
