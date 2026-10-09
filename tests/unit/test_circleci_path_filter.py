@@ -43,7 +43,7 @@ def classify(category: str, changed: list[str]) -> str:
 DOCS = ["README.md", "docs/my_website/index.mdx", "litellm/anywhere.md"]
 CLIENT = ["ui/litellm-dashboard/src/App.tsx"]
 BACKEND = ["litellm/main.py"]
-CI = [".github/workflows/test-litellm-ui-unit.yml"]
+CI = [".github/workflows/test-unit.yml"]
 
 
 @pytest.mark.parametrize(
