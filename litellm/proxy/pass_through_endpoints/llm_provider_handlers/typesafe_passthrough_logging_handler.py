@@ -21,7 +21,6 @@ if TYPE_CHECKING:
 class _TypeSafeUsage(LiteLLMBaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
-    cost: float | None = None
 
 
 class _TypeSafeResponse(LiteLLMBaseModel):
@@ -89,9 +88,7 @@ class TypeSafePassthroughLoggingHandler:
         )
         pricing: Final = _pricing_for(candidate_model_keys)
         response_cost: Final = (
-            usage.cost
-            if custom_llm_provider == "openrouter" and usage.cost is not None
-            else input_tokens * pricing.input_cost_per_token + output_tokens * pricing.output_cost_per_token
+            input_tokens * pricing.input_cost_per_token + output_tokens * pricing.output_cost_per_token
         )
         usage_object: Final = Usage(
             prompt_tokens=input_tokens,
