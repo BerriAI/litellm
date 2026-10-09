@@ -810,9 +810,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         indices: Final = sorted(raw_by_index.keys())
         texts_to_check: Final = [raw_by_index[i] for i in indices]
 
-        resolved_request_data: Final[
-            dict[str, object]
-        ] = (
+        resolved_request_data: Final[dict[str, object]] = (
             request_data if request_data is not None else {"responses": responses_so_far}
         )
         if "responses" not in resolved_request_data:
