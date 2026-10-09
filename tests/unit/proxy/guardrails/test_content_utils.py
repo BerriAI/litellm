@@ -1,5 +1,7 @@
 """Tests for the shared guardrail content extraction helpers."""
 
+import pytest
+
 from litellm.proxy.guardrails._content_utils import (
     apply_redacted_messages_back,
     build_inspection_messages,
@@ -7,6 +9,7 @@ from litellm.proxy.guardrails._content_utils import (
     is_non_conversational_call_type,
     is_string_batch_input,
     iter_message_text,
+    same_json_ignoring_nulls,
     walk_user_text,
 )
 
@@ -741,3 +744,33 @@ def test_is_non_conversational_call_type_defaults_to_inspecting_unknown_call_typ
     """A call type this module has never heard of must still be inspected —
     failing closed is the point of the deny-list."""
     assert is_non_conversational_call_type("some_future_call_type") is False
+
+
+@pytest.mark.parametrize(
+    ("left", "right", "same"),
+    [
+        ({"role": "assistant", "thinking_blocks": None}, {"role": "assistant"}, True),
+        (
+            {"content": [{"type": "text", "text": "x", "cache_control": None}]},
+            {"content": [{"type": "text", "text": "x"}]},
+            True,
+        ),
+        ({"content": ("a", "b")}, {"content": ["a", "b"]}, True),
+        ({"content": "x"}, {"content": "y"}, False),
+        ({"role": "user", "name": "a"}, {"role": "user"}, False),
+        ([None], [], False),
+    ],
+    ids=[
+        "dropped_null_key",
+        "dropped_nested_null_key",
+        "tuple_as_list",
+        "changed_value",
+        "dropped_set_key",
+        "null_list_item",
+    ],
+)
+def test_same_json_ignoring_nulls_treats_only_a_dropped_null_field_as_no_change(
+    left: object, right: object, same: bool
+) -> None:
+    assert same_json_ignoring_nulls(left, right) is same
+    assert same_json_ignoring_nulls(right, left) is same

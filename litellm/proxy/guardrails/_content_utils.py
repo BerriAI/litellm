@@ -8,8 +8,12 @@ skip the other shapes — these helpers normalise that so every hook sees
 every text fragment.
 """
 
+import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from types import MappingProxyType
 from typing import Any, Final
+
+from pydantic_core import to_jsonable_python
 
 # Call types whose body carries free-form chat / prompt text that
 # text-content guardrails (banned keywords, content moderation, secret
@@ -307,3 +311,18 @@ def build_inspection_messages(data: dict[str, Any]) -> list[dict[str, str]]:
         role = message.get("role", "user") or "user"
         flattened.append({"role": role, "content": text})
     return flattened
+
+
+def _null_free_object(pairs: Sequence[tuple[str, object]]) -> Mapping[str, object]:
+    return MappingProxyType({key: item for key, item in pairs if item is not None})
+
+
+def _null_free(value: object) -> object:
+    normalized: Final[object] = json.loads(  # pyright: ignore[reportAny]  # stdlib parse of our own json.dumps output
+        json.dumps(value, default=to_jsonable_python), object_pairs_hook=_null_free_object
+    )
+    return normalized
+
+
+def same_json_ignoring_nulls(left: object, right: object) -> bool:
+    return _null_free(left) == _null_free(right)
