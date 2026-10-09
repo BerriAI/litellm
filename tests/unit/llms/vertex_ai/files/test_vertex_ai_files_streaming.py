@@ -8,8 +8,8 @@ dicts, joined output), which keeps peak memory bounded on large uploads.
 These tests lock in the behaviour that would regress if the streaming path were
 replaced by a list-based pipeline:
   1. Byte-for-byte output parity with a list pipeline (wire format).
-  2. The streaming transform peaks at a clear fraction of a list pipeline on the
-     same input (relative differential, robust to GC noise).
+  2. The upload stream parses and transforms a row only when the HTTP client
+     pulls it, and a Path source is read from disk as the upload proceeds.
   3. ``get_object_name`` only parses the first JSONL row, so a payload whose
      later rows are not valid JSON does not raise.
   4. A tuple-wrapped file handle uploaded through the real create_file ordering
@@ -254,43 +254,27 @@ class TestGetObjectNameLazyParse:
         assert "gemini-2.5-flash" in object_name
 
 
-class TestStreamingPeakMemory:
-    """
-    Differential guard: the streaming transform must stay well under the peak
-    that a list pipeline incurs on the same input. If the hot path builds full
-    intermediate lists, the streaming assertion fails.
-
-    The assertion that matters is the *relative* one: ``streaming_peak`` must be
-    a clear fraction of ``list_peak`` on the identical input. Absolute
-    ``tracemalloc`` ratios drift with GC timing and the live set carried in from
-    earlier tests, so they make poor CI gates; the relative comparison cancels
-    that shared noise and is exactly what regresses (toward 1.0) when the hot
-    path builds full intermediate lists. ``gc.collect()`` before each
-    measurement removes any garbage the previous run left behind.
-    """
-
-    @pytest.mark.no_cover
-    def test_streaming_peak_well_below_list_pipeline(self):
+class TestStreamingLaziness:
+    def test_upload_stream_transforms_rows_only_as_they_are_pulled(self):
         cfg = VertexAIFilesConfig()
-        raw = _make_openai_jsonl_bytes(8000)
-        content_str = raw.decode("utf-8")
+        valid_rows = 3
+        raw = _make_openai_jsonl_bytes(valid_rows) + b"\n" + b"\n".join(b"not-json" for _ in range(8000))
+        mapped = []
 
-        def drain_stream():
-            # Consume the upload body one row at a time, as the chunked uploader
-            # does, without accumulating it.
-            for _ in _OpenAIToVertexBatchUploadStream(raw, cfg._map_openai_to_vertex_params).iter_bytes():
-                pass
+        def counting_mapper(params):
+            mapped.append(params)
+            return cfg._map_openai_to_vertex_params(params)
 
-        streaming_peak = _measure_peak(drain_stream)
-        list_peak = _measure_peak(lambda: _reference_vertex_jsonl_string(cfg, content_str))
+        chunks = _OpenAIToVertexBatchUploadStream(raw, counting_mapper).iter_bytes()
+        pulled = [next(chunks) for _ in range(valid_rows)]
+        custom_ids = [
+            _get_litellm_batch_custom_id_from_labels(json.loads(chunk)["request"]["labels"]) for chunk in pulled
+        ]
 
-        # Core guard: the lazily consumed streaming body peaks well under a list
-        # pipeline that materializes every transformed row. Building full
-        # intermediate lists in the hot path pushes this ratio back toward 1.0.
-        assert streaming_peak < list_peak * 0.6, (
-            f"streaming peak {streaming_peak} not a clear win over list pipeline "
-            f"{list_peak} (ratio {streaming_peak / list_peak:.2f})"
-        )
+        assert len(mapped) == valid_rows
+        assert custom_ids == ["request-0", "request-1", "request-2"]
+        with pytest.raises(json.JSONDecodeError):
+            next(chunks)
 
     def test_get_object_name_does_not_scale_with_payload(self):
         cfg = VertexAIFilesConfig()
@@ -346,35 +330,34 @@ class TestPathSourcedStreaming:
         first_labels = json.loads(lines[0])["request"]["labels"]
         assert _get_litellm_batch_custom_id_from_labels(first_labels) == "request-0"
 
-    @pytest.mark.no_cover
-    def test_path_source_peak_stays_below_list_pipeline(self, tmp_path):
+    def test_path_source_is_read_as_the_upload_is_pulled(self, tmp_path):
         cfg = VertexAIFilesConfig()
-        path, raw = self._write_jsonl(tmp_path, 8000)
+        n_rows = 8000
+        path, raw = self._write_jsonl(tmp_path, n_rows)
         data = self._batch_request(path)
-        content_str = raw.decode("utf-8")
-
-        def drain_stream():
-            cfg.get_complete_file_url(
-                api_base=None,
-                api_key=None,
-                model="",
-                optional_params={},
-                litellm_params={"gcs_bucket_name": "test-bucket"},
-                data=data,
-            )
-            out = cfg.transform_create_file_request(
-                model="", create_file_data=data, optional_params={}, litellm_params={}
-            )
-            for _ in _upload_stream(out).iter_bytes():
-                pass
-
-        streaming_peak = _measure_peak(drain_stream)
-        list_peak = _measure_peak(lambda: _reference_vertex_jsonl_string(cfg, content_str))
-
-        assert streaming_peak < list_peak * 0.3, (
-            f"path-sourced streaming peak {streaming_peak} not a clear win over list pipeline "
-            f"{list_peak} (ratio {streaming_peak / list_peak:.2f})"
+        cfg.get_complete_file_url(
+            api_base=None,
+            api_key=None,
+            model="",
+            optional_params={},
+            litellm_params={"gcs_bucket_name": "test-bucket"},
+            data=data,
         )
+        out = cfg.transform_create_file_request(model="", create_file_data=data, optional_params={}, litellm_params={})
+        chunks = _upload_stream(out).iter_bytes()
+        first = next(chunks)
+
+        with open(path, "r+b") as handle:
+            handle.seek(raw.index(b'"request-6000"'))
+            handle.write(b'"rewrote-6000"')
+        custom_ids = [
+            _get_litellm_batch_custom_id_from_labels(json.loads(chunk)["request"]["labels"])
+            for chunk in (first, *chunks)
+        ]
+
+        assert len(custom_ids) == n_rows
+        assert custom_ids[0] == "request-0"
+        assert custom_ids[6000] == "rewrote-6000"
 
     def test_path_source_stream_is_reiterable(self, tmp_path):
         cfg = VertexAIFilesConfig()
