@@ -7434,9 +7434,19 @@ class Router:
         """
         from litellm.responses.utils import ResponsesAPIRequestUtils
 
-        model_id: Final = ResponsesAPIRequestUtils.get_model_id_from_response_id(kwargs.get("response_id"))
+        response_id: Final = kwargs.get("response_id")
+        model_id: Final = ResponsesAPIRequestUtils.get_model_id_from_response_id(response_id)
         if model_id is not None:
             kwargs["model"] = model_id
+        elif response_id and not kwargs.get("model") and self.default_deployment is None:
+            raise litellm.NotFoundError(
+                message=(
+                    f"Response '{response_id}' not found. It was not issued by this proxy; "
+                    "pass `model` to look up a provider response id."
+                ),
+                model="",
+                llm_provider=str(kwargs.get("custom_llm_provider") or ""),
+            )
         return await self._ageneric_api_call_with_fallbacks(
             original_function=original_function,
             **kwargs,

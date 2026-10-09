@@ -91,6 +91,70 @@ def test_transform_file_request_encodes_file_id(config: OpenAIVectorStoreFilesCo
     assert params == {}
 
 
+def test_transform_create_request_preserves_all_attribute_keys(config: OpenAIVectorStoreFilesConfig):
+    """OpenAI enforces the 16-key limit itself; the transform must not silently
+    truncate user attributes."""
+    attributes = {f"key_{i:02d}": "v" for i in range(17)}
+
+    _url, payload = config.transform_create_vector_store_file_request(
+        vector_store_id="vs_123",
+        create_request={"file_id": "file-abc", "attributes": attributes},
+        api_base="https://api.example.com/v1/vector_stores/vs_123/files",
+    )
+
+    assert payload["attributes"] == attributes
+
+
+def test_transform_create_request_preserves_typed_attribute_values(config: OpenAIVectorStoreFilesConfig):
+    """Attributes may be strings, numbers, or booleans per the OpenAI API."""
+    attributes = {"n": 1, "b": True, "s": "x", "f": 1.5}
+
+    _url, payload = config.transform_create_vector_store_file_request(
+        vector_store_id="vs_123",
+        create_request={"file_id": "file-abc", "attributes": attributes},
+        api_base="https://api.example.com/v1/vector_stores/vs_123/files",
+    )
+
+    assert payload["attributes"] == {"n": 1, "b": True, "s": "x", "f": 1.5}
+
+
+def test_transform_update_request_preserves_all_attribute_keys(config: OpenAIVectorStoreFilesConfig):
+    attributes = {f"key_{i:02d}": "v" for i in range(17)}
+
+    _url, payload = config.transform_update_vector_store_file_request(
+        vector_store_id="vs_123",
+        file_id="file-abc",
+        update_request={"attributes": attributes},
+        api_base="https://api.example.com/v1/vector_stores/vs_123/files",
+    )
+
+    assert payload["attributes"] == attributes
+
+
+def test_transform_update_request_preserves_typed_attribute_values(config: OpenAIVectorStoreFilesConfig):
+    attributes = {"n": 1, "b": True, "s": "x"}
+
+    _url, payload = config.transform_update_vector_store_file_request(
+        vector_store_id="vs_123",
+        file_id="file-abc",
+        update_request={"attributes": attributes},
+        api_base="https://api.example.com/v1/vector_stores/vs_123/files",
+    )
+
+    assert payload["attributes"] == {"n": 1, "b": True, "s": "x"}
+
+
+def test_transform_update_request_drops_null_attributes(config: OpenAIVectorStoreFilesConfig):
+    _url, payload = config.transform_update_vector_store_file_request(
+        vector_store_id="vs_123",
+        file_id="file-abc",
+        update_request={"attributes": None},
+        api_base="https://api.example.com/v1/vector_stores/vs_123/files",
+    )
+
+    assert "attributes" not in payload
+
+
 def test_transform_create_response(config: OpenAIVectorStoreFilesConfig):
     response = httpx.Response(
         status_code=200,

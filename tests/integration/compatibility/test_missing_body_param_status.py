@@ -1253,6 +1253,20 @@ def test_valid_container_file_upload_reaches_upstream(gateway: Gateway) -> None:
         }, matches
 
 
+def test_ocr_multipart_missing_file_field_returns_400(gateway: Gateway) -> None:
+    response: Final = gateway.request_multipart("/v1/ocr", {"model": "azure-prebuilt-layout"}, {})
+    assert response.status_code == 400, response.text
+
+
+def test_ocr_multipart_empty_file_returns_400(gateway: Gateway) -> None:
+    response: Final = gateway.request_multipart(
+        "/v1/ocr",
+        {"model": "azure-prebuilt-layout"},
+        {"file": ("empty.pdf", b"", "application/pdf")},
+    )
+    assert response.status_code == 400, response.text
+
+
 @pytest.mark.parametrize(
     ("route", "expected_text"),
     (

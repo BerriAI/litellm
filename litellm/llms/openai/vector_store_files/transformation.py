@@ -20,7 +20,6 @@ from litellm.types.vector_store_files import (
     VectorStoreFileObject,
     VectorStoreFileUpdateRequest,
 )
-from litellm.utils import add_openai_metadata
 
 
 def _clean_dict(source: Mapping[str, object]) -> dict[str, object]:
@@ -104,13 +103,6 @@ class OpenAIVectorStoreFilesConfig(BaseVectorStoreFilesConfig):
         api_base: str,
     ) -> tuple[str, dict[str, object]]:
         payload: Final[dict[str, object]] = _clean_dict(dict(create_request))
-        attributes: Final = payload.get("attributes")
-        if isinstance(attributes, dict):
-            filtered_attributes: Final = add_openai_metadata(attributes)
-            if filtered_attributes is not None:
-                payload["attributes"] = filtered_attributes
-            else:
-                payload.pop("attributes", None)
         url: Final = api_base
         return url, payload
 
@@ -208,14 +200,7 @@ class OpenAIVectorStoreFilesConfig(BaseVectorStoreFilesConfig):
         update_request: VectorStoreFileUpdateRequest,
         api_base: str,
     ) -> tuple[str, dict[str, object]]:
-        payload: Final[dict[str, object]] = dict(update_request)
-        attributes: Final = payload.get("attributes")
-        if isinstance(attributes, dict):
-            filtered_attributes: Final = add_openai_metadata(attributes)
-            if filtered_attributes is not None:
-                payload["attributes"] = filtered_attributes
-            else:
-                payload.pop("attributes", None)
+        payload: Final[dict[str, object]] = _clean_dict(dict(update_request))
         encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
         return f"{api_base}/{encoded_file_id}", payload
 
