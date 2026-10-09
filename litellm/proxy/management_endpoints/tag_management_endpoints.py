@@ -485,11 +485,11 @@ async def update_tag(
             from litellm.proxy.proxy_server import spend_counter_cache
 
             counter_key: Final = f"spend:tag:{tag.name}"
-            spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=tag.spend, ttl=60)
+            spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=tag.spend, ttl=60)  # pyright: ignore[reportUnknownMemberType]  # DualCache cache methods are untyped
             if spend_counter_cache.redis_cache is not None:
                 try:
                     with service_target(SPEND_COUNTERS_TARGET):
-                        await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=tag.spend, ttl=60)
+                        await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=tag.spend, ttl=60)  # pyright: ignore[reportUnknownMemberType]  # DualCache cache methods are untyped
                 except Exception as redis_err:  # noqa: BLE001  # best-effort refresh: a Redis failure must not fail the request
                     # tag.name is admin-supplied; strip CR/LF before it reaches the logs so it
                     # cannot forge additional log lines.
