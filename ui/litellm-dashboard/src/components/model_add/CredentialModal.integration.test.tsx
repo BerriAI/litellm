@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { chooseSelectOption } from "../../../tests/test-utils";
 import { Providers } from "../provider_info_helpers";
 import { CredentialItem } from "../networking";
@@ -501,6 +501,103 @@ describe("CredentialModal with Anthropic workload identity federation", () => {
       },
       [],
     );
+  });
+});
+
+describe("CredentialModal public JWKS for a LiteLLM-signed Anthropic credential", () => {
+  const signedCredential: CredentialItem = {
+    credential_name: "anthropic-signed",
+    credential_values: {
+      anthropic_identity_source: "internal_issuer",
+      anthropic_issuer_url: "http****",
+      anthropic_issuer_subject: "lite****",
+      anthropic_issuer_signing_key_ref: "os.e****",
+    },
+    credential_info: { custom_llm_provider: "Anthropic" },
+  };
+  const jwks = { keys: [{ kty: "RSA", kid: "kid-1", use: "sig", alg: "RS256", n: "modulus", e: "AQAB" }] };
+  const fetchMock = vi.fn<(request: Request) => Promise<Response>>();
+  const requestedPaths = () => fetchMock.mock.calls.map(([request]) => new URL(request.url).pathname);
+  const respondWith = (status: number, body: unknown) =>
+    fetchMock.mockImplementation(async () => Response.json(body, { status }));
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("shows the JWKS the proxy serves for the saved credential and copies it verbatim", async () => {
+    const user = userEvent.setup();
+    respondWith(200, jwks);
+    renderModal({ mode: "edit", existingCredential: signedCredential });
+
+    const shown = await screen.findByLabelText("Public JWKS");
+    expect(JSON.parse(shown.textContent ?? "")).toEqual(jwks);
+    expect(requestedPaths()).toEqual(["/credentials/anthropic-signed/jwks"]);
+
+    await user.click(screen.getByRole("button", { name: "Copy JWKS" }));
+
+    expect(await navigator.clipboard.readText()).toBe(shown.textContent);
+  });
+
+  it("waits for a fresh JWKS instead of offering the one cached from an earlier open", async () => {
+    const rotatedJwks = { keys: [{ ...jwks.keys[0], kid: "kid-2", n: "rotated-modulus" }] };
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const modal = (open: boolean) => (
+      <QueryClientProvider client={queryClient}>
+        {open && (
+          <CredentialModal
+            open
+            mode="edit"
+            existingCredential={signedCredential}
+            onCancel={vi.fn()}
+            onSubmit={vi.fn()}
+          />
+        )}
+      </QueryClientProvider>
+    );
+    respondWith(200, jwks);
+    const { rerender } = render(modal(true));
+    await screen.findByLabelText("Public JWKS");
+    rerender(modal(false));
+
+    const rotated = Promise.withResolvers<Response>();
+    fetchMock.mockReturnValue(rotated.promise);
+    rerender(modal(true));
+
+    expect(await screen.findByText("Loading JWKS...")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy JWKS" })).not.toBeInTheDocument();
+
+    rotated.resolve(Response.json(rotatedJwks));
+
+    expect(JSON.parse((await screen.findByLabelText("Public JWKS")).textContent ?? "")).toEqual(rotatedJwks);
+  });
+
+  it("shows why the proxy cannot build the JWKS", async () => {
+    respondWith(400, { detail: { error: "anthropic_issuer_signing_key_ref did not resolve to a PEM private key" } });
+    renderModal({ mode: "edit", existingCredential: signedCredential });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "anthropic_issuer_signing_key_ref did not resolve to a PEM private key",
+    );
+    expect(screen.queryByRole("button", { name: "Copy JWKS" })).not.toBeInTheDocument();
+  });
+
+  it("asks the admin to save first while the credential is not stored as LiteLLM-signed", async () => {
+    const user = userEvent.setup();
+    renderModal({ mode: "edit", existingCredential: federatedCredential });
+    await screen.findByLabelText("Upstream API Base");
+    expect(screen.queryByText(/copy the public JWKS/)).not.toBeInTheDocument();
+
+    await chooseOption(user, /Identity Source/, "Token signed by LiteLLM (internal issuer)");
+
+    expect(await screen.findByText(/Once saved, reopen this credential/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Public JWKS")).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

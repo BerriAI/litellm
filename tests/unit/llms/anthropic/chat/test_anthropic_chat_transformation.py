@@ -7968,3 +7968,113 @@ def test_calculate_usage_sums_cache_tokens_across_compaction_iterations():
     assert usage.completion_tokens == 250
     assert usage.prompt_tokens_details.cache_creation_tokens == 60
     assert usage.prompt_tokens_details.cached_tokens == 17020
+
+
+PROMPT_CACHING_MODEL: Final = "claude-sonnet-5-5"
+EPHEMERAL: Final = {"type": "ephemeral"}
+WEATHER_PARAMETERS: Final = {
+    "type": "object",
+    "properties": {
+        "location": {"type": "string", "description": "The city and state, e.g. San Francisco, CA"},
+        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+    },
+    "required": ["location"],
+}
+
+
+async def _send_prompt_caching_request(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, **params: object
+) -> httpx.Request:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Hello!"}],
+                "model": PROMPT_CACHING_MODEL,
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 12, "output_tokens": 6},
+            },
+        )
+    )
+    await litellm.acompletion(
+        api_key="mock_api_key",
+        model=f"anthropic/{PROMPT_CACHING_MODEL}",
+        extra_headers={"anthropic-version": "2023-06-01"},
+        **params,
+    )
+    assert route.call_count == 1
+    request: Final = route.calls.last.request
+    assert request.headers["x-api-key"] == "mock_api_key"
+    assert request.headers["anthropic-version"] == "2023-06-01"
+    assert "anthropic-beta" not in request.headers
+    return request
+
+
+async def test_litellm_anthropic_prompt_caching_tools(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request: Final = await _send_prompt_caching_request(
+        respx_mock,
+        monkeypatch,
+        messages=[{"role": "user", "content": "What's the weather like in Boston today?"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "description": "Get the current weather in a given location",
+                    "parameters": WEATHER_PARAMETERS,
+                    "cache_control": EPHEMERAL,
+                },
+            }
+        ],
+    )
+    assert json.loads(request.content) == {
+        "model": PROMPT_CACHING_MODEL,
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "What's the weather like in Boston today?"}]}
+        ],
+        "tools": [
+            {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "input_schema": WEATHER_PARAMETERS,
+                "type": "custom",
+                "cache_control": EPHEMERAL,
+            }
+        ],
+        "max_tokens": litellm.get_max_tokens(PROMPT_CACHING_MODEL),
+    }
+
+
+async def test_litellm_anthropic_prompt_caching_system(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    system_blocks: Final = [
+        {"type": "text", "text": "You are an AI assistant tasked with analyzing legal documents."},
+        {"type": "text", "text": "Here is the full text of a complex legal agreement", "cache_control": EPHEMERAL},
+    ]
+    request: Final = await _send_prompt_caching_request(
+        respx_mock,
+        monkeypatch,
+        messages=[
+            {"role": "system", "content": system_blocks},
+            {"role": "user", "content": "what are the key terms and conditions in this agreement?"},
+        ],
+    )
+    assert json.loads(request.content) == {
+        "model": PROMPT_CACHING_MODEL,
+        "system": system_blocks,
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "what are the key terms and conditions in this agreement?"}],
+            }
+        ],
+        "max_tokens": litellm.get_max_tokens(PROMPT_CACHING_MODEL),
+    }

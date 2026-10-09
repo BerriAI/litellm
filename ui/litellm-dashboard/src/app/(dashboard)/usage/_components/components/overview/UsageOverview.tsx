@@ -120,8 +120,8 @@ export default function UsageOverview({
       </div>
 
       <Panel
-        title="Top models"
-        subtitle={`${granularity === "day" ? "Daily" : "Weekly"} ${METRIC_NOUN[state.metric]}, top 8 stacked`}
+        title={`${granularity === "day" ? "Daily" : "Weekly"} usage`}
+        subtitle={`${granularity === "day" ? "Daily" : "Weekly"} ${METRIC_NOUN[state.metric]} by model (top 8, rest grouped as Other)`}
         action={
           <>
             <BreakdownControls state={state} onChange={setState} showDimension={false} />
@@ -153,7 +153,8 @@ export default function UsageOverview({
             />
           )}
         </div>
-        <div className={cn("border-t py-2", PANEL_INSET_X)}>
+        <div className={cn("border-t pt-3 pb-2", PANEL_INSET_X)}>
+          <h4 className="text-sm leading-5 font-medium text-foreground">Top models</h4>
           <Leaderboard
             ranking={ranking}
             series={dailySeries}
