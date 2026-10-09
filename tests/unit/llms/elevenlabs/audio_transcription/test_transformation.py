@@ -318,7 +318,7 @@ def test_transform_audio_transcription_response_maps_one_word(
     words: Final = _transform({"text": "t", "words": [word]})["words"]
 
     assert words == expected
-    assert all(isinstance(w[key], float) for w in words for key in ("start", "end"))
+    assert all(isinstance(w["start"], float) and isinstance(w["end"], float) for w in words)
 
 
 @pytest.mark.parametrize("words", [[], "", {}])
@@ -568,6 +568,56 @@ def test_transform_audio_transcription_response_zeroes_absent_start_and_end_and_
     assert item["end"] == 3.0 and isinstance(item["end"], float)
 
 
+@pytest.mark.parametrize("item_type", ["word", "audio_event"])
+@pytest.mark.parametrize("literal", UNUSABLE_TIMESTAMPS)
+def test_transform_audio_transcription_response_ends_at_start_when_end_is_unusable(item_type: str, literal: str):
+    item: Final = _timed_item(_transform_raw(_item_body(item_type, "1.0", literal)), item_type)
+
+    assert item["start"] == 1.0 and item["end"] == 1.0
+    assert isinstance(item["start"], float) and isinstance(item["end"], float)
+
+
+@pytest.mark.parametrize("item_type", ["word", "audio_event"])
+@pytest.mark.parametrize(
+    ("start", "end", "expected_end"),
+    [("1.0", "0.5", 1.0), ("2", "0", 2.0), ("1.0", "1.0", 1.0), ("0.44", "0.68", 0.68), ("1.0", "6.5", 6.5)],
+)
+def test_transform_audio_transcription_response_never_ends_before_it_starts(
+    item_type: str, start: str, end: str, expected_end: float
+):
+    item: Final = _timed_item(_transform_raw(_item_body(item_type, start, end)), item_type)
+
+    assert item["start"] == float(start)
+    assert item["end"] == expected_end
+    assert isinstance(item["end"], float)
+
+
+@pytest.mark.parametrize("item_type", ["word", "audio_event"])
+def test_transform_audio_transcription_response_ends_at_start_when_end_is_absent(item_type: str):
+    body: Final = b'{"words": [{"type": "%s", "text": "x", "start": 1.5}]}' % item_type.encode()
+
+    item: Final = _timed_item(_transform_raw(body), item_type)
+
+    assert item["start"] == 1.5 and item["end"] == 1.5
+
+
+@pytest.mark.parametrize("item_type", ["word", "audio_event"])
+def test_transform_audio_transcription_response_keeps_a_usable_end_when_start_is_unusable(item_type: str):
+    item: Final = _timed_item(_transform_raw(_item_body(item_type, "Infinity", "2.0")), item_type)
+
+    assert item["start"] == 0.0 and item["end"] == 2.0
+
+
+def _cue_seconds(clock: str) -> float:
+    hours, minutes, seconds, millis = (int(part) for part in re.split(r"[:,.]", clock))
+    return hours * 3600 + minutes * 60 + seconds + millis / 1000
+
+
+def _cue_spans(document: str) -> tuple[tuple[float, float], ...]:
+    cues: Final = re.findall(r"(\d{2}:\d{2}:\d{2}[,.]\d{3}) --> (\d{2}:\d{2}:\d{2}[,.]\d{3})", document)
+    return tuple((_cue_seconds(start), _cue_seconds(end)) for start, end in cues)
+
+
 @pytest.mark.parametrize("response_format", SUBTITLE_FORMATS)
 @pytest.mark.parametrize("literal", ["Infinity", "NaN", "1e308", "-Infinity"])
 def test_elevenlabs_transcription_subtitles_survive_unusable_word_timestamps(
@@ -586,6 +636,24 @@ def test_elevenlabs_transcription_subtitles_survive_unusable_word_timestamps(
     assert f"00:00:00{separator}000 --> " in response.text
     assert "Four" in response.text and "score" in response.text
     assert (response_format == "vtt") == response.text.startswith("WEBVTT")
+    spans: Final = _cue_spans(response.text)
+    assert spans
+    assert all(start <= end for start, end in spans)
+
+
+@pytest.mark.parametrize("response_format", SUBTITLE_FORMATS)
+def test_elevenlabs_transcription_subtitles_never_end_before_they_start_when_the_end_is_earlier(
+    response_format: str, respx_mock: respx.MockRouter
+):
+    body: Final = b'{"text": "score", "words": [{"type": "word", "text": "score", "start": 1.0, "end": 0.5}]}'
+
+    response, _ = _transcribe(respx_mock, body, response_format=response_format)
+
+    separator: Final = "," if response_format == "srt" else "."
+    spans: Final = _cue_spans(response.text)
+    assert f"00:00:01{separator}000 --> 00:00:01{separator}000" in response.text
+    assert spans
+    assert all(start <= end for start, end in spans)
 
 
 class TestElevenLabsAudioTranscription:

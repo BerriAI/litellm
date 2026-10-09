@@ -47,6 +47,11 @@ def _timestamp(value: object) -> float:
     return seconds
 
 
+def _time_span(item: Mapping[str, object]) -> Mapping[str, float]:
+    start: Final = _timestamp(item.get("start"))
+    return {"start": start, "end": max(start, _timestamp(item.get("end")))}
+
+
 def _speaker_fields(item: Mapping[str, object]) -> Mapping[str, str]:
     speaker: Final = item.get("speaker_id")
     return {"speaker": speaker} if isinstance(speaker, str) else {}
@@ -56,8 +61,7 @@ def _word_fields(item: Mapping[str, object]) -> Mapping[str, object]:
     logprob: Final = _finite_float(item.get("logprob"))
     return {
         "word": item.get("text", ""),
-        "start": _timestamp(item.get("start")),
-        "end": _timestamp(item.get("end")),
+        **_time_span(item),
         **({} if logprob is None else {"logprob": logprob}),
         **_speaker_fields(item),
     }
@@ -66,8 +70,7 @@ def _word_fields(item: Mapping[str, object]) -> Mapping[str, object]:
 def _audio_event_fields(item: Mapping[str, object]) -> Mapping[str, object]:
     return {
         "text": item.get("text", ""),
-        "start": _timestamp(item.get("start")),
-        "end": _timestamp(item.get("end")),
+        **_time_span(item),
         **_speaker_fields(item),
     }
 
