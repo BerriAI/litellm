@@ -1874,6 +1874,23 @@ def test_ProxyConfig_load_credential_list_tags_every_entry_as_config_defined():
     assert [(cred.credential_name, cred.source) for cred in creds] == [("plain", "config"), ("claims-db", "config")]
 
 
+@pytest.mark.parametrize("display_name", [2024, True, "Azure Prod"])
+def test_ProxyConfig_load_credential_list_ignores_a_display_name_set_in_config(display_name):
+    creds = ProxyConfig().load_credential_list(
+        {
+            "credential_list": [
+                {
+                    "credential_name": "azure_cred",
+                    "display_name": display_name,
+                    "credential_info": {},
+                    "credential_values": {"api_key": "sk-x"},
+                }
+            ]
+        }
+    )
+    assert [(cred.credential_name, cred.display_name) for cred in creds] == [("azure_cred", None)]
+
+
 def test_ProxyConfig_load_credential_list_invalid_entry_raises():
     pc = ProxyConfig()
     with pytest.raises(ValidationError):
