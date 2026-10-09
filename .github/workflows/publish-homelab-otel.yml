@@ -1,0 +1,47 @@
+name: Publish homelab OTEL compatibility image
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the digest-pinned image to GHCR
+        required: true
+        default: 'true'
+        type: boolean
+permissions:
+  contents: read
+  packages: write
+jobs:
+  publish:
+    if: ${{ inputs.publish == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Write compatibility Dockerfile
+        run: |
+          cat > homelab-otel.Dockerfile <<'EOF_DOCKERFILE'
+          FROM ghcr.io/berriai/litellm@sha256:3d88bd757134a00e8c00237b85a021ab1f6d54abb9c1df750f411dbe7256a500
+          LABEL org.opencontainers.image.source="https://github.com/BerriAI/litellm/pull/45612" \
+                org.opencontainers.image.revision="faa168d979b23328a395104fb8670d502b01299c" \
+                org.opencontainers.image.base.name="ghcr.io/berriai/litellm" \
+                org.opencontainers.image.base.digest="sha256:3d88bd757134a00e8c00237b85a021ab1f6d54abb9c1df750f411dbe7256a500" \
+                org.opencontainers.image.licenses="MIT" \
+                com.maxrink.patch.opentelemetry.sha256="b139f02779ada57ad72e798ccfd3748276956dd88549fbb83ba63261b6f3ce32"
+          COPY litellm/integrations/opentelemetry.py /app/.venv/lib/python3.13/site-packages/litellm/integrations/opentelemetry.py
+          EOF_DOCKERFILE
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: homelab-otel.Dockerfile
+          push: true
+          tags: ghcr.io/maxrink/litellm-otel-fix:faa168-pinned-1.104.2
+          labels: |
+            org.opencontainers.image.source=https://github.com/BerriAI/litellm/pull/45612
+            org.opencontainers.image.revision=faa168d979b23328a395104fb8670d502b01299c
+            org.opencontainers.image.base.digest=sha256:3d88bd757134a00e8c00237b85a021ab1f6d54abb9c1df750f411dbe7256a500
+            org.opencontainers.image.licenses=MIT
+            com.maxrink.patch.opentelemetry.sha256=b139f02779ada57ad72e798ccfd3748276956dd88549fbb83ba63261b6f3ce32
