@@ -4392,6 +4392,35 @@ async def test_emit_standard_logging_payload_called_for_non_streaming():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("response_cost", [0.0, 0.125])
+async def test_sync_success_handler_preserves_streaming_cost_computed_by_async_handler(response_cost: float) -> None:
+    now: Final = datetime.datetime(2026, 1, 1)
+    logging_obj: Final = LitellmLogging(
+        model="streaming-cost-regression",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=now,
+        litellm_call_id="streaming-cost-regression",
+        function_id="streaming-cost-regression",
+    )
+    result: Final = ModelResponse(
+        model="streaming-cost-regression",
+        choices=[{"message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}],
+        usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    )
+    result._hidden_params["response_cost"] = response_cost
+
+    await logging_obj.async_success_handler(result=result, start_time=now, end_time=now)
+
+    assert logging_obj.model_call_details["response_cost"] == response_cost
+    assert "async_complete_streaming_response" in logging_obj.model_call_details
+    for _ in range(2):
+        logging_obj.success_handler(result=result, start_time=now, end_time=now)
+        assert logging_obj.model_call_details["response_cost"] == response_cost
+
+
+@pytest.mark.asyncio
 async def test_async_success_handler_preserves_response_cost_for_pass_through_endpoints():
     """Regression test: PR #19887 added a pass-through branch in async_success_handler
     that unconditionally set response_cost=None, overwriting costs already calculated
