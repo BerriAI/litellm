@@ -1,4 +1,4 @@
-import asyncio, copy, datetime as stdlib_datetime, importlib, inspect, itertools, os
+import asyncio, copy, datetime as stdlib_datetime, importlib, itertools, os, time
 from collections.abc import Callable, Iterator
 from datetime import datetime
 from typing import Final
@@ -208,8 +208,31 @@ def test_bucket_keys_use_the_minute_format_of_the_clock_reading(instant: datetim
     assert list(cache.get_cache(key=COST_KEY)[DEPLOYMENT_ID]) == [instant.strftime("%Y-%m-%d-%H-%M")]
 
 
-def test_a_handler_built_without_a_clock_reads_local_naive_datetime_now():
-    assert inspect.signature(LowestCostLoggingHandler).parameters["clock"].default == stdlib_datetime.datetime.now
+@pytest.fixture()
+def _local_time_fourteen_hours_ahead_of_utc(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    with monkeypatch.context() as patched:
+        patched.setenv("TZ", "KIR-14")
+        time.tzset()
+        yield
+    time.tzset()
+
+
+@pytest.mark.usefixtures("_local_time_fourteen_hours_ahead_of_utc")
+def test_a_handler_built_without_a_clock_buckets_under_the_local_wall_clock_minute():
+    cache: Final = DualCache()
+    handler: Final = LowestCostLoggingHandler(router_cache=cache)
+    before: Final = stdlib_datetime.datetime.now()
+
+    handler.log_success_event(
+        kwargs=KWARGS,
+        response_obj=_chat_response_with_no_completion_tokens(),
+        start_time=before,
+        end_time=before,
+    )
+
+    after: Final = stdlib_datetime.datetime.now()
+    (bucket,) = cache.get_cache(key=COST_KEY)[DEPLOYMENT_ID]
+    assert bucket in {before.strftime("%Y-%m-%d-%H-%M"), after.strftime("%Y-%m-%d-%H-%M")}, bucket
 
 
 @pytest.mark.asyncio
