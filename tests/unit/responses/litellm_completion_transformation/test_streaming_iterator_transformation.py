@@ -1177,30 +1177,47 @@ async def test_reasoning_then_text_announces_message_item_before_text_events(syn
     assert announced_indexes_by_item_type["message"] != announced_indexes_by_item_type["reasoning"]
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_reasoning_item_closes_before_message_item_opens():
+async def test_reasoning_item_closes_before_message_item_opens(sync_mode: bool):
     iterator: Final = _build_iterator(
         [
-            _reasoning_chunk("let me think"),
+            _reasoning_chunk("let me "),
+            _reasoning_chunk("think"),
             _chunk("Hello"),
             _chunk("!", finish_reason="stop"),
         ]
     )
 
-    events: Final = await _collect_events(iterator, sync_mode=False)
+    events: Final = await _collect_events(iterator, sync_mode)
 
-    item_lifecycle: Final = [
-        (event.type, event.item.type)
+    lifecycle: Final = [
+        (event.type, getattr(getattr(event, "item", None), "type", None))
         for event in events
         if getattr(event, "type", None)
-        in (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE)
+        in (
+            ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+            ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE,
+            ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE,
+        )
     ]
-    assert item_lifecycle == [
+    assert lifecycle == [
         (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, "reasoning"),
+        (ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE, None),
+        (ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE, None),
         (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, "reasoning"),
         (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, "message"),
         (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, "message"),
     ]
+    summary_text_done: Final = next(
+        event for event in events if event.type == ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE
+    )
+    reasoning_added: Final = next(
+        event for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+    )
+    assert summary_text_done.text == "let me think"
+    assert summary_text_done.item_id == reasoning_added.item.id
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
