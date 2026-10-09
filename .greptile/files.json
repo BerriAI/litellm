@@ -1,0 +1,543 @@
+{
+  "files": [
+    {
+      "path": "litellm/_v2/AGENTS.md",
+      "description": "Conventions for code under litellm/_v2/",
+      "scope": [
+        "litellm/_v2/**"
+      ]
+    },
+    {
+      "path": "litellm/_v2/cache/AGENTS.md",
+      "description": "Conventions for code under litellm/_v2/cache/",
+      "scope": [
+        "litellm/_v2/cache/**"
+      ]
+    },
+    {
+      "path": "litellm/proxy/_experimental/mcp_server/AGENTS.md",
+      "description": "Conventions for code under litellm/proxy/_experimental/mcp_server/",
+      "scope": [
+        "litellm/proxy/_experimental/mcp_server/**"
+      ]
+    },
+    {
+      "path": "litellm/rust_bridge/AGENTS.md",
+      "description": "Conventions for code under litellm/rust_bridge/",
+      "scope": [
+        "litellm/rust_bridge/**"
+      ]
+    },
+    {
+      "path": "litellm/rust_bridge/trace/AGENTS.md",
+      "description": "Conventions for code under litellm/rust_bridge/trace/",
+      "scope": [
+        "litellm/rust_bridge/trace/**"
+      ]
+    },
+    {
+      "path": "litellm/tracing/AGENTS.md",
+      "description": "Conventions for code under litellm/tracing/",
+      "scope": [
+        "litellm/tracing/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/",
+      "scope": [
+        "litellm-rust/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/cache-response/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/cache-response/",
+      "scope": [
+        "litellm-rust/crates/cache-response/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/callbacks-legacy-python/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/callbacks-legacy-python/",
+      "scope": [
+        "litellm-rust/crates/callbacks-legacy-python/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/coroutine/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/coroutine/",
+      "scope": [
+        "litellm-rust/crates/coroutine/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/gateway/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/gateway/",
+      "scope": [
+        "litellm-rust/crates/gateway/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/gateway-auth/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/gateway-auth/",
+      "scope": [
+        "litellm-rust/crates/gateway-auth/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/gateway-inference/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/gateway-inference/",
+      "scope": [
+        "litellm-rust/crates/gateway-inference/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/gateway-mcp/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/gateway-mcp/",
+      "scope": [
+        "litellm-rust/crates/gateway-mcp/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/host/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/host/",
+      "scope": [
+        "litellm-rust/crates/host/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/host/src/machine/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/host/src/machine/",
+      "scope": [
+        "litellm-rust/crates/host/src/machine/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/host-http/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/host-http/",
+      "scope": [
+        "litellm-rust/crates/host-http/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/host-native/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/host-native/",
+      "scope": [
+        "litellm-rust/crates/host-native/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/host-python/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/host-python/",
+      "scope": [
+        "litellm-rust/crates/host-python/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/http/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/http/",
+      "scope": [
+        "litellm-rust/crates/http/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/inference/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/inference/",
+      "scope": [
+        "litellm-rust/crates/inference/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/inference-chat/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/inference-chat/",
+      "scope": [
+        "litellm-rust/crates/inference-chat/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/inference-messages/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/inference-messages/",
+      "scope": [
+        "litellm-rust/crates/inference-messages/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/inference-ocr/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/inference-ocr/",
+      "scope": [
+        "litellm-rust/crates/inference-ocr/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/inference-responses/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/inference-responses/",
+      "scope": [
+        "litellm-rust/crates/inference-responses/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/inference-transcription/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/inference-transcription/",
+      "scope": [
+        "litellm-rust/crates/inference-transcription/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/",
+      "scope": [
+        "litellm-rust/crates/llms/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms/src/anthropic/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/anthropic/",
+      "scope": [
+        "litellm-rust/crates/llms/src/anthropic/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms/src/anthropic/batches/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/anthropic/batches/",
+      "scope": [
+        "litellm-rust/crates/llms/src/anthropic/batches/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms/src/anthropic/count_tokens/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/anthropic/count_tokens/",
+      "scope": [
+        "litellm-rust/crates/llms/src/anthropic/count_tokens/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms/src/anthropic/messages/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/anthropic/messages/",
+      "scope": [
+        "litellm-rust/crates/llms/src/anthropic/messages/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms/src/aws_textract/ocr/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/aws_textract/ocr/",
+      "scope": [
+        "litellm-rust/crates/llms/src/aws_textract/ocr/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms/src/azure_ai/messages/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/azure_ai/messages/",
+      "scope": [
+        "litellm-rust/crates/llms/src/azure_ai/messages/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms/src/base_llm/messages/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/base_llm/messages/",
+      "scope": [
+        "litellm-rust/crates/llms/src/base_llm/messages/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms/src/bedrock/messages/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/bedrock/messages/",
+      "scope": [
+        "litellm-rust/crates/llms/src/bedrock/messages/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms-types/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms-types/",
+      "scope": [
+        "litellm-rust/crates/llms-types/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms-types/src/formats/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms-types/src/formats/",
+      "scope": [
+        "litellm-rust/crates/llms-types/src/formats/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms-types/src/formats/messages/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms-types/src/formats/messages/",
+      "scope": [
+        "litellm-rust/crates/llms-types/src/formats/messages/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms-types/src/providers/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms-types/src/providers/",
+      "scope": [
+        "litellm-rust/crates/llms-types/src/providers/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/model-catalog/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/model-catalog/",
+      "scope": [
+        "litellm-rust/crates/model-catalog/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/python-bridge/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/python-bridge/",
+      "scope": [
+        "litellm-rust/crates/python-bridge/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/python-bridge/src/cache/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/python-bridge/src/cache/",
+      "scope": [
+        "litellm-rust/crates/python-bridge/src/cache/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/python-bridge/src/cache/native/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/python-bridge/src/cache/native/",
+      "scope": [
+        "litellm-rust/crates/python-bridge/src/cache/native/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/python-bridge/src/cache/python/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/python-bridge/src/cache/python/",
+      "scope": [
+        "litellm-rust/crates/python-bridge/src/cache/python/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/python-bridge/src/routes/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/python-bridge/src/routes/",
+      "scope": [
+        "litellm-rust/crates/python-bridge/src/routes/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/python-compat/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/python-compat/",
+      "scope": [
+        "litellm-rust/crates/python-compat/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/secrets-aws/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/secrets-aws/",
+      "scope": [
+        "litellm-rust/crates/secrets-aws/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/secrets-azure/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/secrets-azure/",
+      "scope": [
+        "litellm-rust/crates/secrets-azure/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/secrets-cyberark/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/secrets-cyberark/",
+      "scope": [
+        "litellm-rust/crates/secrets-cyberark/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/secrets-google/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/secrets-google/",
+      "scope": [
+        "litellm-rust/crates/secrets-google/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/secrets-hashicorp/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/secrets-hashicorp/",
+      "scope": [
+        "litellm-rust/crates/secrets-hashicorp/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/storage-clickhouse/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/storage-clickhouse/",
+      "scope": [
+        "litellm-rust/crates/storage-clickhouse/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/traces/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/traces/",
+      "scope": [
+        "litellm-rust/crates/traces/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/traces/src/normalize/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/traces/src/normalize/",
+      "scope": [
+        "litellm-rust/crates/traces/src/normalize/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/traces/src/normalize/format/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/traces/src/normalize/format/",
+      "scope": [
+        "litellm-rust/crates/traces/src/normalize/format/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/traces/src/normalize/instrumentation/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/traces/src/normalize/instrumentation/",
+      "scope": [
+        "litellm-rust/crates/traces/src/normalize/instrumentation/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/traces/src/otlp/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/traces/src/otlp/",
+      "scope": [
+        "litellm-rust/crates/traces/src/otlp/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/traces/src/resolve/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/traces/src/resolve/",
+      "scope": [
+        "litellm-rust/crates/traces/src/resolve/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/traces-cache/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/traces-cache/",
+      "scope": [
+        "litellm-rust/crates/traces-cache/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/traces-clickhouse/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/traces-clickhouse/",
+      "scope": [
+        "litellm-rust/crates/traces-clickhouse/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/docs/adrs/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/docs/adrs/",
+      "scope": [
+        "litellm-rust/docs/adrs/**"
+      ]
+    },
+    {
+      "path": "tests/AGENTS.md",
+      "description": "Conventions for code under tests/",
+      "scope": [
+        "tests/**"
+      ]
+    },
+    {
+      "path": "tests/e2e/AGENTS.md",
+      "description": "Conventions for code under tests/e2e/",
+      "scope": [
+        "tests/e2e/**"
+      ]
+    },
+    {
+      "path": "tests/e2e_harness/AGENTS.md",
+      "description": "Conventions for code under tests/e2e_harness/",
+      "scope": [
+        "tests/e2e_harness/**"
+      ]
+    },
+    {
+      "path": "tests/integration/AGENTS.md",
+      "description": "Conventions for code under tests/integration/",
+      "scope": [
+        "tests/integration/**"
+      ]
+    },
+    {
+      "path": "tests/integration/translation/AGENTS.md",
+      "description": "Conventions for code under tests/integration/translation/",
+      "scope": [
+        "tests/integration/translation/**"
+      ]
+    },
+    {
+      "path": "tests/rust-python-harness/AGENTS.md",
+      "description": "Conventions for code under tests/rust-python-harness/",
+      "scope": [
+        "tests/rust-python-harness/**"
+      ]
+    },
+    {
+      "path": "tests/rust-python-harness/strategies/e2e_parity/AGENTS.md",
+      "description": "Conventions for code under tests/rust-python-harness/strategies/e2e_parity/",
+      "scope": [
+        "tests/rust-python-harness/strategies/e2e_parity/**"
+      ]
+    },
+    {
+      "path": "tests/rust-python-harness/strategies/trace_parity/AGENTS.md",
+      "description": "Conventions for code under tests/rust-python-harness/strategies/trace_parity/",
+      "scope": [
+        "tests/rust-python-harness/strategies/trace_parity/**"
+      ]
+    },
+    {
+      "path": "tests/rust-python-harness/strategies/unit_tests_parity/AGENTS.md",
+      "description": "Conventions for code under tests/rust-python-harness/strategies/unit_tests_parity/",
+      "scope": [
+        "tests/rust-python-harness/strategies/unit_tests_parity/**"
+      ]
+    },
+    {
+      "path": "tests/rust-python-harness/strategies/unit_tests_rust/AGENTS.md",
+      "description": "Conventions for code under tests/rust-python-harness/strategies/unit_tests_rust/",
+      "scope": [
+        "tests/rust-python-harness/strategies/unit_tests_rust/**"
+      ]
+    },
+    {
+      "path": "tests/test_litellm_rust/AGENTS.md",
+      "description": "Conventions for code under tests/test_litellm_rust/",
+      "scope": [
+        "tests/test_litellm_rust/**"
+      ]
+    },
+    {
+      "path": "tests/unit/AGENTS.md",
+      "description": "Conventions for code under tests/unit/",
+      "scope": [
+        "tests/unit/**"
+      ]
+    },
+    {
+      "path": "tests/unit/rust_bridge/AGENTS.md",
+      "description": "Conventions for code under tests/unit/rust_bridge/",
+      "scope": [
+        "tests/unit/rust_bridge/**"
+      ]
+    },
+    {
+      "path": "ui/litellm-dashboard/AGENTS.md",
+      "description": "Conventions for code under ui/litellm-dashboard/",
+      "scope": [
+        "ui/litellm-dashboard/**"
+      ]
+    },
+    {
+      "path": "ui/litellm-dashboard/src/components/chat/AGENTS.md",
+      "description": "Conventions for code under ui/litellm-dashboard/src/components/chat/",
+      "scope": [
+        "ui/litellm-dashboard/src/components/chat/**"
+      ]
+    },
+    {
+      "path": "ui/litellm-dashboard/src/components/lens/traces/AGENTS.md",
+      "description": "Conventions for code under ui/litellm-dashboard/src/components/lens/traces/",
+      "scope": [
+        "ui/litellm-dashboard/src/components/lens/traces/**"
+      ]
+    }
+  ]
+}
