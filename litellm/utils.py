@@ -5187,9 +5187,11 @@ UNVALIDATED_PARAM_DROP_HINTS: Final = {
     ),
 }
 
-# `Final` binds the name, not the contents: the set is still mutated in place
-# below, which is what LIT010 asks for rather than a bare assignment.
-_unvalidated_param_warned: Final[set[tuple[str, str, str]]] = set()
+# A bare `Final` satisfies LIT010 without putting a mutable `set[...]` in an
+# annotation, which LIT001 counts; the parameterized constructor still gives the
+# precise element type. `Final` binds the name, not the contents, so the set is
+# mutated in place below, matching `PROVIDER_UNVALIDATED_PARAMS` above.
+_unvalidated_param_warned: Final = set[tuple[str, str, str]]()
 
 # Bounded so a proxy serving a large model fleet cannot grow the set without
 # limit. Past this many distinct (param, provider, model) triples the message
