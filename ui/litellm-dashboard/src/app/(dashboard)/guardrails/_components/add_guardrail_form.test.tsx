@@ -9,6 +9,7 @@ vi.mock("@/components/networking", () => ({
   getGuardrailProviderSpecificParams: vi.fn().mockResolvedValue({}),
   getGuardrailUISettings: vi.fn().mockResolvedValue({}),
   modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
+  modelHubCall: vi.fn().mockResolvedValue({ data: [] }),
 }));
 
 const renderForm = () => {

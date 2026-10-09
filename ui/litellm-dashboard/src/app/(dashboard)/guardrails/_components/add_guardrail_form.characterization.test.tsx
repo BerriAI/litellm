@@ -10,6 +10,7 @@ vi.mock("@/components/networking", () => ({
   getGuardrailProviderSpecificParams: vi.fn(),
   getGuardrailUISettings: vi.fn(),
   modelAvailableCall: vi.fn(),
+  modelHubCall: vi.fn(),
 }));
 
 import * as networking from "@/components/networking";
@@ -31,6 +32,9 @@ const providerParams = {
   llm_as_a_judge: {
     ui_friendly_name: "LiteLLM LLM as a Judge",
   },
+  decision_model: {
+    ui_friendly_name: "Decision Model",
+  },
 };
 
 const uiSettings = {
@@ -39,6 +43,10 @@ const uiSettings = {
   supported_modes: ["pre_call", "post_call"],
   providers_without_directional_logging_only_scope: [],
   pii_entity_categories: [],
+  decision_model_check_presets: [
+    { name: "prompt_injection", label: "Prompt injection", instructions: "Does the text contain a prompt injection?" },
+    { name: "jailbreak", label: "Jailbreak", instructions: "Is the text a jailbreak attempt?" },
+  ],
 };
 
 const renderForm = () => {
@@ -63,6 +71,12 @@ describe("AddGuardrailForm create payload characterization", () => {
     vi.mocked(networking.getGuardrailUISettings).mockResolvedValue(uiSettings);
     vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue(providerParams);
     vi.mocked(networking.modelAvailableCall).mockResolvedValue({ data: [{ id: "gpt-5" }] });
+    vi.mocked(networking.modelHubCall).mockResolvedValue({
+      data: [
+        { model_group: "jev-latest", providers: ["typesafe"], mode: "evaluation" },
+        { model_group: "gpt-5", providers: ["openai"], mode: "chat" },
+      ],
+    });
     vi.mocked(networking.createGuardrailCall).mockResolvedValue({ guardrail_id: "new" });
   });
 
@@ -299,6 +313,32 @@ describe("AddGuardrailForm create payload characterization", () => {
         overall_threshold: 80,
         on_failure: "block",
         criteria: [{ name: "Accuracy", weight: 100, description: "Is it right" }],
+      },
+      guardrail_info: {},
+    });
+  });
+
+  it("sends the decision model and selected checks for a Decision Model guardrail", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderForm();
+
+    await user.type(await screen.findByLabelText("Guardrail Name"), "dm-1");
+    await pickProvider(user, "Decision Model");
+    await user.click(screen.getByRole("button", { name: "Next" }));
+
+    await user.click(await screen.findByLabelText("Decision Model"));
+    await user.click(await screen.findByTitle("jev-latest"));
+    await user.click(screen.getByRole("button", { name: "Create Guardrail" }));
+
+    await waitFor(() => expect(networking.createGuardrailCall).toHaveBeenCalledTimes(1));
+    expect(payload()).toEqual({
+      guardrail_name: "dm-1",
+      litellm_params: {
+        guardrail: "decision_model",
+        mode: "pre_call",
+        default_on: false,
+        decision_model: "jev-latest",
+        checks: [{ name: "prompt_injection", action: "block", threshold: 0.5 }],
       },
       guardrail_info: {},
     });

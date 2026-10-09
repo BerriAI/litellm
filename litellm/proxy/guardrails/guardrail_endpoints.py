@@ -1481,6 +1481,9 @@ async def get_guardrail_ui_settings() -> GuardrailUIAddGuardrailSettings:
         get_pattern_metadata,
     )
     from litellm.proxy.guardrails.guardrail_registry import guardrail_class_registry
+    from litellm.types.proxy.guardrails.guardrail_hooks.decision_model import (
+        DECISION_MODEL_CHECK_PRESET_MODELS,
+    )
 
     category_maps: Final = [
         {
@@ -1512,6 +1515,7 @@ async def get_guardrail_ui_settings() -> GuardrailUIAddGuardrailSettings:
         supported_modes_by_provider=supported_modes_by_provider,
         providers_without_directional_logging_only_scope=providers_without_directional_logging_only_scope,
         pii_entity_categories=category_maps,
+        decision_model_check_presets=DECISION_MODEL_CHECK_PRESET_MODELS,
         content_filter_settings={
             "prebuilt_patterns": get_pattern_metadata(),
             "pattern_categories": list(PATTERN_CATEGORIES.keys()),

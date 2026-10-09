@@ -3,6 +3,43 @@ import { GuardrailModeRows } from "./GuardrailModeDisplay";
 import { GuardrailStreamScopeDetail } from "./StreamScopeFields";
 import ToolPermissionRulesEditor, { type ToolPermissionConfig } from "./tool_permission/ToolPermissionRulesEditor";
 
+interface DecisionModelCheckView {
+  name: string;
+  action?: string;
+  threshold?: number;
+  instructions?: string;
+}
+
+const DecisionModelSection = ({
+  decisionModel,
+  checks,
+}: {
+  decisionModel: string;
+  checks: DecisionModelCheckView[];
+}) => (
+  <div>
+    <p className="font-medium">Decision Model</p>
+    <div className="font-mono">{decisionModel}</div>
+    <p className="mt-2 font-medium">Checks</p>
+    <div className="mt-2 overflow-hidden rounded-lg border border-border">
+      <div className="flex border-b border-border bg-muted/40 px-4 py-2 text-xs font-semibold">
+        <span className="flex-1">Check</span>
+        <span className="w-24 text-right">Action</span>
+        <span className="w-24 text-right">Threshold</span>
+      </div>
+      {checks.map((check) => (
+        <div key={check.name} className="flex items-center border-b border-border px-4 py-2 text-sm last:border-b-0">
+          <span className="flex-1">{check.name.replace(/_/g, " ")}</span>
+          <span className="w-24 text-right">
+            <Badge variant="secondary">{check.action ?? "block"}</Badge>
+          </span>
+          <span className="w-24 text-right">{check.threshold ?? 0.5}</span>
+        </div>
+      ))}
+    </div>
+  </div>
+);
+
 export const GuardrailReadOnlyDetails = ({
   guardrailId,
   guardrailName,
@@ -19,7 +56,13 @@ export const GuardrailReadOnlyDetails = ({
   guardrailId: string;
   guardrailName: string;
   displayName: string;
-  litellmParams: { mode?: unknown; logging_only_scope?: string | null };
+  litellmParams: {
+    mode?: unknown;
+    logging_only_scope?: string | null;
+    guardrail?: string;
+    decision_model?: string;
+    checks?: DecisionModelCheckView[];
+  };
   streamScope: unknown;
   defaultOn: boolean | undefined;
   piiEntityCount: number;
@@ -47,6 +90,9 @@ export const GuardrailReadOnlyDetails = ({
       <p className="font-medium">Default On</p>
       <Badge variant={defaultOn ? "secondary" : "outline"}>{defaultOn ? "Yes" : "No"}</Badge>
     </div>
+    {litellmParams.guardrail === "decision_model" && litellmParams.decision_model && (
+      <DecisionModelSection decisionModel={litellmParams.decision_model} checks={litellmParams.checks ?? []} />
+    )}
     {piiEntityCount > 0 && (
       <div>
         <p className="font-medium">PII Protection</p>
