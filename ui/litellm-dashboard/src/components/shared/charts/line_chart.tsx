@@ -23,6 +23,7 @@ export type LineChartProps<TDatum extends Record<string, unknown>> = {
   showTooltip?: boolean;
   customTooltip?: ChartTooltipComponent;
   connectNulls?: boolean;
+  showDots?: boolean;
   curveType?: LineChartCurveType;
   className?: string;
   style?: React.CSSProperties;
@@ -42,6 +43,7 @@ export function LineChart<TDatum extends Record<string, unknown>>({
   showTooltip = true,
   customTooltip,
   connectNulls = false,
+  showDots = false,
   curveType = "linear",
   className,
   style,
@@ -88,7 +90,7 @@ export function LineChart<TDatum extends Record<string, unknown>>({
             dataKey={category}
             stroke={fills[i]}
             strokeWidth={2}
-            dot={false}
+            dot={showDots}
             isAnimationActive={false}
             connectNulls={connectNulls}
           />
