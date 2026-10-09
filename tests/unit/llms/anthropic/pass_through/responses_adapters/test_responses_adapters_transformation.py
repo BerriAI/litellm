@@ -481,6 +481,46 @@ class TestTranslateMessagesToResponsesInput:
         result = _translate_messages(messages)
         assert result[0]["output"] == "Line 1\nLine 2"
 
+    def test_user_tool_result_tool_reference_blocks_become_tool_names(self):
+        """tool_result of only tool_reference blocks keeps each referenced tool name."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_ref",
+                        "content": [
+                            {"type": "tool_reference", "tool_name": "WebFetch"},
+                            {"type": "tool_reference", "tool_name": "WebSearch"},
+                        ],
+                    }
+                ],
+            }
+        ]
+        result = _translate_messages(messages)
+        assert result[0]["output"] == "WebFetch\nWebSearch"
+
+    def test_user_tool_result_mixed_text_and_tool_reference_keeps_order(self):
+        """text and tool_reference blocks join in order."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_mix",
+                        "content": [
+                            {"type": "text", "text": "Loaded tools:"},
+                            {"type": "tool_reference", "tool_name": "WebSearch"},
+                        ],
+                    }
+                ],
+            }
+        ]
+        result = _translate_messages(messages)
+        assert result[0]["output"] == "Loaded tools:\nWebSearch"
+
     def test_user_tool_result_null_content(self):
         """tool_result with null content becomes empty string output."""
         messages = [
@@ -623,9 +663,7 @@ class TestTranslateMessagesToResponsesInput:
             }
         ]
         result = _translate_messages(messages)
-        assert result == [
-            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "Private reasoning."}]}
-        ]
+        assert result == [{"type": "reasoning", "summary": [{"type": "summary_text", "text": "Private reasoning."}]}]
 
     def test_consecutive_thinking_blocks_become_one_reasoning_item(self):
         """Summary parts of one upstream reasoning item are regrouped into that item."""
