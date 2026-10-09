@@ -11,11 +11,11 @@ templates:
   - lens/clickhouse.yaml
   - lens/secrets.yaml
 tests:
-  - it: generates both private credentials for a new installation
+  - it: generates private login, gateway and storage credentials
     template: lens/secrets.yaml
     asserts:
       - hasDocuments:
-          count: 2
+          count: 4
       - matchRegex:
           path: data.service-token
           pattern: '^[A-Za-z0-9+/]{86}==$'
@@ -78,6 +78,8 @@ tests:
     set:
       lensWorker.clickhouseSecret.name: external-clickhouse
       lensWorker.serviceTokenSecret.name: external-service
+      lensWorker.adminTokenSecret.name: external-admin
+      lensWorker.gateway.secretName: external-signing
     asserts:
       - hasDocuments:
           count: 0
@@ -96,7 +98,7 @@ tests:
       lensWorker.clickhouse.enabled: false
     asserts:
       - failedTemplate:
-          errorMessage: lensWorker.clickhouseSecret.name is required
+          errorMessage: Lens clickhouseSecret.name is required when bundled storage is disabled
   - it: keeps storage names valid and uses the same name for the connection
     set:
       fullnameOverride: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
