@@ -15,7 +15,7 @@ The (feature, provider) for this cell is inferred from the file path by
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Sequence
 
 import pytest
 
@@ -23,6 +23,7 @@ from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, met
 from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
+    ModelResult,
     failure_diagnostic,
     run_claude_models_parallel,
 )
@@ -62,7 +63,7 @@ def test_prompt_caching_5m_bedrock_converse(compat_result):
     upstream usage block surfaces a non-zero cache token count."""
     base_url, api_key = require_proxy(compat_result)
 
-    def run(models):
+    def run(models: Sequence[str]) -> Dict[str, ModelResult]:
         return run_claude_models_parallel(
             models=models,
             prompt="Reply with the single word 'pong' and nothing else.",

@@ -29,6 +29,7 @@ import json
 import tempfile
 import time
 import tracemalloc
+from typing import Any, Final
 
 import httpx
 import pytest
@@ -259,9 +260,9 @@ class TestStreamingLaziness:
         cfg = VertexAIFilesConfig()
         valid_rows = 3
         raw = _make_openai_jsonl_bytes(valid_rows) + b"\n" + b"\n".join(b"not-json" for _ in range(8000))
-        mapped = []
+        mapped: Final[list[dict[str, Any]]] = []
 
-        def counting_mapper(params):
+        def counting_mapper(params: dict[str, Any]) -> dict[str, object]:
             mapped.append(params)
             return cfg._map_openai_to_vertex_params(params)
 
