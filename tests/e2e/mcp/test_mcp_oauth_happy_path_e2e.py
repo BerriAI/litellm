@@ -18,6 +18,7 @@ from typing import Final, Literal
 import pytest
 from e2e_config import LINEAR_MCP_URL, LINEAR_READONLY_TOOL, LINEAR_STORAGE_STATE, unique_marker
 from e2e_http import AuthHeaders, NoBody, get_external, unwrap
+from e2e_metadata import Domain, Route, Subject, meta
 from idp import Identity, Keycloak
 from lifecycle import ResourceManager
 from models import (
@@ -38,6 +39,7 @@ pytestmark = [pytest.mark.e2e, pytest.mark.mcp_oauth_live, pytest.mark.provider_
 
 
 class OAuthMetadata(BaseModel):
+    issuer: str
     authorization_endpoint: str
     token_endpoint: str
     registration_endpoint: str
@@ -87,6 +89,12 @@ class TestMcpOauthHappyPath:
     @pytest.mark.covers("mcp.list_tools.oauth.succeeds")
     @pytest.mark.covers("mcp.call_tool.oauth.succeeds")
     @pytest.mark.covers("mcp.call_tool.oauth.persists_across_processes")
+    @meta(
+        Subject(
+            domain=Domain.MCP,
+            route=Route.MCP,
+        )
+    )
     @pytest.mark.parametrize("route", ("aggregate_sso", "explicit_header_jwt"))
     @pytest.mark.parametrize("observed", (False, True), ids=("direct", "observed"))
     def test_consent_list_call_and_cold_restart(
@@ -135,6 +143,7 @@ class TestMcpOauthHappyPath:
                 auth_type="oauth2",
                 oauth2_flow="authorization_code",
                 per_server_oauth_discovery=route == "explicit_header_jwt",
+                issuer=metadata.issuer if metadata else None,
                 authorization_url=metadata.authorization_endpoint if metadata else None,
                 token_url=metadata.token_endpoint if metadata else None,
                 registration_url=metadata.registration_endpoint if metadata else None,

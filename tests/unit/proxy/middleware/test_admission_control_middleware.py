@@ -3,10 +3,12 @@ import json
 from typing import Final
 
 import pytest
+from fastapi import FastAPI
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from litellm.proxy.middleware.admission_control_middleware import (
+    ADMISSION_LEASE_SCOPE_KEY,
     AdmissionControlMetrics,
     AdmissionControlMiddleware,
     AdmissionControlSettings,
@@ -24,9 +26,10 @@ def state() -> AdmissionControlState:
 
 
 async def _call(
-    middleware: AdmissionControlMiddleware,
+    middleware: ASGIApp,
     path: str = "/",
     root_path: str = "",
+    parent_scope: Scope | None = None,
 ) -> tuple[Message, ...]:
     messages: Final[list[Message]] = []
 
@@ -41,7 +44,9 @@ async def _call(
         "path": path,
         "root_path": root_path,
         "method": "GET",
+        "query_string": b"",
         "headers": [],
+        ADMISSION_LEASE_SCOPE_KEY: parent_scope.get(ADMISSION_LEASE_SCOPE_KEY) if parent_scope else None,
     }
     await middleware(scope, receive, send)
     return tuple(messages)
@@ -400,3 +405,108 @@ def test_invalid_admission_control_settings_logs_once(caplog: pytest.LogCaptureF
         if record.message.startswith("Ignoring invalid admission control settings")
     )
     assert len(messages) == 1
+
+
+def _single_slot() -> AdmissionControlSettings:
+    return AdmissionControlSettings(1, 0, 1.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", (None, RuntimeError, asyncio.CancelledError))
+async def test_outer_wrapper_retains_route_metadata_after_admission(
+    state: AdmissionControlState,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: type[BaseException] | None,
+) -> None:
+    monkeypatch.delenv("LITELLM_ENABLE_ADMIN_MCP", raising=False)
+    app: Final = FastAPI()
+
+    @app.get("/items/{item_id}")
+    async def item(item_id: str) -> dict[str, str]:
+        assert state.get_stats().admitted == 1
+        if failure is not None:
+            raise failure("request interrupted")
+        return {"item_id": item_id}
+
+    middleware: Final = AdmissionControlMiddleware(app, _single_slot, state)
+
+    async def outer_probe(scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await middleware(scope, receive, send)
+        finally:
+            assert scope["route"].path == "/items/{item_id}"
+            assert scope["endpoint"] is item
+            assert scope["path_params"] == {"item_id": "sample"}
+            assert ADMISSION_LEASE_SCOPE_KEY not in scope
+            assert state.get_stats() == AdmissionControlStats(0, 0, 0)
+
+    if failure is not None:
+        with pytest.raises(failure, match="request interrupted"):
+            await _call(outer_probe, "/items/sample")
+    else:
+        response: Final = await _call(outer_probe, "/items/sample")
+        assert response[0]["status"] == 200
+        assert json.loads(response[1]["body"]) == {"item_id": "sample"}
+
+
+@pytest.mark.asyncio
+async def test_background_request_acquires_a_new_slot_after_parent_finishes(state: AdmissionControlState) -> None:
+    release: Final = asyncio.Event()
+    background: Final[asyncio.Future[asyncio.Task[tuple[Message, ...]]]] = asyncio.get_running_loop().create_future()
+
+    async def later_request(parent_scope: Scope) -> tuple[Message, ...]:
+        await release.wait()
+        return await _call(middleware, path="/child", parent_scope=parent_scope)
+
+    async def handler(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["path"] == "/":
+            background.set_result(asyncio.create_task(later_request(scope.copy())))
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": str(state.get_stats().admitted).encode()})
+
+    middleware: Final = AdmissionControlMiddleware(handler, _single_slot, state)
+    parent: Final = await _call(middleware)
+    assert parent[1]["body"] == b"1"
+    assert state.get_stats() == AdmissionControlStats(0, 0, 0)
+    release.set()
+    child: Final = await (await background)
+    assert child[1]["body"] == b"1"
+    assert state.get_stats() == AdmissionControlStats(0, 0, 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("linked", [False, True])
+async def test_only_explicitly_linked_requests_share_admission(state: AdmissionControlState, linked: bool) -> None:
+    async def handler(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["path"] == "/":
+            nested: Final = await _call(middleware, path="/child", parent_scope=scope if linked else None)
+            await send(nested[0])
+            await send(nested[1])
+            return
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": str(state.get_stats().admitted).encode()})
+
+    middleware: Final = AdmissionControlMiddleware(handler, _single_slot, state)
+    response: Final = await _call(middleware)
+    assert response[0]["status"] == (200 if linked else 503)
+    assert state.get_stats() == AdmissionControlStats(0, 0, 0 if linked else 1)
+    if linked:
+        assert response[1]["body"] == b"1"
+
+
+@pytest.mark.asyncio
+async def test_admission_lease_cannot_be_reused_by_another_worker(state: AdmissionControlState) -> None:
+    def no_metrics() -> None:
+        return None
+
+    other_state: Final = AdmissionControlState(no_metrics)
+
+    async def child_handler(scope: Scope, receive: Receive, send: Send) -> None:
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": str(other_state.get_stats().admitted).encode()})
+
+    child: Final = AdmissionControlMiddleware(child_handler, _single_slot, other_state)
+    parent: Final = AdmissionControlMiddleware(child, _single_slot, state)
+    response: Final = await _call(parent)
+    assert response[1]["body"] == b"1"
+    assert state.get_stats() == other_state.get_stats() == AdmissionControlStats(0, 0, 0)

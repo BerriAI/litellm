@@ -26,7 +26,6 @@ from litellm.proxy.litellm_pre_call_utils import (
 from litellm.types.utils import CustomPricingLiteLLMParams
 
 
-
 def _make_request_mock() -> Request:
     request_mock = MagicMock(spec=Request)
     request_mock.url.path = "/v1/chat/completions"
@@ -58,9 +57,7 @@ class TestStripClientPricingOverrides:
         # The strip set is built from the model so additions are picked up
         # automatically — this test guards against the model and the strip
         # set drifting apart if someone replaces the auto-derivation later.
-        assert _CLIENT_PRICING_CONTROL_FIELDS == frozenset(
-            CustomPricingLiteLLMParams.model_fields.keys()
-        )
+        assert _CLIENT_PRICING_CONTROL_FIELDS == frozenset(CustomPricingLiteLLMParams.model_fields.keys())
         # Sanity: the obvious top-level pricing fields are in the set.
         for field in (
             "input_cost_per_token",
@@ -184,9 +181,7 @@ class TestStripClientPricingOverrides:
         verbose_proxy_logger.setLevel(logging.DEBUG)
         with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
             _strip_client_pricing_overrides({"model": "gpt-4", "temperature": 0.7})
-        assert not any(
-            "pricing" in record.getMessage().lower() for record in caplog.records
-        )
+        assert not any("pricing" in record.getMessage().lower() for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -209,6 +204,26 @@ async def test_add_litellm_data_to_request_strips_root_pricing_fields():
 
     assert "input_cost_per_token" not in updated
     assert "output_cost_per_token" not in updated
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_preserves_caller_streaming_request():
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+        "is_streaming_request": True,
+    }
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_make_request_mock(),
+        user_api_key_dict=_user_api_key_auth(),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated["is_streaming_request"] is True
 
 
 @pytest.mark.asyncio
@@ -318,9 +333,7 @@ async def test_add_litellm_data_to_request_skips_strip_with_team_opt_in():
         "input_cost_per_token": 0.0001,
     }
 
-    user_auth = _user_api_key_auth(
-        team_metadata={"allow_client_pricing_override": True}
-    )
+    user_auth = _user_api_key_auth(team_metadata={"allow_client_pricing_override": True})
     updated = await add_litellm_data_to_request(
         data=data,
         request=_make_request_mock(),

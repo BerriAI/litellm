@@ -30,6 +30,10 @@ external = [
 # grows over time; typing it concretely (`object`) broke that forwarding call outright —
 # basedpyright turned every named param into a reportArgumentType error. Any is correct here.
 "litellm/proxy/guardrails/guardrail_hooks/alice/alice.py" = ["ANN401"]
+# Same reason: `**kwargs` forwards verbatim to CustomGuardrail.__init__, and the lifecycle
+# hook signatures inherit `Any` for `response` from CustomLogger, so narrowing them here
+# would break the override rather than describe it.
+"litellm/proxy/guardrails/guardrail_hooks/llm_shield_proxy/llm_shield_proxy.py" = ["ANN401"]
 
 [lint.mccabe]
 max-complexity = 15

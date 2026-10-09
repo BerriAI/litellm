@@ -1357,7 +1357,7 @@ async def test_handle_streamable_http_mcp_oauth_delegate_with_forwarded_token_sk
     scope = _passthrough_mode_scope(
         "od_server",
         extra_headers=[
-            (b"x-litellm-api-key", b"Bearer sk-1234"),
+            (b"x-litellm-api-key", b"Bearer sk-9876"),
             (b"authorization", b"Bearer upstream-token"),
         ],
     )

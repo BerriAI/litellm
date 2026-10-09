@@ -384,36 +384,92 @@ class Provider:
         return JSONResponse(_interaction_body(interaction_id, cancelled))
 
     async def realtime(self, websocket: WebSocket) -> None:
-        scenario_id: Final = websocket.headers.get("authorization", "").removeprefix("Bearer ")
+        authorization: Final = websocket.headers.get("authorization", "")
+        api_key: Final = websocket.headers.get("api-key", "")
+        scenario_id: Final = authorization.removeprefix("Bearer ") if authorization else api_key
+        self.observations.put(
+            Observation(
+                websocket.url.path,
+                authorization,
+                {"query": [[key, value] for key, value in websocket.query_params.multi_items()]},
+                "WEBSOCKET",
+                api_key,
+            )
+        )
         response: Final = self.scenario_store.get(scenario_id)
         if not isinstance(response, RealtimeResponse):
             await websocket.close(code=4404)
             return
         await websocket.accept()
-        model: Final = websocket.query_params.get("model", "")
-        await websocket.send_json(
-            {
-                "type": "session.created",
-                "session": {
-                    "id": f"sess_{scenario_id}",
-                    "model": response.session_model if response.session_model is not None else model,
-                },
-            }
-        )
+        session: Final = _realtime_session(response, scenario_id, websocket.query_params.get("model", ""))
+        for _ in range(response.created_repeats):
+            await websocket.send_json({"type": response.created_event, "event_id": _event_id(), "session": session})
         event_index: Final = iter(response.events)
         async for message in websocket.iter_json():
             payload: Final = JSON_OBJECT.validate_python(message)
-            if payload.get("type") != "response.create":
+            self.observations.put(Observation(websocket.url.path, authorization, payload, "WEBSOCKET_FRAME", api_key))
+            if payload.get("type") == "session.update":
+                await websocket.send_json(
+                    _realtime_update_reply(payload.get("session"), session, response.session_type)
+                )
+                continue
+            if payload.get("type") not in _REALTIME_TRIGGERS:
                 continue
             event: Final = next(event_index, None)
             if event is None:
                 continue
-            rendered: Final = JSON_OBJECT.validate_json(
-                json.dumps(event, separators=(",", ":"))
-                .replace("$REQUEST_ID", scenario_id)
-                .replace("$UNIQUE_ID", f"{scenario_id}-{uuid.uuid4().hex[:8]}")
+            await websocket.send_json(_rendered_realtime_event(event, scenario_id))
+
+    async def muse_realtime(self, websocket: WebSocket) -> None:
+        await websocket.accept()
+        handshake: Final = JSON_OBJECT.validate_python(await websocket.receive_json())
+        authorization: Final = _muse_access_token(handshake)
+        self.observations.put(Observation(websocket.url.path, authorization, handshake, "WEBSOCKET"))
+        scenario_id: Final = authorization.removeprefix("Bearer ")
+        response: Final = self.scenario_store.get(scenario_id)
+        if not isinstance(response, RealtimeResponse):
+            await websocket.close(code=4404)
+            return
+        await websocket.send_json({"sessionId": f"sess_{scenario_id}"})
+        pending: Final = deque(response.events)
+        while True:
+            frame: Final = await websocket.receive()
+            if frame["type"] == "websocket.disconnect":
+                return
+            self.observations.put(Observation(websocket.url.path, authorization, _muse_frame(frame), "WEBSOCKET_FRAME"))
+            while pending:
+                await websocket.send_json(_rendered_realtime_event(pending.popleft(), scenario_id))
+
+    async def gemini_live(self, websocket: WebSocket) -> None:
+        authorization: Final = websocket.headers.get("authorization", "")
+        scenario_id: Final = websocket.headers.get("x-goog-user-project", "")
+        self.observations.put(
+            Observation(
+                websocket.url.path,
+                authorization,
+                {"host": websocket.headers.get("host", "")},
+                "WEBSOCKET",
+                scenario_id,
             )
-            await websocket.send_json(rendered)
+        )
+        response: Final = self.scenario_store.get(scenario_id)
+        if not isinstance(response, RealtimeResponse):
+            await websocket.close(code=4404)
+            return
+        await websocket.accept()
+        pending: Final = deque(response.events)
+        async for message in websocket.iter_json():
+            payload: Final = JSON_OBJECT.validate_python(message)
+            self.observations.put(
+                Observation(websocket.url.path, authorization, payload, "WEBSOCKET_FRAME", scenario_id)
+            )
+            if "setup" in payload:
+                await websocket.send_json({"setupComplete": {}})
+                continue
+            if not _GEMINI_LIVE_TRIGGERS.intersection(payload):
+                continue
+            while pending:
+                await websocket.send_json(_rendered_realtime_event(pending.popleft(), scenario_id))
 
     @staticmethod
     def _response(response: StoredResponse, scenario_id: str) -> Response:
@@ -511,6 +567,10 @@ class Provider:
                 Route("/{path:path}", self.scripted, methods=["POST"]),
                 Route("/{path:path}", self.scripted, methods=["GET"]),
                 WebSocketRoute("/v1/realtime", self.realtime),
+                WebSocketRoute("/openai/v1/realtime", self.realtime),
+                WebSocketRoute("/openai/realtime", self.realtime),
+                WebSocketRoute("/v1/asr/realtime", self.muse_realtime),
+                WebSocketRoute(GEMINI_LIVE_PATH, self.gemini_live),
             ]
         )
 
@@ -533,6 +593,85 @@ def _interaction_body(interaction_id: str, state: InteractionState) -> dict[str,
     }
 
 
+_REALTIME_TRIGGERS: Final = frozenset({"response.create", "input_audio_buffer.commit"})
+_GEMINI_LIVE_TRIGGERS: Final = frozenset({"clientContent", "realtimeInput"})
+GEMINI_LIVE_PATH: Final = "/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+_TRANSCRIPTION_UPDATE_REFUSED: Final = "Passing a realtime session update to a transcription session is not allowed."
+_REALTIME_UPDATE_REFUSED: Final = "Passing a transcription session update to a realtime session is not allowed."
+_NESTED_TURN_DETECTION_TYPE: Final = "session.audio.input.turn_detection.type"
+_FLAT_TURN_DETECTION_TYPE: Final = "session.turn_detection.type"
+
+
+def _event_id() -> str:
+    return f"event_{uuid.uuid4().hex[:12]}"
+
+
+def _realtime_session(response: RealtimeResponse, scenario_id: str, requested_model: str) -> dict[str, JsonValue]:
+    return {
+        "id": f"sess_{scenario_id}",
+        "model": response.session_model if response.session_model is not None else requested_model,
+        **({} if response.session_type is None else {"type": response.session_type}),
+    }
+
+
+def _realtime_error(code: str, message: str, param: str | None) -> dict[str, JsonValue]:
+    return {
+        "type": "error",
+        "event_id": _event_id(),
+        "error": {"type": "invalid_request_error", "code": code, "message": message, "param": param, "event_id": None},
+    }
+
+
+def _missing_turn_detection_type(session: Mapping[str, JsonValue]) -> str | None:
+    audio: Final = session.get("audio")
+    audio_input: Final = audio.get("input") if isinstance(audio, dict) else None
+    nested: Final = audio_input.get("turn_detection") if isinstance(audio_input, dict) else None
+    if isinstance(nested, dict) and "type" not in nested:
+        return _NESTED_TURN_DETECTION_TYPE
+    flat: Final = session.get("turn_detection")
+    if isinstance(flat, dict) and "type" not in flat:
+        return _FLAT_TURN_DETECTION_TYPE
+    return None
+
+
+def _realtime_update_reply(
+    session: JsonValue, created: Mapping[str, JsonValue], session_type: str | None
+) -> dict[str, JsonValue]:
+    if not isinstance(session, dict):
+        return _realtime_error("invalid_value", "Invalid value for 'session': expected an object.", "session")
+    missing: Final = _missing_turn_detection_type(session)
+    if missing is not None:
+        return _realtime_error("missing_required_parameter", f"Missing required parameter: '{missing}'.", missing)
+    declared: Final = session.get("type")
+    if session_type == "transcription" and declared is not None and declared != "transcription":
+        return _realtime_error("invalid_parameter", _TRANSCRIPTION_UPDATE_REFUSED, "")
+    if session_type != "transcription" and declared == "transcription":
+        return _realtime_error("invalid_parameter", _REALTIME_UPDATE_REFUSED, "")
+    return {"type": "session.updated", "event_id": _event_id(), "session": {**created, **session}}
+
+
+def _rendered_realtime_event(event: Mapping[str, JsonValue], scenario_id: str) -> dict[str, JsonValue]:
+    return JSON_OBJECT.validate_json(
+        json.dumps(event, separators=(",", ":"))
+        .replace("$REQUEST_ID", scenario_id)
+        .replace("$UNIQUE_ID", f"{scenario_id}-{uuid.uuid4().hex[:8]}")
+    )
+
+
+def _muse_access_token(handshake: Mapping[str, JsonValue]) -> str:
+    authorization: Final = handshake.get("authorization")
+    token: Final = authorization.get("accessToken") if isinstance(authorization, dict) else None
+    return token if isinstance(token, str) else ""
+
+
+def _muse_frame(frame: Mapping[str, object]) -> dict[str, JsonValue]:
+    text: Final = frame.get("text")
+    if isinstance(text, str):
+        return JSON_OBJECT.validate_json(text)
+    data: Final = frame.get("bytes")
+    return {"binary_bytes": len(data) if isinstance(data, bytes) else 0}
+
+
 @dataclass(frozen=True, slots=True)
 class ScenarioHandle:
     scenario_id: str
@@ -548,6 +687,7 @@ def register_scenario(scenario_id: str, response: StoredResponse, *, control_url
         json={"scenario_id": scenario_id, "response": response.model_dump(mode="json")},
         trust_env=False,
         timeout=15,
+        verify=_verify_control(control_url),
     )
     http_response.raise_for_status()
     return ScenarioHandle(
@@ -561,8 +701,13 @@ def delete_scenario(handle: ScenarioHandle) -> None:
         f"{handle.control_url}/__scenarios/{handle.scenario_id}",
         trust_env=False,
         timeout=15,
+        verify=_verify_control(handle.control_url),
     )
     response.raise_for_status()
+
+
+def _verify_control(control_url: str) -> bool:
+    return not control_url.startswith("https://")
 
 
 def set_interaction_state(control_url: str, interaction_id: str, state: InteractionState) -> None:
@@ -584,8 +729,18 @@ def clear_interaction_state(control_url: str, interaction_id: str) -> None:
 def main() -> None:
     parser: Final = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8190)
+    parser.add_argument("--ssl-certfile", default=None)
+    parser.add_argument("--ssl-keyfile", default=None)
     arguments: Final = parser.parse_args()
-    uvicorn.run(Provider().app(), host="127.0.0.1", port=cast(int, arguments.port), access_log=False)
+    uvicorn.run(
+        Provider().app(),
+        host="127.0.0.1",
+        port=cast(int, arguments.port),
+        access_log=False,
+        timeout_keep_alive=125,
+        ssl_certfile=cast(str | None, arguments.ssl_certfile),
+        ssl_keyfile=cast(str | None, arguments.ssl_keyfile),
+    )
 
 
 if __name__ == "__main__":

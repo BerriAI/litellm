@@ -31,7 +31,7 @@ def _reencode_as_jpeg(raw_image: bytes, original: str) -> str:
     return base64.b64encode(jpeg_image.getvalue()).decode("utf-8")
 
 
-def _convert_image(image: str) -> str:
+def convert_image(image: str) -> str:
     payload: Final = image.split(",")[-1] if image.startswith("data:") else image
     try:
         raw_image: Final = base64.b64decode(payload)
@@ -41,6 +41,8 @@ def _convert_image(image: str) -> str:
         return payload
     return _reencode_as_jpeg(raw_image, original=image)
 
+
+_convert_image = convert_image
 
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 

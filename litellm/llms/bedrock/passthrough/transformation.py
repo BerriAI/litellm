@@ -22,6 +22,13 @@ if TYPE_CHECKING:
     from litellm.types.utils import CostResponseTypes
 
 
+BEDROCK_STREAMING_ACTIONS: Final = frozenset({"invoke-with-response-stream", "converse-stream"})
+
+
+def is_bedrock_streaming_endpoint(endpoint: str) -> bool:
+    return endpoint.partition("?")[0].rstrip("/").rsplit("/", 1)[-1] in BEDROCK_STREAMING_ACTIONS
+
+
 _TEXT_ONLY_DELTA_FIELDS: Final = frozenset({"content", "role"})
 
 
@@ -74,7 +81,7 @@ def _translate_message(decoder: "AWSEventStreamDecoder", message: str) -> ModelR
     )
     from litellm.types.utils import GenericStreamingChunk
 
-    translated_chunk: Final = decoder._chunk_parser(chunk_data=json.loads(message))
+    translated_chunk: Final = decoder.chunk_parser(chunk_data=json.loads(message))
     if isinstance(translated_chunk, ModelResponseStream):
         return translated_chunk
     if generic_chunk_has_all_required_fields(cast(dict, translated_chunk)):

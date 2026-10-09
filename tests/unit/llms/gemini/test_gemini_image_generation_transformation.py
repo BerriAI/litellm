@@ -1,4 +1,8 @@
+from unittest.mock import Mock
+
 import httpx
+import pytest
+from pydantic import ValidationError
 
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.llms.gemini.image_generation.transformation import GoogleImageGenConfig
@@ -419,3 +423,47 @@ def test_gemini_image_generation_response_without_grounding_has_no_web_search_re
     )
 
     assert getattr(result.usage, "web_search_requests", None) is None
+
+
+def _transform_response(model: str, payload: object) -> ImageResponse:
+    return GoogleImageGenConfig().transform_image_generation_response(
+        model=model,
+        raw_response=httpx.Response(200, json=payload),
+        model_response=ImageResponse(data=[]),
+        logging_obj=Mock(),
+        request_data={},
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+
+@pytest.mark.parametrize("predictions", [[], "", {}])
+def test_imagen_generation_response_with_empty_predictions_has_no_images(predictions: object):
+    assert _transform_response("gemini/imagen-4.0-generate-001", {"predictions": predictions}).data == []
+
+
+def test_imagen_generation_response_keeps_predictions_without_image_bytes():
+    result = _transform_response(
+        "gemini/imagen-4.0-generate-001",
+        {"predictions": [{"bytesBase64Encoded": "first-image"}, {"mimeType": "image/png"}]},
+    )
+
+    assert [image.b64_json for image in result.data or []] == ["first-image", None]
+
+
+@pytest.mark.parametrize(
+    ("model", "payload"),
+    [
+        ("gemini/imagen-4.0-generate-001", {"predictions": None}),
+        ("gemini/imagen-4.0-generate-001", {"predictions": "not a list"}),
+        ("gemini/imagen-4.0-generate-001", {"predictions": [{"bytesBase64Encoded": "a"}, "not an object"]}),
+        ("gemini-3.1-flash-image-preview", {"usageMetadata": "not an object"}),
+        ("gemini-3.1-flash-image-preview", {"usageMetadata": ["not an object"]}),
+    ],
+)
+def test_image_generation_response_rejects_malformed_payloads_without_echoing_them(model: str, payload: object):
+    with pytest.raises(ValidationError) as exc_info:
+        _transform_response(model, payload)
+
+    assert "input_value" not in str(exc_info.value)

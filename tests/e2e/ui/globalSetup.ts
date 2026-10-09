@@ -3,6 +3,7 @@ import { users, Role, STORAGE_PATHS } from "./fixtures/users";
 import { ARTIFACT_DIR, UI_BASE_URL } from "./constants";
 import { expectUnrestrictedDashboard, setInvitedUserPassword } from "./helpers/userOnboarding";
 import { hideLiteAdmin } from "./helpers/navigation";
+import { masterKey as getMasterKey } from "./helpers/traffic";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -22,7 +23,7 @@ async function globalSetup() {
   // enable_projects_ui setting is on, and the seeded DB starts with it off.
   // The proxy runs with LITELLM_LICENSE in CI, so enable it the same way
   // the admin UI toggle does; the projects migration smoke needs the link.
-  const masterKey = process.env.LITELLM_MASTER_KEY || "sk-1234";
+  const masterKey = getMasterKey();
   const api = await request.newContext();
   const settingsRes = await api.patch(`${UI_BASE_URL}${rootPath}/update/ui_settings`, {
     headers: { Authorization: `Bearer ${masterKey}` },

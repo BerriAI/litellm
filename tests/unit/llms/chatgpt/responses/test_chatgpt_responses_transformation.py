@@ -74,6 +74,10 @@ class TestChatGPTResponsesAPITransformation:
     @pytest.mark.parametrize(
         "model_name",
         [
+            "chatgpt/gpt-6-sol",
+            "chatgpt/gpt-6-luna",
+            "chatgpt/gpt-6-astra",
+            "chatgpt/gpt-6.1-sol",
             "chatgpt/gpt-5.5",
             "chatgpt/gpt-5.6-luna",
             "chatgpt/gpt-5.6-sol",
@@ -99,6 +103,10 @@ class TestChatGPTResponsesAPITransformation:
     @pytest.mark.parametrize(
         "model_name",
         [
+            "gpt-6-sol",
+            "gpt-6-luna",
+            "gpt-6-astra",
+            "gpt-6.1-sol",
             "gpt-5.5",
             "gpt-5.6-luna",
             "gpt-5.6-sol",
@@ -110,7 +118,7 @@ class TestChatGPTResponsesAPITransformation:
     ) -> None:
         """A chat completions request for these models must take the Responses bridge.
 
-        `gpt-5.6-*` also exists as an openai chat model, so an unregistered
+        These models also exist as openai chat models, so an unregistered
         chatgpt model resolves to mode "chat" here and never reaches the bridge.
         """
         model_info, resolved_model = responses_api_bridge_check(

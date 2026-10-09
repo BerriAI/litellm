@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.llm_judge import (
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.router_utils.common_utils import resolve_model_group_alias
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints.auto_router_endpoints import ShadowEvalDirection
 from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN
 
@@ -467,7 +468,7 @@ Return ONLY valid JSON in this exact format, no other text:
 }"""
 
 
-class PairwiseVerdict(BaseModel):
+class PairwiseVerdict(LiteLLMBaseModel):
     """The judge's blind A/B verdict: the response_format schema sent with the judge call
     and the validation contract on its reply. Both fields are required and preference is
     closed over the prompt's labels, so a malformed or truncated reply is an
@@ -632,9 +633,9 @@ async def _key_or_team_is_over_budget(metadata: Mapping[str, object]) -> bool:
         from litellm.exceptions import BudgetExceededError
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.auth.auth_checks import (
-            _team_max_budget_check,
-            _virtual_key_max_budget_check,
             get_team_object,
+            team_max_budget_check,
+            virtual_key_max_budget_check,
         )
         from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
     except ImportError:
@@ -644,7 +645,7 @@ async def _key_or_team_is_over_budget(metadata: Mapping[str, object]) -> bool:
     if not isinstance(auth, UserAPIKeyAuth):
         return False
     try:
-        await _virtual_key_max_budget_check(valid_token=auth, proxy_logging_obj=proxy_logging_obj)
+        await virtual_key_max_budget_check(valid_token=auth, proxy_logging_obj=proxy_logging_obj)
         if auth.team_id:
             team: Final = await get_team_object(
                 team_id=auth.team_id,
@@ -652,7 +653,7 @@ async def _key_or_team_is_over_budget(metadata: Mapping[str, object]) -> bool:
                 user_api_key_cache=user_api_key_cache,
                 check_cache_only=True,
             )
-            await _team_max_budget_check(team_object=team, valid_token=auth, proxy_logging_obj=proxy_logging_obj)
+            await team_max_budget_check(team_object=team, valid_token=auth, proxy_logging_obj=proxy_logging_obj)
     except BudgetExceededError:
         return True
     except Exception as e:  # noqa: BLE001  # advisory gate: a failed read must not block sampling
@@ -731,7 +732,7 @@ class _JudgeVerdict:
     cost: float
 
 
-class ActiveShadowEvalJob(BaseModel):
+class ActiveShadowEvalJob(LiteLLMBaseModel):
     """One active job as the sampling path needs it, validated straight off the untyped
     job row: immutable config plus the attempt count as of the cache fill (the turn
     budget's staleness is bounded by the cache TTL). Every way a row can be unsamplable

@@ -2,19 +2,20 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final, cast  # noqa: TID251  # validating the openai tool union strips vendor keys from raw tools
 
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS, ResponseInputParam
 
 ADDITIONAL_TOOLS_INPUT_ITEM_TYPE: Final = "additional_tools"
 
 
-class _InputItemType(BaseModel):
+class _InputItemType(LiteLLMBaseModel):
     type: str = ""
 
 
-class _AdditionalToolsItem(BaseModel):
+class _AdditionalToolsItem(LiteLLMBaseModel):
     tools: tuple[dict[str, object], ...] = ()
 
 

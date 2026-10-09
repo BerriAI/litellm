@@ -10,6 +10,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import asyncio
+import contextlib
 import copy
 import json
 import re
@@ -34,7 +35,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
 from litellm.litellm_core_utils.litellm_logging import (
-    _get_masked_values,  # pyright: ignore[reportPrivateUsage]  # the shared header-masking helper has no public name
+    get_masked_values,
 )
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     bedrock_guardrail_cost_by_unit,
@@ -1232,7 +1233,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             "Bedrock AI request body: %s, url %s, headers: %s",
             bedrock_request_data,
             prepared_request.url,
-            _get_masked_values(headers_dict),
+            get_masked_values(headers_dict),
         )
 
         httpx_response: Final = await self._sign_and_post(
@@ -2036,7 +2037,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     @staticmethod
     def _sanitize_invoke_checks_response_for_logging(
         response: BedrockGuardrailChecksResponse,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Strip PII location offsets from a checks response before it is logged."""
         sanitized: Final[dict[str, Any]] = copy.deepcopy(dict(response))
         sensitive: Final = (sanitized.get("results") or {}).get("sensitiveInformation") or {}
@@ -2747,14 +2748,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 UnifiedLLMGuardrails,
             )
 
-            async for streamed_chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
-                user_api_key_dict=user_api_key_dict,
-                response=response,
-                request_data=request_data,
-                guardrail_to_apply=self,
-                buffer_until_moderated_default=False,
-            ):
-                yield streamed_chunk
+            async with contextlib.aclosing(
+                UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    response=response,
+                    request_data=request_data,
+                    guardrail_to_apply=self,
+                    buffer_until_moderated_default=False,
+                )
+            ) as guarded:
+                async for streamed_chunk in guarded:
+                    yield streamed_chunk
             return
 
         # Responses-API events are neither chat-completions chunks nor raw
