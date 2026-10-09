@@ -1938,8 +1938,7 @@ def client(original_function):
                         or isinstance(e, openai.APIConnectionError)
                     ):
                         kwargs["num_retries"] = num_retries
-                        kwargs["_initial_retry_exception"] = e
-                        return litellm.completion_with_retries(*args, **kwargs)
+                        return litellm.completion_with_retries(*args, _initial_retry_exception=e, **kwargs)
                 elif (
                     isinstance(e, litellm.exceptions.ContextWindowExceededError)
                     and context_window_fallback_dict
@@ -7306,7 +7305,7 @@ def calculate_retry_after(
     jitter: Final = JITTER * random.random()
 
     # If the API asks us to wait a certain amount of time (and it's a reasonable amount), just do what it says.
-    if retry_after is not None and 0 < retry_after <= 60:
+    if 0 < retry_after <= 60:
         return retry_after + jitter
 
     # Calculate exponential backoff

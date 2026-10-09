@@ -161,7 +161,7 @@ from litellm.utils import (
     TextCompletionStreamWrapper,
     TranscriptionResponse,
     Usage,
-    _get_retry_after_from_exception_header,
+    _get_retry_after_from_exception_header,  # pyright: ignore[reportPrivateUsage]  # shared internal retry parser
     add_provider_specific_params_to_optional_params,
     async_mock_completion_streaming_obj,
     convert_to_model_response_object,
@@ -6119,7 +6119,9 @@ def _completion_retry_after(error: Exception) -> float | None:
     )
     if headers is None:
         return None
-    retry_after: Final = _get_retry_after_from_exception_header(headers)
+    retry_after: Final = _get_retry_after_from_exception_header(
+        headers  # pyright: ignore[reportAny]  # provider exceptions expose untyped headers
+    )
     return retry_after if 0 < retry_after <= 60 else None
 
 
@@ -6136,7 +6138,7 @@ def _completion_retry_wait(
     return fallback_wait(retry_state)
 
 
-def completion_with_retries(*args, **kwargs):
+def completion_with_retries(*args, _initial_retry_exception: Exception | None = None, **kwargs):
     """
     Executes a litellm.completion() with 3 retries
     """
@@ -6145,26 +6147,11 @@ def completion_with_retries(*args, **kwargs):
     except Exception as e:
         raise Exception(f"tenacity import failed please run `pip install tenacity`. Error{e}")
 
-    num_retries: Final = kwargs.get("num_retries", 3)
-    initial_exception: Final = kwargs.get("_initial_retry_exception")
-    retry_strategy: Final[RetryStrategy] = kwargs.get("retry_strategy", "constant_retry")
-    original_function: Final = kwargs.get("original_function", completion)
-    completion_kwargs: Final = {
-        **{
-            key: value
-            for key, value in kwargs.items()
-            if key
-            not in (
-                "num_retries",
-                "_initial_retry_exception",
-                "retry_strategy",
-                "original_function",
-                "max_retries",
-            )
-        },
-        "max_retries": 0,
-        "num_retries": 0,
-    }
+    num_retries: Final = kwargs.pop("num_retries", 3)
+    kwargs["max_retries"] = 0
+    kwargs["num_retries"] = 0
+    retry_strategy: Final[RetryStrategy] = kwargs.pop("retry_strategy", "constant_retry")
+    original_function: Final = kwargs.pop("original_function", completion)
     fallback_wait: Final = (
         tenacity.wait_exponential(multiplier=1, max=10)
         if retry_strategy == "exponential_backoff_retry"
@@ -6175,11 +6162,11 @@ def completion_with_retries(*args, **kwargs):
         stop=tenacity.stop_after_attempt(num_retries),
         reraise=True,
     )
-    if isinstance(initial_exception, Exception):
-        initial_retry_after: Final = _completion_retry_after(initial_exception)
+    if _initial_retry_exception is not None:
+        initial_retry_after: Final = _completion_retry_after(_initial_retry_exception)
         if initial_retry_after is not None:
             retryer.sleep(initial_retry_after)
-    return retryer(original_function, *args, **completion_kwargs)
+    return retryer(original_function, *args, **kwargs)
 
 
 async def acompletion_with_retries(*args, **kwargs):
