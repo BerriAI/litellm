@@ -242,3 +242,22 @@ func TestResourceLiteLLMModelUpdateSkipsPatchWhenDisplayNameUnchanged(t *testing
 		t.Fatalf("update failed: %v", err)
 	}
 }
+
+func TestResourceLiteLLMModel_ModeValidation(t *testing.T) {
+	validateMode := resourceLiteLLMModel().Schema["mode"].ValidateFunc
+
+	valid := []string{
+		"completion", "embedding", "image_generation", "chat", "moderation",
+		"audio_transcription", "audio_speech", "rerank",
+		"responses", "realtime", "image_edit", "ocr", "search", "video_generation", "evaluation",
+	}
+	for _, mode := range valid {
+		if _, errs := validateMode(mode, "mode"); len(errs) != 0 {
+			t.Errorf("mode %q: expected no validation error, got %v", mode, errs)
+		}
+	}
+
+	if _, errs := validateMode("not_a_real_mode", "mode"); len(errs) == 0 {
+		t.Error(`mode "not_a_real_mode": expected a validation error, got none`)
+	}
+}
