@@ -8,9 +8,8 @@ use pyo3::types::PyDict;
 use litellm_host::{
     call::HostedCompletion,
     interceptors::WireRequest,
-    lifecycle::{CallEvent, ExecutionEvent, FailureOrigin, Timing, epoch_seconds},
+    lifecycle::{ExecutionEvent, FailureOrigin, Timing, epoch_seconds},
     machine::{HostFailure, Machine, MachineStep},
-    observation::ObservationSender,
     protocol::{HostRequest, InterceptRequest, Protocol, Reply, StreamDelivery},
 };
 
@@ -35,7 +34,6 @@ type StartMachine<P, M> = Box<
 pub struct CallOptions {
     pub asynchronous: bool,
     pub lifecycle: PythonLifecycle,
-    pub observers: Option<ObservationSender>,
 }
 
 impl CallOptions {
@@ -43,7 +41,6 @@ impl CallOptions {
         Self {
             asynchronous,
             lifecycle,
-            observers: None,
         }
     }
 }
@@ -107,9 +104,9 @@ where
     stage: Stage,
     pending: Option<Pending<L>>,
     interrupted: Option<Py<PyBaseException>>,
-    observers: Option<ObservationSender>,
-    observing: bool,
-    terminal_observation: Option<CallEvent>,
+    /// Set from the first event until terminal dispatch begins: a cancellation in between
+    /// is the call's only ending and is reported as such.
+    terminal_pending: bool,
 }
 
 pub fn run_call<H, M, L>(
@@ -145,9 +142,7 @@ where
         stage: Stage::Begin,
         pending: None,
         interrupted: None,
-        observers: options.observers,
-        observing: false,
-        terminal_observation: None,
+        terminal_pending: false,
     };
     if options.asynchronous {
         return Execution::new(driver, options.lifecycle)
@@ -194,8 +189,7 @@ where
                 let started = PythonCallEvent::Started {
                     start_time: self.started_at,
                 };
-                self.observing = true;
-                self.observe(&started);
+                self.terminal_pending = true;
                 match self.hooks.on_event(py, started) {
                     Ok(step) => self.on_event(py, step, EventNext::Started),
                     Err(error) => self.hook_failed(py, error),
@@ -367,23 +361,13 @@ where
                     reply.send(());
                     self.resume_machine(py, None)
                 }
-                EventNext::Terminal => {
-                    if let Some(event) = self.terminal_observation.take()
-                        && let Some(observers) = &self.observers
-                    {
-                        observers.emit(event);
+                EventNext::Terminal => match &self.stage {
+                    Stage::Succeeded(response) => Ok(ExecutionStep::Return(response.clone_ref(py))),
+                    Stage::Failed(error) => {
+                        Err(PyErr::from_value(error.bind(py).clone().into_any()))
                     }
-                    self.observing = false;
-                    match &self.stage {
-                        Stage::Succeeded(response) => {
-                            Ok(ExecutionStep::Return(response.clone_ref(py)))
-                        }
-                        Stage::Failed(error) => {
-                            Err(PyErr::from_value(error.bind(py).clone().into_any()))
-                        }
-                        _ => Err(missing_state()),
-                    }
-                }
+                    _ => Err(missing_state()),
+                },
             },
         }
     }
@@ -473,7 +457,6 @@ where
             }
             HostRequest::Intercept(InterceptRequest::ResultReady { facts, reply }) => {
                 let event = PythonCallEvent::Execution(ExecutionEvent::ResultReady { facts });
-                self.observe(&event);
                 match self.hooks.on_event(py, event) {
                     Ok(HookStep::Ready(())) => {
                         reply.send(());
@@ -490,7 +473,6 @@ where
                 let event = PythonCallEvent::Execution(ExecutionEvent::ProviderResponseReceived {
                     raw: &raw,
                 });
-                self.observe(&event);
                 match self.hooks.on_event(py, event) {
                     Ok(HookStep::Ready(())) => {
                         reply.send(());
@@ -617,7 +599,7 @@ where
             timing: self.timing(),
             response: &response,
         };
-        self.terminal_observation = self.observers.as_ref().map(|_| event.snapshot());
+        self.terminal_pending = false;
         let step = self.hooks.on_event(py, event)?;
         self.stage = Stage::Succeeded(response);
         self.on_event(py, step, EventNext::Terminal)
@@ -638,30 +620,27 @@ where
             origin,
             error: &error,
         };
-        self.terminal_observation = self.observers.as_ref().map(|_| event.snapshot());
+        self.terminal_pending = false;
         let step = self.hooks.on_event(py, event)?;
         self.stage = Stage::Failed(error.into_value(py));
         self.on_event(py, step, EventNext::Terminal)
     }
 
-    fn observe(&self, event: &PythonCallEvent<'_>) {
-        if let Some(observers) = &self.observers {
-            observers.emit(event.snapshot());
+    fn cancelled(&mut self, py: Python<'_>) {
+        if self.terminal_pending {
+            self.terminal_pending = false;
+            let timing = self.timing();
+            self.hooks.on_cancelled(py, timing);
         }
     }
 
     fn clear(&mut self) {
         if !self.closed {
             self.closed = true;
-            if self.observing {
-                self.observe(&PythonCallEvent::Cancelled {
-                    timing: self.timing(),
-                });
-                self.observing = false;
-            }
             self.native.close();
             self.start = None;
             Python::attach(|py| {
+                self.cancelled(py);
                 self.hooks.close(py);
                 self.binding.close(py);
             });
@@ -680,22 +659,9 @@ where
         Python::attach(|py| {
             let outcome = self.drive(py, result);
             if let Err(error) = &outcome
-                && self.observing
+                && is_cancellation(py, error)
             {
-                let event = if is_cancellation(py, error) {
-                    PythonCallEvent::Cancelled {
-                        timing: self.timing(),
-                    }
-                } else {
-                    PythonCallEvent::Failed {
-                        timing: self.timing(),
-                        origin: FailureOrigin::Host,
-                        error,
-                    }
-                };
-                self.observe(&event);
-                self.observing = false;
-                self.terminal_observation = None;
+                self.cancelled(py);
             }
             outcome
         })
@@ -738,9 +704,10 @@ mod tests {
     use pyo3::types::PyDict;
 
     use super::*;
-    use crate::{PythonOwned, PythonRuntime};
+    use crate::{HookChain, Hooks, PythonOwned, PythonRuntime};
     use litellm_host::hooks::CallHooks;
     use litellm_host::interceptors::Interceptors;
+    use litellm_host::lifecycle::CallEvent;
 
     static PYTHON_GLOBALS: Mutex<()> = Mutex::new(());
 
@@ -1195,7 +1162,7 @@ mod tests {
             let (result, log) = run_scripted(
                 py,
                 |_| {
-                    CallMachine::<Synthetic>::new(None, |host| {
+                    CallMachine::<Synthetic>::new(|host| {
                         Box::pin(async move { host.services.call(|reply| ("read", reply)).await })
                     })
                 },
@@ -1342,7 +1309,7 @@ mod tests {
     /// response, so a driver that misroutes a reply changes what the call returns.
     fn success_machine() -> impl FnOnce(String) -> CallMachine<Synthetic> + Send + Sync {
         move |projected| {
-            CallMachine::new(None, move |host| {
+            CallMachine::new(move |host| {
                 Box::pin(async move {
                     let signed = host.services.call(|reply| ("sign", reply)).await?;
                     let wire = host
@@ -1386,6 +1353,7 @@ mod tests {
             if closed {
                 receiver.close();
             }
+            let observer = sender.clone();
             let (actual, actual_log) = run_composed(
                 py,
                 success_machine(),
@@ -1396,12 +1364,8 @@ mod tests {
                     pending_reply: None,
                 },
                 HookScript::ReplaceResponse,
-                std::convert::identity,
-                CallOptions {
-                    asynchronous,
-                    lifecycle: lifecycle_binding,
-                    observers: Some(sender.clone()),
-                },
+                move |hooks| HookChain::new().with(hooks).with_all([Hooks::native(observer)]),
+                call_options(asynchronous),
             );
             assert_eq!(
                 actual.unwrap().extract::<String>(py).unwrap(),
@@ -1426,13 +1390,23 @@ mod tests {
         });
     }
 
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Ending {
+        Failed,
+        Succeeded,
+    }
+
+    /// A Rust hook in the chain sees the terminal event where the chain reaches it. A later
+    /// Python hook failing or cancelling the call does not replay or rewrite that event.
     #[rstest::rstest]
-    #[case::preparation(HookScript::FailBegin, false, 1)]
-    #[case::transformation(HookScript::FailAfterSuccess, false, 1)]
-    #[case::terminal_cancellation(HookScript::CancelTerminal, true, 0)]
-    #[case::terminal_failure(HookScript::FailTerminal, false, 0)]
-    fn observation_reports_the_final_outcome_without_replaying_callbacks(
+    #[case::preparation(HookScript::FailBegin, Ending::Failed, true, false, 1)]
+    #[case::transformation(HookScript::FailAfterSuccess, Ending::Failed, true, false, 1)]
+    #[case::terminal_cancellation(HookScript::CancelTerminal, Ending::Succeeded, true, true, 0)]
+    #[case::terminal_failure(HookScript::FailTerminal, Ending::Succeeded, false, false, 0)]
+    fn native_hooks_see_one_terminal_event_without_replaying_callbacks(
         #[case] script: HookScript,
+        #[case] ending: Ending,
+        #[case] fails: bool,
         #[case] cancelled: bool,
         #[case] failure_callbacks: usize,
         #[values(false, true)] asynchronous: bool,
@@ -1443,7 +1417,7 @@ mod tests {
         crate::initialize_python();
         Python::attach(|py| {
             install_lifecycle_module(py);
-            let (sender, mut receiver) = litellm_host::observation::observation_channel(
+            let (observer, mut receiver) = litellm_host::observation::observation_channel(
                 std::num::NonZeroUsize::new(4).unwrap(),
             );
             let (result, log) = run_composed(
@@ -1456,55 +1430,46 @@ mod tests {
                     pending_reply: None,
                 },
                 script,
-                std::convert::identity,
-                CallOptions {
-                    asynchronous,
-                    lifecycle: lifecycle_binding,
-                    observers: Some(sender),
-                },
+                move |hooks| HookChain::new().with(hooks).with_all([Hooks::native(observer)]),
+                call_options(asynchronous),
             );
-            let error = result.unwrap_err();
-            assert_eq!(
-                error.is_instance_of::<pyo3::exceptions::asyncio::CancelledError>(py),
-                cancelled
-            );
+            assert_eq!(result.is_err(), fails);
+            if let Err(error) = &result {
+                assert_eq!(
+                    error.is_instance_of::<pyo3::exceptions::asyncio::CancelledError>(py),
+                    cancelled
+                );
+            }
             let events: Vec<_> = std::iter::from_fn(|| receiver.try_recv().ok()).collect();
             assert!(matches!(events.first(), Some(CallEvent::Started { .. })));
-            assert_eq!(
-                matches!(events.last(), Some(CallEvent::Cancelled { .. })),
-                cancelled
-            );
-            assert_eq!(
-                matches!(
-                    events.last(),
-                    Some(CallEvent::Failed {
-                        origin: FailureOrigin::Host,
-                        ..
-                    })
-                ),
-                !cancelled
-            );
-            assert_eq!(
-                events
-                    .iter()
-                    .filter(|event| matches!(
+            let terminal: Vec<_> = events
+                .iter()
+                .filter(|event| {
+                    matches!(
                         event,
                         CallEvent::Failed { .. }
                             | CallEvent::Succeeded { .. }
                             | CallEvent::Cancelled { .. }
-                    ))
-                    .count(),
-                1
-            );
+                    )
+                })
+                .collect();
+            match ending {
+                Ending::Failed => assert!(matches!(
+                    terminal.as_slice(),
+                    [CallEvent::Failed {
+                        origin: FailureOrigin::Host,
+                        ..
+                    }]
+                )),
+                Ending::Succeeded => {
+                    assert!(matches!(terminal.as_slice(), [CallEvent::Succeeded { .. }]))
+                }
+            }
             assert_eq!(
                 log.iter()
                     .filter(|entry| entry.starts_with("failed:"))
                     .count(),
                 failure_callbacks
-            );
-            assert!(
-                !log.iter()
-                    .any(|entry| entry.starts_with("succeeded:") || entry == "cancelled")
             );
         });
     }
@@ -1683,7 +1648,7 @@ mod tests {
     fn streaming_machine()
     -> impl FnOnce(()) -> litellm_host::call::HostedMachine<Streaming> + Send + Sync {
         move |()| {
-            litellm_host::call::hosted_call((), None, |(), _, _, _observations| async {
+            litellm_host::call::hosted_call((), |(), _, _| async {
                 Ok(litellm_host::call::CallOutput::Stream {
                     head: vec![("request-id", "req_1")],
                     chunks: Box::pin(futures_util::stream::iter([Ok("first"), Ok("second")])),
@@ -1712,16 +1677,14 @@ mod tests {
                 py,
                 |_, _, request| Ok(streaming_machine()(request)),
                 StreamingBinding,
-                SyntheticHooks {
-                    log: Log(log.0.clone()),
-                    script: HookScript::Plain,
-                },
+                HookChain::new()
+                    .with(SyntheticHooks {
+                        log: Log(log.0.clone()),
+                        script: HookScript::Plain,
+                    })
+                    .with_all([Hooks::native(sender)]),
                 PyDict::new(py).unbind(),
-                CallOptions {
-                    asynchronous,
-                    lifecycle: lifecycle_binding,
-                    observers: Some(sender),
-                },
+                call_options(asynchronous),
             )
             .unwrap();
             let stream = if asynchronous {
@@ -1842,9 +1805,7 @@ mod tests {
 
     fn failing_machine() -> impl FnOnce(String) -> CallMachine<Synthetic> + Send + Sync {
         move |_| {
-            CallMachine::new(None, |_| {
-                Box::pin(async move { Err(Error("provider exploded".into())) })
-            })
+            CallMachine::new(|_| Box::pin(async move { Err(Error("provider exploded".into())) }))
         }
     }
 
@@ -2378,15 +2339,20 @@ mod tests {
             }
             let log = Log::default();
             let host = Cancelling(Log(log.0.clone()));
-            let adapter = SyntheticHooks {
-                log: Log(log.0.clone()),
-                script: HookScript::Plain,
-            };
+            let (observer, mut receiver) = litellm_host::observation::observation_channel(
+                std::num::NonZeroUsize::new(4).unwrap(),
+            );
+            let hooks = HookChain::new()
+                .with(SyntheticHooks {
+                    log: Log(log.0.clone()),
+                    script: HookScript::Plain,
+                })
+                .with_all([Hooks::native(observer)]);
             let error = run_call(
                 py,
                 |_, _, request| Ok(success_machine()(request)),
                 host,
-                adapter,
+                hooks,
                 PyDict::new(py).unbind(),
                 call_options(false),
             )
@@ -2396,6 +2362,11 @@ mod tests {
                 log.entries(),
                 ["started", "begin", "project", "adapter.close"]
             );
+            let events: Vec<_> = std::iter::from_fn(|| receiver.try_recv().ok()).collect();
+            assert!(matches!(
+                events.as_slice(),
+                [CallEvent::Started { .. }, CallEvent::Cancelled { .. }]
+            ));
         });
     }
 

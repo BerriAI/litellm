@@ -63,18 +63,45 @@ impl RecordingHost {
     pub fn runtime(&self) -> litellm_host_native::in_process::Host<'_, (), Self, ()> {
         litellm_host_native::in_process::Host {
             services: &(),
-            interceptors: self,
+            hooks: self,
             stream: &(),
-            observers: Some(&self.events.sender),
         }
     }
 }
 
-impl litellm_host::lifecycle::CallObserver for RecordingHost {
-    fn observe(&self, event: litellm_host::lifecycle::CallEvent) {
-        self.events.sender.emit(event);
+impl litellm_host::hooks::NativeHooks for RecordingHost {
+    fn before_provider_request(
+        &self,
+        wire: Box<WireRequest>,
+        context: &RequestContext,
+    ) -> Result<Box<WireRequest>, litellm_host::error::HookError> {
+        self.optional_params
+            .lock()
+            .unwrap()
+            .push(context.optional_params.clone());
+        (self.rewrite)(*wire)
+            .map(Box::new)
+            .map_err(|error| litellm_host::error::HookError::Rejected {
+                reason: error.to_string(),
+            })
+    }
+
+    fn result_ready(&self, facts: &ExecutionFacts) -> Result<(), litellm_host::error::HookError> {
+        self.facts.lock().unwrap().push(facts.clone());
+        if self.reject_result {
+            return Err(litellm_host::error::HookError::Rejected {
+                reason: "result rejected".into(),
+            });
+        }
+        Ok(())
+    }
+
+    fn on_event(&self, event: &litellm_host::lifecycle::CallEvent) {
+        self.events.sender.emit(event.clone());
     }
 }
+
+/// The same hooks for the direct path, which only ever sees the awaited boundaries.
 impl litellm_host::interceptors::Interceptors<<Messages as litellm_host::protocol::Protocol>::Error>
     for RecordingHost
 {
@@ -101,12 +128,11 @@ impl litellm_host::interceptors::Interceptors<<Messages as litellm_host::protoco
         &self,
         raw: litellm_host::interceptors::RawResponse,
     ) -> Result<(), <Messages as litellm_host::protocol::Protocol>::Error> {
-        litellm_host::lifecycle::CallObserver::observe(
-            self,
-            litellm_host::lifecycle::CallEvent::Execution(
+        self.events
+            .sender
+            .emit(litellm_host::lifecycle::CallEvent::Execution(
                 litellm_host::lifecycle::ExecutionEvent::ProviderResponseReceived { raw },
-            ),
-        );
+            ));
         Ok(())
     }
 }
@@ -178,14 +204,14 @@ async fn rejected_results_are_not_delivered_or_cached(
                 Err(error) => Err(error),
             }
         };
-        assert_eq!(
-            result,
-            if reject {
-                Err(Error::Unsupported("result rejected"))
-            } else {
-                Ok(())
-            }
-        );
+        let expected = match (reject, hosted) {
+            (false, _) => Ok(()),
+            (true, true) => Err(Error::Hook(litellm_host::error::HookError::Rejected {
+                reason: "result rejected".into(),
+            })),
+            (true, false) => Err(Error::Unsupported("result rejected")),
+        };
+        assert_eq!(result, expected);
         assert_eq!(received(&upstream).await.len(), expected_requests);
         let facts = host.facts.lock().unwrap();
         assert_eq!(facts.len(), 1);

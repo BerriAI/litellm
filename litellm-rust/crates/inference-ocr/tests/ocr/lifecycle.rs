@@ -38,7 +38,9 @@ fn recording_host(
         .with_before_send(move |wire, _| {
             interceptions.fetch_add(1, Ordering::SeqCst);
             match block {
-                true => Err(Error::InvalidRequest("blocked".into())),
+                true => Err(litellm_host::error::HookError::Rejected {
+                    reason: "blocked".into(),
+                }),
                 false => Ok(wire),
             }
         })
@@ -83,7 +85,7 @@ async fn a_blocking_before_send_prevents_the_call_and_emits_one_failure() {
     .unwrap_err();
 
     assert!(
-        matches!(&error, Error::InvalidRequest(message) if message == "blocked"),
+        matches!(&error, Error::Hook(litellm_host::error::HookError::Rejected { reason }) if reason == "blocked"),
         "{error:?}"
     );
     assert_eq!(interceptions.load(Ordering::SeqCst), 1);
@@ -217,9 +219,8 @@ impl CallerTokenHost {
     pub fn runtime(&self) -> litellm_host_native::in_process::Host<'_, Self, Self, ()> {
         litellm_host_native::in_process::Host {
             services: self,
-            interceptors: self,
+            hooks: self,
             stream: &(),
-            observers: None,
         }
     }
 }
@@ -237,17 +238,12 @@ impl litellm_host_native::services::HostCallHandler<Ocr> for CallerTokenHost {
     }
 }
 
-impl litellm_host::lifecycle::CallObserver for CallerTokenHost {
-    fn observe(&self, _: litellm_host::lifecycle::CallEvent) {}
-}
-impl litellm_host::interceptors::Interceptors<<Ocr as litellm_host::protocol::Protocol>::Error>
-    for CallerTokenHost
-{
-    async fn before_provider_request(
+impl litellm_host::hooks::NativeHooks for CallerTokenHost {
+    fn before_provider_request(
         &self,
-        wire: WireRequest,
-        _: RequestContext,
-    ) -> Result<WireRequest, Error> {
+        wire: Box<WireRequest>,
+        _: &RequestContext,
+    ) -> Result<Box<WireRequest>, litellm_host::error::HookError> {
         let is_authorization = |name: &str| name.eq_ignore_ascii_case("authorization");
         let authorization = wire
             .headers
@@ -267,19 +263,7 @@ impl litellm_host::interceptors::Interceptors<<Ocr as litellm_host::protocol::Pr
                 false => (name, value),
             })
             .collect();
-        Ok(WireRequest { headers, ..wire })
-    }
-    async fn after_provider_response(
-        &self,
-        raw: litellm_host::interceptors::RawResponse,
-    ) -> Result<(), <Ocr as litellm_host::protocol::Protocol>::Error> {
-        litellm_host::lifecycle::CallObserver::observe(
-            self,
-            litellm_host::lifecycle::CallEvent::Execution(
-                litellm_host::lifecycle::ExecutionEvent::ProviderResponseReceived { raw },
-            ),
-        );
-        Ok(())
+        Ok(Box::new(WireRequest { headers, ..*wire }))
     }
 }
 
@@ -297,7 +281,7 @@ async fn the_callers_azure_token_is_acquired_before_before_send_which_can_still_
     };
 
     litellm_host_native::in_process::run_hosted(
-        ocr_route().machine(host.request().unwrap(), None),
+        ocr_route().machine(host.request().unwrap()),
         host.runtime(),
     )
     .await
@@ -349,15 +333,12 @@ async fn direct_execution_uses_hooks_without_a_machine() {
         json!({"pages":[{"index":0,"markdown":"direct"}]}),
     )])
     .await;
-    let events = Arc::new(super::support::CallEvents::default());
     let route = ocr_route();
     let interceptors = Hooks;
     let builder = route.execute(
         ocr_request("mistral/model", &upstream.uri(), json!({})),
         &interceptors,
-        Some(events.0.sender.clone()),
     );
-    assert!(events.0.lock().unwrap().is_empty());
     assert!(received(&upstream).await.is_empty());
     let result = builder.await.unwrap();
     assert_eq!(result.pages[0].markdown, "direct");
@@ -365,14 +346,6 @@ async fn direct_execution_uses_hooks_without_a_machine() {
         only_request(&upstream).await.header("x-direct-hook"),
         Some("called")
     );
-    assert!(matches!(
-        &events.0.lock().unwrap()[..],
-        [
-            CallEvent::Started { .. },
-            CallEvent::Execution(_),
-            CallEvent::Succeeded { .. }
-        ]
-    ));
 }
 
 #[rstest]

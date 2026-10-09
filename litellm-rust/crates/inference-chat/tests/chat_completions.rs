@@ -271,8 +271,7 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
     );
     let response = if hosted {
         let result = litellm_host_native::in_process::run_hosted(
-            chat_completions_route()
-                .machine(host.request().unwrap(), Some(host.events.0.sender.clone())),
+            chat_completions_route().machine(host.request().unwrap(), None),
             host.runtime(),
         )
         .await
@@ -296,7 +295,7 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
                     timeout: call.timeout,
                 },
                 &host,
-                Some(host.events.0.sender.clone()),
+                None,
             )
             .await
             .unwrap()

@@ -34,6 +34,11 @@ pub(crate) async fn pre_call(
     Ok(body)
 }
 
-pub(crate) fn call_chain(gateway: &Gateway) -> NativeChain {
-    NativeChain::new(gateway.layers.iter().filter_map(|layer| layer.call_hooks()))
+/// The hooks around one native call: the route's own first, then each layer's, in stack
+/// order.
+pub(crate) fn call_chain(gateway: &Gateway, route: impl NativeHooks + 'static) -> NativeChain {
+    NativeChain::new(
+        std::iter::once(Box::new(route) as Box<dyn NativeHooks>)
+            .chain(gateway.layers.iter().filter_map(|layer| layer.call_hooks())),
+    )
 }

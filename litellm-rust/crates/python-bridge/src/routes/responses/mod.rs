@@ -98,6 +98,6 @@ impl InferenceRoute for ResponsesRoute {
         call: <Responses as Protocol>::Request,
         policy: CachePolicy,
     ) -> HostedMachine<Responses> {
-        self.machine(call, policy)
+        self.machine(call, Some(policy))
     }
 }

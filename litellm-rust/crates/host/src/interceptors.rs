@@ -48,6 +48,8 @@ pub struct ExecutionFacts {
     pub source: ResultSource,
 }
 
+/// What a route asks its host for while it runs, awaited in place. The host answers each
+/// request through whichever hooks it holds; a route never learns what they are.
 pub trait Interceptors<E>: Send + Sync {
     fn result_ready(&self, _facts: ExecutionFacts) -> impl Future<Output = Result<(), E>> + Send {
         async { Ok(()) }
@@ -83,30 +85,6 @@ impl<E, T: Interceptors<E> + ?Sized> Interceptors<E> for &T {
         raw: RawResponse,
     ) -> impl Future<Output = Result<(), E>> + Send {
         (**self).after_provider_response(raw)
-    }
-}
-
-impl<E, A: Interceptors<E>, B: Interceptors<E>> Interceptors<E> for (A, B) {
-    async fn result_ready(&self, facts: ExecutionFacts) -> Result<(), E> {
-        self.0.result_ready(facts.clone()).await?;
-        self.1.result_ready(facts).await
-    }
-
-    async fn before_provider_request(
-        &self,
-        wire: WireRequest,
-        context: RequestContext,
-    ) -> Result<WireRequest, E> {
-        let wire = self
-            .0
-            .before_provider_request(wire, context.clone())
-            .await?;
-        self.1.before_provider_request(wire, context).await
-    }
-
-    async fn after_provider_response(&self, raw: RawResponse) -> Result<(), E> {
-        self.0.after_provider_response(raw.clone()).await?;
-        self.1.after_provider_response(raw).await
     }
 }
 
@@ -178,7 +156,7 @@ mod tests {
     #[rstest::rstest]
     #[tokio::test]
     async fn the_channel_yields_each_hook_as_its_op_and_returns_the_answer() {
-        let mut machine = CallMachine::<Unit>::new(None, |channel| {
+        let mut machine = CallMachine::<Unit>::new(|channel| {
             Box::pin(async move {
                 let sent = Interceptors::before_provider_request(
                     &channel.interceptors,

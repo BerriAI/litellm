@@ -1,6 +1,8 @@
+use std::sync::Arc;
+
 use crate::{
     error::HookError,
-    interceptors::{RawResponse, RequestContext, WireRequest},
+    interceptors::{ExecutionFacts, RawResponse, RequestContext, WireRequest},
     lifecycle::{CallEvent, Timing},
 };
 
@@ -100,19 +102,89 @@ pub trait CallHooks<R: HookRuntime>: Sized {
     ) -> Result<(), R::Error> {
         Ok(())
     }
+
+    /// The call ended before its terminal event. A runtime delivers this without awaiting
+    /// and without a result, so a hook can only record it.
+    fn on_cancelled(&mut self, _runtime: R::Context<'_>, _timing: Timing) {}
 }
 
-/// Hooks a Rust built-in implements. They see only what every runtime shares: the wire
-/// request and owned event snapshots. A runtime adapts them into its own hook chain, so the
-/// same built-in runs under any driver and beside that runtime's own hooks.
+/// Hooks a Rust built-in implements, and what a native driver runs for every call. They
+/// see only what every runtime shares: the wire request, the execution facts and owned event
+/// snapshots. A runtime adapts them into its own hook chain, so the same built-in runs under
+/// any driver and beside that runtime's own hooks.
+///
+/// The signature says how a driver delivers each boundary. A method that returns a value or a
+/// `Result` is awaited, because the call cannot proceed without its answer. `on_event` returns
+/// nothing and cannot fail, so a driver may deliver it inline, queue it or spawn it.
 pub trait NativeHooks: Send + Sync {
     fn before_provider_request(
-        &mut self,
+        &self,
         wire: Box<WireRequest>,
         _context: &RequestContext,
     ) -> Result<Box<WireRequest>, HookError> {
         Ok(wire)
     }
 
-    fn on_event(&mut self, _event: &CallEvent) {}
+    fn result_ready(&self, _facts: &ExecutionFacts) -> Result<(), HookError> {
+        Ok(())
+    }
+
+    fn on_event(&self, _event: &CallEvent) {}
 }
+
+impl<T: NativeHooks + ?Sized> NativeHooks for &T {
+    fn before_provider_request(
+        &self,
+        wire: Box<WireRequest>,
+        context: &RequestContext,
+    ) -> Result<Box<WireRequest>, HookError> {
+        (**self).before_provider_request(wire, context)
+    }
+
+    fn result_ready(&self, facts: &ExecutionFacts) -> Result<(), HookError> {
+        (**self).result_ready(facts)
+    }
+
+    fn on_event(&self, event: &CallEvent) {
+        (**self).on_event(event)
+    }
+}
+
+impl<T: NativeHooks + ?Sized> NativeHooks for Arc<T> {
+    fn before_provider_request(
+        &self,
+        wire: Box<WireRequest>,
+        context: &RequestContext,
+    ) -> Result<Box<WireRequest>, HookError> {
+        (**self).before_provider_request(wire, context)
+    }
+
+    fn result_ready(&self, facts: &ExecutionFacts) -> Result<(), HookError> {
+        (**self).result_ready(facts)
+    }
+
+    fn on_event(&self, event: &CallEvent) {
+        (**self).on_event(event)
+    }
+}
+
+impl<T: NativeHooks + ?Sized> NativeHooks for Box<T> {
+    fn before_provider_request(
+        &self,
+        wire: Box<WireRequest>,
+        context: &RequestContext,
+    ) -> Result<Box<WireRequest>, HookError> {
+        (**self).before_provider_request(wire, context)
+    }
+
+    fn result_ready(&self, facts: &ExecutionFacts) -> Result<(), HookError> {
+        (**self).result_ready(facts)
+    }
+
+    fn on_event(&self, event: &CallEvent) {
+        (**self).on_event(event)
+    }
+}
+
+/// No hooks at all.
+impl NativeHooks for () {}

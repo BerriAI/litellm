@@ -20,6 +20,13 @@ use rstest::rstest;
 enum TestError {
     Upstream,
     Machine,
+    Hook,
+}
+
+impl From<litellm_host::error::HookError> for TestError {
+    fn from(_: litellm_host::error::HookError) -> Self {
+        Self::Hook
+    }
 }
 
 impl From<MachineFault> for TestError {
@@ -46,26 +53,25 @@ impl Protocol for TestProtocol {
 async fn sse_preserves_encoded_chunks_and_uses_the_supplied_error_format(#[case] fail: bool) {
     let first = Bytes::from_static(b"event: custom\ndata: first\n\n");
     let last = Bytes::from_static(b"data: [DONE]\n\n");
-    let machine =
-        hosted_call::<TestProtocol, _, _>((), None, move |(), _, _, _observations| async move {
-            let chunks = stream::iter([
-                Ok(first),
-                if fail {
-                    Err(TestError::Upstream)
-                } else {
-                    Ok(last)
-                },
-            ])
-            .boxed();
-            Ok(CallOutput::Stream { head: (), chunks })
-        });
+    let machine = hosted_call::<TestProtocol, _, _>((), move |(), _, _| async move {
+        let chunks = stream::iter([
+            Ok(first),
+            if fail {
+                Err(TestError::Upstream)
+            } else {
+                Ok(last)
+            },
+        ])
+        .boxed();
+        Ok(CallOutput::Stream { head: (), chunks })
+    });
     let errors = Arc::new(AtomicUsize::new(0));
     let formatted_errors = errors.clone();
     let adapter = Sse::new(std::convert::identity, move |error| {
         formatted_errors.fetch_add(1, Ordering::SeqCst);
         Bytes::from(format!("event: custom_error\ndata: {error:?}\n\n"))
     });
-    let response = serve(machine, (), (), adapter, None).await.unwrap();
+    let response = serve(machine, (), (), adapter).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()[CONTENT_TYPE], "text/event-stream");
     assert_eq!(errors.load(Ordering::SeqCst), 0);
@@ -86,14 +92,14 @@ async fn sse_preserves_encoded_chunks_and_uses_the_supplied_error_format(#[case]
 async fn completed_calls_use_the_response_converter_without_sse_headers() {
     use axum::response::IntoResponse;
 
-    let machine = hosted_call::<TestProtocol, _, _>((), None, |(), _, _, _observations| async {
+    let machine = hosted_call::<TestProtocol, _, _>((), |(), _, _| async {
         Ok(CallOutput::Complete(Bytes::from_static(b"completed")))
     });
     let adapter = Sse::new(
         |response| (StatusCode::CREATED, [("x-converted", "yes")], response).into_response(),
         |_| panic!("a completed call cannot format a stream error"),
     );
-    let response = serve(machine, (), (), adapter, None).await.unwrap();
+    let response = serve(machine, (), (), adapter).await.unwrap();
     assert_eq!(response.status(), StatusCode::CREATED);
     assert_eq!(response.headers()["x-converted"], "yes");
     assert_ne!(

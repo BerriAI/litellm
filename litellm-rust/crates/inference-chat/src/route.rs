@@ -1,4 +1,3 @@
-use litellm_host::observation::ObservationSender;
 use std::convert::Infallible;
 
 use litellm_host::{
@@ -27,21 +26,13 @@ impl ChatCompletionsRoute {
     pub fn machine(
         self,
         call: ChatCompletionsCall,
-        options: impl Into<litellm_inference::CallOptions>,
+        cache_options: Option<litellm_cache_response::CachePolicy>,
     ) -> HostedMachine<ChatCompletions> {
-        let litellm_inference::CallOptions {
-            cache: cache_options,
-            observers,
-        } = options.into();
-        hosted_call(
-            call,
-            observers,
-            move |call, _, interceptors, observers| async move {
-                self.run_call(call, cache_options, &interceptors, observers.as_ref())
-                    .await
-                    .map(CallOutput::Complete)
-            },
-        )
+        hosted_call(call, move |call, _, interceptors| async move {
+            self.run_call(call, cache_options, &interceptors)
+                .await
+                .map(CallOutput::Complete)
+        })
     }
 
     #[tracing::instrument(name = "litellm.route", skip_all, fields(
@@ -57,7 +48,6 @@ impl ChatCompletionsRoute {
         call: ChatCompletionsCall,
         cache_options: Option<litellm_cache_response::CachePolicy>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
-        observers: Option<&ObservationSender>,
     ) -> Result<ChatCompletionsResponse, Error> {
         litellm_inference::diagnostic::unary(async {
             let request = ChatCompletionsRequest {
@@ -70,8 +60,7 @@ impl ChatCompletionsRoute {
                 extra_headers: call.extra_headers,
                 timeout: call.timeout,
             };
-            self.run(request, cache_options, interceptors, observers)
-                .await
+            self.run(request, cache_options, interceptors).await
         })
         .await
     }

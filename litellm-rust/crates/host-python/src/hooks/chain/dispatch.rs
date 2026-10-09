@@ -303,6 +303,12 @@ impl CallHooks<PythonRuntime> for HookChain {
             .walk(self.hooks.len())
             .try_for_each(|index| self.hooks[index].on_stream_chunk(py, chunk))
     }
+
+    fn on_cancelled(&mut self, py: Python<'_>, timing: Timing) {
+        Order::Outbound
+            .walk(self.hooks.len())
+            .for_each(|index| self.hooks[index].on_cancelled(py, timing))
+    }
 }
 
 impl PythonOwned for HookChain {

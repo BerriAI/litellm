@@ -2,7 +2,7 @@ use litellm_host::{
     error::HookError,
     hooks::NativeHooks,
     interceptors::{RequestContext, WireRequest},
-    lifecycle::Timing,
+    lifecycle::{CallEvent, ExecutionEvent, Timing},
 };
 use pyo3::{
     exceptions::PyRuntimeError,
@@ -87,7 +87,11 @@ impl<H: NativeHooks> ChainHooks for NativeAdapter<H> {
     }
 
     fn on_event(&mut self, _py: Python<'_>, event: PythonCallEvent<'_>) -> PyResult<ChainStep<()>> {
-        self.0.on_event(&event.snapshot());
+        let snapshot = event.snapshot();
+        self.0.on_event(&snapshot);
+        if let CallEvent::Execution(ExecutionEvent::ResultReady { facts }) = &snapshot {
+            self.0.result_ready(facts).map_err(rejection)?;
+        }
         Ok(ChainStep::Ready(()))
     }
 
@@ -109,6 +113,10 @@ impl<H: NativeHooks> ChainHooks for NativeAdapter<H> {
 
     fn on_stream_chunk(&mut self, _py: Python<'_>, _chunk: &Py<PyAny>) -> PyResult<()> {
         Ok(())
+    }
+
+    fn on_cancelled(&mut self, _py: Python<'_>, timing: Timing) {
+        self.0.on_event(&CallEvent::Cancelled { timing });
     }
 }
 

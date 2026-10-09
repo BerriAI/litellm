@@ -122,7 +122,7 @@ async fn auth_survives_per_call_clients_without_freezing_settings_or_secrets(
             input_sources: Default::default(),
             timeout_seconds: Some(5.0),
         }).unwrap();
-        let result = route.execute(request, &(), None).await.unwrap();
+        let result = route.execute(request, &()).await.unwrap();
         assert!(!result.pages.is_empty());
     }
     let requests = upstream.received_requests().await.unwrap();

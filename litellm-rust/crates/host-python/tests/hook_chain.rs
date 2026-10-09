@@ -745,7 +745,7 @@ struct Recorder {
 
 impl NativeHooks for Recorder {
     fn before_provider_request(
-        &mut self,
+        &self,
         mut wire: Box<WireRequest>,
         _: &RequestContext,
     ) -> Result<Box<WireRequest>, HookError> {
@@ -758,7 +758,7 @@ impl NativeHooks for Recorder {
         Ok(wire)
     }
 
-    fn on_event(&mut self, event: &CallEvent) {
+    fn on_event(&self, event: &CallEvent) {
         let label = match event {
             CallEvent::Started { .. } => "started",
             CallEvent::Succeeded { .. } => "succeeded",

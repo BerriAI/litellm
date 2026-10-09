@@ -1,6 +1,5 @@
 use futures_util::future::BoxFuture;
 use litellm_host::interceptors::{Interceptors, RawResponse, RequestContext, WireRequest};
-use litellm_host::{lifecycle::ExecutionEvent, observation::ObservationSender};
 use litellm_llms::base_llm::ocr::{
     error::Error,
     handler::{CallHooks, OcrClient},
@@ -17,7 +16,6 @@ pub(crate) async fn perform_ocr_request(
     request: ResolvedOcrRequest,
     host: &impl Interceptors<Error>,
     caller_document: bool,
-    observers: Option<&ObservationSender>,
 ) -> Result<LiteLLMOcrResponse, Error> {
     request.response_format()?;
     let config = request.config;
@@ -27,26 +25,19 @@ pub(crate) async fn perform_ocr_request(
         .await
         .map_err(|error| Error::Secret(std::sync::Arc::new(error)))?;
     let request = prepare_request(request, caller_document, client, secrets);
-    let interceptors = OcrCallHooks::new(host, &request, config, observers);
+    let interceptors = OcrCallHooks::new(host, &request, config);
     config.ocr(client, &request, &interceptors).await
 }
 
 struct OcrCallHooks<'a, H> {
     interceptors: &'a H,
     context: RequestContext,
-    observers: Option<&'a ObservationSender>,
 }
 
 impl<'a, H> OcrCallHooks<'a, H> {
-    fn new(
-        interceptors: &'a H,
-        request: &PreparedOcrRequest,
-        config: OcrConfigKind,
-        observers: Option<&'a ObservationSender>,
-    ) -> Self {
+    fn new(interceptors: &'a H, request: &PreparedOcrRequest, config: OcrConfigKind) -> Self {
         Self {
             interceptors,
-            observers,
             context: RequestContext {
                 model: request.model.clone(),
                 custom_llm_provider: <&str>::from(config.provider()).to_owned(),
@@ -78,11 +69,6 @@ impl<H: Interceptors<Error>> CallHooks<Error> for OcrCallHooks<'_, H> {
         let raw = RawResponse {
             body: String::from_utf8_lossy(body).into_owned(),
         };
-        if let Some(observers) = self.observers {
-            observers.emit(litellm_host::lifecycle::CallEvent::Execution(
-                ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
-            ));
-        }
         Box::pin(self.interceptors.after_provider_response(raw))
     }
 }

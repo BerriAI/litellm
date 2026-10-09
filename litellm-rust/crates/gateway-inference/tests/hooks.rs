@@ -77,7 +77,7 @@ struct WireMarker {
 
 impl NativeHooks for WireMarker {
     fn before_provider_request(
-        &mut self,
+        &self,
         mut wire: Box<WireRequest>,
         _: &RequestContext,
     ) -> Result<Box<WireRequest>, HookError> {

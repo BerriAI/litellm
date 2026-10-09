@@ -70,12 +70,11 @@ async fn handle(
                 extra_headers: None,
                 timeout: deployment.timeout,
             },
-            cache_options.policy,
+            Some(cache_options.policy),
         ),
         (),
-        (headers.clone(), crate::hooks::call_chain(gateway)),
+        crate::hooks::call_chain(gateway, headers.clone()),
         litellm_host_http::Unary::new(Json),
-        None,
     )
     .await?;
     Ok(headers.apply(response))
