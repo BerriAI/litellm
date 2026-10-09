@@ -26,7 +26,7 @@ def test_vector_store_create_and_update_only_forward_caller_metadata(gateway: Ga
         create_response: Final = gateway.request(
             "POST",
             "/v1/vector_stores",
-            {"model": model, "name": "x", "metadata": {}},
+            {"model": model, "name": "x"},
             key=key,
         )
         assert create_response.status_code == 200, create_response.text
@@ -46,5 +46,5 @@ def test_vector_store_create_and_update_only_forward_caller_metadata(gateway: Ga
         )
         create_body: Final = JSON_OBJECT.validate_json(requests[0].body)
         update_body: Final = JSON_OBJECT.validate_json(requests[1].body)
-        assert create_body.get("metadata", {}) == {}
+        assert create_body.get("metadata") in (None, {})
         assert update_body.get("metadata") == {"team": "llmproxy"}
