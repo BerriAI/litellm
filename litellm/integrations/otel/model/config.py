@@ -1,19 +1,25 @@
 """Typed configuration for the OpenTelemetry instrumentation."""
 
-from typing import Any, List
+from enum import Enum
+from functools import lru_cache
+from typing import Annotated, Final
 
-from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
-from typing_extensions import Annotated
+from pydantic import AliasChoices, ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
+from pydantic.fields import FieldInfo
+from pydantic_settings import BaseSettings, NoDecode, PydanticBaseSettingsSource, SettingsConfigDict
 
+from litellm._logging import verbose_logger
 from litellm.integrations.otel.model.baggage import (
     BAGGAGE_PROMOTED_KEYS,
     DEFAULT_BAGGAGE_METADATA_KEYS,
     DEFAULT_BAGGAGE_TEAM_METADATA_KEYS,
 )
+from litellm.integrations.otel.model.spans import POSTGRESQL, db_system
+from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.utils import OtelSpanScope
 
 #: Master feature-flag env var. The logger is inert until this is truthy.
-OTEL_V2_ENV = "LITELLM_OTEL_V2"
+OTEL_V2_ENV: Final = "LITELLM_OTEL_V2"
 
 
 class CaptureMessageContent(str):
@@ -23,17 +29,41 @@ class CaptureMessageContent(str):
     SPAN_AND_EVENT = "span_and_event"
 
 
+class ExporterOwner(str, Enum):
+    """The preset that contributed an exporter. Values match the callback names
+    in ``presets.PRESET_BY_CALLBACK`` so per-request dynamic-credential routing
+    can match an exporter's owner against the credential source's callback name.
+    A ``str`` enum so the value compares equal to the bare callback-name string."""
+
+    # Arize AX (the hosted platform) and Arize Phoenix (the open-source / Phoenix
+    # Cloud tracer) are distinct backends with separate config and auth, so they
+    # are separate owners. The member value stays the public callback name.
+    ARIZE_AX = "arize"
+    ARIZE_PHOENIX = "arize_phoenix"
+    LANGFUSE_OTEL = "langfuse_otel"
+    WEAVE_OTEL = "weave_otel"
+    LEVO = "levo"
+    AGENTOPS = "agentops"
+    NEWRELIC = "newrelic"
+    SIGNOZ = "signoz"
+
+
 class _OTelV2Flag(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore")
 
     enabled: bool = Field(default=False, validation_alias=AliasChoices(OTEL_V2_ENV))
 
 
+@lru_cache(maxsize=1)
 def is_otel_v2_enabled() -> bool:
+    # Resolved once at startup and cached: constructing the pydantic-settings
+    # model re-scans the environment and cost ~28us, which on the proxy hot path
+    # (auth, logging-callback setup) compounded into a measurable throughput
+    # regression. Tests that toggle the env must call ``is_otel_v2_enabled.cache_clear()``.
     return _OTelV2Flag().enabled
 
 
-class ExporterSpec(BaseModel):
+class ExporterSpec(LiteLLMBaseModel):
     """One span-export destination.
 
     The shared ``TracerProvider`` attaches one ``SpanProcessor`` per spec, so
@@ -41,14 +71,31 @@ class ExporterSpec(BaseModel):
     Phoenix + your own Honeycomb).
     """
 
-    model_config = {"extra": "forbid"}
+    model_config = ConfigDict(extra="forbid")
 
     kind: str = Field(
         default="console",
-        description="console | in_memory | otlp_http | otlp_grpc | <factory kind>",
+        description="console | in_memory | otlp_http | http/json | otlp_grpc | <factory kind>",
     )
     endpoint: str | None = None
+    traces_endpoint: str | None = Field(
+        default=None,
+        description=(
+            "Complete OTLP/HTTP trace URL, used verbatim. Set this when the "
+            "collector serves traces on a path other than ``/v1/traces``; "
+            "``endpoint`` is a base URL the signal path is appended to."
+        ),
+    )
     headers: str | None = None
+    owner: ExporterOwner | None = Field(
+        default=None,
+        description=(
+            "The preset that contributed this exporter. Per-request dynamic OTLP "
+            "credentials are applied only to the exporter whose owner matches the "
+            "credential source, so one tenant's vendor key never lands on a "
+            "different backend's exporter."
+        ),
+    )
     options: dict[str, str] | None = Field(
         default=None,
         description=(
@@ -65,10 +112,47 @@ class ExporterSpec(BaseModel):
             "auto (Simple for console/in_memory, Batch otherwise)."
         ),
     )
+    requires_headers: bool = Field(
+        default=False,
+        description=(
+            "Skip this exporter when no headers are resolved. For destinations "
+            "that reject unauthenticated exports (e.g. New Relic), a spec kept "
+            "only as the per-request credential-stamping target would otherwise "
+            "export keyless traffic and produce a 4xx for every span batch."
+        ),
+    )
+
+
+class _EnvWithoutBareExcludedServices(PydanticBaseSettingsSource):
+    def __init__(self, settings_cls: type[BaseSettings], env_settings: PydanticBaseSettingsSource) -> None:
+        super().__init__(settings_cls)
+        self._env_settings: Final = env_settings
+
+    def get_field_value(self, field: FieldInfo, field_name: str) -> tuple[object, str, bool]:
+        return self._env_settings.get_field_value(field, field_name)
+
+    def __call__(self) -> dict[str, object]:
+        return {key: value for key, value in self._env_settings().items() if key != "excluded_services"}
 
 
 class OpenTelemetryV2Config(BaseSettings):
     model_config = SettingsConfigDict(populate_by_name=True, extra="ignore")
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        return (
+            init_settings,
+            _EnvWithoutBareExcludedServices(settings_cls, env_settings),
+            dotenv_settings,
+            file_secret_settings,
+        )
 
     # ----- single-destination shorthand, read from standard OTEL_* envs ----- #
     exporter: str = Field(
@@ -85,16 +169,20 @@ class OpenTelemetryV2Config(BaseSettings):
         default=None,
         validation_alias=AliasChoices("OTEL_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT"),
     )
+    traces_endpoint: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OTEL_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"),
+        description=(
+            "Complete OTLP/HTTP trace URL for the single-destination shorthand, "
+            "used verbatim instead of ``endpoint`` + ``/v1/traces``."
+        ),
+    )
     headers: str | None = Field(
         default=None,
         validation_alias=AliasChoices("OTEL_HEADERS", "OTEL_EXPORTER_OTLP_HEADERS"),
     )
-    service_name: str = Field(
-        default="litellm", validation_alias=AliasChoices("OTEL_SERVICE_NAME")
-    )
-    deployment_environment: str | None = Field(
-        default=None, validation_alias=AliasChoices("OTEL_ENVIRONMENT_NAME")
-    )
+    service_name: str = Field(default="litellm", validation_alias=AliasChoices("OTEL_SERVICE_NAME"))
+    deployment_environment: str | None = Field(default=None, validation_alias=AliasChoices("OTEL_ENVIRONMENT_NAME"))
 
     enable_metrics: bool = Field(
         default=False,
@@ -106,12 +194,30 @@ class OpenTelemetryV2Config(BaseSettings):
     )
     capture_message_content: str = Field(
         default=CaptureMessageContent.NO_CONTENT,
-        validation_alias=AliasChoices(
-            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"
+        validation_alias=AliasChoices("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"),
+    )
+    legacy_compat: bool = Field(default=True, validation_alias=AliasChoices("LITELLM_OTEL_LEGACY_COMPAT"))
+    langfuse_span_scope: OtelSpanScope = Field(
+        default="full",
+        validation_alias=AliasChoices("langfuse_span_scope", "LITELLM_OTEL_LANGFUSE_SPAN_SCOPE"),
+        description=(
+            "``llm_only`` keeps just the model-call spans on the operator's own Langfuse "
+            "exporter (the spec whose owner is ``langfuse_otel``). Other exporters and "
+            "key/team destinations are not affected."
         ),
     )
-    legacy_compat: bool = Field(
-        default=True, validation_alias=AliasChoices("LITELLM_OTEL_LEGACY_COMPAT")
+    excluded_services: Annotated[frozenset[str], NoDecode] = Field(
+        default_factory=frozenset,
+        validation_alias=AliasChoices("LITELLM_OTEL_EXCLUDED_SERVICES"),
+        description=(
+            "Datastore services whose spans are withheld from key/team ``callback_vars`` "
+            "OTel destinations (the operator's own exporters still receive them). Accepted "
+            "values are the datastore ``ServiceTypes`` names (``redis``, ``postgres``, "
+            "``batch_write_to_db``, ``redis_*``) or their ``db.system.name`` spellings "
+            "(``redis``, ``postgresql``); stored normalized to ``db.system.name`` values. "
+            "Configure via the ``LITELLM_OTEL_EXCLUDED_SERVICES`` env var (comma-separated) "
+            "or ``callback_settings.otel.excluded_services`` in config.yaml (a YAML list)."
+        ),
     )
 
     # ----- explicit multi-destination / vocabulary configuration ------------ #
@@ -126,7 +232,7 @@ class OpenTelemetryV2Config(BaseSettings):
         ),
     )
 
-    mapper_names: Annotated[List[str], NoDecode] = Field(
+    mapper_names: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["genai"],
         description=(
             "Ordered attribute vocabularies to emit. ``genai`` is the "
@@ -144,11 +250,9 @@ class OpenTelemetryV2Config(BaseSettings):
         ),
     )
 
-    baggage_promoted_keys: Annotated[List[str], NoDecode] = Field(
+    baggage_promoted_keys: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: list(BAGGAGE_PROMOTED_KEYS),
-        validation_alias=AliasChoices(
-            "baggage_promoted_keys", "LITELLM_OTEL_BAGGAGE_PROMOTED_KEYS"
-        ),
+        validation_alias=AliasChoices("baggage_promoted_keys", "LITELLM_OTEL_BAGGAGE_PROMOTED_KEYS"),
         description=(
             "Identity attribute keys written into Baggage and stamped on every "
             "child span (e.g. ``litellm.team.id``). Configure via the "
@@ -157,23 +261,22 @@ class OpenTelemetryV2Config(BaseSettings):
             "YAML list)."
         ),
     )
-    baggage_metadata_keys: Annotated[List[str], NoDecode] = Field(
+    baggage_metadata_keys: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: list(DEFAULT_BAGGAGE_METADATA_KEYS),
-        validation_alias=AliasChoices(
-            "baggage_metadata_keys", "LITELLM_OTEL_BAGGAGE_METADATA_KEYS"
-        ),
+        validation_alias=AliasChoices("baggage_metadata_keys", "LITELLM_OTEL_BAGGAGE_METADATA_KEYS"),
         description=(
             "Metadata sub-keys promoted under the ``litellm.metadata.*`` "
-            "namespace. Configure via the ``LITELLM_OTEL_BAGGAGE_METADATA_KEYS`` "
+            "namespace. A dotted path such as ``requester_metadata.trace_id`` "
+            "reads the caller's nested ``metadata.trace_id`` and is promoted as "
+            "``litellm.metadata.trace_id``; other dotted keys keep their full path. "
+            "Configure via the ``LITELLM_OTEL_BAGGAGE_METADATA_KEYS`` "
             "env var (comma-separated) or "
             "``callback_settings.otel.baggage_metadata_keys`` in config.yaml."
         ),
     )
-    baggage_team_metadata_keys: Annotated[List[str], NoDecode] = Field(
+    baggage_team_metadata_keys: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: list(DEFAULT_BAGGAGE_TEAM_METADATA_KEYS),
-        validation_alias=AliasChoices(
-            "baggage_team_metadata_keys", "LITELLM_OTEL_BAGGAGE_TEAM_METADATA_KEYS"
-        ),
+        validation_alias=AliasChoices("baggage_team_metadata_keys", "LITELLM_OTEL_BAGGAGE_TEAM_METADATA_KEYS"),
         description=(
             "Sub-keys of the team's free-form metadata promoted under "
             "``litellm.team.metadata``. Empty by default so none of a team's "
@@ -198,6 +301,13 @@ class OpenTelemetryV2Config(BaseSettings):
             return value.lower()
         return value
 
+    @field_validator("langfuse_span_scope", mode="before")
+    @classmethod
+    def _normalize_langfuse_span_scope(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
     @field_validator(
         "baggage_promoted_keys",
         "baggage_metadata_keys",
@@ -206,7 +316,7 @@ class OpenTelemetryV2Config(BaseSettings):
         mode="before",
     )
     @classmethod
-    def _split_csv(cls, value: Any) -> Any:
+    def _split_csv(cls, value: object) -> object:
         """Accept a comma-separated string for list fields.
 
         Env vars are strings, but these fields are lists. Pydantic-settings would
@@ -219,20 +329,30 @@ class OpenTelemetryV2Config(BaseSettings):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
 
+    @field_validator("excluded_services", mode="before")
+    @classmethod
+    def _read_excluded_services(cls, value: object) -> frozenset[str]:
+        return excluded_service_names(value)
+
     @model_validator(mode="after")
     def _normalize(self) -> "OpenTelemetryV2Config":
         # An endpoint with the default exporter kind implies OTLP/HTTP.
-        if self.endpoint and self.exporter == "console":
+        if (self.endpoint or self.traces_endpoint) and self.exporter == "console":
             self.exporter = "otlp_http"
         # When no explicit destinations are given, fold the single-destination
-        # shorthand into one spec so the provider always has a destination.
+        # shorthand into one spec so the provider always has a destination. A spec
+        # with no fields set is how the presets tell "nothing configured" from an
+        # operator who asked for the console by name.
         if not self.exporters:
             self.exporters = [
                 ExporterSpec(
                     kind=self.exporter,
                     endpoint=self.endpoint,
+                    traces_endpoint=self.traces_endpoint,
                     headers=self.headers,
                 )
+                if not self.model_fields_set.isdisjoint(("exporter", "endpoint", "headers"))
+                else ExporterSpec()
             ]
         # Ensure ``genai`` is always present and first.
         names = list(self.mapper_names)
@@ -246,6 +366,7 @@ class OpenTelemetryV2Config(BaseSettings):
         if self.legacy_compat and "legacy" not in names:
             names.append("legacy")
         self.mapper_names = names
+        self.excluded_services = _normalize_excluded_services(self.excluded_services)
         return self
 
     @property
@@ -264,3 +385,55 @@ class OpenTelemetryV2Config(BaseSettings):
     @classmethod
     def from_env(cls) -> "OpenTelemetryV2Config":
         return cls()
+
+
+_EXCLUDED_SERVICES_INPUT: Final[TypeAdapter[str | tuple[object, ...]]] = TypeAdapter(str | tuple[object, ...])
+
+
+def excluded_db_systems_from(value: object) -> frozenset[str]:
+    """Normalize a raw ``excluded_services`` value without building a settings model that rereads the env"""
+    return _normalize_excluded_services(excluded_service_names(value))
+
+
+def excluded_service_names(value: object) -> frozenset[str]:
+    """Read a YAML list or comma-separated string of service names, logging and dropping unusable input
+    so a malformed value cannot stop the OTel logger from being built"""
+    if value is None:
+        return frozenset()
+    try:
+        parsed: Final = _EXCLUDED_SERVICES_INPUT.validate_python(value)
+    except ValidationError:
+        verbose_logger.error("excluded_services must be a list or comma-separated string; %r ignored", value)
+        return frozenset()
+    items: Final = tuple(parsed.split(",")) if isinstance(parsed, str) else parsed
+    return frozenset(name for item in items if (name := _service_name(item)))
+
+
+def _service_name(item: object) -> str:
+    if not isinstance(item, str):
+        verbose_logger.error("excluded_services must be a list of service names; %r ignored", item)
+        return ""
+    return item.strip().lower()
+
+
+def _normalize_excluded_services(services: frozenset[str]) -> frozenset[str]:
+    """Fold each accepted spelling to its ``db.system.name`` value.
+
+    ``postgres`` and ``postgresql`` name the same system, as do every
+    ``ServiceTypes`` member that ``db_system`` maps. Anything else means the
+    operator pointed the setting at a span family it cannot cover; those names
+    are logged and dropped so a typo cannot take the proxy down.
+    """
+    resolved: Final = frozenset(
+        system for service in services if (system := _db_system_for_excluded_service(service)) is not None
+    )
+    return resolved
+
+
+def _db_system_for_excluded_service(service: str) -> str | None:
+    resolved: Final = db_system(service) if service != POSTGRESQL else POSTGRESQL
+    if resolved is None:
+        verbose_logger.error(
+            "excluded_services: %r is not a datastore service; ignored. Allowed: postgres, redis", service
+        )
+    return resolved

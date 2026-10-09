@@ -4,7 +4,8 @@ LiteLLM A2A Client class.
 Provides a class-based interface for A2A agent invocation.
 """
 
-from typing import TYPE_CHECKING, AsyncIterator, Dict, Optional
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Final
 
 from litellm.types.agents import LiteLLMSendMessageResponse
 
@@ -50,7 +51,7 @@ class A2AClient:
         self,
         base_url: str,
         timeout: float = 60.0,
-        extra_headers: Optional[Dict[str, str]] = None,
+        extra_headers: dict[str, str] | None = None,
     ):
         """
         Initialize the A2A client wrapper.
@@ -63,7 +64,7 @@ class A2AClient:
         self.base_url = base_url
         self.timeout = timeout
         self.extra_headers = extra_headers
-        self._a2a_client: Optional["A2AClientType"] = None
+        self._a2a_client: A2AClientType | None = None
 
     async def _get_client(self) -> "A2AClientType":
         """Get or create the underlying A2A client."""
@@ -87,13 +88,11 @@ class A2AClient:
             extra_headers=self.extra_headers,
         )
 
-    async def send_message(
-        self, request: "SendMessageRequest"
-    ) -> LiteLLMSendMessageResponse:
+    async def send_message(self, request: "SendMessageRequest") -> LiteLLMSendMessageResponse:
         """Send a message to the A2A agent."""
         from litellm.a2a_protocol.main import asend_message
 
-        a2a_client = await self._get_client()
+        a2a_client: Final = await self._get_client()
         return await asend_message(a2a_client=a2a_client, request=request)
 
     async def send_message_streaming(
@@ -102,8 +101,6 @@ class A2AClient:
         """Send a streaming message to the A2A agent."""
         from litellm.a2a_protocol.main import asend_message_streaming
 
-        a2a_client = await self._get_client()
-        async for chunk in asend_message_streaming(
-            a2a_client=a2a_client, request=request
-        ):
+        a2a_client: Final = await self._get_client()
+        async for chunk in asend_message_streaming(a2a_client=a2a_client, request=request):
             yield chunk

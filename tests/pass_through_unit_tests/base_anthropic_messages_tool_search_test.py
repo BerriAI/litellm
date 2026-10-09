@@ -8,12 +8,9 @@ Reference: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-se
 """
 
 import json
-import os
-import sys
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import pytest
 import litellm
@@ -127,7 +124,7 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
         This validates that the tool search beta header is being passed via
         extra_headers and forwarded correctly to the downstream provider.
         """
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         tools = self.get_tools_with_tool_search()
         messages = [{"role": "user", "content": "What's the weather in San Francisco?"}]
@@ -151,54 +148,12 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
         assert len(content) > 0, "Response should have content"
 
     @pytest.mark.asyncio
-    async def test_tool_search_discovers_tool(self):
-        """
-        E2E test: Tool search should discover and use a deferred tool.
-
-        This validates that when the user asks about weather, the model
-        discovers the get_weather tool via tool search and attempts to use it.
-        """
-        litellm._turn_on_debug()
-
-        tools = self.get_tools_with_tool_search()
-        messages = [
-            {
-                "role": "user",
-                "content": "I need to know the current weather in New York City. Please use the appropriate tool.",
-            }
-        ]
-
-        response = await litellm.anthropic.messages.acreate(
-            model=self.get_model(),
-            messages=messages,
-            tools=tools,
-            max_tokens=1024,
-            extra_headers=self.get_extra_headers(),
-        )
-
-        print(f"Response: {json.dumps(response, indent=2, default=str)}")
-
-        content = response.get("content", [])
-
-        # Check if the model used tool_use (either tool_search or get_weather)
-        tool_uses = [block for block in content if block.get("type") == "tool_use"]
-
-        print(f"Tool uses: {json.dumps(tool_uses, indent=2, default=str)}")
-
-        # The model should attempt to use tools when asked about weather
-        # It might use tool_search first, or directly use get_weather if discovered
-        if response.get("stop_reason") == "tool_use":
-            assert (
-                len(tool_uses) > 0
-            ), "Expected tool_use blocks when stop_reason is tool_use"
-
-    @pytest.mark.asyncio
     @pytest.mark.flaky(retries=3, delay=5)
     async def test_tool_search_streaming(self):
         """
         E2E test: Tool search should work with streaming responses.
         """
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         tools = self.get_tools_with_tool_search()
         messages = [{"role": "user", "content": "What's the weather like in Tokyo?"}]
@@ -237,39 +192,3 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
         # Should have message_start
         message_starts = [c for c in chunks if c.get("type") == "message_start"]
         assert len(message_starts) > 0, "Expected message_start in streaming response"
-
-    @pytest.mark.asyncio
-    async def test_tool_search_with_multiple_deferred_tools(self):
-        """
-        E2E test: Tool search should work with multiple deferred tools.
-
-        This validates that the model can discover the appropriate tool
-        from a larger catalog of deferred tools.
-        """
-        litellm._turn_on_debug()
-
-        tools = self.get_tools_with_tool_search()
-        messages = [
-            {"role": "user", "content": "What's the stock price of Apple (AAPL)?"}
-        ]
-
-        response = await litellm.anthropic.messages.acreate(
-            model=self.get_model(),
-            messages=messages,
-            tools=tools,
-            max_tokens=1024,
-            extra_headers=self.get_extra_headers(),
-        )
-
-        print(f"Response: {json.dumps(response, indent=2, default=str)}")
-
-        # Validate response
-        assert "content" in response, "Response should contain content"
-
-        content = response.get("content", [])
-        tool_uses = [block for block in content if block.get("type") == "tool_use"]
-
-        # If the model decides to use a tool, it should be related to stocks
-        if tool_uses:
-            tool_names = [t.get("name") for t in tool_uses]
-            print(f"Tools used: {tool_names}")

@@ -14,6 +14,7 @@ export interface Policy {
   updated_at?: string;
   created_by?: string;
   updated_by?: string;
+  definition_location?: "db" | "config";
 }
 
 export interface PolicyCondition {
@@ -43,10 +44,13 @@ export interface PolicyAttachment {
   keys: string[];
   models: string[];
   tags: string[];
+  priority?: number | null;
+  default?: boolean;
   created_at?: string;
   updated_at?: string;
   created_by?: string;
   updated_by?: string;
+  definition_location?: "db" | "config";
 }
 
 export interface PolicyCreateRequest {
@@ -76,6 +80,8 @@ export interface PolicyAttachmentCreateRequest {
   keys?: string[];
   models?: string[];
   tags?: string[];
+  priority?: number;
+  default?: boolean;
 }
 
 export interface PolicyListResponse {
@@ -96,7 +102,7 @@ export interface PolicyAttachmentListResponse {
 
 export interface PipelineStepResult {
   guardrail_name: string;
-  outcome: "pass" | "fail" | "error";
+  outcome: "pass" | "fail" | "error" | "skip";
   action_taken: string;
   modified_data: Record<string, any> | null;
   error_detail: string | null;

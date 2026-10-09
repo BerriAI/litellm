@@ -8,15 +8,16 @@ those jobs failed with ``404 Application not found`` even though nothing in the
 PR was broken.
 
 This process is the local stand-in. A model points its ``api_base`` here and
-gets back a well-formed chat/text/embedding response with realistic ``usage`` so
-cost tracking and spend accounting still exercise their real code paths. The one
-behavioral special case mirrors the old hosted mock: a request whose ``model``
-is ``429`` returns HTTP 429 so rate-limit and cooldown tests still have
-something to trip on.
+gets back a well-formed chat/text/embedding/moderation response with realistic
+``usage`` so cost tracking and spend accounting still exercise their real code
+paths. The one behavioral special case mirrors the old hosted mock: a request
+whose ``model`` is ``429`` returns HTTP 429 so rate-limit and cooldown tests
+still have something to trip on.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import uuid
@@ -30,8 +31,25 @@ from starlette.routing import Route
 
 _CANNED_CONTENT: Final = "Hello! This is a mock response from the fake OpenAI endpoint."
 _RATE_LIMIT_MODEL: Final = "429"
+_SLOW_MODEL: Final = "slow-endpoint"
+_SLOW_RESPONSE_SECONDS: Final = 3.0
 _PROMPT_TOKENS: Final = 20
 _COMPLETION_TOKENS: Final = 20
+_MODERATION_CATEGORIES: Final = (
+    "harassment",
+    "harassment/threatening",
+    "hate",
+    "hate/threatening",
+    "illicit",
+    "illicit/violent",
+    "self-harm",
+    "self-harm/instructions",
+    "self-harm/intent",
+    "sexual",
+    "sexual/minors",
+    "violence",
+    "violence/graphic",
+)
 
 
 def _usage() -> dict[str, int]:
@@ -123,6 +141,8 @@ async def chat_completions(request: Request) -> Response:
     model = _requested_model(body)
     if model == _RATE_LIMIT_MODEL:
         return _rate_limit_response(model)
+    if model == _SLOW_MODEL:
+        await asyncio.sleep(_SLOW_RESPONSE_SECONDS)
     if _wants_stream(body):
         return StreamingResponse(
             _chat_completion_stream(model, _wants_stream_usage(body)),
@@ -175,6 +195,8 @@ async def completions(request: Request) -> Response:
     model = _requested_model(body)
     if model == _RATE_LIMIT_MODEL:
         return _rate_limit_response(model)
+    if model == _SLOW_MODEL:
+        await asyncio.sleep(_SLOW_RESPONSE_SECONDS)
     if _wants_stream(body):
         return StreamingResponse(
             _text_completion_stream(model, _wants_stream_usage(body)),
@@ -185,14 +207,55 @@ async def completions(request: Request) -> Response:
 
 async def embeddings(request: Request) -> Response:
     body = await _parse_body(request)
+    model = _requested_model(body)
+    if model == _SLOW_MODEL:
+        await asyncio.sleep(_SLOW_RESPONSE_SECONDS)
     raw_input = body.get("input", "")
     count = len(raw_input) if isinstance(raw_input, list) else 1
     return JSONResponse(
         {
             "object": "list",
             "data": [{"object": "embedding", "index": i, "embedding": [0.0] * 1536} for i in range(max(count, 1))],
-            "model": _requested_model(body),
+            "model": model,
             "usage": {"prompt_tokens": 5, "total_tokens": 5},
+        }
+    )
+
+
+async def triton_embeddings(_request: Request) -> Response:
+    return JSONResponse(
+        {
+            "model_name": "my-triton-model",
+            "outputs": [
+                {
+                    "name": "output",
+                    "datatype": "FP32",
+                    "shape": [1, 2],
+                    "data": [0.1, 0.2],
+                }
+            ],
+        }
+    )
+
+
+def _moderation_result() -> dict[str, object]:
+    return {
+        "flagged": False,
+        "categories": {category: False for category in _MODERATION_CATEGORIES},
+        "category_scores": {category: 0.0 for category in _MODERATION_CATEGORIES},
+        "category_applied_input_types": {category: ["text"] for category in _MODERATION_CATEGORIES},
+    }
+
+
+async def moderations(request: Request) -> Response:
+    body: Final = await _parse_body(request)
+    raw_input: Final = body.get("input", "")
+    count: Final = len(raw_input) if isinstance(raw_input, list) else 1
+    return JSONResponse(
+        {
+            "id": f"modr-{uuid.uuid4().hex[:24]}",
+            "model": _requested_model(body),
+            "results": [_moderation_result() for _ in range(max(count, 1))],
         }
     )
 
@@ -223,6 +286,9 @@ app = Starlette(
         Route("/v1/completions", completions, methods=["POST"]),
         Route("/embeddings", embeddings, methods=["POST"]),
         Route("/v1/embeddings", embeddings, methods=["POST"]),
+        Route("/triton/embeddings", triton_embeddings, methods=["POST"]),
+        Route("/moderations", moderations, methods=["POST"]),
+        Route("/v1/moderations", moderations, methods=["POST"]),
         Route("/models", list_models, methods=["GET"]),
         Route("/v1/models", list_models, methods=["GET"]),
     ]

@@ -1,13 +1,17 @@
 """OpenAI Image Generation handler for Unified Guardrails."""
 
+from typing import Final
+
 from litellm.llms.openai.image_generation.guardrail_translation.handler import (
     OpenAIImageGenerationHandler,
 )
 from litellm.types.utils import CallTypes
 
-guardrail_translation_mappings = {
+guardrail_translation_mappings: Final = {
     CallTypes.image_generation: OpenAIImageGenerationHandler,
     CallTypes.aimage_generation: OpenAIImageGenerationHandler,
+    CallTypes.image_edit: OpenAIImageGenerationHandler,
+    CallTypes.aimage_edit: OpenAIImageGenerationHandler,
 }
 
-__all__ = ["guardrail_translation_mappings", "OpenAIImageGenerationHandler"]
+__all__ = ["OpenAIImageGenerationHandler", "guardrail_translation_mappings"]

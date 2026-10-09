@@ -1,5 +1,41 @@
 import { describe, expect, it } from "vitest";
-import { resolveApiBase } from "./resolveApiBase";
+import { resolveApiBase, resolveRequestUrl } from "./resolveApiBase";
+
+describe("resolveRequestUrl", () => {
+  it("targets the registered base when one is registered", () => {
+    expect(
+      resolveRequestUrl("/model_group/info", {
+        registeredBase: "https://proxy.example.com",
+        pageOrigin: "http://localhost:3000",
+      }),
+    ).toBe("https://proxy.example.com/model_group/info");
+  });
+
+  it("falls back to the page origin when no base is registered", () => {
+    expect(resolveRequestUrl("/model_group/info", { registeredBase: "", pageOrigin: "http://localhost:3000" })).toBe(
+      "http://localhost:3000/model_group/info",
+    );
+  });
+
+  it("trims a trailing slash so the path is not doubled up", () => {
+    expect(resolveRequestUrl("/model_group/info", { registeredBase: "https://proxy.example.com/" })).toBe(
+      "https://proxy.example.com/model_group/info",
+    );
+  });
+
+  it("keeps the path relative when neither a base nor an origin is available", () => {
+    expect(resolveRequestUrl("/model_group/info", {})).toBe("/model_group/info");
+    expect(resolveRequestUrl("/model_group/info", { registeredBase: null, pageOrigin: null })).toBe(
+      "/model_group/info",
+    );
+  });
+
+  it("preserves an already-serialized query string", () => {
+    expect(
+      resolveRequestUrl("/model_group/info?model_group=gpt-4o", { registeredBase: "https://proxy.example.com" }),
+    ).toBe("https://proxy.example.com/model_group/info?model_group=gpt-4o");
+  });
+});
 
 describe("resolveApiBase", () => {
   describe("same-origin (no explicit base)", () => {

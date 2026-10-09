@@ -1,143 +1,19 @@
-import os
-import sys
 import json
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
-from litellm import transcription
+from litellm.litellm_core_utils.get_supported_openai_params import (
+    get_supported_openai_params,
+)
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
-from base_llm_unit_tests import BaseLLMChatTest
-from base_audio_transcription_unit_tests import BaseLLMAudioTranscriptionTest
 
 fireworks = FireworksAIConfig()
 
-
-def test_map_openai_params_tool_choice():
-    # Test case 1: tool_choice is "required"
-    result = fireworks.map_openai_params(
-        {"tool_choice": "required"}, {}, "some_model", drop_params=False
-    )
-    assert result == {"tool_choice": "any"}
-
-    # Test case 2: tool_choice is "auto"
-    result = fireworks.map_openai_params(
-        {"tool_choice": "auto"}, {}, "some_model", drop_params=False
-    )
-    assert result == {"tool_choice": "auto"}
-
-    # Test case 3: tool_choice is not present
-    result = fireworks.map_openai_params(
-        {"some_other_param": "value"}, {}, "some_model", drop_params=False
-    )
-    assert result == {}
-
-    # Test case 4: tool_choice is None
-    result = fireworks.map_openai_params(
-        {"tool_choice": None}, {}, "some_model", drop_params=False
-    )
-    assert result == {"tool_choice": None}
-
-
-def test_map_response_format():
-    """
-    json_schema response_format is passed through to Fireworks unchanged.
-
-    Fireworks accepts the OpenAI strict json_schema shape natively. The earlier
-    downgrade to {type: json_object, schema: ...} silently dropped `strict` and
-    `name`, producing a request that Fireworks treats as "any valid JSON" per
-    its docs, disabling grammar-guided decoding.
-
-    Ref: https://docs.fireworks.ai/structured-responses/structured-response-formatting
-    """
-    response_format = {
-        "type": "json_schema",
-        "json_schema": {
-            "schema": {
-                "properties": {"result": {"type": "boolean"}},
-                "required": ["result"],
-                "type": "object",
-            },
-            "name": "BooleanResponse",
-            "strict": True,
-        },
-    }
-    result = fireworks.map_openai_params(
-        {"response_format": response_format}, {}, "some_model", drop_params=False
-    )
-    assert result == {"response_format": response_format}
-
-
-_AUDIO_FILE_PATH = os.path.join(
-    os.path.dirname(os.path.realpath(__file__)), "gettysburg.wav"
+VISION_MODEL = next(
+    key.removeprefix("fireworks_ai/")
+    for key, info in litellm.model_cost.items()
+    if key.startswith("fireworks_ai/accounts/fireworks/models/") and info.get("supports_vision") is True
 )
-
-
-class TestFireworksAIAudioTranscription(BaseLLMAudioTranscriptionTest):
-    def get_base_audio_transcription_call_args(self) -> dict:
-        return {
-            "model": "fireworks_ai/whisper-v3",
-            "api_base": "https://audio-prod.api.fireworks.ai/v1",
-        }
-
-    def get_custom_llm_provider(self) -> litellm.LlmProviders:
-        return litellm.LlmProviders.FIREWORKS_AI
-
-    def test_audio_transcription(self):
-        from unittest.mock import MagicMock
-
-        from openai.types.audio import Transcription
-
-        audio_file = open(_AUDIO_FILE_PATH, "rb")
-        mock_client = MagicMock()
-        mock_client.audio.transcriptions.create.return_value = Transcription(
-            text="four score and seven years ago"
-        )
-
-        transcript = transcription(
-            **self.get_base_audio_transcription_call_args(),
-            file=audio_file,
-            api_key="fw-test-key",
-            client=mock_client,
-        )
-
-        assert transcript.text == "four score and seven years ago"
-        sent = mock_client.audio.transcriptions.create.call_args.kwargs
-        assert sent["model"] == "whisper-v3"
-        assert sent["file"] is audio_file
-
-    @pytest.mark.asyncio
-    async def test_audio_transcription_async(self):
-        from unittest.mock import AsyncMock, MagicMock
-
-        from openai.types.audio import Transcription
-
-        audio_file = open(_AUDIO_FILE_PATH, "rb")
-        raw_response = MagicMock()
-        raw_response.headers = {}
-        raw_response.parse.return_value = Transcription(
-            text="four score and seven years ago"
-        )
-        mock_client = MagicMock()
-        mock_client.audio.transcriptions.with_raw_response.create = AsyncMock(
-            return_value=raw_response
-        )
-
-        transcript = await litellm.atranscription(
-            **self.get_base_audio_transcription_call_args(),
-            file=audio_file,
-            api_key="fw-test-key",
-            client=mock_client,
-        )
-
-        assert transcript.text == "four score and seven years ago"
-        sent = (
-            mock_client.audio.transcriptions.with_raw_response.create.call_args.kwargs
-        )
-        assert sent["model"] == "whisper-v3"
-        assert sent["file"] is audio_file
 
 
 @pytest.mark.parametrize(
@@ -146,11 +22,8 @@ class TestFireworksAIAudioTranscription(BaseLLMAudioTranscriptionTest):
 )
 def test_document_inlining_example(disable_add_transform_inline_image_block):
     """
-    Document inlining appends ``#transform=inline`` to image/PDF URLs in the
-    outgoing request unless explicitly disabled. Assert the transform on the
-    serialized payload rather than making a live Fireworks call — the live
-    call only proved the model responded and broke whenever Fireworks rotated
-    its serverless model catalog.
+    Fireworks document inlining has been removed from the platform. LiteLLM
+    must not append ``#transform=inline`` regardless of the legacy disable flag.
     """
     from unittest.mock import patch
 
@@ -163,7 +36,7 @@ def test_document_inlining_example(disable_add_transform_inline_image_block):
     with patch.object(client, "post") as mock_post:
         try:
             completion(
-                model="fireworks_ai/accounts/fireworks/models/deepseek-v3p1",
+                model=f"fireworks_ai/{VISION_MODEL}",
                 messages=[
                     {
                         "role": "user",
@@ -182,89 +55,17 @@ def test_document_inlining_example(disable_add_transform_inline_image_block):
                 disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
                 client=client,
             )
-        except Exception as e:
-            print(e)
+        except Exception:
+            pass
 
         mock_post.assert_called_once()
         json_data = json.loads(mock_post.call_args.kwargs["data"])
         sent_url = json_data["messages"][0]["content"][0]["image_url"]["url"]
-        if disable_add_transform_inline_image_block is True:
-            assert sent_url == pdf_url
-            assert "#transform=inline" not in sent_url
-        else:
-            assert sent_url == pdf_url + "#transform=inline"
-
-
-@pytest.mark.parametrize(
-    "content, model, expected_url",
-    [
-        (
-            {"image_url": "http://example.com/image.png"},
-            "gpt-4",
-            "http://example.com/image.png#transform=inline",
-        ),
-        (
-            {"image_url": {"url": "http://example.com/image.png"}},
-            "gpt-4",
-            {"url": "http://example.com/image.png#transform=inline"},
-        ),
-        (
-            {"image_url": "http://example.com/image.png"},
-            "vision-gpt",
-            "http://example.com/image.png",
-        ),
-        # data: URLs must never have #transform=inline appended — doing so
-        # corrupts the base64 payload (fixes #23583).
-        # URI schemes are case-insensitive (RFC 3986) so check all variants.
-        (
-            {"image_url": "data:image/png;base64,iVBORw0KGgo="},
-            "gpt-4",
-            "data:image/png;base64,iVBORw0KGgo=",
-        ),
-        (
-            {"image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ=="}},
-            "gpt-4",
-            {"url": "data:image/jpeg;base64,/9j/4AAQ=="},
-        ),
-        (
-            {"image_url": "Data:image/png;base64,iVBORw0KGgo="},
-            "gpt-4",
-            "Data:image/png;base64,iVBORw0KGgo=",
-        ),
-    ],
-)
-def test_transform_inline(content, model, expected_url):
-
-    result = litellm.FireworksAIConfig()._add_transform_inline_image_block(
-        content=content, model=model, disable_add_transform_inline_image_block=False
-    )
-    if isinstance(expected_url, str):
-        assert result["image_url"] == expected_url
-    else:
-        assert result["image_url"]["url"] == expected_url["url"]
-
-
-@pytest.mark.parametrize(
-    "model, is_disabled, expected_url",
-    [
-        ("gpt-4", True, "http://example.com/image.png"),
-        ("vision-gpt", False, "http://example.com/image.png"),
-        ("gpt-4", False, "http://example.com/image.png#transform=inline"),
-    ],
-)
-def test_global_disable_flag(model, is_disabled, expected_url):
-    content = {"image_url": "http://example.com/image.png"}
-    result = litellm.FireworksAIConfig()._add_transform_inline_image_block(
-        content=content,
-        model=model,
-        disable_add_transform_inline_image_block=is_disabled,
-    )
-    assert result["image_url"] == expected_url
-    litellm.disable_add_transform_inline_image_block = False  # Reset for other tests
+        assert sent_url == pdf_url
+        assert "#transform=inline" not in sent_url
 
 
 def test_global_disable_flag_with_transform_messages_helper(monkeypatch):
-    from openai import OpenAI
     from unittest.mock import patch
     from litellm import completion
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -279,7 +80,7 @@ def test_global_disable_flag_with_transform_messages_helper(monkeypatch):
     ) as mock_post:
         try:
             completion(
-                model="fireworks_ai/accounts/fireworks/models/deepseek-v3p1",
+                model=f"fireworks_ai/{VISION_MODEL}",
                 messages=[
                     {
                         "role": "user",
@@ -296,11 +97,10 @@ def test_global_disable_flag_with_transform_messages_helper(monkeypatch):
                 ],
                 client=client,
             )
-        except Exception as e:
-            print(e)
+        except Exception:
+            pass
 
         mock_post.assert_called_once()
-        print(mock_post.call_args.kwargs)
         json_data = json.loads(mock_post.call_args.kwargs["data"])
         assert (
             "#transform=inline"

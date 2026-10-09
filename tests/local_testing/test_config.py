@@ -3,18 +3,13 @@
 
 
 import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
 
 load_dotenv()
 import io
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from typing import Literal
 
 import pytest
@@ -25,6 +20,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value
 from litellm.proxy.proxy_server import ProxyConfig
 from litellm.proxy.utils import DualCache, ProxyLogging
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+from tests._master_key import MASTER_KEY
 
 
 class DBModel(BaseModel):
@@ -53,7 +49,7 @@ async def test_delete_deployment():
     )
     encrypted_litellm_params = litellm_params.dict(exclude_none=True)
 
-    master_key = "sk-1234"
+    master_key = MASTER_KEY
 
     setattr(litellm.proxy.proxy_server, "master_key", master_key)
 
@@ -88,10 +84,11 @@ async def test_delete_deployment():
     )
 
     db_models = [db_model]
-    deleted_deployments = await pc._delete_deployment(db_models=db_models)
+    still_desired = await pc._delete_deployment(db_models=db_models)
 
-    assert deleted_deployments == 1
+    assert still_desired == frozenset({deployment.model_info.id})
     assert len(llm_router.model_list) == 1
+    assert llm_router.get_model_ids() == [deployment.model_info.id]
 
     """
     Scenario 2 - if model id != model_info["id"]
@@ -115,10 +112,11 @@ async def test_delete_deployment():
     )
 
     db_models = [db_model]
-    deleted_deployments = await pc._delete_deployment(db_models=db_models)
+    still_desired = await pc._delete_deployment(db_models=db_models)
 
-    assert deleted_deployments == 1
+    assert still_desired == frozenset({deployment.model_info.id})
     assert len(llm_router.model_list) == 1
+    assert llm_router.get_model_ids() == [deployment.model_info.id]
 
 
 @pytest.mark.asyncio
@@ -149,7 +147,7 @@ async def test_add_existing_deployment():
 
     init_len_list = len(llm_router.model_list)
     print(f"llm_router: {llm_router}")
-    master_key = "sk-1234"
+    master_key = MASTER_KEY
     setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
     setattr(litellm.proxy.proxy_server, "master_key", master_key)
     pc = ProxyConfig()
@@ -204,7 +202,7 @@ async def test_db_error_new_model_check():
 
     init_len_list = len(llm_router.model_list)
     print(f"llm_router: {llm_router}")
-    master_key = "sk-1234"
+    master_key = MASTER_KEY
     setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
     setattr(litellm.proxy.proxy_server, "master_key", master_key)
     pc = ProxyConfig()
@@ -239,10 +237,16 @@ async def test_db_error_new_model_check():
         new=AsyncMock(return_value={"model_list": config_model_list}),
     ):
         db_models = []
-        deleted_deployments = await pc._delete_deployment(db_models=db_models)
-    assert deleted_deployments == 0
+        still_desired = await pc._delete_deployment(db_models=db_models)
+    assert still_desired == frozenset(
+        {deployment.model_info.id, deployment_2.model_info.id}
+    )
 
     assert init_len_list == len(llm_router.model_list)
+    assert set(llm_router.get_model_ids()) == {
+        deployment.model_info.id,
+        deployment_2.model_info.id,
+    }
 
 
 litellm_params = LiteLLM_Params(
@@ -319,7 +323,7 @@ async def test_add_and_delete_deployments(llm_router, model_list_flag_value):
     - when router is init and not empty
     """
 
-    master_key = "sk-1234"
+    master_key = MASTER_KEY
     setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
     setattr(litellm.proxy.proxy_server, "master_key", master_key)
     pc = ProxyConfig()

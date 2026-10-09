@@ -1,22 +1,14 @@
 import { readFileSync } from "fs";
+import { countBudgetViolations } from "./lint-budget-lib.mjs";
 
-const [, , reportPath, budgetsPath] = process.argv;
-
+const [reportPath, budgetsPath] = process.argv.slice(2);
 const report = JSON.parse(readFileSync(reportPath, "utf8"));
 const budgets = JSON.parse(readFileSync(budgetsPath, "utf8"));
-
-const counts = {};
-for (const file of report) {
-  for (const message of file.messages) {
-    if (message.ruleId in budgets) {
-      counts[message.ruleId] = (counts[message.ruleId] || 0) + 1;
-    }
-  }
-}
+const counts = countBudgetViolations(report, budgets);
 
 let failed = false;
 for (const [rule, { max, target }] of Object.entries(budgets)) {
-  const count = counts[rule] || 0;
+  const count = counts[rule];
   const note = count > max ? "OVER BUDGET" : count <= target ? "at target" : `${max - count} of headroom`;
   console.log(`${rule}: ${count} | max: ${max} | target: ${target} | ${note}`);
   if (count > max) {

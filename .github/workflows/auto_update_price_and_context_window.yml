@@ -18,15 +18,18 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
       - name: Update JSON Data
         run: |
-          uv run --frozen --with 'aiohttp==3.13.3' python ".github/workflows/auto_update_price_and_context_window_file.py"
+          uv run --frozen --with 'aiohttp==3.13.3' python ".github/scripts/auto_update_price_and_context_window_file.py"
+      - name: Regenerate JSON Schema
+        run: |
+          uv run --frozen python ci_cd/generate_model_prices_schema.py
       - name: Create Pull Request
         run: |
-          git add model_prices_and_context_window.json 
+          git add model_prices_and_context_window.json model_prices_and_context_window.schema.json
           git commit -m "Update model_prices_and_context_window.json file: $(date +'%Y-%m-%d')" 
           gh pr create --title "Update model_prices_and_context_window.json file" \
             --body "Automated update for model_prices_and_context_window.json" \

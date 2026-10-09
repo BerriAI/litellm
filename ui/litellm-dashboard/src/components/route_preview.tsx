@@ -1,8 +1,8 @@
 import React from "react";
-import { Card, Typography } from "antd";
-import { RightOutlined, InfoCircleOutlined } from "@ant-design/icons";
+import { ArrowRight, Info } from "lucide-react";
 
-const { Title, Text } = Typography;
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+
 import { getProxyBaseUrl } from "./networking";
 
 interface RoutePreviewProps {
@@ -11,103 +11,66 @@ interface RoutePreviewProps {
   includeSubpath: boolean;
 }
 
+const Endpoint = ({ label, children }: { label: string; children: React.ReactNode }) => (
+  <div className="min-w-0 flex-1 rounded-lg border bg-muted/40 p-3">
+    <div className="mb-2 text-sm text-muted-foreground">{label}</div>
+    <code className="block overflow-x-auto font-mono text-sm text-foreground">{children}</code>
+  </div>
+);
+
 const RoutePreview: React.FC<RoutePreviewProps> = ({ pathValue, targetValue, includeSubpath }) => {
   const proxyBaseUrl = getProxyBaseUrl();
 
-  const getLiteLLMProxyUrl = () => {
-    return pathValue ? `${proxyBaseUrl}${pathValue}` : "";
-  };
-
-  // Only show if both path and target are provided
   if (!pathValue || !targetValue) {
     return null;
   }
 
   return (
-    <Card className="p-5">
-      <Title level={5} className="text-lg font-semibold text-gray-900 mb-2">
-        Route Preview
-      </Title>
-      <Text type="secondary" className="text-gray-600 mb-5" style={{ display: "block" }}>
-        How your requests will be routed
-      </Text>
-
-      <div className="space-y-5">
-        {/* Basic routing */}
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-lg">Route Preview</CardTitle>
+        <CardDescription>How your requests will be routed</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-5">
         <div>
-          <div className="text-base font-semibold text-gray-900 mb-3">Basic routing:</div>
-          <div className="flex items-center gap-4">
-            {/* Your endpoint */}
-            <div className="flex-1 bg-gray-50 border border-gray-200 rounded-lg p-3">
-              <div className="text-sm text-gray-600 mb-2">Your endpoint</div>
-              <code className="font-mono text-sm text-gray-900">{getLiteLLMProxyUrl()}</code>
-            </div>
-
-            {/* Arrow */}
-            <div className="text-gray-400">
-              <RightOutlined className="text-lg" />
-            </div>
-
-            {/* Forwards to */}
-            <div className="flex-1 bg-gray-50 border border-gray-200 rounded-lg p-3">
-              <div className="text-sm text-gray-600 mb-2">Forwards to</div>
-              <code className="font-mono text-sm text-gray-900">{targetValue}</code>
-            </div>
+          <h4 className="mb-3 text-base font-semibold">Basic routing:</h4>
+          <div className="flex flex-col items-stretch gap-4 sm:flex-row sm:items-center">
+            <Endpoint label="Your endpoint">{`${proxyBaseUrl}${pathValue}`}</Endpoint>
+            <ArrowRight className="size-5 shrink-0 self-center text-muted-foreground max-sm:rotate-90" />
+            <Endpoint label="Forwards to">{targetValue}</Endpoint>
           </div>
         </div>
 
-        {includeSubpath && (
-          <>
-            {/* With subpaths */}
-            <div>
-              <div className="text-base font-semibold text-gray-900 mb-3">With subpaths:</div>
-              <div className="flex items-center gap-4">
-                {/* Your endpoint + subpath */}
-                <div className="flex-1 bg-gray-50 border border-gray-200 rounded-lg p-3">
-                  <div className="text-sm text-gray-600 mb-2">Your endpoint + subpath</div>
-                  <code className="font-mono text-sm text-gray-900">
-                    {pathValue && `${proxyBaseUrl}${pathValue}`}
-                    <span className="text-blue-600">/v1/text-to-image/base/model</span>
-                  </code>
-                </div>
-
-                {/* Arrow */}
-                <div className="text-gray-400">
-                  <RightOutlined className="text-lg" />
-                </div>
-
-                {/* Forwards to with subpath */}
-                <div className="flex-1 bg-gray-50 border border-gray-200 rounded-lg p-3">
-                  <div className="text-sm text-gray-600 mb-2">Forwards to</div>
-                  <code className="font-mono text-sm text-gray-900">
-                    {targetValue}
-                    <span className="text-blue-600">/v1/text-to-image/base/model</span>
-                  </code>
-                </div>
-              </div>
-
-              {/* Note */}
-              <div className="mt-3 text-sm text-gray-600">
-                Any path after {pathValue} will be appended to the target URL
-              </div>
+        {includeSubpath ? (
+          <div>
+            <h4 className="mb-3 text-base font-semibold">With subpaths:</h4>
+            <div className="flex flex-col items-stretch gap-4 sm:flex-row sm:items-center">
+              <Endpoint label="Your endpoint + subpath">
+                {`${proxyBaseUrl}${pathValue}`}
+                <span className="text-primary">/v1/text-to-image/base/model</span>
+              </Endpoint>
+              <ArrowRight className="size-5 shrink-0 self-center text-muted-foreground max-sm:rotate-90" />
+              <Endpoint label="Forwards to">
+                {targetValue}
+                <span className="text-primary">/v1/text-to-image/base/model</span>
+              </Endpoint>
             </div>
-          </>
-        )}
-
-        {!includeSubpath && (
-          <div className="mt-4 p-3 bg-blue-50 rounded-md border border-blue-200">
-            <div className="flex items-start">
-              <InfoCircleOutlined className="text-blue-500 mt-0.5 mr-2 flex-shrink-0" />
-              <div className="text-sm text-blue-700">
-                <span className="font-medium">Not seeing the routing you wanted?</span> Try enabling - Include Subpaths
-                - above - this allows subroutes like{" "}
-                <code className="bg-blue-100 px-1 py-0.5 rounded font-mono text-xs">/api/v1/models</code> to be
-                forwarded automatically.
-              </div>
-            </div>
+            <p className="mt-3 text-sm text-muted-foreground">
+              Any path after {pathValue} will be appended to the target URL
+            </p>
+          </div>
+        ) : (
+          <div className="flex items-start gap-2 rounded-md border border-primary/20 bg-primary/5 p-3 text-sm">
+            <Info className="mt-0.5 size-4 shrink-0 text-primary" />
+            <p>
+              <span className="font-medium">Not seeing the routing you wanted?</span> Try enabling - Include Subpaths -
+              above - this allows subroutes like{" "}
+              <code className="rounded-sm bg-primary/10 px-1 py-0.5 font-mono text-xs">/api/v1/models</code> to be
+              forwarded automatically.
+            </p>
           </div>
         )}
-      </div>
+      </CardContent>
     </Card>
   );
 };

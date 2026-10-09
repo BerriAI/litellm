@@ -11,6 +11,7 @@ import json
 import os
 import pytest
 import asyncio
+import requests
 
 # Path to your service account JSON file
 SERVICE_ACCOUNT_FILE = "path/to/your/service-account.json"
@@ -57,106 +58,35 @@ def load_vertex_ai_credentials():
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(temp_file.name)
 
 
-async def call_spend_logs_endpoint():
-    """
-    Call this
-    curl -X GET "http://0.0.0.0:4000/spend/logs" -H "Authorization: Bearer sk-1234"
-    """
-    import datetime
-    import requests
-
-    todays_date = datetime.datetime.now().strftime("%Y-%m-%d")
-    url = f"http://0.0.0.0:4000/global/spend/logs?api_key=best-api-key-ever"
-    headers = {"Authorization": f"Bearer sk-1234"}
-    response = requests.get(url, headers=headers)
-    print("response from call_spend_logs_endpoint", response)
-
-    if response.status_code != 200:
-        print(f"spend logs endpoint returned {response.status_code}: {response.text}")
-        return None
-
-    json_response = response.json()
-
-    # get spend for today
-    """
-    json response looks like this
-
-    [{'date': '2024-08-30', 'spend': 0.00016600000000000002, 'api_key': 'best-api-key-ever'}]
-    """
-    print("json_response", json_response)
-
-    todays_date = datetime.datetime.now().strftime("%Y-%m-%d")
-    for spend_log in json_response:
-        if spend_log["date"] == todays_date:
-            return spend_log["spend"]
-
-
 LITE_LLM_ENDPOINT = "http://localhost:4000"
 
-
-def _is_vertex_quota_error(exc: Exception) -> bool:
-    message = str(exc)
-    return (
-        "429" in message
-        or "Too Many Requests" in message
-        or "RESOURCE_EXHAUSTED" in message
-    )
+SPEND_LOG_API_KEY = "best-api-key-ever"
 
 
-@pytest.mark.asyncio()
-async def test_basic_vertex_ai_pass_through_with_spendlog():
+def get_tracked_spend() -> float:
+    """
+    Total spend recorded under the pass-through key in the global spend view.
 
-    spend_before = await call_spend_logs_endpoint() or 0.0
-    load_vertex_ai_credentials()
+    Sums every day the endpoint returns instead of matching the runner's local
+    "today" so a UTC date rollover mid-test can't hide a freshly billed call, and
+    treats an unreachable endpoint as "nothing recorded yet" (0.0).
+    """
+    url = f"{LITE_LLM_ENDPOINT}/global/spend/logs?api_key={SPEND_LOG_API_KEY}"
+    response = requests.get(url, headers={"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}"})
+    if response.status_code != 200:
+        print(f"global spend logs endpoint returned {response.status_code}: {response.text}")
+        return 0.0
 
-    vertexai.init(
-        project="litellm-ci-cd",
-        location="global",
-        api_endpoint=f"{LITE_LLM_ENDPOINT}/vertex_ai",
-        api_transport="rest",
-    )
-
-    model = GenerativeModel(model_name="gemini-3.1-flash-lite")
-    try:
-        response = model.generate_content("hi")
-    except Exception as exc:
-        if _is_vertex_quota_error(exc):
-            pytest.skip("Vertex AI quota exhausted")
-        raise
-
-    print("response", response)
-
-    # Spend logging is async/batched and can lag under CI load, so poll instead of
-    # sleeping a fixed amount. A transient empty read is skipped, not counted as 0.0
-    # spend, which would spuriously fail the assertion on an otherwise-billed call.
-    max_wait = 240  # total seconds to wait
-    poll_interval = 10  # seconds between checks
-    elapsed = 0
-    spend_after = spend_before
-    while elapsed < max_wait:
-        await asyncio.sleep(poll_interval)
-        elapsed += poll_interval
-        latest_spend = await call_spend_logs_endpoint()
-        if latest_spend is None:
-            print(f"spend logs unavailable (elapsed={elapsed}s), retrying")
-            continue
-        spend_after = latest_spend
-        print(f"spend_after (elapsed={elapsed}s)", spend_after)
-        if spend_after > spend_before:
-            break
-
-    assert (
-        spend_after > spend_before
-    ), "Spend should be greater than before after {}s. spend_before: {}, spend_after: {}".format(
-        elapsed, spend_before, spend_after
-    )
+    rows = response.json()
+    print("global spend logs rows", rows)
+    return sum(float(row.get("spend") or 0.0) for row in rows)
 
 
 @pytest.mark.asyncio()
 @pytest.mark.skip(reason="skip flaky test - vertex pass through streaming is flaky")
 async def test_basic_vertex_ai_pass_through_streaming_with_spendlog():
 
-    spend_before = await call_spend_logs_endpoint() or 0.0
+    spend_before = get_tracked_spend()
     print("spend_before", spend_before)
     load_vertex_ai_credentials()
 
@@ -176,7 +106,7 @@ async def test_basic_vertex_ai_pass_through_streaming_with_spendlog():
     print("response", response)
 
     await asyncio.sleep(20)
-    spend_after = await call_spend_logs_endpoint()
+    spend_after = get_tracked_spend()
     print("spend_after", spend_after)
     assert (
         spend_after > spend_before

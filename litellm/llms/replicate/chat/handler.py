@@ -1,15 +1,19 @@
 import asyncio
 import json
 import time
-from typing import Callable, List, Union
+from collections.abc import Callable
+from typing import Final
+
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.constants import REPLICATE_POLLING_DELAY_SECONDS
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import CustomStreamWrapper, ModelResponse
@@ -17,7 +21,8 @@ from litellm.utils import CustomStreamWrapper, ModelResponse
 from ..common_utils import ReplicateError
 from .transformation import ReplicateConfig
 
-replicate_config = ReplicateConfig()
+replicate_config: Final = ReplicateConfig()
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 # Function to handle prediction response (streaming)
@@ -29,9 +34,7 @@ def handle_prediction_response_streaming(
 
     status = ""
     while True and (status not in ["succeeded", "failed", "canceled"]):
-        time.sleep(
-            REPLICATE_POLLING_DELAY_SECONDS
-        )  # prevent being rate limited by replicate
+        time.sleep(REPLICATE_POLLING_DELAY_SECONDS)  # prevent being rate limited by replicate
         print_verbose(f"replicate: polling endpoint: {prediction_url}")
         response = http_client.get(prediction_url, headers=headers)
         if response.status_code == 200:
@@ -43,9 +46,7 @@ def handle_prediction_response_streaming(
                 except Exception:
                     raise ReplicateError(
                         status_code=422,
-                        message="Unable to parse response. Got={}".format(
-                            response_data["output"]
-                        ),
+                        message="Unable to parse response. Got={}".format(response_data["output"]),
                         headers=response.headers,
                     )
                 new_output = output_string[len(previous_output) :]
@@ -80,17 +81,13 @@ async def async_handle_prediction_response_streaming(
 
     status = ""
     while True and (status not in ["succeeded", "failed", "canceled"]):
-        await asyncio.sleep(
-            REPLICATE_POLLING_DELAY_SECONDS
-        )  # prevent being rate limited by replicate
+        await asyncio.sleep(REPLICATE_POLLING_DELAY_SECONDS)  # prevent being rate limited by replicate
         response = await http_client.get(prediction_url, headers=headers)
         if response.status_code == 200:
-            response_data = response.json()
+            response_data = _JSON_OBJECT.validate_python(response.json())
             status = response_data.get("status", "")
             # Check that "output" exists and is not None or empty
-            output_present = (
-                "output" in response_data and response_data["output"] is not None
-            )
+            output_present = "output" in response_data and response_data["output"] is not None
             if output_present:
                 try:
                     # If output is None or not a list, treat as empty string
@@ -104,9 +101,7 @@ async def async_handle_prediction_response_streaming(
                 except Exception:
                     raise ReplicateError(
                         status_code=422,
-                        message="Unable to parse response. Got={}".format(
-                            response_data.get("output", None)
-                        ),
+                        message="Unable to parse response. Got={}".format(response_data.get("output", None)),
                         headers=response.headers,
                     )
                 new_output = output_string[len(previous_output) :]
@@ -137,14 +132,14 @@ def completion(
     print_verbose: Callable,
     optional_params: dict,
     litellm_params: dict,
-    logging_obj,
+    logging_obj: LiteLLMLoggingObj,
     api_key,
     encoding,
     custom_prompt_dict={},
     logger_fn=None,
     acompletion=None,
     headers={},
-) -> Union[ModelResponse, CustomStreamWrapper]:
+) -> ModelResponse | CustomStreamWrapper:
     headers = replicate_config.validate_environment(
         api_key=api_key,
         headers=headers,
@@ -154,8 +149,8 @@ def completion(
         litellm_params=litellm_params,
     )
     # Start a prediction and get the prediction URL
-    version_id = replicate_config.model_to_version_id(model)
-    input_data = replicate_config.transform_request(
+    version_id: Final = replicate_config.model_to_version_id(model)
+    input_data: Final = replicate_config.transform_request(
         model=model,
         messages=messages,
         optional_params=optional_params,
@@ -178,11 +173,9 @@ def completion(
             logging_obj=logging_obj,
             print_verbose=print_verbose,
             headers=headers,
-        )  # type: ignore
+        )
     ## COMPLETION CALL
-    model_response.created = int(
-        time.time()
-    )  # for pricing this must remain right before calling api
+    model_response.created = int(time.time())  # for pricing this must remain right before calling api
 
     prediction_url = replicate_config.get_complete_url(
         api_base=api_base,
@@ -193,7 +186,7 @@ def completion(
     )
 
     ## COMPLETION CALL
-    httpx_client = _get_httpx_client(
+    httpx_client: Final = get_httpx_client(
         params={"timeout": 600.0},
     )
     response = httpx_client.post(
@@ -207,21 +200,21 @@ def completion(
     # Handle the prediction response (streaming or non-streaming)
     if "stream" in optional_params and optional_params["stream"] is True:
         print_verbose("streaming request")
-        _response = handle_prediction_response_streaming(
+        _response: Final = handle_prediction_response_streaming(
             prediction_url,
             api_key,
             print_verbose,
             headers=headers,
             http_client=httpx_client,
         )
-        return CustomStreamWrapper(_response, model, logging_obj=logging_obj, custom_llm_provider="replicate")  # type: ignore
+        return CustomStreamWrapper(_response, model, logging_obj=logging_obj, custom_llm_provider="replicate")
     else:
         for retry in range(litellm.DEFAULT_REPLICATE_POLLING_RETRIES):
             time.sleep(
                 litellm.DEFAULT_REPLICATE_POLLING_DELAY_SECONDS + 2 * retry
             )  # wait to allow response to be generated by replicate - else partial output is generated with status=="processing"
             response = httpx_client.get(url=prediction_url, headers=headers)
-            if response.status_code == 200 and response.json().get("status") in [
+            if response.status_code == 200 and _JSON_OBJECT.validate_python(response.json()).get("status") in [
                 "processing",
                 "starting",
             ]:
@@ -249,7 +242,7 @@ def completion(
 async def async_completion(
     model_response: ModelResponse,
     model: str,
-    messages: List[AllMessageValues],
+    messages: list[AllMessageValues],
     encoding,
     optional_params: dict,
     litellm_params: dict,
@@ -257,10 +250,10 @@ async def async_completion(
     input_data,
     api_key,
     api_base,
-    logging_obj,
+    logging_obj: LiteLLMLoggingObj,
     print_verbose,
     headers: dict,
-) -> Union[ModelResponse, CustomStreamWrapper]:
+) -> ModelResponse | CustomStreamWrapper:
     prediction_url = replicate_config.get_complete_url(
         api_base=api_base,
         api_key=api_key,
@@ -268,31 +261,29 @@ async def async_completion(
         optional_params=optional_params,
         litellm_params=litellm_params,
     )
-    async_handler = get_async_httpx_client(
+    async_handler: Final = get_async_httpx_client(
         llm_provider=litellm.LlmProviders.REPLICATE,
         params={"timeout": 600.0},
     )
-    response = await async_handler.post(
-        url=prediction_url, headers=headers, data=json.dumps(input_data)
-    )
+    response = await async_handler.post(url=prediction_url, headers=headers, data=json.dumps(input_data))
     prediction_url = replicate_config.get_prediction_url(response)
 
     if "stream" in optional_params and optional_params["stream"] is True:
-        _response = async_handle_prediction_response_streaming(
+        _response: Final = async_handle_prediction_response_streaming(
             prediction_url,
             api_key,
             print_verbose,
             headers=headers,
             http_client=async_handler,
         )
-        return CustomStreamWrapper(_response, model, logging_obj=logging_obj, custom_llm_provider="replicate")  # type: ignore
+        return CustomStreamWrapper(_response, model, logging_obj=logging_obj, custom_llm_provider="replicate")
 
     for retry in range(litellm.DEFAULT_REPLICATE_POLLING_RETRIES):
         await asyncio.sleep(
             litellm.DEFAULT_REPLICATE_POLLING_DELAY_SECONDS + 2 * retry
         )  # wait to allow response to be generated by replicate - else partial output is generated with status=="processing"
         response = await async_handler.get(url=prediction_url, headers=headers)
-        if response.status_code == 200 and response.json().get("status") in [
+        if response.status_code == 200 and _JSON_OBJECT.validate_python(response.json()).get("status") in [
             "processing",
             "starting",
         ]:

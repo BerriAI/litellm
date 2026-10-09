@@ -1,19 +1,27 @@
+from collections.abc import Sequence
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Final, Literal, Optional, Union
 
-from pydantic import BaseModel
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
 class LiteLLMCacheType(str, Enum):
     LOCAL = "local"
     REDIS = "redis"
     REDIS_SEMANTIC = "redis-semantic"
+    VALKEY_SEMANTIC = "valkey-semantic"
     S3 = "s3"
     DISK = "disk"
     QDRANT_SEMANTIC = "qdrant-semantic"
     AZURE_BLOB = "azure-blob"
     GCS = "gcs"
+
+
+class SemanticCacheScope(str, Enum):
+    KEY = "key"
+    END_USER = "end_user"
 
 
 CachingSupportedCallTypes = Literal[
@@ -29,7 +37,26 @@ CachingSupportedCallTypes = Literal[
     "rerank",
     "responses",
     "aresponses",
+    "anthropic_messages",
+    "aanthropic_messages",
 ]
+
+DEFAULT_CACHING_SUPPORTED_CALL_TYPES: tuple[CachingSupportedCallTypes, ...] = (
+    "completion",
+    "acompletion",
+    "embedding",
+    "aembedding",
+    "atranscription",
+    "transcription",
+    "atext_completion",
+    "text_completion",
+    "arerank",
+    "rerank",
+    "responses",
+    "aresponses",
+    "anthropic_messages",
+    "aanthropic_messages",
+)
 
 
 class RedisPipelineIncrementOperation(TypedDict):
@@ -39,7 +66,7 @@ class RedisPipelineIncrementOperation(TypedDict):
 
     key: str
     increment_value: float
-    ttl: Optional[int]
+    ttl: int | None
 
 
 class RedisPipelineSetOperation(TypedDict):
@@ -49,7 +76,7 @@ class RedisPipelineSetOperation(TypedDict):
 
     key: str
     value: Any
-    ttl: Optional[int]
+    ttl: int | None
 
 
 class RedisPipelineRpushOperation(TypedDict):
@@ -58,7 +85,7 @@ class RedisPipelineRpushOperation(TypedDict):
     """
 
     key: str
-    values: List[Any]
+    values: Sequence[Any]
 
 
 class RedisPipelineLpopOperation(TypedDict):
@@ -67,56 +94,62 @@ class RedisPipelineLpopOperation(TypedDict):
     """
 
     key: str
-    count: Optional[int]
+    count: int | None
 
 
 DynamicCacheControl = TypedDict(
     "DynamicCacheControl",
     {
         # Will cache the response for the user-defined amount of time (in seconds).
-        "ttl": Optional[int],
+        "ttl": int | None,
         # Namespace to use for caching
-        "namespace": Optional[str],
+        "namespace": str | None,
         # Max Age to use for caching
-        "s-maxage": Optional[int],
-        "s-max-age": Optional[int],
+        "s-maxage": int | None,
+        "s-max-age": int | None,
         # Will not return a cached response, but instead call the actual endpoint.
-        "no-cache": Optional[bool],
+        "no-cache": bool | None,
         # Will not store the response in the cache.
-        "no-store": Optional[bool],
+        "no-store": bool | None,
     },
 )
 
 
-class CachePingResponse(BaseModel):
+class CachePingResponse(LiteLLMBaseModel):
     status: str
     cache_type: str
-    ping_response: Optional[bool] = None
-    set_cache_response: Optional[str] = None
-    litellm_cache_params: Optional[str] = None
+    ping_response: bool | None = None
+    set_cache_response: str | None = None
+    litellm_cache_params: str | None = None
 
     # intentionally a dict, since we run masker.mask_dict() on HealthCheckCacheParams
-    health_check_cache_params: Optional[dict] = None
+    health_check_cache_params: dict | None = None
 
 
-class HealthCheckCacheParams(BaseModel):
+class HealthCheckCacheParams(LiteLLMBaseModel):
     """
     Cache Params returned on /cache/ping call
     """
 
-    host: Optional[str] = None
-    port: Optional[Union[str, int]] = None
-    redis_kwargs: Optional[Dict[str, Any]] = None
-    namespace: Optional[str] = None
-    redis_version: Optional[Union[str, int, float]] = None
+    host: str | None = None
+    port: str | int | None = None
+    redis_kwargs: dict[str, Any] | None = None
+    namespace: str | None = None
+    redis_version: str | int | float | None = None
+
+
+EMBEDDING_CACHE_FORMAT_VERSION: Final = 2
+
+CACHED_STREAM_EVENTS_KEY: Final = "litellm_cached_anthropic_sse_events"
 
 
 class CachedEmbedding(TypedDict):
     """Type definition for cached embedding objects"""
 
-    embedding: Optional[List[float]]
-    index: Optional[int]
-    object: Optional[str]
-    model: Optional[str]
-    prompt_tokens: Optional[int]
-    prompt_tokens_details: Optional[dict]
+    embedding: ReadOnly[list[float] | str | None]
+    index: ReadOnly[int | None]
+    object: ReadOnly[str | None]
+    model: ReadOnly[str | None]
+    prompt_tokens: ReadOnly[int | None]
+    prompt_tokens_details: ReadOnly[dict | None]
+    format_version: ReadOnly[int]

@@ -1,40 +1,62 @@
 #!/usr/bin/env python3
-"""Total-count gate for the LIT* rules in scripts/check_type_discipline.py.
+"""Delta-vs-base gate for the LIT* rules in scripts/check_type_discipline.py.
 
-Sibling of scripts/ruff_strict_gate.py. Each rule listed in
-type-discipline-budget.json has a hard ceiling (baseline + slack). The gate counts
-each rule across the whole `litellm` tree and fails when a rule is both over its
-ceiling and higher than the base it merges into, so a change is blamed for the
-violations it adds, never for drift that already exists in the base.
+Sibling of scripts/ruff_strict_gate.py. Each rule is counted across the whole
+`litellm` tree at HEAD and at the merge-base with the branch this change merges
+into, and the gate fails only when a rule grew past the merge-base count, so a
+change is blamed for the violations it adds, never for drift that already exists
+in the base. There is no committed budget: the merge-base count is the ceiling,
+so it moves only when the base branch does.
 
-Rules not present in the budget are ignored, but today every rule the checker
-emits is gated: LIT001 (mutable collection in any annotation), LIT002
-(mutable-collection construction), LIT003/LIT004 (noqa / ignore without codes or
-reason), LIT006 (cast), and LIT008 (`**kwargs`) carry slack-buffered ceilings to
-ratchet down; LIT005 (`*-ok` suppression without a reason) is frozen at slack 0
-so any net-new reasonless suppression trips the gate; and LIT007 (TypeGuard/TypeIs)
-is a hard zero. Re-baseline with `--update` to ratchet a ceiling down.
+Every rule the checker emits is gated: LIT001 (mutable collection in any
+annotation), LIT003/LIT004 (noqa / pyright-mypy ignore without codes or
+reason), LIT005 (`*-ok` suppression without a reason), LIT006 (cast), LIT007
+(TypeGuard/TypeIs), LIT008 (`**kwargs`), LIT009 (inert `# type: ignore`, dead
+syntax while enableTypeIgnoreComments is false), LIT010 (assignment without a
+Final declaration; suppress deliberate rebinding with `# rebind-ok: <reason>`),
+LIT011 (parameter rebinding or in-place mutation), LIT012 (TypedDict field
+without a `ReadOnly[...]` qualifier; suppress with `# writable-ok: <reason>`),
+LIT013 (`*-ok` suppression that suppresses nothing), LIT014 (comprehension
+with more than one `for` or `if` clause; suppress with
+`# comprehension-ok: <reason>` on a spanned line, which belongs to the innermost
+violating comprehension spanning it and to any single-line violating
+comprehension on that line), and LIT015 (pydantic model not frozen; suppress
+with `# frozen-ok: <reason>`).
+
+The merge-base counts come from scripts/lint_base_counts.py: the disk cache,
+then the CI artifact published for that commit, then a pass of the current
+checker over a detached worktree at the merge-base, so a rule change on this
+branch is measured on both sides. ``--emit-counts-dir`` writes HEAD's counts
+as the file that artifact is built from.
 """
 
 import argparse
-import json
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
 from collections import Counter
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import NamedTuple
+from typing import Final, NamedTuple
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-CHECKER = REPO_ROOT / "scripts" / "check_type_discipline.py"
-BUDGET_PATH = REPO_ROOT / "type-discipline-budget.json"
-TARGET = "litellm"
-DEFAULT_BASE = "origin/litellm_internal_staging"
+from lint_base_counts import (
+    Checker,
+    base_counts_cached,
+    emit_counts,
+    evaluate,
+    head_sha,
+    resolve_base_point,
+    sha256_of,
+)
 
-_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
-_LINE = re.compile(r"^(?P<file>.+?):(?P<line>\d+): (?P<code>LIT\d+) ")
+REPO_ROOT: Final = Path(__file__).resolve().parent.parent
+CHECKER: Final = REPO_ROOT / "scripts" / "check_type_discipline.py"
+TARGET: Final = "litellm"
+
+_HUNK: Final = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+_LINE: Final = re.compile(r"^(?P<file>.+?):(?P<line>\d+): (?P<code>LIT\d+) ")
 
 
 class Violation(NamedTuple):
@@ -43,22 +65,19 @@ class Violation(NamedTuple):
     code: str
 
 
-class Breach(NamedTuple):
-    rule: str
-    total: int
-    cap: int
-    added: int
-
-
-def _run(cmd: list, cwd: Path = REPO_ROOT) -> str:
-    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+def _run(cmd: Sequence[str], cwd: Path = REPO_ROOT) -> str:
+    proc: Final = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
     if proc.returncode not in (0, 1):
         sys.stderr.write(proc.stderr)
         raise SystemExit(f"{cmd[0]} exited {proc.returncode}")
     return proc.stdout
 
 
-def _check(root: Path, checker: Path) -> list:
+def checker_identity(checker: Path = CHECKER) -> Checker:
+    return Checker("type-discipline", (sha256_of(checker),))
+
+
+def _check(root: Path, checker: Path) -> list[Violation]:
     # Resolve root first: on macOS tempfile dirs (/var/...) resolve to /private/var/...,
     # and the checker prints already-resolved absolute paths, so relative_to would fail.
     root = root.resolve()
@@ -75,22 +94,22 @@ def _check(root: Path, checker: Path) -> list:
     return found
 
 
-def head_violations() -> list:
+def head_violations() -> list[Violation]:
     return _check(REPO_ROOT, CHECKER)
 
 
-def count_by_rule(violations: list) -> dict:
+def count_by_rule(violations: Sequence[Violation]) -> dict[str, int]:
     return dict(Counter(v.code for v in violations))
 
 
-def base_counts(ref: str) -> dict:
-    parent = Path(tempfile.mkdtemp(prefix="lit_base_"))
-    worktree = parent / "wt"
+def base_counts(ref: str) -> dict[str, int]:
+    parent: Final = Path(tempfile.mkdtemp(prefix="lit_base_"))
+    worktree: Final = parent / "wt"
     try:
         _run(["git", "worktree", "add", "--detach", str(worktree), ref])
         # Measure the base with the *current* rule logic, not whatever shipped at base.
         (worktree / "scripts").mkdir(parents=True, exist_ok=True)
-        checker = worktree / "scripts" / "check_type_discipline.py"
+        checker: Final = worktree / "scripts" / "check_type_discipline.py"
         shutil.copy(CHECKER, checker)
         return count_by_rule(_check(worktree, checker))
     finally:
@@ -98,35 +117,15 @@ def base_counts(ref: str) -> dict:
         # the body (or the `worktree add` itself) failed. rmtree is already best-effort.
         subprocess.run(
             ["git", "worktree", "remove", "--force", str(worktree)],
-            cwd=REPO_ROOT, capture_output=True, text=True,
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
         )
         shutil.rmtree(parent, ignore_errors=True)
 
 
-def over_ceiling(head: dict, budget: dict) -> frozenset:
-    """Rules whose head count already exceeds baseline + slack.
-
-    A rule can only breach when it is over its ceiling, so when none are the base
-    comparison cannot change the verdict and the base worktree scan can be skipped.
-    """
-    return frozenset(
-        rule for rule, spec in budget.items()
-        if head.get(rule, 0) > spec["baseline"] + spec["slack"]
-    )
-
-
-def evaluate(head: dict, base: dict, budget: dict) -> list:
-    breaches = []
-    for rule, spec in budget.items():
-        cap = spec["baseline"] + spec["slack"]
-        total = head.get(rule, 0)
-        if total > cap and total > base.get(rule, 0):
-            breaches.append(Breach(rule, total, cap, total - base.get(rule, 0)))
-    return sorted(breaches)
-
-
-def parse_changed_lines(diff_text: str) -> dict:
-    changed: dict = {}
+def parse_changed_lines(diff_text: str) -> dict[str, set[int]]:
+    changed: dict[str, set[int]] = {}
     path = None
     for line in diff_text.splitlines():
         if line.startswith("+++ b/"):
@@ -138,60 +137,54 @@ def parse_changed_lines(diff_text: str) -> dict:
     return changed
 
 
-def introduced(violations: list, changed: dict) -> list:
+def introduced(violations: Sequence[Violation], changed: Mapping[str, set[int]]) -> list[Violation]:
     return [v for v in violations if v.line in changed.get(v.file, set())]
 
 
 def cmd_check(base: str) -> None:
-    budget = json.loads(BUDGET_PATH.read_text())
-    head = head_violations()
-    head_counts = count_by_rule(head)
-    if not over_ceiling(head_counts, budget):
-        print(f"OK: every LIT rule is within its codebase ceiling (base {base})")
-        return
-    base_point = _run(["git", "merge-base", base, "HEAD"]).strip() or base
-    breaches = evaluate(head_counts, base_counts(base_point), budget)
+    head: Final = head_violations()
+    base_point: Final = resolve_base_point(base)
+    breaches: Final = evaluate(count_by_rule(head), base_counts_cached(checker_identity(), base_point, base_counts))
     if not breaches:
-        print(f"OK: every LIT rule is within its codebase ceiling (base {base})")
+        print(f"OK: no LIT rule grew past its merge-base count (base {base})")
         return
-    new = introduced(
-        head,
-        parse_changed_lines(
-            _run(["git", "diff", base_point, "--unified=0", "--no-color", "--", TARGET])
-        ),
-    )
-    print(f"FAIL: LIT-rule totals exceed their ceiling (base {base}):")
+    diff: Final = _run(["git", "diff", base_point, "--unified=0", "--no-color", "--", TARGET])
+    new: Final = introduced(head, parse_changed_lines(diff))
+    print(f"FAIL: LIT-rule totals grew past their merge-base count (base {base}):")
     for breach in breaches:
-        print(
-            f"  {breach.rule}: total {breach.total} over cap {breach.cap} (this change added {breach.added})"
-        )
+        print(f"  {breach.rule}: total {breach.total} over ceiling {breach.ceiling} (this change added {breach.added})")
         for violation in sorted(v for v in new if v.code == breach.rule):
             print(f"    {violation.file}:{violation.line}")
     print(
         "Remove the new violations, give each a reason (`# noqa: XXX  # <reason>`, "
-        "`# pyright: ignore[rule]  # <reason>`, `# mutable-ok: <reason>`, "
-        "`# cast-ok: <reason>`, `# guard-ok: <reason>`, `# kwargs-ok: <reason>`), or "
-        "remove an equal number elsewhere; the ceiling is baseline + slack in "
-        "type-discipline-budget.json."
+        "`# pyright: ignore[rule]  # <reason>`, `# mutable-ok: <reason>`, `# cast-ok: <reason>`, "
+        "`# guard-ok: <reason>`, `# kwargs-ok: <reason>`, `# rebind-ok: <reason>`, "
+        "`# writable-ok: <reason>`, `# comprehension-ok: <reason>`, `# frozen-ok: <reason>`), "
+        "or remove an equal number "
+        "elsewhere; the ceiling is the merge-base count."
     )
     raise SystemExit(1)
 
 
-def cmd_update() -> None:
-    budget = json.loads(BUDGET_PATH.read_text())
-    head = count_by_rule(head_violations())
-    for rule in budget:
-        budget[rule]["baseline"] = head.get(rule, 0)
-    BUDGET_PATH.write_text(json.dumps(budget, indent=2, sort_keys=True) + "\n")
-    print("Re-captured per-rule baselines from the current tree")
-
-
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base", default=DEFAULT_BASE)
-    parser.add_argument("--update", action="store_true")
-    args = parser.parse_args()
-    cmd_update() if args.update else cmd_check(args.base)
+    parser: Final = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--base", help="Comparison ref (default: origin's current default branch)")
+    parser.add_argument(
+        "--emit-counts-dir",
+        type=Path,
+        help="Write HEAD's per-rule counts to this directory as a base-counts artifact instead of gating",
+    )
+    args: Final = parser.parse_args()
+    from default_branch import resolve_base_ref
+    from gate_slot_lock import held_slot
+
+    if args.emit_counts_dir is not None:
+        with held_slot():
+            emit_counts(checker_identity(), count_by_rule(head_violations()), args.emit_counts_dir, head_sha())
+        return
+    base_ref: Final = resolve_base_ref(args.base, REPO_ROOT)
+    with held_slot():
+        cmd_check(base_ref)
 
 
 if __name__ == "__main__":

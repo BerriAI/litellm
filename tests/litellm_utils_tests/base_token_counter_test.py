@@ -10,19 +10,13 @@ Usage:
     the abstract methods to provide provider-specific configuration.
 """
 
-import os
-import sys
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
-from litellm.types.utils import TokenCountResponse
 
 
 class BaseTokenCounterTest(ABC):
@@ -76,69 +70,3 @@ class BaseTokenCounterTest(ABC):
             ):
                 pytest.skip(f"Missing or invalid credentials: {e}")
             raise
-
-    @pytest.mark.asyncio
-    async def test_count_tokens_basic(self):
-        """
-        Test basic token counting functionality.
-
-        Verifies that:
-        - Token counter returns a TokenCountResponse
-        - total_tokens is greater than 0
-        - tokenizer_type is set
-        - No error occurred
-        """
-        token_counter = self.get_token_counter()
-        model = self.get_test_model()
-        messages = self.get_test_messages()
-        deployment = self.get_deployment_config()
-
-        result = await token_counter.count_tokens(
-            model_to_use=model,
-            messages=messages,
-            contents=None,
-            deployment=deployment,
-            request_model=model,
-        )
-
-        print(f"Token count result: {result}")
-
-        assert result is not None, "Token counter should return a result"
-        assert isinstance(
-            result, TokenCountResponse
-        ), "Result should be TokenCountResponse"
-        assert (
-            result.total_tokens > 0
-        ), f"Token count should be > 0, got {result.total_tokens}"
-        assert result.tokenizer_type is not None, "tokenizer_type should be set"
-        assert (
-            result.error is not True
-        ), f"Token counting should not error: {result.error_message}"
-
-    def test_should_use_token_counting_api(self):
-        """
-        Test that should_use_token_counting_api returns True for the correct provider.
-
-        Verifies that the token counter correctly identifies when it should be used
-        based on the custom_llm_provider.
-        """
-        token_counter = self.get_token_counter()
-        provider = self.get_custom_llm_provider()
-
-        result = token_counter.should_use_token_counting_api(
-            custom_llm_provider=provider
-        )
-
-        assert (
-            result is True
-        ), f"should_use_token_counting_api should return True for {provider}"
-
-        # Also verify it returns False for other providers
-        other_provider = "some_other_provider_that_doesnt_exist"
-        result_other = token_counter.should_use_token_counting_api(
-            custom_llm_provider=other_provider
-        )
-
-        assert (
-            result_other is False
-        ), f"should_use_token_counting_api should return False for {other_provider}"

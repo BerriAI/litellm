@@ -11,12 +11,20 @@ If given, generate a unique model_id for the deployment.
 Ensures cooldowns are applied correctly.
 """
 
-from typing import List
+from typing import Final
 
-clientside_credential_keys = ["api_key", "api_base", "base_url"]
+from litellm.types.utils import server_owned_wif_litellm_params
+
+clientside_credential_keys: Final = ["api_key", "api_base", "base_url"]
+
+# Set on a deployment whose api_base was client-redirected, so the Anthropic auth path refuses to
+# mint a federation token there even when WIF is configured only through ANTHROPIC_* env vars (which
+# cannot be cleared from litellm_params).
+DISABLE_WORKLOAD_IDENTITY_PARAM: Final = "anthropic_disable_workload_identity_federation"
+_WIF_CLEAR_ON_BASE_OVERRIDE: Final = tuple(sorted(server_owned_wif_litellm_params))
 
 
-def _admin_config_fields_to_clear_on_base_override() -> List[str]:
+def _admin_config_fields_to_clear_on_base_override() -> list[str]:
     """
     Provider-specific credential / endpoint-targeting fields that must NOT
     flow through to a client-redirected upstream.
@@ -28,12 +36,8 @@ def _admin_config_fields_to_clear_on_base_override() -> List[str]:
     """
     from litellm.types.router import CredentialLiteLLMParams
 
-    typed_fields = [
-        f
-        for f in CredentialLiteLLMParams.model_fields
-        if f not in clientside_credential_keys
-    ]
-    kwargs_only_fields = [
+    typed_fields: Final = [f for f in CredentialLiteLLMParams.model_fields if f not in clientside_credential_keys]
+    kwargs_only_fields: Final = [
         # Caller-supplied via **kwargs, not declared on CredentialLiteLLMParams.
         "organization",
         "extra_body",
@@ -56,13 +60,26 @@ def _admin_config_fields_to_clear_on_base_override() -> List[str]:
         "oci_tenancy",
         "oci_key",
         "oci_key_file",
+        # NVIDIA Riva fields — consumed by
+        # ``litellm/llms/nvidia_riva/audio_transcription/handler.py`` via
+        # optional_params and not declared on CredentialLiteLLMParams.
+        # Admin-pinned values must not flow through on a caller-redirected
+        # ``api_base`` for the same reason as the OCI entries above.
+        "nvcf_function_id",
+        "use_ssl",
+        # Workload-identity federation minting fields, restated here from
+        # server_owned_wif_litellm_params the same way azure_ad_token above is restated
+        # despite also being declared on CredentialLiteLLMParams (hence covered by
+        # typed_fields too): a federation token minted for a client-redirected api_base
+        # would send the workload's OIDC assertion, and then the minted bearer, to the
+        # caller-chosen host, so this list must stay correct even if a field is ever
+        # dropped from the typed model.
+        *_WIF_CLEAR_ON_BASE_OVERRIDE,
     ]
     return typed_fields + kwargs_only_fields
 
 
-_ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE = (
-    _admin_config_fields_to_clear_on_base_override()
-)
+_ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE: Final = _admin_config_fields_to_clear_on_base_override()
 
 
 def is_clientside_credential(request_kwargs: dict) -> bool:
@@ -100,5 +117,6 @@ def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> di
             litellm_params.pop(field, None)
             if field in request_kwargs:
                 litellm_params[field] = request_kwargs[field]
+        litellm_params[DISABLE_WORKLOAD_IDENTITY_PARAM] = True
 
     return litellm_params

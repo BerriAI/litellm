@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
     import litellm
 
-    _qualifire_callback = QualifireGuardrail(
+    _qualifire_callback: Final = QualifireGuardrail(
         api_key=litellm_params.api_key,
         api_base=litellm_params.api_base,
         evaluation_id=getattr(litellm_params, "evaluation_id", None),
@@ -19,17 +19,14 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         hallucinations_check=getattr(litellm_params, "hallucinations_check", None),
         grounding_check=getattr(litellm_params, "grounding_check", None),
         pii_check=getattr(litellm_params, "pii_check", None),
-        content_moderation_check=getattr(
-            litellm_params, "content_moderation_check", None
-        ),
-        tool_selection_quality_check=getattr(
-            litellm_params, "tool_selection_quality_check", None
-        ),
+        content_moderation_check=getattr(litellm_params, "content_moderation_check", None),
+        tool_selection_quality_check=getattr(litellm_params, "tool_selection_quality_check", None),
         assertions=getattr(litellm_params, "assertions", None),
         on_flagged=getattr(litellm_params, "on_flagged", "block"),
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
+        timeout=litellm_params.timeout,
     )
 
     litellm.logging_callback_manager.add_litellm_callback(_qualifire_callback)
@@ -37,11 +34,11 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return _qualifire_callback
 
 
-guardrail_initializer_registry = {
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.QUALIFIRE.value: initialize_guardrail,
 }
 
 
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.QUALIFIRE.value: QualifireGuardrail,
 }

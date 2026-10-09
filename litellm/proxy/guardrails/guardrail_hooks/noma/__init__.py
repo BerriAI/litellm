@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -14,13 +14,11 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     if isinstance(use_v2, str):
         use_v2 = use_v2.lower() == "true"
     if use_v2:
-        return initialize_guardrail_v2(
-            litellm_params=litellm_params, guardrail=guardrail
-        )
+        return initialize_guardrail_v2(litellm_params=litellm_params, guardrail=guardrail)
 
     import litellm
 
-    _noma_callback = NomaGuardrail(
+    _noma_callback: Final = NomaGuardrail(
         guardrail_name=guardrail.get("guardrail_name", ""),
         api_key=litellm_params.api_key,
         api_base=litellm_params.api_base,
@@ -30,6 +28,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         anonymize_input=litellm_params.anonymize_input,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
+        timeout=litellm_params.timeout,
     )
     litellm.logging_callback_manager.add_litellm_callback(_noma_callback)
 
@@ -39,28 +38,30 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
 def initialize_guardrail_v2(litellm_params: "LitellmParams", guardrail: "Guardrail"):
     import litellm
 
-    _noma_v2_callback = NomaV2Guardrail(
+    _noma_v2_callback: Final = NomaV2Guardrail(
         guardrail_name=guardrail.get("guardrail_name", ""),
         api_key=litellm_params.api_key,
         api_base=litellm_params.api_base,
         application_id=litellm_params.application_id,
+        gateway_name=litellm_params.gateway_name,
         monitor_mode=litellm_params.monitor_mode,
         block_failures=litellm_params.block_failures,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
+        timeout=litellm_params.timeout,
     )
     litellm.logging_callback_manager.add_litellm_callback(_noma_v2_callback)
 
     return _noma_v2_callback
 
 
-guardrail_initializer_registry = {
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.NOMA.value: initialize_guardrail,
     SupportedGuardrailIntegrations.NOMA_V2.value: initialize_guardrail_v2,
 }
 
 
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.NOMA.value: NomaGuardrail,
     SupportedGuardrailIntegrations.NOMA_V2.value: NomaV2Guardrail,
 }
