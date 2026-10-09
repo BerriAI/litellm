@@ -125,11 +125,11 @@ def _usage_token_value(usage_obj: object, standard_name: str, decision_name: str
     Returns:
         int: The token count, defaulting to 0.
     """
-    value = getattr(usage_obj, standard_name, None)
+    value = getattr(usage_obj, standard_name, None)  # rebind-ok: staged fallback lookup
     if value is None and isinstance(usage_obj, dict):
-        value = usage_obj.get(standard_name)
+        value = usage_obj.get(standard_name)  # rebind-ok: staged fallback lookup
     if value is None and decision_name is not None:
-        value = getattr(usage_obj, decision_name, None)
+        value = getattr(usage_obj, decision_name, None)  # rebind-ok: staged fallback lookup
     return value or 0
 
 
