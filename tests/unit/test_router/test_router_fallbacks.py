@@ -176,8 +176,6 @@ async def test_client_side_fallbacks_list(sync_mode):
 async def test_router_content_policy_fallbacks(
     sync_mode, content_filter_response_exception, fallback_type
 ):
-    os.environ["LITELLM_LOG"] = "DEBUG"
-
     if content_filter_response_exception:
         mock_response = Exception("content filtering policy")
     else:
