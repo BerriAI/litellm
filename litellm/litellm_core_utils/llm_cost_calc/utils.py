@@ -401,8 +401,10 @@ def _get_tiered_base_costs(model_info: ModelInfo, usage: Usage) -> tuple[float, 
         tier_rate(tier, "input_cost_per_token"),
         completion_cost,
         cache_creation_cost,
-        tier_rate(tier, "cache_creation_input_token_cost_above_1hr", "cache_creation_input_token_cost")
-        or cache_creation_cost,
+        tier_rate(tier, "cache_creation_input_token_cost_above_1hr")
+        if "cache_creation_input_token_cost_above_1hr" in tier
+        and tier["cache_creation_input_token_cost_above_1hr"] is not None
+        else cache_creation_cost,
         tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token"),
     )
 
