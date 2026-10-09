@@ -251,7 +251,7 @@ async def test_native_messages_observes_runtime_capabilities_and_separate_caller
     request: Final = NativeCall(
         args=(),
         kwargs={"temperature": 0.2, "drop_params": True},
-        bound={
+        base={
             "model": model,
             "messages": MESSAGES,
             "max_tokens": 16,

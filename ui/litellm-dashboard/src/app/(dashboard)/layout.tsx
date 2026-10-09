@@ -23,6 +23,7 @@ import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/s
 import { Button } from "@/components/ui/button";
 import { Menu } from "lucide-react";
 import { useMediaQuery } from "usehooks-ts";
+import { CommandPaletteProvider } from "@/components/CommandPalette/CommandPaletteProvider";
 
 const pluginApiClient = createApiClient({ getBaseUrl: () => getProxyBaseUrl() ?? "" });
 
@@ -168,26 +169,28 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
           <SidebarProvider sidebarCollapsed={false} onToggleCollapsed={() => setMobileNavigationKey(null)} />
         </SheetContent>
         <LiteAdminFrame>
-          <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-            <DashboardHeader
-              navigationTrigger={
-                <SheetTrigger
-                  render={
-                    <Button variant="ghost" size="icon" className="size-11 md:hidden" aria-label="Open navigation" />
-                  }
-                >
-                  <Menu />
-                </SheetTrigger>
-              }
-            />
-            <DebugWarningBanner accessToken={accessToken} />
-            <NoRedisWarningBanner accessToken={accessToken} />
-            <EnvCredentialLoginWarningBanner accessToken={accessToken} />
-            <LicenseExpiryBanner accessToken={accessToken} />
-            <UserBanner accessToken={accessToken} />
-            <UpgradeBanner accessToken={accessToken} />
-            <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">{children}</main>
-          </div>
+          <CommandPaletteProvider>
+            <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+              <DashboardHeader
+                navigationTrigger={
+                  <SheetTrigger
+                    render={
+                      <Button variant="ghost" size="icon" className="size-11 md:hidden" aria-label="Open navigation" />
+                    }
+                  >
+                    <Menu />
+                  </SheetTrigger>
+                }
+              />
+              <DebugWarningBanner accessToken={accessToken} />
+              <NoRedisWarningBanner accessToken={accessToken} />
+              <EnvCredentialLoginWarningBanner accessToken={accessToken} />
+              <LicenseExpiryBanner accessToken={accessToken} />
+              <UserBanner accessToken={accessToken} />
+              <UpgradeBanner accessToken={accessToken} />
+              <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">{children}</main>
+            </div>
+          </CommandPaletteProvider>
         </LiteAdminFrame>
       </div>
     </Sheet>

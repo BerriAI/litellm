@@ -147,6 +147,7 @@ from litellm.litellm_core_utils.core_helpers import (
     independent_snapshot,
     is_expected_client_error,
 )
+from litellm.litellm_core_utils.duration_parser import get_budget_window_start
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -4074,10 +4075,10 @@ class ProxyLogging:
                 yield chunk
         except (GeneratorExit, asyncio.CancelledError):
             await ProxyLogging._close_guarded_layers(guarded_layers)
-            ProxyLogging._record_served_stream_output(request_data, served_chunks)
+            await ProxyLogging._record_served_stream_output(request_data, served_chunks)
             raise
         except Exception as e:
-            ProxyLogging._record_served_stream_output(request_data, served_chunks)
+            await ProxyLogging._record_served_stream_output(request_data, served_chunks)
             if not ProxyLogging._discard_deferred_stream_logging_for_failure(request_data, e):
                 ProxyLogging.fire_deferred_stream_logging(request_data)
             raise
@@ -4086,7 +4087,7 @@ class ProxyLogging:
         # completed.  unified_guardrail writes guardrail_information during
         # its end-of-stream block (inside current_response), so by the time
         # we reach this point the metadata is fully populated.
-        ProxyLogging._record_served_stream_output(request_data, served_chunks)
+        await ProxyLogging._record_served_stream_output(request_data, served_chunks)
         ProxyLogging.fire_deferred_stream_logging(request_data)
 
     async def _pipeline_gated_stream(
@@ -4165,11 +4166,12 @@ class ProxyLogging:
                 )
 
     @staticmethod
-    def _record_served_stream_output(request_data: Mapping[str, object], served_chunks: Sequence[object]) -> None:
+    async def _record_served_stream_output(request_data: Mapping[str, object], served_chunks: Sequence[object]) -> None:
         logging_obj: Final = request_data.get("litellm_logging_obj")
         if not isinstance(logging_obj, Logging):
             return
-        record_served_output_texts(logging_obj.model_call_details, served_stream_output_texts(served_chunks))
+        texts: Final = await offload_token_count(served_stream_output_texts)(served_chunks)
+        record_served_output_texts(logging_obj.model_call_details, texts)
 
     @staticmethod
     def fire_deferred_stream_logging(request_data: dict) -> None:
@@ -4395,9 +4397,13 @@ async def get_config_param(prisma_client: "PrismaClient", param_name: str) -> An
     return row
 
 
-async def evict_config_param(param_name: str) -> None:
-    with service_target(CONFIG_PARAMS_TARGET):
-        await litellm_config_cache.async_delete_cache(_config_cache_key(param_name))
+async def evict_config_param(param_name: str, cache: DualCache | None = None) -> None:
+    target: Final = cache if cache is not None else litellm_config_cache
+    try:
+        with service_target(CONFIG_PARAMS_TARGET):
+            await target.async_delete_cache(_config_cache_key(param_name))
+    except Exception as e:  # noqa: BLE001  # best-effort eviction; config writes must never fail on redis errors
+        verbose_proxy_logger.warning("config cache eviction of %s failed: %s", param_name, e)
 
 
 async def invalidate_config_param(param_name: str) -> None:
@@ -4561,6 +4567,7 @@ class PrismaClient:
         self.db: PrismaWrapper | RoutingPrismaWrapper
         if read_replica_url:
             try:
+                reader_token_auth: Final = resolve_database_token_auth(read_replica=True)
                 # If token auth is enabled, the reader refreshes its own token on
                 # the same cadence as the writer. We parse the static endpoint
                 # pieces (host/port/user/db) once from the reader URL — only
@@ -4575,8 +4582,8 @@ class PrismaClient:
                 # and the first query falls through to the synchronous fallback
                 # path in `PrismaWrapper.__getattr__`, which deadlocks the event
                 # loop and times out after 30s.
-                if token_auth is not None and reader_iam_endpoint is not None:
-                    reader_token: Final = mint_database_token(token_auth, reader_iam_endpoint)
+                if reader_token_auth is not None and reader_iam_endpoint is not None:
+                    reader_token: Final = mint_database_token(reader_token_auth, reader_iam_endpoint)
                     read_replica_url = add_missing_query_params(
                         reader_iam_endpoint.build_url(reader_token),
                         token_refresh_params_from_url(read_replica_url),
@@ -4589,7 +4596,7 @@ class PrismaClient:
                     reader_prisma = Prisma(datasource=reader_datasource)
                 reader_wrapper: Final = PrismaWrapper(
                     original_prisma=reader_prisma,
-                    token_auth=token_auth,
+                    token_auth=reader_token_auth,
                     db_url_env_var="DATABASE_URL_READ_REPLICA",
                     iam_endpoint=reader_iam_endpoint,
                     recreate_uses_datasource=True,
@@ -7445,6 +7452,13 @@ class ProxyUpdateSpend:
                 "Spend tracking - processing %d spend logs for DB write",
                 len(logs_to_process),
             )
+        from litellm.proxy.spend_tracking.spend_tracking_utils import (
+            configured_spend_logs_metadata_fields,
+            spend_log_row_with_retained_metadata,
+        )
+
+        retention: Final = configured_spend_logs_metadata_fields()
+        rows_to_write: Final = [spend_log_row_with_retained_metadata(row, retention) for row in logs_to_process]
         start_time: Final = time.time()
         try:
             for i in range(n_retry_times + 1):
@@ -7454,7 +7468,7 @@ class ProxyUpdateSpend:
                         if not base_url.endswith("/"):
                             base_url += "/"
                         verbose_proxy_logger.debug("base_url: %s", base_url)
-                        json_data = json.dumps(logs_to_process)
+                        json_data = json.dumps(rows_to_write)
                         response = await db_writer_client.post(
                             url=base_url + "spend/update",
                             data=json_data,
@@ -7465,8 +7479,8 @@ class ProxyUpdateSpend:
                             # Items already removed from queue at start of function
                             pass
                     else:
-                        for j in range(0, len(logs_to_process), BATCH_SIZE):
-                            batch = logs_to_process[j : j + BATCH_SIZE]
+                        for j in range(0, len(rows_to_write), BATCH_SIZE):
+                            batch = rows_to_write[j : j + BATCH_SIZE]
                             batch_with_dates = [prisma_client.jsonify_object({**entry}) for entry in batch]
                             isolation_budget = MAX_SPEND_LOG_ISOLATION_FAILURES_PER_BATCH
                             for statement_rows in spend_log_write_batches(
@@ -8101,66 +8115,94 @@ def _get_month_end_date(today: date) -> date:
     return date(today.year, today.month + 1, 1) - timedelta(days=1)
 
 
-def is_projected_spend_over_limit(current_spend: float, soft_budget_limit: float | None) -> bool:
-    if soft_budget_limit is None:
-        # If there's no limit, we can't exceed it.
-        return False
+MIN_ELAPSED_WINDOW_FRACTION: Final = 1 / 24
 
+
+def _as_aware(moment: datetime) -> datetime:
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
+
+
+def _reset_window(budget_duration: str, budget_reset_at: datetime) -> tuple[datetime, datetime] | None:
+    window_end: Final = _as_aware(budget_reset_at)
+    window_start: Final = get_budget_window_start(budget_duration, window_end)
+    return (window_start, window_end) if window_start < window_end else None
+
+
+def _project_within_window(
+    current_spend: float,
+    soft_budget_limit: float,
+    window: tuple[datetime, datetime],
+    now: datetime | None,
+) -> tuple[float, date] | None:
+    window_start, window_end = window
+    moment: Final = (_as_aware(now) if now is not None else datetime.now(timezone.utc)).astimezone(window_end.tzinfo)
+    if moment < window_start:
+        return None
+    elapsed: Final = max(moment - window_start, (window_end - window_start) * MIN_ELAPSED_WINDOW_FRACTION)
+    remaining: Final = max(window_end - moment, timedelta(0))
+    spend_per_second: Final = current_spend / elapsed.total_seconds()
+    projected_spend: Final = current_spend + spend_per_second * remaining.total_seconds()
+    if projected_spend <= soft_budget_limit:
+        return None
+    remaining_budget: Final = soft_budget_limit - current_spend
+    if spend_per_second <= 0 or remaining_budget <= 0:
+        return projected_spend, moment.date()
+    exceed_at: Final = min(moment + timedelta(seconds=remaining_budget / spend_per_second), window_end)
+    return projected_spend, exceed_at.date()
+
+
+def _project_to_month_end(current_spend: float, soft_budget_limit: float) -> tuple[float, date] | None:
     today: Final = date.today()
+    remaining_days: Final = (_get_month_end_date(today) - today).days
+    daily_spend: Final = current_spend / max(today.day - 1, 1)
+    projected_spend: Final = current_spend + daily_spend * remaining_days
+    if projected_spend <= soft_budget_limit:
+        return None
+    remaining_budget: Final = soft_budget_limit - current_spend
+    if daily_spend <= 0 or remaining_budget <= 0:
+        return projected_spend, today
+    return projected_spend, today + timedelta(days=remaining_budget / daily_spend)
 
-    # Finding the first day of the next month, then subtracting one day to get the end of the current month.
-    end_month: Final = _get_month_end_date(today)
 
-    remaining_days: Final = (end_month - today).days
-
-    # Check for the start of the month to avoid division by zero
-    if today.day == 1:
-        daily_spend_estimate = current_spend
-    else:
-        daily_spend_estimate = current_spend / (today.day - 1)
-
-    # Total projected spend for the month
-    projected_spend: Final = current_spend + (daily_spend_estimate * remaining_days)
-
-    if projected_spend > soft_budget_limit:
-        print_verbose("Projected spend exceeds soft budget limit!")
-        return True
-    return False
+def is_projected_spend_over_limit(
+    current_spend: float,
+    soft_budget_limit: float | None,
+    budget_duration: str | None = None,
+    budget_reset_at: datetime | None = None,
+    now: datetime | None = None,
+) -> bool:
+    return (
+        get_projected_spend_over_limit(
+            current_spend=current_spend,
+            soft_budget_limit=soft_budget_limit,
+            budget_duration=budget_duration,
+            budget_reset_at=budget_reset_at,
+            now=now,
+        )
+        is not None
+    )
 
 
 _is_projected_spend_over_limit: Final = is_projected_spend_over_limit
 
 
-def get_projected_spend_over_limit(current_spend: float, soft_budget_limit: float | None) -> tuple | None:
+def get_projected_spend_over_limit(
+    current_spend: float,
+    soft_budget_limit: float | None,
+    budget_duration: str | None = None,
+    budget_reset_at: datetime | None = None,
+    now: datetime | None = None,
+) -> tuple[float, date] | None:
     if soft_budget_limit is None:
         return None
-
-    today: Final = date.today()
-    end_month: Final = _get_month_end_date(today)
-    remaining_days: Final = (end_month - today).days
-
-    # assuming the current spend till today (not including today)
-    if today.day == 1:
-        daily_spend = current_spend
-    else:
-        daily_spend = current_spend / (today.day - 1)
-    projected_spend: Final = current_spend + (daily_spend * remaining_days)
-
-    if projected_spend > soft_budget_limit:
-        if daily_spend <= 0:
-            limit_exceed_date = today
-        else:
-            remaining_budget: Final = soft_budget_limit - current_spend
-            if remaining_budget <= 0:
-                limit_exceed_date = today
-            else:
-                approx_days: Final = remaining_budget / daily_spend
-                limit_exceed_date = today + timedelta(days=approx_days)
-
-        # return the projected spend and the date it will exceeded
-        return projected_spend, limit_exceed_date
-
-    return None
+    window: Final = (
+        _reset_window(budget_duration, budget_reset_at)
+        if budget_duration is not None and budget_reset_at is not None
+        else None
+    )
+    if window is None:
+        return _project_to_month_end(current_spend, soft_budget_limit)
+    return _project_within_window(current_spend, soft_budget_limit, window, now)
 
 
 _get_projected_spend_over_limit: Final = get_projected_spend_over_limit

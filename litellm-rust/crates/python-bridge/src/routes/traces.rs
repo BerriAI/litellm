@@ -172,7 +172,7 @@ impl NativeTraceStorage {
             BTreeMap<String, serde_json::Value>,
         >,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let table = InsertTable::parse(table).map_err(map_error)?;
+        let table = table.parse::<InsertTable>().map_err(map_error)?;
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
         let connection = self.config.storage().writer().clone();
         let database = self.config.storage().database().to_owned();

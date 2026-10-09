@@ -230,7 +230,7 @@ def _assert_answered_in_its_own_shape(served: _Served) -> None:
             frame_error: Final = object_value(events[-1][1]["error"])
             assert frame_error["type"] == "rate_limit_error", frame_error
             frame_message: Final = string_value(frame_error["message"])
-            assert frame_message.count(_SENTINEL_PREFIX) == 1 and _RATE_LIMIT_PREFIX in frame_message, frame_message
+            assert frame_message.startswith(_RATE_LIMIT_PREFIX) and _SENTINEL_PREFIX not in frame_message, frame_message
         case "responses_limited":
             assert served.status == 200, served.text
             kinds: Final = [frame["type"] for frame in _data_frames(served.text)]

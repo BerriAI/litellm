@@ -83,6 +83,7 @@ from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_litellm_params import (
     AWS_CREDENTIAL_KWARGS_KEYS,
+    OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
     OPTIONAL_KWARGS_KEYS,
     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
     InvalidControlOption,
@@ -140,6 +141,7 @@ from litellm.types.completion import (
     _CompletionDispatchResult,
 )
 from litellm.types.litellm_params import ControlOptions, RetryStrategy
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     CustomPricingLiteLLMParams,
@@ -640,10 +642,17 @@ async def acompletion(
         "enable_json_schema_validation": enable_json_schema_validation,
     }
     if custom_llm_provider is None:
+        _supplemental: Final = cast(  # cast-ok: kwargs values are request-scoped objects
+            "dict[str, object]", {k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS if k in kwargs}
+        )
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
-            api_base=kwargs.get("api_base") or base_url,
+            api_base=cast(  # cast-ok: api_base arrives as a str in the request kwargs
+                "str | None", kwargs.get("api_base")
+            )
+            or base_url,
+            litellm_params=(GenericLiteLLMParams.model_validate(_supplemental) if _supplemental else None),
         )
 
     fallbacks = fallbacks or litellm.model_fallbacks
@@ -1319,6 +1328,7 @@ def _register_custom_pricing_for_request(
         },
         persist_across_reloads=False,
         warning_display_name=shared_key,
+        custom_llm_provider=custom_llm_provider,
     )
 
 
@@ -2646,13 +2656,22 @@ def _complete_custom_openai(
         from litellm.llms.github_copilot.authenticator import Authenticator
         from litellm.llms.github_copilot.common_utils import (
             get_copilot_default_headers,
+            pin_session_authorization,
+        )
+        from litellm.llms.github_copilot.per_user_auth import (
+            require_github_copilot_user_session,
         )
 
-        copilot_auth: Final = Authenticator()
-        copilot_api_key: Final = copilot_auth.get_api_key()
-        copilot_headers: Final = get_copilot_default_headers(copilot_api_key)
+        user_session: Final = require_github_copilot_user_session(litellm_params)
+        copilot_headers: Final = get_copilot_default_headers(
+            user_session.token if user_session is not None else Authenticator().get_api_key()
+        )
         if extra_headers:
-            copilot_headers.update(extra_headers)
+            copilot_headers.update(
+                cast("dict[str, str]", extra_headers)  # cast-ok: extra_headers is a str-valued request dict
+            )
+        if user_session is not None:
+            pin_session_authorization(copilot_headers, user_session.token)
         extra_headers = copilot_headers
 
     use_base_llm_http_handler: Final = get_secret_bool("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER")
@@ -5101,6 +5120,56 @@ def _complete_langgraph(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
     )
 
 
+def _complete_microsoft_365_copilot(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
+    from litellm.llms.microsoft_365_copilot.chat.handler import acompletion, completion
+    from litellm.llms.microsoft_365_copilot.common_utils import as_secret_fields
+
+    messages: Final[Sequence[AllMessageValues]] = cast(  # cast-ok: dispatch messages are prevalidated
+        Sequence[AllMessageValues],
+        ctx.messages,
+    )
+    optional_params_value: Final[object] = cast(  # cast-ok: dispatch params are validated below
+        object,
+        ctx.optional_params,
+    )
+    optional_params: Final = TypeAdapter(Mapping[str, object]).validate_python(optional_params_value)
+    kwargs_value: Final[object] = cast(  # cast-ok: dispatch kwargs are validated below
+        object,
+        ctx.kwargs,
+    )
+    kwargs: Final = TypeAdapter(Mapping[str, object]).validate_python(kwargs_value)
+    secret_fields: Final = as_secret_fields(kwargs.get("secret_fields"))
+    client: Final = _dispatch_client_http(ctx)
+    if ctx.acompletion:
+        async_client: Final = client if isinstance(client, AsyncHTTPHandler) else None
+        return acompletion(
+            model=ctx.model,
+            messages=messages,
+            api_key=ctx.api_key,
+            litellm_params=ctx.litellm_params,
+            optional_params=optional_params,
+            secret_fields=secret_fields,
+            stream=ctx.stream is True,
+            timeout=ctx.timeout,
+            logging_obj=ctx.logging,
+            client=async_client,
+            shared_session=ctx.shared_session,
+        )
+    sync_client: Final = client if isinstance(client, HTTPHandler) else None
+    return completion(
+        model=ctx.model,
+        messages=messages,
+        api_key=ctx.api_key,
+        litellm_params=ctx.litellm_params,
+        optional_params=optional_params,
+        secret_fields=secret_fields,
+        stream=ctx.stream is True,
+        timeout=ctx.timeout,
+        logging_obj=ctx.logging,
+        client=sync_client,
+    )
+
+
 def _complete_langflow(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
@@ -5736,7 +5805,11 @@ def completion(
                     *AWS_CREDENTIAL_KWARGS_KEYS,
                     *ANTHROPIC_WIF_KWARGS_KEYS,
                     *OPENAI_WIF_KWARGS_KEYS,
+                    *OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
+                    "github_copilot_auth_type",
+                    "github_copilot_user_session",
                     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
+                    "fireworks_forward_user_id",
                 )
                 if key in kwargs
             },
@@ -6089,6 +6162,9 @@ def completion(
             # LangGraph - Agent Runtime Provider
             response = _complete_langgraph(_dispatch_ctx)
 
+        elif custom_llm_provider == "microsoft_365_copilot":
+            response = _complete_microsoft_365_copilot(_dispatch_ctx)  # rebind-ok: shared provider return
+
         elif custom_llm_provider == "langflow":
             # LangFlow - Visual AI Agent Platform
             response = _complete_langflow(_dispatch_ctx)
@@ -6378,6 +6454,10 @@ def embedding(
     """
     azure: Final = kwargs.get("azure", None)
     client: Final = kwargs.pop("client", None)
+    drop_params_kwarg: Final = (
+        cast(object, kwargs["drop_params"]) if "drop_params" in kwargs else None  # cast-ok: untyped request kwargs
+    )
+    drop_unsupported_params: Final = litellm.drop_params is True or normalize_drop_params(drop_params_kwarg) is True
     shared_session: Final = kwargs.get("shared_session", None)
     max_retries: Final = kwargs.get("max_retries", None)
     litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
@@ -6421,17 +6501,24 @@ def embedding(
     default_params: Final = [*openai_params, "aembedding", "extra_headers"]
     non_default_params: Final = filter_out_litellm_params(kwargs, excluding=default_params)
 
+    litellm_params_dict: Final = get_litellm_params(**kwargs)
+
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
         model=model,
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
         api_key=api_key,
+        litellm_params=GenericLiteLLMParams(**kwargs),
     )
 
     if dynamic_api_key is not None:
         api_key = dynamic_api_key
 
-    allowed_openai_params: Final[list[str] | None] = kwargs.get("allowed_openai_params", None)
+    allowed_openai_params: Final[list[str] | None] = (
+        cast(  # cast-ok: allowed_openai_params arrives as a str list in the request kwargs
+            "list[str] | None", kwargs.get("allowed_openai_params", None)
+        )
+    )
     optional_params: Final = get_optional_params_embeddings(
         model=model,
         user=user,
@@ -6455,8 +6542,6 @@ def embedding(
             kwargs=kwargs,
             model_info=kwargs.get("model_info"),
         )
-
-    litellm_params_dict: Final = get_litellm_params(**kwargs)
 
     logging: Final[LiteLLMLoggingObj] = litellm_logging_obj
     logging.update_environment_variables(
@@ -6858,6 +6943,7 @@ def embedding(
                 api_base=api_base,
                 client=client,
                 extra_headers=headers,
+                drop_params=drop_unsupported_params,
             )
 
         elif custom_llm_provider == "vertex_ai":
@@ -6910,6 +6996,7 @@ def embedding(
                     api_base=api_base,
                     client=client,
                     extra_headers=headers,
+                    drop_params=drop_unsupported_params,
                 )
             elif (
                 "image" in optional_params

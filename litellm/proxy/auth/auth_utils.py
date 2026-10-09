@@ -269,7 +269,8 @@ def reject_federated_credential_reference(body: Mapping[str, object]) -> None:
     if wif_fields:
         raise ValueError(
             f"Rejected Request: litellm_credential_name={named!r} names a credential configured for "
-            f"workload identity federation ({wif_fields[0]}), which a request body cannot choose. "
+            f"workload identity federation or OAuth token exchange ({wif_fields[0]}), which a request body "
+            "cannot choose. "
             "A proxy admin attaches it to a deployment."
         )
 
@@ -431,9 +432,18 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # so a caller-supplied value picks a transport and a callback surface the
     # admin did not choose.
     "rust",
+    # Deployment opt-in: a caller-supplied false would switch off identity
+    # forwarding and let the caller choose the `user` Fireworks sees.
+    "fireworks_forward_user_id",
     # SDK-only field; also rejected outright in is_request_body_safe.
     "model_list",
     "vertex_ai_credentials",
+    # Per-user GitHub Copilot connection slots: the mode is decided by the
+    # stored credential's values and the caller's connection by the proxy's own
+    # secret_fields, so a body-supplied value could only spoof either.
+    "github_copilot_auth_type",
+    "user_provider_credentials",
+    "github_copilot_user_session",
     # Observability credentials, hosts, and project identifiers: derived
     # from the canonical ``_supported_callback_params`` allowlist so new
     # integrations are covered automatically. Sorted for stable iteration

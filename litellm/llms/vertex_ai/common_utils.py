@@ -25,6 +25,22 @@ from litellm.types.llms.vertex_ai import (
 from litellm.types.utils import TokenCountResponse
 from litellm.utils import supports_response_schema, supports_system_messages
 
+GEMINI_VIDEO_METADATA_KEYS: Final = MappingProxyType(
+    {"fps": "fps", "start_offset": "startOffset", "end_offset": "endOffset"}
+)
+
+
+GEMINI_FILES_API_URI_PREFIX: Final = "https://generativelanguage.googleapis.com/v1beta/files/"
+
+
+def gemini_video_metadata_from_openai(video_metadata: Mapping[str, object]) -> dict[str, object]:
+    return {
+        gemini_key: video_metadata[openai_key]
+        for openai_key, gemini_key in GEMINI_VIDEO_METADATA_KEYS.items()
+        if openai_key in video_metadata
+    }
+
+
 VERTEX_SELF_DEPLOYED_ENDPOINT_UNSUPPORTED_PARAMS: Final = frozenset(
     {
         "audio",

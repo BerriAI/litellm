@@ -6,7 +6,7 @@ from integration.translation.case import TranslationTestCase
 """
 STRANDS_DECIDER_2B_HOBSON_V19_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
-    litellm_endpoint="/v1/decisions",
+    litellm_endpoint="/v1/systemone",
     litellm_request={
         "model": "strands_decider/strands-decider-2B-hobson-v19",
         "state": "Help! My payouts have been failing for 3 days!",

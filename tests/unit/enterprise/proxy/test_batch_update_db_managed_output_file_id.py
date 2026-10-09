@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
+    ManagedBatchOutputFileWriter,
     ensure_batch_response_managed_file_ids,
     update_batch_in_database,
 )
@@ -39,9 +40,9 @@ def _build_batch_response(
 
 
 def _build_managed_files_mock(unified_id: str = "file-bWFuYWdlZF9vdXRwdXRfaWQ="):
-    mock = MagicMock()
+    mock = MagicMock(spec=ManagedBatchOutputFileWriter)
     mock.get_unified_output_file_id = MagicMock(return_value=unified_id)
-    mock.store_unified_file_id = AsyncMock()
+    mock.store_batch_output_file = AsyncMock()
     return mock
 
 
@@ -114,9 +115,7 @@ async def test_cancel_path_registers_output_file_under_batch_owner():
         operation="cancel",
     )
 
-    forwarded_auth = mock_managed_files.store_unified_file_id.call_args.kwargs[
-        "user_api_key_dict"
-    ]
+    forwarded_auth = mock_managed_files.store_batch_output_file.await_args.kwargs["owner"]
     assert forwarded_auth.user_id == "batch-owner"
     assert forwarded_auth.team_id == "batch-team"
     stored = json.loads(
@@ -156,9 +155,7 @@ async def test_update_batch_skips_lookup_when_db_batch_object_supplied():
     )
 
     mock_prisma.db.litellm_managedobjecttable.find_first.assert_not_called()
-    forwarded_auth = mock_managed_files.store_unified_file_id.call_args.kwargs[
-        "user_api_key_dict"
-    ]
+    forwarded_auth = mock_managed_files.store_batch_output_file.await_args.kwargs["owner"]
     assert forwarded_auth.user_id == "caller-owner"
     assert forwarded_auth.team_id == "caller-team"
 
@@ -222,11 +219,11 @@ async def test_ensure_batch_response_swallows_conversion_errors():
         hidden_params={"model_id": "my-model", "model_name": "openai/gpt-4o"},
     )
 
-    mock_managed_files = MagicMock()
+    mock_managed_files = MagicMock(spec=ManagedBatchOutputFileWriter)
     mock_managed_files.get_unified_output_file_id = MagicMock(
         side_effect=RuntimeError("boom")
     )
-    mock_managed_files.store_unified_file_id = AsyncMock()
+    mock_managed_files.store_batch_output_file = AsyncMock()
 
     mock_logger = MagicMock()
     await ensure_batch_response_managed_file_ids(
@@ -263,9 +260,7 @@ async def test_ensure_batch_response_builds_auth_from_db_batch_object():
         db_batch_object=db_batch_object,
     )
 
-    forwarded_auth = mock_managed_files.store_unified_file_id.call_args.kwargs[
-        "user_api_key_dict"
-    ]
+    forwarded_auth = mock_managed_files.store_batch_output_file.await_args.kwargs["owner"]
     assert forwarded_auth.user_id == "user-from-db"
     assert forwarded_auth.team_id == "team-from-db"
 

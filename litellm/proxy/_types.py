@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, Ty
 
 import httpx
 from pydantic import (
+    AfterValidator,
     BaseModel,
     BeforeValidator,
     ConfigDict,
@@ -2743,6 +2744,41 @@ class ScheduledJobStaggerSettings(LiteLLMPydanticObjectBase):
     )
 
 
+SPEND_LOGS_METADATA_ALWAYS_KEPT_FIELDS: Final = frozenset({"status", "cold_storage_object_key"})
+
+
+def _known_spend_logs_metadata_field(name: str) -> str:
+    if name not in SpendLogsMetadata.__annotations__:
+        raise ValueError(f"{name!r} is not a LiteLLM_SpendLogs.metadata field")
+    return name
+
+
+SpendLogsMetadataFieldName: TypeAlias = Annotated[str, AfterValidator(_known_spend_logs_metadata_field)]
+
+
+class SpendLogsMetadataFields(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    include: tuple[SpendLogsMetadataFieldName, ...] | None = None
+    exclude: tuple[SpendLogsMetadataFieldName, ...] | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one_list(self) -> "SpendLogsMetadataFields":
+        if (self.include is None) == (self.exclude is None):
+            raise ValueError("set exactly one of 'include' or 'exclude'")
+        always_kept_excluded: Final = sorted(SPEND_LOGS_METADATA_ALWAYS_KEPT_FIELDS.intersection(self.exclude or ()))
+        if always_kept_excluded:
+            raise ValueError(f"{always_kept_excluded} are always kept and cannot be excluded")
+        return self
+
+    def keeps(self, name: str) -> bool:
+        if name in SPEND_LOGS_METADATA_ALWAYS_KEPT_FIELDS:
+            return True
+        if self.include is not None:
+            return name in self.include
+        return name not in (self.exclude or ())
+
+
 DEFAULT_RESPONSES_WEBSOCKET_SESSION_LIMIT_SECONDS: Final[float] = 3600.0
 
 
@@ -3091,6 +3127,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
     )
+    spend_logs_metadata_fields: SpendLogsMetadataFields | None = Field(
+        None,
+        description="Which keys of LiteLLM_SpendLogs.metadata are written to the database. Set exactly one of 'include' (write only these keys) or 'exclude' (drop these keys). 'status' and 'cold_storage_object_key' are always written. Daily spend tables, budgets and logging callbacks still see every key. Unset writes every key",
+    )
     disable_auto_add_proxy_admin_to_teams: bool | None = Field(
         None,
         description="By default, the user calling /team/new is automatically added to the new team as a team admin. If True, proxy admins are no longer auto-added; members explicitly listed in members_with_roles are unaffected. Default is False.",
@@ -3166,7 +3206,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     mcp_advertised_versions: MCPAdvertisedVersions | None = Field(
         None,
         description="MCP revisions enabled by the gateway. Defaults to all completed legacy revisions. "
-        "Modern protocol serving and Apps/Tasks remain disabled.",
+        "Modern protocol serving requires explicit opt-in. Apps/Tasks remain disabled.",
     )
     mcp_allowed_clients: list[MCPAllowedClient] | None = Field(
         None,
@@ -3184,6 +3224,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         ge=1,
         description="Number of trusted reverse proxies/load balancers in front of the gateway that append to X-Forwarded-For. When set (and mcp_trusted_proxy_ranges validates the direct peer), the client IP for MCP access control is read this many entries from the right of the chain instead of the spoofable leftmost value, defeating append-style X-Forwarded-For forgery.",
+    )
+    mcp_prefer_client_id_metadata_document: bool | None = Field(
+        None,
+        description="When true, a gateway-managed OAuth2 MCP server whose authorization server advertises Client ID Metadata Document support identifies itself with the gateway's public metadata document URL even when that authorization server also offers dynamic client registration. Requires a public HTTPS PROXY_BASE_URL the authorization server can fetch. Default false: dynamic client registration is used whenever the authorization server offers it, and the metadata document only when it does not.",
     )
     trusted_proxy_ranges: list[str] | None = Field(
         None,
@@ -4885,6 +4929,7 @@ class TeamEditUnrestricted(LiteLLMBaseModel):
 class TeamEditAsTeamAdmin(LiteLLMBaseModel):
     kind: Literal["team_admin"] = "team_admin"
     editable_fields: tuple[str, ...]
+    may_raise_max_budget: bool = False
 
 
 class TeamEditAsTeamAdminDisabled(LiteLLMBaseModel):

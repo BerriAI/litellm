@@ -91,13 +91,32 @@ def span_attribute_limit(span: Span) -> int | None:
     return span._limits.max_span_attributes  # pyright: ignore[reportPrivateUsage]  # SDK has no public getter
 
 
-def attribute_budget(span: Span, reserved: int) -> int | None:
-    """How many mapped attributes fit on ``span`` next to what it already carries and ``reserved`` more."""
+def _carried_keys(
+    attributes: Mapping[str, AttrValue] | tuple[tuple[str, AttrValue], ...],
+) -> frozenset[str]:
+    """The keys a span already carries: a live span exposes a ``Mapping``, an ended one a tuple of pairs."""
+    if isinstance(attributes, Mapping):
+        return frozenset(attributes)
+    return frozenset(key for key, _value in attributes)
+
+
+def attribute_budget(span: Span, reserved: int, overwrites: frozenset[str] = frozenset()) -> int | None:
+    """How many mapped attributes fit on ``span`` next to what it already carries and ``reserved`` more.
+
+    ``overwrites`` are the mapped keys already present on ``span``: setting one
+    replaces the value in place and consumes no slot against the limit, so only
+    the genuinely new pre-existing keys reduce the budget. Counting the
+    overwritten ones too reserves slots the fit can never spend and sheds
+    indexed message attributes for nothing.
+    """
     limit: Final = span_attribute_limit(span)
     if limit is None:
         return None
-    on_span: Final = len(span.attributes or ()) if isinstance(span, ReadableSpan) else 0
-    return limit - on_span - reserved
+    if not isinstance(span, ReadableSpan):
+        return limit - reserved
+    existing_keys: Final = _carried_keys(span.attributes or ())
+    fresh: Final = len(existing_keys - overwrites) if overwrites else len(existing_keys)
+    return limit - fresh - reserved
 
 
 def stamp_error(
@@ -284,7 +303,7 @@ class SpanEmitter:
         )
         stamped_later: Final = error_attributes(error) if error else _NO_ATTRIBUTES
         reserved: Final = len(stamped_later.keys() - mapped.keys())
-        for key, value in fit_indexed_messages(mapped, attribute_budget(span, reserved)).items():
+        for key, value in fit_indexed_messages(mapped, attribute_budget(span, reserved, frozenset(mapped))).items():
             span.set_attribute(key, value)
         if error:
             stamped: Final = stamp_error(span, error)

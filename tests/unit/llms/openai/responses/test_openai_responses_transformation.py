@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
+import respx
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -24,6 +26,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import Choices, Message, ModelResponse
+from tests.unit.proxy.conftest import httpx_transport
 import time
 
 _ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
@@ -3445,3 +3448,127 @@ async def test_extra_body_merges_with_request_data(extra_body_mock_response_data
         assert "temperature" in request_body
         assert "custom_field" in request_body
         assert request_body["custom_field"] == "custom_value"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures(httpx_transport.__name__)
+async def test_aresponses_forwards_previous_response_id_to_openai() -> None:
+    first_input: Final = "remember the first turn"
+    second_input: Final = "continue the conversation"
+    first_id: Final = "resp_previous_turn"
+    second_id: Final = "resp_follow_up"
+    response_payloads: Final = (
+        {
+            "id": first_id,
+            "object": "response",
+            "created_at": 1734366691,
+            "status": "completed",
+            "model": "gpt-4o",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_first",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "first answer", "annotations": []}],
+                }
+            ],
+            "usage": {
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "total_tokens": 2,
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+        },
+        {
+            "id": second_id,
+            "object": "response",
+            "created_at": 1734366692,
+            "status": "completed",
+            "model": "gpt-4o",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_second",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "second answer", "annotations": []}],
+                }
+            ],
+            "usage": {
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "total_tokens": 2,
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+        },
+    )
+    provider_url: Final = "https://api.openai.com/v1/responses"
+
+    with respx.mock() as router:
+        route: Final = router.post(provider_url).mock(
+            side_effect=[
+                httpx.Response(status_code=200, json=response_payloads[0]),
+                httpx.Response(status_code=200, json=response_payloads[1]),
+            ]
+        )
+        first_response: Final = await litellm.aresponses(
+            model="openai/gpt-4o",
+            api_key="sk-test",
+            input=first_input,
+        )
+        assert isinstance(first_response, ResponsesAPIResponse)
+        second_response: Final = await litellm.aresponses(
+            model="openai/gpt-4o",
+            api_key="sk-test",
+            input=second_input,
+            previous_response_id=first_response.id,
+        )
+        calls: Final = route.calls
+
+    assert isinstance(second_response, ResponsesAPIResponse)
+    assert first_response.output[0].content[0].text == "first answer"
+    assert second_response.output[0].content[0].text == "second answer"
+    assert len(calls) == 2
+    request_adapter: Final = TypeAdapter(dict[str, JsonValue])
+    request_bodies: Final = tuple(request_adapter.validate_json(call.request.content) for call in calls)
+    assert request_bodies[0]["input"] == first_input
+    assert request_bodies[1]["input"] == second_input
+    assert request_bodies[1]["previous_response_id"] == first_id
+
+
+def test_dict_responses_input_filters_unset_reasoning_fields() -> None:
+    test_input: Final = [
+        {"role": "user", "content": "test"},
+        {
+            "id": "rs_123",
+            "summary": [{"text": "test", "type": "summary_text"}],
+            "type": "reasoning",
+            "content": None,
+            "encrypted_content": None,
+            "status": None,
+        },
+        {
+            "arguments": "{}",
+            "call_id": "call_123",
+            "name": "get_today",
+            "type": "function_call",
+            "id": "fc_123",
+            "status": "completed",
+        },
+    ]
+
+    validated_input: Final = OpenAIResponsesAPIConfig()._validate_input_param(test_input)
+
+    assert len(validated_input) == 3
+    reasoning_item: Final = validated_input[1]
+    assert reasoning_item["type"] == "reasoning"
+    assert "status" not in reasoning_item
+    assert "content" not in reasoning_item
+    assert "encrypted_content" not in reasoning_item
+    assert reasoning_item["id"] == "rs_123"
+    assert reasoning_item["summary"] == [{"text": "test", "type": "summary_text"}]
+
+    function_call_item: Final = validated_input[2]
+    assert function_call_item["type"] == "function_call"
+    assert function_call_item["status"] == "completed"

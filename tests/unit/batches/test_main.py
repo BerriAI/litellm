@@ -34,6 +34,16 @@ import pytest
 
 import litellm
 import litellm.batches.main as bm
+import asyncio
+import datetime
+import json
+from collections.abc import Mapping
+from typing import Final
+import httpx
+import respx
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
+from litellm.integrations.custom_logger import CustomLogger
 
 
 # --------------------------------------------------------------------------- #
@@ -986,3 +996,211 @@ async def test_batch_logging_azure_credentials_regression():
     print("✓ Batch output files can be fetched with Azure credentials")
     print("✓ Cost and usage tracking works for Azure batches")
     print("✓ Backwards compatibility maintained\n")
+
+
+_OPENAI_FILE_JSON: Final = MappingProxyType(
+    {
+        "id": "file-abc123",
+        "object": "file",
+        "purpose": "batch",
+        "filename": "batch.jsonl",
+        "bytes": 416,
+        "created_at": 1739598666,
+        "status": "processed",
+    }
+)
+
+
+_OPENAI_BATCH_JSON: Final = MappingProxyType(
+    {
+        "id": "batch_abc123",
+        "object": "batch",
+        "endpoint": "/v1/chat/completions",
+        "input_file_id": "file-abc123",
+        "status": "validating",
+        "completion_window": "24h",
+        "created_at": 1739598666,
+    }
+)
+
+
+class _KeyAliasMetadata(TypedDict):
+    user_api_key_alias: ReadOnly[str | None]
+    user_api_key_team_alias: ReadOnly[str | None]
+
+
+class _LoggedCall(TypedDict):
+    call_type: ReadOnly[str]
+    metadata: ReadOnly[_KeyAliasMetadata]
+
+
+_LOGGED_CALL: Final = TypeAdapter(_LoggedCall)
+
+
+class _SuccessPayloadRecorder(CustomLogger):
+    def __init__(self, call_type: str) -> None:
+        super().__init__()
+        self._call_type: Final = call_type
+        self.logged: Final = asyncio.Event()
+        self.payload: _LoggedCall | None = None
+
+    async def async_log_success_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        payload: Final = _LOGGED_CALL.validate_python(kwargs["standard_logging_object"])
+        if payload["call_type"] != self._call_type:
+            return
+        self.payload = payload
+        self.logged.set()
+
+
+@pytest.mark.asyncio
+async def test_acreate_batch_full_crud_and_logging_metadata(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.logging_callback_manager._reset_all_callbacks()
+    recorder: Final = _SuccessPayloadRecorder("acreate_batch")
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+
+    upload_route: Final = respx_mock.post("https://api.openai.com/v1/files").mock(
+        return_value=httpx.Response(200, json=dict(_OPENAI_FILE_JSON))
+    )
+    create_route: Final = respx_mock.post("https://api.openai.com/v1/batches").mock(
+        return_value=httpx.Response(200, json=dict(_OPENAI_BATCH_JSON))
+    )
+    retrieve_route: Final = respx_mock.get("https://api.openai.com/v1/batches/batch_abc123").mock(
+        return_value=httpx.Response(200, json=dict(_OPENAI_BATCH_JSON))
+    )
+    list_batches_route: Final = respx_mock.get("https://api.openai.com/v1/batches").mock(
+        return_value=httpx.Response(200, json={"object": "list", "data": [dict(_OPENAI_BATCH_JSON)]})
+    )
+    respx_mock.get("https://api.openai.com/v1/files/file-abc123/content").mock(
+        return_value=httpx.Response(200, content=b'{"custom_id": "request-1"}\n')
+    )
+    respx_mock.get("https://api.openai.com/v1/files/file-abc123").mock(
+        return_value=httpx.Response(200, json=dict(_OPENAI_FILE_JSON))
+    )
+    respx_mock.delete("https://api.openai.com/v1/files/file-abc123").mock(
+        return_value=httpx.Response(200, json={"id": "file-abc123", "object": "file", "deleted": True})
+    )
+    list_files_route: Final = respx_mock.get("https://api.openai.com/v1/files").mock(
+        return_value=httpx.Response(200, json={"object": "list", "data": [dict(_OPENAI_FILE_JSON)]})
+    )
+    cancel_route: Final = respx_mock.post("https://api.openai.com/v1/batches/batch_abc123/cancel").mock(
+        return_value=httpx.Response(200, json={**_OPENAI_BATCH_JSON, "status": "cancelling"})
+    )
+
+    batch_file: Final = (
+        "batch.jsonl",
+        b'{"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", '
+        b'"body": {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}}\n',
+        "application/jsonl",
+    )
+    file_obj: Final = await litellm.acreate_file(
+        file=batch_file, purpose="batch", custom_llm_provider="openai", api_key="fake-key"
+    )
+    assert file_obj.id == "file-abc123"
+    upload_body: Final = upload_route.calls.last.request.content
+    assert b'name="purpose"\r\n\r\nbatch' in upload_body
+    assert batch_file[1] in upload_body
+
+    extra_metadata_field: Final = {
+        "user_api_key_alias": "special_api_key_alias",
+        "user_api_key_team_alias": "special_team_alias",
+    }
+    create_batch_response: Final = await litellm.acreate_batch(
+        completion_window="24h",
+        endpoint="/v1/chat/completions",
+        input_file_id=file_obj.id,
+        custom_llm_provider="openai",
+        api_key="fake-key",
+        metadata={"key1": "value1", "key2": "value2"},
+        litellm_metadata=extra_metadata_field,
+    )
+
+    assert json.loads(create_route.calls.last.request.content) == {
+        "completion_window": "24h",
+        "endpoint": "/v1/chat/completions",
+        "input_file_id": "file-abc123",
+        "metadata": {"key1": "value1", "key2": "value2"},
+    }
+    assert create_batch_response.id == "batch_abc123"
+    assert create_batch_response.endpoint == "/v1/chat/completions"
+    assert create_batch_response.input_file_id == file_obj.id
+
+    await asyncio.wait_for(recorder.logged.wait(), timeout=10)
+    assert recorder.payload is not None
+    standard_logging_object: Final = recorder.payload
+    assert standard_logging_object["metadata"]["user_api_key_alias"] == extra_metadata_field["user_api_key_alias"]
+    assert (
+        standard_logging_object["metadata"]["user_api_key_team_alias"]
+        == extra_metadata_field["user_api_key_team_alias"]
+    )
+
+    retrieved_batch: Final = await litellm.aretrieve_batch(
+        batch_id=create_batch_response.id, custom_llm_provider="openai", api_key="fake-key"
+    )
+    assert retrieve_route.called
+    assert retrieved_batch.id == create_batch_response.id
+
+    list_batches: Final = await litellm.alist_batches(custom_llm_provider="openai", limit=2, api_key="fake-key")
+    assert list_batches_route.calls.last.request.url.params["limit"] == "2"
+    assert [batch.id for batch in list_batches.data] == ["batch_abc123"]
+
+    file_content: Final = await litellm.afile_content(
+        file_id=file_obj.id, custom_llm_provider="openai", api_key="fake-key"
+    )
+    assert file_content.content == b'{"custom_id": "request-1"}\n'
+
+    retrieved_file: Final = await litellm.afile_retrieve(
+        file_id=file_obj.id, custom_llm_provider="openai", api_key="fake-key"
+    )
+    assert retrieved_file.id == file_obj.id
+
+    delete_file_response: Final = await litellm.afile_delete(
+        file_id=file_obj.id, custom_llm_provider="openai", api_key="fake-key"
+    )
+    assert delete_file_response.id == file_obj.id
+
+    all_files_list: Final = await litellm.afile_list(custom_llm_provider="openai", api_key="fake-key")
+    assert list_files_route.called
+    assert [file.id for file in all_files_list.data] == ["file-abc123"]
+
+    cancel_batch_response: Final = await litellm.acancel_batch(
+        batch_id=create_batch_response.id, custom_llm_provider="openai", api_key="fake-key"
+    )
+    assert cancel_route.called
+    assert cancel_batch_response.id == create_batch_response.id
+
+
+@pytest.mark.asyncio
+async def test_delete_batch_output_file(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    batch_with_output: Final = {
+        **_OPENAI_BATCH_JSON,
+        "status": "completed",
+        "output_file_id": "file-output123",
+    }
+    respx_mock.get("https://api.openai.com/v1/batches/batch_abc123").mock(
+        return_value=httpx.Response(200, json=batch_with_output)
+    )
+    delete_route: Final = respx_mock.delete("https://api.openai.com/v1/files/file-output123").mock(
+        return_value=httpx.Response(200, json={"id": "file-output123", "object": "file", "deleted": True})
+    )
+
+    batch: Final = await litellm.aretrieve_batch(
+        batch_id="batch_abc123", custom_llm_provider="openai", api_key="fake-key"
+    )
+    assert batch.output_file_id == "file-output123"
+
+    delete_response: Final = await litellm.afile_delete(
+        file_id=batch.output_file_id, custom_llm_provider="openai", api_key="fake-key"
+    )
+    assert delete_route.call_count == 1
+    assert delete_response.id == "file-output123"
+    assert delete_response.deleted is True

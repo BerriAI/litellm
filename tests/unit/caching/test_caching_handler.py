@@ -10,6 +10,7 @@ import hashlib
 import random
 
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import aembedding, completion, embedding, aresponses, responses
@@ -39,8 +40,9 @@ from litellm.types.utils import (
     Embedding,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import timedelta, datetime
+from typing import Final, cast
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm._logging import verbose_logger
@@ -51,6 +53,7 @@ import respx
 from fastapi.testclient import TestClient
 from litellm._internal_context import current_service_target, in_post_response_phase
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
 def setup_cache():
@@ -58,6 +61,143 @@ def setup_cache():
     cache = Cache(type=LiteLLMCacheType.LOCAL)
     litellm.cache = cache
     return cache
+
+
+@pytest.fixture
+def copilot_response_cache(monkeypatch: pytest.MonkeyPatch) -> Cache:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    monkeypatch.setattr(litellm, "cache", cache)
+    return cache
+
+
+class _CopilotCacheAsyncTransport(httpx.AsyncBaseTransport):
+    def __init__(self, responder: Callable[[httpx.Request], httpx.Response]) -> None:
+        self._responder = responder
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        return self._responder(request)
+
+
+def _copilot_cache_responder(requests: list[httpx.Request]) -> Callable[[httpx.Request], httpx.Response]:
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/beta/copilot/conversations":
+            return httpx.Response(status_code=201, json={"id": "cache-conversation"}, request=request)
+        if request.url.path.endswith("/chat"):
+            return httpx.Response(
+                status_code=200,
+                json={"messages": [{"text": "cache reply"}]},
+                request=request,
+            )
+        return httpx.Response(status_code=404, json={}, request=request)
+
+    return respond
+
+
+def _sync_copilot_cache_client(
+    requests: list[httpx.Request],
+) -> HTTPHandler:
+    return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_copilot_cache_responder(requests))))
+
+
+def _async_copilot_cache_client(
+    requests: list[httpx.Request],
+) -> AsyncHTTPHandler:
+    return AsyncHTTPHandler(transport=_CopilotCacheAsyncTransport(_copilot_cache_responder(requests)))
+
+
+def _assert_copilot_cache_empty(cache: Cache) -> None:
+    cache_backend: Final = cache.cache
+    assert isinstance(cache_backend, InMemoryCache)
+    cache_contents: Final[Mapping[str, object]] = cast(  # cast-ok: in-memory cache exposes an untyped mapping
+        Mapping[str, object],
+        cache_backend.cache_dict,
+    )
+    assert cache_contents == {}
+
+
+def _sync_copilot_cache_call(client: HTTPHandler, stream: bool) -> None:
+    response: Final = litellm.completion(
+        model="microsoft_365_copilot/chat",
+        messages=[{"role": "user", "content": "cache isolation prompt"}],
+        api_key="delegated-cache-token",
+        client=client,
+        stream=stream,
+        caching=True,
+    )
+    if stream:
+        assert isinstance(response, CustomStreamWrapper)
+        tuple(response)
+
+
+async def _async_copilot_cache_call(client: AsyncHTTPHandler, stream: bool) -> None:
+    response: Final = await litellm.acompletion(
+        model="microsoft_365_copilot/chat",
+        messages=[{"role": "user", "content": "cache isolation prompt"}],
+        api_key="delegated-cache-token",
+        client=client,
+        stream=stream,
+        caching=True,
+    )
+    if stream:
+        assert isinstance(response, CustomStreamWrapper)
+        tuple([chunk async for chunk in response])
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_sync_copilot_requests_bypass_response_cache(copilot_response_cache: Cache, stream: bool) -> None:
+    requests: Final[list[httpx.Request]] = []
+    client: Final = _sync_copilot_cache_client(requests)
+    for _ in range(2):
+        _sync_copilot_cache_call(client=client, stream=stream)
+
+    graph_chat_requests: Final = tuple(request for request in requests if request.url.path.endswith("/chat"))
+    assert len(graph_chat_requests) == 2
+    _assert_copilot_cache_empty(copilot_response_cache)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_async_copilot_requests_bypass_response_cache(copilot_response_cache: Cache, stream: bool) -> None:
+    requests: Final[list[httpx.Request]] = []
+    client: Final = _async_copilot_cache_client(requests)
+    async with client.client:
+        for _ in range(2):
+            await _async_copilot_cache_call(client=client, stream=stream)
+        await asyncio.gather(*_PENDING_CACHE_WRITES)
+
+    graph_chat_requests: Final = tuple(request for request in requests if request.url.path.endswith("/chat"))
+    assert len(graph_chat_requests) == 2
+    _assert_copilot_cache_empty(copilot_response_cache)
+
+
+@pytest.mark.asyncio
+async def test_existing_provider_response_cache_still_hits(copilot_response_cache: Cache) -> None:
+    messages: Final = [{"role": "user", "content": "cached provider control"}]
+    first: Final = await litellm.acompletion(
+        model="gpt-4o",
+        messages=messages,
+        mock_response="first cached response",
+        caching=True,
+    )
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+
+    second: Final = await litellm.acompletion(
+        model="gpt-4o",
+        messages=messages,
+        mock_response="second response should not be used",
+        caching=True,
+    )
+
+    assert isinstance(first, ModelResponse)
+    assert isinstance(second, ModelResponse)
+    hidden_params_value: Final[object] = cast(  # cast-ok: validate the response's dynamic metadata
+        object,
+        second.hidden_params,
+    )
+    hidden_params: Final[Mapping[str, object]] = TypeAdapter(Mapping[str, object]).validate_python(hidden_params_value)
+    assert second.choices[0].message.content == first.choices[0].message.content
+    assert hidden_params.get("cache_hit") is True
 
 
 chat_completion_response = litellm.ModelResponse(
@@ -2714,3 +2854,88 @@ async def test_async_get_cache_forgets_the_worker_copy_of_a_stored_response_with
 
     assert lookup.cached_result is None
     assert await handler.dual_cache.async_get_cache(key) is None
+
+
+@pytest.mark.asyncio
+async def test_async_get_cache_partial_hit_keeps_file_block_items_uncached() -> None:
+    setup_cache()
+    fixed_start: Final = datetime(2026, 1, 1)
+    caching_handler: Final = LLMCachingHandler(original_function=aembedding, request_kwargs={}, start_time=fixed_start)
+    model: Final = "gemini/gemini-embedding-2-preview"
+    logging_obj: Final = LiteLLMLogging(
+        litellm_call_id=str(uuid.uuid4()),
+        call_type=CallTypes.aembedding.value,
+        model=model,
+        messages=[],
+        function_id=str(uuid.uuid4()),
+        stream=False,
+        start_time=fixed_start,
+    )
+    await caching_handler.async_set_cache(
+        result=EmbeddingResponse(model=model, data=[Embedding(embedding=[0.1, 0.2], index=0, object="embedding")]),
+        original_function=aembedding,
+        kwargs={"model": model, "input": ["a red bus"], "caching": True},
+    )
+    clip_block: Final = {
+        "type": "file",
+        "file": {
+            "file_data": "data:video/mp4;base64,AAAA",
+            "format": "video/mp4",
+            "video_metadata": {"fps": 1, "start_offset": "0s", "end_offset": "1s"},
+        },
+        "detail": "left for the provider transformation to judge",
+    }
+
+    cached_response: Final = await caching_handler.async_get_cache(
+        model=model,
+        original_function=aembedding,
+        logging_obj=logging_obj,
+        start_time=fixed_start,
+        call_type=CallTypes.aembedding.value,
+        kwargs={"model": model, "input": [clip_block, "a red bus"], "caching": True},
+    )
+
+    assert cached_response.embedding_all_elements_cache_hit is False
+    assert cached_response.embedding_uncached_input == [clip_block]
+    assert cached_response.final_embedding_cached_response is not None
+    assert cached_response.final_embedding_cached_response.data[1].embedding == [0.1, 0.2]
+    assert cached_response.final_embedding_cached_response.data[0] is None
+
+
+def test_handle_kwargs_input_answers_400_for_a_single_object_input() -> None:
+    caching_handler: Final = LLMCachingHandler(
+        original_function=aembedding, request_kwargs={}, start_time=datetime(2026, 1, 1)
+    )
+    clip_block: Final = {"type": "file", "file": {"file_data": "data:video/mp4;base64,AAAA"}}
+    with pytest.raises(litellm.BadRequestError, match="string or a list"):
+        caching_handler.handle_kwargs_input_list_or_str(
+            {"model": "gemini/gemini-embedding-2-preview", "custom_llm_provider": "gemini", "input": clip_block}
+        )
+
+
+@pytest.mark.asyncio
+async def test_async_get_cache_answers_400_for_a_single_object_embedding_input() -> None:
+    setup_cache()
+    fixed_start: Final = datetime(2026, 1, 1)
+    caching_handler: Final = LLMCachingHandler(original_function=aembedding, request_kwargs={}, start_time=fixed_start)
+    model: Final = "gemini/gemini-embedding-2-preview"
+    logging_obj: Final = LiteLLMLogging(
+        litellm_call_id=str(uuid.uuid4()),
+        call_type=CallTypes.aembedding.value,
+        model=model,
+        messages=[],
+        function_id=str(uuid.uuid4()),
+        stream=False,
+        start_time=fixed_start,
+    )
+    clip_block: Final = {"type": "file", "file": {"file_data": "data:video/mp4;base64,AAAA"}}
+
+    with pytest.raises(litellm.BadRequestError, match="string or a list"):
+        await caching_handler.async_get_cache(
+            model=model,
+            original_function=aembedding,
+            logging_obj=logging_obj,
+            start_time=fixed_start,
+            call_type=CallTypes.aembedding.value,
+            kwargs={"model": model, "custom_llm_provider": "gemini", "input": clip_block, "caching": True},
+        )

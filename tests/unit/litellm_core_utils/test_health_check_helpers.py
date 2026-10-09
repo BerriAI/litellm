@@ -1,7 +1,6 @@
 """Test health check helper functions"""
 
 import json
-import os
 import socket
 import struct
 import zlib
@@ -680,6 +679,81 @@ async def test_ahealth_check_probes_strands_through_decisions_without_mode(
     assert "authorization" not in upstream.calls[0].request.headers
 
 
+@pytest.mark.asyncio
+async def test_ahealth_check_probes_hosted_vllm_with_a_choice_question(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("HOSTED_VLLM_API_KEY", raising=False)
+    monkeypatch.delenv("HOSTED_VLLM_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("http://vllm.local:8000/v1/systemone").respond(
+        json={
+            "model": "Qwen/Qwen3-0.6B",
+            "answers": {
+                "reachable": {
+                    "type": "choice",
+                    "choice": "yes",
+                    "confidence": 1.0,
+                    "probabilities": {"yes": 1.0, "no": 0.0},
+                }
+            },
+            "usage": {"input_tokens": 12, "output_tokens": 1},
+        }
+    )
+
+    result: Final = await ahealth_check(
+        {
+            "model": "hosted_vllm/Qwen/Qwen3-0.6B",
+            "api_base": "http://vllm.local:8000",
+        },
+        mode="evaluation",
+    )
+
+    assert "error" not in result, result
+    assert upstream.called
+    sent: Final = json.loads(upstream.calls[0].request.content)
+    assert sent["questions"] == {
+        "reachable": {
+            "type": "choice",
+            "instructions": "Is the service reachable?",
+            "criteria": {"yes": None, "no": None},
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_ahealth_check_keeps_the_noul_probe_for_other_decisions_providers(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(
+        json={
+            "model": "jev-1.13",
+            "answers": {"reachable": {"type": "noul", "noul": 1.0}},
+            "usage": {"input_tokens": 12, "output_tokens": 1},
+        }
+    )
+
+    result: Final = await ahealth_check(
+        {
+            "model": "typesafe/jev-1.13",
+            "api_key": "sk-test",
+        },
+        mode="evaluation",
+    )
+
+    assert "error" not in result, result
+    assert upstream.called
+    sent: Final = json.loads(upstream.calls[0].request.content)
+    assert sent["questions"] == {
+        "reachable": {"type": "noul", "instructions": "Is the service reachable?"}
+    }
+
+
 @pytest.mark.parametrize(
     ("model", "custom_llm_provider", "expected"),
     (
@@ -1235,3 +1309,193 @@ async def test_health_check_with_custom_llm_provider(
     assert "error" not in response, response
     assert upstream.called
     assert json.loads(upstream.calls[0].request.content)["model"] == "deepseek-r1-distill-qwen-1.5B-q4"
+
+
+@pytest.mark.asyncio
+async def test_azure_chat_health_check_surfaces_provider_rate_limit_headers(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(
+        url__regex=r"https://resource\.example/openai/deployments/gpt-4\.1-mini/chat/completions.*"
+    ).respond(
+        json={
+            "id": "chatcmpl-health",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gpt-4.1-mini",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+        headers={"x-ratelimit-remaining-tokens": "42"},
+    )
+
+    response: Final = await ahealth_check(
+        {
+            "model": "azure/gpt-4.1-mini",
+            "api_key": "fake-key",
+            "api_base": "https://resource.example",
+            "api_version": "2024-06-01",
+        },
+        mode="chat",
+    )
+
+    assert response["x-ratelimit-remaining-tokens"] == "42"
+    assert upstream.called
+
+
+@pytest.mark.asyncio
+async def test_azure_embedding_health_check_surfaces_provider_rate_limit_headers(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(
+        url__regex=r"https://resource\.example/openai/deployments/text-embedding-ada-002/embeddings.*"
+    ).respond(
+        json={
+            "object": "list",
+            "data": [{"object": "embedding", "embedding": [0.1, 0.2], "index": 0}],
+            "model": "text-embedding-ada-002",
+            "usage": {"prompt_tokens": 1, "total_tokens": 1},
+        },
+        headers={"x-ratelimit-remaining-tokens": "84"},
+    )
+
+    response: Final = await ahealth_check(
+        {
+            "model": "azure/text-embedding-ada-002",
+            "api_key": "fake-key",
+            "api_base": "https://resource.example",
+            "api_version": "2024-06-01",
+        },
+        input=["health check"],
+        mode="embedding",
+    )
+
+    assert response["x-ratelimit-remaining-tokens"] == "84"
+    assert upstream.called
+
+
+@pytest.mark.asyncio
+async def test_image_generation_health_check_returns_a_successful_response(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/images/generations").respond(
+        json={"created": 1, "data": [{"b64_json": "AA=="}]}
+    )
+
+    response: Final = await ahealth_check(
+        {"model": "gpt-image-1", "api_key": "fake-key"},
+        mode="image_generation",
+        prompt="health check",
+    )
+
+    assert "error" not in response
+    assert upstream.called
+
+
+@pytest.mark.asyncio
+async def test_groq_wildcard_health_check_uses_a_concrete_model(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        litellm,
+        "models_by_provider",
+        {"groq": ["groq/openai/gpt-oss-20b"]},
+    )
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.groq.com/openai/v1/chat/completions").respond(
+        json={
+            "id": "chatcmpl-health",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "groq/openai/gpt-oss-20b",
+            "service_tier": "on_demand",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "2"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+    )
+
+    response: Final = await ahealth_check(
+        {
+            "model": "groq/*",
+            "api_key": "fake-key",
+            "messages": [{"role": "user", "content": "What is 1 + 1?"}],
+        }
+    )
+
+    assert upstream.called
+    assert json.loads(upstream.calls.last.request.content)["model"] == "openai/gpt-oss-20b"
+    assert response == {}
+
+
+@pytest.mark.asyncio
+async def test_cohere_rerank_health_check_returns_a_successful_response(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.cohere.com/v2/rerank").respond(
+        json={
+            "id": "rerank-health",
+            "results": [{"index": 0, "relevance_score": 0.7}],
+            "meta": {"billed_units": {"search_units": 1}},
+        }
+    )
+
+    response: Final = await ahealth_check(
+        {"model": "cohere/rerank-english-v3.0", "api_key": "fake-key"},
+        mode="rerank",
+        prompt="health check",
+    )
+
+    assert "error" not in response
+    assert upstream.called
+    assert json.loads(upstream.calls.last.request.content)["query"] == "health check"
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_health_check_returns_audio(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/audio/speech").respond(
+        content=b"audio",
+        headers={"content-type": "audio/mpeg"},
+    )
+
+    response: Final = await ahealth_check(
+        {"model": "openai/tts-1", "api_key": "fake-key"},
+        mode="audio_speech",
+        prompt="health check",
+    )
+
+    assert "error" not in response
+    assert upstream.called
+    assert json.loads(upstream.calls.last.request.content)["input"] == "health check"
+
+
+@pytest.mark.asyncio
+async def test_audio_transcription_health_check_returns_transcribed_text(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/audio/transcriptions").respond(
+        json={"text": "health check audio"}
+    )
+
+    response: Final = await ahealth_check(
+        {"model": "openai/whisper-1", "api_key": "fake-key"},
+        mode="audio_transcription",
+    )
+
+    assert "error" not in response
+    assert upstream.called
+    assert b'name="file"' in upstream.calls.last.request.content

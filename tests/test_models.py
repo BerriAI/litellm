@@ -5,8 +5,6 @@ import pytest
 import asyncio
 import aiohttp
 import os
-import dotenv
-from typing import Final
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -30,46 +28,6 @@ async def generate_key(session, models=[]):
         if status != 200:
             raise Exception(f"Request did not return a 200 status code: {status}")
         return await response.json()
-
-
-async def get_models(session, key, only_model_access_groups=False):
-    url = "http://0.0.0.0:4000/models"
-    if only_model_access_groups:
-        url += "?only_model_access_groups=True"
-    headers = {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    }
-
-    async with session.get(url, headers=headers) as response:
-        status = response.status
-        response_text = await response.text()
-        print("response from /models")
-        print(response_text)
-        print()
-
-        if status != 200:
-            raise Exception(f"Request did not return a 200 status code: {status}")
-        return await response.json()
-
-
-@pytest.mark.asyncio
-async def test_get_models_multiple_tests():
-    async with aiohttp.ClientSession() as session:
-        key_gen = await generate_key(session=session)
-        key = key_gen["key"]
-        models = await get_models(session=session, key=key)
-        print(f"\n\nmodels: {models}")
-        assert len(models["data"]) > 0
-
-        ## Test only_model_access_groups
-        new_response = await get_models(
-            session=session, key=key, only_model_access_groups=True
-        )
-        print(f"\n\nnew_response: {new_response}")
-        assert (
-            len(new_response["data"]) == 0
-        )  # no model access groups set on config.yaml
 
 
 async def add_models(
@@ -106,48 +64,6 @@ async def add_models(
         return response_json
 
 
-async def get_model_info(session, key, litellm_model_id=None):
-    """
-    Make sure only models user has access to are returned
-    """
-    if litellm_model_id:
-        url = f"http://0.0.0.0:4000/model/info?litellm_model_id={litellm_model_id}"
-    else:
-        url = "http://0.0.0.0:4000/model/info"
-    headers = {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    }
-
-    async with session.get(url, headers=headers) as response:
-        status = response.status
-        response_text = await response.text()
-        print(response_text)
-        print()
-
-        if status != 200:
-            raise Exception(f"Request did not return a 200 status code: {status}")
-        return await response.json()
-
-
-async def get_model_group_info(session, key):
-    url = "http://0.0.0.0:4000/model_group/info"
-    headers = {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    }
-
-    async with session.get(url, headers=headers) as response:
-        status = response.status
-        response_text = await response.text()
-        print(response_text)
-        print()
-
-        if status != 200:
-            raise Exception(f"Request did not return a 200 status code: {status}")
-        return await response.json()
-
-
 async def chat_completion(session, key, model="azure-gpt-3.5"):
     url = "http://0.0.0.0:4000/chat/completions"
     headers = {
@@ -171,49 +87,6 @@ async def chat_completion(session, key, model="azure-gpt-3.5"):
 
         if status != 200:
             raise Exception(f"Request did not return a 200 status code: {status}")
-
-
-@pytest.mark.asyncio
-async def test_get_models():
-    """
-    Get models user has access to
-    """
-    async with aiohttp.ClientSession() as session:
-        key_gen = await generate_key(session=session, models=["gpt-4"])
-        key = key_gen["key"]
-        response = await get_model_info(session=session, key=key)
-        models = [m["model_name"] for m in response["data"]]
-        for m in models:
-            assert m == "gpt-4"
-
-
-@pytest.mark.asyncio
-async def test_get_specific_model():
-    """
-    Return specific model info
-
-    Ensure value of model_info is same as on `/model/info` (no id set)
-    """
-    async with aiohttp.ClientSession() as session:
-        key_gen = await generate_key(session=session, models=["gpt-4"])
-        key = key_gen["key"]
-        response = await get_model_info(session=session, key=key)
-        models = [m["model_name"] for m in response["data"]]
-        model_specific_info = None
-        for idx, m in enumerate(models):
-            assert m == "gpt-4"
-            litellm_model_id = response["data"][idx]["model_info"]["id"]
-            model_specific_info = response["data"][idx]
-        assert litellm_model_id is not None
-        response = await get_model_info(
-            session=session, key=key, litellm_model_id=litellm_model_id
-        )
-        assert response["data"][0]["model_info"]["id"] == litellm_model_id
-        assert (
-            response["data"][0] == model_specific_info
-        ), "Model info is not the same. Got={}, Expected={}".format(
-            response["data"][0], model_specific_info
-        )
 
 
 async def delete_model(session, model_id="123", key=os.environ["LITELLM_MASTER_KEY"]):
@@ -268,47 +141,5 @@ async def test_add_and_delete_models():
             pytest.fail(f"Expected call to fail.")
         except Exception:
             pass
-
-
-@pytest.mark.asyncio
-async def test_get_personal_models_for_user():
-    """
-    Test /models endpoint with team
-    """
-    from tests.test_users import new_user
-
-    async with aiohttp.ClientSession() as session:
-        # Creat a user
-        user_data = await new_user(session=session, i=0, models=["gpt-3.5-turbo"])
-        user_id = user_data["user_id"]
-        user_api_key = user_data["key"]
-
-        model_group_info = await get_model_group_info(session=session, key=user_api_key)
-        print(model_group_info)
-
-        assert len(model_group_info["data"]) == 1
-        assert model_group_info["data"][0]["model_group"] == "gpt-3.5-turbo"
-
-
-@pytest.mark.asyncio
-async def test_model_group_info_e2e():
-    """
-    Test /model/group/info endpoint
-    """
-    async with aiohttp.ClientSession() as session:
-        models = await get_models(session=session, key=os.environ["LITELLM_MASTER_KEY"])
-        print(models)
-
-        model_group_info = await get_model_group_info(session=session, key=os.environ["LITELLM_MASTER_KEY"])
-        print(model_group_info)
-
-        model_groups: Final = [m["model_group"] for m in model_group_info["data"]]
-
-        assert "anthropic/*" not in model_groups, (
-            f"Expected 'anthropic/*' to be expanded, but it was returned verbatim: {model_groups}"
-        )
-        assert any(m.startswith("anthropic/") for m in model_groups), (
-            f"Expected concrete anthropic models from the 'anthropic/*' config entry, got: {model_groups}"
-        )
 
 

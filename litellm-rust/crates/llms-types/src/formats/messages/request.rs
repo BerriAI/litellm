@@ -4,14 +4,14 @@ use strum::IntoStaticStr;
 use crate::formats::chat_completions::ReasoningEffort;
 use crate::recognized::Recognized;
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(untagged)]
 pub enum SystemPrompt {
     Text(String),
     Blocks(Vec<ContentBlock>),
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(untagged)]
 pub enum MessageContent {
     Text(String),
@@ -30,16 +30,24 @@ pub enum MessageContent {
 )]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(from = "String", into = "String"))]
-#[strum(serialize_all = "snake_case")]
 pub enum ContentBlockType {
+    #[strum(serialize = "text")]
     Text,
+    #[strum(serialize = "thinking")]
     Thinking,
+    #[strum(serialize = "redacted_thinking")]
     RedactedThinking,
+    #[strum(serialize = "tool_use")]
     ToolUse,
+    #[strum(serialize = "server_tool_use")]
     ServerToolUse,
+    #[strum(serialize = "tool_result")]
     ToolResult,
+    #[strum(serialize = "compaction")]
     Compaction,
+    #[strum(serialize = "advisor_tool_result")]
     AdvisorToolResult,
+    #[strum(serialize = "web_search_tool_result")]
     WebSearchToolResult,
     #[strum(default, transparent)]
     Other(String),
@@ -57,7 +65,7 @@ impl From<ContentBlockType> for String {
     }
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ContentBlock {
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
@@ -102,7 +110,7 @@ impl ContentBlock {
     }
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct CacheControl {
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
@@ -115,7 +123,7 @@ pub struct CacheControl {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct Message {
     pub role: String,
     pub content: MessageContent,
@@ -123,22 +131,20 @@ pub struct Message {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
-#[derive(Copy, Hash, IntoStaticStr, Eq)]
+#[macro_rules_attribute::apply(crate::wire_type)]
+#[derive(Copy, Hash, IntoStaticStr, Eq, strum::VariantArray)]
 #[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
 pub enum EffortLevel {
+    #[strum(serialize = "low")]
     Low,
+    #[strum(serialize = "medium")]
     Medium,
+    #[strum(serialize = "high")]
     High,
+    #[strum(serialize = "xhigh")]
     Xhigh,
+    #[strum(serialize = "max")]
     Max,
-}
-
-impl EffortLevel {
-    pub fn as_str(self) -> &'static str {
-        self.into()
-    }
 }
 
 impl From<EffortLevel> for ReasoningEffort {
@@ -153,24 +159,19 @@ impl From<EffortLevel> for ReasoningEffort {
     }
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Copy, IntoStaticStr, Eq)]
 #[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
 pub enum Speed {
+    #[strum(serialize = "fast")]
     Fast,
+    #[strum(serialize = "standard")]
     Standard,
-}
-
-impl Speed {
-    pub fn as_str(self) -> &'static str {
-        self.into()
-    }
 }
 
 /// The tools whose presence changes how the request is sent. Every other tool, custom or
 /// server, deserializes as `Recognized::Unrecognized` and passes through verbatim.
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type")]
 pub enum MessagesTool {
     #[serde(rename = "advisor_20260301")]
@@ -190,7 +191,22 @@ pub enum MessagesTool {
     },
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContextTrigger {
+    InputTokens {
+        value: u64,
+        #[serde(flatten)]
+        extra: Map<String, Value>,
+    },
+    ToolUses {
+        value: u64,
+        #[serde(flatten)]
+        extra: Map<String, Value>,
+    },
+}
+
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type")]
 pub enum ContextEdit {
     #[serde(rename = "compact_20260112")]
@@ -210,7 +226,7 @@ pub enum ContextEdit {
     },
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ContextManagement {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -219,7 +235,7 @@ pub struct ContextManagement {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct OutputConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -236,7 +252,7 @@ impl OutputConfig {
     }
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Copy, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ThinkingDisplay {
@@ -245,7 +261,7 @@ pub enum ThinkingDisplay {
     Updates,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct EnabledThinking {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -256,7 +272,7 @@ pub struct EnabledThinking {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct AdaptiveThinking {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -265,14 +281,14 @@ pub struct AdaptiveThinking {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct DisabledThinking {
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ThinkingConfig {
     Enabled(EnabledThinking),
@@ -296,7 +312,7 @@ impl ThinkingConfig {
     }
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct MessagesRequest {
     pub model: String,
     pub messages: Vec<Message>,
@@ -304,7 +320,7 @@ pub struct MessagesRequest {
     pub params: MessagesOptionalParams,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct MessagesOptionalParams {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -676,7 +692,10 @@ mod tests {
 
     #[rstest]
     fn speed_names_match_the_wire(#[values(Speed::Fast, Speed::Standard)] speed: Speed) {
-        assert_eq!(serde_json::to_value(speed).unwrap(), json!(speed.as_str()));
+        assert_eq!(
+            serde_json::to_value(speed).unwrap(),
+            json!(<&'static str>::from(speed))
+        );
     }
 
     #[rstest]
@@ -690,10 +709,13 @@ mod tests {
         )]
         level: EffortLevel,
     ) {
-        assert_eq!(serde_json::to_value(level).unwrap(), json!(level.as_str()));
+        assert_eq!(
+            serde_json::to_value(level).unwrap(),
+            json!(<&'static str>::from(level))
+        );
         assert_eq!(
             serde_json::to_value(ReasoningEffort::from(level)).unwrap(),
-            json!(level.as_str())
+            json!(<&'static str>::from(level))
         );
     }
 }

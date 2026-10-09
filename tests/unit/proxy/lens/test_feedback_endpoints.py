@@ -94,32 +94,29 @@ class FakeClickHouse(ClickHouseStorage):
                     and self._visible(str(r["TeamId"]), str(r["ApiKeyHash"]), parameters)
                 )
             case LensFeedbackSummaryParams():
-                live = tuple(
+                live: Final = tuple(
                     r
                     for r in self._latest()
                     if r["TraceId"] in parameters.trace_ids
                     and self._visible(str(r["TeamId"]), str(r["ApiKeyHash"]), parameters)
                 )
-                keys = sorted({(str(r["TeamId"]), str(r["ApiKeyHash"]), str(r["TraceId"])) for r in live})
-                return tuple(
-                    FeedbackSummaryRow(
-                        trace_id=trace,
-                        trace_ref=ref(team, key, trace),
-                        count=len(scores),
-                        average=sum(scores) / len(scores),
-                        lowest=min(scores),
-                    )
-                    for team, key, trace in keys
-                    for scores in [
-                        [
-                            int(str(r["Score"]))
-                            for r in live
-                            if (r["TeamId"], r["ApiKeyHash"], r["TraceId"]) == (team, key, trace)
-                        ]
-                    ]
-                )
+                keys: Final = sorted({(str(r["TeamId"]), str(r["ApiKeyHash"]), str(r["TraceId"])) for r in live})
+                return tuple(_summary_row(live, team, key, trace) for team, key, trace in keys)
             case _:
                 raise AssertionError(f"unexpected query {query.name}")
+
+
+def _summary_row(live: tuple[Mapping[str, object], ...], team: str, key: str, trace: str) -> FeedbackSummaryRow:
+    scores: Final = tuple(
+        int(str(r["Score"])) for r in live if (r["TeamId"], r["ApiKeyHash"], r["TraceId"]) == (team, key, trace)
+    )
+    return FeedbackSummaryRow(
+        trace_id=trace,
+        trace_ref=ref(team, key, trace),
+        count=len(scores),
+        average=sum(scores) / len(scores),
+        lowest=min(scores),
+    )
 
 
 def store(**traces: tuple[tuple[str, str], ...]) -> ClickHouseFeedbackStore:
@@ -205,6 +202,20 @@ async def test_viewers_can_read_but_not_write_and_non_admins_cannot_read_in_lens
         await read_feedback(FeedbackTarget(trace_id="t1"), INTERNAL, feedback)
 
     assert (write.value.status_code, read.value.status_code) == (403, 403)
+
+
+@pytest.mark.asyncio
+async def test_a_caller_without_a_team_or_key_cannot_write_on_a_teamless_trace() -> None:
+    feedback: Final = store(t1=(("", "key-a"),))
+    await submit_feedback(submission(9, "mine", user="customer-1"), ADMIN, feedback, T0)
+
+    with pytest.raises(HTTPException) as write:
+        await submit_feedback(submission(1, "overwrite", user="customer-1"), INTERNAL, feedback, T0)
+    with pytest.raises(HTTPException) as delete:
+        await delete_feedback(FeedbackDeletion(trace_id="t1", user="customer-1"), INTERNAL, feedback, T0)
+
+    assert (write.value.status_code, delete.value.status_code) == (403, 403)
+    assert [f.score for f in (await read_feedback(FeedbackTarget(trace_id="t1"), ADMIN, feedback)).feedback] == [9]
 
 
 @pytest.mark.asyncio

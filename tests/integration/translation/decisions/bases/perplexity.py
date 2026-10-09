@@ -6,7 +6,7 @@ from integration.translation.case import TranslationTestCase
 """
 PPLX_DECIDER_V1_27B_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
-    litellm_endpoint="/v1/decisions",
+    litellm_endpoint="/v1/systemone",
     litellm_request={
         "model": "perplexity/pplx-decider-v1-27b",
         "state": "Ticket (billing): The export job hangs at 99% and never finishes",

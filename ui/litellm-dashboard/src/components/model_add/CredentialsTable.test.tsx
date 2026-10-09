@@ -63,7 +63,7 @@ describe("CredentialsTable", () => {
     expect(screen.getByText("Azure")).toBeInTheDocument();
   });
 
-  it("should mark only the credential that stores federation values as federated", () => {
+  it("should mark only the credentials the proxy federates as federated", () => {
     const credentials: CredentialItem[] = [
       {
         credential_name: "a-anthropic-federated",
@@ -75,12 +75,23 @@ describe("CredentialsTable", () => {
         credential_values: { api_key: "sk-a****" },
         credential_info: { custom_llm_provider: "anthropic" },
       },
+      {
+        credential_name: "c-openai-federated",
+        credential_values: { openai_service_account_id: "svc_stored" },
+        credential_info: { custom_llm_provider: "openai" },
+      },
+      {
+        credential_name: "d-openai-key-and-federation",
+        credential_values: { api_key: "sk-p****", openai_service_account_id: "svc_stored" },
+        credential_info: { custom_llm_provider: "openai" },
+      },
     ];
     render(<CredentialsTable {...defaultProps} credentials={credentials} />);
-    const [federatedRow, apiKeyRow] = screen.getAllByRole("row").slice(1);
-    expect(within(federatedRow).getByText("a-anthropic-federated")).toBeInTheDocument();
-    expect(within(federatedRow).getByText("Workload identity federation")).toBeInTheDocument();
-    expect(within(apiKeyRow).queryByText("Workload identity federation")).not.toBeInTheDocument();
+    const rows = screen.getAllByRole("row").slice(1);
+    const federatedNames = rows
+      .filter((row) => within(row).queryByText("Workload identity federation") !== null)
+      .map((row) => within(row).getAllByRole("cell")[0].textContent);
+    expect(federatedNames).toEqual(["a-anthropic-federated", "c-openai-federated"]);
   });
 
   it("should render a dash when a credential has no provider", () => {
@@ -126,6 +137,71 @@ describe("CredentialsTable", () => {
     await user.click(screen.getByTestId("credential-actions-b-openai-key"));
     await user.click(await screen.findByTestId("credential-action-copy"));
     expect(await window.navigator.clipboard.readText()).toBe("b-openai-key");
+  });
+
+  it("should show the display name with the credential name beneath it, and the bare name when unset", () => {
+    const credentials: CredentialItem[] = [
+      {
+        credential_name: "openai-prod",
+        display_name: "Prod OpenAI",
+        credential_values: {},
+        credential_info: { custom_llm_provider: "openai" },
+      },
+      { credential_name: "plain-key", credential_values: {}, credential_info: { custom_llm_provider: "openai" } },
+    ];
+    render(<CredentialsTable {...defaultProps} credentials={credentials} />);
+
+    const labeledRow = screen.getByRole("row", { name: /Prod OpenAI/ });
+    expect(within(labeledRow).getByText("openai-prod")).toBeInTheDocument();
+    const plainRow = screen.getByRole("row", { name: /plain-key/ });
+    expect(within(plainRow).getAllByText("plain-key")).toHaveLength(1);
+  });
+
+  it("should sort by the display name when one is set", () => {
+    const credentials: CredentialItem[] = [
+      { credential_name: "a-key", display_name: "zulu", credential_values: {}, credential_info: {} },
+      { credential_name: "b-key", credential_values: {}, credential_info: {} },
+    ];
+    render(<CredentialsTable {...defaultProps} credentials={credentials} />);
+
+    const rows = screen.getAllByRole("row").slice(1);
+    expect(within(rows[0]).getByText("b-key")).toBeInTheDocument();
+    expect(within(rows[1]).getByText("zulu")).toBeInTheDocument();
+  });
+
+  it("should badge a config credential and block editing and deleting it", async () => {
+    const user = userEvent.setup();
+    const credentials: CredentialItem[] = [
+      { credential_name: "from-config", source: "config", credential_values: {}, credential_info: {} },
+      { credential_name: "from-db", source: "db", credential_values: {}, credential_info: {} },
+    ];
+    render(<CredentialsTable {...defaultProps} credentials={credentials} />);
+
+    expect(within(screen.getByRole("row", { name: /from-config/ })).getByText("Config")).toBeInTheDocument();
+    expect(within(screen.getByRole("row", { name: /from-db/ })).queryByText("Config")).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId("credential-actions-from-config"));
+    expect(await screen.findByTestId("credential-config-owned-hint")).toBeInTheDocument();
+    const edit = screen.getByTestId("credential-action-edit");
+    const remove = screen.getByTestId("credential-action-delete");
+    expect(edit).toHaveAttribute("data-disabled");
+    expect(remove).toHaveAttribute("data-disabled");
+    await user.click(edit);
+    await user.click(remove);
+    expect(mockOnEdit).not.toHaveBeenCalled();
+    expect(mockOnDelete).not.toHaveBeenCalled();
+  });
+
+  it("should keep editing enabled for a DB credential", async () => {
+    const user = userEvent.setup();
+    const credentials: CredentialItem[] = [
+      { credential_name: "from-db", source: "db", credential_values: {}, credential_info: {} },
+    ];
+    render(<CredentialsTable {...defaultProps} credentials={credentials} />);
+
+    await user.click(screen.getByTestId("credential-actions-from-db"));
+    expect(await screen.findByTestId("credential-action-edit")).not.toHaveAttribute("data-disabled");
+    expect(screen.queryByTestId("credential-config-owned-hint")).not.toBeInTheDocument();
   });
 
   it("should not render the actions menu when the user cannot modify credentials", () => {

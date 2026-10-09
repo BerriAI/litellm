@@ -35,7 +35,7 @@ pub enum EventType {
 }
 ```
 
-Use `#[strum(serialize_all = "snake_case")]` or another supported case style when it exactly matches the contract. Use explicit variant spellings otherwise. With multiple accepted aliases, set `to_string` to the existing canonical output: Strum Display otherwise selects the longest `serialize` spelling
+Spell each variant explicitly with `#[strum(serialize = "...")]`; do not use `serialize_all`. With multiple accepted aliases, set `to_string` to the existing canonical output: Strum Display otherwise selects the longest `serialize` spelling
 
 Use only the derives the contract needs. A deserialize-only type should remain deserialize-only. Do not add an unknown variant to a closed enum, or derive Serde for a type that currently has no serialization contract
 
@@ -43,7 +43,7 @@ Plain Serde derives with `rename` or `rename_all` remain appropriate for closed 
 
 ## Preserve behavior during migration
 
-Read the type, its callers, and existing tests before changing it. Preserve canonical output, accepted aliases, case sensitivity, whitespace handling, unknown values, malformed-input rejection, and existing public conversion APIs. Keep conversions needed by callers or compatibility even when Serde no longer uses them
+Read the type, its callers, and existing tests before changing it. Preserve canonical output, accepted aliases, case sensitivity, whitespace handling, unknown values, malformed-input rejection, and existing public conversion contracts. Wrappers that only delegate to a Strum-derived trait are removed rather than kept: callers use `FromStr` and `From<Enum> for &'static str` directly. Keep conversions that add behavior needed by callers or compatibility even when Serde no longer uses them
 
 Use the workspace dependencies and enable `serde_with.workspace = true` in a crate only when needed. Check the versions and enabled features in `Cargo.toml` and `Cargo.lock` rather than upgrading dependencies for this refactor
 

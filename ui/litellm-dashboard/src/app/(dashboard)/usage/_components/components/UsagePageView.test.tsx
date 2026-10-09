@@ -61,6 +61,7 @@ vi.mock("@/components/networking", () => ({
   dailyActivityModelTopKeysCall: vi.fn(),
   dailyActivityExportCall: vi.fn(),
   gatewayDailyActivityCall: vi.fn(),
+  requestErrorActivityCall: vi.fn(),
   tagListCall: vi.fn(),
 }));
 
@@ -208,6 +209,7 @@ describe("UsagePage", () => {
   const mockDailyActivityKeyPageCall = vi.mocked(networking.dailyActivityKeyPageCall);
   const mockTagListCall = vi.mocked(networking.tagListCall);
   const mockGatewayDailyActivityCall = vi.mocked(networking.gatewayDailyActivityCall);
+  const mockRequestErrorActivityCall = vi.mocked(networking.requestErrorActivityCall);
   const mockUseCustomers = vi.mocked(useCustomers);
   const mockUseAgents = vi.mocked(useAgents);
   const mockUseAuthorized = vi.mocked(useAuthorized);
@@ -370,11 +372,50 @@ describe("UsagePage", () => {
 
   // Counts deliberately unlike anything in mockSpendData: the gateway tile must be
   // readable as coming from /gateway/daily/activity and from nothing else.
+  const mockRequestErrorActivity = {
+    total_successful_requests: 900,
+    total_failed_requests: 100,
+    by_date: [
+      {
+        date: "2025-01-01",
+        successful_requests: 900,
+        failed_requests: 100,
+        client_errors: 90,
+        server_errors: 10,
+        by_status_code: [
+          { status_code: 429, failed_requests: 90 },
+          { status_code: 500, failed_requests: 10 },
+        ],
+      },
+    ],
+    by_status_code: [
+      { status_code: 429, failed_requests: 90 },
+      { status_code: 500, failed_requests: 10 },
+    ],
+    by_key: [
+      {
+        id: "hash-1",
+        label: "prod-key",
+        api_requests: 400,
+        failed_requests: 100,
+        top_status_code: 429,
+        top_status_code_requests: 90,
+      },
+    ],
+    by_team: [],
+    by_user: [],
+    by_model: [],
+  };
+
   const mockGatewayActivity = {
     total_successful_requests: 424242,
     total_failed_requests: 909,
     by_date: [{ date: "2025-01-01", successful_requests: 424242, failed_requests: 909 }],
     by_route: [{ category: "llm", route: "/chat/completions", successful_requests: 424242, failed_requests: 909 }],
+    by_status_code: [
+      { status_code: 429, failed_requests: 3 },
+      { status_code: 500, failed_requests: 2 },
+    ],
   };
 
   const defaultProps = {
@@ -440,6 +481,8 @@ describe("UsagePage", () => {
     mockGatewayDailyActivityCall.mockClear();
     mockUserDailyActivityAggregatedCall.mockResolvedValue(mockSpendData);
     mockGatewayDailyActivityCall.mockResolvedValue(mockGatewayActivity);
+    mockRequestErrorActivityCall.mockClear();
+    mockRequestErrorActivityCall.mockResolvedValue(mockRequestErrorActivity);
     mockUseInfiniteUsers.mockReturnValue({
       data: {
         pages: [
@@ -594,11 +637,31 @@ describe("UsagePage", () => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
     });
     expect(mockGatewayDailyActivityCall).not.toHaveBeenCalled();
+    expect(mockRequestErrorActivityCall).not.toHaveBeenCalled();
+    expect(screen.queryByRole("tab", { name: "Errors" })).not.toBeInTheDocument();
     await waitFor(() => {
       expect(totalRequestsCell()).toHaveTextContent("1,500");
     });
     expect(screen.queryByText("424,242")).not.toBeInTheDocument();
     expect(screen.queryByTestId("gateway-requests-by-endpoint")).not.toBeInTheDocument();
+  });
+
+  it("keeps failure analytics off the cost overview and on the Errors tab", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockRequestErrorActivityCall).toHaveBeenCalled();
+    });
+    expect(overview().queryByText(/Client errors \(4xx\)/)).not.toBeInTheDocument();
+    expect(overview().queryByRole("button", { name: /Failed Requests/ })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Errors" }));
+    const errorsTab = within(await screen.findByTestId("usage-errors-tab"));
+    expect(await errorsTab.findByText("10.0%")).toBeInTheDocument();
+    expect(errorsTab.getByRole("list", { name: "Failed requests by status code" })).toHaveTextContent("429");
+    const keys = errorsTab.getByRole("table", { name: "Virtual keys ranked by failed requests" });
+    expect(within(keys).getAllByRole("row")[1]).toHaveTextContent("prod-key");
   });
 
   it("should display usage metrics and charts", async () => {
@@ -620,8 +683,27 @@ describe("UsagePage", () => {
     expect(totalTokensElements.length).toBeGreaterThan(0);
 
     // Check for chart titles (these are in the Overview tab)
+    expect(screen.getByText("Daily usage")).toBeInTheDocument();
+    expect(screen.getByText("Daily spend by model (top 8, rest grouped as Other)")).toBeInTheDocument();
     expect(screen.getByText("Top models")).toBeInTheDocument();
     expect(screen.getByText("Top Virtual Keys")).toBeInTheDocument();
+  });
+
+  it("should rename the usage chart when the weekly bucket is selected", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+
+    expect(screen.getByText("Daily usage")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: "Weekly" }));
+
+    expect(screen.getByText("Weekly usage")).toBeInTheDocument();
+    expect(screen.getByText("Weekly spend by model (top 8, rest grouped as Other)")).toBeInTheDocument();
+    expect(screen.queryByText("Daily usage")).not.toBeInTheDocument();
   });
 
   it("should render the top models chart stacked in the shared usage palette", async () => {
@@ -660,7 +742,7 @@ describe("UsagePage", () => {
     });
 
     // Default view should show Global Usage (for admin)
-    expect(screen.getByText("Top models")).toBeInTheDocument();
+    expect(screen.getByText("Daily usage")).toBeInTheDocument();
 
     // Switch to Team Usage view
     const usageSelect = screen.getByTestId("usage-view-select");

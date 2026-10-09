@@ -596,16 +596,9 @@ mod tests {
     use crate::base_llm::messages::context::SupportedEffortTiers;
     use rstest::{fixture, rstest};
     use serde_json::json;
+    use strum::VariantArray;
 
     use super::*;
-
-    const ALL_LEVELS: [EffortLevel; 5] = [
-        EffortLevel::Low,
-        EffortLevel::Medium,
-        EffortLevel::High,
-        EffortLevel::Xhigh,
-        EffortLevel::Max,
-    ];
 
     fn apply(sanitizer: fn(Vec<Message>) -> Vec<Message>, messages: Value) -> Value {
         let parsed: Vec<Message> = serde_json::from_value(messages).unwrap();
@@ -1712,7 +1705,10 @@ mod tests {
             ..unmapped
         };
         assert_eq!(
-            ALL_LEVELS.map(|level| supports_effort_tier(&capabilities, level)),
+            EffortLevel::VARIANTS
+                .iter()
+                .map(|level| supports_effort_tier(&capabilities, *level))
+                .collect::<Vec<_>>(),
             expected
         );
     }

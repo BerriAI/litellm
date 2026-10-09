@@ -3,10 +3,7 @@ import pytest
 
 import litellm
 
-
 class TestBedrockTestSuite(BaseLLMChatTest):
-    test_content_list_handling = None
-    test_empty_tools = None
     test_function_calling_with_tool_response = None
 
     def get_base_completion_call_args(self) -> dict:

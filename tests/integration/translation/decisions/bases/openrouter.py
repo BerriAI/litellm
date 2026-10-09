@@ -6,7 +6,7 @@ from integration.translation.case import TranslationTestCase
 """
 TYPESAFE_JEV_1_13_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
-    litellm_endpoint="/v1/decisions",
+    litellm_endpoint="/v1/systemone",
     litellm_request={
         "model": "openrouter/typesafe/jev-1.13",
         "state": "Ticket (billing): The export job hangs at 99% and never finishes",

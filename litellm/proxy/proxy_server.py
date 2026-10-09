@@ -559,6 +559,11 @@ from litellm.proxy.db.proxy_worker_heartbeat import (
     PROXY_WORKER_HEARTBEAT_INTERVAL_SECONDS,
     ProxyWorkerHeartbeat,
 )
+from litellm.proxy.db.request_error_tracking import (
+    RequestErrorRedisBuffer,
+    flush_request_errors,
+    request_error_accumulator,
+)
 from litellm.proxy.db.spend_counter_reseed import END_USER_COUNTER_PREFIX, SpendCounterReseed
 from litellm.proxy.discovery_endpoints import (
     agent_skills_discovery_router,
@@ -695,6 +700,9 @@ from litellm.proxy.management_endpoints.password_endpoints import (
 )
 from litellm.proxy.management_endpoints.prompt_caching_requests import (
     router as prompt_caching_requests_router,
+)
+from litellm.proxy.management_endpoints.request_error_endpoints import (
+    router as request_error_router,
 )
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
@@ -887,7 +895,7 @@ from litellm.proxy.utils import (  # noqa: F401, RUF100  # legacy module exports
     hash_password,
     hash_token,
     invalidate_config_param,
-    is_projected_spend_over_limit,
+    is_projected_spend_over_limit,  # pyright: ignore[reportUnusedImport]  # backwards-compatible package export
     is_valid_team_configs,
     litellm_config_cache,
     migrate_passwords_to_scrypt_async,
@@ -1191,6 +1199,7 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
         # ClientNotConnectedError rather than persisting anything. Ordering this
         # inside the same guard is what keeps the two from drifting apart.
         await flush_gateway_requests(prisma_client, gateway_request_accumulator)
+        await flush_request_errors(prisma_client, request_error_accumulator)
         verbose_proxy_logger.debug("Disconnecting from Prisma")
         await prisma_client.disconnect()
 
@@ -2850,6 +2859,14 @@ def _gateway_request_redis_buffer() -> GatewayRequestRedisBuffer | None:
     return GatewayRequestRedisBuffer(redis_cache=redis_cache, pod_lock_manager=writer.pod_lock_manager)
 
 
+def _request_error_redis_buffer() -> RequestErrorRedisBuffer | None:
+    writer: Final = proxy_logging_obj.db_spend_update_writer
+    redis_cache: Final = writer.redis_update_buffer.redis_cache
+    if redis_cache is None or not writer.redis_update_buffer.should_commit_spend_updates_to_redis():
+        return None
+    return RequestErrorRedisBuffer(redis_cache=redis_cache, pod_lock_manager=writer.pod_lock_manager)
+
+
 ### REDIS QUEUE ###
 async_result: Final = None
 celery_app_conn: Final = None
@@ -4165,21 +4182,18 @@ async def update_cache(
         new_spend: Final = existing_spend + response_cost
 
         ## CHECK IF USER PROJECTED SPEND > SOFT LIMIT
-        if (
-            existing_spend_obj.soft_budget_cooldown is False
-            and existing_spend_obj.soft_budget is not None
-            and (
-                is_projected_spend_over_limit(
-                    current_spend=new_spend,
-                    soft_budget_limit=existing_spend_obj.soft_budget,
-                )
-                is True
-            )
-        ):
-            projected_spend, projected_exceeded_date = get_projected_spend_over_limit(
+        projection: Final = (
+            get_projected_spend_over_limit(
                 current_spend=new_spend,
                 soft_budget_limit=existing_spend_obj.soft_budget,
+                budget_duration=existing_spend_obj.budget_duration,
+                budget_reset_at=existing_spend_obj.budget_reset_at,
             )
+            if existing_spend_obj.soft_budget_cooldown is False and existing_spend_obj.soft_budget is not None
+            else None
+        )
+        if projection is not None:
+            projected_spend, projected_exceeded_date = projection
             soft_limit: Final = existing_spend_obj.soft_budget
             call_info: Final = CallInfo(
                 token=existing_spend_obj.token or "",
@@ -6316,7 +6330,10 @@ class ProxyConfig:
         credential_list_dict: Final = config.get("credential_list")
         credential_list = []
         if credential_list_dict:
-            credential_list = [CredentialItem(**cred) for cred in credential_list_dict]
+            credential_list = [
+                CredentialItem.model_validate({**cred, "display_name": None, "source": "config"})
+                for cred in credential_list_dict
+            ]
         return credential_list
 
     def parse_search_tools(self, config: dict) -> list[SearchToolTypedDict] | None:
@@ -6951,6 +6968,13 @@ class ProxyConfig:
                             {"user_api_key_cache_max_size": general_settings["user_api_key_cache_max_size"]}
                         )
                     ).user_api_key_cache_max_size
+                )
+
+            if "spend_logs_metadata_fields" in general_settings:
+                _ = ConfigGeneralSettings.model_validate(
+                    MappingProxyType(
+                        {"spend_logs_metadata_fields": typed_general_settings["spend_logs_metadata_fields"]}
+                    )
                 )
 
             ### PKCE MULTI-INSTANCE PREREQUISITE CHECK ###
@@ -9340,7 +9364,10 @@ class ProxyConfig:
 
         decrypted_credential_values: Final = {}
         for k, v in credential_object.credential_values.items():
-            decrypted_credential_values[k] = decrypted_or_stored(k, v)
+            decrypted_credential_values[k] = decrypted_or_stored(
+                k,
+                cast("str", v),  # cast-ok: credential values are str at the decrypt boundary
+            )
 
         credential_object.credential_values = decrypted_credential_values
         return credential_object
@@ -10971,6 +10998,17 @@ class ProxyStartupEvent:
             seconds=batch_writing_interval,
             args=(prisma_client, gateway_request_accumulator, _gateway_request_redis_buffer()),
             id="update_gateway_requests_job",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
+
+        ### UPDATE FAILED REQUEST COUNTS BY CALLER AND STATUS ###
+        scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
+            flush_request_errors,
+            "interval",
+            seconds=batch_writing_interval,
+            args=(prisma_client, request_error_accumulator, _request_error_redis_buffer()),
+            id="update_request_errors_job",
             replace_existing=True,
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
         )
@@ -18538,6 +18576,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "mcp_client_id_header": "String",
         "mcp_trusted_proxy_ranges": "List",
         "mcp_xff_num_trusted_hops": "Integer",
+        "mcp_prefer_client_id_metadata_document": "Boolean",
         "always_include_stream_usage": "Boolean",
         "forward_client_headers_to_llm_api": "Boolean",
         "mcp_required_fields": "List",
@@ -20334,6 +20373,7 @@ app.include_router(cache_settings_router)
 app.include_router(coordination_redis_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(gateway_request_router)
+app.include_router(request_error_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
 app.include_router(agent_skills_discovery_router)

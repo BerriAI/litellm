@@ -6,7 +6,6 @@ export interface FeedbackView {
   readonly lowest: number;
 }
 
-/** End-user feedback on one run, newest first, or null when nobody has rated it. */
 export function feedbackView(feedback: readonly Feedback[]): FeedbackView | null {
   if (feedback.length === 0) return null;
   const scores = feedback.map((entry) => entry.score);

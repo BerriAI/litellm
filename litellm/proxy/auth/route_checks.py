@@ -70,6 +70,16 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES: Final = ("/regenerate", "/reset_spe
 
 _AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS: Final = frozenset(("openai_routes", "llm_api_routes"))
 
+# Method-scoped because the generic credential CRUD handlers share these paths:
+# the route check cannot admit PATCH/DELETE on a name like "user_connections"
+# or "*/user_connection*" without also opening the admin CRUD handlers.
+_INTERNAL_USER_CREDENTIAL_CONNECTION_ROUTES: Final = (
+    ("GET", "/credentials/user_connections"),
+    ("POST", "/credentials/{credential_name:path}/user_connection/start"),
+    ("POST", "/credentials/{credential_name:path}/user_connection/poll"),
+    ("DELETE", "/credentials/{credential_name:path}/user_connection"),
+)
+
 
 class RouteChecks:
     @staticmethod
@@ -331,7 +341,10 @@ class RouteChecks:
             )
         elif (
             _user_role == LitellmUserRoles.INTERNAL_USER.value
-            and RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.internal_user_routes.value)
+            and (
+                RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.internal_user_routes.value)
+                or RouteChecks.is_internal_user_credential_connection_route(route=route, request=request)
+            )
             or user_is_org_admin(request_data=request_data, user_object=user_obj)
             and RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.org_admin_allowed_routes.value)
             or _user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
@@ -663,7 +676,9 @@ class RouteChecks:
             return None
 
         try:
-            method: Final = request.method
+            method: Final = cast(  # cast-ok: request.method is str at runtime; tests hand a MagicMock
+                object, request.method
+            )
         except (AttributeError, KeyError):
             return None
         if not isinstance(method, str):
@@ -672,6 +687,16 @@ class RouteChecks:
         return method.upper()
 
     _get_request_method = get_request_method
+
+    @staticmethod
+    def is_internal_user_credential_connection_route(route: str, request: Request | None) -> bool:
+        method: Final = RouteChecks.get_request_method(request)
+        if method is None:
+            return False
+        return any(
+            method == expected_method and RouteChecks.check_route_access(route=route, allowed_routes=(pattern,))
+            for expected_method, pattern in _INTERNAL_USER_CREDENTIAL_CONNECTION_ROUTES
+        )
 
     @staticmethod
     def is_auth_enforced_pass_through_route(route: str, method: str | None = None) -> bool:

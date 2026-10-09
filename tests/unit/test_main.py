@@ -23,8 +23,11 @@ from openai.types.chat.chat_completion import ChatCompletion
 
 import litellm
 from litellm import acompletion, completion
+from litellm import acompletion_with_retries, aresponses_with_retries, completion_with_retries, responses_with_retries
 from litellm import main as litellm_main
 from litellm.constants import CONTROL_OPTIONS_KEY
+from litellm.caching.base_cache import BaseCache
+from litellm.caching.caching import Cache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
@@ -33,7 +36,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.litellm_params import ControlOptions
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, HttpxBinaryResponseContent
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import Delta, ModelResponseStream, StandardCallbackDynamicParams, StreamingChoices, Usage
 
@@ -4628,6 +4631,45 @@ def test_completion_rejects_an_invalid_stream_chunk_size_before_the_mcp_gateway(
     assert exc_info.value.param == "stream_chunk_size"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("missing_tenacity", [False, True])
+@pytest.mark.parametrize("route", ["bedrock", "bedrock/invoke"])
+async def test_bedrock_stream_missing_dependency_remains_actionable_with_retries(
+    monkeypatch, use_async, missing_tenacity, route
+):
+    import builtins
+
+    original_import = builtins.__import__
+
+    def import_without_aws_or_retry_dependencies(name, *args, **kwargs):
+        if name.split(".")[0] == "botocore" or (name == "tenacity" and missing_tenacity):
+            raise ModuleNotFoundError(name=name.split(".")[0])
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_aws_or_retry_dependencies)
+    monkeypatch.setattr(litellm, "num_retries", None)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock as upstream:
+        response = upstream.post(url__regex=r"https://bedrock-test\.invalid/.*").respond(200, content=b"")
+        arguments = dict(
+            model=f"{route}/anthropic.claude-3-sonnet-20240229-v1:0",
+            messages=[{"role": "user", "content": "ping"}],
+            api_key="test-bearer",
+            aws_region_name="us-east-1",
+            aws_bedrock_runtime_endpoint="https://bedrock-test.invalid",
+            stream=True,
+            num_retries=1,
+        )
+        if use_async:
+            with pytest.raises(ImportError, match="pip install boto3"):
+                await litellm.acompletion(**arguments)
+        else:
+            with pytest.raises(ImportError, match="pip install boto3"):
+                litellm.completion(**arguments)
+        assert response.call_count == 1
+
+
 def test_drop_params_false_still_rejects_an_invalid_stream_chunk_size() -> None:
     with pytest.raises(litellm.BadRequestError):
         litellm.completion(
@@ -5831,3 +5873,316 @@ def test_completion_openai_metadata(monkeypatch, enable_preview_features):
             }
         else:
             assert "metadata" not in mock_completion.call_args.kwargs
+
+
+AZURE_TTS_BASE: Final = "https://tts.example.azure.com"
+SPEECH_INPUT: Final = "the quick brown fox jumped over the lazy dogs"
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_speech_azure_returns_binary_audio(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode: bool
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(
+        url__regex=rf"{AZURE_TTS_BASE}/openai/deployments/tts/audio/speech\?api-version=.+"
+    ).mock(return_value=httpx.Response(200, content=b"ID3-fake-mp3"))
+
+    speech_kwargs: Final = {
+        "model": "azure/tts",
+        "input": SPEECH_INPUT,
+        "voice": "alloy",
+        "api_base": AZURE_TTS_BASE,
+        "api_key": "fake-key",
+        "max_retries": 1,
+        "timeout": 60,
+    }
+    response: Final = litellm.speech(**speech_kwargs) if sync_mode else await litellm.aspeech(**speech_kwargs)
+
+    assert route.call_count == 1
+    assert route.calls[0].request.headers["api-key"] == "fake-key"
+    assert json.loads(route.calls[0].request.content) == {"model": "tts", "input": SPEECH_INPUT, "voice": "alloy"}
+    assert isinstance(response, HttpxBinaryResponseContent)
+    assert response.content == b"ID3-fake-mp3"
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_speech_openai_returns_binary_audio(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode: bool
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/audio/speech").mock(
+        return_value=httpx.Response(200, content=b"ID3-fake-mp3")
+    )
+
+    speech_kwargs: Final = {
+        "model": "openai/tts-1",
+        "input": SPEECH_INPUT,
+        "voice": "alloy",
+        "api_key": "fake-key",
+        "max_retries": 1,
+        "timeout": 60,
+    }
+    response: Final = litellm.speech(**speech_kwargs) if sync_mode else await litellm.aspeech(**speech_kwargs)
+
+    assert route.call_count == 1
+    assert route.calls[0].request.headers["authorization"] == "Bearer fake-key"
+    assert json.loads(route.calls[0].request.content) == {"model": "tts-1", "input": SPEECH_INPUT, "voice": "alloy"}
+    assert isinstance(response, HttpxBinaryResponseContent)
+    assert response.content == b"ID3-fake-mp3"
+
+
+class _SignallingCache(Cache):
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+        super().__init__()
+        self.loop: Final = loop
+        self.written: Final = asyncio.Event()
+
+    async def async_add_cache(
+        self, result: object, dynamic_cache_object: BaseCache | None = None, **kwargs: object
+    ) -> None:
+        await super().async_add_cache(result, dynamic_cache_object=dynamic_cache_object, **kwargs)
+        self.loop.call_soon_threadsafe(self.written.set)
+
+
+GETTYSBURG_WAV: Final = ("gettysburg.wav", b"RIFF\x00\x00\x00\x00WAVE-gettysburg", "audio/wav")
+EAGLE_WAV: Final = ("eagle.wav", b"RIFF\x00\x00\x00\x00WAVE-eagle", "audio/wav")
+
+
+async def test_transcription_caching_hit_same_file_miss_different_file(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    cache: Final = _SignallingCache(asyncio.get_running_loop())
+    monkeypatch.setattr(litellm, "cache", cache)
+    route: Final = respx_mock.post("https://api.openai.com/v1/audio/transcriptions").mock(
+        side_effect=[
+            httpx.Response(200, json={"text": "gettysburg transcript"}),
+            httpx.Response(200, json={"text": "eagle transcript"}),
+        ]
+    )
+
+    response_1: Final = await litellm.atranscription(model="openai/whisper-1", file=GETTYSBURG_WAV, api_key="fake-key")
+    await asyncio.wait_for(cache.written.wait(), 30)
+
+    response_2: Final = await litellm.atranscription(model="openai/whisper-1", file=GETTYSBURG_WAV, api_key="fake-key")
+    assert response_2._hidden_params["cache_hit"] is True
+    assert response_2.text == response_1.text == "gettysburg transcript"
+
+    response_3: Final = await litellm.atranscription(model="openai/whisper-1", file=EAGLE_WAV, api_key="fake-key")
+    assert response_3._hidden_params.get("cache_hit") is not True
+    assert response_3.text == "eagle transcript"
+    assert route.call_count == 2
+
+
+async def test_whisper_log_pre_call_fires_once(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "hello"})
+    )
+
+    class _PreCallRecorder(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.models: tuple[str, ...] = ()
+
+        def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
+            self.models = (*self.models, model)
+
+    recorder: Final = _PreCallRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+
+    await litellm.atranscription(model="openai/whisper-1", file=GETTYSBURG_WAV, api_key="fake-key")
+
+    assert recorder.models == ("whisper-1",)
+
+
+@pytest.mark.parametrize("model", ["gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"])
+async def test_transcription_model_names_pass_through(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, model: str
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "hello"})
+    )
+
+    response: Final = await litellm.atranscription(
+        model=f"openai/{model}",
+        file=GETTYSBURG_WAV,
+        api_key="fake-key",
+        response_format="json",
+    )
+
+    assert response._hidden_params["model"] == model
+    assert response._hidden_params["custom_llm_provider"] == "openai"
+    assert response.text == "hello"
+    assert route.call_count == 1
+    assert f'name="model"\r\n\r\n{model}\r\n'.encode() in route.calls[0].request.content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("model", ["sagemaker/test-endpoint", "sagemaker_chat/test-endpoint"])
+async def test_sagemaker_missing_dependency_remains_actionable_with_retries(monkeypatch, use_async, model):
+    import sys
+
+    monkeypatch.setattr(litellm, "num_retries", None)
+    for dependency in ("botocore", "boto3", "tenacity"):
+        monkeypatch.setitem(sys.modules, dependency, None)
+    if use_async:
+        with pytest.raises(ModuleNotFoundError, match="pip install boto3") as caught:
+            await litellm.acompletion(model=model, messages=[{"role": "user", "content": "ping"}], num_retries=1)
+    else:
+        with pytest.raises(ModuleNotFoundError, match="pip install boto3") as caught:
+            litellm.completion(model=model, messages=[{"role": "user", "content": "ping"}], num_retries=1)
+    assert caught.value.name == "botocore"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_polly_missing_dependency_remains_actionable_with_retries(monkeypatch, use_async):
+    import sys
+
+    monkeypatch.setattr(litellm, "num_retries", None)
+    for dependency in ("botocore", "boto3", "tenacity"):
+        monkeypatch.setitem(sys.modules, dependency, None)
+    if use_async:
+        with pytest.raises(ModuleNotFoundError, match="pip install boto3") as caught:
+            await litellm.aspeech(model="aws_polly/standard", input="ping", voice="Joanna", num_retries=1)
+    else:
+        with pytest.raises(ModuleNotFoundError, match="pip install boto3") as caught:
+            litellm.speech(model="aws_polly/standard", input="ping", voice="Joanna", num_retries=1)
+    assert caught.value.name == "botocore"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing_tenacity", [False, True])
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_mantle_responses_missing_dependency_is_not_retried(monkeypatch, missing_tenacity, use_async):
+    import builtins
+
+    original_import = builtins.__import__
+    attempts = []
+
+    def import_without_aws(name, *args, **kwargs):
+        if name == "botocore":
+            attempts.append(name)
+            raise ModuleNotFoundError(name="botocore")
+        if name == "tenacity" and missing_tenacity:
+            attempts.append(name)
+            raise ModuleNotFoundError(name="tenacity")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_aws)
+    monkeypatch.setattr(litellm, "num_retries", None)
+    for name in ("AWS_BEARER_TOKEN_BEDROCK", "BEDROCK_MANTLE_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    if use_async:
+        with pytest.raises(ModuleNotFoundError, match="pip install boto3"):
+            await litellm.aresponses(model="bedrock_mantle/openai.gpt-oss-120b", input="ping", num_retries=1)
+    else:
+        with pytest.raises(ModuleNotFoundError, match="pip install boto3"):
+            litellm.responses(model="bedrock_mantle/openai.gpt-oss-120b", input="ping", num_retries=1)
+    assert attempts == ["botocore"]
+
+
+@pytest.mark.asyncio
+async def test_async_responses_still_retries_provider_server_errors(monkeypatch):
+    monkeypatch.setattr(litellm, "num_retries", None)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock as upstream:
+        response = upstream.post("https://openai-test.invalid/v1/responses").mock(side_effect=[
+            httpx.Response(500, json={"error": {"message": "temporary provider failure", "type": "server_error"}}),
+            httpx.Response(200, json={
+                "id": "resp-retry", "object": "response", "created_at": 1, "status": "completed",
+                "model": "test-model", "output": [],
+                "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
+            }),
+        ])
+        result = await litellm.aresponses(
+            model="openai/test-model", input="ping", api_key="test-key",
+            api_base="https://openai-test.invalid/v1", num_retries=1, max_retries=0,
+        )
+        assert result.status == "completed"
+        assert response.call_count == 2
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completion_with_retries(sync_mode):
+    """
+    If completion_with_retries is called with num_retries=3, and max_retries=0, then litellm.completion should receive num_retries , max_retries=0
+    """
+    if sync_mode:
+        target_function = "completion"
+    else:
+        target_function = "acompletion"
+
+    with patch.object(litellm, target_function) as mock_completion:
+        if sync_mode:
+            completion_with_retries(
+                model="gpt-3.5-turbo",
+                messages=[{"gm": "vibe", "role": "user"}],
+                num_retries=3,
+                original_function=mock_completion,
+            )
+        else:
+            await acompletion_with_retries(
+                model="gpt-3.5-turbo",
+                messages=[{"gm": "vibe", "role": "user"}],
+                num_retries=3,
+                original_function=mock_completion,
+            )
+        mock_completion.assert_called_once()
+        assert mock_completion.call_args.kwargs["num_retries"] == 0
+        assert mock_completion.call_args.kwargs["max_retries"] == 0
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_responses_with_retries(sync_mode):
+    """
+    Test that responses() and aresponses() properly handle num_retries parameter.
+    If responses_with_retries is called with num_retries=3, and max_retries=0,
+    then litellm.responses should receive num_retries=0, max_retries=0
+    """
+    if sync_mode:
+        target_function = "responses"
+        retry_function = responses_with_retries
+    else:
+        target_function = "aresponses"
+        retry_function = aresponses_with_retries
+
+    with patch(
+        "litellm.responses.main.responses" if sync_mode else "litellm.responses.main.aresponses"
+    ) as mock_responses:
+        if sync_mode:
+            mock_responses.return_value = MagicMock()
+            retry_function(
+                model="gpt-4o",
+                input="Hello, what's the weather?",
+                num_retries=3,
+                original_function=mock_responses,
+            )
+        else:
+            mock_responses.return_value = AsyncMock()
+            await retry_function(
+                model="gpt-4o",
+                input="Hello, what's the weather?",
+                num_retries=3,
+                original_function=mock_responses,
+            )
+
+        mock_responses.assert_called_once()
+        assert mock_responses.call_args.kwargs["num_retries"] == 0
+        assert mock_responses.call_args.kwargs["max_retries"] == 0
+
+
+def test_azure_embedding_exceptions():
+    with pytest.raises(Exception, match="Mock error") as exc_info:
+        litellm.embedding(
+            model="azure/text-embedding-ada-002",
+            input="hello",
+            mock_response="error",
+        )
+    assert str(exc_info.value) == "Mock error"

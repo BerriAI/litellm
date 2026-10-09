@@ -67,3 +67,9 @@ The same ownership rule applies to Messages, Responses, Chat Completions, OCR, a
   - Follow the workspace test-placement and `rstest` rules
   - Test provider transformations, header policy, and stream execution in their owning crates
   - Do not test import locations or Rust source structure as substitutes for behavior
+
+# references
+
+## json_schema.rs
+
+- https://json-schema.org/draft/2020-12/json-schema-core

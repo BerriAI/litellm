@@ -494,21 +494,70 @@ fn model_calls_link_the_spend_log_they_were_priced_from() {
 }
 
 #[rstest]
-fn model_call_span_cost_agrees_with_the_run_total_when_priced_from_a_wrapper() {
+#[case::wrapper_without_leaf_id(false, litellm_traces::CallEvidenceKind::Unknown)]
+#[case::wrapper_with_partial_leaf(false, litellm_traces::CallEvidenceKind::Partial)]
+#[case::transport_without_leaf_id(true, litellm_traces::CallEvidenceKind::Unknown)]
+#[case::transport_with_partial_leaf(true, litellm_traces::CallEvidenceKind::Partial)]
+fn model_call_span_cost_agrees_with_the_run_total_when_priced_from_related_evidence(
+    #[case] transport: bool,
+    #[case] leaf_evidence: litellm_traces::CallEvidenceKind,
+) {
     let rows = [
         TraceSpansRow {
-            call_keys: vec![litellm_traces::CallKey::LiteLlmRequest("gateway".into())],
+            trace_id: "trace".into(),
+            parent_span_id: if transport { "call" } else { "" }.into(),
+            kind: if transport {
+                litellm_traces::ObservationType::Chain
+            } else {
+                litellm_traces::ObservationType::Llm
+            },
+            call_keys: vec![if transport {
+                litellm_traces::CallKey::Transport
+            } else {
+                litellm_traces::CallKey::LiteLlmRequest("gateway".into())
+            }],
             call_evidence: Some(litellm_traces::CallEvidenceKind::Complete),
-            ..llm("wrapper", "", "agent", "")
+            ..llm("evidence", "", "agent", "")
         },
-        llm("call", "wrapper", "agent", ""),
+        TraceSpansRow {
+            trace_id: "trace".into(),
+            call_evidence: Some(leaf_evidence),
+            ..llm(
+                "call",
+                if transport { "" } else { "evidence" },
+                "agent",
+                "chatcmpl-request",
+            )
+        },
     ];
+    let pending = resolve_trace("trace", "ref", &rows, &[]).unwrap();
+    assert_eq!(
+        pending.spans[1].spend_match,
+        Some(
+            if leaf_evidence == litellm_traces::CallEvidenceKind::Partial {
+                SpendMatch::IncompleteEvidence
+            } else {
+                SpendMatch::NoCallId
+            }
+        )
+    );
+    assert!(pending.gateway_spend_pending);
+    assert!(
+        serde_json::to_value(&pending)
+            .unwrap()
+            .get("gateway_spend_pending")
+            .is_none()
+    );
+    assert_eq!(pending.summary.spend, None);
     let logs = [SpendByResponseIdsRow {
+        trace_id: "trace".into(),
+        span_id: "evidence".into(),
         litellm_call_id: "gateway".into(),
         ..spend("request", "chatcmpl-request", 0.25)
     }];
     let trace = resolve_trace("trace", "ref", &rows, &logs).unwrap();
     assert_eq!(trace.summary.spend, Some(0.25));
+    assert!(!trace.gateway_spend_pending);
     assert_eq!(
         (
             trace.spans[1].spend,
@@ -1568,7 +1617,12 @@ fn complete_wrapper_reconciles_ambiguous_response(
         owned_spend("request-a", "response", "team", "", "key", 0.25),
         owned_spend("request-b", "response", "team", "", "key", 0.5),
         owned_spend("request-c", "other-response", "team", "", "key", 0.75),
+        owned_spend("request-d", "response", "team", "", "key", 0.0),
     ];
+    let pending = resolve_trace("trace", "ref", &rows, &logs[1..]).unwrap();
+    assert_eq!(pending.spans[1].spend_match, Some(SpendMatch::Ambiguous));
+    assert!(pending.gateway_spend_pending);
+    assert_eq!(pending.summary.spend, None);
     let trace = resolve_trace("trace", "ref", &rows, &logs).unwrap();
     assert_eq!(trace.summary.spend, expected);
     assert_eq!(trace.agents[0].spend, expected);

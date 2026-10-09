@@ -89,6 +89,7 @@ from litellm.llms.base_llm.vector_store.transformation import(
 from litellm.types.utils import CallTypes, CredentialItem
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 from tests.large_text import text
 import traceback
 import inspect
@@ -4721,6 +4722,235 @@ async def test_aresponses_streaming_iterator_fallback():
     assert fbk["original_generic_function"] is litellm.aresponses
     assert call_kwargs["model_group"] == "anthropic/claude-sonnet-4-6"
     assert call_kwargs["disable_fallbacks"] is False
+
+
+@pytest.mark.asyncio
+async def test_aresponses_mid_stream_order_fallback_hop_drops_the_encrypted_reasoning_the_next_provider_cannot_decrypt(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    """A Codex-style multi-turn history replays the order-1 provider's encrypted reasoning. When that
+    provider's stream breaks before its first output chunk, the order-2 hop must not replay reasoning
+    the next provider cannot decrypt; the readable summary stays."""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    def history() -> list:
+        return [
+            {"type": "message", "role": "user", "content": "What is 17*23?"},
+            {
+                "type": "reasoning",
+                "id": "rs_order1",
+                "encrypted_content": "gAAAAA-minted-by-order-1",
+                "summary": [{"type": "summary_text", "text": "multiply 17 by 23"}],
+            },
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "391"}]},
+            {"type": "message", "role": "user", "content": "And 19*21?"},
+        ]
+
+    def response_body(response_id: str, model: str, status: str, output: list) -> dict:
+        return {
+            "id": response_id,
+            "object": "response",
+            "created_at": 0,
+            "status": status,
+            "model": model,
+            "output": output,
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2} if status == "completed" else None,
+        }
+
+    def sse(events: list) -> httpx.Response:
+        body: Final = "".join(f"data: {json.dumps(event)}\n\n" for event in events)
+        return httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
+
+    openai_opened: Final = response_body("resp_openai", "gpt-6-astra", "in_progress", [])
+    openai_route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=sse(
+            [
+                {"type": "response.created", "sequence_number": 0, "response": openai_opened},
+                {"type": "response.in_progress", "sequence_number": 1, "response": openai_opened},
+                {
+                    "type": "error",
+                    "sequence_number": 2,
+                    "error": {
+                        "type": "server_error",
+                        "code": "server_error",
+                        "message": "The server had an error while processing your request",
+                        "param": None,
+                    },
+                },
+            ]
+        )
+    )
+    mantle_answer: Final = [
+        {
+            "id": "msg_mantle",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "399", "annotations": []}],
+        }
+    ]
+    mantle_route: Final = respx_mock.post("https://bedrock-mantle.us-east-1.api.aws/openai/v1/responses").mock(
+        return_value=sse(
+            [
+                {
+                    "type": "response.created",
+                    "sequence_number": 0,
+                    "response": response_body("resp_mantle", "openai.gpt-6-astra", "in_progress", []),
+                },
+                {
+                    "type": "response.completed",
+                    "sequence_number": 1,
+                    "response": response_body("resp_mantle", "openai.gpt-6-astra", "completed", mantle_answer),
+                },
+            ]
+        )
+    )
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra", "api_key": "openai-key", "order": 1},
+                "model_info": {"id": "openai-order-1"},
+            },
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {
+                    "model": "bedrock_mantle/openai.gpt-6-astra",
+                    "api_key": "mantle-bearer-token",
+                    "aws_region_name": "us-east-1",
+                    "order": 2,
+                },
+                "model_info": {"id": "mantle-order-2"},
+            },
+        ],
+        num_retries=0,
+    )
+    stream = await router.aresponses(model="gpt-6-astra", input=history(), store=False, stream=True)
+    collected = [event async for event in stream]
+
+    assert [event.type for event in collected] == ["response.created", "response.completed"]
+    assert json.loads(openai_route.calls.last.request.read())["input"] == history()
+    assert json.loads(mantle_route.calls.last.request.read())["input"] == [
+        {"type": "message", "role": "user", "content": "What is 17*23?"},
+        {"type": "reasoning", "summary": [{"type": "summary_text", "text": "multiply 17 by 23"}]},
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "391"}]},
+        {"type": "message", "role": "user", "content": "And 19*21?"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_aresponses_mid_stream_order_fallback_hop_keeps_the_encrypted_reasoning_the_same_boundary_can_decrypt(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    """The mid-stream hop re-enters the chain on a snapshot taken before routing, so the snapshot has to
+    carry the deployment that streamed and failed: a same-boundary order-2 deployment can decrypt that
+    deployment's unmarked reasoning and must receive it unchanged."""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    def history() -> list:
+        return [
+            {"type": "message", "role": "user", "content": "What is 17*23?"},
+            {
+                "type": "reasoning",
+                "id": "rs_order1",
+                "encrypted_content": "gAAAAA-minted-by-order-1",
+                "summary": [{"type": "summary_text", "text": "multiply 17 by 23"}],
+            },
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "391"}]},
+            {"type": "message", "role": "user", "content": "And 19*21?"},
+        ]
+
+    def response_body(response_id: str, model: str, status: str, output: list) -> dict:
+        return {
+            "id": response_id,
+            "object": "response",
+            "created_at": 0,
+            "status": status,
+            "model": model,
+            "output": output,
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2} if status == "completed" else None,
+        }
+
+    def sse(events: list) -> httpx.Response:
+        body: Final = "".join(f"data: {json.dumps(event)}\n\n" for event in events)
+        return httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
+
+    order_1_opened: Final = response_body("resp_order1", "gpt-6-astra", "in_progress", [])
+    order_2_answer: Final = [
+        {
+            "id": "msg_order2",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "399", "annotations": []}],
+        }
+    ]
+    openai_route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        side_effect=[
+            sse(
+                [
+                    {"type": "response.created", "sequence_number": 0, "response": order_1_opened},
+                    {"type": "response.in_progress", "sequence_number": 1, "response": order_1_opened},
+                    {
+                        "type": "error",
+                        "sequence_number": 2,
+                        "error": {
+                            "type": "server_error",
+                            "code": "server_error",
+                            "message": "The server had an error while processing your request",
+                            "param": None,
+                        },
+                    },
+                ]
+            ),
+            sse(
+                [
+                    {
+                        "type": "response.created",
+                        "sequence_number": 0,
+                        "response": response_body("resp_order2", "gpt-6-astra-mini", "in_progress", []),
+                    },
+                    {
+                        "type": "response.completed",
+                        "sequence_number": 1,
+                        "response": response_body("resp_order2", "gpt-6-astra-mini", "completed", order_2_answer),
+                    },
+                ]
+            ),
+        ]
+    )
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {
+                    "model": "openai/gpt-6-astra",
+                    "api_base": "https://api.openai.com/v1",
+                    "api_key": "openai-key",
+                    "order": 1,
+                },
+                "model_info": {"id": "openai-order-1"},
+            },
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {
+                    "model": "openai/gpt-6-astra-mini",
+                    "api_base": "https://api.openai.com/v1",
+                    "api_key": "openai-key",
+                    "order": 2,
+                },
+                "model_info": {"id": "openai-order-2"},
+            },
+        ],
+        num_retries=0,
+    )
+    stream = await router.aresponses(model="gpt-6-astra", input=history(), store=False, stream=True)
+    collected = [event async for event in stream]
+
+    assert [event.type for event in collected] == ["response.created", "response.completed"]
+    assert [json.loads(call.request.read())["input"] for call in openai_route.calls] == [history(), history()]
 
 
 @pytest.mark.asyncio
@@ -24811,3 +25041,83 @@ async def test_acompletion_keeps_include_fallback_errors_off_the_wire_and_return
             model="primary", messages=[{"role": "user", "content": "hi"}], include_fallback_errors=True
         )
     _assert_fallback_errors_reached_the_caller_and_not_the_wire(response, primary, backup)
+
+
+def _create_custom_routing_router():
+    return Router(
+        model_list=[
+            {
+                "model_name": "azure-model",
+                "litellm_params": {
+                    "model": "openai/very-special-endpoint",
+                    "api_base": FAKE_OPENAI_API_BASE,
+                    "api_key": "fake-key",
+                },
+                "model_info": {"id": "very-special-endpoint"},
+            },
+            {
+                "model_name": "azure-model",
+                "litellm_params": {
+                    "model": "openai/fast-endpoint",
+                    "api_base": FAKE_OPENAI_API_BASE,
+                    "api_key": "fake-key",
+                },
+                "model_info": {"id": "fast-endpoint"},
+            },
+        ],
+        set_verbose=True,
+        debug_level="DEBUG",
+    )
+
+
+class SpecialEndpointRoutingStrategy(CustomRoutingStrategyBase):
+    def __init__(self, router_instance: Router):
+        self._router = router_instance
+
+    async def async_get_available_deployment(
+        self,
+        model: str,
+        messages: list[dict[str, str]] | None = None,
+        input: str | list | None = None,
+        specific_deployment: bool | None = False,
+        request_kwargs: dict | None = None,
+    ):
+        print("In CUSTOM async get available deployment")
+        model_list = self._router.model_list
+        print("router model list=", model_list)
+        for model in model_list:
+            if isinstance(model, dict):
+                if model["litellm_params"]["model"] == "openai/very-special-endpoint":
+                    return model
+        pass
+
+    def get_available_deployment(
+        self,
+        model: str,
+        messages: list[dict[str, str]] | None = None,
+        input: str | list | None = None,
+        specific_deployment: bool | None = False,
+        request_kwargs: dict | None = None,
+    ):
+        pass
+
+
+def test_reset_custom_routing_strategy():
+    """
+    Setting a custom routing strategy installs instance-level overrides for
+    get_available_deployment / async_get_available_deployment. Re-initializing the
+    routing strategy must clear them so the class implementations are used again.
+    """
+    router = _create_custom_routing_router()
+    router.set_custom_routing_strategy(SpecialEndpointRoutingStrategy(router))
+
+    assert "get_available_deployment" in router.__dict__
+    assert "async_get_available_deployment" in router.__dict__
+
+    router._reset_custom_routing_strategy()
+
+    assert "get_available_deployment" not in router.__dict__
+    assert "async_get_available_deployment" not in router.__dict__
+    assert router.async_get_available_deployment.__func__ is Router.async_get_available_deployment
+
+    router._reset_custom_routing_strategy()

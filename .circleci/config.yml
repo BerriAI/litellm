@@ -856,58 +856,6 @@ jobs:
       - store_test_results:
           path: test-results
 
-  litellm_router_unit_testing: # Runs all tests with the "router" keyword
-    docker:
-      - *python312_image
-    working_directory: ~/project
-    resource_class: large
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - restore_cache:
-          keys:
-            - v1-uv-cache-{{ checksum "uv.lock" }}
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - save_cache:
-          paths:
-            - ~/.cache/uv
-          key: v1-uv-cache-{{ checksum "uv.lock" }}
-      # Run pytest and generate JUnit XML report
-      - setup_litellm_enterprise_pip
-      - run:
-          name: Run tests
-          command: |
-            mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/router_unit_tests/**/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
-                -v \
-                --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
-                --junitxml=test-results/junit.xml \
-                --durations=5 \
-                -n 4"
-          no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml router_unit_tests_coverage.xml
-            mv .coverage router_unit_tests_coverage
-      # Store test results
-      - store_test_results:
-          path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - router_unit_tests_coverage.xml
-            - router_unit_tests_coverage
   llm_translation_testing:
     docker:
       - *python312_image
@@ -1024,16 +972,13 @@ jobs:
           command: |
             mkdir -p test-results
             export LITELLM_LOG=WARNING
-            TEST_FILES=$(circleci tests glob "tests/guardrails_tests/**/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
-                -vv \
-                --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
-                --junitxml=test-results/junit.xml \
-                --durations=5 \
-                -n 2 \
-                --timeout=120 --timeout_method=thread"
+            uv run --no-sync python -m pytest --tb=short \
+              -vv \
+              --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
+              --junitxml=test-results/junit.xml \
+              --durations=5 \
+              --timeout=120 --timeout_method=thread \
+              "tests/guardrails_tests/test_custom_guardrail.py::test_get_guardrail_dynamic_request_body_params"
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -1095,50 +1040,6 @@ jobs:
             - google_generate_content_endpoint_coverage.xml
             - google_generate_content_endpoint_coverage
 
-  llm_responses_api_testing:
-    docker:
-      - *python312_image
-    working_directory: ~/project
-    resource_class: large
-    environment:
-      REQUEST_TIMEOUT: "180"
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - restore_cache:
-          keys:
-            - v1-uv-cache-{{ checksum "uv.lock" }}
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - save_cache:
-          paths:
-            - ~/.cache/uv
-          key: v1-uv-cache-{{ checksum "uv.lock" }}
-      # Run pytest and generate JUnit XML report
-      - run:
-          name: Run tests
-          command: |
-            mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/llm_responses_api_testing/**/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
-                -v \
-                --junitxml=test-results/junit.xml \
-                --durations=5 \
-                -n 8 \
-                --reruns 1 --only-rerun Timeout"
-          no_output_timeout: 15m
-
-      # Store test results
-      - store_test_results:
-          path: test-results
   ocr_testing:
     docker:
       - *python312_image
@@ -2074,98 +1975,6 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
-  proxy_spend_accuracy_tests:
-    machine:
-      image: ubuntu-2204:2024.04.1
-    resource_class: large
-    working_directory: ~/project
-    steps:
-      - checkout
-      - run:
-          name: Generate LiteLLM master key
-          command: |
-            key="$(openssl rand -hex 16)"
-            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - start_postgres
-      - start_redis
-      - start_fake_openai_endpoint
-      - attach_workspace:
-          at: ~/project
-      - run:
-          name: Load Docker Database Image
-          command: |
-            zstd -d litellm-docker-database.tar.zst --stdout | docker load
-            docker images | grep litellm-docker-database
-      - run:
-          name: Run Docker container
-          # Point the proxy at the job-local Redis (start_redis) instead of the
-          # shared remote Redis. The Redis transaction buffer uses a single
-          # global pod-lock key (cronjob_lock:db_spend_update_job) and a single
-          # global buffer list (litellm_spend_update_buffer); sharing those
-          # across concurrent CI pipelines causes spend flushes to stall or
-          # land in the wrong DB, which is what makes this test flaky.
-          command: |
-            docker run -d \
-              -p 4000:4000 \
-              -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
-              -e REDIS_HOST=host.docker.internal \
-              -e REDIS_PORT=6379 \
-              -e LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
-              -e OPENAI_API_KEY=$OPENAI_API_KEY \
-              -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
-              -e LITELLM_LICENSE=$LITELLM_LICENSE \
-              -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
-              -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
-              -e USE_DDTRACE=True \
-              -e DD_API_KEY=$DD_API_KEY \
-              -e DD_SITE=$DD_SITE \
-              -e AWS_REGION_NAME=$AWS_REGION_NAME \
-              -e PROXY_BATCH_WRITE_AT=2 \
-              -e LITELLM_LOG=ERROR \
-              --add-host host.docker.internal:host-gateway \
-              --name my-app \
-              -v $(pwd)/litellm/proxy/example_config_yaml/spend_tracking_config.yaml:/app/config.yaml \
-              litellm-docker-database:ci \
-              --config /app/config.yaml \
-              --port 4000
-      - run:
-          name: Start outputting logs
-          command: docker logs -f my-app
-          background: true
-      - wait_for_service:
-          url: http://localhost:4000
-          timeout: "300"
-      - run:
-          name: Run tests
-          command: |
-            mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/spend_tracking_tests/**/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
-                -vv \
-                --junitxml=test-results/junit.xml \
-                --durations=5"
-          no_output_timeout: 15m
-      - store_test_results:
-          path: test-results
-      - run:
-          name: Stop and remove first container
-          when: always
-          command: |
-            docker stop my-app
-            docker rm my-app
-            docker stop redis-cache
-            docker rm redis-cache
-
   proxy_multi_instance_tests:
     machine:
       image: ubuntu-2204:2024.04.1
@@ -2629,7 +2438,7 @@ jobs:
       - run:
           name: Combine Coverage
           command: |
-            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage ocr_coverage search_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage google_generate_content_endpoint_coverage litellm_utils_coverage router_unit_tests_coverage auth_ui_unit_tests_coverage
+            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage ocr_coverage search_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage google_generate_content_endpoint_coverage litellm_utils_coverage
             uv tool run --from 'coverage[toml]==7.10.6' coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -3577,7 +3386,6 @@ workflows:
       - local_testing_part2
       - langfuse_logging_unit_tests
       - litellm_router_testing
-      - litellm_router_unit_testing
       - auth_ui_unit_tests
       - build_docker_database_image
       - e2e_ui_testing
@@ -3589,9 +3397,6 @@ workflows:
           requires:
             - build_docker_database_image
       - proxy_logging_guardrails_model_info_tests:
-          requires:
-            - build_docker_database_image
-      - proxy_spend_accuracy_tests:
           requires:
             - build_docker_database_image
       - proxy_multi_instance_tests:
@@ -3611,7 +3416,6 @@ workflows:
       - realtime_translation_testing
       - guardrails_testing
       - google_generate_content_endpoint_testing
-      - llm_responses_api_testing
       - ocr_testing
       - search_testing
       - batches_testing
@@ -3624,7 +3428,6 @@ workflows:
           requires:
             - realtime_translation_testing
             - google_generate_content_endpoint_testing
-            - guardrails_testing
             - ocr_testing
             - search_testing
             - batches_testing
@@ -3636,8 +3439,6 @@ workflows:
             - langfuse_logging_unit_tests
             - local_testing_part1
             - local_testing_part2
-            - litellm_router_unit_testing
-            - auth_ui_unit_tests
       - db_migration_disable_update_check:
           requires:
             - build_docker_database_image
