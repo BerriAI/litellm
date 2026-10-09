@@ -28,7 +28,10 @@ pub use file_reader::{FileContent, PythonFileReader, py_bytes};
 pub use fork_gate::RuntimeAlreadyStarted;
 pub use gil::{PythonContext, attach_blocking, release_count, release_gil};
 pub use handle::{Execution, ExecutionBody, ExecutionStep, PythonLifecycle};
-pub use hooks::{HookChain, HookResume, HookStep, PythonCallEvent, PythonCallHooks, PythonRuntime};
+pub use hooks::{
+    HookChain, HookLayer, HookResume, HookStep, Hooks, PythonCallEvent, PythonCallHooks,
+    PythonRuntime,
+};
 pub use marshal::{
     Pythonized, from_py, from_py_argument, json_loads, json_object_field, panic_to_pyerr, to_py,
 };

@@ -2,7 +2,7 @@
 //! raises is answered with the same `Logging` calls, in the same order, as the Python
 //! `@client` path makes them.
 
-use crate::LoggingOperation;
+use litellm_host::call::Operation;
 use litellm_host_python::PythonOwned;
 
 use litellm_host::{
@@ -45,7 +45,7 @@ struct LoggedRequest {
 }
 
 pub struct LegacyLogging {
-    operation: LoggingOperation,
+    operation: Operation,
     call: PublicCall,
     logger: Option<PythonLogger>,
     start: Py<PyAny>,
@@ -68,12 +68,7 @@ fn is_cancellation(py: Python<'_>, error: &PyErr) -> bool {
 }
 
 impl LegacyLogging {
-    pub fn new(
-        py: Python<'_>,
-        operation: LoggingOperation,
-        call: PublicCall,
-        asynchronous: bool,
-    ) -> Self {
+    pub fn new(py: Python<'_>, operation: Operation, call: PublicCall, asynchronous: bool) -> Self {
         Self {
             operation,
             call,
@@ -92,34 +87,32 @@ impl LegacyLogging {
 
     fn call_type(&self) -> &'static str {
         match (self.operation, self.asynchronous) {
-            (LoggingOperation::Completion, false) => "completion",
-            (LoggingOperation::Completion, true) => "acompletion",
-            (LoggingOperation::Responses, false) => "responses",
-            (LoggingOperation::Responses, true) => "aresponses",
-            (LoggingOperation::Messages, _) => "anthropic_messages",
-            (LoggingOperation::Ocr, false) => "ocr",
-            (LoggingOperation::Ocr, true) => "aocr",
+            (Operation::Completion, false) => "completion",
+            (Operation::Completion, true) => "acompletion",
+            (Operation::Responses, false) => "responses",
+            (Operation::Responses, true) => "aresponses",
+            (Operation::Messages, _) => "anthropic_messages",
+            (Operation::Ocr, false) => "ocr",
+            (Operation::Ocr, true) => "aocr",
         }
     }
 
     fn input_description(&self) -> &'static str {
         match self.operation {
-            LoggingOperation::Completion => "Chat completions",
-            LoggingOperation::Responses => "Responses",
-            LoggingOperation::Messages => "Messages",
-            LoggingOperation::Ocr => "OCR document processing",
+            Operation::Completion => "Chat completions",
+            Operation::Responses => "Responses",
+            Operation::Messages => "Messages",
+            Operation::Ocr => "OCR document processing",
         }
     }
 
     fn stream_billing(&self) -> Option<PassThroughStream> {
         match self.operation {
-            LoggingOperation::Messages => Some(PassThroughStream {
+            Operation::Messages => Some(PassThroughStream {
                 url_route: "/v1/messages",
                 endpoint_type: "anthropic",
             }),
-            LoggingOperation::Completion | LoggingOperation::Responses | LoggingOperation::Ocr => {
-                None
-            }
+            Operation::Completion | Operation::Responses | Operation::Ocr => None,
         }
     }
 
@@ -266,7 +259,7 @@ impl LegacyLogging {
         match scheduled {
             Ok(awaitable) => Ok(HookStep::Await(
                 awaitable.unbind(),
-                Self::resume_async_failure,
+                Box::new(Self::resume_async_failure),
             )),
             Err(failure) if is_cancellation(py, &failure) => Err(failure),
             Err(_) => Ok(HookStep::Ready(())),
@@ -292,7 +285,10 @@ impl LegacyLogging {
             return Ok(HookStep::Ready(()));
         }
         match logger.failure(py, error, &self.start, &self.end, true) {
-            Ok(Some(awaitable)) => Ok(HookStep::Await(awaitable, Self::resume_async_failure)),
+            Ok(Some(awaitable)) => Ok(HookStep::Await(
+                awaitable,
+                Box::new(Self::resume_async_failure),
+            )),
             Ok(None) => Ok(HookStep::Ready(())),
             Err(failure) if is_cancellation(py, &failure) => Err(failure),
             Err(_) => Ok(HookStep::Ready(())),
@@ -363,7 +359,7 @@ impl LegacyLogging {
         if self.runs_deployment_hooks() {
             return Ok(HookStep::Await(
                 DeploymentHooks::before_call(py, self.call.kwargs(), self.call_type())?,
-                Self::resume_begin,
+                Box::new(Self::resume_begin),
             ));
         }
         self.prepare(py)
@@ -431,7 +427,7 @@ impl LegacyLogging {
                     &self.response,
                     self.call_type(),
                 )?,
-                Self::resume_after_success,
+                Box::new(Self::resume_after_success),
             ));
         }
         self.finalize(py)
@@ -522,7 +518,7 @@ impl LegacyLogging {
             let error = self.error.as_ref().ok_or_else(missing_state)?;
             return Ok(HookStep::Await(
                 DeploymentHooks::after_failure(py, self.call.kwargs(), error, self.call_type())?,
-                Self::resume_deployment_failure,
+                Box::new(Self::resume_deployment_failure),
             ));
         }
         self.dispatch_failure(py)
@@ -650,16 +646,16 @@ kwargs = {'logger': logger, 'document': document}
     }
 
     #[rstest]
-    #[case::sync_completion(crate::LoggingOperation::Completion, false, "completion")]
-    #[case::async_completion(crate::LoggingOperation::Completion, true, "acompletion")]
-    #[case::sync_responses(crate::LoggingOperation::Responses, false, "responses")]
-    #[case::async_responses(crate::LoggingOperation::Responses, true, "aresponses")]
-    #[case::sync_messages(crate::LoggingOperation::Messages, false, "anthropic_messages")]
-    #[case::async_messages(crate::LoggingOperation::Messages, true, "anthropic_messages")]
-    #[case::sync_ocr(crate::LoggingOperation::Ocr, false, "ocr")]
-    #[case::async_ocr(crate::LoggingOperation::Ocr, true, "aocr")]
+    #[case::sync_completion(litellm_host::call::Operation::Completion, false, "completion")]
+    #[case::async_completion(litellm_host::call::Operation::Completion, true, "acompletion")]
+    #[case::sync_responses(litellm_host::call::Operation::Responses, false, "responses")]
+    #[case::async_responses(litellm_host::call::Operation::Responses, true, "aresponses")]
+    #[case::sync_messages(litellm_host::call::Operation::Messages, false, "anthropic_messages")]
+    #[case::async_messages(litellm_host::call::Operation::Messages, true, "anthropic_messages")]
+    #[case::sync_ocr(litellm_host::call::Operation::Ocr, false, "ocr")]
+    #[case::async_ocr(litellm_host::call::Operation::Ocr, true, "aocr")]
     fn operation_selects_the_legacy_setup_and_deployment_hook_contract(
-        #[case] operation: crate::LoggingOperation,
+        #[case] operation: litellm_host::call::Operation,
         #[case] asynchronous: bool,
         #[case] expected: &str,
     ) {
@@ -1092,12 +1088,12 @@ check = lambda: None
     }
 
     #[rstest]
-    #[case::completion(crate::LoggingOperation::Completion, "Chat completions")]
-    #[case::responses(crate::LoggingOperation::Responses, "Responses")]
-    #[case::messages(crate::LoggingOperation::Messages, "Messages")]
-    #[case::ocr(crate::LoggingOperation::Ocr, "OCR document processing")]
+    #[case::completion(litellm_host::call::Operation::Completion, "Chat completions")]
+    #[case::responses(litellm_host::call::Operation::Responses, "Responses")]
+    #[case::messages(litellm_host::call::Operation::Messages, "Messages")]
+    #[case::ocr(litellm_host::call::Operation::Ocr, "OCR document processing")]
     fn prepared_arguments_replace_the_legacy_view_without_losing_callback_aliases(
-        #[case] operation: crate::LoggingOperation,
+        #[case] operation: litellm_host::call::Operation,
         #[case] description: &str,
     ) {
         Python::initialize();
@@ -1767,7 +1763,7 @@ assert logger.calls[1][1] is response
         Python::attach(|py| {
             let locals = namespace(py, c"first = b'first'\nlast = b'last'\nresponse = None\nhead = {'additional_headers': {'request-id': 'req_native'}}");
             let mut logging = LegacyLogging {
-                operation: crate::LoggingOperation::Messages,
+                operation: litellm_host::call::Operation::Messages,
                 ..logged(py, &locals, true)
             };
             logging

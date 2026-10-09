@@ -1,15 +1,19 @@
 use litellm_host::{
-    hooks::CallHooks,
+    error::HookError,
+    hooks::{CallHooks, NativeHooks},
     interceptors::{RequestContext, WireRequest},
-    lifecycle::{FailureOrigin, Timing},
+    lifecycle::{CallEvent, FailureOrigin, Timing},
 };
-use litellm_host_python::{HookChain, HookStep, PythonCallEvent, PythonOwned, PythonRuntime};
+use litellm_host_python::{
+    HookChain, HookStep, Hooks, PythonCallEvent, PythonOwned, PythonRuntime,
+};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     types::{PyDict, PyTuple},
 };
 use rstest::{fixture, rstest};
+use std::sync::{Arc, Mutex};
 
 struct ScriptHooks {
     object: Py<PyAny>,
@@ -85,7 +89,7 @@ impl CallHooks<PythonRuntime> for ScriptHooks {
     ) -> PyResult<HookStep<Self, Py<PyDict>>> {
         let value = self.invoke(py, "prepare", arguments.into_any())?;
         if self.asynchronous {
-            Ok(HookStep::Await(value, Self::arguments))
+            Ok(HookStep::Await(value, Box::new(Self::arguments)))
         } else {
             self.arguments(py, Ok(value))
         }
@@ -110,7 +114,7 @@ impl CallHooks<PythonRuntime> for ScriptHooks {
         )?;
         self.wire = Some(wire);
         if self.asynchronous {
-            Ok(HookStep::Await(value, Self::request))
+            Ok(HookStep::Await(value, Box::new(Self::request)))
         } else {
             self.request(py, Ok(value))
         }
@@ -124,7 +128,7 @@ impl CallHooks<PythonRuntime> for ScriptHooks {
     ) -> PyResult<HookStep<Self, Py<PyAny>>> {
         let value = self.invoke(py, "transform", response)?;
         if self.asynchronous {
-            Ok(HookStep::Await(value, Self::response))
+            Ok(HookStep::Await(value, Box::new(Self::response)))
         } else {
             self.response(py, Ok(value))
         }
@@ -152,7 +156,7 @@ impl CallHooks<PythonRuntime> for ScriptHooks {
                 .unbind(),
         )?;
         if self.asynchronous {
-            Ok(HookStep::Await(value, Self::notification))
+            Ok(HookStep::Await(value, Box::new(Self::notification)))
         } else {
             self.notification(py, Ok(value))
         }
@@ -321,10 +325,10 @@ assert original == {}
 assert first.adopted is arguments and second.adopted is arguments
 assert first.adopted['policy'] == second.adopted['policy'] == 'configured'
 assert first.model == second.model == 'model'
-assert final_response == ((response, 'a'), 'b')
+assert final_response == ((response, 'b'), 'a')
 assert [(name, kind) for name, kind, value in log] == [
-    ('a', 'prepare'), ('b', 'prepare'), ('a', 'success'), ('b', 'success'),
-    ('a', 'stream'), ('b', 'stream'), ('a', 'stream'), ('b', 'stream'),
+    ('a', 'prepare'), ('b', 'prepare'), ('b', 'success'), ('a', 'success'),
+    ('b', 'stream'), ('a', 'stream'), ('b', 'stream'), ('a', 'stream'),
 ]
 assert log[2][2] is final_response and log[3][2] is final_response
 assert log[6][2] is response and log[7][2] is response
@@ -396,7 +400,7 @@ fn terminal_failure_does_not_skip_later_hooks(
             .unwrap();
         py.run(
             c"
-assert [name for name, kind, value in log] == ['a', 'b', 'c']
+assert [name for name, kind, value in log] == ['c', 'b', 'a']
 assert all(kind == log[0][1] for name, kind, value in log)
 assert all(value is selected for name, kind, value in log)
 ",
@@ -448,7 +452,7 @@ fn cancellation_stops_notification_dispatch(scripts: Py<PyDict>, #[case] asynchr
         let mut hooks = chain(py, &scripts, asynchronous);
         let locals = scripts.bind(py);
         py.run(
-            c"first.error = asyncio.CancelledError()",
+            c"second.error = asyncio.CancelledError()",
             Some(locals),
             Some(locals),
         )
@@ -469,7 +473,7 @@ fn cancellation_stops_notification_dispatch(scripts: Py<PyDict>, #[case] asynchr
                 .is_instance_of::<pyo3::exceptions::asyncio::CancelledError>(py)
         );
         py.run(
-            c"assert len(log) == 1 and log[0][0] == 'a'",
+            c"assert len(log) == 1 and log[0][0] == 'b'",
             Some(locals),
             Some(locals),
         )
@@ -730,5 +734,136 @@ fn builder_runs_hooks_in_append_order(
             Some(locals),
         )
         .unwrap();
+    });
+}
+
+struct Recorder {
+    name: &'static str,
+    log: Arc<Mutex<Vec<String>>>,
+    reject: bool,
+}
+
+impl NativeHooks for Recorder {
+    fn before_provider_request(
+        &mut self,
+        mut wire: Box<WireRequest>,
+        _: &RequestContext,
+    ) -> Result<Box<WireRequest>, HookError> {
+        if self.reject {
+            return Err(HookError::Rejected {
+                reason: self.name.into(),
+            });
+        }
+        wire.url.push_str(self.name);
+        Ok(wire)
+    }
+
+    fn on_event(&mut self, event: &CallEvent) {
+        let label = match event {
+            CallEvent::Started { .. } => "started",
+            CallEvent::Succeeded { .. } => "succeeded",
+            _ => "other",
+        };
+        self.log
+            .lock()
+            .unwrap()
+            .push(format!("{}:{label}", self.name));
+    }
+}
+
+fn native_chain(log: &Arc<Mutex<Vec<String>>>, rejecting: Option<&'static str>) -> HookChain {
+    ["a", "b", "c"]
+        .into_iter()
+        .fold(HookChain::new(), |chain, name| {
+            chain.with_all([Hooks::native(Recorder {
+                name,
+                log: Arc::clone(log),
+                reject: rejecting == Some(name),
+            })])
+        })
+}
+
+fn request_context() -> RequestContext {
+    RequestContext {
+        model: "m".into(),
+        custom_llm_provider: "p".into(),
+        optional_params: serde_json::json!({}),
+        secret_fields: Vec::new(),
+        api_key: None,
+    }
+}
+
+fn wire() -> Box<WireRequest> {
+    Box::new(WireRequest {
+        url: String::new(),
+        headers: Vec::new(),
+        body: serde_json::json!({}),
+    })
+}
+
+#[test]
+fn native_hooks_rewrite_the_wire_request_in_chain_order() {
+    Python::attach(|py| {
+        let log = Arc::default();
+        let mut hooks = native_chain(&log, None);
+        let step = hooks
+            .before_provider_request(py, wire(), &request_context())
+            .unwrap();
+        let HookStep::Ready(wire) = step else {
+            panic!("native hooks never suspend");
+        };
+        assert_eq!(wire.url, "abc");
+    });
+}
+
+#[test]
+fn native_hook_rejection_raises_and_stops_the_chain() {
+    Python::attach(|py| {
+        let log = Arc::default();
+        let mut hooks = native_chain(&log, Some("b"));
+        let Err(error) = hooks.before_provider_request(py, wire(), &request_context()) else {
+            panic!("the rejection must surface");
+        };
+        assert!(error.to_string().contains("a hook rejected the call: b"));
+    });
+}
+
+#[test]
+fn native_hooks_see_events_in_onion_order_and_leave_arguments_alone() {
+    Python::attach(|py| {
+        let log: Arc<Mutex<Vec<String>>> = Arc::default();
+        let mut hooks = native_chain(&log, None);
+        let arguments = PyDict::new(py).unbind();
+        let HookStep::Ready(prepared) = hooks
+            .prepare_arguments(py, arguments.clone_ref(py), 0.0)
+            .unwrap()
+        else {
+            panic!("native hooks never suspend");
+        };
+        assert!(prepared.bind(py).is(arguments.bind(py)));
+        let response = py.None();
+        let events: [PythonCallEvent<'_>; 2] = [
+            PythonCallEvent::Started { start_time: 0.0 },
+            PythonCallEvent::Succeeded {
+                timing: TIMING,
+                response: &response,
+            },
+        ];
+        for event in events {
+            let HookStep::Ready(()) = hooks.on_event(py, event).unwrap() else {
+                panic!("native hooks never suspend");
+            };
+        }
+        assert_eq!(
+            *log.lock().unwrap(),
+            [
+                "a:started",
+                "b:started",
+                "c:started",
+                "c:succeeded",
+                "b:succeeded",
+                "a:succeeded"
+            ],
+        );
     });
 }

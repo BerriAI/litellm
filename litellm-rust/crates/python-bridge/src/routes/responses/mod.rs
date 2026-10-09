@@ -6,7 +6,7 @@ use std::sync::Arc;
 use host::ResponsesPythonHost;
 use litellm_auth::AuthServices;
 use litellm_cache_response::{CachePolicy, ScopedCache};
-use litellm_callbacks_legacy_python::LoggingOperation;
+use litellm_host::call::Operation;
 use litellm_host::{call::HostedMachine, protocol::Protocol};
 use litellm_host_python::present;
 use litellm_inference_responses::{ResponsesRoute, route::Responses};
@@ -77,7 +77,7 @@ pub(crate) fn aresponses(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py<Py
 
 impl InferenceRoute for ResponsesRoute {
     type Protocol = Responses;
-    const OPERATION: LoggingOperation = LoggingOperation::Responses;
+    const OPERATION: Operation = Operation::Responses;
     const SYNC_CALL_TYPE: &'static str = "responses";
     const ASYNC_CALL_TYPE: &'static str = "aresponses";
 

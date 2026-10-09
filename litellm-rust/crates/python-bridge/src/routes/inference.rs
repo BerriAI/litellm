@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use litellm_auth::AuthServices;
 use litellm_cache_response::{CachePolicy, CacheScope, ScopedCache};
-use litellm_callbacks_legacy_python::LoggingOperation;
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
+use litellm_host::call::Operation;
 use litellm_host::{call::HostedMachine, protocol::Protocol};
 use litellm_host_python::{PythonBinding, PythonHostCalls, from_py, present};
 use litellm_http::transport::Error as TransportError;
@@ -137,7 +137,7 @@ impl InferenceHost {
 
 pub(super) trait InferenceRoute: Sized + 'static {
     type Protocol: Protocol<Error = RouteError>;
-    const OPERATION: LoggingOperation;
+    const OPERATION: Operation;
     const SYNC_CALL_TYPE: &'static str;
     const ASYNC_CALL_TYPE: &'static str;
 

@@ -18,7 +18,7 @@ Each driver owns terminal dispatch. Hooks can change or fail execution; passive 
 
 `hooks.rs` owns the call-stage interface and its runtime-associated types. It contains no Python types or legacy callback policy. A runtime supplies its context and continuation representation through `HookRuntime`
 
-`protocol.rs` owns `Protocol` and suspension messages, including `InterceptRequest` and `StreamDelivery`. `call.rs` owns route outputs and their adaptation into a hosted machine. Rust service handling belongs in `host-native::services`; coroutine channel handles stay in `machine/context.rs`
+`protocol.rs` owns `Protocol` and suspension messages, including `InterceptRequest` and `StreamDelivery`. `call.rs` owns neutral operation identifiers, route outputs and their adaptation into a hosted machine. `hooks.rs` names shared call boundaries; consumers supply their route and callback policy. Rust service handling belongs in `host-native::services`; coroutine channel handles stay in `machine/context.rs`
 
 Rust handlers answer suspensions through `litellm-host-native::Driver`, which `litellm-host-http` and `litellm_host_native::in_process` share. `in_process::Host` is an assembly of services, interceptors, stream consumer and optional observation publisher. It is not a trait mirroring every suspension. Use `run_hosted` to preserve the distinction between stream completion and detachment
 

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use host::ChatCompletionsPythonHost;
 use litellm_auth::AuthServices;
 use litellm_cache_response::{CachePolicy, ScopedCache};
-use litellm_callbacks_legacy_python::LoggingOperation;
+use litellm_host::call::Operation;
 use litellm_host::{call::HostedMachine, protocol::Protocol};
 use litellm_inference_chat::{ChatCompletionsRoute, route::ChatCompletions};
 use litellm_secrets::source::SecretSource;
@@ -45,7 +45,7 @@ pub(crate) fn acompletion(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py<P
 
 impl InferenceRoute for ChatCompletionsRoute {
     type Protocol = ChatCompletions;
-    const OPERATION: LoggingOperation = LoggingOperation::Completion;
+    const OPERATION: Operation = Operation::Completion;
     const SYNC_CALL_TYPE: &'static str = "completion";
     const ASYNC_CALL_TYPE: &'static str = "acompletion";
 

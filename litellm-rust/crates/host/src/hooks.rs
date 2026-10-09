@@ -1,7 +1,21 @@
 use crate::{
+    error::HookError,
     interceptors::{RawResponse, RequestContext, WireRequest},
     lifecycle::{CallEvent, Timing},
 };
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CallBoundary {
+    PrepareArguments,
+    PrepareRequest,
+    BeforeProviderRequest,
+    AfterProviderResponse,
+    TransformResponse,
+    Succeeded,
+    Failed,
+    StreamOpened,
+    StreamChunk,
+}
 
 pub trait HookRuntime {
     type Context<'a>;
@@ -33,6 +47,14 @@ pub trait CallHooks<R: HookRuntime>: Sized {
         _arguments: &R::Arguments,
     ) -> Result<(), R::Error> {
         Ok(())
+    }
+
+    fn prepare_request(
+        &mut self,
+        _runtime: R::Context<'_>,
+        arguments: R::Arguments,
+    ) -> Result<R::Step<Self, R::Arguments>, R::Error> {
+        Ok(R::ready(arguments))
     }
 
     fn before_provider_request(
@@ -76,4 +98,16 @@ pub trait CallHooks<R: HookRuntime>: Sized {
     ) -> Result<(), R::Error> {
         Ok(())
     }
+}
+
+pub trait NativeHooks: Send + Sync {
+    fn before_provider_request(
+        &mut self,
+        wire: Box<WireRequest>,
+        _context: &RequestContext,
+    ) -> Result<Box<WireRequest>, HookError> {
+        Ok(wire)
+    }
+
+    fn on_event(&mut self, _event: &CallEvent) {}
 }

@@ -191,5 +191,5 @@ pub(crate) fn legacy_call(
             .unwrap_or_else(|| PyDict::new(py))
     };
     let call = PublicCall::capture(&dict("bound"), &PyTuple::empty(py), &dict("kwargs")).unwrap();
-    LegacyLogging::new(py, crate::LoggingOperation::Ocr, call, asynchronous)
+    LegacyLogging::new(py, litellm_host::call::Operation::Ocr, call, asynchronous)
 }
