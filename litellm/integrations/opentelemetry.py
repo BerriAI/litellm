@@ -2764,6 +2764,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         """
         Safely sets an attribute on the span, ensuring the value is a primitive type.
         """
+        is_recording = getattr(span, "is_recording", None)
+        if callable(is_recording) and not is_recording():
+            return
         primitive_value: Final = self._cast_as_primitive_value_type(value)
         span.set_attribute(key, primitive_value)
 

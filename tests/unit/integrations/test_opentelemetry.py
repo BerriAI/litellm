@@ -388,6 +388,22 @@ def test_v1_malformed_routing_metadata_preserves_inference_attributes(decision: 
     assert not any(key.startswith("litellm.routing.") for key in finished.attributes)
 
 
+def test_safe_set_attribute_skips_ended_and_non_recording_spans() -> None:
+    otel: Final = OpenTelemetry.__new__(OpenTelemetry)
+    recording_span: Final = MagicMock()
+    recording_span.is_recording.return_value = True
+    ended_span: Final = MagicMock()
+    ended_span.is_recording.return_value = False
+    non_recording_span: Final = trace.NonRecordingSpan(trace.INVALID_SPAN_CONTEXT)
+
+    otel.safe_set_attribute(recording_span, "litellm.test", "recorded")
+    otel.safe_set_attribute(ended_span, "litellm.test", "skipped")
+    otel.safe_set_attribute(non_recording_span, "litellm.test", "skipped")
+
+    recording_span.set_attribute.assert_called_once_with("litellm.test", "recorded")
+    ended_span.set_attribute.assert_not_called()
+
+
 class TestOpenTelemetryCostBreakdown(unittest.TestCase):
     def test_cost_breakdown_emitted_to_otel_span(self):
         """
