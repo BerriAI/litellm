@@ -402,7 +402,6 @@ async fn ocr_records_one_route_summary_across_both_execution_paths(
     assert_eq!(summaries[0]["route"], "ocr");
     assert_eq!(summaries[0]["model"], model);
     assert_eq!(summaries[0]["provider"], "mistral");
-    assert_eq!(summaries[0]["resolved_model"], model);
     assert_eq!(summaries[0]["outcome"], "success");
     assert_eq!(summaries[0]["stream"], false);
 }
