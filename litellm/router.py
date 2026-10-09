@@ -7439,11 +7439,17 @@ class Router:
         model_id: Final = ResponsesAPIRequestUtils.get_model_id_from_response_id(response_id)
         if model_id is not None:
             kwargs["model"] = model_id
-        elif response_id and not request_args.get("model") and self.default_deployment is None:
+        elif (
+            response_id
+            and not request_args.get("model")
+            and self.default_deployment is None
+            and not self._has_default_fallbacks()
+            and not request_args.get("fallbacks")
+        ):
             raise litellm.NotFoundError(
                 message=(
-                    f"Response '{response_id}' not found. It was not issued by this proxy; "
-                    "pass `model` to look up a provider response id."
+                    f"Response '{response_id}' not found: the id does not identify a deployment. "
+                    "Pass `model` to look up a provider response id."
                 ),
                 model="",
                 llm_provider=str(request_args.get("custom_llm_provider") or ""),

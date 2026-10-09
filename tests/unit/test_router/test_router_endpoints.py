@@ -561,10 +561,31 @@ async def test_init_responses_api_endpoints_unknown_response_id_raises_not_found
     assert "invalid-response-id-xyz" in str(exc_info.value)
     router._ageneric_api_call_with_fallbacks.assert_not_called()
 
-    # A create-style call with no response_id is not a lookup miss; it must still
-    # reach the generic call path without a model.
     await router._init_responses_api_endpoints(original_function=AsyncMock())
     assert "model" not in router._ageneric_api_call_with_fallbacks.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_init_responses_api_endpoints_default_fallback_still_routes():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "openai/test-model",
+                    "api_key": "fake-api-key",
+                },
+            }
+        ],
+        fallbacks=[{"*": ["test-model"]}],
+    )
+    router._ageneric_api_call_with_fallbacks = AsyncMock()
+
+    await router._init_responses_api_endpoints(
+        original_function=AsyncMock(), response_id="invalid-response-id-xyz"
+    )
+
+    router._ageneric_api_call_with_fallbacks.assert_called_once()
 
 
 @pytest.mark.asyncio

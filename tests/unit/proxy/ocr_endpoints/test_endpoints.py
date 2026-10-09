@@ -3,6 +3,7 @@ Tests for the proxy OCR endpoint helpers that select the response format
 (`x-req-format: native | litellm`) and return the provider's native payload.
 """
 
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import orjson
@@ -202,7 +203,7 @@ async def test_multipart_oversized_file_returns_413():
 
 @pytest.mark.asyncio
 async def test_json_body_empty_returns_400():
-    request = _json_request({}, {})
+    request: Final = _json_request({}, {})
     request.body = AsyncMock(return_value=b"")
 
     with pytest.raises(ProxyException) as exc_info:
@@ -214,7 +215,7 @@ async def test_json_body_empty_returns_400():
 
 @pytest.mark.asyncio
 async def test_json_document_type_file_returns_400():
-    request = _json_request({"model": "m", "document": {"type": "file", "file": "/etc/passwd"}}, {})
+    request: Final = _json_request({"model": "m", "document": {"type": "file", "file": "/etc/passwd"}}, {})
 
     with pytest.raises(ProxyException) as exc_info:
         await _parse_ocr_request(request)

@@ -1,3 +1,5 @@
+from typing import Final
+
 import httpx
 import pytest
 
@@ -94,7 +96,7 @@ def test_transform_file_request_encodes_file_id(config: OpenAIVectorStoreFilesCo
 def test_transform_create_request_preserves_all_attribute_keys(config: OpenAIVectorStoreFilesConfig):
     """OpenAI enforces the 16-key limit itself; the transform must not silently
     truncate user attributes."""
-    attributes = {f"key_{i:02d}": "v" for i in range(17)}
+    attributes: Final = {f"key_{i:02d}": "v" for i in range(17)}
 
     _url, payload = config.transform_create_vector_store_file_request(
         vector_store_id="vs_123",
@@ -107,7 +109,7 @@ def test_transform_create_request_preserves_all_attribute_keys(config: OpenAIVec
 
 def test_transform_create_request_preserves_typed_attribute_values(config: OpenAIVectorStoreFilesConfig):
     """Attributes may be strings, numbers, or booleans per the OpenAI API."""
-    attributes = {"n": 1, "b": True, "s": "x", "f": 1.5}
+    attributes: Final = {"n": 1, "b": True, "s": "x", "f": 1.5}
 
     _url, payload = config.transform_create_vector_store_file_request(
         vector_store_id="vs_123",
@@ -119,7 +121,7 @@ def test_transform_create_request_preserves_typed_attribute_values(config: OpenA
 
 
 def test_transform_update_request_preserves_all_attribute_keys(config: OpenAIVectorStoreFilesConfig):
-    attributes = {f"key_{i:02d}": "v" for i in range(17)}
+    attributes: Final = {f"key_{i:02d}": "v" for i in range(17)}
 
     _url, payload = config.transform_update_vector_store_file_request(
         vector_store_id="vs_123",
@@ -132,7 +134,7 @@ def test_transform_update_request_preserves_all_attribute_keys(config: OpenAIVec
 
 
 def test_transform_update_request_preserves_typed_attribute_values(config: OpenAIVectorStoreFilesConfig):
-    attributes = {"n": 1, "b": True, "s": "x"}
+    attributes: Final = {"n": 1, "b": True, "s": "x"}
 
     _url, payload = config.transform_update_vector_store_file_request(
         vector_store_id="vs_123",

@@ -157,10 +157,10 @@ class TestOpenAIResponsesAPIConfig:
         assert self.config._enforce_min_max_output_tokens(value) == expected
 
     @pytest.mark.parametrize("max_output_tokens", [0, -1, -100])
-    def test_map_openai_params_passes_nonpositive_max_output_tokens_through(self, max_output_tokens):
+    def test_map_openai_params_passes_nonpositive_max_output_tokens_through(self, max_output_tokens: int):
         """Non-positive values must reach OpenAI unchanged so its 400 propagates
         instead of being silently rewritten to a valid request."""
-        result = self.config.map_openai_params(
+        result: Final = self.config.map_openai_params(
             response_api_optional_params={"max_output_tokens": max_output_tokens},
             model=self.model,
             drop_params=False,
