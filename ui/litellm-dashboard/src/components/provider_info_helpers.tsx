@@ -32,6 +32,7 @@ import jinaLogo from "../../public/assets/logos/jina.png";
 import lambdaLogo from "../../public/assets/logos/lambda.svg";
 import lmstudioLogo from "../../public/assets/logos/lmstudio.svg";
 import metaLlamaLogo from "../../public/assets/logos/meta_llama.svg";
+import microsoft365CopilotLogo from "../../public/assets/logos/microsoft_365_copilot.svg";
 import microsoftAzureLogo from "../../public/assets/logos/microsoft_azure.svg";
 import minimaxLogo from "../../public/assets/logos/minimax.svg";
 import mistralLogo from "../../public/assets/logos/mistral.svg";
@@ -366,7 +367,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.LM_STUDIO]: lmstudioLogo.src,
   [Providers.LLAMA]: metaLlamaLogo.src,
   [Providers.MiniMax]: minimaxLogo.src,
-  [Providers.MICROSOFT_365_COPILOT]: microsoftAzureLogo.src,
+  [Providers.MICROSOFT_365_COPILOT]: microsoft365CopilotLogo.src,
   [Providers.MistralAI]: mistralLogo.src,
   [Providers.MOONSHOT]: moonshotLogo.src,
   [Providers.MORPH]: morphLogo.src,

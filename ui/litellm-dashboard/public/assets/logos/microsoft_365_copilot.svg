@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" id="Copilot_Icons" data-name="Copilot Icons" viewBox="-1 15 513 481">
+  <defs>
+    <style>
+      .cls-1 {
+        fill: url(#radial-gradient-2);
+      }
+
+      .cls-2 {
+        fill: url(#linear-gradient-2);
+      }
+
+      .cls-3 {
+        fill: url(#radial-gradient);
+      }
+
+      .cls-4 {
+        fill: url(#linear-gradient);
+      }
+    </style>
+    <radialGradient id="radial-gradient" cx="987.21" cy="1216.02" fx="987.21" fy="1216.02" r="2" gradientTransform="translate(-402710.6509 -405348.4949) rotate(116.7194) scale(232.2644 -445.8898) skewX(-9.7245)" gradientUnits="userSpaceOnUse">
+      <stop offset=".25" stop-color="#109df2"/>
+      <stop offset=".72" stop-color="#aad445"/>
+      <stop offset=".97" stop-color="#ffd400"/>
+    </radialGradient>
+    <linearGradient id="linear-gradient" x1="175.87" y1="498.29" x2="173.86" y2="137.69" gradientTransform="translate(0 514) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3dcbff"/>
+      <stop offset=".25" stop-color="#0588f7" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="radial-gradient-2" cx="987.17" cy="1215.84" fx="987.17" fy="1215.84" r="2" gradientTransform="translate(-214974.3479 -373904.6811) rotate(116.0466) scale(242.0348 -294.2735) skewX(.4853)" gradientUnits="userSpaceOnUse">
+      <stop offset=".07" stop-color="#8c48ff"/>
+      <stop offset=".5" stop-color="#f2598a"/>
+      <stop offset=".9" stop-color="#ffb152"/>
+    </radialGradient>
+    <linearGradient id="linear-gradient-2" x1="337.55" y1="400.48" x2="337.35" y2="302.27" gradientTransform="translate(0 514) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset=".06" stop-color="#f8adfa"/>
+      <stop offset=".71" stop-color="#a86edd" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <path class="cls-3" d="M347.3,115.17l-5.16,20.63h-49.62c-36.77,0-68.82,25.03-77.74,60.7l-44.92,179.7h-89.69c-52.13,0-90.38-48.99-77.74-99.57L47.46,96.53C59.35,48.97,102.08,15.6,151.11,15.6h118.45c52.13,0,90.38,48.99,77.74,99.57Z"/>
+  <path class="cls-4" d="M347.3,115.17l-5.16,20.63h-49.62c-36.77,0-68.82,25.03-77.74,60.7l-44.92,179.7h-89.69c-52.13,0-90.38-48.99-77.74-99.57L47.46,96.53C59.35,48.97,102.08,15.6,151.11,15.6h118.45c52.13,0,90.38,48.99,77.74,99.57Z"/>
+  <path class="cls-1" d="M164.7,396.83l5.16-20.63h49.62c36.77,0,68.82-25.03,77.74-60.7l44.92-179.7h89.69c52.13,0,90.38,48.99,77.74,99.57l-45.02,180.1c-11.89,47.56-54.63,80.93-103.66,80.93h-118.45c-52.13,0-90.38-48.99-77.74-99.57Z"/>
+  <path class="cls-2" d="M164.7,396.83l5.16-20.63h49.62c36.77,0,68.82-25.03,77.74-60.7l44.92-179.7h89.69c52.13,0,90.38,48.99,77.74,99.57l-45.02,180.1c-11.89,47.56-54.63,80.93-103.66,80.93h-118.45c-52.13,0-90.38-48.99-77.74-99.57Z"/>
+</svg>
