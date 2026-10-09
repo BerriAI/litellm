@@ -6,13 +6,33 @@ export const OSS_CLASSIFIER_MODELS = {
   bespoke: ["nimble-latest", "nimble", "bespokelabs/Bespoke-Nimble-9B"],
 } as const;
 
+const OSS_CLASSIFIER_PROVIDERS = ["jev", "laya", "bespoke", "databricks"] as const;
+export type OssClassifierProvider = (typeof OSS_CLASSIFIER_PROVIDERS)[number];
+export const isOssClassifierProvider = (value: unknown): value is OssClassifierProvider =>
+  OSS_CLASSIFIER_PROVIDERS.some((provider) => provider === value);
+
+const DEFAULT_TIMEOUT_MS = 3000;
+const SERVING_ENDPOINT_NAME = /^[A-Za-z0-9_-][A-Za-z0-9._-]*$/;
+
+export const fixedClassifierModels = (provider: OssClassifierProvider | undefined): readonly string[] | undefined =>
+  provider === "laya" || provider === "bespoke" ? OSS_CLASSIFIER_MODELS[provider] : undefined;
+
+const defaultClassifierModel = (provider: OssClassifierProvider | undefined): string =>
+  fixedClassifierModels(provider)?.[0] ?? (provider === "databricks" ? "" : "jev-latest");
+
+const isSupportedClassifierModel = (provider: OssClassifierProvider | undefined, model: string): boolean => {
+  if (provider === "databricks") return SERVING_ENDPOINT_NAME.test(model);
+  const fixed = fixedClassifierModels(provider);
+  return fixed === undefined || fixed.some((candidate) => candidate === model);
+};
+
 const jevClassifierConfigFields = {
   provider: z.preprocess(
     (value) => (value === "typesafe" ? "jev" : value),
-    z.enum(["jev", "laya", "bespoke"]).optional(),
+    z.enum(["jev", "laya", "bespoke", "databricks"]).optional(),
   ),
   model: z.string().trim().min(1).optional(),
-  timeout_ms: z.number().int().positive().default(3000),
+  timeout_ms: z.number().int().positive().default(DEFAULT_TIMEOUT_MS),
   instructions: z
     .string()
     .nullish()
@@ -24,24 +44,18 @@ const jevClassifierConfigFields = {
 
 export const jevClassifierConfigSchema = z
   .object(jevClassifierConfigFields)
-  .transform((config) => ({
-    ...config,
-    model:
-      config.model ??
-      (config.provider && config.provider !== "jev" ? OSS_CLASSIFIER_MODELS[config.provider][0] : "jev-latest"),
-  }))
-  .refine(
-    (config) =>
-      !config.provider ||
-      config.provider === "jev" ||
-      OSS_CLASSIFIER_MODELS[config.provider].some((model) => model === config.model),
-    { error: "Select a supported classifier model", path: ["model"] },
-  );
+  .transform((config) => ({ ...config, model: config.model ?? defaultClassifierModel(config.provider) }))
+  .refine((config) => isSupportedClassifierModel(config.provider, config.model), {
+    error: "Select a supported classifier model, or enter the bare Databricks serving endpoint name",
+    path: ["model"],
+  });
 
 export type JevClassifierConfig = z.infer<typeof jevClassifierConfigSchema>;
 
-export const defaultJevClassifierConfig = (provider: JevClassifierConfig["provider"] = "jev"): JevClassifierConfig =>
-  jevClassifierConfigSchema.parse({ provider });
+export const defaultJevClassifierConfig = (provider: OssClassifierProvider = "jev"): JevClassifierConfig =>
+  provider === "databricks"
+    ? { provider, model: "", timeout_ms: DEFAULT_TIMEOUT_MS }
+    : jevClassifierConfigSchema.parse({ provider });
 
 export const hydrateOssClassifier = (config: {
   classifier_type?: ClassifierType | "oss_classifier";

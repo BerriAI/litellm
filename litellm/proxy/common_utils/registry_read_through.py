@@ -7,18 +7,24 @@ immediately can land on a sibling that has never heard of it and fail 400/404.
 On a registry miss, callers here fetch the missing row from the DB and load it
 into the local registry before giving up. A short negative-result TTL per key
 plus a global resync budget per window bound the DB load from lookups of
-genuinely unknown names.
+genuinely unknown names. An auto router's tiers are deployment rows of their
+own, so a miss on an auto router reconciles every row instead of just its own,
+or the first routed request on this replica would pick a tier it has not loaded.
 """
 
 import asyncio
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final
+
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 
 if TYPE_CHECKING:
+    from prisma import models as prisma_models
     from prisma.types import (
         LiteLLM_AgentsTableInclude,
         LiteLLM_AgentsTableWhereUniqueInput,
@@ -129,11 +135,35 @@ async def _resync_model_deployments(model_name: str) -> bool:
             prisma_client=prisma_client, proxy_logging_obj=proxy_server.proxy_logging_obj
         )
         return proxy_server.llm_router is not None
+    if _holds_an_auto_router(rows):
+        await proxy_server.proxy_config.add_deployment(
+            prisma_client=prisma_client, proxy_logging_obj=proxy_server.proxy_logging_obj
+        )
+        return _model_is_loaded(model_name)
     async with proxy_server.MODEL_RECONCILE_LOCK:
         await proxy_server.proxy_config.get_credentials(prisma_client=prisma_client)
         proxy_server.proxy_config._add_deployment(db_models=rows)
         proxy_server.llm_model_list = router.get_model_list()
     return True
+
+
+def _holds_an_auto_router(rows: Sequence["prisma_models.LiteLLM_ProxyModelTable"]) -> bool:
+    return any(_names_an_auto_router(row.litellm_params) for row in rows)
+
+
+_STORED_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _names_an_auto_router(stored_litellm_params: object) -> bool:
+    try:
+        params: Final = _STORED_LITELLM_PARAMS.validate_python(stored_litellm_params)
+    except ValidationError:
+        return False
+    stored_model: Final = params.get("model")
+    if not isinstance(stored_model, str):
+        return False
+    model: Final = decrypt_value_helper(value=stored_model, key="model", return_original_value=True)
+    return isinstance(model, str) and model.startswith("auto_router/")
 
 
 async def _resync_guardrails(guardrail_name: str) -> bool:
