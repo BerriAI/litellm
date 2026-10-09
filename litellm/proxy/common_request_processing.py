@@ -2290,6 +2290,13 @@ class ProxyBaseLLMRequestProcessing:
         general_settings_view: Final = cast(  # cast-ok: this method keeps its legacy bare-dict settings parameter
             Mapping[str, object], general_settings
         )
+        per_model_limits_are_hard: Final = (
+            general_settings_view.get("disable_fallbacks_on_per_model_rate_limits") is True
+        )
+
+        def is_hard_per_model_limit(exc: ProxyRateLimitError) -> bool:
+            return per_model_limits_are_hard and exc.descriptor_key in PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS
+
         configured_fallbacks: Final = (
             self._configured_fallbacks(llm_router=llm_router, user_api_key_dict=user_api_key_dict)
             if llm_router is not None
@@ -2322,10 +2329,7 @@ class ProxyBaseLLMRequestProcessing:
                 or not configured_fallbacks
                 or rate_limited_data.get("disable_fallbacks")
                 or not isinstance(original_model, str)
-                or (
-                    general_settings_view.get("disable_fallbacks_on_per_model_rate_limits") is True
-                    and getattr(original_exc, "descriptor_key", None) in PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS
-                )
+                or is_hard_per_model_limit(original_exc)
             ):
                 raise
 
@@ -2365,7 +2369,9 @@ class ProxyBaseLLMRequestProcessing:
                             llm_router=llm_router,
                             rate_limited_model=original_model,
                         )
-                    except ProxyRateLimitError:
+                    except ProxyRateLimitError as fallback_exc:
+                        if is_hard_per_model_limit(fallback_exc):
+                            raise
                         continue
             except BaseException:
                 self.data = rate_limited_data
