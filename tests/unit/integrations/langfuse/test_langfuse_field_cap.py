@@ -63,17 +63,29 @@ def test_short_string_passes_through_unchanged():
 
 
 def test_long_ascii_string_is_cut_at_the_cap_with_marker():
-    assert cap_payload("a" * 100, 32) == "a" * 32 + _TRUNCATION_SUFFIX
+    assert cap_payload("a" * 100, 32) == "a" * 16 + _TRUNCATION_SUFFIX
 
 
 def test_multibyte_string_never_splits_a_rune():
     capped: Final = cap_payload("漢" * 100, 32)
-    assert capped == "漢" * 10 + _TRUNCATION_SUFFIX
+    assert capped == "漢" * 2 + _TRUNCATION_SUFFIX
 
 
-def test_capped_string_stays_within_cap_bytes_excluding_marker():
+def test_capped_string_serialized_width_stays_within_cap():
     capped: Final = cap_payload("x" * 10_000, 256)
-    assert len(capped[: -len(_TRUNCATION_SUFFIX)].encode("utf-8")) == 256
+    assert len(json.dumps(capped)) <= 256
+
+
+def test_cjk_string_wire_width_stays_within_cap_despite_uXXXX_escaping():
+    capped: Final = cap_payload("漢" * 100_000, DEFAULT_MAX_FIELD_BYTES)
+    assert capped == "漢" * 5_458 + _TRUNCATION_SUFFIX
+    assert len(json.dumps(capped)) <= DEFAULT_MAX_FIELD_BYTES
+
+
+def test_astral_code_points_count_double_width():
+    capped: Final = cap_payload("🙂" * 1_000, 32)
+    assert capped == "🙂" + _TRUNCATION_SUFFIX
+    assert len(json.dumps(capped)) <= 32
 
 
 def test_nested_containers_are_capped_recursively():
@@ -83,11 +95,15 @@ def test_nested_containers_are_capped_recursively():
         "count": 5,
         "nothing": None,
     }
-    capped: Final = cap_payload(payload, 16)
-    assert capped["messages"][0]["content"] == "x" * 16 + _TRUNCATION_SUFFIX
-    assert capped["tools"][0] == "y" * 16 + _TRUNCATION_SUFFIX
+    capped: Final = cap_payload(payload, 64)
+    assert capped["messages"][0]["content"] == "x" * 48 + _TRUNCATION_SUFFIX
+    assert capped["tools"][0] == "y" * 48 + _TRUNCATION_SUFFIX
     assert capped["count"] == 5
     assert capped["nothing"] is None
+
+
+def test_cap_below_marker_size_leaves_only_the_marker():
+    assert cap_payload("x" * 100, 16) == _TRUNCATION_SUFFIX
 
 
 def test_non_container_objects_pass_through():
