@@ -12,7 +12,10 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.integrations.custom_guardrail import CustomGuardrail, log_guardrail_information
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,  # pyright: ignore[reportUnknownVariableType]  # decorator is untyped upstream
+)
 from litellm.litellm_core_utils.llm_judge import default_router_provider, judge_target
 from litellm.types.decisions import MAX_DECISION_QUESTIONS, OpenAIDecisionResponse, OpenAIPredicateAnswer
 from litellm.types.guardrails import GuardrailEventHooks, Mode
