@@ -299,6 +299,39 @@ def test_reasoning_tokens_gemini(_local_model_cost_map):
     )
 
 
+def test_gemini_priority_tier_bills_audio_at_priority_rate(_local_model_cost_map):
+    """Priority-tier audio input tokens must bill at ``input_cost_per_audio_token_priority``.
+
+    The cost map declares a distinct priority audio rate for Gemini flash (added by
+    PRs #42980 / #44632). ``get_model_info`` must surface that key so the service-tier
+    cost path bills it, instead of silently falling back to the standard audio rate.
+    """
+    model = "gemini-2.5-flash"
+    custom_llm_provider = "gemini"
+
+    usage = Usage(
+        prompt_tokens=150,
+        completion_tokens=0,
+        total_tokens=150,
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=100, audio_tokens=50),
+    )
+    model_cost_map = litellm.model_cost[model]
+    # Guard: the priority audio rate is genuinely distinct from the standard one,
+    # so this test fails if (and only if) the priority rate is not applied.
+    assert model_cost_map["input_cost_per_audio_token_priority"] != model_cost_map["input_cost_per_audio_token"]
+
+    prompt_cost, _ = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        service_tier="priority",
+    )
+
+    expected = (
+        model_cost_map["input_cost_per_token_priority"] * 100
+        + model_cost_map["input_cost_per_audio_token_priority"] * 50
+    )
+    assert round(prompt_cost, 12) == round(expected, 12)
 
 
 def test_image_tokens_with_custom_pricing():
