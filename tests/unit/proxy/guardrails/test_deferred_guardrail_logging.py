@@ -24,13 +24,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
+from fastapi import HTTPException
 
 
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.utils import StandardLoggingPayload
-from litellm.utils import _dispatch_success_logging
+from litellm.utils import Rules, _dispatch_success_logging, function_setup
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -603,6 +604,49 @@ def test_flush_deferred_async_logging_swallows_closure_errors():
         exception_raised=False,
     )
     assert logging_obj.enqueue_deferred_logging is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked", [False, True])
+async def test_a_follow_up_call_held_with_the_request_shares_its_post_call_guardrail_outcome(blocked: bool) -> None:
+    """An internal follow-up call held with the request (MCP auto-execute) is logged with it: both
+    succeed once the post-call guardrails pass, and both fail when they block"""
+    logged: Final[list[tuple[str, str]]] = []
+    both_logged: Final = asyncio.Event()
+
+    async def record(kwargs: dict[str, Any], response_obj: object, start_time: datetime, end_time: datetime) -> None:
+        logged.append((kwargs["standard_logging_object"]["status"], kwargs["litellm_call_id"]))
+        if len(logged) == 2:
+            both_logged.set()
+
+    async def held_call(call_id: str) -> Logging:
+        logging_obj, _ = function_setup(
+            "acompletion", Rules(), datetime(2026, 1, 1), model="gpt-4o-mini", messages=[], litellm_call_id=call_id
+        )
+        logging_obj.defer_async_logging = True
+        logging_obj.dynamic_async_success_callbacks = [record]
+        logging_obj.dynamic_async_failure_callbacks = [record]
+        await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[],
+            mock_response="hello",
+            litellm_logging_obj=logging_obj,
+            litellm_call_id=call_id,
+        )
+        return logging_obj
+
+    request: Final = await held_call("request")
+    request.deferred_follow_ups = (await held_call("follow-up"),)
+
+    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(logging_obj=request, exception_raised=blocked)
+    if blocked:
+        await ProxyLogging._dispatch_proxy_only_failure_handlers(
+            request, HTTPException(status_code=400, detail="blocked")
+        )
+    await both_logged.wait()
+
+    status: Final = "failure" if blocked else "success"
+    assert sorted(logged) == [(status, "follow-up"), (status, "request")], logged
 
 
 # ---------------------------------------------------------------------------

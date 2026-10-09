@@ -31,8 +31,9 @@ def _follow_up_call_args(
     Success callbacks fire once per logging object, so a follow-up sharing the first call's object
     is never logged or billed. It gets its own: a new call id in the same trace, with the request's
     team/key callbacks. The first call settles the budget reservation and the pre-call guardrail
-    cost. A stream the proxy defers for post-call guardrails keeps the shared object, so its
-    guardrails still run before the follow-up is logged.
+    cost. When the proxy defers logging for post-call guardrails, a non-streaming follow-up is
+    logged with the request, as a success once they pass or a failure when they block. A deferred
+    stream keeps the shared object, so its guardrails still run before the follow-up is logged.
     """
     parent: Final = base_call_args.get("litellm_logging_obj")
     if not isinstance(parent, LiteLLMLoggingObj) or getattr(parent, "_on_deferred_stream_complete", None):
@@ -46,9 +47,11 @@ def _follow_up_call_args(
     masking_function: Final[object] = parent.model_call_details["litellm_params"].get("_langfuse_masking_function")
     for key in ("metadata", "litellm_metadata"):
         if isinstance(metadata := args.get(key), dict):
-            follow_up_metadata = forwarded_internal_call_metadata(metadata, "mcp_auto_execute")
-            follow_up_metadata.pop("standard_logging_guardrail_information", None)
-            args[key] = follow_up_metadata
+            args[key] = {
+                k: v
+                for k, v in forwarded_internal_call_metadata(metadata, "mcp_auto_execute").items()
+                if k != "standard_logging_guardrail_information"
+            }
     start_time: Final = datetime.datetime.now()  # noqa: DTZ005  # logging pipeline uses naive datetimes
     child, follow_up_args = function_setup("acompletion", Rules(), start_time, is_async_call=True, **args)
     for attr in (
@@ -61,15 +64,8 @@ def _follow_up_call_args(
         setattr(child, attr, getattr(parent, attr))
     if masking_function is not None:
         child.model_call_details["litellm_params"]["_langfuse_masking_function"] = masking_function
-    if parent.defer_async_logging:  # post-call guardrails: the proxy flushes only the request's object
-        first_flush: Final = parent.enqueue_deferred_logging
-
-        def _flush_both() -> None:
-            for flush in (first_flush, child.enqueue_deferred_logging):
-                if flush is not None:
-                    flush()
-
-        parent.enqueue_deferred_logging = _flush_both
+    if parent.defer_async_logging:
+        parent.deferred_follow_ups = (*parent.deferred_follow_ups, child)
     follow_up_args["litellm_logging_obj"] = child
     return follow_up_args
 

@@ -3439,6 +3439,8 @@ class ProxyBaseLLMRequestProcessing:
             if pending is not None:
                 logging_obj._native_pending_logging = None  # rebind-ok: consume the native OCR release signal once
                 pending.release(not exception_raised)
+        for follow_up in getattr(logging_obj, "deferred_follow_ups", ()):
+            ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(follow_up, exception_raised)
         _enqueue_fn: Final = getattr(logging_obj, "enqueue_deferred_logging", None)
         if _enqueue_fn is None:
             return
