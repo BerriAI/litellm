@@ -1542,6 +1542,27 @@ describe("ModelInfoView", () => {
       expect(screen.getByTestId("reuse-credentials-button")).toBeInTheDocument();
     });
 
+    it("names the attached credential by its display name in the re-use dialog", async () => {
+      mockCredentialListCall.mockResolvedValue({
+        credentials: [
+          {
+            credential_name: "selected-credential",
+            display_name: "Selected Label",
+            credential_values: {},
+            credential_info: {},
+          },
+        ],
+      } as never);
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+      await user.click(await screen.findByTestId("reuse-credentials-button"));
+
+      const dialog = await screen.findByRole("dialog", { name: "Using Existing Credential" });
+      await vi.waitFor(() => expect(dialog).toHaveTextContent("Selected Label"));
+      expect(dialog).not.toHaveTextContent("selected-credential");
+    });
+
     it.each([["auto_router/adaptive_router"], ["auto_router/quality_router"]])(
       "offers no Test Connection for %s, whose targets it cannot build",
       async (model) => {

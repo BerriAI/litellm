@@ -645,7 +645,10 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
                       placeholder="Select or search for existing credentials"
                       options={credentialOptions(credentialsList)}
                       value={(value as string | null) ?? ""}
-                      onValueChange={(selected) => onChange(selected === "" || selected === null ? null : selected)}
+                      allowClear={false}
+                      onValueChange={(selected) => {
+                        if (selected !== null) onChange(selected === "" ? null : selected);
+                      }}
                     />
                   )}
                 </FormField>

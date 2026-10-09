@@ -240,6 +240,23 @@ describe("CredentialModal", () => {
       expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("display_name");
     });
 
+    it("accepts a 255-character display name and blocks a 256-character one", async () => {
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+      const onSubmit = vi.fn();
+      renderModal({ mode: "add", onSubmit });
+
+      await fillRequiredAddFields(user);
+      fireEvent.change(screen.getByLabelText("Display Name:"), { target: { value: "x".repeat(256) } });
+      fireEvent.click(screen.getByRole("button", { name: "Add Credential" }));
+      expect(await screen.findByText("Display name must be at most 255 characters")).toBeInTheDocument();
+      expect(onSubmit).not.toHaveBeenCalled();
+
+      fireEvent.change(screen.getByLabelText("Display Name:"), { target: { value: "x".repeat(255) } });
+      fireEvent.click(screen.getByRole("button", { name: "Add Credential" }));
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+      expect(onSubmit.mock.calls[0][0].display_name).toBe("x".repeat(255));
+    });
+
     it("keeps the credential name read-only while the display name stays editable in edit mode", () => {
       renderModal({ mode: "edit", existingCredential: { ...mockCredential, display_name: "Prod" } });
 

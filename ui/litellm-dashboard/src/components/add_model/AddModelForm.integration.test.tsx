@@ -330,6 +330,7 @@ describe("AddModelForm", () => {
 
     it("selecting by display name sets litellm_credential_name to the credential name", async () => {
       const { user, input, form } = await openPicker();
+      expect(screen.getByText("OR")).toBeInTheDocument();
 
       await user.type(input, "prod open");
       await user.click(await screen.findByRole("option", { name: /test-credential/ }));

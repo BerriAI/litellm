@@ -9,6 +9,7 @@ import DeleteResourceModal from "@/components/common_components/DeleteResourceMo
 import ModelSettingsModal from "@/components/model_dashboard/ModelSettingsModal/ModelSettingsModal";
 import { ModelData } from "@/components/model_dashboard/types";
 import { toast } from "@/lib/toast";
+import { isProxyAdminRole } from "@/utils/roles";
 import { uiHref } from "@/utils/uiHref";
 import { modelDeleteCall, modelPatchUpdateCall } from "@/components/networking";
 import { useQueryClient } from "@tanstack/react-query";
@@ -82,7 +83,7 @@ const AllModelsTab = ({
   const { data: modelCostMapData, isLoading: isLoadingModelCostMap } = useModelCostMap();
   const { accessToken, userId, userRole, isViewOnly } = useAuthorized();
   const { data: teams, isLoading: isLoadingTeams } = useTeams();
-  const { data: credentialsResponse } = useCredentials();
+  const { data: credentialsResponse } = useCredentials({ enabled: isProxyAdminRole(userRole ?? "") });
   const credentialLabels = useMemo(
     () => credentialLabelsByName(credentialsResponse?.credentials ?? []),
     [credentialsResponse],

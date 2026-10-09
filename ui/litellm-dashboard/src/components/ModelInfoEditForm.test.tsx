@@ -76,6 +76,26 @@ describe("ModelInfoEditForm existing-credentials picker", () => {
     expect(onSubmit.mock.calls[0][0].litellm_credential_name).toBe("openai-main");
   });
 
+  it("keeps the attached credential when the search text is emptied and only clears through None", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    renderForm({ onSubmit, litellmParams: { model: "gpt-4o", litellm_credential_name: "openai-main" } });
+
+    const picker = await screen.findByPlaceholderText("Select or search for existing credentials");
+    expect(picker).toHaveValue("Main OpenAI");
+    await user.clear(picker);
+    await user.tab();
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].litellm_credential_name).toBe("openai-main");
+
+    await user.click(picker);
+    await user.click(await screen.findByRole("option", { name: "None" }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
+    expect(onSubmit.mock.calls[1][0].litellm_credential_name).toBeNull();
+  });
+
   it("shows the attached credential's display name when not editing", () => {
     renderForm({ isEditing: false, litellmParams: { model: "gpt-4o", litellm_credential_name: "openai-main" } });
 

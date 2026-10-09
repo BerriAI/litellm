@@ -173,7 +173,7 @@ describe("VectorStoreForm submit payload", () => {
     });
   });
 
-  it("shows the credential alias beside the name, searches by it, and still submits the name", async () => {
+  it("shows the credential display name beside the name, searches by it, and still submits the name", async () => {
     const user = setupUser();
     renderForm();
 
@@ -186,11 +186,28 @@ describe("VectorStoreForm submit payload", () => {
 
     await user.type(picker, "bedrock prod");
     await user.click(await screen.findByRole("option", { name: /bedrock-prod/ }));
-    await user.type(screen.getByPlaceholderText("Enter vector store ID from your provider"), "vs-alias");
+    await user.type(screen.getByPlaceholderText("Enter vector store ID from your provider"), "vs-labeled");
     await submit(user);
 
     await vi.waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1));
     expect(createdPayload().litellm_credential_name).toBe("bedrock-prod");
+  });
+
+  it("sends no credential when None is picked after a credential", async () => {
+    const user = setupUser();
+    renderForm();
+
+    const picker = screen.getByPlaceholderText("Select or search for existing credentials");
+    await user.click(picker);
+    await user.click(await screen.findByRole("option", { name: /bedrock-prod/ }));
+    expect(picker).toHaveValue("Bedrock Prod");
+    await user.click(picker);
+    await user.click(await screen.findByRole("option", { name: "None" }));
+    await user.type(screen.getByPlaceholderText("Enter vector store ID from your provider"), "vs-none");
+    await submit(user);
+
+    await vi.waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1));
+    expect(createdPayload().litellm_credential_name).toBeUndefined();
   });
 
   it("blocks the request and reports invalid metadata JSON instead of submitting", async () => {

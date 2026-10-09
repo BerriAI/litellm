@@ -810,7 +810,7 @@ export default function ModelInfoView({
               <DialogTitle>Using Existing Credential</DialogTitle>
             </DialogHeader>
             <p className="text-sm">
-              {credentialLabelsByName(credentialsList).get(modelData.litellm_params.litellm_credential_name) ??
+              {credentialLabelsByName(credentialsList).get(modelData.litellm_params.litellm_credential_name ?? "") ??
                 modelData.litellm_params.litellm_credential_name}
             </p>
             <DialogFooter>
