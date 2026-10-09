@@ -168,6 +168,158 @@ def test_db_store_lifecycle_is_unchanged_beside_config_store(gateway: Gateway) -
     assert missing.status_code == 404, missing.text
 
 
+def test_team_owned_store_rejects_other_team_info_update_and_delete(gateway: Gateway) -> None:
+    store_id: Final = f"vs_team_owned_{uuid.uuid4().hex}"
+    with gateway.scenario() as scenario:
+        owner_team: Final = scenario.team()
+        owner_user: Final = scenario.member(owner_team)
+        owner_key: Final = scenario.key(team_id=owner_team, user_id=owner_user)
+        owner_admin_user: Final = scenario.user(user_role="proxy_admin")
+        owner_admin_key: Final = scenario.key(user_id=owner_admin_user, team_id=owner_team)
+        other_team: Final = scenario.team()
+        other_key: Final = scenario.key(team_id=other_team)
+        allowed_vector_store_routes: Final = [
+            "/vector_store/info",
+            "/vector_store/update",
+            "/vector_store/delete",
+        ]
+        other_route_key: Final = scenario.key(team_id=other_team, allowed_routes=allowed_vector_store_routes)
+        owner_route_key: Final = scenario.key(
+            team_id=owner_team,
+            user_id=owner_user,
+            allowed_routes=allowed_vector_store_routes,
+        )
+        created: Final = gateway.request(
+            "POST",
+            "/vector_store/new",
+            {
+                "vector_store_id": store_id,
+                "custom_llm_provider": "openai",
+                "vector_store_name": "owner name",
+                "litellm_params": {"api_base": "https://example.invalid/v1", "api_key": "original synthetic key"},
+            },
+            key=owner_admin_key,
+        )
+        assert created.status_code == 200, created.text
+        scenario.cleanups.callback(
+            gateway.request, "POST", "/vector_store/delete", {"vector_store_id": store_id}, key=gateway.key
+        )
+        snapshot_query: Final = (
+            'SELECT to_jsonb(store) FROM "LiteLLM_ManagedVectorStoresTable" AS store WHERE vector_store_id = %s'
+        )
+        before_denial: Final = read_rows(snapshot_query, (store_id,))
+        assert len(before_denial) == 1, before_denial
+        assert object_value(before_denial[0]["to_jsonb"])["team_id"] == owner_team, before_denial
+
+        granted_info: Final = gateway.request(
+            "POST", "/vector_store/info", {"vector_store_id": store_id}, key=other_route_key
+        )
+        assert granted_info.status_code == 403, granted_info.text
+        denied_info: Final = gateway.request("POST", "/vector_store/info", {"vector_store_id": store_id}, key=other_key)
+        assert denied_info.status_code == 403, denied_info.text
+        assert read_rows(snapshot_query, (store_id,)) == before_denial
+        denied_update: Final = gateway.request(
+            "POST",
+            "/vector_store/update",
+            {
+                "vector_store_id": store_id,
+                "vector_store_name": "unauthorized name",
+                "litellm_params": {"api_base": "https://example.invalid/changed", "api_key": "changed synthetic key"},
+            },
+            key=other_key,
+        )
+        assert denied_update.status_code == 401, denied_update.text
+        assert read_rows(snapshot_query, (store_id,)) == before_denial
+        granted_update: Final = gateway.request(
+            "POST",
+            "/vector_store/update",
+            {"vector_store_id": store_id, "vector_store_name": "unauthorized granted update"},
+            key=other_route_key,
+        )
+        assert granted_update.status_code == 403, granted_update.text
+        assert read_rows(snapshot_query, (store_id,)) == before_denial
+        denied_delete: Final = gateway.request(
+            "POST", "/vector_store/delete", {"vector_store_id": store_id}, key=other_key
+        )
+        assert denied_delete.status_code == 401, denied_delete.text
+        assert read_rows(snapshot_query, (store_id,)) == before_denial
+        granted_delete: Final = gateway.request(
+            "POST", "/vector_store/delete", {"vector_store_id": store_id}, key=other_route_key
+        )
+        assert granted_delete.status_code == 403, granted_delete.text
+        assert read_rows(snapshot_query, (store_id,)) == before_denial
+
+        owner_info: Final = gateway.request("POST", "/vector_store/info", {"vector_store_id": store_id}, key=owner_key)
+        assert owner_info.status_code == 200, owner_info.text
+        assert object_value(object_value(owner_info.json())["vector_store"])["vector_store_name"] == "owner name"
+
+        updated: Final = gateway.request(
+            "POST",
+            "/vector_store/update",
+            {"vector_store_id": store_id, "vector_store_name": "admin update"},
+            key=gateway.key,
+        )
+        assert updated.status_code == 200, updated.text
+        updated_rows: Final = read_rows(snapshot_query, (store_id,))
+        assert len(updated_rows) == 1, updated_rows
+        updated_store: Final = object_value(updated_rows[0]["to_jsonb"])
+        assert updated_store["vector_store_name"] == "admin update", updated_rows
+        assert updated_store["team_id"] == owner_team, updated_rows
+
+        admin_info: Final = gateway.request(
+            "POST", "/vector_store/info", {"vector_store_id": store_id}, key=gateway.key
+        )
+        assert admin_info.status_code == 200, admin_info.text
+        assert object_value(object_value(admin_info.json())["vector_store"])["vector_store_name"] == "admin update"
+        owner_updated: Final = gateway.request(
+            "POST",
+            "/vector_store/update",
+            {"vector_store_id": store_id, "vector_store_name": "owner route grant update"},
+            key=owner_route_key,
+        )
+        assert owner_updated.status_code == 200, owner_updated.text
+        owner_info_after_update: Final = gateway.request(
+            "POST", "/vector_store/info", {"vector_store_id": store_id}, key=owner_route_key
+        )
+        assert owner_info_after_update.status_code == 200, owner_info_after_update.text
+        assert (
+            object_value(object_value(owner_info_after_update.json())["vector_store"])["vector_store_name"]
+            == "owner route grant update"
+        ), owner_info_after_update.text
+        owner_updated_rows: Final = read_rows(snapshot_query, (store_id,))
+        assert len(owner_updated_rows) == 1, owner_updated_rows
+        owner_updated_store: Final = object_value(owner_updated_rows[0]["to_jsonb"])
+        assert owner_updated_store["vector_store_name"] == "owner route grant update", owner_updated_rows
+        assert owner_updated_store["team_id"] == owner_team, owner_updated_rows
+        owner_deleted: Final = gateway.request(
+            "POST", "/vector_store/delete", {"vector_store_id": store_id}, key=owner_route_key
+        )
+        assert owner_deleted.status_code == 200, owner_deleted.text
+        assert read_rows(snapshot_query, (store_id,)) == []
+        owner_info_after_delete: Final = gateway.request(
+            "POST", "/vector_store/info", {"vector_store_id": store_id}, key=gateway.key
+        )
+        assert owner_info_after_delete.status_code == 404, owner_info_after_delete.text
+
+        admin_store_id: Final = f"vs_team_owned_admin_{uuid.uuid4().hex}"
+        admin_created: Final = gateway.request(
+            "POST",
+            "/vector_store/new",
+            {"vector_store_id": admin_store_id, "custom_llm_provider": "openai", "vector_store_name": "admin target"},
+            key=owner_admin_key,
+        )
+        assert admin_created.status_code == 200, admin_created.text
+        scenario.cleanups.callback(
+            gateway.request, "POST", "/vector_store/delete", {"vector_store_id": admin_store_id}, key=gateway.key
+        )
+        assert len(read_rows(snapshot_query, (admin_store_id,))) == 1
+        admin_deleted: Final = gateway.request(
+            "POST", "/vector_store/delete", {"vector_store_id": admin_store_id}, key=gateway.key
+        )
+        assert admin_deleted.status_code == 200, admin_deleted.text
+        assert read_rows(snapshot_query, (admin_store_id,)) == []
+
+
 @pytest.mark.covers("other.vector_store.chat.config_store_search_reaches_upstream_after_listing")
 def test_chat_with_config_store_searches_upstream_and_injects_context_after_listing(gateway: Gateway) -> None:
     with (
