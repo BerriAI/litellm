@@ -6,6 +6,7 @@ use litellm_llms::{
     azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG,
     base_llm::messages::transformation::BaseMessagesConfig,
     bedrock::messages::invoke_transformations::anthropic_claude3_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
+    vertex_ai::messages::transformation::VERTEX_ANTHROPIC_MESSAGES_CONFIG,
 };
 use serde_json::{Map, Value};
 
@@ -18,6 +19,7 @@ pub(crate) enum MessagesProvider {
     Anthropic,
     AzureAi,
     Bedrock,
+    VertexAi,
 }
 
 impl MessagesProvider {
@@ -26,6 +28,7 @@ impl MessagesProvider {
             Self::Anthropic => LlmProviders::Anthropic,
             Self::AzureAi => LlmProviders::AzureAi,
             Self::Bedrock => LlmProviders::Bedrock,
+            Self::VertexAi => LlmProviders::VertexAi,
         }
         .into()
     }
@@ -35,15 +38,21 @@ impl MessagesProvider {
             Self::Anthropic => &ANTHROPIC_MESSAGES_CONFIG,
             Self::AzureAi => &AZURE_ANTHROPIC_MESSAGES_CONFIG,
             Self::Bedrock => &BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
+            Self::VertexAi => &VERTEX_ANTHROPIC_MESSAGES_CONFIG,
         }
     }
 }
 
-pub(crate) fn messages_provider(provider: LlmProviders) -> Option<MessagesProvider> {
+/// Python's `get_provider_anthropic_messages_config`: Vertex AI serves only its Claude
+/// partner models on this route.
+pub(crate) fn messages_provider(provider: LlmProviders, model: &str) -> Option<MessagesProvider> {
     match provider {
         LlmProviders::Anthropic => Some(MessagesProvider::Anthropic),
         LlmProviders::AzureAi => Some(MessagesProvider::AzureAi),
         LlmProviders::Bedrock => Some(MessagesProvider::Bedrock),
+        LlmProviders::VertexAi if model.to_ascii_lowercase().contains("claude") => {
+            Some(MessagesProvider::VertexAi)
+        }
         _ => None,
     }
 }
@@ -68,20 +77,26 @@ mod tests {
     #[case::anthropic("anthropic", MessagesProvider::Anthropic)]
     #[case::azure_ai("azure_ai", MessagesProvider::AzureAi)]
     #[case::bedrock("bedrock", MessagesProvider::Bedrock)]
+    #[case::vertex_ai("vertex_ai", MessagesProvider::VertexAi)]
     fn provider_round_trips_through_its_python_name(
         #[case] name: &str,
         #[case] provider: MessagesProvider,
     ) {
         assert_eq!(
-            messages_provider(name.parse::<LlmProviders>().unwrap()),
+            messages_provider(name.parse::<LlmProviders>().unwrap(), "claude-sonnet-4-5"),
             Some(provider)
         );
         assert_eq!(provider.as_str(), name);
     }
 
-    #[test]
-    fn provider_without_a_messages_config_is_rejected() {
-        assert_eq!(messages_provider(LlmProviders::Openai), None);
+    #[rstest]
+    #[case::openai(LlmProviders::Openai, "gpt-5")]
+    #[case::vertex_gemini(LlmProviders::VertexAi, "gemini-2.5-pro")]
+    fn provider_without_a_messages_config_is_rejected(
+        #[case] provider: LlmProviders,
+        #[case] model: &str,
+    ) {
+        assert_eq!(messages_provider(provider, model), None);
     }
 
     #[test]

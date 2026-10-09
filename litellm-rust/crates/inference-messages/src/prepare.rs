@@ -51,7 +51,7 @@ fn resolve_provider(
     custom_llm_provider: Option<&str>,
 ) -> Result<ResolvedProvider, Error> {
     let resolved = resolve_llm_provider(model, custom_llm_provider, "messages")?;
-    let provider = messages_provider(resolved.provider)
+    let provider = messages_provider(resolved.provider, resolved.model)
         .ok_or_else(|| Error::InvalidProvider(<&str>::from(resolved.provider).to_string()))?;
     Ok(ResolvedProvider {
         model: resolved.model.to_string(),
