@@ -50,6 +50,7 @@ interface ModelHubTableProps {
   publicPage: boolean;
   premiumUser: boolean;
   userRole: string | null;
+  canOpenPlayground: boolean;
 }
 
 function isMCPHubVisibilityDisabled(isLoading: boolean, servers: readonly MCPServerData[] | null): boolean {
@@ -68,7 +69,13 @@ function HubEmptyState({ title, body }: { title: string; body: string }) {
   );
 }
 
-const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, premiumUser, userRole }) => {
+const ModelHubTable: React.FC<ModelHubTableProps> = ({
+  accessToken,
+  publicPage,
+  premiumUser,
+  userRole,
+  canOpenPlayground,
+}) => {
   const syntaxTheme = useSyntaxTheme(prism);
   // Admin Viewer follows the read-parity rule: see the AI Hub catalog, but
   // cannot toggle public visibility (write).
@@ -775,10 +782,14 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                     <a href={DECISIONS_DOCS_URL} target="_blank" rel="noopener noreferrer" className="underline">
                       How to call decision models
                     </a>
-                    {" · "}
-                    <a href={uiHref(SYSTEM_ONE_PLAYGROUND_ROUTE)} className="underline">
-                      Try it in the Playground
-                    </a>
+                    {canOpenPlayground && (
+                      <>
+                        {" · "}
+                        <a href={uiHref(SYSTEM_ONE_PLAYGROUND_ROUTE)} className="underline">
+                          Try it in the Playground
+                        </a>
+                      </>
+                    )}
                   </p>
                 )}
                 <SyntaxHighlighter language="python" className="text-sm" style={syntaxTheme}>

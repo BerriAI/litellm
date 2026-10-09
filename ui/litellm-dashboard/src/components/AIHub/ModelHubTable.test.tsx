@@ -115,7 +115,15 @@ describe("ModelHubTable", () => {
     it(description, async () => {
       setupAuthRedirectTest(requireAuth, tokenValue, isTokenValid);
 
-      renderWithProviders(<ModelHubTable accessToken={null} publicPage={true} premiumUser={false} userRole={null} />);
+      renderWithProviders(
+        <ModelHubTable
+          accessToken={null}
+          publicPage={true}
+          premiumUser={false}
+          userRole={null}
+          canOpenPlayground={false}
+        />,
+      );
 
       await waitFor(() => {
         if (shouldRedirect) {
@@ -148,7 +156,13 @@ describe("ModelHubTable", () => {
     });
 
     renderWithProviders(
-      <ModelHubTable accessToken="test-token" publicPage={false} premiumUser={false} userRole={null} />,
+      <ModelHubTable
+        accessToken="test-token"
+        publicPage={false}
+        premiumUser={false}
+        userRole={null}
+        canOpenPlayground
+      />,
     );
 
     await waitFor(() => {
@@ -165,7 +179,9 @@ describe("ModelHubTable", () => {
       isLoading: false,
     });
 
-    renderWithProviders(<ModelHubTable accessToken={null} publicPage={false} premiumUser={false} userRole={null} />);
+    renderWithProviders(
+      <ModelHubTable accessToken={null} publicPage={false} premiumUser={false} userRole={null} canOpenPlayground />,
+    );
 
     expect(await screen.findByText("No models yet")).toBeInTheDocument();
     expect(networking.modelHubCall).not.toHaveBeenCalled();
@@ -191,7 +207,15 @@ describe("ModelHubTable", () => {
       isLoading: false,
     });
 
-    renderWithProviders(<ModelHubTable accessToken={null} publicPage={true} premiumUser={false} userRole={null} />);
+    renderWithProviders(
+      <ModelHubTable
+        accessToken={null}
+        publicPage={true}
+        premiumUser={false}
+        userRole={null}
+        canOpenPlayground={false}
+      />,
+    );
 
     await waitFor(() => {
       expect(getUiConfigMock).toHaveBeenCalled();
@@ -205,7 +229,10 @@ describe("ModelHubTable", () => {
   });
 
   describe("model details usage example", () => {
-    const openDetails = async (model: { model_group: string; providers: string[]; mode: string }) => {
+    const openDetails = async (
+      model: { model_group: string; providers: string[]; mode: string },
+      canOpenPlayground = true,
+    ) => {
       vi.mocked(networking.modelHubCall).mockResolvedValue({ data: [model] });
       vi.mocked(networking.getConfigFieldSetting).mockResolvedValue({ field_value: false });
       vi.mocked(networking.getAgentsList).mockResolvedValue({ agents: [] });
@@ -214,7 +241,13 @@ describe("ModelHubTable", () => {
       mockUseUISettings.mockReturnValue({ data: { values: {} }, isLoading: false });
       const user = userEvent.setup();
       renderWithProviders(
-        <ModelHubTable accessToken="test-token" publicPage={false} premiumUser={false} userRole="Admin" />,
+        <ModelHubTable
+          accessToken="test-token"
+          publicPage={false}
+          premiumUser={false}
+          userRole="Admin"
+          canOpenPlayground={canOpenPlayground}
+        />,
       );
       await user.click(await screen.findByRole("button", { name: model.model_group }));
       return screen.findByRole("dialog");
@@ -233,6 +266,17 @@ describe("ModelHubTable", () => {
         "href",
         "/ui/playground?tab=system-one",
       );
+    });
+
+    it("does not link a view-only session to the Playground it cannot open", async () => {
+      const dialog = await openDetails(
+        { model_group: "jev-latest", providers: ["typesafe"], mode: "evaluation" },
+        false,
+      );
+
+      expect(dialog).toHaveTextContent('"http://localhost:4000/v1/systemone"');
+      expect(screen.getByRole("link", { name: "How to call decision models" })).toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Try it in the Playground" })).not.toBeInTheDocument();
     });
 
     it("keeps the chat completions example for a chat model", async () => {
@@ -256,7 +300,13 @@ describe("ModelHubTable", () => {
 
       const user = userEvent.setup();
       renderWithProviders(
-        <ModelHubTable accessToken="test-token" publicPage={false} premiumUser={false} userRole="Admin" />,
+        <ModelHubTable
+          accessToken="test-token"
+          publicPage={false}
+          premiumUser={false}
+          userRole="Admin"
+          canOpenPlayground
+        />,
       );
       return { user, search: await screen.findByPlaceholderText("Search model names...") };
     };

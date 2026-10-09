@@ -22,12 +22,15 @@ vi.mock("./detailNavigation", () => ({
 }));
 
 vi.mock("@/components/molecules/DecisionModelsBanner", () => ({
-  default: ({ onAddModel }: { onAddModel?: () => void }) =>
-    onAddModel ? (
-      <button type="button" onClick={onAddModel}>
-        Add a decision model
-      </button>
-    ) : null,
+  default: ({ onAddModel }: { onAddModel?: () => void }) => (
+    <section aria-label="Decision models">
+      {onAddModel && (
+        <button type="button" onClick={onAddModel}>
+          Add a decision model
+        </button>
+      )}
+    </section>
+  ),
 }));
 vi.mock("@/components/model_info_view", () => ({
   default: ({ modelId }: { modelId: string }) => <div data-testid="model-info">model:{modelId}</div>,
@@ -113,9 +116,16 @@ describe("ModelsAndEndpointsPage", () => {
   });
 
   it("does not offer the banner's Add a decision model to a session that cannot add models", () => {
+    mockUseAuthorized.mockReturnValue(NON_ADMIN);
+    renderPage();
+    expect(screen.getByRole("region", { name: "Decision models" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add a decision model" })).not.toBeInTheDocument();
+  });
+
+  it("does not show a view-only session the decision models banner, whose Playground it cannot open", () => {
     mockUseAuthorized.mockReturnValue(VIEW_ONLY_ADMIN);
     renderPage();
-    expect(screen.queryByRole("button", { name: "Add a decision model" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Decision models" })).not.toBeInTheDocument();
   });
 
   it("renders the model detail overlay from the ?model drill-in and hides the tabs", () => {
