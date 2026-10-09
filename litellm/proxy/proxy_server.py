@@ -2426,7 +2426,7 @@ try:
         in /litellm the rewritten path still contains the original one, so a plain replace
         would prepend the root path again on each restart.
         """
-        ui_config_path = f"{server_root_path}/.well-known/litellm-ui-config"
+        ui_config_path: Final = f"{server_root_path}/.well-known/litellm-ui-config"
         return ui_config_path.join(
             part.replace("/litellm/.well-known/litellm-ui-config", ui_config_path)
             for part in content.split(ui_config_path)
