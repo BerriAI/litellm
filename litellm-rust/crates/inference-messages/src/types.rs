@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use litellm_host::call::CallOutput;
-use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
+use litellm_llms::{ErrorDetail, base_llm::messages::context::MessagesModelCapabilities};
 use litellm_llms_types::{
     formats::messages::{MessagesRequest, MessagesResponse},
     headers::ProviderSpecificHeaders,
@@ -34,11 +34,11 @@ pub fn messages_body(body: Map<String, Value>) -> Result<MessagesRequest, Error>
 /// Python's `GenericLiteLLMParams(**kwargs)`.
 pub fn litellm_params(fields: Map<String, Value>) -> Result<LitellmParams, Error> {
     serde_json::from_value(Value::Object(fields))
-        .map_err(|err| Error::InvalidRequest(format!("invalid litellm params: {err}").into()))
+        .map_err(|err| Error::InvalidRequest(ErrorDetail::invalid("litellm params", err)))
 }
 
 pub(super) fn invalid_request(err: serde_json::Error) -> Error {
-    Error::InvalidRequest(format!("invalid Anthropic messages request: {err}").into())
+    Error::InvalidRequest(ErrorDetail::invalid("Anthropic messages request", err))
 }
 
 pub type MessagesCallResponse =
