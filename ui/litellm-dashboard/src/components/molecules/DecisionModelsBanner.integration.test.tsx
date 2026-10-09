@@ -35,6 +35,18 @@ describe("DecisionModelsBanner", () => {
     expect(onAddModel).toHaveBeenCalledTimes(1);
   });
 
+  it("points only users who can add models at Add Model", () => {
+    const { rerender } = render(<DecisionModelsBanner />);
+    expect(screen.getByRole("paragraph")).not.toHaveTextContent("Add Model");
+    expect(screen.getByRole("paragraph")).toHaveTextContent("Call them at /v1/decisions or /v1/systemone");
+
+    rerender(<DecisionModelsBanner onAddModel={vi.fn()} />);
+
+    expect(screen.getByRole("paragraph")).toHaveTextContent(
+      "Search decision in Add Model to find them. Call them at /v1/decisions",
+    );
+  });
+
   it("shows the announcement even if the old feedback banner was dismissed", () => {
     localStorage.setItem("hideCostOptimizationFeedbackBanner", "true");
     render(<DecisionModelsBanner />);
