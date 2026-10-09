@@ -38,6 +38,7 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token
 from litellm.llms.bedrock.common_utils import (
     BedrockError,
     bedrock_model_is_openai_gpt,
+    bedrock_runtime_chat_completions_numbers_tool_calls,
     bedrock_runtime_chat_completions_serves_reasoning_inline,
     split_bedrock_region_path,
 )
@@ -202,6 +203,13 @@ def mint_tool_call_id() -> str:
     return f"call_{uuid.uuid4().hex}"
 
 
+def _mint_unique_tool_call_ids(response: ModelResponse) -> None:
+    for choice in response.choices:
+        for tool_call in choice.message.tool_calls or ():
+            if is_positional_tool_call_id(tool_call.id):
+                tool_call.id = mint_tool_call_id()
+
+
 def _split_streamed_content(
     splitter: ReasoningTagSplitter, content: str | None, finished: bool
 ) -> tuple[ReasoningTagSplitter, str, str]:
@@ -249,6 +257,8 @@ class BedrockRuntimeChatCompletionsStreamingHandler(OpenAIChatCompletionStreamin
         return minted
 
     def _mint_unique_tool_call_ids(self, parsed: ModelResponseStream) -> None:
+        if not bedrock_runtime_chat_completions_numbers_tool_calls(parsed.model or ""):
+            return
         for choice in parsed.choices:
             for tool_call in choice.delta.tool_calls or ():
                 if is_positional_tool_call_id(tool_call.id):
@@ -508,10 +518,8 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
             json_mode=json_mode,
         )
         set_provider_response_headers_in_hidden_params(response, raw_response.headers)
-        for choice in response.choices:
-            for tool_call in choice.message.tool_calls or ():
-                if is_positional_tool_call_id(tool_call.id):
-                    tool_call.id = mint_tool_call_id()
+        if bedrock_runtime_chat_completions_numbers_tool_calls(model):
+            _mint_unique_tool_call_ids(response)
         if not bedrock_runtime_chat_completions_serves_reasoning_inline(model):
             return response
         for choice in response.choices:

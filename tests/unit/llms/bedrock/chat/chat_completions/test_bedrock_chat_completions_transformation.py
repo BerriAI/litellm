@@ -88,7 +88,9 @@ def test_cost_map_row_listing_chat_completions_leaves_the_default_route_alone(mo
     }
     monkeypatch.setattr(litellm, "model_cost", {"openai.gpt-oss-20b-1:0": entry})
     assert BedrockModelInfo.get_bedrock_route("bedrock/openai.gpt-oss-20b-1:0", {}) == "converse"
-    assert BedrockModelInfo.get_bedrock_route("bedrock/chat_completions/openai.gpt-oss-20b-1:0", {}) == "chat_completions"
+    assert (
+        BedrockModelInfo.get_bedrock_route("bedrock/chat_completions/openai.gpt-oss-20b-1:0", {}) == "chat_completions"
+    )
 
 
 @pytest.mark.parametrize(
@@ -303,6 +305,7 @@ def test_completion_keeps_the_aws_request_id_as_a_provider_header(local_cost_map
 
     assert response._hidden_params["additional_headers"]["llm_provider-x-amzn-requestid"] == "req-native-1"
 
+
 def test_region_path_sends_the_bare_model_id_to_the_path_region(local_cost_map, fake_aws_env):
     requests, client = _recording_client(json=_chat_completion_json("ok", "openai.gpt-oss-20b-1:0"))
     litellm.completion(
@@ -516,7 +519,10 @@ def test_bearer_api_key_is_sent_as_the_authorization_header(monkeypatch):
     ],
 )
 def test_gpt56_tools_need_reasoning_none_on_chat_completions(local_cost_map, request_params, expected_route):
-    assert BedrockModelInfo.get_bedrock_route("chat_completions/global.openai.gpt-5.6-sol", request_params) == expected_route
+    assert (
+        BedrockModelInfo.get_bedrock_route("chat_completions/global.openai.gpt-5.6-sol", request_params)
+        == expected_route
+    )
     assert (
         BedrockModelInfo.get_bedrock_route("bedrock/chat_completions/us.openai.gpt-5.6-terra", request_params)
         == expected_route
@@ -543,14 +549,22 @@ def test_gpt_oss_tools_with_any_reasoning_effort_stay_on_chat_completions(local_
     ],
 )
 def test_gpt56_legacy_functions_route_like_tools(local_cost_map, request_params, expected_route):
-    assert BedrockModelInfo.get_bedrock_route("chat_completions/global.openai.gpt-5.6-sol", request_params) == expected_route
-    assert BedrockModelInfo.get_bedrock_route("chat_completions/openai.gpt-oss-120b-1:0", request_params) == "chat_completions"
+    assert (
+        BedrockModelInfo.get_bedrock_route("chat_completions/global.openai.gpt-5.6-sol", request_params)
+        == expected_route
+    )
+    assert (
+        BedrockModelInfo.get_bedrock_route("chat_completions/openai.gpt-oss-120b-1:0", request_params)
+        == "chat_completions"
+    )
 
 
 def test_thinking_block_goes_to_converse(local_cost_map):
     thinking = {"type": "enabled", "budget_tokens": 1024}
     assert BedrockModelInfo.get_bedrock_route("chat_completions/us.xai.grok-4.6", {"thinking": thinking}) == "converse"
-    assert BedrockModelInfo.get_bedrock_route("chat_completions/us.xai.grok-4.6", {"thinking": None}) == "chat_completions"
+    assert (
+        BedrockModelInfo.get_bedrock_route("chat_completions/us.xai.grok-4.6", {"thinking": None}) == "chat_completions"
+    )
 
 
 def test_explicit_converse_prefix_wins_for_openai_models(local_cost_map):
@@ -600,9 +614,7 @@ def _assert_remote_images_inlined(content):
 def test_transform_request_inlines_remote_image_urls(local_cost_map, monkeypatch):
     import litellm.litellm_core_utils.prompt_templates.image_handling as image_handling
 
-    monkeypatch.setattr(
-        image_handling, "convert_url_to_base64", lambda url: f"data:image/png;base64,{url}"
-    )
+    monkeypatch.setattr(image_handling, "convert_url_to_base64", lambda url: f"data:image/png;base64,{url}")
     body = AmazonBedrockRuntimeChatCompletionsConfig().transform_request(
         model="us.xai.grok-4.6",
         messages=IMAGE_MESSAGES,
@@ -768,7 +780,9 @@ def test_supported_params_leave_out_what_each_family_refuses(local_cost_map, mod
     ids=lambda value: value if isinstance(value, str) else next(iter(value)),
 )
 def test_refused_params_are_dropped_or_refused_before_reaching_aws(local_cost_map, fake_aws_env, model, param):
-    requests, client = _recording_client(json=_chat_completion_json("ok", model.removeprefix("bedrock/chat_completions/")))
+    requests, client = _recording_client(
+        json=_chat_completion_json("ok", model.removeprefix("bedrock/chat_completions/"))
+    )
     with pytest.raises(litellm.UnsupportedParamsError, match=next(iter(param))):
         litellm.completion(model=model, messages=[{"role": "user", "content": "hello"}], client=client, **param)
     litellm.completion(
@@ -909,12 +923,12 @@ def test_reasoning_tag_splitter_releases_a_false_tag_prefix():
     assert _run_splitter(["<", "b>x"]) == ("", "<b>x")
 
 
-def _stream_chunk(delta, finish_reason=None, index=0):
+def _stream_chunk(delta, finish_reason=None, index=0, model="openai.gpt-oss-20b-1:0"):
     return {
         "id": "chatcmpl-test",
         "object": "chat.completion.chunk",
         "created": 1733529600,
-        "model": "openai.gpt-oss-20b-1:0",
+        "model": model,
         "choices": [{"index": index, "delta": delta, "finish_reason": finish_reason}],
     }
 
@@ -1488,7 +1502,9 @@ def test_streaming_handler_keeps_a_literal_reasoning_tag_outside_gpt_oss(local_c
     assert opened.choices[0].delta.content == "<reasoning>not thinking"
     assert _reasoning_of(opened) is None
 
-    closed = handler.chunk_parser({**_stream_chunk({"content": "</reasoning> Hello"}, finish_reason="stop"), "model": model})
+    closed = handler.chunk_parser(
+        {**_stream_chunk({"content": "</reasoning> Hello"}, finish_reason="stop"), "model": model}
+    )
     assert closed.choices[0].delta.content == "</reasoning> Hello"
     assert _reasoning_of(closed) is None
 
@@ -1590,12 +1606,14 @@ def test_provider_unique_tool_call_ids_pass_through(local_cost_map, fake_aws_env
     assert response.choices[0].message.tool_calls[0].id == "chatcmpl-tool-90090f0c1c521528"
 
 
-def _streamed_tool_call_ids(tool_call_deltas):
+def _streamed_tool_call_ids(tool_call_deltas, model="global.xai.grok-4.7"):
     handler = BedrockRuntimeChatCompletionsStreamingHandler(streaming_response=iter(()), sync_stream=True)
     return [
         tool_call.id
         for delta in tool_call_deltas
-        for tool_call in handler.chunk_parser(_stream_chunk({"tool_calls": [delta]})).choices[0].delta.tool_calls
+        for tool_call in handler.chunk_parser(_stream_chunk({"tool_calls": [delta]}, model=model))
+        .choices[0]
+        .delta.tool_calls
     ]
 
 
@@ -1616,6 +1634,24 @@ def test_streamed_positional_tool_call_ids_are_minted_once_per_tool_call(local_c
 
 
 def test_streamed_provider_unique_tool_call_ids_pass_through(local_cost_map):
-    assert _streamed_tool_call_ids([{"index": 0, **_tool_call("chatcmpl-tool-8c9232df5019ff4f", "read_a")}]) == [
-        "chatcmpl-tool-8c9232df5019ff4f"
-    ]
+    assert _streamed_tool_call_ids(
+        [{"index": 0, **_tool_call("chatcmpl-tool-8c9232df5019ff4f", "read_a")}], model="openai.gpt-oss-20b-1:0"
+    ) == ["chatcmpl-tool-8c9232df5019ff4f"]
+
+
+def test_streamed_tool_call_ids_of_models_other_than_grok_pass_through(local_cost_map):
+    deltas = [{"index": 0, **_tool_call("call_0", "read_a")}, {"index": 1, **_tool_call("call_1", "read_b")}]
+
+    assert _streamed_tool_call_ids(deltas, model="global.openai.gpt-6.1-sol") == ["call_0", "call_1"]
+
+
+def test_tool_call_ids_of_models_other_than_grok_pass_through(local_cost_map, fake_aws_env):
+    reply = _chat_completion_json(
+        None, "global.openai.gpt-6.1-sol", tool_calls=[_tool_call("call_0", "read_a"), _tool_call("call_1", "read_b")]
+    )
+    _, client = _recording_client(json=reply)
+    response = litellm.completion(
+        model="bedrock/global.openai.gpt-6.1-sol", messages=[{"role": "user", "content": "hello"}], client=client
+    )
+
+    assert [tool_call.id for tool_call in response.choices[0].message.tool_calls] == ["call_0", "call_1"]
