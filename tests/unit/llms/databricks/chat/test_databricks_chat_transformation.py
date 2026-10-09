@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 import respx
+from pydantic import TypeAdapter
 from fastapi.testclient import TestClient
 
 import litellm
@@ -21,6 +22,7 @@ from litellm.llms.databricks.chat.transformation import (
     DatabricksConfig,
     _sanitize_empty_content,
 )
+from litellm.types.llms.openai import AllMessageValues
 import asyncio
 from unittest.mock import Mock
 from litellm._version import version
@@ -398,17 +400,135 @@ def test_transform_messages_sanitizes_empty_content():
     assert result[1]["content"] == "Hi"
 
 
-def test_transform_request_preserves_unity_model_service_name():
-    config = DatabricksConfig()
-    result = config.transform_request(
-        model="system.ai.kimi-k3",
-        messages=[{"role": "user", "content": "hello"}],
-        optional_params={},
-        litellm_params={},
-        headers={},
+@pytest.mark.parametrize(
+    "model,messages,optional_params,expected_model,expected_content",
+    [
+        pytest.param(
+            "system.ai.kimi-k3",
+            [{"role": "user", "content": "hello"}],
+            {},
+            "system.ai.kimi-k3",
+            "hello",
+            id="unity-model-service-name",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "user", "content": [{"type": "text", "text": "Reply in JSON"}]}],
+            {"response_format": {"type": "json_object"}},
+            "databricks-meta-llama-3-3-70b-instruct",
+            "Reply in JSON",
+            id="user",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "system", "content": [{"type": "text", "text": "Reply in JSON"}]}],
+            {"response_format": {"type": "json_object"}},
+            "databricks-meta-llama-3-3-70b-instruct",
+            "Reply in JSON",
+            id="system",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "assistant", "content": [{"type": "text", "text": "Reply in JSON"}]}],
+            {"response_format": {"type": "json_object"}},
+            "databricks-meta-llama-3-3-70b-instruct",
+            "Reply in JSON",
+            id="assistant",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": [{"type": "text", "text": "Reply in JSON"}],
+                }
+            ],
+            {"response_format": {"type": "json_object"}},
+            "databricks-meta-llama-3-3-70b-instruct",
+            "Reply in JSON",
+            id="tool",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Reply in JSON", "cache_control": {"type": "ephemeral"}}],
+                }
+            ],
+            {"response_format": {"type": "json_object"}},
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"type": "text", "text": "Reply in JSON", "cache_control": {"type": "ephemeral"}}],
+            id="cache-control",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "user", "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]}],
+            {"response_format": {"type": "json_object"}},
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}],
+            id="multiple-text-blocks",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Reply in JSON"},
+                        {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
+                    ],
+                }
+            ],
+            {"response_format": {"type": "json_object"}},
+            "databricks-meta-llama-3-3-70b-instruct",
+            [
+                {"type": "text", "text": "Reply in JSON"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
+            ],
+            id="text-and-image",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "user", "content": "Reply in JSON"}],
+            {"response_format": {"type": "json_object"}},
+            "databricks-meta-llama-3-3-70b-instruct",
+            "Reply in JSON",
+            id="plain-string",
+        ),
+        pytest.param(
+            "databricks-claude-sonnet-5",
+            [{"role": "user", "content": [{"type": "text", "text": "Reply in JSON"}]}],
+            {"response_format": {"type": "json_object"}},
+            "databricks-claude-sonnet-5",
+            [{"type": "text", "text": "Reply in JSON"}],
+            id="claude",
+        ),
+    ],
+)
+def test_transform_request_collapses_single_plain_text_block_for_non_claude_models(
+    model: str,
+    messages: list[AllMessageValues],
+    optional_params: dict[str, object],
+    expected_model: str,
+    expected_content: object,
+) -> None:
+    result: Final[dict[str, object]] = TypeAdapter(dict[str, object]).validate_python(
+        DatabricksConfig().transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+    )
+    outgoing_messages: Final[list[dict[str, object]]] = TypeAdapter(list[dict[str, object]]).validate_python(
+        result["messages"]
     )
 
-    assert result["model"] == "system.ai.kimi-k3"
+    assert result["model"] == expected_model
+    assert outgoing_messages[0]["content"] == expected_content
 
 
 def test_transform_request_strips_thinking_blocks_and_reasoning_content():

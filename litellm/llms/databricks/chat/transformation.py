@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequenc
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
@@ -66,6 +66,38 @@ def _is_bare_assistant_message(message_dict: Mapping[str, object]) -> bool:
     return message_dict.get("role") == "assistant" and not any(
         message_dict.get(key) for key in ("content", "tool_calls", "function_call")
     )
+
+
+_CONTENT_BLOCKS_ADAPTER: Final = TypeAdapter(list[object])
+_CONTENT_BLOCK_ADAPTER: Final = TypeAdapter(dict[object, object])
+
+
+def _collapse_single_text_block(message: AllMessageValues) -> AllMessageValues:
+    message_values: Final[Mapping[str, object]] = dict(message)
+    content: Final[object] = message_values.get("content")
+    if not isinstance(content, list):
+        return message
+
+    content_blocks: Final[Sequence[object]] = _CONTENT_BLOCKS_ADAPTER.validate_python(
+        message_values.get("content"), strict=True
+    )
+    if len(content_blocks) != 1:
+        return message
+
+    block: Final[object] = content_blocks[0]
+    if not isinstance(block, dict):
+        return message
+
+    text_block: Final[Mapping[object, object]] = _CONTENT_BLOCK_ADAPTER.validate_python(content_blocks[0], strict=True)
+    if set(text_block) != {"type", "text"}:
+        return message
+
+    block_type: Final[object] = text_block["type"]
+    text: Final[object] = text_block["text"]
+    if block_type != "text" or not isinstance(text, str):
+        return message
+
+    return cast(AllMessageValues, {**message, "content": text})  # cast-ok: replacement preserves role-specific fields
 
 
 def _sanitize_empty_content(message_dict: dict[str, object]) -> None:
@@ -447,6 +479,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         Databricks does not support:
         - 'name' in user message.
         - litellm's internal `thinking_blocks` / `reasoning_content` on assistant messages.
+        - single plain text content blocks for non-Claude models.
         """
         new_messages = []
         for idx, message in enumerate(messages):
@@ -462,7 +495,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             _sanitize_empty_content(cast(dict[str, Any], _message))
             if _is_bare_assistant_message(_message):
                 continue
-            new_messages.append(_message)
+            new_messages.append(_collapse_single_text_block(_message) if "claude" not in model else _message)
 
         if "claude" not in model:
             new_messages = _split_parallel_tool_calls(
