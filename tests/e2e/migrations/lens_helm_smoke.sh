@@ -100,17 +100,32 @@ forward_bundled() {
 }
 
 deployment_pods() {
-  local selector
+  local selector attempt
+  local pods="$qa_dir/$1-pods.json" snapshot="$qa_dir/$1-snapshot.json"
+  printf '%s: wait for deployment/%s before recording pod identities\n' "$namespace" "$1" >&2
+  kubectl -n "$namespace" rollout status "deployment/$1" --timeout=180s >&2 || return
   selector=$(kubectl -n "$namespace" get deployment "$1" -o json \
     | jq -r '.spec.selector.matchLabels | to_entries | map("\(.key)=\(.value)") | join(",")')
   test -n "$selector"
-  kubectl -n "$namespace" get pods -l "$selector" -o json \
-    | jq -S -e '[.items[] | select(.metadata.deletionTimestamp == null)
+  for attempt in $(seq 1 30); do
+    kubectl -n "$namespace" get pods -l "$selector" -o json > "$pods" || return
+    if jq -S -e '[.items[] | select(.metadata.deletionTimestamp == null)
         | {uid:.metadata.uid, images:.spec.containers | map({name,image}),
-        containers:.status.containerStatuses | map({name,imageID,restartCount,ready})}] | sort_by(.uid)
+        containers:(.status.containerStatuses // []) | map({name,imageID,restartCount,ready})}] | sort_by(.uid)
       | if length > 0 and all(.[]; .containers | length > 0)
           and all(.[].containers[]; .imageID != null and .imageID != "" and .ready)
-        then . else error("Ready pod runtime identity is missing") end'
+        then . else error("Ready pod runtime identity is missing") end' \
+        "$pods" > "$snapshot" 2> "$qa_dir/$1-snapshot-error.log"; then
+      cat "$snapshot"
+      return 0
+    fi
+    sleep 1
+  done
+  printf '%s: deployment/%s pod identities did not converge\n' "$namespace" "$1" >&2
+  jq '[.items[] | {name:.metadata.name, uid:.metadata.uid, deleting:.metadata.deletionTimestamp,
+    phase:.status.phase, containers:[.status.containerStatuses[]? | {name,imageID,restartCount,ready}]}]' \
+    "$pods" >&2
+  return 1
 }
 
 gateway_pods() {
