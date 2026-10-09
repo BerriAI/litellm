@@ -1491,9 +1491,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         # to keep out of traces still leaks through the raw span. This uses the
         # same precedence as the main span (dynamic param > redaction headers >
         # global turn_off_message_logging).
-        from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+        from litellm.litellm_core_utils.redact_messages import (
+            should_redact_message_logging,  # pyright: ignore[reportUnknownVariableType]  # callee is untyped upstream
+        )
 
-        if should_redact_message_logging(kwargs):
+        if should_redact_message_logging(kwargs):  # pyright: ignore[reportUnknownArgumentType]  # untyped by design
             return
         litellm_params: Final = kwargs.get("litellm_params", {})
         metadata: Final = litellm_params.get("metadata") or {}
