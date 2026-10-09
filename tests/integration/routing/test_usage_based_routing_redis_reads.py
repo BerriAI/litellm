@@ -191,6 +191,10 @@ def test_proxy_usage_routing_reads_cooldown_tpm_then_rpm_from_redis(
         )
         config: Final = {
             **configuration,
+            "general_settings": {
+                **JSON_OBJECT.validate_python(configuration["general_settings"]),
+                "store_model_in_db": False,
+            },
             "model_list": _deployment_list(model_name, f"{wire.url}/v1", deployment_ids),
             "router_settings": {
                 "routing_strategy": "usage-based-routing-v2",
@@ -205,7 +209,7 @@ def test_proxy_usage_routing_reads_cooldown_tpm_then_rpm_from_redis(
             with owned_proxy(
                 bootstrap,
                 tmp_path,
-                {"REDIS_HOST": cache.host, "REDIS_PORT": str(cache.port)},
+                {"REDIS_HOST": cache.host, "REDIS_PORT": str(cache.port), "STORE_MODEL_IN_DB": "False"},
                 config=config_path,
             ) as candidate:
                 eventually(
