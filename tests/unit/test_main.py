@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
-from openai import APITimeoutError
+from openai import APITimeoutError, OpenAI
 from openai.types.chat.chat_completion import ChatCompletion
 
 import litellm
@@ -37,7 +37,14 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.litellm_params import ControlOptions
 from litellm.types.llms.openai import AllMessageValues, HttpxBinaryResponseContent
 from litellm.types.prompts.init_prompts import PromptSpec
-from litellm.types.utils import Delta, ModelResponseStream, StandardCallbackDynamicParams, StreamingChoices, Usage
+from litellm.types.utils import (
+    Delta,
+    ModelResponseStream,
+    StandardCallbackDynamicParams,
+    StreamingChoices,
+    TextCompletionResponse,
+    Usage,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -3162,6 +3169,103 @@ def test_mock_text_completion_stream_and_non_stream_report_the_same_zero_admissi
     assert non_stream.usage.prompt_tokens == 0
 
 
+def _carries_text_or_finish(frame: TextCompletionResponse) -> bool:
+    return frame.choices[0].text is not None or frame.choices[0].finish_reason is not None
+
+
+def test_mock_text_completion_stream_hides_the_usage_chunk_the_proxy_asked_for_on_the_clients_behalf():
+    frames: Final = list(
+        litellm.text_completion(
+            model="openai/gpt-5.4-mini",
+            prompt="hi",
+            mock_response="ok then",
+            api_key="mock",
+            stream=True,
+            stream_options={"include_usage": True},
+            _litellm_strip_stream_usage=True,
+        )
+    )
+
+    assert len(frames) == 4
+    assert all(_carries_text_or_finish(frame) for frame in frames)
+    assert all(frame.usage.total_tokens == 0 for frame in frames)
+
+
+@pytest.mark.asyncio
+async def test_mock_atext_completion_stream_hides_the_usage_chunk_the_proxy_asked_for_on_the_clients_behalf():
+    response: Final = await litellm.atext_completion(
+        model="openai/gpt-5.4-mini",
+        prompt="hi",
+        mock_response="ok then",
+        api_key="mock",
+        stream=True,
+        stream_options={"include_usage": True},
+        _litellm_strip_stream_usage=True,
+    )
+
+    frames: Final = [frame async for frame in response]
+
+    assert len(frames) == 4
+    assert all(_carries_text_or_finish(frame) for frame in frames)
+    assert all(frame.usage.total_tokens == 0 for frame in frames)
+
+
+def _native_completions_upstream(outbound: list[dict[str, object]]) -> OpenAI:
+    def respond(request: httpx.Request) -> httpx.Response:
+        outbound.append(json.loads(request.content))
+        base: Final = {"id": "cmpl-native", "object": "text_completion", "created": 1, "model": "code-model"}
+        frames: Final = (
+            {**base, "choices": [{"index": 0, "text": "def ", "finish_reason": None, "logprobs": None}]},
+            {**base, "choices": [{"index": 0, "text": "main", "finish_reason": "length", "logprobs": None}]},
+            {**base, "choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}},
+        )
+        content: Final = "".join(f"data: {json.dumps(frame)}\n\n" for frame in frames) + "data: [DONE]\n\n"
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=content.encode())
+
+    return OpenAI(api_key="transport-only", http_client=httpx.Client(transport=httpx.MockTransport(respond)))
+
+
+def test_native_text_completion_stream_hides_the_usage_chunk_the_proxy_asked_for_on_the_clients_behalf():
+    outbound: Final[list[dict[str, object]]] = []
+
+    frames: Final = list(
+        litellm.text_completion(
+            model="text-completion-openai/code-model",
+            prompt="hi",
+            client=_native_completions_upstream(outbound),
+            api_key="transport-only",
+            stream=True,
+            stream_options={"include_usage": True},
+            _litellm_strip_stream_usage=True,
+        )
+    )
+
+    assert [sent.get("stream_options") for sent in outbound] == [{"include_usage": True}]
+    assert [(frame.choices[0].text, frame.choices[0].finish_reason) for frame in frames] == [
+        ("def ", None),
+        ("main", None),
+        (None, "length"),
+    ]
+    assert all(frame.usage.total_tokens == 0 for frame in frames)
+
+
+def test_native_text_completion_stream_keeps_the_usage_chunk_the_client_asked_for():
+    frames: Final = list(
+        litellm.text_completion(
+            model="text-completion-openai/code-model",
+            prompt="hi",
+            client=_native_completions_upstream([]),
+            api_key="transport-only",
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+    )
+
+    assert len(frames) == 4
+    assert all(_carries_text_or_finish(frame) for frame in frames[:3])
+    assert (frames[-1].usage.prompt_tokens, frames[-1].usage.completion_tokens) == (10, 5)
+
+
 def test_mock_completion_stream_with_model_response():
     """Test that mock_completion correctly handles stream=True with a ModelResponse as mock_response."""
     from litellm import completion
@@ -3319,7 +3423,6 @@ class TestCallTypesOCR:
 
 def test_stream_chunk_builder_text_completion_combines_text_and_usage():
     from litellm.main import stream_chunk_builder_text_completion
-    from litellm.types.utils import TextCompletionResponse
 
     chunks = [
         TextCompletionResponse(

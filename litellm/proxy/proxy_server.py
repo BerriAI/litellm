@@ -163,7 +163,6 @@ from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
     ModelResponse,
     ModelResponseStream,
-    StreamingChoices,
     TextCompletionResponse,
     TokenCountResponse,
     echoed_cost_map_pricing_fields,
@@ -333,6 +332,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     SensitiveDataMasker,
     mask_sensitive_keys,
 )
+from litellm.litellm_core_utils.stream_usage_chunks import is_empty_streaming_choice
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -9828,18 +9828,7 @@ def _is_injected_stream_usage_artifact(chunk: object) -> bool:
         return False
     if chunk.provider_specific_fields is not None:
         return False
-    return all(_is_empty_streaming_choice(choice) for choice in chunk.choices or [])
-
-
-def _is_empty_streaming_choice(choice: StreamingChoices) -> bool:
-    if choice.finish_reason is not None:
-        return False
-    if getattr(choice, "logprobs", None) is not None:
-        return False
-    delta: Final = getattr(choice, "delta", None)
-    if delta is None:
-        return True
-    return all(value is None for value in delta.model_dump().values())
+    return all(is_empty_streaming_choice(choice) for choice in chunk.choices or [])
 
 
 async def _apply_streaming_chunk_hooks(

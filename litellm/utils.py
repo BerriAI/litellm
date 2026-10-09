@@ -90,6 +90,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_fill_missing_generalizations,
 )
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
+from litellm.litellm_core_utils.stream_usage_chunks import is_usage_only_chunk
 from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace, strip_special_tokens
 from litellm.rust_bridge import tokenizer as tokenizer_dispatch
 from litellm.rust_bridge.catalog import decision
@@ -7373,11 +7374,17 @@ class TextCompletionStreamWrapper:
         model,
         stream_options: dict | None = None,
         custom_llm_provider: str | None = None,
+        usage_injected_by_proxy: bool = False,
     ):
         self.completion_stream = completion_stream
         self.model = model
         self.stream_options = stream_options
         self.custom_llm_provider = custom_llm_provider
+        self.include_usage: Final = (
+            not usage_injected_by_proxy
+            and stream_options is not None
+            and stream_options.get("include_usage", False) is True
+        )
 
     def __iter__(self):
         return self
@@ -7402,13 +7409,17 @@ class TextCompletionStreamWrapper:
             text_choices["finish_reason"] = chunk["choices"][0]["finish_reason"]
             response["choices"] = [text_choices]
 
-            # only pass usage when stream_options["include_usage"] is True
-            if self.stream_options and self.stream_options.get("include_usage", False) is True:
+            if self.include_usage:
                 response["usage"] = chunk.get("usage", None)
 
             return response
         except Exception as e:
             raise Exception(f"Error occurred converting to text completion object - chunk: {chunk}; Error: {e}")
+
+    def _client_frame(self, chunk: ModelResponse) -> TextCompletionResponse | None:
+        if not self.include_usage and isinstance(chunk, ModelResponseStream) and is_usage_only_chunk(chunk):
+            return None
+        return self.convert_to_text_completion_object(chunk=chunk)
 
     def __next__(self):
         # model_response = ModelResponse(stream=True, model=self.model)
@@ -7417,7 +7428,9 @@ class TextCompletionStreamWrapper:
             for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     raise Exception
-                processed_chunk = self.convert_to_text_completion_object(chunk=chunk)
+                processed_chunk = self._client_frame(chunk)
+                if processed_chunk is None:
+                    continue
                 return processed_chunk
             raise StopIteration
         except StopIteration:
@@ -7437,7 +7450,9 @@ class TextCompletionStreamWrapper:
             async for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     raise Exception
-                processed_chunk = self.convert_to_text_completion_object(chunk=chunk)
+                processed_chunk = self._client_frame(chunk)
+                if processed_chunk is None:
+                    continue
                 return processed_chunk
             raise StopIteration
         except StopIteration:

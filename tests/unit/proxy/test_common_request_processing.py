@@ -7829,6 +7829,14 @@ class TestApplyStreamUsageTracking:
         assert data["stream_options"] == {"include_usage": True}
         assert data["_litellm_strip_stream_usage"] is True
 
+    def test_default_injects_usage_and_marks_strip_for_text_completions(self):
+        data = {"stream": True, "model": "gpt-5.4-nano"}
+
+        _apply_stream_usage_tracking(data=data, general_settings={}, route_type="atext_completion")
+
+        assert data["stream_options"] == {"include_usage": True}
+        assert data["_litellm_strip_stream_usage"] is True
+
     def test_default_preserves_other_client_stream_options_keys(self):
         data = {"stream": True, "stream_options": {"include_obfuscation": True}}
 

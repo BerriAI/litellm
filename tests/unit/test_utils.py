@@ -9,7 +9,7 @@ import logging
 import os
 import queue
 import threading
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import PurePath
@@ -70,6 +70,7 @@ from litellm.types.utils import (
     RerankResponse,
     StandardCallbackDynamicParams,
     StreamingChoices,
+    TextCompletionResponse,
     TranscriptionResponse,
     Usage,
     all_litellm_params,
@@ -2199,6 +2200,55 @@ def test_reasoning_content_preserved_in_text_completion_wrapper():
     choice = transformed["choices"][0]
     assert choice["text"] == "Some answer text"
     assert choice["reasoning_content"] == "Here's my chain of thought..."
+
+
+def _text_stream_chunks() -> tuple[ModelResponseStream, ...]:
+    return (
+        ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="Hi"), finish_reason=None)]),
+        ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="length")]),
+        ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(), finish_reason=None)],
+            usage=Usage(prompt_tokens=19, completion_tokens=5, total_tokens=24),
+        ),
+    )
+
+
+def _text_frames(frames: list[TextCompletionResponse]) -> list[tuple[str | None, str | None]]:
+    return [(frame.choices[0].text, frame.choices[0].finish_reason) for frame in frames]
+
+
+def test_text_completion_stream_wrapper_hides_the_usage_chunk_the_client_did_not_ask_for():
+    wrapper: Final = TextCompletionStreamWrapper(completion_stream=iter(_text_stream_chunks()), model="gpt-5.4-mini")
+
+    frames: Final = list(wrapper)
+
+    assert _text_frames(frames) == [("Hi", None), (None, "length")]
+    assert all(frame.usage.total_tokens == 0 for frame in frames)
+
+
+def test_text_completion_stream_wrapper_keeps_the_usage_chunk_the_client_asked_for():
+    wrapper: Final = TextCompletionStreamWrapper(
+        completion_stream=iter(_text_stream_chunks()), model="gpt-5.4-mini", stream_options={"include_usage": True}
+    )
+
+    frames: Final = list(wrapper)
+
+    assert _text_frames(frames) == [("Hi", None), (None, "length"), (None, None)]
+    assert (frames[-1].usage.prompt_tokens, frames[-1].usage.completion_tokens) == (19, 5)
+
+
+@pytest.mark.asyncio
+async def test_async_text_completion_stream_wrapper_hides_the_usage_chunk_the_client_did_not_ask_for():
+    async def chunks() -> AsyncIterator[ModelResponseStream]:
+        for chunk in _text_stream_chunks():
+            yield chunk
+
+    wrapper: Final = TextCompletionStreamWrapper(completion_stream=chunks(), model="gpt-5.4-mini")
+
+    frames: Final = [frame async for frame in wrapper]
+
+    assert _text_frames(frames) == [("Hi", None), (None, "length")]
+    assert all(frame.usage.total_tokens == 0 for frame in frames)
 
 
 def test_anthropic_claude_4_invoke_chat_provider_config():
