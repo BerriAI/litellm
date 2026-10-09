@@ -1097,6 +1097,8 @@ async def test_openrouter_decisions_uses_provider_reported_cost_without_cost_map
         "https://res.services.ai.azure.com/models",
         "https://res.services.ai.azure.com/openai/v1",
         "https://res.services.ai.azure.com/api/projects/proj",
+        "https://res.services.ai.azure.com/api/projects/proj/openai/v1",
+        "https://res.services.ai.azure.com/api/projects/proj/models",
         "https://res.services.ai.azure.com/models?api-version=2024-05-01-preview",
     ),
 )

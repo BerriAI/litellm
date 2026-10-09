@@ -5,7 +5,7 @@ import httpx
 
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
 
-_FOUNDRY_ROUTE_SUFFIX: Final = re.compile(r"(/api/projects/[^/]+|/openai/v1|/openai|/models|/v1)$")
+_FOUNDRY_ROUTE_SUFFIX: Final = re.compile(r"(/api/projects/[^/]+)?(/openai/v1|/openai|/models|/v1)?$")
 
 
 class AzureAIDecisionsConfig(BaseDecisionsConfig):
