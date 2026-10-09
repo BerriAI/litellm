@@ -156,7 +156,7 @@ pub(crate) fn update_headers_with_anthropic_beta(
 
 /// The betas a request needs on a host other than the first-party API: the Anthropic set
 /// filtered and renamed through the host's `BetaProvider` policy.
-pub fn provider_feature_betas(request: &MessagesRequest, provider: BetaProvider) -> BetaSet {
+pub(crate) fn provider_feature_betas(request: &MessagesRequest, provider: BetaProvider) -> BetaSet {
     feature_betas(request)
         .iter()
         .filter_map(|beta| beta.on(provider))
