@@ -308,6 +308,9 @@ class BaseDecisionsConfig(ABC):
     def get_default_api_base(self) -> str | None:
         return None
 
+    def provider_reported_cost(self, response: DecisionsIRResponse) -> float | None:
+        return None
+
     def missing_api_base_message(self, custom_llm_provider: str) -> str:
         return f"api_base is required for Decisions provider '{custom_llm_provider}'"
 
