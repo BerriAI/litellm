@@ -86,6 +86,30 @@ impl<E, T: Interceptors<E> + ?Sized> Interceptors<E> for &T {
     }
 }
 
+impl<E, A: Interceptors<E>, B: Interceptors<E>> Interceptors<E> for (A, B) {
+    async fn result_ready(&self, facts: ExecutionFacts) -> Result<(), E> {
+        self.0.result_ready(facts.clone()).await?;
+        self.1.result_ready(facts).await
+    }
+
+    async fn before_provider_request(
+        &self,
+        wire: WireRequest,
+        context: RequestContext,
+    ) -> Result<WireRequest, E> {
+        let wire = self
+            .0
+            .before_provider_request(wire, context.clone())
+            .await?;
+        self.1.before_provider_request(wire, context).await
+    }
+
+    async fn after_provider_response(&self, raw: RawResponse) -> Result<(), E> {
+        self.0.after_provider_response(raw.clone()).await?;
+        self.1.after_provider_response(raw).await
+    }
+}
+
 impl<E> Interceptors<E> for () {
     async fn before_provider_request(
         &self,
