@@ -432,6 +432,17 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 tool_call_task_mappings=tool_call_task_mappings,
             )
 
+        # Commentary rides in provider_specific_fields, so content extraction never
+        # sees it; it joins the same guardrail batch with its own choice mapping
+        commentary_choice_indices: Final[list[int]] = []  # mutable-ok: ordered extraction mapping
+        for choice_idx, choice in enumerate(response.choices):
+            if not isinstance(choice, litellm.Choices):
+                continue
+            commentary = _commentary_text(getattr(choice.message, "provider_specific_fields", None))
+            if commentary:
+                commentary_choice_indices.append(choice_idx)
+                texts_to_check.append(commentary)
+
         # Step 2: Apply guardrail to all texts and tool calls in batch
         if texts_to_check or tool_calls_to_check:
             # Use the real request_data if provided (proxy path), otherwise
@@ -469,11 +480,20 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             )
 
             # Step 3: Map guardrail responses back to original response structure
-            if guardrailed_texts and texts_to_check:
+            content_responses: Final = guardrailed_texts[: len(text_task_mappings)]
+            if content_responses:
                 await self._apply_guardrail_responses_to_output_texts(
                     response=response,
-                    responses=guardrailed_texts,
+                    responses=content_responses,
                     task_mappings=text_task_mappings,
+                )
+
+            commentary_responses: Final = guardrailed_texts[len(text_task_mappings) :]
+            if commentary_responses and commentary_choice_indices:
+                await self._apply_guardrail_responses_to_output_commentary(
+                    response=response,
+                    responses=commentary_responses,
+                    choice_indices=commentary_choice_indices,
                 )
 
             # Step 4: Apply guardrailed tool calls back to response
@@ -598,6 +618,12 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             texts_to_check.append(combined_text)
             task_mappings.append((map_choice_idx, map_content_idx))
 
+        combined_commentary: Final = self._combine_streaming_commentary(responses_so_far)
+        commentary_choice_indices: Final[list[int]] = []  # mutable-ok: ordered extraction mapping
+        for commentary_choice_idx, combined_commentary_text in combined_commentary.items():
+            commentary_choice_indices.append(commentary_choice_idx)
+            texts_to_check.append(combined_commentary_text)
+
         # Step 3: Apply guardrail to all combined texts in batch
         if texts_to_check:
             # Use the real request_data if provided (proxy path), otherwise
@@ -629,9 +655,16 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             # For each choice, replace the combined text across all chunks
             await self._apply_guardrail_responses_to_output_streaming(
                 responses=responses_so_far,
-                guardrailed_texts=guardrailed_texts,
+                guardrailed_texts=guardrailed_texts[: len(task_mappings)],
                 task_mappings=task_mappings,
             )
+            commentary_responses: Final = guardrailed_texts[len(task_mappings) :]
+            if commentary_responses and commentary_choice_indices:
+                await self._apply_guardrail_responses_to_output_streaming_commentary(
+                    responses=responses_so_far,
+                    guardrailed_texts=commentary_responses,
+                    choice_indices=commentary_choice_indices,
+                )
 
         verbose_proxy_logger.debug(
             "OpenAI Chat Completions: Processed output streaming responses: %s",
@@ -656,6 +689,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         model_response: Final = self._rebuild_ended_stream_per_choice(responses_so_far, litellm_logging_obj)
         pre_guardrail_texts: Final = self._string_choice_contents(model_response)
         pre_guardrail_tool_calls: Final = self._function_tool_call_shapes(model_response)
+        pre_guardrail_commentary: Final = self._string_choice_commentary(model_response)
         await self.process_output_response(
             response=model_response,
             guardrail_to_apply=guardrail_to_apply,
@@ -669,6 +703,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             responses_so_far=responses_so_far,
             guardrailed_response=model_response,
             pre_guardrail_texts=pre_guardrail_texts,
+        )
+        await self._write_ended_stream_commentary_rewrites(
+            responses_so_far=responses_so_far,
+            guardrailed_response=model_response,
+            pre_guardrail_commentary=pre_guardrail_commentary,
         )
         self._write_ended_stream_tool_call_rewrites(
             responses_so_far=responses_so_far,
@@ -916,6 +955,57 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         return combined_texts
 
+    @staticmethod
+    def _combine_streaming_commentary(
+        responses_so_far: Sequence["ModelResponseStream"],
+    ) -> dict[int, str]:
+        """Concatenate ``delta.provider_specific_fields["commentary"]`` per choice
+        index, mirroring what ``_combine_streaming_texts`` does for content."""
+        combined: Final[dict[int, str]] = {}  # mutable-ok: per-choice accumulator
+        for response in responses_so_far:
+            for choice in response.choices:
+                if isinstance(choice, litellm.StreamingChoices):
+                    fields = getattr(choice.delta, "provider_specific_fields", None)
+                elif isinstance(choice, litellm.Choices):
+                    fields = getattr(choice.message, "provider_specific_fields", None)
+                else:
+                    continue
+                commentary = _commentary_text(fields)
+                if commentary:
+                    idx: Final = getattr(choice, "index", 0) or 0
+                    combined[idx] = combined.get(idx, "") + commentary
+        return combined
+
+    async def _apply_guardrail_responses_to_output_streaming_commentary(
+        self,
+        responses: list["ModelResponseStream"],
+        guardrailed_texts: list[str],
+        choice_indices: list[int],
+    ) -> None:
+        """Mirror ``_apply_guardrail_responses_to_output_streaming`` for commentary:
+        the combined guardrailed text lands in the choice's first commentary chunk
+        and later chunks are blanked."""
+        guardrail_map: Final[dict[int, str]] = {
+            choice_idx: guardrailed_texts[task_idx]
+            for task_idx, choice_idx in enumerate(choice_indices)
+            if task_idx < len(guardrailed_texts)
+        }
+        already_set: Final[set[int]] = set()  # mutable-ok: per-choice first-chunk tracking
+        for response in responses:
+            for choice in response.choices:
+                if not isinstance(choice, litellm.StreamingChoices):
+                    continue
+                fields = getattr(choice.delta, "provider_specific_fields", None)
+                if not isinstance(fields, dict):
+                    continue
+                if not isinstance(fields.get("commentary"), str):
+                    continue
+                idx: Final = getattr(choice, "index", 0) or 0
+                if idx not in guardrail_map:
+                    continue
+                fields["commentary"] = guardrail_map[idx] if idx not in already_set else ""
+                already_set.add(idx)
+
     def _has_text_content(self, response: Union["ModelResponse", "ModelResponseStream"]) -> bool:
         """
         Check if response has any text content or tool calls to process.
@@ -934,6 +1024,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     if choice.message.tool_calls and isinstance(choice.message.tool_calls, list):
                         if len(choice.message.tool_calls) > 0:
                             return True
+                    # Check for commentary in provider_specific_fields
+                    if _commentary_text(getattr(choice.message, "provider_specific_fields", None)):
+                        return True
         elif isinstance(response, ModelResponseStream):
             for streaming_choice in response.choices:
                 if isinstance(streaming_choice, litellm.StreamingChoices):
@@ -944,6 +1037,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     if streaming_choice.delta.tool_calls and isinstance(streaming_choice.delta.tool_calls, list):
                         if len(streaming_choice.delta.tool_calls) > 0:
                             return True
+                    # Check for commentary in provider_specific_fields
+                    if _commentary_text(getattr(streaming_choice.delta, "provider_specific_fields", None)):
+                        return True
         return False
 
     def _extract_output_text_images_and_tool_calls(
@@ -1064,6 +1160,20 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 # Replace specific text item in list content
                 content[content_idx_optional]["text"] = guardrail_response
 
+    async def _apply_guardrail_responses_to_output_commentary(
+        self,
+        response: "ModelResponse",
+        responses: list[str],
+        choice_indices: list[int],
+    ) -> None:
+        """Write guardrailed commentary back to each choice's provider_specific_fields."""
+        for task_idx, choice_idx in enumerate(choice_indices):
+            if task_idx >= len(responses):
+                break
+            fields: Final = getattr(response.choices[choice_idx].message, "provider_specific_fields", None)
+            if isinstance(fields, dict):
+                fields["commentary"] = responses[task_idx]
+
     async def _apply_guardrail_responses_to_output_tool_calls(
         self,
         response: "ModelResponse",
@@ -1101,6 +1211,40 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     def _string_choice_contents(response: "ModelResponse") -> tuple[str | None, ...]:
         return tuple(
             choice.message.content if isinstance(choice.message.content, str) else None for choice in response.choices
+        )
+
+    @staticmethod
+    def _string_choice_commentary(response: "ModelResponse") -> tuple[str | None, ...]:
+        return tuple(
+            _commentary_text(getattr(choice.message, "provider_specific_fields", None))
+            for choice in response.choices
+        )
+
+    async def _write_ended_stream_commentary_rewrites(
+        self,
+        responses_so_far: list["ModelResponseStream"],  # mutable-ok: rewrites the caller's buffered chunks in place
+        guardrailed_response: "ModelResponse",
+        pre_guardrail_commentary: tuple[str | None, ...],
+    ) -> None:
+        """Ended-stream counterpart of ``_write_ended_stream_text_rewrites`` for
+        commentary: the rebuilt choice's masked commentary is written back into
+        the choice's first commentary chunk and the rest blanked."""
+        post_guardrail_commentary: Final = self._string_choice_commentary(guardrailed_response)
+        rewrites_by_choice: Final = MappingProxyType(
+            {
+                choice.index: after
+                for choice, before, after in zip(
+                    guardrailed_response.choices, pre_guardrail_commentary, post_guardrail_commentary
+                )
+                if before is not None and after is not None and after != before
+            }
+        )
+        if not rewrites_by_choice:
+            return
+        await self._apply_guardrail_responses_to_output_streaming_commentary(
+            responses=list(responses_so_far),
+            guardrailed_texts=list(rewrites_by_choice.values()),
+            choice_indices=list(rewrites_by_choice),
         )
 
     async def _write_ended_stream_text_rewrites(
@@ -1382,6 +1526,13 @@ class _BlockedChunk(TypedDict):
     model: ReadOnly[str]
     choices: ReadOnly[tuple[_BlockedChunkChoice, ...]]
     usage: NotRequired[ReadOnly[_BlockedChunkUsage]]
+
+
+def _commentary_text(fields: object) -> str | None:
+    if not isinstance(fields, dict):
+        return None
+    commentary: Final = fields.get("commentary")
+    return commentary if isinstance(commentary, str) and commentary else None
 
 
 def _chat_sse_chunk(payload: _BlockedChunk) -> bytes:
