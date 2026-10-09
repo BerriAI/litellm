@@ -1,6 +1,7 @@
 """Tests for the per-user provider credentials DB/cache module."""
 
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -382,11 +383,11 @@ async def test_reads_hit_the_writer_engine_not_a_stale_replica():
     """With DATABASE_URL_READ_REPLICA set, prisma_client.db is the reader. A row
     saved by connect exists only on the writer, so every lookup must route to
     writer_db or a fresh connection 401s as not-connected."""
-    reader_table = MagicMock()
+    reader_table: Final = MagicMock()
     reader_table.find_many = AsyncMock(return_value=[])
-    writer_table = MagicMock()
+    writer_table: Final = MagicMock()
     writer_table.find_many = AsyncMock(return_value=[])
-    prisma_client = MagicMock()
+    prisma_client: Final = MagicMock()
     prisma_client.db.litellm_userprovidercredentials = reader_table
     prisma_client.writer_db.litellm_userprovidercredentials = writer_table
 

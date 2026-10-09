@@ -2,6 +2,7 @@
 
 import json
 from contextlib import contextmanager
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -12,11 +13,11 @@ from fastapi import HTTPException, Request
 from fastapi.testclient import TestClient
 
 import litellm
+from litellm.models.credentials import CredentialSource
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.credential_endpoints.endpoints import get_llm_router
 from litellm.proxy.proxy_server import app
-from litellm.models.credentials import CredentialSource
 from litellm.types.utils import CredentialItem
 
 client = TestClient(app)
@@ -1868,7 +1869,7 @@ def test_label_only_patch_does_not_purge_user_connections():
     """A PATCH that only changes display_name sends no credential_name in the
     body, and that must not read as a rename that purges every user's stored
     connection."""
-    stored = CredentialItem(
+    stored: Final = CredentialItem(
         credential_name="copilot-cred",
         credential_values={"github_copilot_auth_type": "per_user_oauth"},
         credential_info={"custom_llm_provider": "github_copilot"},
@@ -1876,13 +1877,13 @@ def test_label_only_patch_does_not_purge_user_connections():
     with _repository_holding(stored):
         from litellm.proxy import proxy_server
 
-        table = MagicMock()
+        table: Final = MagicMock()
         table.find_many = AsyncMock(return_value=[_connection_row()])
         table.delete_many = AsyncMock(return_value=None)
         proxy_server.prisma_client.db.litellm_userprovidercredentials = table
         proxy_server.prisma_client.writer_db = proxy_server.prisma_client.db
 
-        response = _patch_credential(
+        response: Final = _patch_credential(
             "copilot-cred",
             {"display_name": "Renamed Copilot", "credential_info": {"custom_llm_provider": "github_copilot"}},
         )
@@ -1893,7 +1894,7 @@ def test_label_only_patch_does_not_purge_user_connections():
 
 
 def test_switching_away_from_per_user_oauth_purges_user_connections():
-    stored = CredentialItem(
+    stored: Final = CredentialItem(
         credential_name="copilot-cred",
         credential_values={"github_copilot_auth_type": "per_user_oauth"},
         credential_info={"custom_llm_provider": "github_copilot"},
@@ -1901,13 +1902,13 @@ def test_switching_away_from_per_user_oauth_purges_user_connections():
     with _repository_holding(stored):
         from litellm.proxy import proxy_server
 
-        table = MagicMock()
+        table: Final = MagicMock()
         table.find_many = AsyncMock(return_value=[_connection_row()])
         table.delete_many = AsyncMock(return_value=None)
         proxy_server.prisma_client.db.litellm_userprovidercredentials = table
         proxy_server.prisma_client.writer_db = proxy_server.prisma_client.db
 
-        response = _patch_credential(
+        response: Final = _patch_credential(
             "copilot-cred",
             {
                 "credential_name": "copilot-cred",
