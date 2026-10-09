@@ -288,6 +288,7 @@ LITELLM_TRACE_CONTROL_METADATA_FIELDS: Final = frozenset(
 )
 
 _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
+    "ssl_verify",
     "weights",
     "_router_weights",
     "fallback_depth",

@@ -1,9 +1,12 @@
+import ssl
 import time
 import types
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator, Mapping
 from typing import TYPE_CHECKING, Final, Literal, Optional, cast
 
 import httpx
+
+from litellm.types.llms.custom_http import VerifyTypes
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -63,6 +66,13 @@ from .workload_identity import resolve_openai_workload_identity_config
 
 openaiOSeriesConfig: Final = OpenAIOSeriesConfig()
 openAIGPT5Config: Final = OpenAIGPT5Config()
+
+
+def _get_ssl_verify(litellm_params: Mapping[str, object] | None) -> VerifyTypes | None:
+    value: Final = litellm_params.get("ssl_verify") if litellm_params else None
+    if isinstance(value, (str, bool, ssl.SSLContext)):
+        return value
+    return None
 
 
 class MistralEmbeddingConfig:
@@ -390,6 +400,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         client: OpenAI | AsyncOpenAI | None = None,
         shared_session: Optional["ClientSession"] = None,
         litellm_params: Mapping[str, object] | None = None,
+        ssl_verify: VerifyTypes | None = None,
     ) -> OpenAI | AsyncOpenAI | None:
         workload_identity_config: Final = resolve_openai_workload_identity_config(
             api_key=api_key, api_base=api_base, litellm_params=litellm_params
@@ -410,7 +421,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 if isinstance(cached_client, OpenAI) or isinstance(cached_client, AsyncOpenAI):
                     return cached_client
             if is_async:
-                async_http_client: Final = OpenAIChatCompletion._get_async_http_client(shared_session=shared_session)
+                async_http_client: Final = OpenAIChatCompletion._get_async_http_client(
+                    shared_session=shared_session,
+                    ssl_verify=ssl_verify,
+                )
                 http_client: httpx.Client | httpx.AsyncClient | None = async_http_client
                 _new_client: OpenAI | AsyncOpenAI = (
                     AsyncOpenAI(
@@ -432,7 +446,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     )
                 )
             else:
-                sync_http_client: Final = OpenAIChatCompletion._get_sync_http_client()
+                sync_http_client: Final = OpenAIChatCompletion._get_sync_http_client(
+                    ssl_verify=ssl_verify,
+                )
                 http_client = sync_http_client
                 _new_client = (
                     OpenAI(
@@ -796,6 +812,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         headers=headers or {},
                     )
                     if stream is True and fake_stream is False:
+                        stream_ssl_verify: VerifyTypes | None = _get_ssl_verify(litellm_params)
                         return self.streaming(
                             logging_obj=logging_obj,
                             headers=headers,
@@ -810,10 +827,12 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                             organization=organization,
                             stream_options=stream_options,
                             litellm_params=litellm_params,
+                            ssl_verify=stream_ssl_verify,
                         )
                     else:
                         if not isinstance(max_retries, int):
                             raise OpenAIError(status_code=422, message="max retries must be an int")
+                        ssl_verify: VerifyTypes | None = _get_ssl_verify(litellm_params)
                         openai_client: OpenAI = self._get_openai_client(
                             is_async=False,
                             api_key=api_key,
@@ -824,6 +843,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                             organization=organization,
                             client=client,
                             litellm_params=litellm_params,
+                            ssl_verify=ssl_verify,
                         )
 
                         ## LOGGING
@@ -956,6 +976,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         )
         for _ in range(2):  # if call fails due to alternating messages, retry with reformatted message
             try:
+                ssl_verify: VerifyTypes | None = _get_ssl_verify(litellm_params)
                 openai_aclient: AsyncOpenAI = self._get_openai_client(
                     is_async=True,
                     api_key=api_key,
@@ -967,6 +988,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     client=client,
                     shared_session=shared_session,
                     litellm_params=litellm_params,
+                    ssl_verify=ssl_verify,
                 )
 
                 ## LOGGING
@@ -1064,6 +1086,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         headers=None,
         stream_options: dict | None = None,
         litellm_params: Mapping[str, object] | None = None,
+        ssl_verify: VerifyTypes | None = None,
     ):
         data["stream"] = True
         data.update(self.get_stream_options(stream_options=stream_options, api_base=api_base))
@@ -1078,6 +1101,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             organization=organization,
             client=client,
             litellm_params=litellm_params,
+            ssl_verify=ssl_verify,
         )
         ## LOGGING
         logging_obj.pre_call(
@@ -1140,6 +1164,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         data.update(self.get_stream_options(stream_options=stream_options, api_base=api_base))
         for _ in range(2):
             try:
+                ssl_verify: VerifyTypes | None = _get_ssl_verify(litellm_params)
                 openai_aclient: AsyncOpenAI = self._get_openai_client(
                     is_async=True,
                     api_key=api_key,
@@ -1151,6 +1176,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     client=client,
                     shared_session=shared_session,
                     litellm_params=litellm_params,
+                    ssl_verify=ssl_verify,
                 )
                 ## LOGGING
                 logging_obj.pre_call(
