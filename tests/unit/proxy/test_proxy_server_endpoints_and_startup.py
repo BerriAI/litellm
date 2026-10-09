@@ -992,6 +992,66 @@ async def test_initialize_scheduled_jobs_registers_cleanup_when_retention_lives_
 
 
 @pytest.mark.asyncio
+async def test_initialize_scheduled_jobs_skips_cleanup_when_data_manager_owns_it(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    monkeypatch.setenv("LITELLM_DATA_MANAGER_ENABLED", "true")
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_logging.db_spend_update_writer = MagicMock()
+    mock_proxy_config = _mock_scheduled_proxy_config()
+    db_settings = proxy_server_module.ProxyConfig().settings
+    db_settings.apply_db_row("general_settings", {"maximum_daily_tag_spend_retention_period": "30d"})
+
+    async def sync_from_db(*args: object, **kwargs: object) -> None:
+        proxy_server_module._bind_general_settings_store(db_settings)
+
+    mock_proxy_config.add_deployment.side_effect = sync_from_db
+    scheduler = AsyncIOScheduler()
+    try:
+        with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
+            with (
+                patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+                patch("litellm.proxy.proxy_server.store_model_in_db", True),
+                patch("litellm.proxy.proxy_server.general_settings", {}),
+                patch("litellm.proxy.proxy_server.AsyncIOScheduler", return_value=scheduler),
+            ):
+                await ProxyStartupEvent.initialize_scheduled_background_jobs(
+                    general_settings={},
+                    prisma_client=mock_prisma_client,
+                    proxy_budget_rescheduler_min_time=1,
+                    proxy_budget_rescheduler_max_time=2,
+                    proxy_batch_write_at=5,
+                    proxy_logging_obj=mock_proxy_logging,
+                )
+
+        assert scheduler.get_job("spend_log_cleanup_job") is None
+        assert scheduler.get_job("update_spend_job") is not None
+        assert scheduler.get_job("add_deployment_job") is not None
+        mock_proxy_config.record_cleanup_schedule_attempt.assert_not_called()
+        assert [
+            record.getMessage()
+            for record in caplog.records
+            if "Spend log cleanup is owned by the LiteLLM Data Manager" in record.getMessage()
+        ] == [
+            "Spend log cleanup is owned by the LiteLLM Data Manager "
+            "(LITELLM_DATA_MANAGER_ENABLED=true), not scheduling it in this proxy"
+        ]
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+@pytest.mark.asyncio
 async def test_initialize_scheduled_jobs_does_not_fall_back_to_the_interval_for_a_non_string_cron(monkeypatch):
     """A truthy non-string cron is invalid, so startup must log it and register no cleanup job
     rather than silently pruning on the default interval the admin never configured."""

@@ -4135,6 +4135,22 @@ async def test_ProxyConfig__reschedule_spend_log_cleanup_job_health_check_retent
 
 
 @pytest.mark.asyncio
+async def test_ProxyConfig__reschedule_spend_log_cleanup_job_skips_when_data_manager_owns_it(monkeypatch):
+    real_scheduler = _paused_scheduler(monkeypatch)
+    monkeypatch.setenv("LITELLM_DATA_MANAGER_ENABLED", "true")
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"maximum_health_check_retention_period": "30d"},
+    )
+    pc = ProxyConfig()
+    try:
+        await pc._reschedule_spend_log_cleanup_job()
+        assert real_scheduler.get_job("spend_log_cleanup_job") is None
+    finally:
+        real_scheduler.shutdown(wait=False)
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig__update_general_settings_updates_health_check_retention(monkeypatch):
     settings = {}
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", settings)

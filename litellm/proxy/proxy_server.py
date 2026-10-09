@@ -533,6 +533,7 @@ from litellm.proxy.config_resolvers.settings_rules import (
 )
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
+from litellm.proxy.data_manager.config import data_manager_enabled
 from litellm.proxy.data_manager.spend_log_cleanup_job import (
     SPEND_LOG_CLEANUP_JOB_ID,
     SpendLogCleanupScheduler,
@@ -8012,6 +8013,8 @@ class ProxyConfig:
     async def _reschedule_spend_log_cleanup_job(self) -> None:
         if scheduler is None:
             return
+        if data_manager_enabled():
+            return
         cleanup_scheduler: Final[SpendLogCleanupScheduler] = scheduler
         cleanup_settings: Final[Mapping[str, object]] = general_settings
         schedule_spend_log_cleanup(cleanup_scheduler, cleanup_settings, prisma_client)
@@ -11113,9 +11116,15 @@ class ProxyStartupEvent:
         ### SPEND LOG CLEANUP ###
         cleanup_settings: Final = _current_general_settings()
         if wants_spend_log_cleanup(cleanup_settings):
-            cleanup_scheduler: Final[SpendLogCleanupScheduler] = scheduler
-            schedule_spend_log_cleanup(cleanup_scheduler, cleanup_settings, prisma_client)
-            proxy_config.record_cleanup_schedule_attempt(cleanup_settings)
+            if data_manager_enabled():
+                verbose_proxy_logger.info(
+                    "Spend log cleanup is owned by the LiteLLM Data Manager "
+                    "(LITELLM_DATA_MANAGER_ENABLED=true), not scheduling it in this proxy"
+                )
+            else:
+                cleanup_scheduler: Final[SpendLogCleanupScheduler] = scheduler
+                schedule_spend_log_cleanup(cleanup_scheduler, cleanup_settings, prisma_client)
+                proxy_config.record_cleanup_schedule_attempt(cleanup_settings)
         ### CHECK BATCH COST ###
         if llm_router is not None and PROXY_BATCH_POLLING_ENABLED:
             try:
