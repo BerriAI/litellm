@@ -15,7 +15,7 @@ import httpx
 from openai.types.batch import BatchRequestCounts
 from openai.types.batch import Errors as BatchErrors
 from openai.types.batch_error import BatchError
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.constants import XAI_API_BASE
@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.xai.common_utils import XAIModelInfo
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import CreateBatchRequest
 from litellm.types.utils import LiteLLMBatch
 
@@ -70,7 +71,7 @@ def get_xai_auth_headers(
         raise xai_batches_error(
             "Missing xAI API Key. Pass api_key, set litellm.xai_key or XAI_API_KEY", 401, _EMPTY_HEADERS
         )
-    return dict(headers, Authorization=f"Bearer {resolved_key}")  # mutable-ok: BaseConfig contract returns dict
+    return dict(headers, Authorization=f"Bearer {resolved_key}")
 
 
 def xai_batches_url(api_base: str | None, batch_id: str | None = None, suffix: str = "") -> str:
@@ -89,7 +90,7 @@ class XAICreateBatchRequest(TypedDict):
     input_file_id: NotRequired[ReadOnly[str]]
 
 
-class XAIBatchState(BaseModel):
+class XAIBatchState(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     num_requests: int = 0
@@ -99,7 +100,7 @@ class XAIBatchState(BaseModel):
     num_cancelled: int = 0
 
 
-class XAIBatch(BaseModel):
+class XAIBatch(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     batch_id: str
@@ -112,35 +113,35 @@ class XAIBatch(BaseModel):
     input_file_id: str | None = None
 
 
-class XAIBatchList(BaseModel):
+class XAIBatchList(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     batches: tuple[XAIBatch, ...] = ()
     pagination_token: str | None = None
 
 
-class XAIBatchResultError(BaseModel):
+class XAIBatchResultError(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     code: int | str | None = None
     message: str = ""
 
 
-class XAIBatchResultData(BaseModel):
+class XAIBatchResultData(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     response: Mapping[str, Mapping[str, object]] | None = None
     error: XAIBatchResultError | None = None
 
 
-class XAIBatchResult(BaseModel):
+class XAIBatchResult(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     batch_request_id: str
     batch_result: XAIBatchResultData = XAIBatchResultData()
 
 
-class XAIBatchResultsPage(BaseModel):
+class XAIBatchResultsPage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     results: tuple[XAIBatchResult, ...] = ()
@@ -176,7 +177,7 @@ def to_litellm_batch(batch: XAIBatch, endpoint: str = DEFAULT_BATCH_ENDPOINT) ->
     created_at: Final = _to_unix_timestamp(batch.create_time)
     cancelled_at: Final = _to_unix_timestamp(batch.cancel_time)
     errors: Final = (
-        BatchErrors(object="list", data=[BatchError(message=batch.cancel_by_xai_message)])  # mutable-ok: openai type
+        BatchErrors(object="list", data=[BatchError(message=batch.cancel_by_xai_message)])
         if batch.cancel_by_xai_message
         else None
     )
@@ -198,11 +199,11 @@ def to_litellm_batch(batch: XAIBatch, endpoint: str = DEFAULT_BATCH_ENDPOINT) ->
             completed=batch.state.num_success,
             failed=batch.state.num_error + batch.state.num_cancelled,
         ),
-        metadata={"name": batch.name} if batch.name else None,  # mutable-ok: LiteLLMBatch.metadata is a dict
+        metadata={"name": batch.name} if batch.name else None,
     )
 
 
-class OpenAIBatchListResponse(BaseModel):
+class OpenAIBatchListResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     object: Literal["list"] = "list"

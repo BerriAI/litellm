@@ -52,8 +52,8 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.types.integrations.s3_v2 import S3PartitionGranularity, s3BatchLoggingElement
@@ -595,7 +595,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                     and not (self.s3_drop_on_terminal_error and _is_terminal(response))
                     and attempt < max_retries - 1
                 ):
-                    wait_time = 2**attempt  # 1s, 2s
+                    wait_time = 1 << attempt  # 1s, 2s
                     verbose_logger.log(
                         logging.DEBUG if _in_flush.get() else logging.WARNING,
                         "S3 upload returned %s, retrying in %ss (attempt %s/%s) key=%s",
@@ -642,7 +642,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         #########################################################
         uploads: Final = self._batch_file_elements(batch) if self._batch_file_mode_active() else batch
         self._flush_retries = 0
-        self._flush_dropped = {}  # mutable-ok: per-flush drop marks read back by _upload_bounded
+        self._flush_dropped = {}
         stale: Final = min(self._requeued_count, len(uploads)) if len(uploads) == len(batch) else 0
         order: Final = (*range(stale, len(uploads)), *range(stale))
         ordered: Final = await asyncio.gather(*(self._upload_outcome(uploads[i]) for i in order))
@@ -694,7 +694,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 self.max_queue_size,
                 overflow,
             )
-        self.log_queue = [  # mutable-ok: log_queue is the flush buffer shared with custom_batch_logger
+        self.log_queue = [
             *requeued,
             *arrivals,
         ][overflow:]
@@ -875,7 +875,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
             prepared: Final = self._prepare_put(batch_logging_element)
 
-            httpx_client: Final = _get_httpx_client(
+            httpx_client: Final = get_httpx_client(
                 params=({"ssl_verify": self.s3_verify} if self.s3_verify is not None else None)
             )
 
@@ -897,7 +897,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                     and not (self.s3_drop_on_terminal_error and _is_terminal(response))
                     and attempt < max_retries - 1
                 ):
-                    wait_time = 2**attempt  # 1s, 2s
+                    wait_time = 1 << attempt  # 1s, 2s
                     verbose_logger.warning(
                         "S3 upload returned %s, retrying in %ss (attempt %s/%s) key=%s",
                         response.status_code,

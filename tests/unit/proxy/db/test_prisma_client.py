@@ -448,9 +448,25 @@ def test_db_push_without_the_prisma_runner_fails_the_migration_instead_of_crashi
 ):
     """
     An ImportError out of setup_database escapes the caller's RuntimeError handler and
-    kills boot, bypassing the operator's enforce_prisma_migration_check choice.
+    kills boot with a traceback instead of the failed-setup message and exit code.
     """
     monkeypatch.setitem(sys.modules, "litellm_proxy_extras.prisma_toolchain", None)
 
     assert PrismaManager.setup_database(use_migrate=False) is False
     assert fake_prisma_cli.calls == []
+
+
+@pytest.mark.parametrize(
+    ("run", "outcome"),
+    (
+        (PrismaManager.build_request_log_indexes, False),
+        (PrismaManager.start_request_log_index_build, None),
+    ),
+    ids=("wait-for-the-build", "start-the-build"),
+)
+def test_without_proxy_extras_the_index_build_reports_failure_instead_of_raising(monkeypatch, run, outcome):
+    """The migration job exits non-zero and a serving proxy keeps booting when the extras
+    package that owns the index build is not installed."""
+    monkeypatch.setitem(sys.modules, "litellm_proxy_extras.utils", None)
+
+    assert run() is outcome

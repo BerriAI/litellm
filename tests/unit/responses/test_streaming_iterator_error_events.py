@@ -452,7 +452,7 @@ def test_handle_logging_failed_response_records_usage_and_cost():
         usage=usage,
     )
     iterator.completed_response = chunk
-    iterator.logging_obj._response_cost_calculator.return_value = 0.0042
+    iterator.logging_obj.response_cost_calculator.return_value = 0.0042
     with (
         patch.object(import_module("litellm.responses.streaming_iterator"), "run_async_function"),
         patch.object(import_module("litellm.responses.streaming_iterator"), "executor"),
@@ -464,7 +464,7 @@ def test_handle_logging_failed_response_records_usage_and_cost():
     assert combined_usage.completion_tokens == 5
     assert combined_usage.total_tokens == 15
     assert iterator.logging_obj.model_call_details["response_cost"] == 0.0042
-    iterator.logging_obj._response_cost_calculator.assert_called_once_with(result=chunk.response)
+    iterator.logging_obj.response_cost_calculator.assert_called_once_with(result=chunk.response)
 
 
 def test_handle_logging_failed_response_without_usage_skips_recording():
@@ -478,7 +478,7 @@ def test_handle_logging_failed_response_without_usage_skips_recording():
     ):
         iterator._handle_logging_failed_response()
     assert "combined_usage_object" not in iterator.logging_obj.model_call_details
-    iterator.logging_obj._response_cost_calculator.assert_not_called()
+    iterator.logging_obj.response_cost_calculator.assert_not_called()
 
 
 def test_sync_iterator_raises_mid_stream_fallback_on_rate_limit_error_event():
