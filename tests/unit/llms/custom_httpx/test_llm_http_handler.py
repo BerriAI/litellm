@@ -18,6 +18,7 @@ from litellm.integrations.code_interpreter_interception.handler import (
     CodeInterpreterInterceptionLogger,
     LITELLM_CODE_EXECUTION_TOOL_NAME,
 )
+from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -350,6 +351,56 @@ def test_response_api_handler_runs_responses_pre_call_hook_before_transform():
     hook_litellm_params = transform_kwargs["litellm_params"]
     assert hook_litellm_params.get(_ACTIVE_KEY) is True
     assert hook_litellm_params.get(_SANDBOX_KEY)
+
+
+def test_response_api_handler_sends_no_stream_options_when_web_search_forces_a_non_streaming_call(monkeypatch):
+    handler: Final = BaseLLMHTTPHandler()
+    config: Final = Mock()
+    config.validate_environment.return_value = {}
+    config.get_complete_url.return_value = "https://example.openai.azure.com/openai/v1/responses"
+    config.sign_request.return_value = ({}, None)
+    config.transform_response_api_response.return_value = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        output=[],
+        status="completed",
+        model="gpt-4o",
+    )
+    config.transform_responses_api_request.side_effect = lambda **kwargs: {
+        "model": kwargs["model"],
+        "input": kwargs["input"],
+        **kwargs["response_api_optional_request_params"],
+    }
+    client: Final = HTTPHandler(client=httpx.Client())
+    client.post = Mock(
+        return_value=httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://example.openai.azure.com/openai/v1/responses"),
+        )
+    )
+    logging_obj: Final = Mock()
+    logging_obj.dynamic_success_callbacks = []
+
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["azure"])])
+    handler.response_api_handler(
+        model="gpt-4o",
+        input="what is new in litellm?",
+        responses_api_provider_config=config,
+        response_api_optional_request_params={
+            "stream": True,
+            "stream_options": {"include_obfuscation": True},
+            "tools": [{"type": "web_search"}],
+        },
+        custom_llm_provider="azure",
+        litellm_params=GenericLiteLLMParams(api_key="sk-test", stream_options={"include_obfuscation": True}),
+        logging_obj=logging_obj,
+        client=client,
+    )
+
+    sent_body: Final = client.post.call_args.kwargs["json"]
+    assert sent_body["stream"] is False
+    assert "stream_options" not in sent_body
+    assert config.transform_responses_api_request.call_args.kwargs["litellm_params"].get("stream_options") is None
 
 
 @pytest.mark.asyncio
