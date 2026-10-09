@@ -2216,6 +2216,216 @@ class TestBedrockFileContentTransformation:
         assert "x-amz-content-sha256" in authorization
         assert "X-Amz-Date" in signed_headers
 
+    def test_transform_retrieve_file_request_adds_unsigned_range(self, monkeypatch):
+        from litellm.llms.bedrock.files.transformation import (
+            S3_SIGNED_REQUEST_HEADERS_PARAM,
+            BedrockFilesConfig,
+        )
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        litellm_params = self._litellm_params()
+        url, params = BedrockFilesConfig().transform_retrieve_file_request(
+            file_id=self.S3_URI,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        assert url == self.EXPECTED_URL
+        assert params == {}
+        assert litellm_params[S3_SIGNED_REQUEST_HEADERS_PARAM]["Range"] == "bytes=0-0"
+
+    @pytest.mark.parametrize(
+        ("file_id", "purpose"),
+        [
+            ("s3://my-bucket/litellm-batch-outputs/job-123/output.jsonl", "batch_output"),
+            ("s3://my-bucket/litellm-bedrock-files-job-123/input.jsonl", "batch"),
+        ],
+    )
+    def test_transform_retrieve_file_response_parses_metadata(
+        self, file_id: str, purpose: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import httpx
+
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        litellm_params = self._litellm_params()
+        BedrockFilesConfig().transform_retrieve_file_request(
+            file_id=file_id,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+        response = BedrockFilesConfig().transform_retrieve_file_response(
+            raw_response=httpx.Response(
+                206,
+                headers={
+                    "Content-Range": "bytes 0-0/4321",
+                    "Last-Modified": "Wed, 21 Oct 2015 07:28:00 GMT",
+                },
+                request=httpx.Request("GET", file_id),
+            ),
+            logging_obj=MagicMock(),
+            litellm_params=litellm_params,
+        )
+
+        assert response.id == file_id
+        assert response.bytes == 4321
+        assert response.created_at == 1445412480
+        assert response.filename == file_id.rsplit("/", 1)[-1]
+        assert response.purpose == purpose
+        assert response.status == "processed"
+        assert response.object == "file"
+
+    @pytest.mark.parametrize(
+        ("file_id", "purpose"),
+        [
+            pytest.param(
+                "s3://out-bucket/outpfx/litellm-batch-outputs/job-123/x.jsonl.out",
+                "batch_output",
+                id="output-bucket",
+            ),
+            pytest.param(
+                "s3://in-bucket/pfx/litellm-bedrock-files/job-123/input.jsonl",
+                "batch",
+                id="input-bucket-upload",
+            ),
+            pytest.param(
+                "s3://in-bucket/pfx/litellm-batch-outputs/job-123/x.jsonl.out",
+                "batch_output",
+                id="input-bucket-output",
+            ),
+        ],
+    )
+    def test_transform_retrieve_file_response_uses_the_retrieved_bucket_prefix(
+        self, file_id: str, purpose: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import httpx
+
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+        monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+        litellm_params: Final = _trusted_bucket_snapshot(
+            s3_bucket_name="in-bucket/pfx",
+            s3_output_bucket_name="out-bucket/outpfx",
+        )
+        config: Final = BedrockFilesConfig()
+        config.transform_retrieve_file_request(
+            file_id=file_id,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+        response: Final = config.transform_retrieve_file_response(
+            raw_response=httpx.Response(
+                206,
+                headers={"Content-Range": "bytes 0-0/1"},
+                request=httpx.Request("GET", file_id),
+            ),
+            logging_obj=MagicMock(),
+            litellm_params=litellm_params,
+        )
+
+        assert response.purpose == purpose
+
+    def test_transform_retrieve_file_response_accepts_verified_empty_object(self, monkeypatch):
+        import httpx
+
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        litellm_params = self._litellm_params()
+        BedrockFilesConfig().transform_retrieve_file_request(
+            file_id=self.S3_URI,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+        response = BedrockFilesConfig().transform_retrieve_file_response(
+            raw_response=httpx.Response(
+                416,
+                content=b"<Error><Code>InvalidRange</Code><ActualObjectSize>0</ActualObjectSize></Error>",
+                request=httpx.Request("GET", self.S3_URI),
+            ),
+            logging_obj=MagicMock(),
+            litellm_params=litellm_params,
+        )
+
+        assert response.bytes == 0
+        assert response.filename == "input.jsonl.out"
+        assert response.purpose == "batch_output"
+
+    def test_transform_retrieve_file_response_rejects_unverified_empty_object(self, monkeypatch):
+        import httpx
+
+        from litellm.llms.bedrock.common_utils import BedrockError
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        litellm_params = self._litellm_params()
+        BedrockFilesConfig().transform_retrieve_file_request(
+            file_id=self.S3_URI,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+        with pytest.raises(BedrockError):
+            BedrockFilesConfig().transform_retrieve_file_response(
+                raw_response=httpx.Response(
+                    416,
+                    content=b"<Error><Code>InvalidRange</Code></Error>",
+                    request=httpx.Request("GET", self.S3_URI),
+                ),
+                logging_obj=MagicMock(),
+                litellm_params=litellm_params,
+            )
+
+    def test_transform_retrieve_file_response_uses_content_length_when_range_is_ignored(self, monkeypatch):
+        import httpx
+
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        litellm_params = self._litellm_params()
+        BedrockFilesConfig().transform_retrieve_file_request(
+            file_id=self.S3_URI,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+        response = BedrockFilesConfig().transform_retrieve_file_response(
+            raw_response=httpx.Response(
+                200,
+                headers={"Content-Length": "4321"},
+                request=httpx.Request("GET", self.S3_URI),
+            ),
+            logging_obj=MagicMock(),
+            litellm_params=litellm_params,
+        )
+
+        assert response.bytes == 4321
+
+    def test_transform_retrieve_file_response_raises_on_s3_error(self, monkeypatch):
+        import httpx
+
+        from litellm.llms.bedrock.common_utils import BedrockError
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+        litellm_params = self._litellm_params()
+        BedrockFilesConfig().transform_retrieve_file_request(
+            file_id=self.S3_URI,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        with pytest.raises(BedrockError, match="AccessDenied"):
+            BedrockFilesConfig().transform_retrieve_file_response(
+                raw_response=httpx.Response(
+                    403,
+                    content=b"<Error><Code>AccessDenied</Code></Error>",
+                    request=httpx.Request("GET", self.S3_URI),
+                ),
+                logging_obj=MagicMock(),
+                litellm_params=litellm_params,
+            )
+
     def test_transform_file_content_request_decodes_unified_file_id(self, monkeypatch):
         """Base64 unified ids carrying llm_output_file_id must resolve to their S3 object."""
         import base64

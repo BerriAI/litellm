@@ -72,10 +72,10 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attributio
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 from litellm.proxy.utils import PrismaClient, ProxyLogging, handle_exception_on_proxy, is_known_model
 from litellm.repositories.managed_batch_repository import ManagedBatchRepository
-from litellm.repositories.table_repositories import ManagedFileRepository
+from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.router import Router
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest
-from litellm.types.utils import LiteLLMBatch
+from litellm.types.utils import LiteLLMBatch, LLMResponseTypes
 
 if TYPE_CHECKING:
     from prisma.models import LiteLLM_ManagedObjectTable
@@ -94,6 +94,12 @@ def _request_tags(data: Mapping[str, object]) -> tuple[str, ...] | None:
     if metadata is None:
         return None
     return request_tags_from_metadata(_METADATA_ADAPTER.validate_python(metadata))
+
+
+def _require_batch_response(response: LLMResponseTypes) -> LiteLLMBatch:
+    if not isinstance(response, LiteLLMBatch):
+        raise TypeError("Batch endpoint received a non-batch response")
+    return response
 
 
 def _litellm_executed_batch_runner(llm_router: Router, proxy_logging_obj: ProxyLogging) -> LiteLLMExecutedBatchRunner:
@@ -652,8 +658,9 @@ async def retrieve_batch(
             # The DB may store raw provider file IDs (before hooks translate them).
             # Register any missing managed-file rows and return unified IDs.
             if unified_batch_id:
+                terminal_batch_response: Final = _require_batch_response(response)
                 await ensure_batch_response_managed_file_ids(
-                    response=response,
+                    response=terminal_batch_response,
                     managed_files_obj=managed_files_obj,
                     prisma_client=prisma_client,
                     verbose_proxy_logger=verbose_proxy_logger,
@@ -799,8 +806,9 @@ async def retrieve_batch(
         # Fix: bug_feb14_batch_retrieve_returns_raw_input_file_id
         # Register any missing managed-file rows and return unified IDs.
         if unified_batch_id:
+            retrieved_batch_response: Final = _require_batch_response(response)
             await ensure_batch_response_managed_file_ids(
-                response=response,
+                response=retrieved_batch_response,
                 managed_files_obj=managed_files_obj,
                 prisma_client=prisma_client,
                 verbose_proxy_logger=verbose_proxy_logger,

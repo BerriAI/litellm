@@ -102,7 +102,7 @@ from litellm.proxy.openai_files_endpoints.general_upload_validation import (
     raise_upload_validation_failure,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, is_known_model
-from litellm.repositories.table_repositories import ManagedFileRepository
+from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.router import Router
 from litellm.types.llms.openai import (
     CREATE_FILE_REQUESTS_PURPOSE,

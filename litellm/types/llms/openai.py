@@ -365,6 +365,7 @@ _JsonValue: TypeAlias = object
 
 
 BATCH_GUARDRAIL_RESPONSE_FIELD: Final = "litellm_batch_guardrail"
+LITELLM_DETAILS_FALLBACK_RESPONSE_FIELD: Final = "litellm_details_fallback"
 
 
 class OpenAIFileObject(LiteLLMBaseModel):
@@ -413,6 +414,9 @@ class OpenAIFileObject(LiteLLMBaseModel):
     Absent on every other upload, so OpenAI-shaped clients see an unchanged response.
     """
 
+    litellm_details_fallback: bool | None = None
+    """Set by the LiteLLM proxy on a saved batch output file entry built without provider metadata; stripped from API responses."""
+
     _hidden_params: dict = PrivateAttr(default={"response_cost": 0.0})  # no cost for writing a file
 
     @property
@@ -424,13 +428,19 @@ class OpenAIFileObject(LiteLLMBaseModel):
         self._hidden_params = hidden_params
 
     @model_serializer(mode="wrap")
-    def _omit_absent_batch_guardrail(  # noqa: ANN202  # annotating it replaces the model's serialization schema
+    def _omit_absent_proxy_only_fields(  # noqa: ANN202  # annotating it replaces the model's serialization schema
         self, handler: SerializerFunctionWrapHandler
     ):
         serialized: Final[Mapping[str, object]] = handler(self)
-        if self.litellm_batch_guardrail is not None:
-            return serialized
-        return {key: value for key, value in serialized.items() if key != BATCH_GUARDRAIL_RESPONSE_FIELD}
+        fields_to_omit: Final = tuple(
+            field_name
+            for field_name, value in (
+                (BATCH_GUARDRAIL_RESPONSE_FIELD, self.litellm_batch_guardrail),
+                (LITELLM_DETAILS_FALLBACK_RESPONSE_FIELD, self.litellm_details_fallback),
+            )
+            if value is None
+        )
+        return {key: value for key, value in serialized.items() if key not in fields_to_omit}
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
