@@ -38,6 +38,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_tools_pt,
     make_valid_bedrock_tool_name,
 )
+from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_images
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     CONVERTED_SYSTEM_NOTE,
     is_system_message,
@@ -2036,11 +2037,16 @@ class AmazonConverseConfig(BaseConfig):
             litellm_params=litellm_params,
         )
 
-        bedrock_messages: Final = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-            messages=messages,
-            model=model,
-            llm_provider="bedrock_converse",
-            user_continue_message=litellm_params.pop("user_continue_message", None),
+        bedrock_messages: Final = list(
+            place_tool_result_images(
+                await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+                    messages=messages,
+                    model=model,
+                    llm_provider="bedrock_converse",
+                    user_continue_message=litellm_params.pop("user_continue_message", None),
+                ),
+                model,
+            )
         )
 
         request_metadata: Final = resolve_bedrock_request_metadata(
@@ -2099,11 +2105,16 @@ class AmazonConverseConfig(BaseConfig):
         )
 
         ## TRANSFORMATION ##
-        bedrock_messages: Final[list[MessageBlock]] = _bedrock_converse_messages_pt(
-            messages=messages,
-            model=model,
-            llm_provider="bedrock_converse",
-            user_continue_message=litellm_params.pop("user_continue_message", None),
+        bedrock_messages: Final[list[MessageBlock]] = list(
+            place_tool_result_images(
+                _bedrock_converse_messages_pt(
+                    messages=messages,
+                    model=model,
+                    llm_provider="bedrock_converse",
+                    user_continue_message=litellm_params.pop("user_continue_message", None),
+                ),
+                model,
+            )
         )
 
         request_metadata: Final = resolve_bedrock_request_metadata(
