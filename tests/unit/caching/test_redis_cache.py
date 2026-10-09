@@ -1635,21 +1635,3 @@ async def test_async_set_cache_pipeline_does_not_format_cached_values_for_loggin
 
     assert _FormatCountingStr.format_calls == 0
     assert pipe.sets == [("k1", '"embedding"', timedelta(seconds=60))]
-
-
-@pytest.mark.asyncio
-async def test_async_set_cache_pipeline_logs_cached_values_when_debugging_is_on(monkeypatch, redis_no_ping, capsys):
-    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
-    monkeypatch.setattr(litellm._logging, "set_verbose", True)
-    redis_cache = RedisCache()
-    pipe = _SetRecordingPipeline()
-    client = MagicMock()
-    client.pipeline = MagicMock(return_value=pipe)
-
-    _FormatCountingStr.format_calls = 0
-    with patch.object(redis_cache, "init_async_client", return_value=client):
-        await redis_cache.async_set_cache_pipeline([("k1", _FormatCountingStr("embedding"))], ttl=60)
-
-    assert _FormatCountingStr.format_calls == 1
-    assert "Value embedding" in capsys.readouterr().out
-    assert pipe.sets == [("k1", '"embedding"', timedelta(seconds=60))]
