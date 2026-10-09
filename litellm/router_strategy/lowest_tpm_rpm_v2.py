@@ -17,8 +17,8 @@ from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
-    get_metadata_variable_name_from_kwargs,
     get_parent_otel_span_from_kwargs,
+    get_router_callback_metadata,
 )
 from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.types.router import RouterErrors
@@ -259,10 +259,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             return deployment  # don't fail calls if eg. redis fails to connect
 
     def _is_serving_router(self, kwargs: Mapping[str, object]) -> bool:
-        litellm_params: Final = _callback_metadata_adapter.validate_python(kwargs.get("litellm_params") or {})
-        metadata: Final = _callback_metadata_adapter.validate_python(
-            litellm_params.get(get_metadata_variable_name_from_kwargs(litellm_params)) or {}
-        )
+        metadata: Final = get_router_callback_metadata(kwargs)
         return metadata.get("router_cache_id", self.router_cache_id) == self.router_cache_id
 
     @with_service_target("router_usage")

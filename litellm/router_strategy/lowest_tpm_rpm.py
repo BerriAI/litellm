@@ -1,17 +1,23 @@
 #### What this does ####
 #   identifies lowest tpm deployment
 import traceback
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Final
+
+from pydantic import TypeAdapter
 
 from litellm import token_counter
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import get_router_callback_metadata
 from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.types.utils import LiteLLMPydanticObjectBase
 from litellm.utils import print_verbose
+
+_callback_metadata_adapter: Final = TypeAdapter(Mapping[str, object])
 
 
 class RoutingArgs(LiteLLMPydanticObjectBase):
@@ -31,18 +37,21 @@ class LowestTPMLoggingHandler(CustomLogger):
 
     @with_service_target("router_usage")
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
-        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+        callback_kwargs: Final = _callback_metadata_adapter.validate_python(kwargs)
+        if is_batch_retrieve_call_type(callback_kwargs.get("call_type")):
             return
         try:
+            callback_metadata: Final = get_router_callback_metadata(callback_kwargs)
+            local_only: Final = callback_metadata.get("router_cache_id", self.router_cache_id) != self.router_cache_id
             """
             Update TPM/RPM usage on success
             """
             if "litellm_params" not in kwargs or kwargs["litellm_params"] is None:
                 return
-            if kwargs["litellm_params"].get("metadata") is None:
+            if not callback_metadata:
                 pass
             else:
-                model_group: Final = kwargs["litellm_params"]["metadata"].get("model_group", None)
+                model_group: Final = callback_metadata.get("model_group")
 
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
@@ -64,16 +73,20 @@ class LowestTPMLoggingHandler(CustomLogger):
                 # ------------
 
                 ## TPM
-                request_count_dict = self.router_cache.get_cache(key=tpm_key) or {}
+                request_count_dict = self.router_cache.get_cache(key=tpm_key, local_only=local_only) or {}
                 request_count_dict[id] = request_count_dict.get(id, 0) + total_tokens
 
-                self.router_cache.set_cache(key=tpm_key, value=request_count_dict, ttl=self.routing_args.ttl)
+                self.router_cache.set_cache(
+                    key=tpm_key, value=request_count_dict, ttl=self.routing_args.ttl, local_only=local_only
+                )
 
                 ## RPM
-                request_count_dict = self.router_cache.get_cache(key=rpm_key) or {}
+                request_count_dict = self.router_cache.get_cache(key=rpm_key, local_only=local_only) or {}
                 request_count_dict[id] = request_count_dict.get(id, 0) + 1
 
-                self.router_cache.set_cache(key=rpm_key, value=request_count_dict, ttl=self.routing_args.ttl)
+                self.router_cache.set_cache(
+                    key=rpm_key, value=request_count_dict, ttl=self.routing_args.ttl, local_only=local_only
+                )
 
                 ### TESTING ###
                 if self.test_flag:
@@ -86,18 +99,21 @@ class LowestTPMLoggingHandler(CustomLogger):
 
     @with_service_target("router_usage")
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+        callback_kwargs: Final = _callback_metadata_adapter.validate_python(kwargs)
+        if is_batch_retrieve_call_type(callback_kwargs.get("call_type")):
             return
         try:
+            callback_metadata: Final = get_router_callback_metadata(callback_kwargs)
+            local_only: Final = callback_metadata.get("router_cache_id", self.router_cache_id) != self.router_cache_id
             """
             Update TPM/RPM usage on success
             """
             if "litellm_params" not in kwargs or kwargs["litellm_params"] is None:
                 return
-            if kwargs["litellm_params"].get("metadata") is None:
+            if not callback_metadata:
                 pass
             else:
-                model_group: Final = kwargs["litellm_params"]["metadata"].get("model_group", None)
+                model_group: Final = callback_metadata.get("model_group")
 
                 model_info: Final = kwargs["litellm_params"].get("model_info")
                 id = None
@@ -125,19 +141,19 @@ class LowestTPMLoggingHandler(CustomLogger):
                 # update cache
 
                 ## TPM
-                request_count_dict = await self.router_cache.async_get_cache(key=tpm_key) or {}
+                request_count_dict = await self.router_cache.async_get_cache(key=tpm_key, local_only=local_only) or {}
                 request_count_dict[id] = request_count_dict.get(id, 0) + total_tokens
 
                 await self.router_cache.async_set_cache(
-                    key=tpm_key, value=request_count_dict, ttl=self.routing_args.ttl
+                    key=tpm_key, value=request_count_dict, ttl=self.routing_args.ttl, local_only=local_only
                 )
 
                 ## RPM
-                request_count_dict = await self.router_cache.async_get_cache(key=rpm_key) or {}
+                request_count_dict = await self.router_cache.async_get_cache(key=rpm_key, local_only=local_only) or {}
                 request_count_dict[id] = request_count_dict.get(id, 0) + 1
 
                 await self.router_cache.async_set_cache(
-                    key=rpm_key, value=request_count_dict, ttl=self.routing_args.ttl
+                    key=rpm_key, value=request_count_dict, ttl=self.routing_args.ttl, local_only=local_only
                 )
 
                 ### TESTING ###

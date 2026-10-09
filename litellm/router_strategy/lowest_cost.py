@@ -1,7 +1,10 @@
 #### What this does ####
 #   picks based on response time (for streaming, this is time to first token)
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Final
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import ModelResponse, token_counter, verbose_logger
@@ -9,7 +12,10 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import get_router_callback_metadata
 from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
+
+_callback_metadata_adapter: Final = TypeAdapter(Mapping[str, object])
 
 
 class LowestCostLoggingHandler(CustomLogger):
@@ -23,16 +29,19 @@ class LowestCostLoggingHandler(CustomLogger):
 
     @with_service_target("router_usage")
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
-        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+        callback_kwargs: Final = _callback_metadata_adapter.validate_python(kwargs)
+        if is_batch_retrieve_call_type(callback_kwargs.get("call_type")):
             return
         try:
+            callback_metadata: Final = get_router_callback_metadata(callback_kwargs)
+            local_only: Final = callback_metadata.get("router_cache_id", self.router_cache_id) != self.router_cache_id
             """
             Update usage on success
             """
-            if kwargs["litellm_params"].get("metadata") is None:
+            if not callback_metadata:
                 pass
             else:
-                model_group: Final = kwargs["litellm_params"]["metadata"].get("model_group", None)
+                model_group: Final = callback_metadata.get("model_group")
 
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
@@ -69,7 +78,7 @@ class LowestCostLoggingHandler(CustomLogger):
                 # Update usage
                 # ------------
 
-                request_count_dict: Final = self.router_cache.get_cache(key=cost_key) or {}
+                request_count_dict: Final = self.router_cache.get_cache(key=cost_key, local_only=local_only) or {}
 
                 # check local result first
 
@@ -87,7 +96,7 @@ class LowestCostLoggingHandler(CustomLogger):
                 ## RPM
                 request_count_dict[id][precise_minute]["rpm"] = request_count_dict[id][precise_minute].get("rpm", 0) + 1
 
-                self.router_cache.set_cache(key=cost_key, value=request_count_dict)
+                self.router_cache.set_cache(key=cost_key, value=request_count_dict, local_only=local_only)
 
                 ### TESTING ###
                 if self.test_flag:
@@ -99,16 +108,19 @@ class LowestCostLoggingHandler(CustomLogger):
 
     @with_service_target("router_usage")
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+        callback_kwargs: Final = _callback_metadata_adapter.validate_python(kwargs)
+        if is_batch_retrieve_call_type(callback_kwargs.get("call_type")):
             return
         try:
+            callback_metadata: Final = get_router_callback_metadata(callback_kwargs)
+            local_only: Final = callback_metadata.get("router_cache_id", self.router_cache_id) != self.router_cache_id
             """
             Update cost usage on success
             """
-            if kwargs["litellm_params"].get("metadata") is None:
+            if not callback_metadata:
                 pass
             else:
-                model_group: Final = kwargs["litellm_params"]["metadata"].get("model_group", None)
+                model_group: Final = callback_metadata.get("model_group")
 
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
@@ -146,7 +158,9 @@ class LowestCostLoggingHandler(CustomLogger):
                 # Update usage
                 # ------------
 
-                request_count_dict: Final = await self.router_cache.async_get_cache(key=cost_key) or {}
+                request_count_dict: Final = (
+                    await self.router_cache.async_get_cache(key=cost_key, local_only=local_only) or {}
+                )
 
                 if id not in request_count_dict:
                     request_count_dict[id] = {}
@@ -162,7 +176,7 @@ class LowestCostLoggingHandler(CustomLogger):
                 request_count_dict[id][precise_minute]["rpm"] = request_count_dict[id][precise_minute].get("rpm", 0) + 1
 
                 await self.router_cache.async_set_cache(
-                    key=cost_key, value=request_count_dict
+                    key=cost_key, value=request_count_dict, local_only=local_only
                 )  # reset map within window
 
                 ### TESTING ###

@@ -311,6 +311,16 @@ def get_metadata_variable_name_from_kwargs(
     return "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
 
 
+_router_callback_metadata_adapter: Final = TypeAdapter(Mapping[str, object])
+
+
+def get_router_callback_metadata(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    litellm_params: Final = _router_callback_metadata_adapter.validate_python(kwargs.get("litellm_params") or {})
+    return _router_callback_metadata_adapter.validate_python(
+        litellm_params.get(get_metadata_variable_name_from_kwargs(litellm_params)) or {}
+    )
+
+
 def max_retries_per_request_hit(kwargs: Mapping[str, object], num_retries_per_request: int | None) -> bool:
     if num_retries_per_request is None:
         return False

@@ -24833,7 +24833,7 @@ def test_multiple_routers_latency_callbacks_registered() -> None:
         assert router_2.lowestlatency_logger in litellm.callbacks
         assert len(litellm.callbacks) == 2
 
-        now: Final = datetime.now()
+        now: Final = datetime(2024, 1, 1, tzinfo=timezone.utc)
         kwargs_1: Final = {
             "litellm_params": {
                 "metadata": {"model_group": "gpt-4"},
@@ -24879,7 +24879,8 @@ def test_router_discard_unregisters_strategy_selectors() -> None:
     assert len(litellm.callbacks) == 0
 
 
-def test_router_discard_after_model_call_cleans_all_callback_lists() -> None:
+@pytest.mark.parametrize("request_strategy", ["latency-based-routing", "usage-based-routing-v2"])
+def test_router_discard_after_model_call_cleans_all_callback_lists(request_strategy: str) -> None:
     router: Final = Router(
         model_list=[
             {
@@ -24892,7 +24893,10 @@ def test_router_discard_after_model_call_cleans_all_callback_lists() -> None:
     selector: Final = router.lowestlatency_logger
     assert selector is not None
 
-    router.completion(model="gpt-4", messages=[{"role": "user", "content": "hi"}])
+    router.completion(
+        model="gpt-4", messages=[{"role": "user", "content": "hi"}], routing_strategy=request_strategy
+    )
+    selectors: Final = tuple(router._all_strategy_selectors())
 
     router.discard()
 
@@ -24906,7 +24910,7 @@ def test_router_discard_after_model_call_cleans_all_callback_lists() -> None:
         litellm._async_failure_callback,
     ):
         if isinstance(callback_list, list):
-            assert selector not in callback_list
+            assert all(registered_selector not in callback_list for registered_selector in selectors)
 
 
 @pytest.mark.parametrize(
@@ -24986,10 +24990,23 @@ def test_router_discard_unregisters_group_selectors() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("is_async", [False, True])
 @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
-async def test_multiple_usage_v2_routers_shared_cache_increment_not_doubled(
-    is_async: bool, metadata_key: Literal["metadata", "litellm_metadata"]
+@pytest.mark.parametrize(
+    "strategy, is_async, is_timeout",
+    [
+        ("usage-based-routing-v2", False, False),
+        ("usage-based-routing-v2", True, False),
+        ("usage-based-routing", False, False),
+        ("usage-based-routing", True, False),
+        ("cost-based-routing", False, False),
+        ("cost-based-routing", True, False),
+        ("latency-based-routing", False, False),
+        ("latency-based-routing", True, False),
+        ("latency-based-routing", True, True),
+    ],
+)
+async def test_multiple_routers_shared_cache_usage_not_doubled(
+    is_async: bool, is_timeout: bool, metadata_key: Literal["metadata", "litellm_metadata"], strategy: str
 ) -> None:
     import fakeredis
     import fakeredis.aioredis
@@ -25006,42 +25023,80 @@ async def test_multiple_usage_v2_routers_shared_cache_increment_not_doubled(
         shared_cache.init_async_client()
     router_1: Final = Router(
         model_list=[{"model_name": "test-model", "litellm_params": {"model": "openai/test-model", "api_key": "fake"}}],
-        routing_strategy="usage-based-routing-v2",
+        routing_strategy=strategy,
     )
     router_2: Final = Router(
         model_list=[{"model_name": "test-model", "litellm_params": {"model": "openai/test-model", "api_key": "fake"}}],
-        routing_strategy="usage-based-routing-v2",
+        routing_strategy=strategy,
     )
     router_1.cache.attach_redis_cache(shared_cache)
     router_2.cache.attach_redis_cache(shared_cache)
 
     try:
-        selector_1: Final = router_1.lowesttpm_logger_v2
-        selector_2: Final = router_2.lowesttpm_logger_v2
+        selector_1: Final = router_1._get_override_strategy_selector(strategy)
+        selector_2: Final = router_2._get_override_strategy_selector(strategy)
         assert selector_1 is not None and selector_2 is not None
 
         now: Final = datetime(2024, 1, 1, tzinfo=timezone.utc)
         tokens: Final = 100
-        cache_key: Final = f"dep-1:test-model:tpm:{now.strftime('%H-%M')}"
+        cache_key: Final = (
+            f"dep-1:test-model:tpm:{now.strftime('%H-%M')}"
+            if strategy == "usage-based-routing-v2"
+            else f"test-model:tpm:{now.strftime('%H-%M')}"
+            if strategy == "usage-based-routing"
+            else "cost_map:test-model"
+            if strategy == "cost-based-routing"
+            else "test-model_map"
+        )
+        response: Final = litellm.ModelResponse(
+            usage=litellm.Usage(prompt_tokens=0, completion_tokens=tokens, total_tokens=tokens)
+        )
         kwargs: Final = {
+            "exception": litellm.Timeout(message="request timed out", model="test-model", llm_provider="openai")
+            if is_timeout
+            else None,
             "standard_logging_object": {
                 "model_group": "test-model",
                 "model_id": "dep-1",
                 "total_tokens": tokens,
                 "hidden_params": {"litellm_model_name": "test-model"},
             },
-            "litellm_params": {metadata_key: {"router_cache_id": str(id(router_1.cache))}},
+            "litellm_params": {
+                metadata_key: {"router_cache_id": str(id(router_1.cache)), "model_group": "test-model"},
+                "model_info": {"id": "dep-1"},
+            },
         }
-        with patch("litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime", return_value=now):
-            for selector in (selector_2, selector_1):
-                if is_async:
-                    await selector.async_log_success_event(kwargs, None, now, now)
-                else:
-                    selector.log_success_event(kwargs, None, now, now)
 
-        assert int(redis_client.get(cache_key)) == tokens
-        assert router_1.cache.get_cache(cache_key, local_only=True) == tokens
-        assert router_2.cache.get_cache(cache_key, local_only=True) == tokens
+        class FixedDatetime:
+            @staticmethod
+            def now() -> datetime:
+                return now
+
+        with (
+            patch("litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime", return_value=now),
+            patch("litellm.router_strategy.lowest_tpm_rpm.datetime", FixedDatetime),
+            patch("litellm.router_strategy.lowest_cost.datetime", FixedDatetime),
+            patch("litellm.router_strategy.lowest_latency.datetime", FixedDatetime),
+        ):
+            for selector in (selector_2, selector_1):
+                if is_timeout:
+                    await selector.async_log_failure_event(kwargs, None, now, now)
+                elif is_async:
+                    await selector.async_log_success_event(kwargs, response, now, now)
+                else:
+                    selector.log_success_event(kwargs, response, now, now)
+
+        for cache in (shared_cache, router_1.cache, router_2.cache):
+            value: Final = cache.get_cache(cache_key, local_only=True)
+            if is_timeout:
+                assert len(value["dep-1"]["latency"]) == 1
+            elif strategy == "usage-based-routing-v2":
+                assert value == tokens
+            elif strategy == "usage-based-routing":
+                assert value == {"dep-1": tokens}
+                assert cache.get_cache(f"test-model:rpm:{now.strftime('%H-%M')}", local_only=True) == {"dep-1": 1}
+            else:
+                assert value["dep-1"][now.strftime("%Y-%m-%d-%H-%M")] == {"tpm": tokens, "rpm": 1}
     finally:
         router_1.discard()
         router_2.discard()
