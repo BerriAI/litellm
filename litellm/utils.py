@@ -3205,7 +3205,7 @@ _CACHE_PRICING_FIELDS: Final = (
 )
 
 
-def _resolve_builtin_model_cost_entry(key: str, provider: str) -> dict[str, object] | None:
+def _resolve_builtin_model_cost_entry(key: str, provider: str | None) -> dict[str, object] | None:
     """Best-effort lookup of a built-in ``model_cost`` entry for a custom key
     whose shape ``get_model_info`` cannot resolve (repeated provider prefixes
     like ``bedrock/bedrock/bedrock/us.anthropic.claude-sonnet-4-6`` or region
@@ -3253,7 +3253,7 @@ def is_generalized_model_info(model_info: ModelInfo) -> bool:
     return key not in litellm.model_cost and match_capability_generalizations(key) is not None
 
 
-def _get_builtin_model_info_for_registration(model: str) -> ModelInfo | None:
+def _get_builtin_model_info_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | None:
     """Resolve ``model`` to its built-in cost-map entry for registration merging.
 
     Returns ``None`` when the lookup raises or when it resolved via a
@@ -3262,7 +3262,7 @@ def _get_builtin_model_info_for_registration(model: str) -> ModelInfo | None:
     inheritance for prefix-mangled keys.
     """
     try:
-        info: Final = get_model_info(model=model)
+        info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:
         return None
     return None if is_generalized_model_info(info) else info
@@ -3337,6 +3337,7 @@ def register_model(
     *,
     persist_across_reloads: bool = True,
     warning_display_name: str | None = None,
+    custom_llm_provider: str | None = None,
 ):
     """
     Register new / Override existing models (and their pricing) to specific providers.
@@ -3361,6 +3362,11 @@ def register_model(
     ``warning_display_name`` names the model in the missing-cache-pricing
     warning instead of the registered key, for callers that register under an
     opaque key (e.g. the router's hashed deployment ids).
+
+    ``custom_llm_provider`` scopes the built-in cost-map match to entries for
+    that provider, so a deployment id that happens to equal another provider's
+    catalog key stays its own provider-less entry instead of merging into it.
+    Per-entry ``litellm_provider`` takes precedence when present.
     """
 
     loaded_model_cost = {}
@@ -3387,7 +3393,12 @@ def register_model(
             existing_model = litellm.model_cost.get(key, {})
             model_cost_key = key
         else:
-            builtin_model_info = _get_builtin_model_info_for_registration(model=_key_str)
+            builtin_model_info = _get_builtin_model_info_for_registration(
+                model=_key_str,
+                custom_llm_provider=(
+                    lookup_provider := (provider if isinstance(provider, str) else None) or custom_llm_provider
+                ),
+            )
             if builtin_model_info is not None:
                 existing_model = cast(dict, builtin_model_info)
                 model_cost_key = existing_model["key"]
@@ -3397,7 +3408,7 @@ def register_model(
                 # shadows the very defaults it would have resolved to unregistered.
                 existing_model = dict(match_capability_generalizations(_key_str) or {})
                 model_cost_key = key
-                builtin_entry = _resolve_builtin_model_cost_entry(key=_key_str, provider=provider)
+                builtin_entry = _resolve_builtin_model_cost_entry(key=_key_str, provider=lookup_provider)
                 if builtin_entry is not None:
                     for field in _CACHE_PRICING_FIELDS:
                         if value.get(field) is None and builtin_entry.get(field) is not None:

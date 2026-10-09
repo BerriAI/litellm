@@ -1037,3 +1037,34 @@ def test_update_model_cost():
         assert litellm.model_cost["gpt-4"]["input_cost_per_token"] == 0.00002
     except Exception as e:
         pytest.fail(f"An error occurred: {e}")
+
+
+def test_register_model_scopes_builtin_match_to_the_given_provider():
+    """Registering under an id that collides with another provider's catalog
+    key keeps the entry provider-less under the id instead of merging into the
+    baseten row."""
+    colliding_id: Final = "baseten/zai-org/glm-5.2"
+    builtin_key: Final = "baseten/zai-org/GLM-5.2"
+    model_cost_entries: Final = _snapshot_model_cost_entries((colliding_id, builtin_key))
+    builtin_row_before: Final = copy.deepcopy(litellm.model_cost[builtin_key])
+    try:
+        litellm.register_model(
+            {
+                colliding_id: {
+                    "input_cost_per_token": 0.00000096,
+                    "output_cost_per_token": 0.00000302,
+                    "cache_read_input_token_cost": 0.00000010,
+                    "mode": "chat",
+                }
+            },
+            custom_llm_provider="openai",
+        )
+
+        entry: Final = litellm.model_cost[colliding_id]
+        assert "litellm_provider" not in entry
+        assert entry["input_cost_per_token"] == 0.00000096
+        assert entry["output_cost_per_token"] == 0.00000302
+        assert entry["cache_read_input_token_cost"] == 0.00000010
+        assert litellm.model_cost[builtin_key] == builtin_row_before
+    finally:
+        _restore_model_cost_entries(model_cost_entries)

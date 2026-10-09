@@ -10423,6 +10423,7 @@ class Router:
                 model_cost={model_id: model_info},
                 persist_across_reloads=False,
                 warning_display_name=model,
+                custom_llm_provider=custom_llm_provider,
             )
 
         ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
