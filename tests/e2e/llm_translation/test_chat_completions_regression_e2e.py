@@ -687,6 +687,52 @@ class TestAzureOpenAIChatCompletions:
         )
         _assert_weather_tool_call(response)
 
+    @pytest.mark.covers(
+        "llm.chat_completions.azure_openai.tool_use_bridged.nonstream.single_choice",
+        exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.AZURE,),
+            models=(AZURE_OPENAI_BACKEND,),
+            capabilities=(Capability.FUNCTION_CALLING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_azure_openai_bridged_tool_call_returns_one_choice(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = self._register(client, resources, "e2e-azure-openai-bridge")
+        key = resources.key()
+
+        response = unwrap(
+            client.proxy.chat(
+                key,
+                ChatBody(
+                    model=model,
+                    messages=[
+                        ChatMessage(
+                            role="system",
+                            content="Before you call any tool, first tell the user in one short sentence what you are about to do",
+                        ),
+                        ChatMessage(
+                            role="user",
+                            content=f"What is the weather in San Francisco? Use the get_weather tool. {unique_marker()}",
+                        ),
+                    ],
+                    tools=[_WEATHER_TOOL],
+                    max_tokens=128,
+                ),
+            )
+        )
+        assert len(response.choices) == 1, f"bridged reply returned {len(response.choices)} choices: {response}"
+        assert response.choices[0].finish_reason == "tool_calls", (
+            f"expected finish_reason tool_calls: {response}"
+        )
+        _assert_weather_tool_call(response)
+
 
 class TestAzureFoundryChatCompletions:
     @pytest.mark.covers(
