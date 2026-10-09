@@ -89,6 +89,7 @@ from litellm.llms.base_llm.vector_store.transformation import(
 from litellm.types.utils import CallTypes, CredentialItem
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 from tests.large_text import text
 import traceback
 import inspect
@@ -25040,3 +25041,83 @@ async def test_acompletion_keeps_include_fallback_errors_off_the_wire_and_return
             model="primary", messages=[{"role": "user", "content": "hi"}], include_fallback_errors=True
         )
     _assert_fallback_errors_reached_the_caller_and_not_the_wire(response, primary, backup)
+
+
+def _create_custom_routing_router():
+    return Router(
+        model_list=[
+            {
+                "model_name": "azure-model",
+                "litellm_params": {
+                    "model": "openai/very-special-endpoint",
+                    "api_base": FAKE_OPENAI_API_BASE,
+                    "api_key": "fake-key",
+                },
+                "model_info": {"id": "very-special-endpoint"},
+            },
+            {
+                "model_name": "azure-model",
+                "litellm_params": {
+                    "model": "openai/fast-endpoint",
+                    "api_base": FAKE_OPENAI_API_BASE,
+                    "api_key": "fake-key",
+                },
+                "model_info": {"id": "fast-endpoint"},
+            },
+        ],
+        set_verbose=True,
+        debug_level="DEBUG",
+    )
+
+
+class SpecialEndpointRoutingStrategy(CustomRoutingStrategyBase):
+    def __init__(self, router_instance: Router):
+        self._router = router_instance
+
+    async def async_get_available_deployment(
+        self,
+        model: str,
+        messages: list[dict[str, str]] | None = None,
+        input: str | list | None = None,
+        specific_deployment: bool | None = False,
+        request_kwargs: dict | None = None,
+    ):
+        print("In CUSTOM async get available deployment")
+        model_list = self._router.model_list
+        print("router model list=", model_list)
+        for model in model_list:
+            if isinstance(model, dict):
+                if model["litellm_params"]["model"] == "openai/very-special-endpoint":
+                    return model
+        pass
+
+    def get_available_deployment(
+        self,
+        model: str,
+        messages: list[dict[str, str]] | None = None,
+        input: str | list | None = None,
+        specific_deployment: bool | None = False,
+        request_kwargs: dict | None = None,
+    ):
+        pass
+
+
+def test_reset_custom_routing_strategy():
+    """
+    Setting a custom routing strategy installs instance-level overrides for
+    get_available_deployment / async_get_available_deployment. Re-initializing the
+    routing strategy must clear them so the class implementations are used again.
+    """
+    router = _create_custom_routing_router()
+    router.set_custom_routing_strategy(SpecialEndpointRoutingStrategy(router))
+
+    assert "get_available_deployment" in router.__dict__
+    assert "async_get_available_deployment" in router.__dict__
+
+    router._reset_custom_routing_strategy()
+
+    assert "get_available_deployment" not in router.__dict__
+    assert "async_get_available_deployment" not in router.__dict__
+    assert router.async_get_available_deployment.__func__ is Router.async_get_available_deployment
+
+    router._reset_custom_routing_strategy()

@@ -620,8 +620,27 @@ describe("UsagePage", () => {
     expect(totalTokensElements.length).toBeGreaterThan(0);
 
     // Check for chart titles (these are in the Overview tab)
+    expect(screen.getByText("Daily usage")).toBeInTheDocument();
+    expect(screen.getByText("Daily spend by model (top 8, rest grouped as Other)")).toBeInTheDocument();
     expect(screen.getByText("Top models")).toBeInTheDocument();
     expect(screen.getByText("Top Virtual Keys")).toBeInTheDocument();
+  });
+
+  it("should rename the usage chart when the weekly bucket is selected", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+
+    expect(screen.getByText("Daily usage")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: "Weekly" }));
+
+    expect(screen.getByText("Weekly usage")).toBeInTheDocument();
+    expect(screen.getByText("Weekly spend by model (top 8, rest grouped as Other)")).toBeInTheDocument();
+    expect(screen.queryByText("Daily usage")).not.toBeInTheDocument();
   });
 
   it("should render the top models chart stacked in the shared usage palette", async () => {
@@ -660,7 +679,7 @@ describe("UsagePage", () => {
     });
 
     // Default view should show Global Usage (for admin)
-    expect(screen.getByText("Top models")).toBeInTheDocument();
+    expect(screen.getByText("Daily usage")).toBeInTheDocument();
 
     // Switch to Team Usage view
     const usageSelect = screen.getByTestId("usage-view-select");
