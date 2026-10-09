@@ -1410,6 +1410,37 @@ class TestCallerScopedOAuthAuthFailureCooldown:
         assert get_deployment_failures_for_current_minute(router, model_id) == 1
         assert get_cooldown_deployments(router, parent_otel_span=None) == [model_id]
 
+    @pytest.mark.parametrize("status", (401, 403))
+    def test_fallback_oauth_caller_auth_failure_does_not_cooldown(self, status: int) -> None:
+        model_id: Final = f"fallback-oauth-{status}"
+        router: Final = self._router(
+            model_id,
+            {
+                "token_exchange_endpoint": "https://identity.example.com/token",
+                "client_id": "copilot-client",
+                "client_secret": "copilot-secret",
+            },
+        )
+        exception: Final = self._auth_exception(status)
+        exception.failed_deployment_id = model_id
+
+        _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=exception)
+
+        assert get_deployment_failures_for_current_minute(router, model_id) == 0
+        assert get_cooldown_deployments(router, parent_otel_span=None) == []
+
+    @pytest.mark.asyncio
+    async def test_fallback_api_key_auth_failure_still_cools_down(self) -> None:
+        model_id: Final = "fallback-api-key"
+        router: Final = self._router(model_id, {"api_key": "sk-test"})
+        exception: Final = litellm.AuthenticationError("API key rejected", "openai", "gpt-4o-mini")
+        exception.failed_deployment_id = model_id
+
+        _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=exception)
+
+        assert get_deployment_failures_for_current_minute(router, model_id) == 1
+        assert get_cooldown_deployments(router, parent_otel_span=None) == [model_id]
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestNewAllowedFailsPolicyFields:
     def test_service_unavailable_error_matched_by_policy(self):

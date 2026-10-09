@@ -22,6 +22,7 @@ from litellm.router_utils.cooldown_handlers import (
     _first_present,  # pyright: ignore[reportPrivateUsage] - shared internal helper, used across router_utils
     cast_exception_status_to_int,
     is_advisor_orchestration_failure,
+    is_caller_scoped_auth_failure,
     is_caller_timeout_408,
     set_cooldown_deployments,
 )
@@ -106,6 +107,14 @@ def _trigger_cooldown_for_failed_deployment(
 
         if deployment_id is None:
             verbose_router_logger.debug("Cannot trigger cooldown for fallback: no failed_deployment_id on exception")
+            return
+
+        deployment: Final = litellm_router.get_deployment(model_id=deployment_id)
+        if is_caller_scoped_auth_failure(deployment, exception_status):
+            verbose_router_logger.debug(
+                "Not triggering cooldown for fallback deployment %s: caller-scoped OAuth authentication failure.",
+                deployment_id,
+            )
             return
 
         # Priority: deployment config > response header > router default, matching
