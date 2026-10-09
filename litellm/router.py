@@ -1078,9 +1078,12 @@ class Router:
         self.deployment_names: list = []  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self.deployment_latency_map = {}
         ### CACHING ###
-        cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = "local"  # default to an in-memory cache
+        cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = "local"
         redis_cache = None
-        cache_config: Final[dict[str, Any]] = {}
+        cache_config: dict[str, Any] = {}
+
+        cache_config.update(cache_kwargs)
+        cache_type = cache_config.pop("type", cache_type)
 
         self.client_ttl = client_ttl
         if redis_url is not None or (redis_host is not None and redis_port is not None):
@@ -1104,8 +1107,6 @@ class Router:
                 )
                 cache_config["db"] = str(redis_db)
 
-            # Add additional key-value pairs from cache_kwargs
-            cache_config.update(cache_kwargs)
             redis_cache = self._create_redis_cache(cache_config)
 
         if cache_responses:
