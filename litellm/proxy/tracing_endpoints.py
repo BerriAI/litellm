@@ -3,6 +3,7 @@ Agent tracing endpoints. Thin wrappers over `TraceReceiver`: auth -> tenant/scop
 
 POST /v1/traces                              OTLP/HTTP trace export (protobuf or JSON)
 GET  /v1/traces                              TracePage
+GET  /v1/traces/agents                       TraceAgentList
 GET  /v1/traces/{trace_id}                   Trace
 GET  /v1/traces/{trace_id}/spans/{span_id}   SpanDetail
 """
@@ -10,44 +11,73 @@ GET  /v1/traces/{trace_id}/spans/{span_id}   SpanDetail
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import partial
 from http.client import responses
 from types import MappingProxyType
-from typing import Annotated, Final
+from typing import Annotated, Final, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import OTLP_RETRY_AFTER_SECONDS
+from litellm.constants import (
+    DEFAULT_AGENT_TRACING_RETENTION_DAYS,
+    OTLP_RETRY_AFTER_SECONDS,
+    TRACE_READ_RETRY_AFTER_SECONDS,
+)
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.authorization import AllRows, ReadScope, resolve_trace_read_scope
+from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import is_otlp_trace_request
 from litellm.proxy.tracing_runtime import provide_receiver, require_receiver
-from litellm.rust_bridge.traces import ClickHouseStorage, QueryScope
-from litellm.tracing import (
-    Tenant,
-    TraceReceiver,
-    TracingPayloadTooLargeError,
+from litellm.rust_bridge.trace.errors import TraceChanged
+from litellm.rust_bridge.trace.generated.models import TraceQueryHelp
+from litellm.rust_bridge.trace.generated.requests import (
+    TraceDetailRequest,
+    TraceErrorPageRequest,
+    TraceListRequest,
+    TraceQueryRequest,
+    TraceSpanRequest,
 )
-from litellm.tracing.decode import InvalidOTLPPayloadError, encode_otlp_response
-from litellm.tracing.types import SpanDetail, SpanErrorPage, Trace, TracePage, TraceScope
+from litellm.rust_bridge.trace.generated.responses import TraceSQLResponse
+from litellm.rust_bridge.trace.generated.types import (
+    AllQueryScope,
+    OwnedQueryScope,
+    QueryScope,
+    SpanDetail,
+    SpanErrorPage,
+    Trace,
+    TracePage,
+    TraceScope,
+)
+from litellm.rust_bridge.trace.storage import ClickHouseStorage, Tenant
+from litellm.tracing import TraceReceiver
+from litellm.tracing.otlp_http import encode_otlp_response
+from litellm.tracing.types import TraceAgentList
+from litellm.types.llms.base import LiteLLMBaseModel
 
 router = APIRouter(tags=["agent tracing"])
 
 MS_PER_DAY: Final = 24 * 60 * 60 * 1000
 
 
+async def current_time_ms() -> int:
+    return int(time.time() * 1000)
+
+
 @dataclass(frozen=True, slots=True)
 class TraceAccessContext:
     receiver: TraceReceiver | None
-    read_scope: TraceScope | None
+    read_scope: ReadScope | None
     write_tenant: Tenant | None
 
     def reader(self) -> tuple[TraceReceiver, TraceScope]:
         tracing: Final = require_receiver(self.receiver)
         if self.read_scope is None:
             raise HTTPException(status_code=403, detail="Not allowed to view agent traces")
-        return tracing, self.read_scope
+        return tracing, _trace_scope(self.read_scope)
 
     def writer(self) -> tuple[TraceReceiver, Tenant]:
         if self.write_tenant is None:
@@ -58,19 +88,24 @@ class TraceAccessContext:
 async def provide_trace_access(
     auth: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     tracing: Annotated[TraceReceiver | None, Depends(provide_receiver)],
+    log_team_lookup: LogTeamLookupDependency,
 ) -> TraceAccessContext:
-    tenant: Final = Tenant(team_id=auth.team_id or "", api_key_hash=auth.token or "", org_id=auth.org_id or "")
-    match auth.user_role:
-        case LitellmUserRoles.PROXY_ADMIN:
-            return TraceAccessContext(tracing, TraceScope(team_ids=(), api_key_hash=""), tenant)
-        case LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY:
-            return TraceAccessContext(tracing, TraceScope(team_ids=(), api_key_hash=""), None)
-        case _ if auth.team_id:
-            return TraceAccessContext(tracing, TraceScope(team_ids=(auth.team_id,), api_key_hash=""), tenant)
-        case _ if auth.token:
-            return TraceAccessContext(tracing, TraceScope(team_ids=("",), api_key_hash=auth.token), tenant)
-        case _:
-            return TraceAccessContext(tracing, None, tenant)
+    tenant: Final = Tenant(
+        team_id=auth.team_id or "", api_key_hash=auth.token or "", org_id=auth.org_id or "", user_id=auth.user_id or ""
+    )
+    write_tenant: Final = None if auth.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY else tenant
+    read_scope: Final = await resolve_trace_read_scope(auth, partial(log_team_lookup, auth))
+    return TraceAccessContext(tracing, read_scope, write_tenant)
+
+
+def _trace_scope(scope: ReadScope) -> TraceScope:
+    if isinstance(scope, AllRows):
+        return TraceScope(all_teams=1, user_id="", team_ids=())
+    return TraceScope(
+        all_teams=0,
+        user_id=scope.user_id or "",
+        team_ids=scope.team_ids,
+    )
 
 
 def otlp_error_response(
@@ -94,61 +129,109 @@ def _otlp_error(content_type: str | None, status_code: int, message: str, retry:
     )
 
 
+@router.post("/v1/logs", include_in_schema=False)
 @router.post("/v1/traces", include_in_schema=False)
-async def ingest_otlp_traces(
-    request: Request,
-    context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
-) -> Response:
-    content_type: Final = request.headers.get("content-type")
-    try:
-        tracing, tenant = context.writer()
-        await tracing.ingest(
-            body=request.stream(),
-            content_type=content_type,
-            content_encoding=request.headers.get("content-encoding"),
-            tenant=tenant,
-        )
-    except TracingPayloadTooLargeError as e:
-        return _otlp_error(content_type, 413, str(e))
-    except InvalidOTLPPayloadError as error:
-        return _otlp_error(content_type, 400, str(error))
-    except RuntimeError:
-        return _otlp_error(content_type, 503, "Trace ingestion is temporarily unavailable", retry=True)
-    except HTTPException as error:
-        return _otlp_error(content_type, error.status_code, str(error.detail))
-    body, media_type = encode_otlp_response(content_type)
-    return Response(content=body, media_type=media_type)
+async def ingest_otlp_traces(request: Request) -> Response:
+    return _otlp_error(
+        request.headers.get("content-type"),
+        410,
+        "Send traces and logs directly to the Lens endpoint shown in Lens setup.",
+    )
+
+
+class TraceReadFailure(LiteLLMBaseModel):
+    """The body of every failed trace read. Clients branch on `code`, never on `message`."""
+
+    model_config = ConfigDict(frozen=True)
+
+    code: Literal["invalid_request", "trace_changed", "too_large", "unavailable"]
+    message: str
+
+
+def read_failure(error: TraceChanged | ValueError | OverflowError | RuntimeError) -> HTTPException:
+    """One status per failure kind, so a client can tell a bad cursor (400, fix the request) from a
+    traversal it must restart (409), a result it cannot page through (413), and an outage it should
+    retry after `Retry-After` (503)."""
+    match error:
+        case TraceChanged():
+            return HTTPException(
+                status_code=409,
+                detail=TraceReadFailure(code="trace_changed", message=str(error)).model_dump(),
+            )
+        case ValueError():
+            return HTTPException(
+                status_code=400, detail=TraceReadFailure(code="invalid_request", message=str(error)).model_dump()
+            )
+        case OverflowError():
+            return HTTPException(
+                status_code=413,
+                detail=TraceReadFailure(
+                    code="too_large", message="Trace is too large for this view. Use a filtered trace query."
+                ).model_dump(),
+            )
+        case RuntimeError():
+            verbose_proxy_logger.warning("Trace read unavailable: %s", error)
+            return HTTPException(
+                status_code=503,
+                detail=TraceReadFailure(
+                    code="unavailable", message="Traces are temporarily unavailable. Please try again."
+                ).model_dump(),
+                headers={"Retry-After": str(TRACE_READ_RETRY_AFTER_SECONDS)},
+            )
+        case _:
+            return assert_never(error)
 
 
 @router.get("/v1/traces", response_model=TracePage)
 async def list_agent_traces(
     context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
-    start_ms: Annotated[int | None, Query(description="Window start, unix ms. Default: 24h ago")] = None,
-    end_ms: Annotated[int | None, Query(description="Window end, unix ms. Default: now")] = None,
-    cursor: Annotated[str | None, Query()] = None,
+    now_ms: Annotated[int, Depends(current_time_ms)],
+    request: Annotated[TraceListRequest, Query()],
 ) -> TracePage:
-    now_ms: Final = int(time.time() * 1000)
     try:
         tracing, scope = context.reader()
         return await tracing.list_traces(
             scope=scope,
-            start_ms=start_ms if start_ms is not None else now_ms - MS_PER_DAY,
-            end_ms=end_ms if end_ms is not None else now_ms,
-            cursor=cursor,
+            start_ms=request.start_ms if request.start_ms is not None else now_ms - MS_PER_DAY,
+            end_ms=request.end_ms if request.end_ms is not None else now_ms,
+            cursor=request.cursor,
         )
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+    except (TraceChanged, ValueError, OverflowError, RuntimeError) as error:
+        raise read_failure(error) from error
 
 
-class TraceQueryRequest(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    sql: str
+class TraceAgentListRequest(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    start_ms: int | None = None
+    end_ms: int | None = None
+
+
+@router.get("/v1/traces/agents", response_model=TraceAgentList)
+async def list_trace_agents(
+    context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
+    now_ms: Annotated[int, Depends(current_time_ms)],
+    request: Annotated[TraceAgentListRequest, Query()],
+) -> TraceAgentList:
+    try:
+        tracing, scope = context.reader()
+        return await tracing.list_agents(
+            scope=scope,
+            start_ms=(
+                request.start_ms
+                if request.start_ms is not None
+                else now_ms - DEFAULT_AGENT_TRACING_RETENTION_DAYS * MS_PER_DAY
+            ),
+            end_ms=request.end_ms if request.end_ms is not None else now_ms,
+        )
+    except (ValueError, OverflowError, RuntimeError) as error:
+        raise read_failure(error) from error
 
 
 @dataclass(frozen=True, slots=True)
 class TraceQueryAccess:
     storage: ClickHouseStorage
-    scope: QueryScope
+    scope: ReadScope
     secret: str
 
 
@@ -160,37 +243,36 @@ def provide_trace_query_secret() -> str:
     return master_key
 
 
-def trace_query_scope(auth: UserAPIKeyAuth) -> QueryScope:
-    if auth.user_role in (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
-        return {"kind": "admin"}
-    if auth.project_id and auth.token:
-        return {"kind": "key", "team_id": auth.team_id or "", "api_key_hash": auth.token}
-    if auth.project_id:
-        raise HTTPException(status_code=403, detail="Project trace SQL queries require a project key")
-    if auth.team_id:
-        return {"kind": "team", "team_id": auth.team_id}
-    if auth.token:
-        return {"kind": "key", "team_id": "", "api_key_hash": auth.token}
-    raise HTTPException(status_code=403, detail="Trace SQL queries require an authenticated trace scope")
+def trace_query_scope(scope: ReadScope) -> QueryScope:
+    if isinstance(scope, AllRows):
+        return AllQueryScope(kind="all")
+    return OwnedQueryScope(
+        kind="owned",
+        user_id=scope.user_id or "",
+        team_ids=scope.team_ids,
+    )
 
 
 async def provide_trace_query_access(
     auth: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     tracing: Annotated[TraceReceiver | None, Depends(provide_receiver)],
     secret: Annotated[str, Depends(provide_trace_query_secret)],
+    log_team_lookup: LogTeamLookupDependency,
 ) -> TraceQueryAccess:
-    return TraceQueryAccess(require_receiver(tracing).store.storage, trace_query_scope(auth), secret)
+    storage: Final = require_receiver(tracing).storage
+    scope: Final = await resolve_trace_read_scope(auth, partial(log_team_lookup, auth))
+    if scope is None:
+        raise HTTPException(status_code=403, detail="Not allowed to view logs")
+    return TraceQueryAccess(storage, scope, secret)
 
 
-@router.post("/v1/traces/query")
+@router.post("/v1/traces/query", response_model=TraceSQLResponse, response_model_exclude_unset=True)
 async def query_agent_traces(
     body: TraceQueryRequest,
     access: Annotated[TraceQueryAccess, Depends(provide_trace_query_access)],
-) -> Response:
+) -> TraceSQLResponse:
     try:
-        return Response(
-            content=await access.storage.query_sql(body.sql, access.scope, access.secret), media_type="application/json"
-        )
+        return await access.storage.query_sql(body.sql, trace_query_scope(access.scope), access.secret)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except RuntimeError as error:
@@ -198,14 +280,12 @@ async def query_agent_traces(
         raise HTTPException(status_code=503, detail="Trace SQL query failed or exceeded reader limits") from error
 
 
-@router.get("/v1/traces/query/help")
+@router.get("/v1/traces/query/help", response_model=TraceQueryHelp, response_model_exclude_unset=True)
 async def help_agent_trace_queries(
     access: Annotated[TraceQueryAccess, Depends(provide_trace_query_access)],
-) -> Response:
+) -> TraceQueryHelp:
     try:
-        return Response(
-            content=await access.storage.query_help(access.scope, access.secret), media_type="application/json"
-        )
+        return await access.storage.query_help(trace_query_scope(access.scope), access.secret)
     except RuntimeError as error:
         verbose_proxy_logger.warning("Trace query help unavailable: %s", error)
         raise HTTPException(status_code=503, detail="Trace query help is temporarily unavailable") from error
@@ -215,10 +295,13 @@ async def help_agent_trace_queries(
 async def get_agent_trace(
     trace_id: str,
     context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
-    trace_ref: Annotated[str, Query()] = "",
+    request: Annotated[TraceDetailRequest, Query()],
 ) -> Trace:
     tracing, scope = context.reader()
-    trace: Final = await tracing.get_trace(trace_id, scope, trace_ref)
+    try:
+        trace: Final = await tracing.get_trace(trace_id, scope, request.trace_ref, request.cursor, request.page_size)
+    except (TraceChanged, ValueError, OverflowError, RuntimeError) as error:
+        raise read_failure(error) from error
     if trace is None:
         raise HTTPException(status_code=404, detail=f"Trace {trace_id} not found")
     return trace
@@ -229,10 +312,13 @@ async def get_agent_trace_span(
     trace_id: str,
     span_id: str,
     context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
-    trace_ref: Annotated[str, Query()] = "",
+    request: Annotated[TraceSpanRequest, Query()],
 ) -> SpanDetail:
     tracing, scope = context.reader()
-    span: Final = await tracing.get_span(trace_id, span_id, scope, trace_ref)
+    try:
+        span: Final = await tracing.get_span(trace_id, span_id, scope, request.trace_ref)
+    except (TraceChanged, ValueError, OverflowError, RuntimeError) as error:
+        raise read_failure(error) from error
     if span is None:
         raise HTTPException(status_code=404, detail=f"Span {span_id} not found")
     return span
@@ -243,14 +329,13 @@ async def get_agent_trace_span_error(
     trace_id: str,
     span_id: str,
     context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
-    trace_ref: Annotated[str, Query()] = "",
-    cursor: Annotated[str | None, Query(max_length=512)] = None,
+    request: Annotated[TraceErrorPageRequest, Query()],
 ) -> SpanErrorPage:
     try:
         tracing, scope = context.reader()
-        page: Final = await tracing.get_span_error(trace_id, span_id, scope, trace_ref, cursor)
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        page: Final = await tracing.get_span_error(trace_id, span_id, scope, request.trace_ref, request.cursor)
+    except (TraceChanged, ValueError, OverflowError, RuntimeError) as error:
+        raise read_failure(error) from error
     if page is None:
         raise HTTPException(status_code=404, detail="Span diagnostic not found or no longer available")
     return page

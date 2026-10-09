@@ -11,7 +11,13 @@ from mcp_types.methods import CLIENT_REQUESTS
 from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS, LATEST_HANDSHAKE_VERSION
 from pydantic import TypeAdapter
 
-from litellm.types.mcp import MCP_LEGACY_VERSIONS, MCPAdvertisedVersions, MCPLegacyVersion, MCPSpecVersion, MCPTransport
+from litellm.types.mcp import (
+    MCP_LEGACY_VERSIONS,
+    MCPAdvertisedVersion,
+    MCPAdvertisedVersions,
+    MCPSpecVersion,
+    MCPTransport,
+)
 
 GATEWAY_OPERATIONS: Final = frozenset(
     {
@@ -46,14 +52,14 @@ REVISION_SUPPORT: Final[Mapping[str, RevisionSupport]] = MappingProxyType(
             if version.value in HANDSHAKE_PROTOCOL_VERSIONS
             else frozenset({"complete", "input_required"}),
             extensions=frozenset(),
-            completed=version.value in HANDSHAKE_PROTOCOL_VERSIONS,
+            completed=version.value in HANDSHAKE_PROTOCOL_VERSIONS or version.value == "2026-07-28",
         )
         for version in MCPSpecVersion
     }
 )
 _COMPLETED_REVISIONS: Final = tuple(version for version, support in REVISION_SUPPORT.items() if support.completed)
 TRANSLATION_PAIRS: Final = frozenset(product(_COMPLETED_REVISIONS, repeat=2))
-_ADVERTISED_VERSIONS: Final[TypeAdapter[tuple[MCPLegacyVersion, ...]]] = TypeAdapter(MCPAdvertisedVersions)
+_ADVERTISED_VERSIONS: Final[TypeAdapter[tuple[MCPAdvertisedVersion, ...]]] = TypeAdapter(MCPAdvertisedVersions)
 
 
 def configured_versions() -> tuple[str, ...]:

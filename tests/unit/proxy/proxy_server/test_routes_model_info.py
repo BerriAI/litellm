@@ -648,7 +648,7 @@ def model_group_info_router(monkeypatch):
     monkeypatch.setattr(proxy_server, "general_settings", {})
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", None)
-    monkeypatch.setattr(proxy_server, "_get_model_group_info", model_group_info)
+    monkeypatch.setattr(proxy_server, "get_model_group_info", model_group_info)
 
     from litellm.proxy.agent_endpoints import model_list_helpers
 

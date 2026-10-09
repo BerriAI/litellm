@@ -49,8 +49,8 @@ fn info(name: &str, config: &McpServer) -> ServerInfo {
     let identity = format!(
         "{name}|{}|{}|{}|{}",
         config.url.as_ref().map_or("", SecretValue::expose),
-        config.transport.as_str(),
-        config.auth_type.map_or("", McpAuth::as_str),
+        <&'static str>::from(config.transport),
+        config.auth_type.map_or("", <&'static str>::from),
         config.alias.as_deref().unwrap_or("")
     );
     ServerInfo {

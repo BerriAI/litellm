@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { normalizeTierModels } from "./complexity_router_tiers";
 import { fireEvent, renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import AutoRouterConnectionTest from "./auto_router_connection_test";
 import AutoRouterRoutingTest from "./AutoRouterRoutingTest";
@@ -53,7 +54,7 @@ const request = buildSavedJevConnectionTestRequest(
   "saved-id",
 );
 const targets = buildAutoRouterTestTargets({
-  tiers: Object.entries(config.tiers),
+  tiers: Object.entries(config.tiers).map(([tier, models]) => [tier, normalizeTierModels(models)]),
   semanticMatchingEnabled: false,
   embeddingModel: undefined,
 });
@@ -107,10 +108,10 @@ describe("JEV network probes", () => {
       expect(JSON.parse(String(routingCall?.[1]?.body))).toEqual(expectedRequest);
       expect(fetchMock).toHaveBeenCalledTimes(5);
       expect(screen.getAllByTestId("test-status-success")).toHaveLength(4);
-      expect(screen.getByRole("status", { name: "Jev connection" })).toHaveTextContent(
+      expect(screen.getByRole("status", { name: "OSS classifier connection" })).toHaveTextContent(
         cause === "jev_classifier"
-          ? "Jev classification succeeded"
-          : `Jev was not reached successfully (routing cause: ${cause})`,
+          ? "OSS classification succeeded"
+          : `OSS classifier was not reached successfully (routing cause: ${cause})`,
       );
     },
   );
@@ -131,7 +132,7 @@ describe("JEV network probes", () => {
     );
     fireEvent.change(screen.getByTestId("auto-router-routing-test-prompt"), { target: { value: "Hello" } });
     fireEvent.click(screen.getByTestId("auto-router-routing-test-send"));
-    expect(await screen.findByText("JEV classifier")).toBeInTheDocument();
+    expect(await screen.findByText("OSS classifier")).toBeInTheDocument();
     expect(screen.getByText("jev-latest")).toBeInTheDocument();
     expect(screen.getByText("80.0%")).toBeInTheDocument();
     expect(screen.getByText("SIMPLE: 80.0%")).toBeInTheDocument();
