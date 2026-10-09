@@ -14,6 +14,7 @@ meters exactly the aggregate. OTel spans for line items must still be emitted:
 the guard belongs on cost/token metrics, not on tracing.
 """
 
+import asyncio
 import io
 import json
 import os
@@ -28,7 +29,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 import litellm
-from litellm.batches.batch_line_item_logging import batch_line_item_claim_cache
+from litellm.batches.batch_line_item_logging import batch_line_item_claim_cache, pending_batch_line_item_tasks
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.utils import LiteLLMBatch, Usage
 
@@ -168,6 +169,7 @@ async def _log_completed_batch(monkeypatch: pytest.MonkeyPatch, loggers: list, f
                 batch_prompt_cost=1.0,
                 batch_completion_cost=0.5,
             )
+            await asyncio.gather(*pending_batch_line_item_tasks())
     finally:
         litellm._async_success_callback = saved_success  # test-quality-ok: restores the seam
         litellm._async_failure_callback = saved_failure  # test-quality-ok: restores the seam

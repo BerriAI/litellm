@@ -1,3 +1,4 @@
+import asyncio
 import json
 import uuid
 from collections.abc import Iterator, Mapping
@@ -72,6 +73,12 @@ _EMPTY_BODY: Final[Mapping[str, object]] = MappingProxyType({})
 _LINE_ITEM_CLAIM_TTL_SECONDS: Final = 30 * 24 * 60 * 60
 
 batch_line_item_claim_cache: Final = DualCache()
+
+# asyncio holds tasks weakly, so each spawned line fan-out stays referenced here until it finishes
+_LINE_ITEM_TASKS: Final[set["asyncio.Task[int]"]] = set()  # mutable-ok: strong refs to running fan-outs
+
+# Anthropic keeps no input file, so its retrieved batch reports input_file_id as the string "None"
+_NO_FILE_IDS: Final = frozenset(("", "None"))
 
 _ClaimResult: TypeAlias = Literal["claimed", "already_claimed", "unavailable"]
 
@@ -324,6 +331,7 @@ async def _emit_line_event(
     batch: LiteLLMBatch,
     custom_llm_provider: _BatchLineProvider,
     parent: "Logging",
+    parent_params: Mapping[str, object],
     model_name: str | None,
     model_info: ModelInfo | None,
 ) -> bool:
@@ -334,7 +342,6 @@ async def _emit_line_event(
     request_call_type: Final = _call_type_for_request(request_line)
     response_body: Final = _get_response_from_batch_job_output_file(entry, custom_llm_provider)
     start_time: Final = parent.start_time
-    parent_params: Final = _as_object_mapping(parent.litellm_params) or _EMPTY_BODY  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped upstream
     model: Final = _line_model(response_body, request_body, parent)
 
     successful: Final = _batch_response_was_successful(entry, custom_llm_provider)
@@ -410,13 +417,64 @@ async def _fetch_managed_file_or_empty(
     custom_llm_provider: _BatchLineProvider,
     fetch_params: dict[str, object] | None,  # mutable-ok: batch_utils file fetch takes the shared litellm_params dict
 ) -> bytes:
-    if file_id is None:
+    if file_id is None or file_id in _NO_FILE_IDS:
         return b""
     return await _fetch_batch_managed_file_content(
         file_id,
         custom_llm_provider=custom_llm_provider,
         litellm_params=fetch_params,  # pyright: ignore[reportArgumentType]  # batch_utils types this param as an unparameterized dict
     )
+
+
+def spawn_batch_line_items(
+    batch: LiteLLMBatch,
+    custom_llm_provider: str,
+    parent: "Logging",
+    model_name: str | None,
+    litellm_params: dict[str, object] | None,  # mutable-ok: the logging object's shared litellm_params dict
+    model_info: ModelInfo | None,
+    result_files: BatchResultFiles | None,
+) -> "asyncio.Task[int]":
+    """Run ``log_batch_line_items`` in its own task, so the fan-out never shares
+    the logging worker deadline the aggregate aretrieve_batch event runs under.
+    The parent's litellm_params are copied first, because the aggregate event's
+    callbacks keep writing request-local markers into its metadata."""
+    task: Final = asyncio.get_running_loop().create_task(
+        log_batch_line_items(
+            batch=batch,
+            custom_llm_provider=custom_llm_provider,
+            parent=parent,
+            model_name=model_name,
+            litellm_params=litellm_params,
+            model_info=model_info,
+            result_files=result_files,
+            parent_params=parent_params_snapshot(parent),
+        )
+    )
+    _LINE_ITEM_TASKS.add(task)
+    task.add_done_callback(_LINE_ITEM_TASKS.discard)
+    task.add_done_callback(_log_line_item_task_failure)
+    return task
+
+
+def parent_params_snapshot(parent: "Logging") -> Mapping[str, object]:
+    """The parent's litellm_params with their own copy of the metadata dict."""
+    params: Final = _as_object_mapping(parent.litellm_params) or _EMPTY_BODY  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped upstream
+    return MappingProxyType({**params, "metadata": _metadata_copy(params)})
+
+
+def pending_batch_line_item_tasks() -> tuple["asyncio.Task[int]", ...]:
+    """The spawned line fan-outs that have not finished yet."""
+    return tuple(_LINE_ITEM_TASKS)
+
+
+def _log_line_item_task_failure(task: "asyncio.Task[int]") -> None:
+    if task.cancelled():
+        verbose_logger.warning("batch line item logging was cancelled before it finished")
+        return
+    error: Final = task.exception()
+    if error is not None:
+        verbose_logger.error("batch line item logging failed; aggregate logging unaffected", exc_info=error)
 
 
 async def log_batch_line_items(
@@ -428,6 +486,7 @@ async def log_batch_line_items(
     model_info: ModelInfo | None,
     result_files: BatchResultFiles | None = None,
     claim_cache: DualCache = batch_line_item_claim_cache,
+    parent_params: Mapping[str, object] | None = None,
 ) -> int:
     """Emit one callback event per JSONL line of a completed batch (request
     paired with its response/error), behind the opt-in
@@ -436,7 +495,9 @@ async def log_batch_line_items(
     ``batch_parent_id`` and never update spend themselves. Any failure here
     is logged and swallowed: aggregate accounting must be unaffected.
     ``result_files`` carries the output/error bytes the aggregate path already
-    fetched, so they are reused instead of refetched."""
+    fetched, so they are reused instead of refetched. ``parent_params`` is the
+    parent's litellm_params as of the aggregate event, read now when omitted."""
+    line_params: Final = parent_params if parent_params is not None else parent_params_snapshot(parent)
     line_provider: Final = _supported_line_provider(custom_llm_provider)
     if line_provider is None:
         verbose_logger.warning(
@@ -499,6 +560,7 @@ async def log_batch_line_items(
                         batch=batch,
                         custom_llm_provider=line_provider,
                         parent=parent,
+                        parent_params=line_params,
                         model_name=model_name,
                         model_info=model_info,
                     )

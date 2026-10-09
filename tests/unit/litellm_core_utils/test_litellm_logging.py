@@ -9697,7 +9697,7 @@ class TestRetrieveBatchReusesFetchedResultFiles:
 
     @pytest.mark.asyncio
     async def test_compute_path_fetches_each_result_file_once(self, monkeypatch) -> None:
-        from litellm.batches.batch_line_item_logging import batch_line_item_claim_cache
+        from litellm.batches.batch_line_item_logging import batch_line_item_claim_cache, pending_batch_line_item_tasks
 
         batch_line_item_claim_cache.in_memory_cache.flush_cache()
         file_bytes = self._batch_file_bytes()
@@ -9713,6 +9713,7 @@ class TestRetrieveBatchReusesFetchedResultFiles:
         monkeypatch.setattr("litellm.cost_calculator.batch_cost_calculator", lambda **kw: (0.01, 0.02))
 
         await self._logging_obj()._async_success_handler_body(result=self._batch(), start_time=None, end_time=None)
+        await asyncio.gather(*pending_batch_line_item_tasks())
 
         fetched = sorted(call.kwargs["file_id"] for call in file_mock.await_args_list)
         assert fetched == ["file-err", "file-in", "file-out"], (
@@ -9721,7 +9722,7 @@ class TestRetrieveBatchReusesFetchedResultFiles:
 
     @pytest.mark.asyncio
     async def test_explicit_kwargs_path_forwards_result_files(self, monkeypatch) -> None:
-        from litellm.batches.batch_line_item_logging import batch_line_item_claim_cache
+        from litellm.batches.batch_line_item_logging import batch_line_item_claim_cache, pending_batch_line_item_tasks
 
         batch_line_item_claim_cache.in_memory_cache.flush_cache()
         from litellm.types.utils import Usage
@@ -9747,6 +9748,7 @@ class TestRetrieveBatchReusesFetchedResultFiles:
             batch_output_file_content=file_bytes["file-out"],
             batch_error_file_content=file_bytes["file-err"],
         )
+        await asyncio.gather(*pending_batch_line_item_tasks())
 
         assert file_mock.await_count == 1
         assert file_mock.await_args.kwargs["file_id"] == "file-in", (

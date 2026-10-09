@@ -3364,13 +3364,13 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
 
             if litellm.store_batch_line_items_in_callbacks and (has_explicit_batch_data or should_compute_batch_data):
-                from litellm.batches.batch_line_item_logging import log_batch_line_items
+                from litellm.batches.batch_line_item_logging import spawn_batch_line_items
 
                 _line_item_litellm_params: Final = cast(  # cast-ok: shared attribute is an untyped dict
                     "dict[str, object] | None", self.litellm_params
                 )
                 try:
-                    await log_batch_line_items(
+                    spawn_batch_line_items(
                         batch=result,
                         custom_llm_provider=self.custom_llm_provider,
                         parent=self,
@@ -3379,7 +3379,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         model_info=self.get_router_deployment_model_info(),
                         result_files=result_files,
                     )
-                except Exception:  # noqa: BLE001  # line-item logging (claim step included) must never reach the aggregate aretrieve_batch path
+                except Exception:  # noqa: BLE001  # starting the line fan-out must never break the aggregate aretrieve_batch path
                     verbose_logger.exception(
                         "batch line item logging failed for batch_id=%s; aggregate logging unaffected",
                         result.id,

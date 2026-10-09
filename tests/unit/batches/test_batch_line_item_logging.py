@@ -11,6 +11,7 @@ the async success/failure lists, so a regression in pairing, hidden params,
 cost, or error propagation fails here.
 """
 
+import asyncio
 import json
 import uuid
 from datetime import datetime
@@ -25,6 +26,7 @@ from litellm.batches.batch_line_item_logging import (
     _release_line_item_claim,
     batch_line_item_claim_cache,
     log_batch_line_items,
+    pending_batch_line_item_tasks,
 )
 from litellm.batches.batch_utils import BatchResultFiles
 from litellm.caching.caching import DualCache
@@ -181,6 +183,7 @@ async def _log_completed_batch(logging_obj: Logging, batch: LiteLLMBatch) -> Non
         batch_prompt_cost=1.0,
         batch_completion_cost=0.5,
     )
+    await asyncio.gather(*pending_batch_line_item_tasks())
 
 
 def _payload(event: dict) -> dict:
@@ -286,6 +289,65 @@ async def test_in_progress_batch_poll_emits_no_line_events(recorder):
     file_mock.assert_not_called()
     assert all(_hidden(e).get("batch_custom_id") is None for e in recorder.success_events)
     assert len(recorder.failure_events) == 0
+
+
+class _GatedLineLogger(CustomLogger):
+    """Delivers the aggregate event at once and holds every line event until the gate opens."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.gate = asyncio.Event()
+        self.aggregate_events: list[dict] = []
+        self.line_events: list[dict] = []
+
+    async def _record(self, kwargs: dict) -> None:
+        if kwargs["litellm_params"].get("batch_parent_id") is None:
+            self.aggregate_events.append(kwargs)
+            return
+        await self.gate.wait()
+        self.line_events.append(kwargs)
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        await self._record(kwargs)
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        await self._record(kwargs)
+
+
+@pytest.mark.asyncio
+async def test_a_slow_line_fan_out_does_not_hold_back_the_aggregate_event(recorder, monkeypatch):
+    """The logging worker cancels a callback coroutine after its deadline, so the
+    aggregate event, which bills the batch, must not wait on the line fan-out."""
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: flag under test; fixture restores it
+    gated: Final = _GatedLineLogger()
+    monkeypatch.setattr(litellm, "_async_success_callback", [gated])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [gated])
+    with (
+        patch(
+            "litellm.files.main.afile_content", new_callable=AsyncMock, side_effect=_file_content
+        ),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        patch(
+            "litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)
+        ),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
+    ):
+        await asyncio.wait_for(
+            _parent_logging().async_success_handler(
+                result=_batch(),
+                batch_cost=1.5,
+                batch_usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+                batch_models=["gpt-4o"],
+                batch_successful_requests=1,
+                batch_failed_requests=1,
+            ),
+            timeout=5,
+        )
+        assert [_payload(e)["response_cost"] for e in gated.aggregate_events] == [1.5]
+        assert gated.line_events == []
+
+        gated.gate.set()
+        await asyncio.gather(*pending_batch_line_item_tasks())
+
+    assert sorted(_hidden(e)["batch_custom_id"] for e in gated.line_events) == ["a", "b"]
 
 
 @pytest.mark.asyncio
@@ -670,6 +732,39 @@ async def test_line_items_anthropic_shapes(recorder):
     assert payload["response"]["choices"][0]["message"]["content"] == "hello b2"
     assert payload["prompt_tokens"] == 1
     assert payload["completion_tokens"] == 2
+
+
+@pytest.mark.asyncio
+async def test_anthropic_line_items_arrive_without_an_input_file(recorder):
+    """Anthropic keeps no input file, so a retrieved Anthropic batch reports input_file_id "None"."""
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: flag under test; fixture restores it
+    batch = LiteLLMBatch(
+        id="batch_anth_no_input",
+        object="batch",
+        endpoint="/v1/messages",
+        input_file_id="None",
+        output_file_id="output-anth",
+        error_file_id=None,
+        status="completed",
+        completion_window="24h",
+        created_at=1,
+    )
+    file_mock: Final = AsyncMock(side_effect=_edge_file_content)
+    logging_obj = _parent_logging(custom_llm_provider="anthropic")
+    with (
+        patch(
+            "litellm.files.main.afile_content", file_mock
+        ),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        patch(
+            "litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)
+        ),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
+    ):
+        await _log_completed_batch(logging_obj, batch)
+
+    assert "None" not in [call.kwargs["file_id"] for call in file_mock.await_args_list]
+    line = next(e for e in recorder.success_events if _hidden(e).get("batch_custom_id") == "b2")
+    assert line["litellm_params"]["batch_parent_id"] == batch.id
+    assert _payload(line)["response"]["choices"][0]["message"]["content"] == "hello b2"
 
 
 def _provider_batch(batch_id: str, input_file_id: str, output_file_id: str) -> LiteLLMBatch:
