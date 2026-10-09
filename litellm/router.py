@@ -10776,6 +10776,10 @@ class Router:
         configured or discovered token limits. Resolved via O(1) index
         lookup.
 
+        A ``model_group_alias`` name that is not itself a deployment name resolves to its
+        target group, as routing does, so a listed alias reports the limits of the
+        deployments it routes to rather than none at all.
+
         Returns None for wildcard-expanded or unknown names, where the listed name is the
         real model name and no deployment-specific information exists, and treats a
         malformed configured limit as absent rather than failing the listing.
@@ -10788,7 +10792,9 @@ class Router:
         this never triggers pattern matching or deep copies, so it is safe to call per
         listed model on the /v1/models hot path.
         """
-        indices: Final = self.model_name_to_deployment_indices.get(model_name)
+        indices: Final = self.model_name_to_deployment_indices.get(
+            model_name
+        ) or self.model_name_to_deployment_indices.get(self._get_model_from_alias(model_name) or "")
         if not indices:
             return None
 
