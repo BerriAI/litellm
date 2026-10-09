@@ -13,13 +13,14 @@ import json
 import logging
 import os
 import re
+import sys
 from collections.abc import Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
-from typing import Any, Dict, Final
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -27,7 +28,10 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
-from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
 from litellm.proxy.proxy_server import (
     ProxyConfig,
     _is_remote_module_url,
@@ -41,9 +45,9 @@ from litellm.proxy.proxy_server import (
     validate_deployment_max_agentic_loops,
 )
 from litellm.tracing.config import trace_storage_config
+from tests._master_key import MASTER_KEY
 
 from .conftest import normalize
-from tests._master_key import MASTER_KEY
 
 
 @pytest.mark.asyncio
@@ -150,7 +154,7 @@ def test__is_remote_module_url_raises_on_unexpected_iteration():
 
 
 def test__scrub_guardrail_inner_strips_remote_callbacks_and_guardrail():
-    inner: Dict[str, Any] = {
+    inner: dict[str, Any] = {
         "callbacks": ["safe.mod", "s3://attacker/m.py", "gcs://x/y.py"],
         "guardrail": "s3://attacker/g.py",
         "default_on": True,
@@ -204,7 +208,7 @@ def test__scrub_db_overlay_remote_module_loads_invalid_non_dict_returns_input():
 
 
 def test_resolve_complexity_router_plugins_no_plugins_key_is_a_noop():
-    config: Dict[str, Any] = {"tiers": {"SIMPLE": "gpt-4o-mini"}}
+    config: dict[str, Any] = {"tiers": {"SIMPLE": "gpt-4o-mini"}}
     resolve_complexity_router_plugins(model_name="smart-router", complexity_router_config=config, config_file_path=None)
     assert config == {"tiers": {"SIMPLE": "gpt-4o-mini"}}
 
@@ -214,7 +218,7 @@ def test_resolve_complexity_router_plugins_resolves_dotted_path_to_live_instance
     plugin_file.write_text(
         "class _Plugin:\n    async def run(self, context):\n        return context\n\nmy_plugin_instance = _Plugin()\n"
     )
-    config: Dict[str, Any] = {"plugins": ["my_plugin.my_plugin_instance"]}
+    config: dict[str, Any] = {"plugins": ["my_plugin.my_plugin_instance"]}
 
     resolve_complexity_router_plugins(
         model_name="smart-router",
@@ -531,7 +535,7 @@ def test_validate_deployment_max_agentic_loops_names_the_offending_model():
 def test_resolve_complexity_router_plugins_rejects_non_routing_plugin_object(tmp_path):
     plugin_file = tmp_path / "bad_plugin.py"
     plugin_file.write_text("not_a_plugin = object()\n")
-    config: Dict[str, Any] = {"plugins": ["bad_plugin.not_a_plugin"]}
+    config: dict[str, Any] = {"plugins": ["bad_plugin.not_a_plugin"]}
 
     with pytest.raises(ValueError, match="does not implement the RoutingPlugin interface"):
         resolve_complexity_router_plugins(
@@ -555,7 +559,7 @@ def test_resolve_complexity_router_plugins_rejects_synchronous_run_method(tmp_pa
         "\n"
         "sync_plugin_instance = _SyncPlugin()\n"
     )
-    config: Dict[str, Any] = {"plugins": ["sync_plugin.sync_plugin_instance"]}
+    config: dict[str, Any] = {"plugins": ["sync_plugin.sync_plugin_instance"]}
 
     with pytest.raises(ValueError, match="does not implement the RoutingPlugin interface"):
         resolve_complexity_router_plugins(
@@ -2507,7 +2511,7 @@ async def test_ProxyConfig_load_config_wires_config_reload_interval(tmp_path, mo
     """general_settings.proxy_config_reload_interval_seconds must reach the proxy_server
     module global that schedules the DB config-reload jobs, so operators can tune multi-pod
     convergence from config.yaml."""
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     f = tmp_path / "c.yaml"
     f.write_text(
@@ -3231,7 +3235,7 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_for_aws_bedrock_auth_para
     fake_router.upsert_deployment = MagicMock(return_value=True)
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
     pc = ProxyConfig()
-    litellm_params: Dict[str, Any] = {"model": "bedrock/anthropic.claude-v2"}
+    litellm_params: dict[str, Any] = {"model": "bedrock/anthropic.claude-v2"}
     for key, (env_name, _) in aws_env.items():
         litellm_params[key] = f"os.environ/{env_name}"
     db_model = SimpleNamespace(
@@ -3406,6 +3410,28 @@ def test_ProxyConfig_decrypt_credentials_returns_an_encrypted_empty_value_as_emp
         }
     )
     assert decrypted.credential_values == {"api_base": "", "openai_service_account_id": "user-1"}
+
+
+def test_ProxyConfig_decrypt_credentials_without_pynacl_drops_a_legacy_value_instead_of_serving_the_blob(monkeypatch):
+    import base64
+    import hashlib
+
+    import nacl.secret
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-decrypt-credentials-test-salt")
+    box = nacl.secret.SecretBox(hashlib.sha256(b"sk-decrypt-credentials-test-salt").digest())
+    legacy = base64.urlsafe_b64encode(bytes(box.encrypt(b"sk-legacy-upstream"))).decode()
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+
+    decrypted = ProxyConfig().decrypt_credentials(
+        {
+            "credential_name": "openai-legacy",
+            "credential_values": {"api_key": legacy, "api_base": encrypt_value_helper("https://api.example.test")},
+            "credential_info": {"custom_llm_provider": "openai"},
+        }
+    )
+    assert decrypted.credential_values == {"api_base": "https://api.example.test"}
 
 
 def test_ProxyConfig_decrypt_model_list_from_db_returns_decrypted(monkeypatch):
@@ -3749,6 +3775,24 @@ def test_ProxyConfig__encrypt_env_variables_for_db_idempotent(monkeypatch):
     pc = ProxyConfig()
     out = pc._encrypt_env_variables_for_db({"A": "1", "B": "2", "C": "3"})
     assert out == {"A": "ENC[1]", "B": "ENC[2]", "C": "ENC[3]"}
+
+
+def test_ProxyConfig__encrypt_env_variables_for_db_without_pynacl_encrypts_new_plaintext_and_keeps_v3(monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-config-save")
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    v3 = encrypt_value_helper("already-migrated")
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    pc = ProxyConfig()
+
+    long_plaintext = "A" * 56
+    saved = pc._encrypt_env_variables_for_db({"A": v3, "B": "first-write-plaintext", "C": long_plaintext})
+    assert all(v.startswith("v3:gcm:") for v in saved.values())
+    assert {k: decrypt_value_helper(v, key=k) for k, v in saved.items()} == {
+        "A": "already-migrated",
+        "B": "first-write-plaintext",
+        "C": long_plaintext,
+    }
 
 
 def test_ProxyConfig__encrypt_env_variables_for_db_invalid_raises():
@@ -4759,7 +4803,9 @@ async def test_ProxyConfig__update_config_from_db_keeps_keys_the_config_file_omi
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ui_settings_already_synced", [False, True])
-async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endpoints(monkeypatch, ui_settings_already_synced):
+async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endpoints(
+    monkeypatch, ui_settings_already_synced
+):
     from litellm.proxy import proxy_server
 
     pc = ProxyConfig()
@@ -4960,7 +5006,7 @@ def clean_agent_registry():
         global_agent_registry.config_agents = original_config_agents
 
 
-def _config_agent(agent_name: str) -> Dict[str, Any]:
+def _config_agent(agent_name: str) -> dict[str, Any]:
     return {
         "agent_name": agent_name,
         "agent_card_params": {
@@ -5199,7 +5245,7 @@ async def test_add_deployment_re_reads_ui_settings_so_other_pods_converge(monkey
     Startup used to be the only read, so a proxy admin flipping a runtime flag reached the pod
     that served the PATCH and nowhere else until every other pod restarted.
     """
-    general_settings: Dict[str, Any] = {"allow_agents_for_team_admins": False}
+    general_settings: dict[str, Any] = {"allow_agents_for_team_admins": False}
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
 
     prisma_client = MagicMock()
@@ -5226,7 +5272,7 @@ async def test_add_deployment_re_reads_ui_settings_so_other_pods_converge(monkey
 @pytest.mark.asyncio
 async def test_add_deployment_syncs_ui_settings_even_when_the_model_reconcile_fails(monkeypatch):
     """A broken model reconcile must not strand every pod on stale settings."""
-    general_settings: Dict[str, Any] = {"allow_agents_for_team_admins": False}
+    general_settings: dict[str, Any] = {"allow_agents_for_team_admins": False}
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
 
     prisma_client = MagicMock()

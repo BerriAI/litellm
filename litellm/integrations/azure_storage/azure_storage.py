@@ -31,14 +31,14 @@ from litellm.types.secret_managers.get_azure_ad_token_provider import (
 from litellm.types.utils import StandardLoggingPayload
 
 AZURE_STORAGE_TOKEN_SCOPE: Final = "https://storage.azure.com/.default"
-_ADLS_SAFE_NAME: Final = str.maketrans("/", "_", "=")
+_ADLS_SAFE_NAME: Final = str.maketrans("/:", "__", "=")
 _DOT_OR_EMPTY_SEGMENTS: Final = frozenset(("", ".", ".."))
 
 
 def adls_safe_file_name(payload_id: str | None) -> str:
-    """A Responses API id is base64 behind `resp_`, and the Data Lake service rejects its `=` padding and `/`, so
-    that name drops the padding and maps `/` to `_`. Standard base64 has no `_` and its padding is fixed by the
-    length, so those ids stay distinct. Every other id, including a caller's `x-litellm-call-id`, is used as is
+    """A Responses API id is base64 behind `resp_`, with a `v3:gcm:` style algorithm tag when the proxy encrypts it,
+    and the Data Lake service rejects its `=` padding, `/` and `:`, so that name drops the padding and maps `/` and
+    `:` to `_`. Standard base64 has no `_` and its padding is fixed by the length, so those ids stay distinct. Every other id, including a caller's `x-litellm-call-id`, is used as is
     unless it has an empty, `.` or `..` path segment, which gets the same rewrite so the file keeps its own name in
     the log directory"""
     name: Final = payload_id or str(uuid.uuid4())

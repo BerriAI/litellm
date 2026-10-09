@@ -12,7 +12,7 @@ from types import MappingProxyType
 from typing import Final
 
 import litellm
-from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, legacy_unreadable
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.router_utils.clientside_credential_handler import clientside_credential_keys
@@ -58,20 +58,24 @@ def stored_credential_provider(credential_provider: object) -> str | None:
     return lowered if lowered in _LITELLM_PROVIDER_IDS else None
 
 
-def decrypted_or_stored(key: str, value: str) -> str:
-    """The stored value decrypted, or as stored when it was never encrypted (a config.yaml value)."""
+def decrypted_or_stored(key: str, value: str) -> str | None:
+    """The stored value decrypted, as stored when it was never encrypted (a config.yaml value), or None when it
+    is legacy ciphertext this install has no PyNaCl to read: a credential, never the ciphertext blob."""
     decrypted: Final = decrypt_value_helper(value=value, key=key)
-    return value if decrypted is None else decrypted
+    if decrypted is not None:
+        return decrypted
+    return None if legacy_unreadable(value) else value
+
+
+def decrypted_values(values: Mapping[str, str]) -> Mapping[str, str]:
+    resolved: Final = {key: decrypted_or_stored(key, value) for key, value in values.items()}
+    return MappingProxyType({key: value for key, value in resolved.items() if value is not None})
 
 
 def _decrypted(db_credential: CredentialItem) -> CredentialItem:
-    """The stored credential with every value decrypted, leaving already-plaintext values alone."""
-    decrypted_values: Final = MappingProxyType(
-        {key: decrypted_or_stored(key, value) for key, value in db_credential.credential_values.items()}
-    )
     return CredentialItem(
         credential_name=db_credential.credential_name,
-        credential_values=decrypted_values,  # pyright: ignore[reportArgumentType]  # declared dict[str, str], and pydantic copies this mapping into one on validation; LIT002 rules out building that dict here
+        credential_values=decrypted_values(db_credential.credential_values),  # pyright: ignore[reportArgumentType]  # declared dict[str, str], and pydantic copies this mapping into one on validation; LIT002 rules out building that dict here
         credential_info=db_credential.credential_info,
     )
 

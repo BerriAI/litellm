@@ -420,13 +420,14 @@ from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_pr
 from litellm.proxy.common_utils.codex_model_catalog import codex_model_list_body
 from litellm.proxy.common_utils.config_includes import resolve_include_file_path, resolve_includes
 from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
-from litellm.proxy.common_utils.credential_hydration import decrypted_or_stored
+from litellm.proxy.common_utils.credential_hydration import decrypted_values
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
 from litellm.proxy.common_utils.discoverable_model_filter import discoverable_rows, undiscoverable_model_names
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
+    legacy_unreadable,
 )
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
 from litellm.proxy.common_utils.fips import (
@@ -7879,7 +7880,10 @@ class ProxyConfig:
         _decrypt_and_set_db_env_variables): this is a write path, and
         loading values into os.environ is the read path's responsibility.
         """
-        decrypted_env_vars: Final = self.decrypt_db_variables(environment_variables)
+        decrypted_env_vars: Final = {
+            k: v if legacy_unreadable(v) else decrypt_value_helper(value=v, key=k, return_original_value=True)
+            for k, v in environment_variables.items()
+        }
         return self.encrypt_env_variables(
             environment_variables=decrypted_env_vars,
             new_encryption_key=new_encryption_key,
@@ -9340,16 +9344,10 @@ class ProxyConfig:
         await initialize_pass_through_endpoints_in_db()
 
     def decrypt_credentials(self, credential: dict | BaseModel) -> CredentialItem:
-        if isinstance(credential, dict):
-            credential_object = CredentialItem(**credential)
-        elif isinstance(credential, BaseModel):
-            credential_object = CredentialItem(**credential.model_dump())
-
-        decrypted_credential_values: Final = {}
-        for k, v in credential_object.credential_values.items():
-            decrypted_credential_values[k] = decrypted_or_stored(k, v)
-
-        credential_object.credential_values = decrypted_credential_values
+        credential_object: Final = CredentialItem(
+            **(credential if isinstance(credential, dict) else credential.model_dump())
+        )
+        credential_object.credential_values = dict(decrypted_values(credential_object.credential_values))
         return credential_object
 
     async def delete_credentials(self, db_credentials: list[CredentialItem]):

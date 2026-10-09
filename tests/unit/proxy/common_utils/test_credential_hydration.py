@@ -1,3 +1,6 @@
+import base64
+import hashlib
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -26,3 +29,32 @@ async def test_authoritative_hydrate_returns_an_encrypted_empty_value_as_empty(m
 
     assert resolved is not None
     assert resolved.credential_values == {"api_base": "", "openai_service_account_id": "user-1"}
+
+
+def _legacy_nacl_ciphertext(plaintext: str, salt_key: str) -> str:
+    import nacl.secret
+
+    box = nacl.secret.SecretBox(hashlib.sha256(salt_key.encode()).digest())
+    return base64.urlsafe_b64encode(bytes(box.encrypt(plaintext.encode()))).decode()
+
+
+@pytest.mark.asyncio
+async def test_authoritative_hydrate_without_pynacl_drops_a_legacy_value_instead_of_serving_the_blob(monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-hydration-test-salt")
+    legacy = _legacy_nacl_ciphertext("sk-legacy-upstream", "sk-hydration-test-salt")
+    row = {
+        "credential_name": "openai-legacy",
+        "credential_values": {"api_key": legacy, "api_base": encrypt_value_helper("https://api.example.test")},
+        "credential_info": {"custom_llm_provider": "openai"},
+    }
+    prisma = MagicMock()
+    prisma.db.litellm_credentialstable.find_unique = AsyncMock(return_value=row)
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+
+    with patch.object(litellm, "credential_list", []):  # test-quality-ok: the row under test must win over memory
+        resolved = await hydrate_named_credential_authoritative("openai-legacy", prisma)
+
+    assert resolved is not None
+    assert resolved.credential_values == {"api_base": "https://api.example.test"}
+    assert legacy not in resolved.credential_values.values()

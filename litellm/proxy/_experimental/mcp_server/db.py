@@ -261,7 +261,7 @@ def _drop_stale_minted_on_client_rotation(merged: dict[str, object], new_creds: 
     }
 
 
-def _is_global_env_var_scope(scope: object) -> bool:
+def is_global_env_var_scope(scope: object) -> bool:
     """``scope="user"`` entries are placeholders the user fills in; everything
     else (including a missing scope) is an admin-supplied global value."""
     return scope != MCPEnvVarScope.user and scope != "user"
@@ -276,7 +276,7 @@ def _encrypt_global_env_var_values(env_vars: Iterable[dict[str, str]]) -> None:
     secrets and are stored verbatim.
     """
     for entry in env_vars:
-        if not _is_global_env_var_scope(entry.get("scope")):
+        if not is_global_env_var_scope(entry.get("scope")):
             continue
         value = entry.get("value")
         if value:
@@ -297,7 +297,7 @@ def decrypt_global_env_var_values(env_vars: Iterable[MCPEnvVar | dict[str, str]]
     for entry in env_vars:
         is_dict = isinstance(entry, dict)
         scope = entry.get("scope") if is_dict else getattr(entry, "scope", None)
-        if not _is_global_env_var_scope(scope):
+        if not is_global_env_var_scope(scope):
             continue
         value = entry.get("value") if is_dict else getattr(entry, "value", None)
         if not value:
@@ -377,7 +377,7 @@ def _reencrypt_global_env_var_values(
     rebuilt: Final = [dict(v) for v in entries]
     rotated = False
     for entry in rebuilt:
-        if not _is_global_env_var_scope(entry.get("scope")):
+        if not is_global_env_var_scope(entry.get("scope")):
             continue
         value = entry.get("value")
         if not value:
@@ -811,20 +811,22 @@ async def _db_find_user_env_var_rows(
     return await _user_env_var_actions(prisma_client).find_many(where=where)
 
 
+MCP_CREDENTIAL_SECRET_FIELDS: Final = (
+    "auth_value",
+    "client_id",
+    "client_secret",
+    "client_private_key",
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+)
+
+
 def decrypt_credentials(
     credentials: MCPCredentials,
 ) -> MCPCredentials:
     """Decrypt all secret fields in an MCPCredentials dict using the global salt key."""
-    secret_fields: Final = [
-        "auth_value",
-        "client_id",
-        "client_secret",
-        "client_private_key",
-        "aws_access_key_id",
-        "aws_secret_access_key",
-        "aws_session_token",
-    ]
-    for field in secret_fields:
+    for field in MCP_CREDENTIAL_SECRET_FIELDS:
         value = credentials.get(field)
         if value is not None and isinstance(value, str):
             credentials[field] = decrypt_value_helper(
@@ -1562,7 +1564,7 @@ async def rotate_mcp_server_credentials_master_key(prisma_client: PrismaClient, 
 def _decode_user_credential(stored: str) -> str | None:
     """Read back a value persisted in ``LiteLLM_MCPUserCredentials.credential_b64``.
 
-    Tries nacl decryption first (current write format).  Falls back to a
+    Tries the at-rest decryptor first (current write format).  Falls back to a
     plain ``urlsafe_b64decode`` for rows persisted by older code that wrote
     the credential without encryption.  Returns ``None`` when neither path
     yields a valid string.

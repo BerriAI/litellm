@@ -78,6 +78,7 @@ COPY litellm-proxy-extras/pyproject.toml litellm-proxy-extras/
 # Install third-party dependencies (cached unless pyproject.toml/uv.lock change)
 RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-groups --no-editable \
     --extra proxy \
+    --extra legacy-encryption \
     --extra proxy-runtime \
     --group admin-mcp \
     --extra extra_proxy \
@@ -101,6 +102,7 @@ RUN sed -i 's/\r$//' docker/build_admin_ui.sh && chmod +x docker/build_admin_ui.
 # Install project and workspace packages (fast - deps already cached)
 RUN uv sync --frozen --no-default-groups --no-editable \
     --extra proxy \
+    --extra legacy-encryption \
     --extra proxy-runtime \
     --group admin-mcp \
     --extra extra_proxy \
