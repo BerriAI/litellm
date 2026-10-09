@@ -23,6 +23,7 @@ from openai.types.chat.chat_completion import ChatCompletion
 
 import litellm
 from litellm import acompletion, completion
+from litellm import acompletion_with_retries, aresponses_with_retries, completion_with_retries, responses_with_retries
 from litellm import main as litellm_main
 from litellm.constants import CONTROL_OPTIONS_KEY
 from litellm.caching.base_cache import BaseCache
@@ -6104,3 +6105,84 @@ async def test_async_responses_still_retries_provider_server_errors(monkeypatch)
         )
         assert result.status == "completed"
         assert response.call_count == 2
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_completion_with_retries(sync_mode):
+    """
+    If completion_with_retries is called with num_retries=3, and max_retries=0, then litellm.completion should receive num_retries , max_retries=0
+    """
+    if sync_mode:
+        target_function = "completion"
+    else:
+        target_function = "acompletion"
+
+    with patch.object(litellm, target_function) as mock_completion:
+        if sync_mode:
+            completion_with_retries(
+                model="gpt-3.5-turbo",
+                messages=[{"gm": "vibe", "role": "user"}],
+                num_retries=3,
+                original_function=mock_completion,
+            )
+        else:
+            await acompletion_with_retries(
+                model="gpt-3.5-turbo",
+                messages=[{"gm": "vibe", "role": "user"}],
+                num_retries=3,
+                original_function=mock_completion,
+            )
+        mock_completion.assert_called_once()
+        assert mock_completion.call_args.kwargs["num_retries"] == 0
+        assert mock_completion.call_args.kwargs["max_retries"] == 0
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_responses_with_retries(sync_mode):
+    """
+    Test that responses() and aresponses() properly handle num_retries parameter.
+    If responses_with_retries is called with num_retries=3, and max_retries=0,
+    then litellm.responses should receive num_retries=0, max_retries=0
+    """
+    if sync_mode:
+        target_function = "responses"
+        retry_function = responses_with_retries
+    else:
+        target_function = "aresponses"
+        retry_function = aresponses_with_retries
+
+    with patch(
+        "litellm.responses.main.responses" if sync_mode else "litellm.responses.main.aresponses"
+    ) as mock_responses:
+        if sync_mode:
+            mock_responses.return_value = MagicMock()
+            retry_function(
+                model="gpt-4o",
+                input="Hello, what's the weather?",
+                num_retries=3,
+                original_function=mock_responses,
+            )
+        else:
+            mock_responses.return_value = AsyncMock()
+            await retry_function(
+                model="gpt-4o",
+                input="Hello, what's the weather?",
+                num_retries=3,
+                original_function=mock_responses,
+            )
+
+        mock_responses.assert_called_once()
+        assert mock_responses.call_args.kwargs["num_retries"] == 0
+        assert mock_responses.call_args.kwargs["max_retries"] == 0
+
+
+def test_azure_embedding_exceptions():
+    with pytest.raises(Exception, match="Mock error") as exc_info:
+        litellm.embedding(
+            model="azure/text-embedding-ada-002",
+            input="hello",
+            mock_response="error",
+        )
+    assert str(exc_info.value) == "Mock error"
