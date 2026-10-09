@@ -2722,7 +2722,8 @@ _FallbackIndex: TypeAlias = tuple[Mapping[str, tuple[str, ...]], tuple[object, .
 
 def _index_fallback_list(fallback_list: Sequence[object]) -> _FallbackIndex:
     """Index one fallback list once: an exact ``{source_key: targets}`` map for
-    bare keys, plus a capped tuple of entries only the router matcher can score
+    bare keys (duplicate keys union their targets, a superset of the router's
+    first-wins resolution), plus the entries only the router matcher can score
     ("*" keys, provider-prefixed keys, bare-string generic targets)."""
     exact: dict[str, tuple[str, ...]] = {}  # mutable-ok: one entry per bare source key
     fuzzy: list[object] = []  # mutable-ok: accumulates matcher-only entries
@@ -2735,10 +2736,10 @@ def _index_fallback_list(fallback_list: Sequence[object]) -> _FallbackIndex:
             if "*" in key or "/" in key:
                 fuzzy.append(entry)
             else:
-                exact[key] = targets
+                exact[key] = exact.get(key, ()) + targets
         else:
             fuzzy.append(entry)
-    return exact, tuple(fuzzy[:_FALLBACK_DISCOVERY_LIMIT])
+    return exact, tuple(fuzzy)
 
 
 def _fallback_edges(
@@ -2781,16 +2782,17 @@ def _fallback_target_groups(
     model_group: str,
 ) -> frozenset[str]:
     """Transitive closure over every fallback graph that can route this request:
-    a chain like A -> B -> C must still surface C's per-user credential. Bounded
-    by _FALLBACK_DISCOVERY_LIMIT: discovery is advisory, and an undiscovered
-    target fails closed as the usual "not connected" 401."""
+    a chain like A -> B -> C must still surface C's per-user credential. Every
+    entry the router could match is indexed or matcher-scored, so discovery is
+    a faithful superset of what routing can reach; the only bound is the 400 on
+    caller-supplied fallback lists in the resolver."""
     indexed: Final = tuple(
         _index_fallback_list(fallback_list)
         for fallback_list in _fallback_lists(data, llm_router, router_settings, team_router_settings)
     )
     seen: Final[set[str]] = set()  # mutable-ok: BFS visited set
     frontier: Final[list[str]] = [model_group]  # mutable-ok: BFS work list
-    while frontier and len(seen) <= _FALLBACK_DISCOVERY_LIMIT:
+    while frontier:
         group = frontier.pop()
         for target in _fallback_edges(indexed, group):
             if target not in seen and target != model_group:
@@ -2884,6 +2886,17 @@ async def _resolve_user_provider_credentials_for_request(
     model: Final = data.get("model")
     if llm_router is None or not isinstance(model, str):
         return
+    # The one caller-controlled input to discovery is the request body's own
+    # fallback lists, so the size bound lives here instead of on the scan: admin
+    # lists (router, key/team router_settings) are always read in full.
+    request_fallback_entries: Final = sum(
+        len(entries) for key in _REQUEST_FALLBACK_KEYS if isinstance(entries := data.get(key), list)
+    )
+    if request_fallback_entries > _FALLBACK_DISCOVERY_LIMIT:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"fallback lists in the request body cannot exceed {_FALLBACK_DISCOVERY_LIMIT} entries"),
+        )
     from litellm.router_utils.common_utils import resolve_model_group_alias
 
     # Discovery must see the group the router actually routes to, so include the

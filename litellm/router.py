@@ -4206,6 +4206,29 @@ class Router:
                 existing_tags.append(credential_tag)
             kwargs[metadata_variable_name]["tags"] = existing_tags
 
+        # A caller-supplied litellm_credential_name rides in kwargs and wins the
+        # ``{**litellm_params, **kwargs}`` merge downstream, so a per-user
+        # deployment's credential can be swapped for a shared one even when
+        # pre-call discovery missed this fallback hop. The deployment's own
+        # litellm_params still carry the configured name and auth type, so the
+        # check is exact: same name or no caller override is unaffected.
+        from litellm.llms.github_copilot.per_user_auth import (
+            github_copilot_per_user_credential_name,
+        )
+
+        configured_per_user_name: Final = github_copilot_per_user_credential_name(deployment.get("litellm_params"))
+        caller_credential_name: Final = kwargs.get("litellm_credential_name")
+        if (
+            configured_per_user_name is not None
+            and isinstance(caller_credential_name, str)
+            and caller_credential_name != configured_per_user_name
+        ):
+            raise litellm.BadRequestError(
+                message="litellm_credential_name cannot be overridden on a deployment that uses per-user GitHub OAuth",
+                model=deployment_model_name,
+                llm_provider="",
+            )
+
         kwargs["model_info"] = model_info
 
         if function_name == "_ageneric_api_call_with_fallbacks":

@@ -9231,8 +9231,9 @@ class TestResolveUserProviderCredentials:
 
     @pytest.mark.asyncio
     async def test_fallback_discovery_bounds_matcher_calls_on_huge_lists(self, monkeypatch):
-        """30k unmatched fallback entries must not mean 30k matcher calls: the
-        index runs the router matcher only over a capped fuzzy subset."""
+        """30k admin-configured unmatched entries go through the exact index: the
+        router matcher only ever sees the small wildcard subset, once per group
+        per list, instead of being scored against every entry."""
         import litellm.router_utils.fallback_event_handlers as feh
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
@@ -9246,6 +9247,134 @@ class TestResolveUserProviderCredentials:
 
         monkeypatch.setattr(feh, "get_fallback_model_group", _spy)
         router = MagicMock()
+        router.fallbacks = [{"unmatched-%d" % i: ["x"]} for i in range(30_000)] + [{"*": ["generic-x"]}]
+        router.context_window_fallbacks = []
+        router.content_policy_fallbacks = []
+        router.get_model_list = MagicMock(return_value=[])
+        router.get_deployment = MagicMock(return_value=None)
+        data = {"model": "gpt-4o", "secret_fields": {}}
+        await _resolve_user_provider_credentials_for_request(
+            data=data,
+            authenticated_user_id="user-a",
+            team_id=None,
+            llm_router=router,
+        )
+        total = sum(entries_seen)
+        assert total <= 8, (
+            f"matcher must only see the 1 wildcard entry, got {total} entries across {len(entries_seen)} calls"
+        )
+
+    @pytest.mark.asyncio
+    async def test_duplicate_fallback_source_keys_union_targets(self, monkeypatch):
+        """Two entries with the same source key: the router picks the first, so
+        the per-user target on that first entry must be discovered even though
+        a later duplicate points elsewhere."""
+        from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
+
+        table = self._env(monkeypatch)
+        router = MagicMock()
+        router.fallbacks = [{"gpt-4o": ["copilot-chat"]}, {"gpt-4o": ["other-chat"]}]
+        router.context_window_fallbacks = []
+        router.content_policy_fallbacks = []
+        router.get_model_list = MagicMock(
+            side_effect=lambda model_name=None, team_id=None: (
+                [
+                    {
+                        "model_name": "copilot-chat",
+                        "litellm_params": {
+                            "model": "github_copilot/gpt-4o",
+                            "litellm_credential_name": "copilot-cred",
+                        },
+                    }
+                ]
+                if model_name == "copilot-chat"
+                else []
+            )
+        )
+        router.get_deployment = MagicMock(return_value=None)
+        data = {"model": "gpt-4o", "secret_fields": {}}
+        await _resolve_user_provider_credentials_for_request(
+            data=data,
+            authenticated_user_id="user-a",
+            team_id=None,
+            llm_router=router,
+        )
+        table.find_many.assert_awaited()
+        assert data["secret_fields"]["user_provider_credentials_user_id"] == "user-a"
+
+    @pytest.mark.asyncio
+    async def test_fallback_discovery_scans_past_the_wildcard_cap_position(self, monkeypatch):
+        """A wildcard match at position 290 of an admin list is still discovered:
+        admin lists are scanned in full, only the request body's lists are
+        capped."""
+        from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
+
+        table = self._env(monkeypatch)
+        router = MagicMock()
+        entries = [{"azure/unmatched-%d" % i: ["x"]} for i in range(300)]
+        entries.insert(290, {"*": ["copilot-chat"]})
+        router.fallbacks = entries
+        router.context_window_fallbacks = []
+        router.content_policy_fallbacks = []
+        router.get_model_list = MagicMock(
+            side_effect=lambda model_name=None, team_id=None: (
+                [
+                    {
+                        "model_name": "copilot-chat",
+                        "litellm_params": {
+                            "model": "github_copilot/gpt-4o",
+                            "litellm_credential_name": "copilot-cred",
+                        },
+                    }
+                ]
+                if model_name == "copilot-chat"
+                else []
+            )
+        )
+        router.get_deployment = MagicMock(return_value=None)
+        data = {"model": "gpt-4o", "secret_fields": {}}
+        await _resolve_user_provider_credentials_for_request(
+            data=data,
+            authenticated_user_id="user-a",
+            team_id=None,
+            llm_router=router,
+        )
+        table.find_many.assert_awaited()
+        assert data["secret_fields"]["user_provider_credentials_user_id"] == "user-a"
+
+    @pytest.mark.asyncio
+    async def test_request_fallback_entries_over_the_limit_get_a_400(self, monkeypatch):
+        """The request body's fallback lists are the caller-controlled input to
+        discovery, so past 256 entries the request is refused instead of scanned."""
+        from fastapi import HTTPException
+
+        from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
+
+        self._env(monkeypatch)
+        router = MagicMock()
+        router.fallbacks = []
+        router.context_window_fallbacks = []
+        router.content_policy_fallbacks = []
+        data = {
+            "model": "gpt-4o",
+            "fallbacks": [{"unmatched-%d" % i: ["x"]} for i in range(257)],
+            "secret_fields": {},
+        }
+        with pytest.raises(HTTPException) as exc:
+            await _resolve_user_provider_credentials_for_request(
+                data=data,
+                authenticated_user_id="user-a",
+                team_id=None,
+                llm_router=router,
+            )
+        assert getattr(exc.value, "status_code", None) == 400
+
+    @pytest.mark.asyncio
+    async def test_request_fallback_entries_at_the_limit_are_accepted(self, monkeypatch):
+        from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
+
+        self._env(monkeypatch)
+        router = MagicMock()
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -9253,7 +9382,7 @@ class TestResolveUserProviderCredentials:
         router.get_deployment = MagicMock(return_value=None)
         data = {
             "model": "gpt-4o",
-            "fallbacks": [{"unmatched-%d" % i: ["x"]} for i in range(30_000)],
+            "fallbacks": [{"unmatched-%d" % i: ["x"]} for i in range(256)],
             "secret_fields": {},
         }
         await _resolve_user_provider_credentials_for_request(
@@ -9262,10 +9391,7 @@ class TestResolveUserProviderCredentials:
             team_id=None,
             llm_router=router,
         )
-        total = sum(entries_seen)
-        assert total <= 512, (
-            f"matcher work must be bounded by the cap, got {total} entries across {len(entries_seen)} calls"
-        )
+        assert data["secret_fields"] == {}
 
     @pytest.mark.asyncio
     async def test_model_alias_map_target_loads_per_user_tokens(self, monkeypatch):
