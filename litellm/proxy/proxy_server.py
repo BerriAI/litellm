@@ -486,6 +486,7 @@ from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.responses_stream_errors import ResponsesStreamErrorState
 from litellm.proxy.common_utils.scheduled_job_stagger import (
+    JobScheduler,
     apply_scheduled_job_stagger,
     attach_job_timing_logger,
     parse_stagger_settings,
@@ -533,7 +534,7 @@ from litellm.proxy.config_resolvers.settings_rules import (
 )
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
-from litellm.proxy.data_manager.config import data_manager_enabled
+from litellm.proxy.data_manager.config import proxy_skips_spend_log_cleanup, running_as_data_manager
 from litellm.proxy.data_manager.spend_log_cleanup_job import (
     SPEND_LOG_CLEANUP_JOB_ID,
     SpendLogCleanupScheduler,
@@ -1653,7 +1654,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
     ### START BATCH WRITING DB + CHECKING NEW MODELS###
     worker_heartbeat: Final = (
         await ProxyStartupEvent.initialize_scheduled_background_jobs(
-            general_settings=general_settings,
+            general_settings=cast(Mapping[str, object], general_settings),
             prisma_client=prisma_client,
             proxy_budget_rescheduler_min_time=proxy_budget_rescheduler_min_time,
             proxy_budget_rescheduler_max_time=proxy_budget_rescheduler_max_time,
@@ -8013,10 +8014,10 @@ class ProxyConfig:
     async def _reschedule_spend_log_cleanup_job(self) -> None:
         if scheduler is None:
             return
-        if data_manager_enabled():
+        if proxy_skips_spend_log_cleanup():
             return
         cleanup_scheduler: Final[SpendLogCleanupScheduler] = scheduler
-        cleanup_settings: Final[Mapping[str, object]] = general_settings
+        cleanup_settings: Final = cast(Mapping[str, object], general_settings)
         schedule_spend_log_cleanup(cleanup_scheduler, cleanup_settings, prisma_client)
 
     async def _update_general_settings(self, db_general_settings: Mapping[str, SettingsJsonValue] | None) -> None:
@@ -10805,13 +10806,13 @@ class ProxyStartupEvent:
     @classmethod
     async def initialize_scheduled_background_jobs(
         cls,
-        general_settings: dict,
+        general_settings: Mapping[str, object],
         prisma_client: PrismaClient,
         proxy_budget_rescheduler_min_time: int,
         proxy_budget_rescheduler_max_time: int,
         proxy_batch_write_at: int,
         proxy_logging_obj: ProxyLogging,
-    ) -> ProxyWorkerHeartbeat:
+    ) -> ProxyWorkerHeartbeat | None:
         """Initializes scheduled background jobs"""
         global heuristic_v1_tuning_baselines, store_model_in_db, scheduler, scheduler_executor
 
@@ -10842,6 +10843,14 @@ class ProxyStartupEvent:
             # Disable timezone awareness to reduce computation
             timezone=None,
         )
+
+        if running_as_data_manager():
+            return await cls._initialize_data_manager_jobs(
+                scheduler=scheduler,
+                general_settings=general_settings,
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
+            )
 
         # Use fixed intervals with small random offset instead of jitter
         # This avoids the expensive jitter calculations in APScheduler
@@ -10954,70 +10963,12 @@ class ProxyStartupEvent:
             prisma_client.spend_logs_queue_monitor_task = monitor_task  # rebind-ok: the client owns its monitor handle
 
         ### ADD NEW MODELS ###
-        store_model_in_db = get_secret_bool("STORE_MODEL_IN_DB", store_model_in_db) or store_model_in_db
-
-        # If store_model_in_db is still False, check DB for override.
-        # This breaks the chicken-and-egg where DB has store_model_in_db=True
-        # but YAML config has False.
-        if store_model_in_db is not True and prisma_client is not None:
-            try:
-                _db_gs_record: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
-                    where={"param_name": "general_settings"}
-                )
-                if _db_gs_record is not None and isinstance(_db_gs_record.param_value, dict):
-                    _db_val: Final = _db_gs_record.param_value.get("store_model_in_db")
-                    if _db_val is True or (isinstance(_db_val, str) and _db_val.lower() == "true"):
-                        store_model_in_db = True
-                        verbose_proxy_logger.info("store_model_in_db=True loaded from DB, overriding config/env")
-            except Exception as e:
-                verbose_proxy_logger.debug("Failed to check DB for store_model_in_db: %s", str(e))
-
-        config_reload_interval_seconds = proxy_config_reload_interval_seconds
-        if not isinstance(config_reload_interval_seconds, int) or config_reload_interval_seconds <= 0:
-            verbose_proxy_logger.warning(
-                "proxy_config_reload_interval_seconds=%s must be a positive integer; falling back to 30s",
-                config_reload_interval_seconds,
-            )
-            config_reload_interval_seconds = 30
-
-        ### PERIODIC RELOADS (model cost map, anthropic beta headers) ###
-        scheduler.add_job(
-            proxy_config.check_periodic_reloads,
-            "interval",
-            seconds=config_reload_interval_seconds,
-            args=[prisma_client],
-            id="periodic_reload_job",
-            replace_existing=True,
-            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        config_reload_interval_seconds: Final = await cls._initialize_config_sync_jobs(
+            scheduler=scheduler,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            include_proxy_only_jobs=True,
         )
-
-        proxy_config.start_auth_cache_invalidation_subscriber(
-            redis_cache=redis_usage_cache,
-            user_api_key_cache=user_api_key_cache,
-        )
-
-        if store_model_in_db is True:
-            # MEMORY LEAK FIX: Increase interval from 10s to 30s minimum
-            # Frequent polling was causing excessive memory allocations
-            scheduler.add_job(
-                proxy_config.add_deployment,
-                "interval",
-                seconds=config_reload_interval_seconds,
-                # REMOVED jitter parameter - major cause of memory leak
-                args=[prisma_client, proxy_logging_obj],
-                id="add_deployment_job",
-                replace_existing=True,
-                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-            )
-
-            # this will load all existing credentials and models on proxy startup
-            await proxy_config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
-
-            proxy_config.start_config_sync_subscriber(
-                prisma_client=prisma_client,
-                proxy_logging_obj=proxy_logging_obj,
-                redis_cache=redis_usage_cache,
-            )
 
         if store_model_in_db is not True:
             await proxy_config.init_mcp_servers_from_db()
@@ -11037,13 +10988,10 @@ class ProxyStartupEvent:
                 # store_model_in_db=True deployments get via the add_deployment job must run here
                 # too; without it, a server whose OAuth discovery failed at startup is rebuilt only
                 # by a management write, since the reload fast path is the retry's only driver.
-                mcp_reload_interval_seconds = proxy_config_reload_interval_seconds
-                if not isinstance(mcp_reload_interval_seconds, int) or mcp_reload_interval_seconds <= 0:
-                    mcp_reload_interval_seconds = 30
                 scheduler.add_job(
                     proxy_config.reload_mcp_servers_from_db,
                     "interval",
-                    seconds=mcp_reload_interval_seconds,
+                    seconds=config_reload_interval_seconds,
                     id="reload_mcp_servers_job",
                     replace_existing=True,
                     misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
@@ -11116,7 +11064,7 @@ class ProxyStartupEvent:
         ### SPEND LOG CLEANUP ###
         cleanup_settings: Final = _current_general_settings()
         if wants_spend_log_cleanup(cleanup_settings):
-            if data_manager_enabled():
+            if proxy_skips_spend_log_cleanup():
                 verbose_proxy_logger.info(
                     "Spend log cleanup is owned by the LiteLLM Data Manager "
                     "(LITELLM_DATA_MANAGER_ENABLED=true), not scheduling it in this proxy"
@@ -11136,7 +11084,7 @@ class ProxyStartupEvent:
                     proxy_logging_obj=proxy_logging_obj,
                     prisma_client=prisma_client,
                     llm_router=llm_router,
-                    track_unmanaged_batch_cost=general_settings.get("track_unmanaged_batch_cost", False),
+                    track_unmanaged_batch_cost=cast(bool, general_settings.get("track_unmanaged_batch_cost", False)),
                 )
                 await check_batch_cost_job.confirm_batch_processed_support()
                 scheduler.add_job(
@@ -11204,6 +11152,110 @@ class ProxyStartupEvent:
             APSCHEDULER_MISFIRE_GRACE_TIME,
         )
         return worker_heartbeat
+
+    @classmethod
+    async def _initialize_config_sync_jobs(
+        cls,
+        scheduler: AsyncIOScheduler,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+        *,
+        include_proxy_only_jobs: bool,
+    ) -> int:
+        global store_model_in_db
+
+        store_model_in_db = get_secret_bool("STORE_MODEL_IN_DB", store_model_in_db) or store_model_in_db
+
+        if store_model_in_db is not True and prisma_client is not None:
+            try:
+                db_general_settings: Final[_ConfigParamRow | None] = await _config_param_table(
+                    prisma_client
+                ).find_first(where={"param_name": "general_settings"})
+                if db_general_settings is not None and isinstance(db_general_settings.param_value, dict):
+                    store_model_setting: Final = db_general_settings.param_value.get("store_model_in_db")
+                    if store_model_setting is True or (
+                        isinstance(store_model_setting, str) and store_model_setting.lower() == "true"
+                    ):
+                        store_model_in_db = True
+                        verbose_proxy_logger.info("store_model_in_db=True loaded from DB, overriding config/env")
+            except Exception as database_error:
+                verbose_proxy_logger.debug("Failed to check DB for store_model_in_db: %s", str(database_error))
+
+        raw_config_reload_interval_seconds: Final[object] = proxy_config_reload_interval_seconds
+        if not isinstance(raw_config_reload_interval_seconds, int) or raw_config_reload_interval_seconds <= 0:
+            verbose_proxy_logger.warning(
+                "proxy_config_reload_interval_seconds=%s must be a positive integer; falling back to 30s",
+                str(raw_config_reload_interval_seconds),
+            )
+        config_reload_interval_seconds: Final = (
+            raw_config_reload_interval_seconds
+            if isinstance(raw_config_reload_interval_seconds, int) and raw_config_reload_interval_seconds > 0
+            else 30
+        )
+
+        if include_proxy_only_jobs:
+            scheduler.add_job(
+                proxy_config.check_periodic_reloads,
+                "interval",
+                seconds=config_reload_interval_seconds,
+                args=[prisma_client],
+                id="periodic_reload_job",
+                replace_existing=True,
+                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+            )
+
+            proxy_config.start_auth_cache_invalidation_subscriber(
+                redis_cache=redis_usage_cache,
+                user_api_key_cache=user_api_key_cache,
+            )
+
+        if store_model_in_db is True:
+            scheduler.add_job(
+                proxy_config.add_deployment,
+                "interval",
+                seconds=config_reload_interval_seconds,
+                args=[prisma_client, proxy_logging_obj],
+                id="add_deployment_job",
+                replace_existing=True,
+                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+            )
+            await proxy_config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
+            proxy_config.start_config_sync_subscriber(
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
+                redis_cache=redis_usage_cache,
+            )
+
+        return config_reload_interval_seconds
+
+    @classmethod
+    async def _initialize_data_manager_jobs(
+        cls,
+        scheduler: AsyncIOScheduler,
+        general_settings: Mapping[str, object],
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+    ) -> None:
+        await cls._initialize_config_sync_jobs(
+            scheduler=scheduler,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            include_proxy_only_jobs=False,
+        )
+
+        cleanup_settings: Final = _current_general_settings()
+        if wants_spend_log_cleanup(cleanup_settings):
+            schedule_spend_log_cleanup(scheduler, cleanup_settings, prisma_client)
+            proxy_config.record_cleanup_schedule_attempt(cleanup_settings)
+
+        attach_job_timing_logger(scheduler)
+        apply_scheduled_job_stagger(
+            scheduler=scheduler,
+            settings=parse_stagger_settings(general_settings),
+        )
+        scheduler.start(paused=False)
+        registered_job_ids: Final = tuple(sorted(job.id for job in cast(JobScheduler, scheduler).get_jobs()))
+        verbose_proxy_logger.info("Data Manager scheduled jobs: %s", registered_job_ids)
 
     @classmethod
     async def _initialize_spend_tracking_background_jobs(cls, scheduler: AsyncIOScheduler):
@@ -11445,7 +11497,7 @@ class ProxyStartupEvent:
     async def _initialize_slack_alerting_jobs(
         cls,
         scheduler: AsyncIOScheduler,
-        general_settings: dict,
+        general_settings: Mapping[str, object],
         proxy_logging_obj: ProxyLogging,
         prisma_client: PrismaClient,
     ):
@@ -11456,7 +11508,7 @@ class ProxyStartupEvent:
             and prisma_client is not None
         ):
             print("Alerting: Initializing Weekly/Monthly Spend Reports")  # noqa: T201
-            spend_report_frequency: Final[str] = general_settings.get("spend_report_frequency", "7d") or "7d"
+            spend_report_frequency: Final[str] = cast(str, general_settings.get("spend_report_frequency", "7d") or "7d")
 
             days: Final = int(spend_report_frequency[:-1])
             if spend_report_frequency[-1].lower() != "d" or days <= 0:
