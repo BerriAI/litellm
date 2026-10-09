@@ -625,7 +625,7 @@ def test_native_projection_errors_never_select_python(
     request: Final = NativeCall(
         args=(),
         kwargs={},
-        bound={
+        base={
             "model": "mistral/mistral-ocr-latest",
             "document": OCR_DOCUMENT,
             "api_key": "test-key",
