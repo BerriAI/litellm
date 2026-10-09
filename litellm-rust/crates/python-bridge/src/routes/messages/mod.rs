@@ -1,12 +1,21 @@
 mod host;
 
-use host::MessagesPythonHost;
+use crate::errors::RustBridgeDeclined;
+use host::{MessagesPythonHost, ROUTE_HOST_MODULE};
 use litellm_host::call::Operation;
 use pyo3::prelude::*;
 
 use super::NativeCall;
 
 fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyResult<Py<PyAny>> {
+    if let Some(reason) = py
+        .import(ROUTE_HOST_MODULE)?
+        .getattr("decline_reason")?
+        .call1((call.resolved()?,))?
+        .extract::<Option<String>>()?
+    {
+        return Err(RustBridgeDeclined::new_err(reason));
+    }
     let (arguments, hooks) =
         crate::routes::call_hooks(py, Operation::Messages, &call, asynchronous)?;
     crate::routes::run_public_call(

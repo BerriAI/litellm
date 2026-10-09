@@ -1,10 +1,12 @@
 from types import MappingProxyType
 from typing import Final
 
-from litellm.rust_bridge.messages.route_host import response
 import pytest
+
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.rust_bridge.messages import route_host
+from litellm.rust_bridge.messages.route_host import response
 
 
 def test_response_is_a_detached_public_messages_dict() -> None:
@@ -116,3 +118,53 @@ def test_stream_hidden_params_projects_upstream_headers_the_way_the_python_handl
     assert additional["llm_provider-request-id"] == "req_upstream_123"
     assert additional["x-ratelimit-remaining-requests"] == "41"
     assert additional["request-id"] == additional["llm_provider-request-id"]
+
+
+class _AgenticLoop(CustomLogger):
+    async def async_should_run_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: object,
+        tools: object,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict[str, object],
+    ) -> tuple[bool, dict[str, object]]:
+        return False, {}
+
+
+class _InheritedLoop(_AgenticLoop):
+    pass
+
+
+@pytest.mark.parametrize(
+    ("stream", "registered", "requested", "declined"),
+    (
+        (True, (), (), False),
+        (True, (CustomLogger(),), (), False),
+        (False, (_AgenticLoop(),), (), False),
+        (True, (_AgenticLoop(),), (), True),
+        (True, (_InheritedLoop(),), (), True),
+        (True, (), (_AgenticLoop(),), True),
+    ),
+    ids=("no-callbacks", "plain-logger", "unary", "registered-loop", "inherited-loop", "requested-loop"),
+)
+def test_streaming_declines_only_when_a_callback_overrides_the_agentic_gate(
+    monkeypatch: pytest.MonkeyPatch,
+    stream: bool,
+    registered: tuple[CustomLogger, ...],
+    requested: tuple[CustomLogger, ...],
+    declined: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", list(registered))
+    request: Final = {
+        "model": "anthropic/claude-sonnet-5",
+        "messages": [],
+        "stream": stream,
+        "callbacks": list(requested),
+    }
+
+    reason: Final = route_host.decline_reason(request)
+
+    assert (reason is not None) is declined

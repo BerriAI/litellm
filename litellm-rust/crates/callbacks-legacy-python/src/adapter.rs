@@ -6,10 +6,13 @@ use litellm_host::call::Operation;
 use litellm_host_python::PythonOwned;
 
 use litellm_host::{
+    hooks::CallHooks,
     interceptors::{RawResponse, RequestContext, WireRequest},
-    lifecycle::{FailureOrigin, Timing, epoch_seconds},
+    lifecycle::{ExecutionEvent, FailureOrigin, Timing, epoch_seconds},
 };
-use litellm_host_python::{HookStep, from_py, missing_state, to_py};
+use litellm_host_python::{
+    HookStep, PythonCallEvent, PythonRuntime, from_py, missing_state, to_py,
+};
 use pyo3::{
     exceptions::{PyBaseException, PyException},
     gc::{PyTraverseError, PyVisit},
@@ -22,15 +25,10 @@ use crate::{
     DeploymentHooks, LegacyCallbacks, PublicCall, PythonLogger,
     deferred::{PendingLogging, PendingSuccess},
     finalize, is_internal_call,
+    operation::{PassThroughStream, profile},
     python::Streaming,
     setup,
 };
-
-#[derive(Clone, Copy, Debug)]
-struct PassThroughStream {
-    url_route: &'static str,
-    endpoint_type: &'static str,
-}
 
 /// What the Messages stream iterator keeps for its end-of-stream billing.
 struct DeliveredStream {
@@ -86,38 +84,15 @@ impl LegacyLogging {
     }
 
     fn call_type(&self) -> &'static str {
-        match (self.operation, self.asynchronous) {
-            (Operation::Completion, false) => "completion",
-            (Operation::Completion, true) => "acompletion",
-            (Operation::Responses, false) => "responses",
-            (Operation::Responses, true) => "aresponses",
-            (Operation::Messages, _) => "anthropic_messages",
-            (Operation::Ocr, false) => "ocr",
-            (Operation::Ocr, true) => "aocr",
-        }
+        profile(self.operation).call_type(self.asynchronous)
     }
 
     fn input_description(&self) -> &'static str {
-        match self.operation {
-            Operation::Completion => "Chat completions",
-            Operation::Responses => "Responses",
-            Operation::Messages => "Messages",
-            Operation::Ocr => "OCR document processing",
-        }
+        profile(self.operation).input_description
     }
 
     fn stream_billing(&self) -> Option<PassThroughStream> {
-        match self.operation {
-            Operation::Messages => Some(PassThroughStream {
-                url_route: "/v1/messages",
-                endpoint_type: "anthropic",
-            }),
-            Operation::Completion | Operation::Responses | Operation::Ocr => None,
-        }
-    }
-
-    pub(crate) fn adopt_arguments(&mut self, py: Python<'_>, arguments: &Py<PyDict>) {
-        self.call.set_kwargs(arguments.clone_ref(py));
+        profile(self.operation).stream_billing
     }
 
     /// Deployment hooks are awaited, and Python's synchronous `@client` wrapper never
@@ -580,10 +555,72 @@ impl PythonOwned for LegacyLogging {
     }
 }
 
+impl CallHooks<PythonRuntime> for LegacyLogging {
+    fn prepare_arguments(
+        &mut self,
+        py: Python<'_>,
+        arguments: Py<PyDict>,
+        started_at: f64,
+    ) -> PyResult<HookStep<Self, Py<PyDict>>> {
+        self.prepare_call(py, arguments, started_at)
+    }
+
+    fn before_provider_request(
+        &mut self,
+        py: Python<'_>,
+        wire: Box<WireRequest>,
+        context: &RequestContext,
+    ) -> PyResult<HookStep<Self, Box<WireRequest>>> {
+        self.pre_call(py, wire, context)
+    }
+
+    fn transform_response(
+        &mut self,
+        py: Python<'_>,
+        response: Py<PyAny>,
+        timing: Timing,
+    ) -> PyResult<HookStep<Self, Py<PyAny>>> {
+        self.transform_public_response(py, response, timing)
+    }
+
+    fn on_event(
+        &mut self,
+        py: Python<'_>,
+        event: PythonCallEvent<'_>,
+    ) -> PyResult<HookStep<Self, ()>> {
+        match event {
+            PythonCallEvent::Started { .. } | PythonCallEvent::Cancelled { .. } => {
+                Ok(HookStep::Ready(()))
+            }
+            PythonCallEvent::Execution(ExecutionEvent::ResultReady { facts }) => {
+                self.result_ready(py, &facts)
+            }
+            PythonCallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw }) => {
+                self.post_call(py, raw)
+            }
+            PythonCallEvent::Succeeded { timing, response } => self.succeeded(py, timing, response),
+            PythonCallEvent::Failed {
+                timing,
+                origin,
+                error,
+            } => self.failed(py, timing, origin, error),
+        }
+    }
+
+    fn on_stream_open(&mut self, py: Python<'_>, head: &Py<PyAny>) -> PyResult<()> {
+        self.stream_opened(py, head)
+    }
+
+    fn on_stream_chunk(&mut self, py: Python<'_>, chunk: &Py<PyAny>) -> PyResult<()> {
+        self.stream_chunk(py, chunk)
+    }
+}
+
 #[cfg(test)]
 mod deployment_hooks_tests {
     use std::ffi::CStr;
 
+    use litellm_host::call::Operation;
     use litellm_host::hooks::CallHooks;
     use litellm_host::lifecycle::{FailureOrigin, Timing};
     use litellm_host_python::{HookStep, PythonCallEvent};
@@ -646,16 +683,16 @@ kwargs = {'logger': logger, 'document': document}
     }
 
     #[rstest]
-    #[case::sync_completion(litellm_host::call::Operation::Completion, false, "completion")]
-    #[case::async_completion(litellm_host::call::Operation::Completion, true, "acompletion")]
-    #[case::sync_responses(litellm_host::call::Operation::Responses, false, "responses")]
-    #[case::async_responses(litellm_host::call::Operation::Responses, true, "aresponses")]
-    #[case::sync_messages(litellm_host::call::Operation::Messages, false, "anthropic_messages")]
-    #[case::async_messages(litellm_host::call::Operation::Messages, true, "anthropic_messages")]
-    #[case::sync_ocr(litellm_host::call::Operation::Ocr, false, "ocr")]
-    #[case::async_ocr(litellm_host::call::Operation::Ocr, true, "aocr")]
+    #[case::sync_completion(Operation::Completion, false, "completion")]
+    #[case::async_completion(Operation::Completion, true, "acompletion")]
+    #[case::sync_responses(Operation::Responses, false, "responses")]
+    #[case::async_responses(Operation::Responses, true, "aresponses")]
+    #[case::sync_messages(Operation::Messages, false, "anthropic_messages")]
+    #[case::async_messages(Operation::Messages, true, "anthropic_messages")]
+    #[case::sync_ocr(Operation::Ocr, false, "ocr")]
+    #[case::async_ocr(Operation::Ocr, true, "aocr")]
     fn operation_selects_the_legacy_setup_and_deployment_hook_contract(
-        #[case] operation: litellm_host::call::Operation,
+        #[case] operation: Operation,
         #[case] asynchronous: bool,
         #[case] expected: &str,
     ) {
@@ -1085,57 +1122,6 @@ check = lambda: None
         fn __clear__(slf: &Bound<'_, Self>) {
             drop(slf.borrow_mut().logging.take());
         }
-    }
-
-    #[rstest]
-    #[case::completion(litellm_host::call::Operation::Completion, "Chat completions")]
-    #[case::responses(litellm_host::call::Operation::Responses, "Responses")]
-    #[case::messages(litellm_host::call::Operation::Messages, "Messages")]
-    #[case::ocr(litellm_host::call::Operation::Ocr, "OCR document processing")]
-    fn prepared_arguments_replace_the_legacy_view_without_losing_callback_aliases(
-        #[case] operation: litellm_host::call::Operation,
-        #[case] description: &str,
-    ) {
-        Python::initialize();
-        Python::attach(|py| {
-            let locals = namespace(py, PAYLOAD_LOGGER);
-            run(
-                py,
-                &locals,
-                c"
-original = [0]
-replacement = [1]
-kwargs['pages'] = original
-prepared = {'pages': replacement}
-",
-            );
-            let mut logging = LegacyLogging {
-                operation,
-                logger: Some(PythonLogger::new(local(&locals, "logger").unbind())),
-                ..legacy_call(py, &locals, false)
-            };
-            let prepared = local(&locals, "prepared")
-                .cast_into::<pyo3::types::PyDict>()
-                .unwrap()
-                .unbind();
-            logging.arguments_prepared(py, &prepared).unwrap();
-            let wire = WireRequest {
-                body: json!({"pages": [1]}),
-                ..route_wire()
-            };
-            let (_, step) = send_and_receive(py, &mut logging, wire, &route_context());
-            assert!(matches!(step, HookStep::Ready(_)));
-            locals.set_item("description", description).unwrap();
-            run(
-                py,
-                &locals,
-                c"
-assert logger.pre['complete_input_dict']['pages'] is replacement
-assert logger.pre_input == description
-assert original == [0]
-",
-            );
-        });
     }
 
     #[rstest::rstest]
@@ -1622,6 +1608,7 @@ def check():
 mod terminal_tests {
     use std::ffi::CStr;
 
+    use litellm_host::call::Operation;
     use litellm_host::hooks::CallHooks;
     use litellm_host::lifecycle::{FailureOrigin, Timing};
     use litellm_host_python::{HookStep, PythonCallEvent, PythonOwned};
@@ -1763,7 +1750,7 @@ assert logger.calls[1][1] is response
         Python::attach(|py| {
             let locals = namespace(py, c"first = b'first'\nlast = b'last'\nresponse = None\nhead = {'additional_headers': {'request-id': 'req_native'}}");
             let mut logging = LegacyLogging {
-                operation: litellm_host::call::Operation::Messages,
+                operation: Operation::Messages,
                 ..logged(py, &locals, true)
             };
             logging

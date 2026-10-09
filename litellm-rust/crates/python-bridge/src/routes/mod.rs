@@ -8,12 +8,10 @@ pub(crate) mod responses;
 pub(crate) mod token_counter;
 pub(crate) mod traces;
 
-use litellm_callbacks_legacy_python::{LegacyLogging, PublicCall};
+use litellm_callbacks_legacy_python::PublicCall;
 use litellm_host::call::Operation;
 use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol};
-use litellm_host_python::{
-    HookChain, Hooks, PythonBinding, PythonCallHooks, PythonHostCalls, effective_py_args,
-};
+use litellm_host_python::{HookChain, PythonBinding, PythonHostCalls, effective_py_args};
 use pyo3::{
     prelude::*,
     types::{PyDict, PyMapping, PyTuple},
@@ -53,13 +51,15 @@ fn call_hooks(
     operation: Operation,
     call: &NativeCall<'_>,
     asynchronous: bool,
-) -> PyResult<(Py<PyDict>, impl PythonCallHooks + use<>)> {
+) -> PyResult<(Py<PyDict>, HookChain)> {
     let call = PublicCall::capture(&call.base, &call.args, &call.kwargs)?;
     let arguments = call.arguments(py);
-    Ok((
-        arguments,
-        LegacyLogging::new(py, operation, call, asynchronous),
-    ))
+    let hooks = HookChain::new().layer(
+        py,
+        litellm_callbacks_legacy_python::LegacyLayer::new(operation, asynchronous),
+        call,
+    );
+    Ok((arguments, hooks))
 }
 
 fn run_public_call<H, M>(
@@ -74,7 +74,7 @@ fn run_public_call<H, M>(
     + Sync
     + 'static,
     host: H,
-    hooks: impl PythonCallHooks + 'static,
+    hooks: HookChain,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>>
 where
@@ -88,11 +88,7 @@ where
             start(py, arguments, request).map(crate::logger::LoggedMachine::new)
         },
         host,
-        HookChain::new().layer(
-            py,
-            |_: Python<'_>, ()| [Hooks::new(hooks), Hooks::new(crate::preflight::SdkPolicy)],
-            (),
-        ),
+        hooks,
         arguments,
         crate::lifecycle::call_options(asynchronous),
     )

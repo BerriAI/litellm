@@ -2,7 +2,7 @@ import asyncio
 import inspect
 import json
 import ssl
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Coroutine, Iterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from types import MappingProxyType
@@ -369,26 +369,39 @@ def _responses_api_optional_request_param_names() -> frozenset[str]:
 
 
 def _custom_logger_callbacks(logging_obj: LiteLLMLoggingObj) -> list["CustomLogger"]:
+    dynamic_success_callbacks: Final = getattr(logging_obj, "dynamic_success_callbacks", None)
+    dynamic: Final = dynamic_success_callbacks if isinstance(dynamic_success_callbacks, (list, tuple)) else ()
+    return list(resolve_custom_loggers((*litellm.callbacks, *dynamic)))
+
+
+def resolve_custom_loggers(callbacks: Iterable[object]) -> tuple["CustomLogger", ...]:
+    """The ``CustomLogger`` instances among ``callbacks``, with string entries (e.g. ``"datadog"``) resolved."""
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.litellm_logging import (
         get_custom_logger_compatible_class,
     )
 
-    dynamic_success_callbacks: Final = getattr(logging_obj, "dynamic_success_callbacks", None)
-    callbacks: Final = list(litellm.callbacks)
-    if isinstance(dynamic_success_callbacks, (list, tuple)):
-        callbacks.extend(dynamic_success_callbacks)
+    def resolved(cb: object) -> object:
+        return get_custom_logger_compatible_class(cb) if isinstance(cb, str) else cb
 
-    custom_loggers: Final[list[CustomLogger]] = []
-    for cb in callbacks:
-        if isinstance(cb, str):
-            resolved = get_custom_logger_compatible_class(cb)
-            if resolved is None:
-                continue
-            cb = resolved
-        if isinstance(cb, CustomLogger):
-            custom_loggers.append(cb)
-    return custom_loggers
+    return tuple(logger for logger in map(resolved, callbacks) if isinstance(logger, CustomLogger))
+
+
+def overrides_agentic_loop_gate(callbacks: Iterable["CustomLogger"]) -> bool:
+    """True if any callback overrides ``async_should_run_agentic_loop``, the gate every agentic hook goes through.
+
+    Compared by function identity so an override inherited through an intermediate class still counts.
+    """
+    from litellm.integrations.custom_logger import CustomLogger
+
+    base_func: Final = CustomLogger.async_should_run_agentic_loop
+    base: Final = getattr(base_func, "__func__", base_func)
+
+    def overridden(cb: "CustomLogger") -> bool:
+        cb_func: Final = getattr(type(cb), "async_should_run_agentic_loop", base_func)
+        return getattr(cb_func, "__func__", cb_func) is not base
+
+    return any(map(overridden, callbacks))
 
 
 def _has_pre_call_deployment_hook(logging_obj: LiteLLMLoggingObj) -> bool:
@@ -5397,33 +5410,7 @@ class BaseLLMHTTPHandler:
 
     @staticmethod
     def _has_agentic_completion_hook(logging_obj: LiteLLMLoggingObj) -> bool:
-        """
-        True if any registered callback actually overrides
-        ``async_should_run_agentic_loop`` (the gate every agentic hook goes
-        through). The base ``CustomLogger`` implementation returns
-        ``(False, {})``, so when nothing overrides it the agentic
-        post-processing is a guaranteed no-op and the streaming wrapper that
-        buffers + rebuilds the whole response from SSE just to call it can be
-        skipped entirely.
-
-        Function-identity comparison (not a leaf ``__dict__`` check) so an
-        override inherited through any intermediate class is still detected --
-        a false negative here would silently disable agentic features.
-
-        String entries in ``litellm.callbacks`` (e.g. ``"datadog"``) are
-        resolved to their ``CustomLogger`` instance via
-        ``get_custom_logger_compatible_class`` -- same pattern as
-        ``ProxyLogging._callback_capabilities`` -- so a string-registered
-        agentic callback is detected too.
-        """
-        from litellm.integrations.custom_logger import CustomLogger
-
-        base_func: Final = CustomLogger.async_should_run_agentic_loop
-        for cb in _custom_logger_callbacks(logging_obj):
-            cb_func = getattr(type(cb), "async_should_run_agentic_loop", base_func)
-            if getattr(cb_func, "__func__", cb_func) is not getattr(base_func, "__func__", base_func):
-                return True
-        return False
+        return overrides_agentic_loop_gate(_custom_logger_callbacks(logging_obj))
 
     @staticmethod
     def _server_fulfilled_tools_in_request(logging_obj: LiteLLMLoggingObj, tools: object) -> frozenset[str]:

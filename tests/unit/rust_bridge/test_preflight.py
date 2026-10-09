@@ -47,7 +47,7 @@ def test_check_limits_refuses_a_call_over_the_budget(monkeypatch: pytest.MonkeyP
         check_limits({"model": "mistral/mistral-ocr-latest"})
 
 
-CONTRACT_PATH: Final = Path(__file__).parents[3] / "litellm-rust/crates/python-bridge/preflight_contract.json"
+CONTRACT_PATH: Final = Path(__file__).parents[3] / "litellm-rust/crates/callbacks-legacy-python/preflight_contract.json"
 _SHIMS: Final[MappingProxyType[str, Callable[..., object]]] = MappingProxyType(
     {
         "credential_list": preflight.credential_list,

@@ -23,7 +23,7 @@ use crate::{
     marshal::{optional_timeout, project_optional_fields, public_response, python_timeout_seconds},
 };
 
-const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.messages.route_host";
+pub(super) const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.messages.route_host";
 const REQUEST_ERROR_MARKER: &str = "messages_request_error";
 
 const BODY_FIELDS: [&str; 22] = [
