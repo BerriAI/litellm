@@ -329,10 +329,10 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         databricks_tool: Final = self.convert_anthropic_tool_to_databricks_tool(tool)
         return databricks_tool
 
-    def get_json_schema_from_pydantic_object(
+    def get_json_schema_from_pydantic_object(  # pyright: ignore[reportUnknownParameterType]  # match BaseLLMConfig signature
         self,
-        response_format: type[BaseModel] | dict | None,  # mutable-ok: match BaseLLMConfig
-    ) -> dict | None:  # mutable-ok: match BaseLLMConfig
+        response_format: type[BaseModel] | dict | None,  # mutable-ok: match BaseLLMConfig  # pyright: ignore[reportMissingTypeArgument, reportUnknownParameterType]  # match BaseLLMConfig
+    ) -> dict | None:  # mutable-ok: match BaseLLMConfig  # pyright: ignore[reportMissingTypeArgument]  # match BaseLLMConfig
         """
         Databricks Model Serving expects standard JSON Schema pointers (e.g. '#/$defs/{model}').
         AnthropicConfig overrides this with ref_template='/$defs/{model}' (without leading '#'),
@@ -341,7 +341,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
         Override to use the default type_to_response_format_param without the Anthropic ref_template rewrite.
         """
-        return type_to_response_format_param(response_format=response_format)
+        return type_to_response_format_param(  # pyright: ignore[reportUnknownVariableType]  # type_to_response_format_param returns bare dict
+            response_format=response_format
+        )
 
     def remove_cache_control_flag_from_messages_and_tools(
         self,
