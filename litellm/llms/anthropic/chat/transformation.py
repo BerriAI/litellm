@@ -37,10 +37,12 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 )
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.types.integrations.anthropic_cache_control_hook import CacheControlInjectionPoint
 from litellm.types.llms.anthropic import (
     ANTHROPIC_ADVISOR_TOOL_TYPE,
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
+    ANTHROPIC_TOOL_SEARCH_TOOL_TYPES,
     AllAnthropicPassThroughMessageValues,
     AllAnthropicToolsValues,
     AnthropicCodeExecutionTool,
@@ -1961,6 +1963,38 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             headers=headers,
         )
 
+    @staticmethod
+    def _tools_marked_for_a_tool_config_point(
+        tools: Sequence[object], points: Sequence[CacheControlInjectionPoint]
+    ) -> tuple[object, ...] | None:
+        """The tools with a ``tool_config`` point's marker on the last tool that keeps one.
+
+        Anthropic caches the tools block up to and including the marked tool, and this
+        transform drops a marker written on a tool-search tool. A caller that marked a
+        tool itself already spent the breakpoint, so the point stands down and this
+        returns None, as it does when no tool can keep a marker.
+        """
+        control: Final = next(
+            (
+                point.get("control") or ChatCompletionCachedContent(type="ephemeral")
+                for point in points
+                if point.get("location") == "tool_config"
+                and (point.get("control") is None or isinstance(point.get("control"), dict))
+            ),
+            None,
+        )
+        if control is None or any(isinstance(tool, dict) and "cache_control" in tool for tool in tools):
+            return None
+        for position in range(len(tools) - 1, -1, -1):
+            tool = tools[position]
+            if not isinstance(tool, dict):
+                continue
+            fields = cast(dict[str, object], tool)  # cast-ok: a runtime dict whose value types are not known here
+            if fields.get("type") in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES:
+                continue
+            return (*tools[:position], {**fields, "cache_control": control}, *tools[position + 1 :])
+        return None
+
     def transform_request(
         self,
         model: str,
@@ -2091,6 +2125,24 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         tools: Final = self.add_code_execution_tool(messages=anthropic_messages, tools=_tools)
         if len(tools) > 1:
             optional_params["tools"] = tools
+
+        request_params: Final = cast(dict[str, object], optional_params)  # cast-ok: the untyped request params
+        cache_control_points: Final = cast(  # cast-ok: this key only holds the documented injection-point list
+            list[CacheControlInjectionPoint] | None, request_params.pop("cache_control_injection_points", None)
+        )
+        if cache_control_points:
+            marked_tools: Final = AnthropicConfig._tools_marked_for_a_tool_config_point(
+                cast(Sequence[object], request_params.get("tools") or ()),  # cast-ok: this key holds the tools list
+                cache_control_points,
+            )
+            if marked_tools is not None:
+                from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+
+                optional_params["tools"] = list(marked_tools)  # rebind-ok: the outgoing tools, written as above
+                AnthropicCacheControlHook.record_gateway_injection(
+                    cast(Mapping[str, object], litellm_params),  # cast-ok: litellm_params is an untyped request dict
+                    1,
+                )
 
         ## Load Config
         config: Final = litellm.AnthropicConfig.get_config(model=model)
