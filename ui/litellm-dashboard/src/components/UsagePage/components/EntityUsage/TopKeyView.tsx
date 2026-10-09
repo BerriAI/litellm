@@ -42,11 +42,21 @@ interface TopKeyViewProps {
   topKeys: TopKeyItem[];
   teams: any[] | null;
   showTags?: boolean;
+  tagsColumnHeader?: string;
+  formatTag?: (tag: string) => string;
   topKeysLimit: number;
   setTopKeysLimit: (limit: number) => void;
 }
 
-const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = false, topKeysLimit, setTopKeysLimit }) => {
+const TopKeyView: React.FC<TopKeyViewProps> = ({
+  topKeys,
+  teams,
+  showTags = false,
+  tagsColumnHeader = "Tags",
+  formatTag = (tag) => tag,
+  topKeysLimit,
+  setTopKeysLimit,
+}) => {
   const { accessToken } = useAuthorized();
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -138,7 +148,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
   ];
 
   const tagsColumn = {
-    header: "Tags",
+    header: tagsColumnHeader,
     accessorKey: "tags",
     meta: QUIET_HEADER,
     cell: (info: any) => {
@@ -157,26 +167,29 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
       return (
         <div className="overflow-hidden">
           <div className="flex flex-wrap items-center gap-1">
-            {displayTags.map((tag, index) => (
-              <SimpleTooltip
-                key={index}
-                content={
-                  <div>
+            {displayTags.map((tag, index) => {
+              const tagLabel = formatTag(tag.tag);
+              return (
+                <SimpleTooltip
+                  key={index}
+                  content={
                     <div>
-                      <span className="text-muted-foreground">Tag Name:</span> {tag.tag}
+                      <div>
+                        <span className="text-muted-foreground">Tag Name:</span> {tagLabel}
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground">Spend:</span>{" "}
+                        {tag.usage > 0 && tag.usage < 0.01 ? "<$0.01" : `$${formatNumberWithCommas(tag.usage, 2)}`}
+                      </div>
                     </div>
-                    <div>
-                      <span className="text-muted-foreground">Spend:</span>{" "}
-                      {tag.usage > 0 && tag.usage < 0.01 ? "<$0.01" : `$${formatNumberWithCommas(tag.usage, 2)}`}
-                    </div>
-                  </div>
-                }
-              >
-                <span className="rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
-                  {tag.tag.slice(0, 7)}...
-                </span>
-              </SimpleTooltip>
-            ))}
+                  }
+                >
+                  <span className="rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                    {tagLabel.slice(0, 7)}...
+                  </span>
+                </SimpleTooltip>
+              );
+            })}
             {hasMoreTags && (
               <button
                 onClick={() => toggleTagsExpansion(apiKey)}

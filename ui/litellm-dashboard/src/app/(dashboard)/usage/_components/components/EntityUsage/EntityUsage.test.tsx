@@ -93,10 +93,24 @@ vi.mock("../EndpointUsage/EndpointUsage", () => ({
 }));
 
 vi.mock("@/components/UsagePage/components/EntityUsage/TopKeyView", () => ({
-  default: ({ topKeys }: { topKeys: { api_key: string; user?: string | null; spend: number }[] }) => (
+  default: ({
+    topKeys,
+    tagsColumnHeader,
+    formatTag,
+  }: {
+    topKeys: { api_key: string; user?: string | null; spend: number; tags?: { tag: string; usage: number }[] }[];
+    tagsColumnHeader?: string;
+    formatTag?: (tag: string) => string;
+  }) => (
     <div>
       <span>Top Keys</span>
+      {tagsColumnHeader && <span>{`top-keys-header:${tagsColumnHeader}`}</span>}
       <span>{`top-keys:${topKeys.map((row) => `${row.api_key}=${row.spend}=${row.user ?? "-"}`).join("|")}`}</span>
+      {topKeys.flatMap((row) =>
+        (row.tags ?? []).map((tag) => (
+          <span key={`${row.api_key}-${tag.tag}`}>{formatTag ? formatTag(tag.tag) : tag.tag}</span>
+        )),
+      )}
     </div>
   ),
 }));
@@ -1505,6 +1519,83 @@ describe("EntityUsage", () => {
       });
       expect(screen.queryByRole("radio", { name: "Tag" })).not.toBeInTheDocument();
       expect(mockTeamDailyActivityCall.mock.lastCall?.[0]).not.toHaveProperty("groupBy", "team");
+    });
+
+    it("labels the spend section and breakdown column as Team in team grouping", async () => {
+      render(<EntityUsage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockTagDailyActivityCall).toHaveBeenCalled();
+      });
+      fireEvent.click(screen.getByRole("radio", { name: "Team" }));
+
+      expect(await screen.findByText("Spend Per Team")).toBeInTheDocument();
+      expect(screen.getByRole("columnheader", { name: "Team" })).toBeInTheDocument();
+    });
+
+    it("shows the Team header and aliases in the top keys table in team grouping", async () => {
+      const mockUseTeams = vi.mocked(useTeams);
+      mockUseTeams.mockReturnValue({
+        teams: [{ team_id: "tag-1", team_alias: "Team Alpha" }],
+        setTeams: vi.fn(),
+      } as unknown as ReturnType<typeof useTeams>);
+      const entityMetrics = {
+        spend: 5,
+        api_requests: 5,
+        successful_requests: 5,
+        failed_requests: 0,
+        total_tokens: 500,
+        prompt_tokens: 300,
+        completion_tokens: 200,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+      };
+      mockTagDailyActivityCall.mockResolvedValue({
+        results: [
+          {
+            date: "2025-01-01",
+            metrics: { ...mockSpendData.results[0].metrics },
+            breakdown: {
+              entities: {
+                "tag-1": {
+                  metrics: { ...entityMetrics },
+                  metadata: { team_alias: "Tag 1" },
+                  api_key_breakdown: {
+                    "key-abc": { metrics: { ...entityMetrics }, metadata: {} },
+                  },
+                },
+              },
+              models: {},
+              api_keys: {
+                "key-abc": { metrics: { ...entityMetrics }, metadata: {} },
+              },
+              providers: {},
+            },
+          },
+        ],
+        metadata: mockSpendData.metadata,
+      });
+
+      render(<EntityUsage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockTagDailyActivityCall).toHaveBeenCalled();
+      });
+      fireEvent.click(screen.getByRole("radio", { name: "Team" }));
+
+      expect(await screen.findByText("top-keys-header:Team")).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.getAllByText("Team Alpha").length).toBeGreaterThan(0);
+      });
+    });
+
+    it("keeps the Tag labels and shows the Break down by text in tag grouping", async () => {
+      render(<EntityUsage {...defaultProps} />);
+
+      expect(await screen.findByText("Spend Per Tag")).toBeInTheDocument();
+      expect(screen.getByRole("columnheader", { name: "Tag" })).toBeInTheDocument();
+      expect(screen.getByText("top-keys-header:Tags")).toBeInTheDocument();
+      expect(screen.getByText("Break down by")).toBeInTheDocument();
     });
   });
 });

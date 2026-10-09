@@ -389,6 +389,26 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const filterSlot = entityFilterSlots[entityType];
 
   const capitalizedEntityLabel = entityType.charAt(0).toUpperCase() + entityType.slice(1);
+  const breakdownEntityLabel = entityType === "tag" && groupBy === "team" ? "Team" : capitalizedEntityLabel;
+  const breakdownLabelById = useMemo(() => {
+    if (entityType !== "tag" || groupBy !== "team") {
+      return null;
+    }
+    const labels: Record<string, string> = {};
+    spendData.results.forEach((day) => {
+      Object.entries(day.breakdown?.entities ?? {}).forEach(([entityId, entity]) => {
+        if (labels[entityId] === undefined) {
+          labels[entityId] = getEntityLabel(entityId, entity.metadata);
+        }
+      });
+    });
+    return labels;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entityType, groupBy, spendData.results, teamList, entityList]);
+  const formatBreakdownKey = useCallback(
+    (entityId: string) => (entityId === "" ? "Unassigned" : (breakdownLabelById?.[entityId] ?? entityId)),
+    [breakdownLabelById],
+  );
   const showFlatCost = entityType === "team" && hasFlatCost(spendData.metadata);
   const userSpendTeamIds = useMemo(
     () =>
@@ -409,7 +429,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const entityBreakdownColumns = useMemo<ColumnDef<EntityMetricWithMetadata>[]>(
     () => [
       {
-        header: capitalizedEntityLabel,
+        header: breakdownEntityLabel,
         accessorKey: "metadata.alias",
         meta: QUIET_HEADER,
         cell: ({ row }) => <span className="font-medium text-foreground">{row.original.metadata.alias}</span>,
@@ -445,7 +465,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         cell: ({ row }) => row.original.metrics.total_tokens.toLocaleString(),
       },
     ],
-    [capitalizedEntityLabel, maxEntitySpend],
+    [breakdownEntityLabel, maxEntitySpend],
   );
 
   const chev = "size-3 text-muted-foreground";
@@ -574,7 +594,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
       <Panel
         icon={Layers}
-        title={`Spend Per ${capitalizedEntityLabel}`}
+        title={`Spend Per ${breakdownEntityLabel}`}
         action={
           <a
             href="https://docs.litellm.ai/docs/proxy/enterprise#spend-tracking"
@@ -610,6 +630,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
             topKeys={getTopAPIKeys(spendData.results, topKeysLimit)}
             teams={null}
             showTags={entityType === "tag"}
+            tagsColumnHeader={entityType === "tag" && groupBy === "team" ? "Team" : "Tags"}
+            formatTag={formatBreakdownKey}
             topKeysLimit={topKeysLimit}
             setTopKeysLimit={setTopKeysLimit}
           />
@@ -742,12 +764,15 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                   <label className="text-sm font-medium text-foreground block mb-2">Filter by team</label>
                   <TeamMultiSelect value={selectedTeamIds} onChange={setSelectedTeamIds} />
                 </div>
-                <Segmented
-                  label="Break down by"
-                  value={groupBy}
-                  options={GROUP_BY_OPTIONS}
-                  onChange={setGroupBy}
-                />
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">Break down by</span>
+                  <Segmented
+                    label="Break down by"
+                    value={groupBy}
+                    options={GROUP_BY_OPTIONS}
+                    onChange={setGroupBy}
+                  />
+                </div>
               </div>
             ) : undefined
           }
