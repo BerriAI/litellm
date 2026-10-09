@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import token_counter
@@ -15,7 +16,10 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.core_helpers import (
+    get_parent_otel_span_from_kwargs,
+    get_router_callback_metadata,
+)
 from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.types.router import RouterErrors
 from litellm.types.utils import LiteLLMPydanticObjectBase, StandardLoggingPayload
@@ -36,6 +40,7 @@ class RoutingArgs(LiteLLMPydanticObjectBase):
 
 
 _active_prefetched_usage: Final[ContextVar["PrefetchedUsage | None"]] = ContextVar("prefetched_usage", default=None)
+_callback_metadata_adapter: Final = TypeAdapter(Mapping[str, object])
 
 
 @dataclass(frozen=True)
@@ -91,6 +96,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
 
     def __init__(self, router_cache: DualCache, routing_args: dict = {}):
         self.router_cache = router_cache
+        self.router_cache_id = str(id(router_cache))
         self.routing_args = RoutingArgs(**routing_args)
         BaseRoutingStrategy.__init__(
             self,
@@ -252,9 +258,14 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 raise e
             return deployment  # don't fail calls if eg. redis fails to connect
 
+    def _is_serving_router(self, kwargs: Mapping[str, object]) -> bool:
+        metadata: Final = get_router_callback_metadata(kwargs)
+        return metadata.get("router_cache_id", self.router_cache_id) == self.router_cache_id
+
     @with_service_target("router_usage")
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
-        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+    def log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        callback_kwargs: Final = _callback_metadata_adapter.validate_python(kwargs)
+        if is_batch_retrieve_call_type(callback_kwargs.get("call_type")):
             return
         try:
             """
@@ -286,7 +297,12 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             # update cache
 
             ## TPM
-            self.router_cache.increment_cache(key=tpm_key, value=total_tokens, ttl=self.routing_args.ttl)
+            self.router_cache.increment_cache(
+                key=tpm_key,
+                value=total_tokens,
+                ttl=self.routing_args.ttl,
+                local_only=not self._is_serving_router(callback_kwargs),
+            )
             ### TESTING ###
             if self.test_flag:
                 self.logged_success += 1
@@ -296,8 +312,9 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             )
 
     @with_service_target("router_usage")
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        callback_kwargs: Final = _callback_metadata_adapter.validate_python(kwargs)
+        if is_batch_retrieve_call_type(callback_kwargs.get("call_type")):
             return
         try:
             """
@@ -327,12 +344,21 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             # update cache
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
             ## TPM
-            await self.router_cache.async_increment_cache_post_call(
-                key=tpm_key,
-                value=total_tokens,
-                ttl=self.routing_args.ttl,
-                parent_otel_span=parent_otel_span,
-            )
+            if self._is_serving_router(callback_kwargs):
+                await self.router_cache.async_increment_cache_post_call(
+                    key=tpm_key,
+                    value=total_tokens,
+                    ttl=self.routing_args.ttl,
+                    parent_otel_span=parent_otel_span,
+                )
+            else:
+                await self.router_cache.async_increment_cache(
+                    key=tpm_key,
+                    value=total_tokens,
+                    ttl=self.routing_args.ttl,
+                    parent_otel_span=parent_otel_span,
+                    local_only=True,
+                )
 
             ### TESTING ###
             if self.test_flag:

@@ -42,7 +42,7 @@ class BaseRoutingStrategy(ABC):
         )
 
     def cancel_sync_task(self) -> None:
-        if self._sync_task is not None:
+        if self._sync_task is not None and not self._sync_task.get_loop().is_closed():
             self._sync_task.cancel()
 
     def retire(self) -> None:

@@ -333,6 +333,10 @@ class LoggingCallbackManager:
             if not attr_name.startswith("_"):  # Skip private attributes
                 if isinstance(attr_value, (str, bool, int)):
                     key_parts.append(f"{attr_name}={attr_value}")
+                elif (
+                    attr_name in ("router_cache", "dual_cache") or type(attr_value).__name__ == "DualCache"
+                ) and "router_cache_id" not in vars(custom_logger):
+                    key_parts.append(f"router_cache_id={id(attr_value)}")
 
         return "-".join(key_parts)
 
@@ -370,6 +374,7 @@ class LoggingCallbackManager:
         """
         for callback_list in (
             litellm.callbacks,
+            litellm.input_callback,
             litellm.success_callback,
             litellm.failure_callback,
             litellm._async_success_callback,
