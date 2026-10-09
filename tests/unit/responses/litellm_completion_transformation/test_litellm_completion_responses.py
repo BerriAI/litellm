@@ -3,6 +3,7 @@ from copy import deepcopy
 from typing import Final, Literal
 
 import pytest
+from openai.types.responses import ResponseReasoningItem
 from openai.types.responses.response_function_web_search import (
     ActionFind,
     ActionOpenPage,
@@ -343,9 +344,9 @@ class TestLiteLLMCompletionResponsesConfig:
                 "rs_"
             ), f"Expected ID to start with 'rs_', got: {reasoning_item.id}"
         assert reasoning_item.status == "completed"
-        assert reasoning_item.role == "assistant"
+        assert reasoning_item.summary == []
         assert len(reasoning_item.content) == 1
-        assert reasoning_item.content[0].type == "output_text"
+        assert reasoning_item.content[0].type == "reasoning_text"
         assert "step by step" in reasoning_item.content[0].text
         assert "42" in reasoning_item.content[0].text
 
@@ -478,8 +479,81 @@ class TestLiteLLMCompletionResponsesConfig:
             item for item in responses_api_response.output if item.type == "reasoning"
         ]
         assert len(reasoning_items) == 1, "Signature-only thinking should still surface a reasoning item"
-        assert reasoning_items[0].content == []
+        assert reasoning_items[0].content is None
+        assert reasoning_items[0].summary == []
         assert "signature-payload" in reasoning_items[0].encrypted_content
+
+    @pytest.mark.parametrize(
+        ("reasoning_content", "thinking_blocks"),
+        [
+            ("Euler's polynomial fails at n=40.", None),
+            ("", [{"type": "thinking", "thinking": "", "signature": "signature-payload"}]),
+        ],
+    )
+    def test_bridged_reasoning_item_parses_as_openai_reasoning_item(
+        self, reasoning_content: str, thinking_blocks: list[dict[str, str]] | None
+    ) -> None:
+        response: Final = ModelResponse(
+            id="test-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="40",
+                        role="assistant",
+                        reasoning_content=reasoning_content,
+                        thinking_blocks=thinking_blocks,
+                    ),
+                )
+            ],
+        )
+
+        output: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Test input",
+            responses_api_request={},
+            chat_completion_response=response,
+        ).model_dump(mode="json")["output"]
+
+        reasoning_item: Final = output[0]
+        assert reasoning_item["summary"] == []
+        assert "role" not in reasoning_item
+        assert "phase" not in reasoning_item
+        parsed: Final = ResponseReasoningItem.model_validate(reasoning_item)
+        assert [part.text for part in parsed.content or ()] == ([reasoning_content] if reasoning_content else [])
+        assert all(part.type == "reasoning_text" for part in parsed.content or ())
+
+    @pytest.mark.parametrize(
+        ("request_params", "expected_reasoning"),
+        [
+            ({"reasoning": {"effort": "high"}}, {"effort": "high", "summary": None}),
+            ({"reasoning": {"effort": "low", "summary": "detailed"}}, {"effort": "low", "summary": "detailed"}),
+            ({}, {"effort": None, "summary": None}),
+        ],
+    )
+    def test_response_reasoning_always_carries_effort_and_summary(
+        self, request_params: dict[str, dict[str, str]], expected_reasoning: dict[str, str | None]
+    ) -> None:
+        response: Final = ModelResponse(
+            id="test-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[Choices(finish_reason="stop", index=0, message=Message(content="40", role="assistant"))],
+        )
+
+        responses_api_response: Final = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="Test input",
+                responses_api_request=request_params,
+                chat_completion_response=response,
+            )
+        )
+
+        assert responses_api_response.model_dump(mode="json")["reasoning"] == expected_reasoning
 
     def test_redacted_thinking_block_preserved_as_encrypted_content(self):
         response = ModelResponse(
