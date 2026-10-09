@@ -13746,6 +13746,18 @@
               "description": "If True, will not raise an exception when the guardrail is blocked. Useful for OpenWebUI where exceptions can end the chat flow.",
               "title": "Disable Exception On Block"
             },
+            "enable_thinking": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Whether MLS should render the chat template in thinking mode. Defaults to False.",
+              "title": "Enable Thinking"
+            },
             "end_session_after_n_fails": {
               "anyOf": [
                 {
@@ -13927,6 +13939,18 @@
               ],
               "description": "Enable hallucination detection to detect factual inaccuracies.",
               "title": "Hallucinations Check"
+            },
+            "hazard_threshold": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Block the request when the hazard_prompt probe scores strictly above this value. Defaults to 0.703, the threshold MLS reports for that probe. Note the probe also responds to instruction-style phrasing such as \"repeat this back verbatim\", so raise this if benign traffic is being blocked.",
+              "title": "Hazard Threshold"
             },
             "include_evidence": {
               "anyOf": [
@@ -14337,6 +14361,18 @@
               "description": "Controls Pillar session persistence (sets `plr_persist` header). Set to False to disable persistence.",
               "title": "Persist Session"
             },
+            "pii": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Whether to run MLS's PII detection head. Defaults to True.",
+              "title": "Pii"
+            },
             "pii_check": {
               "anyOf": [
                 {
@@ -14378,6 +14414,18 @@
               ],
               "description": "Configuration for PII entity types and actions",
               "title": "Pii Entities Config"
+            },
+            "pii_mask": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "What to do with detected PII. True (default) rewrites each span as its type in brackets, e.g. \"My name is Alex\" -> \"My name is [name]\", and lets the request through. False blocks the request instead.",
+              "title": "Pii Mask"
             },
             "policy_id": {
               "anyOf": [
@@ -14582,6 +14630,24 @@
               ],
               "description": "Optional per-entity minimum confidence scores for Presidio detections. Entities below the threshold are ignored.",
               "title": "Presidio Score Thresholds"
+            },
+            "probes": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Which classifier probes to run: a list of probe names, or \"all\". Defaults to [\"hazard_prompt\"] - the only probe whose score this guardrail enforces. An unknown probe name makes MLS return 404.",
+              "title": "Probes"
             },
             "project_id": {
               "anyOf": [
