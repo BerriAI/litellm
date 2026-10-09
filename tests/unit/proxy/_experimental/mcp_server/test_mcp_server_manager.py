@@ -164,7 +164,9 @@ async def test_elicitation_callback_keeps_initiating_session():
     request = AsyncMock(return_value=accepted)
     initiating = SimpleNamespace(client_params=SimpleNamespace(capabilities=capabilities), elicit_form=request)
     token = legacy_server.active_mcp_session_var.set(initiating)
-    request_token = active_mcp_request_ctx_var.set(SimpleNamespace(session=initiating, request_id="initiating-call"))
+    request_token = active_mcp_request_ctx_var.set(
+        SimpleNamespace(session=initiating, request_id="initiating-call", protocol_version="2025-11-25")
+    )
     try:
         callback = _create_elicitation_callback()
         legacy_server.active_mcp_session_var.set(SimpleNamespace())
@@ -4323,7 +4325,9 @@ class TestMCPServerManager:
         mock_create_client.assert_called_once()
         called_kwargs = mock_create_client.call_args.kwargs
         assert called_kwargs["extra_headers"] == {"X-Test": "1", "X-Static": "1"}
-        mock_client.read_resource.assert_awaited_once_with("https://example.com/resource")
+        mock_client.read_resource.assert_awaited_once_with(
+            "https://example.com/resource", input_responses=None, request_state=None, allow_input_required=False
+        )
         assert result is read_result
 
     @pytest.mark.asyncio
@@ -19275,3 +19279,32 @@ async def test_repeated_stale_discovery_uses_current_callers_endpoint(endpoint: 
         original, needed_endpoint=lambda server: getattr(server, endpoint), retry_stale=False,
     )
     assert resolved is replacement
+
+
+@pytest.mark.asyncio
+async def test_legacy_upstream_elicitation_rejects_modern_downstream_without_consent() -> None:
+    from types import SimpleNamespace
+    from mcp.types import ElicitRequestFormParams, ErrorData
+    from litellm.proxy._experimental.mcp_server import server as legacy_server
+    from litellm.proxy._experimental.mcp_server.legacy_callbacks import create_elicitation_callback
+    from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
+
+    session: Final = SimpleNamespace(client_params=None)
+    session_token: Final = legacy_server.active_mcp_session_var.set(session)
+    request_token: Final = active_mcp_request_ctx_var.set(
+        SimpleNamespace(session=session, request_id="modern-call", protocol_version="2026-07-28")
+    )
+    relay: Final = AsyncMock()
+    try:
+        callback: Final = create_elicitation_callback()
+        with patch("litellm.proxy._experimental.mcp_server.elicitation_handler.handle_elicitation_request", relay):
+            result: Final = await callback(
+                None, ElicitRequestFormParams(message="Confirm", requested_schema={"type": "object"})
+            )
+        assert isinstance(result, ErrorData)
+        assert result.code == -32602
+        assert "may have partially completed" in result.message
+        relay.assert_not_awaited()
+    finally:
+        active_mcp_request_ctx_var.reset(request_token)
+        legacy_server.active_mcp_session_var.reset(session_token)

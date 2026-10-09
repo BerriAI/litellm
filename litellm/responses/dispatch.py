@@ -56,14 +56,14 @@ def _public_request(
     model: Final = fields.get("model")
     if not isinstance(model, str):
         return None
-    return native_call(args, kwargs, fields)
+    return native_call(legacy, args, kwargs)
 
 
 def _context(request: NativeCall) -> RouteContext:
     return RouteContext(
         Route.RESPONSES,
-        provider=optional_str(request.bound.get("custom_llm_provider")),
-        model=str(request.bound["model"]),
+        provider=optional_str(request.resolved.get("custom_llm_provider")),
+        model=str(request.resolved["model"]),
     )
 
 
