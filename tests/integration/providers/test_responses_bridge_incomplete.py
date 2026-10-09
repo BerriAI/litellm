@@ -572,3 +572,102 @@ def test_chat_over_responses_deployment_merges_function_call_followed_by_message
             }
         ], response.text
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/responses")]
+
+
+def test_chat_over_responses_deployment_merges_two_messages_and_function_call_into_one_choice(
+    gateway: Gateway,
+) -> None:
+    identity: Final = "responses-bridge-two-messages-" + uuid.uuid4().hex
+
+    def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return Reply(body=b'{"object":"list","data":[]}')
+        assert request.method == "POST" and request.target == "/responses", request.target
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": "resp_weather_two_messages",
+                    "object": "response",
+                    "created_at": 1789788253,
+                    "status": "completed",
+                    "model": "gpt-6-sol",
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": "msg_first",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "First message.", "annotations": []}],
+                        },
+                        {
+                            "type": "message",
+                            "id": "msg_second",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "Second message.", "annotations": []}],
+                        },
+                        {
+                            "type": "function_call",
+                            "id": "fc_1",
+                            "call_id": "call_1",
+                            "name": "get_weather",
+                            "arguments": '{"city":"Paris"}',
+                            "status": "completed",
+                        },
+                    ],
+                    "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                }
+            ).encode()
+        )
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="openai/responses/gpt-6-sol", api_base=wire.url, api_key="synthetic-openai-key"
+        )
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": f"What is the weather in Paris? {identity}"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "description": "Get the weather for a city.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"city": {"type": "string"}},
+                                "required": ["city"],
+                            },
+                        },
+                    }
+                ],
+                "cache": {"no-cache": True},
+            },
+        )
+        assert response.status_code == 200, response.text
+        body: Final = response.json()
+        assert body["choices"] == [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "First message.Second message.",
+                    "tool_calls": [
+                        {
+                            "id": "fc_1",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"city":"Paris"}',
+                            },
+                            "index": 0,
+                        }
+                    ],
+                },
+            }
+        ], response.text
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/responses")]
