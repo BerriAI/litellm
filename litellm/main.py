@@ -32,7 +32,6 @@ from litellm._logging import redact_string
 from litellm._uuid import uuid
 
 if TYPE_CHECKING:
-    import tenacity
     from aiohttp import ClientSession
 
 import dotenv
@@ -6111,6 +6110,15 @@ def completion(
         )
 
 
+class _CompletionRetryOutcome(Protocol):
+    def exception(self) -> BaseException | None: ...
+
+
+class _CompletionRetryState(Protocol):
+    @property
+    def outcome(self) -> _CompletionRetryOutcome | None: ...
+
+
 def _completion_retry_after(error: Exception) -> float | None:
     headers: Final = (
         getattr(getattr(error, "response", None), "headers", None)
@@ -6126,8 +6134,8 @@ def _completion_retry_after(error: Exception) -> float | None:
 
 
 def _completion_retry_wait(
-    retry_state: "tenacity.RetryCallState",
-    fallback_wait: Callable[["tenacity.RetryCallState"], float],
+    retry_state: _CompletionRetryState,
+    fallback_wait: Callable[[_CompletionRetryState], float],
 ) -> float:
     outcome: Final = retry_state.outcome
     error: Final = outcome.exception() if outcome is not None else None
@@ -6136,6 +6144,10 @@ def _completion_retry_wait(
         if retry_after is not None:
             return retry_after
     return fallback_wait(retry_state)
+
+
+def _completion_constant_wait(_: _CompletionRetryState) -> float:
+    return 0.0
 
 
 def completion_with_retries(*args, _initial_retry_exception: Exception | None = None, **kwargs):
@@ -6152,10 +6164,10 @@ def completion_with_retries(*args, _initial_retry_exception: Exception | None = 
     kwargs["num_retries"] = 0
     retry_strategy: Final[RetryStrategy] = kwargs.pop("retry_strategy", "constant_retry")
     original_function: Final = kwargs.pop("original_function", completion)
-    fallback_wait: Final = (
+    fallback_wait: Final[Callable[[_CompletionRetryState], float]] = (
         tenacity.wait_exponential(multiplier=1, max=10)
         if retry_strategy == "exponential_backoff_retry"
-        else tenacity.wait_fixed(0)
+        else _completion_constant_wait
     )
     retryer: Final = tenacity.Retrying(
         wait=partial(_completion_retry_wait, fallback_wait=fallback_wait),
@@ -6165,7 +6177,7 @@ def completion_with_retries(*args, _initial_retry_exception: Exception | None = 
     if _initial_retry_exception is not None:
         initial_retry_after: Final = _completion_retry_after(_initial_retry_exception)
         if initial_retry_after is not None:
-            retryer.sleep(initial_retry_after)
+            time.sleep(initial_retry_after)
     return retryer(original_function, *args, **kwargs)
 
 
