@@ -1,0 +1,85 @@
+suite: test Data Manager deployment
+templates:
+  - deployment.yaml
+  - deployment-data-manager.yaml
+  - configmap-litellm.yaml
+tests:
+  - it: should not render the Data Manager deployment when disabled
+    template: deployment-data-manager.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should not set the Data Manager flag on the proxy when disabled
+    template: deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_DATA_MANAGER_ENABLED
+            value: "true"
+
+  - it: should run an isolated Data Manager deployment with the shared config
+    template: deployment-data-manager.yaml
+    set:
+      dataManager.enabled: true
+      dataManager.replicaCount: 2
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: spec.replicas
+          value: 2
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/component: data-manager
+            app.kubernetes.io/instance: RELEASE-NAME
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value: [python, -m, litellm.proxy.data_manager]
+      - notExists:
+          path: spec.template.spec.containers[0].ports
+      - notExists:
+          path: spec.template.spec.containers[0].livenessProbe
+      - notExists:
+          path: spec.template.spec.containers[0].readinessProbe
+      - notExists:
+          path: spec.template.spec.containers[0].startupProbe
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CONFIG_FILE_PATH
+            value: /etc/litellm/config.yaml
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: litellm-config
+            mountPath: /etc/litellm/config.yaml
+            subPath: config.yaml
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: litellm-config
+            configMap:
+              name: RELEASE-NAME-litellm-config
+              items:
+                - key: config.yaml
+                  path: config.yaml
+
+  - it: should enable proxy and collector ownership when the Data Manager is enabled
+    template: deployment.yaml
+    set:
+      dataManager.enabled: true
+      collector.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_DATA_MANAGER_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LITELLM_DATA_MANAGER_ENABLED
+            value: "true"

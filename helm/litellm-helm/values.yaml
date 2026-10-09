@@ -246,6 +246,15 @@ collector:
   # HPAContainerMetrics feature gate on 1.27 to 1.29)
   scaleOnProxyContainerCpu: false
 
+dataManager:
+  enabled: false
+  replicaCount: 1
+  command:
+    - python
+    - -m
+    - litellm.proxy.data_manager
+  resources: {}
+
 resources:
   {}
   # Unset by default so the chart installs on small clusters such as Minikube, and so an

@@ -68,6 +68,10 @@ spec:
                   key: {{ .Values.lensWorker.serviceTokenSecret.key | quote }}
             {{- end }}
             {{- include "litellm.proxyEnv" . | nindent 12 }}
+            {{- if .Values.dataManager.enabled }}
+            - name: LITELLM_DATA_MANAGER_ENABLED
+              value: "true"
+            {{- end }}
             {{- if .Values.liteadmin.enabled }}
             - name: LITELLM_ADMIN_AGENT_URL
               value: {{ printf "http://%s-liteadmin:10000" (include "litellm.fullname" . | trunc 53 | trimSuffix "-") | quote }}
@@ -181,6 +185,10 @@ spec:
           command: {{ toYaml .Values.collector.command | nindent 12 }}
           env:
             {{- include "litellm.proxyEnv" . | nindent 12 }}
+            {{- if .Values.dataManager.enabled }}
+            - name: LITELLM_DATA_MANAGER_ENABLED
+              value: "true"
+            {{- end }}
             {{- include "litellm.collectorEnv" . | nindent 12 }}
             - name: LITELLM_JOB_ROLE
               value: collector

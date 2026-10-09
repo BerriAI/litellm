@@ -50,6 +50,20 @@ app.kubernetes.io/name: {{ include "litellm.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
+{{- define "litellm.dataManagerSelectorLabels" -}}
+app.kubernetes.io/component: data-manager
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{- define "litellm.dataManagerLabels" -}}
+helm.sh/chart: {{ include "litellm.chart" . }}
+{{ include "litellm.dataManagerSelectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
 {{/*
 Enterprise billable-request metering. The client certificate identifies the
 deployment to LiteLLM's collector, so it is mounted read-only from an existing
