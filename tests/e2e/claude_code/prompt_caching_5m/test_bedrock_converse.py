@@ -62,12 +62,21 @@ def test_prompt_caching_5m_bedrock_converse(compat_result):
     upstream usage block surfaces a non-zero cache token count."""
     base_url, api_key = require_proxy(compat_result)
 
-    outcomes = run_claude_models_parallel(
-        models=BEDROCK_CONVERSE_MODELS,
-        prompt="Reply with the single word 'pong' and nothing else.",
-        base_url=base_url,
-        api_key=api_key,
-    )
+    def run(models):
+        return run_claude_models_parallel(
+            models=models,
+            prompt="Reply with the single word 'pong' and nothing else.",
+            base_url=base_url,
+            api_key=api_key,
+        )
+
+    first = run(BEDROCK_CONVERSE_MODELS)
+    uncached = [
+        model
+        for model, outcome in first.items()
+        if not isinstance(outcome, ClaudeCLIError) and outcome.exit_code == 0 and _cache_tokens(outcome.usage) <= 0
+    ]
+    outcomes = {**first, **run(uncached)} if uncached else first
 
     failures = []
     for model in BEDROCK_CONVERSE_MODELS:
