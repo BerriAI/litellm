@@ -891,6 +891,16 @@ def bedrock_runtime_chat_completions_is_default(model: str) -> bool:
     )
 
 
+def bedrock_rejects_stop_sequences(model: str) -> bool:
+    """Whether AWS refuses stop sequences for this model on every Bedrock route.
+
+    Grok answers ``stopSequences`` on Converse and ``stop`` on native Chat Completions alike with
+    ``This model doesn't support the stopSequences field`` (Grok 4.6 and 4.7 checked live on 2026-10-09),
+    so litellm drops ``stop`` for it instead of forwarding it to a 400.
+    """
+    return _XAI_GROK_MODEL_RE.search(model) is not None
+
+
 def bedrock_runtime_chat_completions_serves_tools_with_reasoning(model: str) -> bool:
     """Whether AWS's native Chat Completions serves this model's function tools with any ``reasoning_effort``.
 
@@ -967,7 +977,9 @@ def bedrock_request_needs_converse(model: str, request_params: Mapping[str, obje
     AWS's native OpenAI surface, a ``model_id`` override (an application inference profile or provisioned
     throughput ARN) is only encoded into Converse's request URL and so stays on Converse like the
     ``bedrock/arn:...`` model form, ``stop`` stays on Converse where it fails loudly instead of silently
-    stopping hidden reasoning, operator-owned request metadata is only written onto the Converse body,
+    stopping hidden reasoning (except on models that reject stop sequences everywhere,
+    ``bedrock_rejects_stop_sequences``, where both routes drop it), operator-owned request metadata is only
+    written onto the Converse body,
     function tools (``tools`` or legacy ``functions``) on a model without
     ``supports_bedrock_runtime_chat_completions_tools_with_reasoning`` are rejected there unless
     ``reasoning_effort`` is exactly ``"none"``, and a ``response_format`` goes native only as
@@ -977,7 +989,12 @@ def bedrock_request_needs_converse(model: str, request_params: Mapping[str, obje
     handling everywhere, since AWS's native surface rejects that type with a 400 unless the prompt
     mentions json.
     """
-    if any(request_params.get(key) is not None for key in BEDROCK_CONVERSE_ONLY_REQUEST_KEYS):
+    converse_only_keys: Final = (
+        BEDROCK_CONVERSE_ONLY_REQUEST_KEYS - {"stop"}
+        if bedrock_rejects_stop_sequences(model)
+        else BEDROCK_CONVERSE_ONLY_REQUEST_KEYS
+    )
+    if any(request_params.get(key) is not None for key in converse_only_keys):
         return True
     if bedrock_request_metadata_is_owned():
         return True

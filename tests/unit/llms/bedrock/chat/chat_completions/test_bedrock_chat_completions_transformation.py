@@ -441,15 +441,51 @@ def test_guardrail_config_falls_back_to_converse(local_cost_map, model):
     [
         {"additionalModelRequestFields": {"reasoning_effort": "high"}},
         {"top_k": 40},
-        {"stop": ["END"]},
         {"model_id": APPLICATION_INFERENCE_PROFILE_ARN},
     ],
-    ids=["additionalModelRequestFields", "top_k", "stop", "model_id"],
+    ids=["additionalModelRequestFields", "top_k", "model_id"],
 )
 def test_converse_extension_params_fall_back_to_converse(local_cost_map, model, request_params):
     assert bedrock_request_needs_converse(model, request_params) is True
     assert BedrockModelInfo.get_bedrock_route(model, request_params) == "converse"
     assert BedrockModelInfo.get_bedrock_route(model, {key: None for key in request_params}) == "chat_completions"
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["chat_completions/openai.gpt-oss-20b-1:0", "bedrock/global.openai.gpt-5.6-sol", "bedrock/us.openai.gpt-6.1-sol"],
+)
+def test_stop_keeps_other_models_on_converse(local_cost_map, model):
+    assert bedrock_request_needs_converse(model, {"stop": ["END"]}) is True
+    assert BedrockModelInfo.get_bedrock_route(model, {"stop": ["END"]}) == "converse"
+
+
+@pytest.mark.parametrize("model", ["bedrock/global.xai.grok-4.7", "bedrock/us.xai.grok-4.6"])
+def test_stop_is_dropped_on_chat_completions_for_grok(local_cost_map, fake_aws_env, model):
+    requests, client = _recording_client(json=_chat_completion_json("ok", model.removeprefix("bedrock/")))
+    response = litellm.completion(
+        model=model, messages=[{"role": "user", "content": "hello"}], stop=["</block>"], max_tokens=64, client=client
+    )
+
+    assert requests[0].url.raw_path == b"/openai/v1/chat/completions"
+    body = json.loads(requests[0].content)
+    assert "stop" not in body
+    assert body["max_completion_tokens"] == 64
+    assert response.choices[0].message.content == "ok"
+
+
+def test_stop_is_dropped_on_converse_for_grok(local_cost_map, fake_aws_env):
+    requests, client = _recording_client(json=CONVERSE_JSON)
+    litellm.completion(
+        model="bedrock/converse/global.xai.grok-4.7",
+        messages=[{"role": "user", "content": "hello"}],
+        stop=["</block>"],
+        max_tokens=64,
+        client=client,
+    )
+
+    assert requests[0].url.raw_path == b"/model/global.xai.grok-4.7/converse"
+    assert json.loads(requests[0].content)["inferenceConfig"] == {"maxTokens": 64}
 
 
 @pytest.mark.parametrize(

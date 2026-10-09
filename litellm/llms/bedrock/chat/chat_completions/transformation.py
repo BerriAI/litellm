@@ -38,6 +38,7 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token
 from litellm.llms.bedrock.common_utils import (
     BedrockError,
     bedrock_model_is_openai_gpt,
+    bedrock_rejects_stop_sequences,
     bedrock_runtime_chat_completions_serves_reasoning_inline,
     split_bedrock_region_path,
 )
@@ -446,10 +447,13 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
                 ),
                 status_code=400,
             )
+        rejected_stop: Final = frozenset(("stop",)) if bedrock_rejects_stop_sequences(model) else frozenset[str]()
         return dict(
             without_refused_reasoning_effort(
                 model,
-                with_max_completion_tokens(_without_params(mapped, refused_while_reasoning | malformed_effort)),
+                with_max_completion_tokens(
+                    _without_params(mapped, refused_while_reasoning | malformed_effort | rejected_stop)
+                ),
             )
         )
 
