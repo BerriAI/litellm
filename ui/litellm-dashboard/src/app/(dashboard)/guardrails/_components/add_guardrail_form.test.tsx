@@ -22,6 +22,18 @@ describe("AddGuardrailForm close behavior", () => {
     vi.clearAllMocks();
   });
 
+  it("keeps the wizard bounded and scrollable on narrow viewports", () => {
+    renderForm();
+
+    const dialog = screen.getByText("Create guardrail").closest('[data-slot="dialog-content"]');
+    expect(dialog).toHaveClass("max-w-[1000px]");
+    expect(dialog).toHaveClass("w-[calc(100vw-2rem)]");
+
+    const scrollRegion = dialog?.querySelector(".overflow-x-auto.overflow-y-auto");
+    expect(scrollRegion).not.toBeNull();
+    expect(scrollRegion).toHaveClass("max-w-full");
+  });
+
   it("does not close when the user clicks outside the modal on the mask", () => {
     const { onClose } = renderForm();
     expect(screen.getByText("Create guardrail")).toBeInTheDocument();
