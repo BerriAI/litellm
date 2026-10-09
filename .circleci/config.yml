@@ -3379,37 +3379,25 @@ workflows:
             equal: ["", << pipeline.parameters.routing_parity_base >>]
     jobs:
       - using_litellm_on_windows:
-          filters:
+          filters: &full_suite_branches
             branches:
-              only: main
+              only:
+                - main
+                - /^litellm_rc_.*/
       - windows_release_wheel:
-          filters:
-            branches:
-              only: main
+          filters: *full_suite_branches
       - provider_replay_harness:
-          filters:
-            branches:
-              only: main
+          filters: *full_suite_branches
       - base_sdk_install:
-          filters:
-            branches:
-              only: main
+          filters: *full_suite_branches
       - local_testing_part1:
-          filters:
-            branches:
-              only: main
+          filters: *full_suite_branches
       - local_testing_part2:
-          filters:
-            branches:
-              only: main
+          filters: *full_suite_branches
       - langfuse_logging_unit_tests:
-          filters:
-            branches:
-              only: main
+          filters: *full_suite_branches
       - litellm_router_testing:
-          filters:
-            branches:
-              only: main
+          filters: *full_suite_branches
       - auth_ui_unit_tests
       - build_docker_database_image
       - e2e_ui_testing
@@ -3430,9 +3418,7 @@ workflows:
           requires:
             - build_docker_database_image
       - proxy_build_from_pip_tests:
-          filters:
-            branches:
-              only: main
+          filters: *full_suite_branches
       - proxy_pass_through_endpoint_tests:
           requires:
             - build_docker_database_image
@@ -3440,54 +3426,30 @@ workflows:
           requires:
             - build_docker_database_image
       - llm_translation_testing:
-          filters:
-            branches:
-              only: main
+          filters: *full_suite_branches
       - realtime_translation_testing:
-          filters:
-            branches:
-              only: main
+          filters: *full_suite_branches
       - guardrails_testing
       - google_generate_content_endpoint_testing:
-          filters:
-            branches:
-              only: main
+          filters: *full_suite_branches
       - ocr_testing:
-          filters:
-            branches:
-              only: main
+          filters: *full_suite_branches
       - search_testing:
-          filters:
-            branches:
-              only: main
+          filters: *full_suite_branches
       - batches_testing:
-          filters:
-            branches:
-              only: main
+          filters: *full_suite_branches
       - litellm_utils_testing:
-          filters:
-            branches:
-              only: main
+          filters: *full_suite_branches
       - pass_through_unit_testing:
-          filters:
-            branches:
-              only: main
+          filters: *full_suite_branches
       - image_gen_testing:
-          filters:
-            branches:
-              only: main
+          filters: *full_suite_branches
       - logging_testing:
-          filters:
-            branches:
-              only: main
+          filters: *full_suite_branches
       - audio_testing:
-          filters:
-            branches:
-              only: main
+          filters: *full_suite_branches
       - upload-coverage:
-          filters:
-            branches:
-              only: main
+          filters: *full_suite_branches
           requires:
             - realtime_translation_testing
             - google_generate_content_endpoint_testing
@@ -3506,26 +3468,16 @@ workflows:
           requires:
             - build_docker_database_image
       - installing_litellm_on_python:
-          filters:
-            branches:
-              only: main
+          filters: *full_suite_branches
       - installing_litellm_on_python_3_13:
-          filters:
-            branches:
-              only: main
+          filters: *full_suite_branches
       - installing_litellm_on_python_v2_migration_resolver:
-          filters:
-            branches:
-              only: main
+          filters: *full_suite_branches
       - helm_chart_testing:
-          filters:
-            branches:
-              only: main
+          filters: *full_suite_branches
           requires:
             - build_docker_database_image
       - test_bad_database_url:
-          filters:
-            branches:
-              only: main
+          filters: *full_suite_branches
           requires:
             - build_docker_database_image
