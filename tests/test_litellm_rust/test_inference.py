@@ -415,7 +415,7 @@ async def test_projection_failure_uses_the_public_error_and_rewritten_model(
             return {**kwargs, "model": expected_model}
 
     with rebound(litellm, "callbacks", [Prepare()]):
-        with pytest.raises(litellm.APIError) as caught:
+        with pytest.raises(litellm.APIConnectionError) as caught:
             await execute(
                 route,
                 asynchronous,
