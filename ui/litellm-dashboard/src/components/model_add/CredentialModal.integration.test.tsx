@@ -481,16 +481,19 @@ describe("CredentialModal with OpenAI workload identity federation", () => {
     expect(onSubmit).toHaveBeenCalledWith(expectedPayload, []);
   });
 
-  it("refuses to save a federated OpenAI credential without a service account", async () => {
+  it("saves a stored federated OpenAI credential untouched when its service account comes from the proxy environment", async () => {
     const user = userEvent.setup();
-    const onSubmit = renderModal({ initialProvider: "OpenAI", initialAuthMethod: "federation" });
-    await screen.findByLabelText("API Base");
-    fill("Credential Name:", "openai-federated");
+    const { openai_service_account_id: _, ...valuesWithoutServiceAccount } =
+      openAIFederatedCredential.credential_values;
+    const onSubmit = renderModal({
+      mode: "edit",
+      existingCredential: { ...openAIFederatedCredential, credential_values: valuesWithoutServiceAccount },
+    });
+    await screen.findByLabelText(/Service Account ID/);
 
-    await user.click(screen.getByRole("button", { name: "Add Credential" }));
+    await user.click(screen.getByRole("button", { name: "Update Credential" }));
 
-    expect(await screen.findByText("Required")).toBeInTheDocument();
-    expect(onSubmit).not.toHaveBeenCalled();
+    expect(onSubmit).toHaveBeenCalledWith({ credential_name: "openai-federated", custom_llm_provider: "openai" }, []);
   });
 
   it("refuses a base URL the proxy would not federate with, and drops that check once the admin picks an API key", async () => {

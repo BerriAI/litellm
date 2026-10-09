@@ -14,8 +14,9 @@ export const OPENAI_FEDERATION_FIELDS: readonly FederationField[] = [
   {
     key: "openai_service_account_id",
     label: "Service Account ID",
-    tooltip: "The OpenAI service account the verified identity acts as. Its project decides what the model can reach.",
-    required: true,
+    tooltip:
+      "The OpenAI service account the verified identity acts as. Its project decides what the model can reach. Leave empty when the proxy sets OPENAI_SERVICE_ACCOUNT_ID in its environment.",
+    required: false,
     control: "text",
   },
   {
