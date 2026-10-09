@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     handle_invalid_parallel_tool_calls,
     should_convert_tool_call_to_json_mode,
 )
+from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_reasoning_content,
     merge_consecutive_system_messages,
@@ -186,6 +187,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     @property
     def custom_llm_provider(self) -> str | None:
         return "databricks"
+
+    def get_json_schema_from_pydantic_object(self, response_format: type[BaseModel] | dict | None) -> dict | None:
+        return type_to_response_format_param(response_format=response_format)
 
     @classmethod
     def get_config(cls, *, model: str | None = None):

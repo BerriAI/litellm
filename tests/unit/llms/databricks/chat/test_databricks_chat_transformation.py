@@ -654,6 +654,31 @@ def test_databricks_config_probes_capabilities_under_databricks_namespace():
     assert DatabricksConfig().custom_llm_provider == "databricks"
 
 
+def test_databricks_response_format_preserves_json_schema_reference() -> None:
+    response_format: Final = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "PersonResponse",
+            "schema": {
+                "$defs": {"Person": {"type": "object"}},
+                "type": "object",
+                "properties": {"person": {"$ref": "#/$defs/Person"}},
+            },
+            "strict": True,
+        },
+    }
+
+    optional_params = litellm.get_optional_params(
+        model="system.ai.deepseek-v4-1-flash",
+        custom_llm_provider="databricks",
+        response_format=response_format,
+    )
+
+    assert optional_params["response_format"]["json_schema"]["schema"]["properties"]["person"]["$ref"] == (
+        "#/$defs/Person"
+    )
+
+
 @pytest.mark.parametrize(
     "model, expected_thinking, expected_output_config",
     [
