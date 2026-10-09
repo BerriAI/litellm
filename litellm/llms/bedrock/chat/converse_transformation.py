@@ -38,7 +38,6 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_tools_pt,
     make_valid_bedrock_tool_name,
 )
-from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_images
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     CONVERTED_SYSTEM_NOTE,
     is_system_message,
@@ -53,6 +52,7 @@ from litellm.llms.anthropic.chat.transformation import (
 )
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_images
 from litellm.llms.bedrock.common_utils import bedrock_model_supports_regex_lookaround
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
