@@ -148,6 +148,13 @@ def test_update_display_name_request(client, base_url, api_key, display_name):
     assert request.json == {"display_name": display_name, "credential_info": {}}
 
 
+@pytest.mark.parametrize(("credential_name", "path"), [("team?prod", "team%3Fprod"), ("a/b#c", "a%2Fb%23c")])
+def test_update_display_name_targets_the_whole_credential_name(client, base_url, credential_name, path):
+    request = client.update_display_name(credential_name, "Label", return_request=True)
+
+    assert request.prepare().url == f"{base_url}/credentials/{path}"
+
+
 @responses.activate
 def test_create_mock_response(client):
     """Test create with a mocked successful response"""

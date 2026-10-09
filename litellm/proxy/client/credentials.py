@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from typing import Any, Final
+from urllib.parse import quote
 
 import requests
 
@@ -159,7 +160,7 @@ class CredentialsManagementClient:
         display_name: str | None,
         return_request: bool = False,
     ) -> Mapping[str, object] | requests.Request:
-        url: Final = f"{self._base_url}/credentials/{credential_name}"
+        url: Final = f"{self._base_url}/credentials/{quote(credential_name, safe='')}"
         data: Final[Mapping[str, object]] = {"display_name": display_name, "credential_info": {}}
 
         request: Final = requests.Request("PATCH", url, headers=self._get_headers(), json=data)
