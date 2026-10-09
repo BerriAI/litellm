@@ -7434,8 +7434,12 @@ class Router:
         """
         from litellm.responses.utils import ResponsesAPIRequestUtils
 
-        request_args: Final = cast(dict[str, object], kwargs)
-        response_id: Final = cast("str | None", request_args.get("response_id"))
+        request_args: Final = cast(
+            dict[str, object], kwargs
+        )  # cast-ok: kwargs is dict[str, Any]; object keeps the values readable without new Anys
+        response_id: Final = cast(
+            "str | None", request_args.get("response_id")
+        )  # cast-ok: same type as the response id callers pass in kwargs
         model_id: Final = ResponsesAPIRequestUtils.get_model_id_from_response_id(response_id)
         if model_id is not None:
             kwargs["model"] = model_id
