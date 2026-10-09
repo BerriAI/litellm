@@ -5144,6 +5144,29 @@ async def stamp_matched_model_access_groups(
     return matched
 
 
+def _log_key_model_access_denied(
+    valid_token: UserAPIKeyAuth,
+    model: str | Sequence[str],
+    allowed_models: Sequence[object] | None,
+) -> None:
+    """Log which key/user was denied which model, server-side only.
+
+    Key identity (alias / key_name / user_id) is PII: it goes to the server
+    warning log only — the client-facing exception message stays generic. The
+    speculative inner model checks (``_can_object_call_model``, which run before
+    the access-group fallback) deliberately log nothing, so a request that is
+    finally authorized via fallback is not miscounted as a denial.
+    """
+    verbose_proxy_logger.warning(
+        "Model access denied: key_alias=%s key_name=%s user_id=%s requested_model=%s allowed_models=%s",
+        valid_token.key_alias,
+        valid_token.key_name,
+        valid_token.user_id,
+        model,
+        list(allowed_models or []),
+    )
+
+
 async def can_key_call_model(
     model: str | list[str],
     llm_model_list: Sequence[object] | None,
@@ -5183,15 +5206,20 @@ async def can_key_call_model(
                 prisma_client=prisma_client,
             )
             if models_from_groups:
-                return can_object_call_model(
-                    model=model,
-                    llm_router=llm_router,
-                    models=models_from_groups,
-                    team_model_aliases=valid_token.team_model_aliases,
-                    team_id=valid_token.team_id,
-                    key_model_aliases=key_model_aliases_for_auth_check(valid_token),
-                    object_type="key",
-                )
+                try:
+                    return can_object_call_model(
+                        model=model,
+                        llm_router=llm_router,
+                        models=models_from_groups,
+                        team_model_aliases=valid_token.team_model_aliases,
+                        team_id=valid_token.team_id,
+                        key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+                        object_type="key",
+                    )
+                except ProxyException:
+                    _log_key_model_access_denied(valid_token, model, models_from_groups)
+                    raise
+        _log_key_model_access_denied(valid_token, model, key_models)
         raise
 
 
