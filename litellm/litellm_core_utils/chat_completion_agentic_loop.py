@@ -20,11 +20,11 @@ from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
     NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
-    WEBSEARCH_STREAM_OPTIONS_KEY,
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
     converted_stream_requested,
     is_interception_internal_key,
+    stashed_stream_options,
 )
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
@@ -65,7 +65,7 @@ _STREAM_OPTIONS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeA
 
 def _stashed_stream_options(kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
     try:
-        return _STREAM_OPTIONS_ADAPTER.validate_python(kwargs.get(WEBSEARCH_STREAM_OPTIONS_KEY))
+        return _STREAM_OPTIONS_ADAPTER.validate_python(stashed_stream_options(kwargs))
     except ValidationError:
         return None
 
@@ -253,7 +253,7 @@ async def maybe_run_chat_completion_agentic_loop(
     model: str,
     messages: list,
     optional_params: dict,
-    kwargs: dict,
+    kwargs: dict[str, object],
     logging_obj: object,
     custom_llm_provider: str,
     stream: bool,

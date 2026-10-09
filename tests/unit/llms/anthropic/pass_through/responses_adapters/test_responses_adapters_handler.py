@@ -14,6 +14,7 @@ from litellm.llms.anthropic.pass_through.responses_adapters.handler import (
     LiteLLMMessagesToResponsesAPIHandler,
     _build_responses_kwargs,
 )
+from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS, converted_stream_requested
 
 MESSAGES = [{"role": "user", "content": "hello"}]
 CLAUDE_CODE_USER_ID = json.dumps({"device_id": "d" * 64, "account_uuid": "", "session_id": "session-abc"})
@@ -29,6 +30,18 @@ RESPONSES_SSE_BODY = (
     b'"parallel_tool_calls":true,"tool_choice":"auto","tools":[],'
     b'"usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7}}}\n\n'
 )
+
+
+def test_build_responses_kwargs_never_asks_the_nested_call_to_replay_a_stream():
+    responses_kwargs = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="azure/gpt-5.6-luna",
+        extra_kwargs={"custom_llm_provider": "azure", **{key: True for key in CONVERTED_STREAM_KEYS}},
+    )
+
+    assert not converted_stream_requested(responses_kwargs)
+    assert responses_kwargs["custom_llm_provider"] == "azure"
 
 
 def test_build_responses_kwargs_derives_prompt_cache_key_from_claude_code_session_id():

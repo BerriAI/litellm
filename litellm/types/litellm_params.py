@@ -348,6 +348,9 @@ class AgenticLoopState:
     code_interpreter_converted_stream: bool | None = field(
         default=None, metadata=wire("_code_interpreter_interception_converted_stream")
     )
+    code_interpreter_stream_options: Mapping[str, object] | None = field(
+        default=None, metadata=wire("_code_interpreter_interception_stream_options")
+    )
     websearch_emit_native_blocks: bool | None = field(
         default=None, metadata=wire("_websearch_interception_emit_native_blocks")
     )
@@ -359,6 +362,9 @@ class AgenticLoopState:
     )
     headroom_converted_stream: bool | None = field(
         default=None, metadata=wire("_headroom_interception_converted_stream")
+    )
+    headroom_stream_options: Mapping[str, object] | None = field(
+        default=None, metadata=wire("_headroom_interception_stream_options")
     )
 
 

@@ -18,6 +18,7 @@ from litellm.integrations.code_interpreter_interception.handler import (
 )
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
+    CODE_INTERPRETER_STREAM_OPTIONS_KEY,
     NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
     is_interception_internal_key,
 )
@@ -514,6 +515,26 @@ async def test_pre_call_forces_non_stream_for_loop():
     assert out["_code_interpreter_interception_converted_stream"] is True, (
         "the converted-stream flag must be set so the final response is wrapped back into a stream for the caller"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", (CallTypes.acompletion, CallTypes.aresponses))
+async def test_pre_call_moves_stream_options_off_the_forced_non_stream_call(call_type: CallTypes):
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
+    stream_options = {"include_usage": True}
+    kwargs: dict[str, object] = {
+        "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}],
+        "custom_llm_provider": "azure",
+        "stream": True,
+        "stream_options": stream_options,
+    }
+
+    out = await logger.async_pre_call_deployment_hook(kwargs, call_type)
+
+    assert out is not None
+    assert out["stream"] is False
+    assert "stream_options" not in out
+    assert out[CODE_INTERPRETER_STREAM_OPTIONS_KEY] == stream_options
 
 
 async def _build_plan(logger, sandbox, call_id="k1", provider="openai"):

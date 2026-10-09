@@ -38,6 +38,9 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.integrations.custom_logger import (
+    CODE_INTERPRETER_INTERCEPTION_PREFIX,
+    HEADROOM_INTERCEPTION_PREFIX,
+    WEBSEARCH_INTERCEPTION_PREFIX,
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
 )
@@ -465,8 +468,12 @@ async def test_dispatcher_raises_on_repeated_tool_call_fingerprint(restore_callb
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("include_usage", (True, False), ids=("usage_requested", "usage_not_requested"))
-async def test_websearch_converted_stream_replays_the_final_answer_with_the_requested_usage_chunk(
+@pytest.mark.parametrize(
+    "prefix", (WEBSEARCH_INTERCEPTION_PREFIX, CODE_INTERPRETER_INTERCEPTION_PREFIX, HEADROOM_INTERCEPTION_PREFIX)
+)
+async def test_converted_stream_replays_the_final_answer_with_the_requested_usage_chunk(
     include_usage: bool,
+    prefix: str,
 ):
     """A streamed web search request runs non-streaming and is replayed as a fake
     stream at depth 0. The stream_options the interception moved out of the provider
@@ -486,14 +493,14 @@ async def test_websearch_converted_stream_replays_the_final_answer_with_the_requ
         function_id="fn-websearch",
         dynamic_success_callbacks=[gate],
     )
-    stash = {"_websearch_interception_stream_options": {"include_usage": True}} if include_usage else {}
+    stash = {f"{prefix}_stream_options": {"include_usage": True}} if include_usage else {}
 
     result: Final = await maybe_run_chat_completion_agentic_loop(
         response=_tool_call_model_response(),
         model="gpt-4o",
         messages=[{"role": "user", "content": "what is 6*7?"}],
         optional_params={},
-        kwargs={"_websearch_interception_converted_stream": True, "mock_response": "done", **stash},
+        kwargs={f"{prefix}_converted_stream": True, "mock_response": "done", **stash},
         logging_obj=logging_obj,
         custom_llm_provider="azure",
         stream=False,

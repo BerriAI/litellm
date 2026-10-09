@@ -52,7 +52,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, headers
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.proxy.utils import is_valid_api_key
 from litellm.types.caching import CachingSupportedCallTypes
-from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY
+from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY, STREAM_OPTIONS_STASH_KEYS
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import (
@@ -5275,6 +5275,15 @@ def test_websearch_interception_control_fields_never_reach_the_provider():
         f"{sorted(set(non_default) - {'a_real_provider_specific_param'})}"
     )
     assert set(WEBSEARCH_INTERNAL_CONTROL_FIELDS) <= set(all_litellm_params)
+
+
+@pytest.mark.parametrize("stash_key", STREAM_OPTIONS_STASH_KEYS)
+def test_converted_stream_options_stash_never_reaches_the_provider(stash_key: str):
+    non_default = get_non_default_completion_params(
+        {"a_real_provider_specific_param": 1, stash_key: {"include_usage": True}}
+    )
+
+    assert non_default == {"a_real_provider_specific_param": 1}
 
 
 def test_get_litellm_params_keys_never_reach_the_provider():
