@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "gateway_sha": "8b8ea77a7ddd0d9f788270a92aa54aad0bdfa7f6",
+  "lens_sha": "e56021e23153e8ce6c47e4508b37cec2234695ad",
+  "lens_version": "0.1.0-dev.0",
+  "package": "vendor/litellm-lens-ui-0.1.0-dev.0.tgz",
+  "sha256": "c89fbf735ff91fc9da72f131a4158b8a4a114a55405b0268732b6a6183a75ad6",
+  "integrity": "sha512-WKpSCYP4a7wHvOOBQulMTOEbA7N4K/c4cq7hhHABPxZjyTplafMAIwYWG72t1k3G8hg6D5Bur55N6wmCuyqU6w==",
+  "source_repository": "BerriAI/lens",
+  "source_commit": "e56021e23153e8ce6c47e4508b37cec2234695ad",
+  "archive": "ui/litellm-dashboard/vendor/litellm-lens-ui-0.1.0-dev.0.tgz",
+  "files": 398,
+  "all_files_equal_committed_source": true,
+  "installed_files_equal_archive": true,
+  "two_network_isolated_packs_have_identical_bytes": true,
+  "non_lens_dependency_changes": false,
+  "validation": {
+    "embedded_wrapper_and_route_tests": 7,
+    "gateway_production_build": "passed",
+    "make_check": "passed"
+  }
+}
