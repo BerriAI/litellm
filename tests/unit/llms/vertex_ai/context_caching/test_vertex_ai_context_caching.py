@@ -2486,3 +2486,9 @@ class TestResolvedCacheNameMemoization:
         limit = self.ctx_caching._RESOLVED_CACHE_MAX_ENTRIES
         for i in range(limit + 5):
             self.ctx_caching._remember_cache_name(f"key_{i}", f"cache_{i}", expire)
+
+        # The bound is held by flushing the whole memo at the cap rather than
+        # evicting the oldest entry, so the five writes after the limit are all
+        # that survive. Asserting the exact set pins which of the two it is.
+        assert len(self.ctx_caching._memo) <= limit
+        assert set(self.ctx_caching._memo) == {f"key_{i}" for i in range(limit, limit + 5)}
