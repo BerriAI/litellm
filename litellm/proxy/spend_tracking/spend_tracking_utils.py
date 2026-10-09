@@ -662,7 +662,7 @@ def get_logging_payload(
     # clean up litellm metadata
     clean_metadata = _get_spend_logs_metadata(
         persisted_metadata,
-        request_litellm_params=litellm_params,
+        request_litellm_params=cast("Mapping[str, object] | None", litellm_params),
         applied_guardrails=(
             standard_logging_payload["metadata"].get("applied_guardrails", None)
             if standard_logging_payload is not None
@@ -826,10 +826,11 @@ def get_logging_payload(
             messages=_get_messages_for_spend_logs_payload(
                 standard_logging_payload=standard_logging_payload,
                 metadata=metadata,
-                request_litellm_params=litellm_params,
+                request_litellm_params=cast("Mapping[str, object] | None", litellm_params),
             ),
             response=_get_response_for_spend_logs_payload(
-                payload=standard_logging_payload, kwargs=kwargs, request_litellm_params=litellm_params
+                payload=standard_logging_payload, kwargs=kwargs,
+                request_litellm_params=cast("Mapping[str, object] | None", litellm_params)
             ),
             proxy_server_request=_get_proxy_server_request_for_spend_logs_payload(
                 metadata=metadata,
