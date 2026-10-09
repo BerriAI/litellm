@@ -621,6 +621,7 @@ describe("UsagePage", () => {
 
     // Check for chart titles (these are in the Overview tab)
     expect(screen.getByText("Daily usage")).toBeInTheDocument();
+    expect(screen.getByText("Daily spend by model (top 8, rest grouped as Other)")).toBeInTheDocument();
     expect(screen.getByText("Top models")).toBeInTheDocument();
     expect(screen.getByText("Top Virtual Keys")).toBeInTheDocument();
   });
@@ -638,6 +639,7 @@ describe("UsagePage", () => {
     await user.click(screen.getByRole("radio", { name: "Weekly" }));
 
     expect(screen.getByText("Weekly usage")).toBeInTheDocument();
+    expect(screen.getByText("Weekly spend by model (top 8, rest grouped as Other)")).toBeInTheDocument();
     expect(screen.queryByText("Daily usage")).not.toBeInTheDocument();
   });
 

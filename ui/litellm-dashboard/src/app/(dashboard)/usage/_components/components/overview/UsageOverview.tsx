@@ -121,7 +121,7 @@ export default function UsageOverview({
 
       <Panel
         title={`${granularity === "day" ? "Daily" : "Weekly"} usage`}
-        subtitle={`${granularity === "day" ? "Daily" : "Weekly"} ${METRIC_NOUN[state.metric]}, top 8 stacked`}
+        subtitle={`${granularity === "day" ? "Daily" : "Weekly"} ${METRIC_NOUN[state.metric]} by model (top 8, rest grouped as Other)`}
         action={
           <>
             <BreakdownControls state={state} onChange={setState} showDimension={false} />
