@@ -787,5 +787,85 @@
       "Published signed release artifact adoption",
       "Required CI and automated reviews"
     ]
+  },
+  "latest_main_reconciliation": {
+    "source_commit": "9b6fab7a6fbed555addd635d35174e0651434bd8",
+    "merge_base": "0d17f954c04eb68212c66aad95f450d64f6177fb",
+    "overlapping_files_reviewed": [
+      "litellm/proxy/proxy_server.py",
+      "ui/litellm-dashboard/src/components/networking.tsx",
+      "ui/litellm-dashboard/src/lib/http/schema.d.ts"
+    ],
+    "result": "Credential display_name/source changes retained; Lens adapter imports, middleware registration and shared UI wrapper retained",
+    "checks": [
+      {
+        "command": "make check",
+        "result": "passed",
+        "includes": [
+          "Python lint/type gates",
+          "test-tree lint",
+          "dashboard formatting/lint/budgets",
+          "generated API type sync"
+        ],
+        "log": {
+          "path": "/tmp/lens-host-latest-main-check.log",
+          "sha256": "54de2a1aa46c2f8d712c28fb136e845309dd895cdc128074e3fc675f7bdbddc8"
+        }
+      },
+      {
+        "command": ".venv/bin/pytest -q tests/unit/tracing tests/unit/proxy/test_tracing_endpoints.py tests/unit/proxy/lens tests/unit/proxy/proxy_server/test_proxy_config.py tests/unit/proxy/credential_endpoints/test_endpoints.py",
+        "result": "passed",
+        "passed": 602,
+        "skipped": 2,
+        "log": {
+          "path": "/tmp/lens-host-latest-main-tests.log",
+          "sha256": "79bfbcb773e937b4407ffb0467139763220626ffaef3ceafb66a03665262de82"
+        }
+      },
+      {
+        "command": "npm run knip:ci",
+        "result": "passed",
+        "log": {
+          "path": "/tmp/lens-host-latest-main-knip.log",
+          "sha256": "2d6bec3cf9f78fdf1f101b06dba1a06d913a043cbb71eef28b21a25c4ec4fec7"
+        }
+      },
+      {
+        "command": "npx vitest run src/components/lens/EmbeddedLens.integration.test.tsx 'src/app/(dashboard)/lens/page.test.tsx' src/components/shared/credentialOptions.test.ts",
+        "result": "passed",
+        "log": {
+          "path": "/tmp/lens-host-latest-main-ui.log",
+          "sha256": "3b5a64635dd8c38615bcd881803c389be218ad625a8e9e002aa818c23a2ec3ca"
+        }
+      },
+      {
+        "command": "npx vitest run --project types src/lib/http/api.test-d.ts src/lib/http/searchToolTypes.test-d.ts src/lib/http/traceQueryTypes.test-d.ts src/components/shared/DataTable/DataTable.test-d.tsx",
+        "result": "passed",
+        "tests": 8,
+        "log": {
+          "path": "/tmp/lens-host-latest-main-types.log",
+          "sha256": "8b5ccf7d2400c68ad8be723d110b19236bededbc2a7f2dbb4d4f974c7b219dad"
+        }
+      }
+    ],
+    "removal_audit": {
+      "removed_python_modules": 20,
+      "parsed_python_files": 7615,
+      "unparsed": [],
+      "references_to_removed_modules": [],
+      "method": "Parse every tracked Python file with ast and compare import/from targets, including resolved relative imports, against the removed Lens module set",
+      "limitation": "Static import audit; dynamic gateway traffic and final deployment images remain separately qualified"
+    },
+    "ui_cleanup": {
+      "docker_recipes": [
+        "Dockerfile",
+        "ui/Dockerfile",
+        "docker/Dockerfile.database",
+        "docker/Dockerfile.non_root"
+      ],
+      "result": "Every dashboard npm-ci recipe copies the pinned vendor directory first",
+      "type_test_move": "Lens trace-message type assertion moved to BerriAI/lens src/ui/lib/src/components/lens/traces/requestTypes.test-d.ts; 2 focused type tests pass",
+      "package_bytes_changed": false
+    }
   }
 }
