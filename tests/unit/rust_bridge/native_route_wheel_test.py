@@ -20,13 +20,6 @@ from typing import Final
 REQUEST_STARTED: Final = threading.Event()
 REQUEST_CANCELLED: Final = threading.Event()
 
-ANTHROPIC_RESPONSE: Final = (
-    b'{"id":"msg_native","type":"message","role":"assistant",'
-    b'"model":"claude-sonnet-4-5","content":[{"type":"text","text":"native-message"}],'
-    b'"stop_reason":"end_turn","stop_sequence":null,'
-    b'"usage":{"input_tokens":2,"output_tokens":3}}'
-)
-
 
 class NativeRouteServer(ThreadingHTTPServer):
     request_queue_size = 64
@@ -49,7 +42,7 @@ class NativeRouteHandler(BaseHTTPRequestHandler):
             return
 
         status: Final = 429 if outcome == "429" else 200
-        response_body: Final = native_response(status, route)
+        response_body: Final = native_response(status)
 
         self.send_response(status)
         self.send_header("content-type", "application/json")
@@ -78,32 +71,23 @@ def assert_native_request(
     headers: HTTPMessage,
     body: object,
 ) -> None:
-    if route not in {"transcription", "chat_completions"}:
+    if route != "transcription":
         raise AssertionError(f"unexpected route marker: {route!r}")
     if outcome not in {"success", "429", "hang"}:
         raise AssertionError(f"unexpected outcome marker: {outcome!r}")
     if not isinstance(body, dict):
         raise TypeError(f"{route} sent {type(body).__name__}, expected a JSON object")
-    if route == "transcription":
-        assert path == "/model/mistral.voxtral-mini-3b-2507/converse"
-        assert headers.get("authorization", "").startswith("AWS4-HMAC-SHA256 ")
-        assert headers.get("x-amz-date")
-        assert body["messages"][0]["content"][0]["audio"]["source"]["bytes"] == "AQI="
-        assert "The audio language is en" in body["messages"][0]["content"][1]["text"]
-        return
-    assert path == "/v1/messages"
-    assert headers.get("x-api-key") == "sk-native"
-    assert body["model"] == "claude-sonnet-4-5"
-    assert body["max_tokens"] == 17
-    assert body["messages"][0]["content"] == [{"type": "text", "text": "hello-from-chat"}]
+    assert path == "/model/mistral.voxtral-mini-3b-2507/converse"
+    assert headers.get("authorization", "").startswith("AWS4-HMAC-SHA256 ")
+    assert headers.get("x-amz-date")
+    assert body["messages"][0]["content"][0]["audio"]["source"]["bytes"] == "AQI="
+    assert "The audio language is en" in body["messages"][0]["content"][1]["text"]
 
 
-def native_response(status: int, route: str | None) -> bytes:
+def native_response(status: int) -> bytes:
     if status == 429:
         return b'{"error":"native-rate-limit"}'
-    if route == "transcription":
-        return b'{"output":{"message":{"content":[{"text":"native-transcription"}]}}}'
-    return ANTHROPIC_RESPONSE
+    return b'{"output":{"message":{"content":[{"text":"native-transcription"}]}}}'
 
 
 def load_native(native_path: Path) -> object:
@@ -117,7 +101,7 @@ def load_native(native_path: Path) -> object:
 
 def route_call(route: str, api_base: str, outcome: str) -> SimpleNamespace:
     fields: Final = route_kwargs(route, api_base, outcome)
-    return SimpleNamespace(args=(), kwargs=fields, bound=fields)
+    return SimpleNamespace(args=(), kwargs=fields, base={})
 
 
 def route_kwargs(route: str, api_base: str, outcome: str) -> dict[str, object]:
@@ -138,38 +122,23 @@ def route_kwargs(route: str, api_base: str, outcome: str) -> dict[str, object]:
                 "language": "en",
             },
         }
-    if route == "chat_completions":
-        return common | {
-            "model": "anthropic/claude-sonnet-4-5",
-            "messages": [{"role": "user", "content": "hello-from-chat"}],
-            "optional_params": {"max_tokens": 17},
-            "api_key": "sk-native",
-        }
     raise AssertionError(f"unknown route: {route}")
 
 
 def assert_success(route: str, response: object) -> None:
     if not isinstance(response, dict):
         raise TypeError(f"{route} returned {type(response).__name__}, expected dict")
-    actual: Final = success_value(route, response)
-    expected: Final = "native-transcription" if route == "transcription" else "native-message"
-    if actual != expected:
-        raise AssertionError(f"{route} returned {actual!r}, expected {expected!r}")
-
-
-def success_value(route: str, response: dict[object, object]) -> object:
-    if route == "transcription":
-        return response["text"]
-    return response["choices"][0]["message"]["content"]
+    if response["text"] != "native-transcription":
+        raise AssertionError(f"{route} returned {response['text']!r}, expected 'native-transcription'")
 
 
 def assert_rate_limit(route: str, error: BaseException) -> None:
-    if error.args != (429, native_response(429, route).decode()):
+    if error.args != (429, native_response(429).decode()):
         raise AssertionError(f"{route} returned the wrong 429 error: {error!r}")
 
 
 def exercise_sync(native: object, api_base: str) -> None:
-    for route in ("transcription", "chat_completions"):
+    for route in ("transcription",):
         function: Final = getattr(native, route)
         assert_success(route, function(route_call(route, api_base, "success")))
         try:
@@ -181,7 +150,7 @@ def exercise_sync(native: object, api_base: str) -> None:
 
 
 async def exercise_async(native: object, api_base: str) -> None:
-    for route in ("transcription", "chat_completions"):
+    for route in ("transcription",):
         function: Final = getattr(native, f"a{route}")
         assert_success(route, await function(route_call(route, api_base, "success")))
         try:
@@ -192,13 +161,11 @@ async def exercise_async(native: object, api_base: str) -> None:
             raise AssertionError(f"a{route} accepted a 429 response")
 
     responses: Final = await asyncio.wait_for(
-        asyncio.gather(
-            *(native.achat_completions(route_call("chat_completions", api_base, "success")) for _ in range(32))
-        ),
+        asyncio.gather(*(native.atranscription(route_call("transcription", api_base, "success")) for _ in range(32))),
         timeout=15,
     )
     for response in responses:
-        assert_success("chat_completions", response)
+        assert_success("transcription", response)
 
 
 def exercise_routes(native_path: Path, api_base: str) -> object:
@@ -210,8 +177,8 @@ def exercise_routes(native_path: Path, api_base: str) -> object:
 
 def exercise_signal(native: object, api_base: str) -> int:
     try:
-        native.chat_completions(
-            route_call("chat_completions", api_base, "hang"),
+        native.transcription(
+            route_call("transcription", api_base, "hang"),
         )
     except KeyboardInterrupt:
         sys.stdout.write("KeyboardInterrupt\n")

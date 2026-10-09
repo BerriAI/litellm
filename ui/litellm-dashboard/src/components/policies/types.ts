@@ -102,7 +102,7 @@ export interface PolicyAttachmentListResponse {
 
 export interface PipelineStepResult {
   guardrail_name: string;
-  outcome: "pass" | "fail" | "error";
+  outcome: "pass" | "fail" | "error" | "skip";
   action_taken: string;
   modified_data: Record<string, any> | null;
   error_detail: string | null;

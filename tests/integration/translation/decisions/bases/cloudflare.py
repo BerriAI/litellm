@@ -6,7 +6,7 @@ from integration.translation.case import TranslationTestCase
 """
 CLEF_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
-    litellm_endpoint="/v1/decisions",
+    litellm_endpoint="/v1/systemone",
     litellm_request={
         "model": "cloudflare/@cf/cloudflare/clef",
         "state": "Ticket (billing): The export job hangs at 99% and never finishes",

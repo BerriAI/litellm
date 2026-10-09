@@ -102,16 +102,9 @@ describe("prepareModelAddRequest", () => {
     expect(deployment.litellmParamsObj.timeout).toBe(5);
   });
 
-  it("routes an Evaluation mode TypeSafe deployment to litellm_params and model_info", async () => {
+  it("saves the selected mode under model_info", async () => {
     const formValues = {
-      model_mappings: [
-        {
-          public_name: "TypeSafe Jev",
-          litellm_model: "typesafe/jev-latest",
-        },
-      ],
-      model_name: "typesafe/jev-latest",
-      custom_llm_provider: "TypeSafe",
+      model_mappings: [{ public_name: "Jev", litellm_model: "typesafe/jev-latest" }],
       mode: "evaluation",
     };
 
@@ -119,10 +112,8 @@ describe("prepareModelAddRequest", () => {
 
     expect(deployments).toHaveLength(1);
     const [deployment] = deployments!;
-    expect(deployment.litellmParamsObj.model).toBe("typesafe/jev-latest");
-    expect(deployment.litellmParamsObj.custom_llm_provider).toBe("typesafe");
-    expect(deployment.litellmParamsObj.mode).toBeUndefined();
     expect(deployment.modelInfoObj.mode).toBe("evaluation");
+    expect(deployment.litellmParamsObj).not.toHaveProperty("mode");
   });
 
   it.each([

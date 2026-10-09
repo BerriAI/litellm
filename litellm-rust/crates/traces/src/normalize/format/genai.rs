@@ -11,18 +11,24 @@ use crate::{
 pub(crate) struct GenAi;
 
 #[derive(strum::EnumString)]
-#[strum(serialize_all = "snake_case")]
 pub(crate) enum Operation {
+    #[strum(serialize = "create_agent")]
     CreateAgent,
+    #[strum(serialize = "invoke_agent")]
     InvokeAgent,
+    #[strum(serialize = "invoke_workflow")]
     InvokeWorkflow,
+    #[strum(serialize = "chat")]
     Chat,
     #[strum(serialize = "text_completion", serialize = "completion")]
     TextCompletion,
+    #[strum(serialize = "generate_content")]
     GenerateContent,
+    #[strum(serialize = "execute_tool")]
     ExecuteTool,
     #[strum(serialize = "embeddings", serialize = "embedding")]
     Embeddings,
+    #[strum(serialize = "retrieval")]
     Retrieval,
 }
 
