@@ -22,10 +22,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Helm 3.19.0
+      - name: Set up Helm 3.11.1
         uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
         with:
-          version: "3.19.0"
+          version: "3.11.1"
 
       - name: Download and verify Helm Unit Test Plugin
         run: |
