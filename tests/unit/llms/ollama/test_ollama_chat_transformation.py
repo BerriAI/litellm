@@ -659,18 +659,18 @@ class TestOllamaFinishReasonLength:
         ), f"Expected 'tool_calls' when tool_calls were streamed earlier, got '{done_result.choices[0].finish_reason}'"
 
 
-OLLAMA_TOOL_CALL_PARSE_ERROR = (
+OLLAMA_TOOL_CALL_PARSE_ERROR: Final = (
     "error parsing tool call: raw='{\"command\":\"grep -n flag\"]}', err=invalid character ']' after object key:value pair"
 )
 
 
 class TestOllamaStructuredErrorPayload:
-    def _transform(self, ollama_response: dict) -> ModelResponse:
-        mock_response = MagicMock()
+    def _transform(self, ollama_response: dict[str, object]) -> ModelResponse:
+        mock_response: Final = MagicMock()
         mock_response.json.return_value = ollama_response
         mock_response.text = json.dumps(ollama_response)
 
-        model_response = ModelResponse()
+        model_response: Final = ModelResponse()
         model_response.choices = [Choices(message=Message(content=""), index=0)]
 
         return OllamaChatConfig().transform_response(
@@ -688,7 +688,7 @@ class TestOllamaStructuredErrorPayload:
         )
 
     def test_streaming_error_chunk_surfaces_ollama_message(self):
-        iterator = OllamaChatCompletionResponseIterator(streaming_response=iter([]), sync_stream=True)
+        iterator: Final = OllamaChatCompletionResponseIterator(streaming_response=iter([]), sync_stream=True)
 
         with pytest.raises(OllamaError) as exc_info:
             iterator.chunk_parser({"error": OLLAMA_TOOL_CALL_PARSE_ERROR})
@@ -704,8 +704,8 @@ class TestOllamaStructuredErrorPayload:
         assert exc_info.value.status_code == 400
 
     def test_streaming_error_chunk_does_not_mask_earlier_tool_call_state(self):
-        iterator = OllamaChatCompletionResponseIterator(streaming_response=iter([]), sync_stream=True)
-        tool_chunk = {
+        iterator: Final = OllamaChatCompletionResponseIterator(streaming_response=iter([]), sync_stream=True)
+        tool_chunk: Final = {
             "model": "gpt-oss:120b",
             "message": {
                 "role": "assistant",
@@ -722,7 +722,7 @@ class TestOllamaStructuredErrorPayload:
         assert exc_info.value.message == "llama runner process has terminated: exit status 2"
 
     def test_usage_uses_eval_count_when_message_has_no_content(self):
-        result = self._transform(
+        result: Final = self._transform(
             {
                 "model": "gpt-oss:120b",
                 "message": {

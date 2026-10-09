@@ -336,7 +336,8 @@ class OllamaChatConfig(BaseConfig):
         )
 
         response_json: Final = raw_response.json()
-        _raise_on_error_payload(response_json)
+        if "error" in response_json:
+            raise _structured_error(f"{response_json['error']}")
 
         ## RESPONSE OBJECT
         _done_reason: Final = map_finish_reason(response_json.get("done_reason") or "stop")
@@ -421,12 +422,9 @@ class OllamaChatConfig(BaseConfig):
         )
 
 
-def _raise_on_error_payload(payload: Mapping[str, object]) -> None:
-    error: Final = payload.get("error")
-    if error is None:
-        return
-    raise OllamaError(
-        message=str(error),
+def _structured_error(message: str) -> OllamaError:
+    return OllamaError(
+        message=message,
         status_code=400,
         headers={"Content-Type": "application/json"},
     )
@@ -490,7 +488,8 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
             """
             from litellm.types.utils import Delta, StreamingChoices
 
-            _raise_on_error_payload(chunk)
+            if "error" in chunk:
+                raise _structured_error(f"{chunk['error']}")
 
             # process tool calls - if complete function arg - add id to tool call
             tool_calls: Final = chunk["message"].get("tool_calls")
