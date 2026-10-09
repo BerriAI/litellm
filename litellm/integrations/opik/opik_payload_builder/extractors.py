@@ -4,7 +4,11 @@ import json
 from collections.abc import Mapping
 from typing import Any, Final
 
+from pydantic import TypeAdapter
+
 from litellm import _logging
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def normalize_provider_name(provider: str | None) -> str | None:
@@ -149,7 +153,7 @@ def apply_proxy_header_overrides(
             thread_id = value
         elif param_key == "tags":
             try:
-                parsed_tags: object = json.loads(value)
+                parsed_tags = _DECODED_JSON.validate_python(json.loads(value))
                 if isinstance(parsed_tags, list):
                     tags.extend(parsed_tags)
             except (json.JSONDecodeError, TypeError):

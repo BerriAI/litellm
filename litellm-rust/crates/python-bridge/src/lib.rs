@@ -17,7 +17,10 @@ mod tokenizer;
 
 #[pymodule(gil_used = true)]
 mod _native {
-    use crate::cache::ResolvedCache;
+    #[pymodule_export]
+    use litellm_host_python::{ForkedAfterNativeRuntimeStarted, ProcessReservedForForking};
+    use pyo3::{prelude::*, types::PyModule};
+
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
     use crate::diagnostics::_panic_for_test;
@@ -30,9 +33,7 @@ mod _native {
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
     #[pymodule_export]
-    use crate::routes::chat_completions::{
-        achat_completions, acompletion, chat_completions, completion,
-    };
+    use crate::routes::chat_completions::{acompletion, completion};
     #[pymodule_export]
     use crate::routes::embeddings::{aembedding, embedding};
     #[pymodule_export]
@@ -45,17 +46,13 @@ mod _native {
     use crate::routes::token_counter::TokenCounter;
     #[pymodule_export]
     use crate::routes::traces::{
-        NativeTraceConfig, NativeTraceStorage, trace_decode_otlp, trace_encode_error,
-        trace_normalized_field_definitions,
+        NativeTraceConfig, NativeTraceStorage, trace_encode_error, trace_span_rows,
     };
     #[cfg(feature = "huggingface")]
     #[pymodule_export]
     use crate::tokenizer::HuggingFaceEncoding;
     #[pymodule_export]
     use crate::tokenizer::Tokenizer;
-    #[pymodule_export]
-    use litellm_host_python::{ForkedAfterNativeRuntimeStarted, ProcessReservedForForking};
-    use pyo3::{prelude::*, types::PyModule};
 
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -65,7 +62,6 @@ mod _native {
             "NativeCacheHandle",
             py.get_type::<crate::cache::NativeCacheHandle>(),
         )?;
-        dict.set_item("_ResponseCacheRuntime", py.get_type::<ResolvedCache>())?;
         dict.set_item(
             "_SecretManagerRuntime",
             py.get_type::<crate::secrets::runtime::NativeSecretManager>(),
@@ -104,8 +100,6 @@ mod tests {
                 "atranscription",
                 "messages",
                 "amessages",
-                "chat_completions",
-                "achat_completions",
                 "completion",
                 "acompletion",
                 "responses",
@@ -114,9 +108,8 @@ mod tests {
                 "NativeDiagnosticProcessor",
                 "NativeTraceConfig",
                 "NativeTraceStorage",
-                "trace_decode_otlp",
                 "trace_encode_error",
-                "trace_normalized_field_definitions",
+                "trace_span_rows",
                 "TokenCounter",
                 "Tokenizer",
                 "gil_stats",

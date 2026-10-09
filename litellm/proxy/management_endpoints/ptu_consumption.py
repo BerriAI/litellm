@@ -116,7 +116,7 @@ def capacity_by_requested_name(llm_router: Router, team_id: str | None) -> Calla
         model_group: Final = resolve_model_group_alias(aliases, requested_model) or requested_model
         routed: Final = routed_deployments(
             listed_rows,
-            llm_router.model_list,  # pyright: ignore[reportUnknownArgumentType]  # Router.model_list is a bare list
+            llm_router.model_list,  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # Router.model_list is a bare list
             model_group,
         )
         return model_group_ptu_capacity(routed if team_id is None else team_servable_deployments(routed, team_id))

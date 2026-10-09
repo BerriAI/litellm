@@ -1,3 +1,4 @@
+import importlib
 import os
 import socket
 import sys
@@ -12,10 +13,10 @@ import pytest
 from uvicorn.importer import import_from_string
 from uvicorn.main import main as uvicorn_main
 
-import gateway.main
 from gateway.launch import GATEWAY_APP, main, pool_database_url, uvicorn_argv
 from litellm.proxy.db.db_url_settings import DatabaseURLSettings
 from litellm.proxy.db.pgbouncer import PGBOUNCER_POOLED_ENV_VAR, PgBouncerError, PgBouncerSettings
+from litellm.proxy.proxy_server import app as proxy_app
 
 DB_ENV: Final = {
     "DATABASE_HOST": "db.internal",
@@ -107,8 +108,22 @@ class TestUvicornArgv:
         argv: Final = uvicorn_argv(("--timeout-keep-alive", "30"), {"KEEPALIVE_TIMEOUT": "75"})
         assert _uvicorn_params(argv)["timeout_keep_alive"] == 30
 
-    def test_the_app_uvicorn_is_told_to_serve_is_the_trimmed_gateway(self):
-        assert import_from_string(cast(str, _uvicorn_params(uvicorn_argv((), {}))["app"])) is gateway.main.app
+    def test_the_app_uvicorn_is_told_to_serve_is_the_trimmed_gateway(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(proxy_app.router, "lifespan_context", proxy_app.router.lifespan_context)
+        for key in (
+            "DATABASE_URL",
+            "DIRECT_URL",
+            "DATABASE_URL_READ_REPLICA",
+            "DATABASE_HOST",
+            "DATABASE_HOST_READ_REPLICA",
+            "DATABASE_PASSWORD",
+            "IAM_TOKEN_DB_AUTH",
+            "AZURE_POSTGRESQL_AUTH",
+        ):
+            monkeypatch.delenv(key, raising=False)
+
+        served: Final = import_from_string(cast(str, _uvicorn_params(uvicorn_argv((), {}))["app"]))
+        assert served is importlib.import_module("gateway.main").app
 
 
 class TestPoolDatabaseUrl:

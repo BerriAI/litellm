@@ -15,7 +15,6 @@ from types import MappingProxyType
 from typing import Annotated, Final, Literal, NamedTuple
 
 from pydantic import (
-    BaseModel,
     ConfigDict,
     Field,
     SkipValidation,
@@ -25,6 +24,8 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", DeprecationWarning)
@@ -73,6 +74,15 @@ DEFAULT_CLASSIFICATION_RUBRIC: Final[ClassificationRubric] = ClassificationRubri
 LLM_CLASSIFIER_TYPES: Final[frozenset[str]] = frozenset({"llm", "capability", "llm_v2", "heuristic_first", "hybrid"})
 
 
+def configured_local_heuristic(config: Mapping[str, object]) -> Literal["heuristic", "heuristic_v2"] | None:
+    classifier_type: Final = config.get("classifier_type", "heuristic")
+    if classifier_type == "heuristic" or classifier_type == "heuristic_v2":
+        return classifier_type
+    if classifier_type in ("heuristic_first", "hybrid"):
+        return "heuristic_v2" if config.get("local_heuristic") == "heuristic_v2" else "heuristic"
+    return None
+
+
 TIER_SEVERITY_ORDER: Final[tuple[ComplexityTier, ...]] = (
     ComplexityTier.SIMPLE,
     ComplexityTier.MEDIUM,
@@ -96,7 +106,7 @@ DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE: Final[int] = 3
 DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS: Final[int] = 8000
 
 
-class KeywordTierRule(BaseModel):
+class KeywordTierRule(LiteLLMBaseModel):
     """A deterministic override: if any keyword matches, route to this tier."""
 
     keywords: list[str] = Field(
@@ -173,7 +183,7 @@ def normalize_classification_examples(value: str | None) -> str | None:
 _BUILT_IN_TIER_NAMES: Final[str] = ", ".join(ComplexityTier.__members__)
 
 
-class TierDefinition(BaseModel):
+class TierDefinition(LiteLLMBaseModel):
     """An operator-defined tier: the name the LLM classifier must return and its rubric description."""
 
     name: str = Field(
@@ -217,7 +227,7 @@ class TierDefinition(BaseModel):
         return self
 
 
-class ReminderMarkerPair(BaseModel):
+class ReminderMarkerPair(LiteLLMBaseModel):
     """One open/close delimiter pair a harness wraps injected context in.
 
     Normalizing here rather than at the scan is what makes matching case-insensitive: markers reach
@@ -241,7 +251,7 @@ class ReminderMarkerPair(BaseModel):
         return self
 
 
-class ComplexityTierModel(BaseModel):
+class ComplexityTierModel(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     model_name: str
@@ -477,7 +487,7 @@ DEFAULT_TIER_MODELS: Final[dict[str, str]] = {
 }
 
 
-class ClassifierVisionConfig(BaseModel):
+class ClassifierVisionConfig(LiteLLMBaseModel):
     """Whether the LLM classifier sees the images on the request it is classifying.
 
     Off by default because images cost far more than the text ask they arrive with, and the
@@ -508,7 +518,7 @@ class ClassifierVisionConfig(BaseModel):
     )
 
 
-class ClassifierLLMConfig(BaseModel):
+class ClassifierLLMConfig(LiteLLMBaseModel):
     """Configuration for the LLM-based complexity classifier."""
 
     model: str = Field(
@@ -604,7 +614,7 @@ class ClassifierLLMConfig(BaseModel):
         return self
 
 
-class CapabilityCalibrationConfig(BaseModel):
+class CapabilityCalibrationConfig(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     version: str = Field(min_length=1, max_length=128, pattern=r"^\S(?:.*\S)?$")
@@ -617,7 +627,7 @@ class CapabilityCalibrationConfig(BaseModel):
         return 1.0 / (1.0 + math.exp(-log_odds))
 
 
-class CapabilityClassifierConfig(BaseModel):
+class CapabilityClassifierConfig(LiteLLMBaseModel):
     """Switchyard-compatible probability threshold policy for two model tiers."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -695,20 +705,20 @@ def normalize_classifier_config_aliases(config: Mapping[str, object]) -> Mapping
     return normalized
 
 
-class OpenSourceClassifierConfig(BaseModel):
+class OpenSourceClassifierConfig(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    provider: Literal["jev", "laya"] = "jev"
+    provider: Literal["jev", "laya", "bespoke"] = "jev"
     model: str = "jev-latest"
-    api_key: str | None = Field(default=None, description="Provider API key; optional for self-hosted Laya")
+    api_key: str | None = Field(default=None, description="Provider API key; optional for self-hosted providers")
     api_base: str | None = Field(
         default=None,
-        description="Provider API base; defaults to TYPESAFE_API_BASE or LAYA_API_BASE for the selected provider",
+        description="Provider API base; defaults to the selected provider API_BASE environment variable",
     )
     timeout_ms: int = Field(default=3000, ge=1)
     instructions: str | None = Field(
         default=None,
-        description="Replaces the built-in Jev question instructions",
+        description="Replaces the built-in classification instructions",
     )
     circuit_breaker_enabled: bool = True
     circuit_breaker_cooldown_seconds: float = Field(default=30.0, gt=0.0)
@@ -729,17 +739,19 @@ class OpenSourceClassifierConfig(BaseModel):
     @classmethod
     def _reject_blank_api_key(cls, value: str | None) -> str | None:
         if value is not None and not value.strip():
-            raise ValueError("opensource_classifier_config.api_key must be non-empty; omit it to use TYPESAFE_API_KEY")
+            raise ValueError(
+                "opensource_classifier_config.api_key must be non-empty; omit it to use the provider environment key"
+            )
         return value
 
     @model_validator(mode="after")
     def _keep_the_environment_key_on_the_environment_base(self) -> "OpenSourceClassifierConfig":
-        if self.provider == "laya":
-            from litellm.llms.laya.common_utils import validate_laya_api_base, validate_laya_model
+        if self.provider in ("laya", "bespoke"):
+            from litellm.llms.oss_decision import validate_oss_api_base, validate_oss_model
 
-            _ = validate_laya_model(self.model)
+            _ = validate_oss_model(self.provider, self.model)
             if self.api_base is not None:
-                _ = validate_laya_api_base(self.api_base)
+                _ = validate_oss_api_base(self.provider, self.api_base)
             return self
         if self.api_base is not None and self.api_key is None:
             raise ValueError(
@@ -902,7 +914,7 @@ def custom_pattern_work(pattern: str) -> int | str:
     return cost if isinstance(cost, str) else cost.steps
 
 
-class CustomDimension(BaseModel):
+class CustomDimension(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     name: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z][A-Za-z0-9_]*$")
@@ -938,7 +950,7 @@ class CustomDimension(BaseModel):
         )
 
 
-class ContextCompactionConfig(BaseModel):
+class ContextCompactionConfig(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     model: str | None = Field(default=None, min_length=1)
@@ -947,7 +959,7 @@ class ContextCompactionConfig(BaseModel):
     timeout_seconds: float = Field(default=120, gt=0)
 
 
-class ComplexityRouterConfig(BaseModel):
+class ComplexityRouterConfig(LiteLLMBaseModel):
     """Configuration for the ComplexityRouter."""
 
     @model_validator(mode="before")
@@ -1150,17 +1162,24 @@ class ComplexityRouterConfig(BaseModel):
             "an LLM tier-selection call, a Switchyard-compatible capability forecast, a joint Fuse V2 forecast, "
             "a custom classifier plugin, 'heuristic_first', which scores locally and only pays for the LLM classifier when the "
             "local scorer does not confidently land a cheap tier, or 'hybrid', which trusts the local scorer "
-            "everywhere except when its score lands near a tier boundary, or 'oss_classifier', a structured choice call using Jev or Laya"
+            "everywhere except when its score lands near a tier boundary, or 'oss_classifier', a structured choice call using Jev, Laya or Bespoke Nimble"
         ),
     )
     llm_v2_config: LLMV2Config | None = Field(
         default=None,
         description="Experimental joint task-demand and solver-capability forecasting for classifier_type llm_v2.",
     )
+    local_heuristic: Literal["heuristic", "heuristic_v2"] | None = Field(
+        default=None,
+        description=(
+            "Local scorer for heuristic_first or hybrid. Omitted or null keeps heuristic v1; "
+            "heuristic_v2 uses the trained success predictor. Rejected for other classifier types."
+        ),
+    )
     heuristic_v2_artifact: TrainedTierArtifact | Literal["ultrafeedback"] = Field(
         default="ultrafeedback",
         description=(
-            "Success-probability artifact used by classifier_type 'heuristic_v2'. The bundled "
+            "Success-probability artifact used by standalone or chained heuristic_v2. The bundled "
             "UltraFeedback artifact is selected by default; an inline trained artifact may replace it"
         ),
     )
@@ -1170,10 +1189,11 @@ class ComplexityRouterConfig(BaseModel):
         ge=0.0,
         le=1.0,
         description=(
-            "Minimum predicted success probability for classifier_type 'heuristic_v2' to select a tier. "
-            "The first tier meeting this threshold is selected, or REASONING if none meets it. "
+            "Minimum predicted success probability for standalone or chained heuristic_v2 to select a tier. "
+            "The first tier meeting this threshold is selected. When none meets it, standalone heuristic_v2 "
+            "selects REASONING and chained heuristic_v2 defers to the LLM judge. "
             "When omitted or null, uses the artifact's routing_threshold (0.75 for the bundled artifact). "
-            "Other classifier types ignore this setting"
+            "Ignored when heuristic_v2 is not selected"
         ),
     )
     classifier_llm_config: ClassifierLLMConfig | None = Field(
@@ -1200,8 +1220,8 @@ class ComplexityRouterConfig(BaseModel):
             "one skips the LLM classifier and routes straight to that heuristic tier, so the classifier "
             "call is only paid for on traffic the scorer could not place cheaply. The scorer must also "
             "have produced at least one signal: a prompt where no dimension fired scores 0.0 and would "
-            "otherwise land SIMPLE by default rather than by evidence, which is how a chained router "
-            "would silently send unclassified traffic to the cheapest model. Names a built-in tier, and "
+            "otherwise land SIMPLE by default rather than by evidence. With local_heuristic 'heuristic_v2', "
+            "the predicted tier must meet its success threshold. Names a built-in tier, and "
             "may not name the highest one, since that would make the LLM classifier unreachable."
         ),
     )
@@ -1215,7 +1235,9 @@ class ComplexityRouterConfig(BaseModel):
             "this from every active boundary routes on the scorer's own tier with no classifier call, at any "
             "tier, which is what separates 'hybrid' from 'heuristic_first' and its cheap-tier ceiling. A "
             "prompt where no dimension fired still goes to the classifier, since the scorer has no opinion "
-            "to be near a boundary with. 0 escalates only scores sitting exactly on a boundary."
+            "to be near a boundary with. With local_heuristic 'heuristic_v2', a tier must meet its success "
+            "threshold and its probability and all lower-tier probabilities must be further than this margin "
+            "from that threshold. 0 escalates only scores or probabilities exactly on a boundary."
         ),
     )
     classifier_plugin: ClassifierPlugin | None = Field(
@@ -1853,11 +1875,24 @@ class ComplexityRouterConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_local_heuristic(self) -> "ComplexityRouterConfig":
+        if self.local_heuristic is not None and self.classifier_type not in ("heuristic_first", "hybrid"):
+            raise ValueError("local_heuristic requires classifier_type heuristic_first or hybrid")
+        return self
+
+    @model_validator(mode="after")
     def _validate_custom_dimensions(self) -> "ComplexityRouterConfig":
         if not self.custom_dimensions:
             return self
-        if self.classifier_type not in ("heuristic", "heuristic_first", "hybrid"):
-            raise ValueError("custom_dimensions requires classifier_type heuristic, heuristic_first or hybrid")
+        if (
+            configured_local_heuristic(
+                {"classifier_type": self.classifier_type, "local_heuristic": self.local_heuristic}
+            )
+            != "heuristic"
+        ):
+            raise ValueError(
+                "custom_dimensions requires classifier_type heuristic, heuristic_first or hybrid using heuristic v1"
+            )
         names: Final = tuple(dimension.name.casefold() for dimension in self.custom_dimensions)
         reserved: Final = frozenset(name.casefold() for name in DEFAULT_DIMENSION_WEIGHTS)
         weighted: Final = frozenset(name.casefold() for name in self.dimension_weights)
@@ -1952,6 +1987,20 @@ class ComplexityRouterConfig(BaseModel):
     @classmethod
     def _normalize_classification_examples_field(cls, value: str | None) -> str | None:
         return normalize_classification_examples(value)
+
+    def resolve_default_model(self, default_model: str | None = None) -> str | None:
+        if default_model is not None:
+            return default_model
+        if self.default_model is not None:
+            return self.default_model
+        derived: Final = (
+            (self.tiers.get(self.fallback_tier) if self.fallback_tier is not None else None)
+            or self.tiers.get("MEDIUM")
+            or self.tiers.get("SIMPLE")
+        )
+        if isinstance(derived, list):
+            return derived[0] if derived else None
+        return derived
 
     @property
     def has_custom_tiers(self) -> bool:

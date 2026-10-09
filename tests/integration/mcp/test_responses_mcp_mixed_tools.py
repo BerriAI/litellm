@@ -21,6 +21,8 @@ def test_responses_with_gateway_mcp_and_caller_function_tool_hands_both_to_model
     upstream_tools: list[tuple[str, ...]] = []
 
     def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target.endswith("/models"):
+            return Reply(body=b'{"object":"list","data":[]}')
         assert request.target.endswith("/responses"), request.target
         body: Final = json.loads(request.body)
         upstream_tools.append(tuple(str(tool.get("name")) for tool in body.get("tools", ())))

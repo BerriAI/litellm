@@ -33,7 +33,7 @@ def _edits_from(normalized: dict[str, object] | None) -> list[dict[str, object]]
     return [edit for edit in edits if isinstance(edit, dict)]
 
 
-def _normalize_spec(
+def normalize_spec(
     spec: dict[str, object] | list[dict[str, object]] | None,
 ) -> list[dict[str, object]] | None:
     """Accept Anthropic-native dict form or OpenAI list form; return edits list."""
@@ -44,6 +44,9 @@ def _normalize_spec(
         return _edits_from(AnthropicConfig.map_openai_context_management_to_anthropic(spec))
 
     return _edits_from(spec)
+
+
+_normalize_spec = normalize_spec
 
 
 def _wrap_editor_return(
@@ -87,7 +90,7 @@ async def apply_context_management(
     worker thread so their token counts stay off the event loop;
     ``inspect.iscoroutinefunction`` decides how each editor is invoked.
     """
-    edits: Final = _normalize_spec(context_management_spec)
+    edits: Final = normalize_spec(context_management_spec)
     if not edits:
         return PolyfillResult(messages=messages, system=system, applied_edits=[])
 

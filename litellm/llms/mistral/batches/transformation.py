@@ -15,12 +15,13 @@ import httpx
 from openai.types.batch import BatchRequestCounts
 from openai.types.batch import Errors as BatchErrors
 from openai.types.batch_error import BatchError
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues, CreateBatchRequest
 from litellm.types.utils import LiteLLMBatch, LlmProviders
 
@@ -64,14 +65,14 @@ class MistralPresignedRequest(TypedDict):
     headers: ReadOnly[Mapping[str, str]]
 
 
-class MistralBatchError(BaseModel):
+class MistralBatchError(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     message: str
     count: int = 1
 
 
-class MistralBatchJob(BaseModel):
+class MistralBatchJob(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     id: str

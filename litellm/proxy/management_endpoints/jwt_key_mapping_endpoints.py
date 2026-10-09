@@ -17,7 +17,10 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
-from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
+    _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    user_api_key_has_admin_view,
+)
 from litellm.repositories.table_repositories import JWTKeyMappingRepository
 
 router: Final = APIRouter()
@@ -310,7 +313,7 @@ async def list_jwt_key_mappings(
     from litellm.proxy.proxy_server import prisma_client
 
     # Admin Viewer follows the read-parity rule.
-    if not _user_has_admin_view(user_api_key_dict):
+    if not user_api_key_has_admin_view(user_api_key_dict):
         raise HTTPException(status_code=403, detail="Only proxy admins can list JWT key mappings")
 
     if prisma_client is None:
@@ -348,7 +351,7 @@ async def info_jwt_key_mapping(
     from litellm.proxy.proxy_server import prisma_client
 
     # Admin Viewer follows the read-parity rule.
-    if not _user_has_admin_view(user_api_key_dict):
+    if not user_api_key_has_admin_view(user_api_key_dict):
         raise HTTPException(status_code=403, detail="Only proxy admins can get JWT key mapping info")
 
     if prisma_client is None:

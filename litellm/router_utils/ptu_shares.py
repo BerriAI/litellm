@@ -10,11 +10,16 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Generic, TypeVar
 
-from litellm.litellm_core_utils.ptu_pricing import is_model_info_mapping, parsed_ptu_shares, ptu_terms
-from litellm.llms.azure.ptu_capacity import PTUCapacity, deployment_ptu_capacity, is_azure_deployment
+from litellm.litellm_core_utils.ptu_pricing import parsed_ptu_shares, ptu_terms
+from litellm.llms.azure.ptu_capacity import (
+    PTUCapacity,
+    deployment_ptu_capacity,
+    is_azure_deployment,
+    is_str_keyed_mapping,
+)
 from litellm.router_utils.common_utils import team_may_use_deployment
 
-_DeploymentT = TypeVar("_DeploymentT", bound=Mapping[str, object])
+_DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +47,7 @@ def _deployment_shares(deployment: Mapping[str, object]) -> Mapping[str, int] | 
     split whose terms are missing still serves only the teams it names rather than everyone.
     """
     model_info: Final = deployment.get("model_info")
-    if not is_model_info_mapping(model_info):
+    if not is_str_keyed_mapping(model_info):
         return None
     return parsed_ptu_shares(model_info.get("ptu_shares"))
 
@@ -109,7 +114,7 @@ def model_group_deployments(deployments: Sequence[_DeploymentT], model_group: st
         for deployment in deployments
         if deployment.get("model_name") == model_group
         or (
-            isinstance(model_info := deployment.get("model_info"), Mapping)
+            is_str_keyed_mapping(model_info := deployment.get("model_info"))
             and model_info.get("team_public_model_name") == model_group
         )
     )
@@ -117,19 +122,19 @@ def model_group_deployments(deployments: Sequence[_DeploymentT], model_group: st
 
 def _deployment_id(deployment: Mapping[str, object]) -> object:
     model_info: Final = deployment.get("model_info")
-    return model_info.get("id") if isinstance(model_info, Mapping) else None
+    return model_info.get("id") if is_str_keyed_mapping(model_info) else None
 
 
 def _names_deployment(deployment: Mapping[str, object], name: str) -> bool:
     litellm_params: Final = deployment.get("litellm_params")
     return _deployment_id(deployment) == name or (
-        isinstance(litellm_params, Mapping) and litellm_params.get("model") == name
+        is_str_keyed_mapping(litellm_params) and litellm_params.get("model") == name
     )
 
 
 def _deployment_model_group(deployment: Mapping[str, object]) -> str | None:
     model_info: Final = deployment.get("model_info")
-    public_name: Final = model_info.get("team_public_model_name") if isinstance(model_info, Mapping) else None
+    public_name: Final = model_info.get("team_public_model_name") if is_str_keyed_mapping(model_info) else None
     if isinstance(public_name, str):
         return public_name
     model_name: Final = deployment.get("model_name")
@@ -165,7 +170,7 @@ def _model_group_of(
 
 def _deployment_owner(deployment: Mapping[str, object]) -> object:
     model_info: Final = deployment.get("model_info")
-    return model_info.get("team_id") if isinstance(model_info, Mapping) else None
+    return model_info.get("team_id") if is_str_keyed_mapping(model_info) else None
 
 
 def team_servable_deployments(deployments: Sequence[_DeploymentT], team_id: str) -> tuple[_DeploymentT, ...]:
@@ -185,7 +190,7 @@ def model_group_ptu_capacity(deployments: Sequence[Mapping[str, object]]) -> PTU
         (
             capacity
             for deployment in deployments
-            if is_model_info_mapping(model_info := deployment.get("model_info"))
+            if is_str_keyed_mapping(model_info := deployment.get("model_info"))
             and ptu_terms(model_info) is not None
             and (capacity := deployment_ptu_capacity(deployment)) is not None
         ),
@@ -201,7 +206,7 @@ def ptu_capacity_warning(model_name: str, deployment: Mapping[str, object]) -> s
     provider only ever used the flat-cost rollup, which needs no sizing.
     """
     model_info: Final = deployment.get("model_info")
-    if not is_model_info_mapping(model_info) or ptu_terms(model_info) is None:
+    if not is_str_keyed_mapping(model_info) or ptu_terms(model_info) is None:
         return None
     if deployment_ptu_capacity(deployment) is not None:
         return None

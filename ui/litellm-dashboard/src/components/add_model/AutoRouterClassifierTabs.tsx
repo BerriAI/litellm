@@ -28,7 +28,7 @@ import {
   AUTO_ROUTER_CONTACT_URL,
 } from "./AutoRouterAvailability";
 
-function ClassifierOption({
+export function ClassifierOption({
   value,
   label,
   description,
@@ -75,7 +75,7 @@ function ClassifierOption({
   );
 }
 
-function ClassifierMenu({
+export function ClassifierMenu({
   id,
   label,
   value,
@@ -150,7 +150,7 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
     if (next === "jev") changeType("jev");
   };
   const changeProvider = (provider: unknown) => {
-    if (provider !== "jev" && provider !== "laya") return;
+    if (provider !== "jev" && provider !== "laya" && provider !== "bespoke") return;
     const defaults = defaultJevClassifierConfig(provider);
     onChange({
       ...value,
@@ -173,7 +173,7 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
           {[
             { value: "heuristics", label: "Heuristics", description: "Classify locally, with no API call" },
             { value: "llm", label: "LLM", description: "Use a judge model to choose a solver" },
-            { value: "jev", label: "OSS Classifier", description: "Use Jev or Laya to choose a tier" },
+            { value: "jev", label: "OSS Classifier", description: "Use Jev, Laya, or Bespoke Nimble to choose a tier" },
           ].map((option) => (
             <Label
               key={option.value}
@@ -213,6 +213,10 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
             <Label>
               <RadioGroupItem value="laya" />
               Laya
+            </Label>
+            <Label>
+              <RadioGroupItem value="bespoke" />
+              Bespoke Nimble
             </Label>
           </RadioGroup>
         </fieldset>

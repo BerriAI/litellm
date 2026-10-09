@@ -1,6 +1,8 @@
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
 class LAR1Act(str, Enum):
@@ -31,9 +33,9 @@ class LAR1Evidence(str, Enum):
     CONFIRMED = "CONFIRMED"
 
 
-class LAR1Metadata(BaseModel):
+class LAR1Metadata(LiteLLMBaseModel):
     act: LAR1Act = LAR1Act.INF
     time: LAR1Time = LAR1Time.NOW
     mind: LAR1Mind = LAR1Mind.REF
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
-    evidence: list[LAR1Evidence] = []
+    evidence: list[LAR1Evidence] = Field(default=[])

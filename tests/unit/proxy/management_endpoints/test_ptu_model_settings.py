@@ -22,7 +22,7 @@ from litellm.proxy._types import (
     ReconcileOutcome,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import _is_model_cost_zero
+from litellm.proxy.auth.auth_checks import is_model_cost_zero
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _PTU_ZEROED_PRICING_FIELDS,
     _SEARCH_CONTEXT_SIZES,
@@ -695,8 +695,8 @@ class TestAddNewModelPtuGate:
                 f"{endpoints}.ModelManagementAuthChecks.can_user_make_model_call",
                 AsyncMock(return_value=True),
             ),
-            patch(f"{endpoints}._add_model_to_db", add_model_to_db),
-            patch(f"{endpoints}._add_team_model_to_db", add_team_model_to_db),
+            patch(f"{endpoints}.add_model_to_db", add_model_to_db),
+            patch(f"{endpoints}.add_team_model_to_db", add_team_model_to_db),
         ]
 
     @staticmethod
@@ -1108,8 +1108,8 @@ class TestPtuDeploymentsAreNotBilledPerToken:
             )
         )
         router = Router(model_list=[priced.to_json(exclude_none=True)])
-        assert _is_model_cost_zero(model="model_name_team-1_dep-ptu", llm_router=router) is False
-        assert _is_model_cost_zero(model="ptu-model", llm_router=router) is False
+        assert is_model_cost_zero(model="model_name_team-1_dep-ptu", llm_router=router) is False
+        assert is_model_cost_zero(model="ptu-model", llm_router=router) is False
 
     def test_an_unrelated_patch_heals_a_deployment_stored_before_this_rule(self):
         """Both blobs, because litellm_params wins over model_info wherever the two are merged."""

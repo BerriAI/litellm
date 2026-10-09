@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, renderWithProviders, screen } from "../../../tests/test-utils";
+import { chooseSelectOption, fireEvent, renderWithProviders, screen } from "../../../tests/test-utils";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
 import AutoRouterClassifierTabs from "./AutoRouterClassifierTabs";
@@ -97,9 +97,13 @@ function Form() {
 
 describe("JEV classifier editor", () => {
   afterEach(() => vi.mocked(useAuthorized).mockReset());
-  it.each(["jev", "laya"] as const)(
+  it.each([
+    ["jev", "Jev", "jev-test"],
+    ["laya", "Laya", "multilingual"],
+    ["bespoke", "Bespoke Nimble", "bespokelabs/Bespoke-Nimble-9B"],
+  ] as const)(
     "preserves %s, custom tiers and context through save, reload and probe",
-    async (provider) => {
+    async (provider, label, model) => {
       renderWithProviders(<Form />);
       expect(screen.getByLabelText("Judge model")).toBeInTheDocument();
       expect(screen.getByText("Reasoning Effort")).toBeInTheDocument();
@@ -117,12 +121,12 @@ describe("JEV classifier editor", () => {
       expect(screen.getByLabelText("Classifier Model")).toHaveTextContent("english");
       fireEvent.click(screen.getByRole("radio", { name: "Jev" }));
       expect(screen.getByLabelText("Classifier Model")).toHaveValue("jev-latest");
-      if (provider === "laya") {
-        fireEvent.click(screen.getByRole("radio", { name: "Laya" }));
-        await userEvent.click(screen.getByLabelText("Classifier Model"));
-        await userEvent.click(screen.getByRole("option", { name: "multilingual" }));
+      fireEvent.click(screen.getByRole("radio", { name: label }));
+      if (provider === "bespoke") expect(screen.getByLabelText("Classifier Model")).toHaveTextContent("nimble-latest");
+      if (provider !== "jev") {
+        await chooseSelectOption(userEvent, screen.getByLabelText("Classifier Model"), model);
       } else {
-        fireEvent.change(screen.getByLabelText("Classifier Model"), { target: { value: "jev-test" } });
+        fireEvent.change(screen.getByLabelText("Classifier Model"), { target: { value: model } });
       }
       fireEvent.change(screen.getByLabelText("Classifier Timeout (ms)"), { target: { value: "4200" } });
       fireEvent.change(screen.getByLabelText("Context Window Size"), { target: { value: "6" } });
@@ -131,9 +135,9 @@ describe("JEV classifier editor", () => {
       fireEvent.click(screen.getByRole("button", { name: "Customize tiers" }));
       fireEvent.click(screen.getByRole("button", { name: "Save and reload" }));
       expect(screen.getByRole("radio", { name: /^OSS Classifier$/ })).toBeChecked();
-      expect(screen.getByRole("radio", { name: provider === "laya" ? "Laya" : "Jev" })).toBeChecked();
-      if (provider === "laya") expect(screen.getByLabelText("Classifier Model")).toHaveTextContent("multilingual");
-      else expect(screen.getByLabelText("Classifier Model")).toHaveValue("jev-test");
+      expect(screen.getByRole("radio", { name: label })).toBeChecked();
+      if (provider !== "jev") expect(screen.getByLabelText("Classifier Model")).toHaveTextContent(model);
+      else expect(screen.getByLabelText("Classifier Model")).toHaveValue(model);
       expect(screen.getByLabelText("Classifier Timeout (ms)")).toHaveValue(4200);
       expect(screen.getByLabelText("Context Window Size")).toHaveValue("6");
       expect(screen.getByRole("switch", { name: "Classifier circuit breaker" })).not.toBeChecked();
@@ -145,7 +149,7 @@ describe("JEV classifier editor", () => {
             classifier_type: "oss_classifier",
             opensource_classifier_config: {
               provider,
-              model: provider === "laya" ? "multilingual" : "jev-test",
+              model,
               timeout_ms: 4200,
               circuit_breaker_enabled: false,
               circuit_breaker_cooldown_seconds: 50,

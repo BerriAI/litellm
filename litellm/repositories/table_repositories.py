@@ -131,10 +131,6 @@ class JWTKeyMappingRepository(PrismaTableRepository["prisma_models.LiteLLM_JWTKe
     table_name = "litellm_jwtkeymapping"
 
 
-class ManagedFileRepository(PrismaTableRepository["prisma_models.LiteLLM_ManagedFileTable"]):
-    table_name = "litellm_managedfiletable"
-
-
 class MemoryRepository(PrismaTableRepository["prisma_models.LiteLLM_MemoryTable"]):
     table_name = "litellm_memorytable"
 
@@ -265,6 +261,12 @@ class AuditLogRepository(PrismaTableRepository["prisma_models.LiteLLM_AuditLog"]
 
 class AdaptiveRouterSessionRepository(PrismaTableRepository["prisma_models.LiteLLM_AdaptiveRouterSession"]):
     table_name = "litellm_adaptiveroutersession"
+
+
+class BackgroundInteractionSettlementRepository(
+    PrismaTableRepository["prisma_models.LiteLLM_BackgroundInteractionSettlement"]
+):
+    table_name = "litellm_backgroundinteractionsettlement"
 
 
 class RetiredAgentRepository(PrismaTableRepository["prisma_models.LiteLLM_RetiredAgent"]):

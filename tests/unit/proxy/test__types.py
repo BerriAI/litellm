@@ -61,7 +61,7 @@ def test_the_server_sets_a_marker_by_assignment_after_construction(marker):
 
 
 def test_a_virtual_key_is_hashed_out_of_the_auth_object():
-    raw_key = "sk-1234567890abcdefghij"
+    raw_key = "sk-9876567890abcdefghij"
 
     auth = UserAPIKeyAuth(api_key=raw_key)
 
@@ -70,7 +70,7 @@ def test_a_virtual_key_is_hashed_out_of_the_auth_object():
 
 
 def test_a_bearer_prefixed_key_hashes_the_same_as_the_bare_key():
-    raw_key = "sk-1234567890abcdefghij"
+    raw_key = "sk-9876567890abcdefghij"
 
     assert UserAPIKeyAuth(api_key=f"Bearer {raw_key}").token == UserAPIKeyAuth(api_key=raw_key).token
 
@@ -387,7 +387,7 @@ def test_change_password_request_passwords_hidden_from_repr():
     for rendered in (repr(request), str(request)):
         assert "hunter2hunter2" not in rendered
         assert "NewP@ssw0rd-2026" not in rendered
-@pytest.mark.parametrize("versions", [[], ["2099-01-01"], ["2026-07-28"]])
+@pytest.mark.parametrize("versions", [[], ["2099-01-01"]])
 def test_mcp_advertised_versions_reject_unavailable_revisions(versions):
     from pydantic import ValidationError
 
@@ -397,7 +397,7 @@ def test_mcp_advertised_versions_reject_unavailable_revisions(versions):
         ConfigGeneralSettings(mcp_advertised_versions=versions)
 
 
-@pytest.mark.parametrize("revision", ["2026-07-28", "unknown", None])
+@pytest.mark.parametrize("revision", ["unknown", None])
 def test_mcp_metadata_rejects_unavailable_upstream_protocol(revision):
     from litellm.proxy._types import NewMCPServerRequest, UpdateMCPServerRequest
 
@@ -466,3 +466,25 @@ def test_an_http_mcp_server_is_unaffected_by_the_stdio_flag(monkeypatch, request
 def test_a_non_mapping_mcp_server_payload_gets_a_validation_error(request_model):
     with pytest.raises(ValidationError, match="valid dictionary"):
         request_model.model_validate("not-a-server")
+
+
+@pytest.mark.parametrize("request_model", MCP_SERVER_REQUESTS)
+def test_modern_http_upstream_protocol_is_available(request_model):
+    parsed = request_model.model_validate({
+        "server_id": "modern", "transport": "http", "url": "https://example.com/mcp",
+        "mcp_info": {"protocol_version": "2026-07-28"},
+    })
+    assert parsed.mcp_info["protocol_version"] == "2026-07-28"
+    assert parsed.transport == "http"
+
+
+@pytest.mark.parametrize(
+    "setting", ["max_batch_file_records", "max_batch_file_uploads_per_day", "max_file_downloads_per_minute"]
+)
+def test_batch_file_caps_accept_only_positive_limits(setting):
+    from litellm.proxy._types import ConfigGeneralSettings
+
+    for invalid in (0, -5):
+        with pytest.raises(ValidationError):
+            ConfigGeneralSettings.model_validate({setting: invalid})
+    assert getattr(ConfigGeneralSettings.model_validate({setting: 3}), setting) == 3

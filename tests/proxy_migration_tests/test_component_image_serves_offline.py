@@ -32,6 +32,8 @@ import uuid
 import os
 import pytest
 
+from tests._master_key import MASTER_KEY
+
 IMAGE = os.getenv("LITELLM_IMAGE")
 POSTGRES_IMAGE = os.getenv("LITELLM_TEST_POSTGRES_IMAGE", "postgres:16-alpine")
 CURL_IMAGE = os.getenv("LITELLM_TEST_CURL_IMAGE", "curlimages/curl:8.11.1")
@@ -89,7 +91,7 @@ def offline_stack():
             "run", "-d", "--name", component, "--network", network,
             "--user", NON_ROOT_UID,
             "-e", f"DATABASE_URL=postgresql://postgres:pw@{pg}:5432/litellm",
-            "-e", "LITELLM_MASTER_KEY=sk-component-serve-test",
+            "-e", f"LITELLM_MASTER_KEY={MASTER_KEY}",
             "-e", "DISABLE_SCHEMA_UPDATE=true",
             "-e", "LITELLM_LOCAL_MODEL_COST_MAP=True",
             IMAGE,

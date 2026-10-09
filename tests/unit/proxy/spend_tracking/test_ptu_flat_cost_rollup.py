@@ -3,6 +3,7 @@
 import json
 import types
 from datetime import date, datetime, timedelta, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -23,6 +24,7 @@ from litellm.proxy.spend_tracking.ptu_flat_cost_rollup import (
 
 DAY = date(2026, 7, 30)
 TODAY = date(2026, 7, 31)
+_SCHEDULED_NOW: Final = datetime(2026, 7, 31, 12, 0, tzinfo=timezone.utc)
 
 
 # The endpoints require ptu_effective_from alongside the count and rate, so a fixture that
@@ -1457,10 +1459,10 @@ async def test_scheduled_rollup_backfills_after_pricing_the_day():
     """The catch-up pass runs after the day's own rollup, so it sees yesterday already
     priced and does not write it a second time."""
     table = _FakeSentinelTable()
-    yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
+    yesterday: Final = _SCHEDULED_NOW.date() - timedelta(days=1)
     prisma = _prisma_for([_windowed_row(effective_from=_midnight(yesterday - timedelta(days=2)))], table)
 
-    await run_scheduled_ptu_rollup(prisma)
+    await run_scheduled_ptu_rollup(prisma, clock=lambda: _SCHEDULED_NOW)
 
     yesterday_key = ("t", yesterday.isoformat(), PTU_SENTINEL_API_KEY, "m1")
     assert table.upsert_keys.count(yesterday_key) == 1
@@ -1483,13 +1485,13 @@ async def test_scheduled_rollup_with_an_explicit_target_date_does_not_backfill()
 async def test_scheduled_rollup_holds_one_lock_across_both_phases():
     """Backfill running outside the lock would let another pod's prune race its writes."""
     table = _FakeSentinelTable()
-    yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
+    yesterday: Final = _SCHEDULED_NOW.date() - timedelta(days=1)
     prisma = _prisma_for([_windowed_row(effective_from=_midnight(yesterday - timedelta(days=3)))], table)
     rows_at_release = []
     lock = _pod_lock(acquired=True)
     lock.release_lock = AsyncMock(side_effect=lambda **kwargs: rows_at_release.append(len(table.rows)))
 
-    await run_scheduled_ptu_rollup(prisma, pod_lock_manager=lock)
+    await run_scheduled_ptu_rollup(prisma, pod_lock_manager=lock, clock=lambda: _SCHEDULED_NOW)
 
     lock.acquire_lock.assert_awaited_once()
     assert rows_at_release == [4]
@@ -1515,12 +1517,12 @@ async def test_scheduled_rollup_alerts_when_a_backfill_charge_never_landed():
     """An unpriced day that stays unpriced is the silent underbill this work exists to
     remove, so it has to reach an operator too."""
     table = _FakeSentinelTable()
-    yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
+    yesterday: Final = _SCHEDULED_NOW.date() - timedelta(days=1)
     prisma = _prisma_for([_windowed_row(effective_from=_midnight(yesterday - timedelta(days=1)))], table)
     prisma.db.litellm_dailyteamspend.upsert = AsyncMock(side_effect=RuntimeError("db down"))
     alert = AsyncMock()
 
-    await run_scheduled_ptu_rollup(prisma, alert=alert)
+    await run_scheduled_ptu_rollup(prisma, alert=alert, clock=lambda: _SCHEDULED_NOW)
 
     messages = [call.args[0] for call in alert.await_args_list]
     assert any("backfill" in message for message in messages)
@@ -1543,21 +1545,39 @@ async def test_a_broken_alert_channel_does_not_fail_the_backfill():
 
 @pytest.mark.asyncio
 async def test_scheduled_rollup_with_no_target_date_closes_a_backdated_window():
-    """The production call shape from proxy_server.py, on the real clock: no target_date,
+    """The production call shape from proxy_server.py, on a frozen clock: no target_date,
     a window backdated 30 days, and every elapsed in-window day has to end up priced with
     no operator alert raised. Every other rollup test pins target_date, which is exactly
     why this regression shipped."""
     table = _FakeSentinelTable()
-    today = datetime.now(timezone.utc).date()
-    opened_on = today - timedelta(days=30)
+    today: Final = _SCHEDULED_NOW.date()
+    opened_on: Final = today - timedelta(days=30)
     prisma = _prisma_for([_windowed_row(effective_from=_midnight(opened_on))], table)
     alert = AsyncMock()
 
-    await run_scheduled_ptu_rollup(prisma, alert=alert)
+    await run_scheduled_ptu_rollup(prisma, alert=alert, clock=lambda: _SCHEDULED_NOW)
 
     expected = [(opened_on + timedelta(days=offset)).isoformat() for offset in range(30)]
     assert _priced_dates(table) == expected
     alert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_scheduled_rollup_uses_one_day_across_the_midnight_boundary():
+    table: Final = _FakeSentinelTable()
+    clock: Final = iter(
+        (
+            datetime(2026, 1, 31, 23, 59, 59, 999999, tzinfo=timezone.utc),
+            datetime(2026, 2, 1, 0, 0, 0, 1, tzinfo=timezone.utc),
+        )
+    ).__next__
+    prisma: Final = _prisma_for([_windowed_row(effective_from=_midnight(date(2026, 1, 27)))], table)
+
+    result: Final = await run_scheduled_ptu_rollup(prisma, clock=clock)
+
+    assert result is not None
+    assert result.day == date(2026, 1, 30)
+    assert _priced_dates(table) == ["2026-01-27", "2026-01-28", "2026-01-29", "2026-01-30"]
 
 
 # --- R8: a rename must not re-price history under the new name ----------------
@@ -2074,19 +2094,22 @@ async def test_the_catch_up_pass_reaches_a_config_declared_deployment():
     """The catch-up shares the loader, so config deployments join it without being wired in.
     That is what prices the elapsed days of a reservation declared before today."""
     table = _FakeSentinelTable()
-    now = datetime.now(timezone.utc)
-    started = (now - timedelta(days=3)).strftime("%Y-%m-%dT00:00:00Z")
+    now: Final = _SCHEDULED_NOW
+    started: Final = (now - timedelta(days=3)).strftime("%Y-%m-%dT00:00:00Z")
     entry = _router_entry(
         model_id="cfg-back",
         model_info={"ptu_count": 100, "cost_per_ptu_per_hour": 0.02, "team_id": "t", "ptu_effective_from": started},
     )
 
     await run_scheduled_ptu_rollup(
-        _prisma_for([], table), pod_lock_manager=_pod_lock(acquired=True), router=_router_holding(entry)
+        _prisma_for([], table),
+        pod_lock_manager=_pod_lock(acquired=True),
+        router=_router_holding(entry),
+        clock=lambda: _SCHEDULED_NOW,
     )
 
     charged = sorted(day for (_, day, _, model) in table.rows if model == "cfg-back")
-    yesterday = (now.date() - timedelta(days=1)).isoformat()
+    yesterday: Final = (now.date() - timedelta(days=1)).isoformat()
     assert len(charged) == 3, charged
     assert charged[-1] == yesterday
     assert all(row["ptu_flat_cost"] == pytest.approx(48.0) for row in table.rows.values())

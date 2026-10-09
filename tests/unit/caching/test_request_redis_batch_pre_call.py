@@ -12,23 +12,29 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from litellm import Router
 import litellm.caching.dual_cache as dual_cache_module
+from litellm import Router
+from litellm._internal_context import current_service_target
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_batch import active_request_redis_batches, request_redis_batch_scope
 from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LiteLLM_UserTable
-from litellm.proxy.auth.auth_checks import _cache_team_object
+from litellm.proxy.auth.auth_checks import cache_team_object
 from litellm.proxy.auth.auth_object_prefetch import _CacheEntry, _write_back, prefetch_identity_keys
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     CHECK_AND_INCREMENT_BY_N_SCRIPT,
     RateLimitDescriptor,
     RateLimitUnverifiableError,
-    _PROXY_MaxParallelRequestsHandler_v3,
+    PROXY_MaxParallelRequestsHandler_v3,
 )
 from litellm.proxy.utils import InternalUsageCache
-from litellm.router_utils.cooldown_cache import CooldownCache
-from litellm.router_utils.routing_read_batch import RoutingPrefetch
+from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET, CooldownCache
+from litellm.router_utils.routing_read_batch import (
+    ROUTER_COOLDOWNS_USAGE_TARGET,
+    ROUTER_USAGE_TARGET,
+    RoutingPrefetch,
+    _routing_read_target,  # pyright: ignore[reportPrivateUsage]  # the family rule under test
+)
 
 from .test_redis_batch import FakeClient, FakeRedisCache, replies
 
@@ -40,9 +46,9 @@ def sha_of(script: str) -> str:
     return hashlib.sha1(script.encode()).hexdigest()  # noqa: S324
 
 
-def _limiter(redis_cache: FakeRedisCache, fail_closed: bool = False) -> _PROXY_MaxParallelRequestsHandler_v3:
+def _limiter(redis_cache: FakeRedisCache, fail_closed: bool = False) -> PROXY_MaxParallelRequestsHandler_v3:
     dual_cache = DualCache()
-    limiter = _PROXY_MaxParallelRequestsHandler_v3(
+    limiter = PROXY_MaxParallelRequestsHandler_v3(
         internal_usage_cache=InternalUsageCache(dual_cache=dual_cache),
         fail_closed_resolver=lambda: fail_closed,
     )
@@ -58,7 +64,7 @@ def _descriptor(key: str, value: str, rpm: int) -> RateLimitDescriptor:
     return {"key": key, "value": value, "rate_limit": {"requests_per_unit": rpm}}
 
 
-def _refunds(limiter: _PROXY_MaxParallelRequestsHandler_v3) -> list[tuple[str, float]]:
+def _refunds(limiter: PROXY_MaxParallelRequestsHandler_v3) -> list[tuple[str, float]]:
     refund_script = limiter.window_guarded_token_increment_script
     assert isinstance(refund_script, AsyncMock)
     return [(call.kwargs["keys"][1], call.kwargs["args"][1]) for call in refund_script.await_args_list]
@@ -277,7 +283,7 @@ def _deployment(deployment_id: str) -> dict:
 
 def _router(redis_cache: FakeRedisCache, routing_strategy: str = "usage-based-routing-v2") -> Router:
     router = Router(model_list=[_deployment("dep-a"), _deployment("dep-b")], routing_strategy=routing_strategy)
-    router._update_redis_cache(cache=redis_cache)
+    router.update_redis_cache(cache=redis_cache)
     return router
 
 
@@ -420,6 +426,30 @@ async def test_a_failed_prefetch_falls_back_to_the_shared_read():
         keys for command, keys in redis_cache.alone if command == "MGET" and cooldown_keys.issubset(keys)
     )
     assert len(fallback_cooldown_mgets) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_armed_routing_read_is_declared_under_the_router_cooldowns_family():
+    """The prefetch is declared before routing runs under a target of its own, so the pipeline that
+    carries it renders ``redis.pipeline router_cooldowns`` instead of a bare ``redis.pipeline``."""
+    client = FakeClient(_lua_ok_replies)
+    redis_cache = FakeRedisCache(client)
+    router = _router(redis_cache, routing_strategy="simple-shuffle")
+    pipeline_targets: list[str | None] = []  # mutable-ok: filled by the recording hook
+
+    async def record(**kwargs: object) -> None:
+        pipeline_targets.append(current_service_target())
+
+    redis_cache.service_logger_obj.async_service_success_hook = record  # pyright: ignore[reportAttributeAccessIssue]  # fake, records the hook call
+
+    with request_redis_batch_scope():
+        router.arm_routing_read_prefetch(_MODEL_GROUP, {})
+        await router.async_get_available_deployment(
+            model=_MODEL_GROUP, messages=[{"role": "user", "content": "ping"}], request_kwargs={}
+        )
+    await asyncio.gather(*(t for t in asyncio.all_tasks() if t is not asyncio.current_task()))
+
+    assert pipeline_targets == [ROUTER_COOLDOWNS_TARGET]
 
 
 @pytest.mark.asyncio
@@ -659,7 +689,7 @@ async def test_simple_shuffle_prefetches_only_its_cooldown_read_into_the_admissi
     assert redis_cache.alone == []
 
     shuffle = Router(model_list=[_deployment("dep-a")], routing_strategy="simple-shuffle")
-    shuffle._update_redis_cache(cache=redis_cache)
+    shuffle.update_redis_cache(cache=redis_cache)
     with request_redis_batch_scope() as request:
         shuffle.arm_routing_read_prefetch(_MODEL_GROUP, {})
         armed = request.prefetched["routing_read"]
@@ -999,7 +1029,7 @@ async def test_a_team_refresh_inside_a_request_sends_its_set_and_alias_del_in_on
     proxy_logging_obj.internal_usage_cache = InternalUsageCache(dual_cache=usage_cache)
     team = LiteLLM_TeamTableCachedObj(team_id="t1", team_alias="alpha")
     with request_redis_batch_scope() as request:
-        await _cache_team_object("t1", team, cache, proxy_logging_obj)
+        await cache_team_object("t1", team, cache, proxy_logging_obj)
         assert [c[:2] for c in client.pipelines[0].commands] == [("SET", "team_id:t1"), ("DEL", "team_alias:alpha")], (
             "the alias DEL must reach Redis before the refresh returns, or another request can refill memory from it"
         )
@@ -1037,3 +1067,19 @@ async def test_identity_prefetch_is_one_mget_after_which_hits_and_misses_alike_c
         assert await cache.async_get_cache("end_user_id:eu-miss") is None
     assert len(client.pipelines) == 1 and redis_cache.alone == []
     assert cache.in_memory_cache.get_cache("end_user_id:eu-miss") is None
+
+
+@pytest.mark.parametrize(
+    ("cooldown_keys", "usage_keys", "expected"),
+    [
+        (("cooldown:a",), (), ROUTER_COOLDOWNS_TARGET),
+        ((), ("usage:a",), ROUTER_USAGE_TARGET),
+        (("cooldown:a",), ("usage:a",), ROUTER_COOLDOWNS_USAGE_TARGET),
+    ],
+)
+def test_the_routing_read_family_follows_the_keys_that_are_actually_due(
+    cooldown_keys: tuple[str, ...], usage_keys: tuple[str, ...], expected: str
+):
+    """A routing MGET is ``router_cooldowns`` when only cooldown keys go out, ``router_usage`` when the
+    cooldowns were already in memory and only usage counters go out, and the combined family otherwise."""
+    assert _routing_read_target(cooldown_keys, usage_keys) == expected

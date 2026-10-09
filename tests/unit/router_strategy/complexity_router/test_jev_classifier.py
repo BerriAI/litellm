@@ -451,7 +451,7 @@ def test_jev_config_requires_classifier_config() -> None:
 )
 @pytest.mark.parametrize(
     ("provider", "model", "canonical_provider"),
-    [(None, "jev-latest", "jev"), ("typesafe", "jev-latest", "jev"), ("jev", "jev-latest", "jev"), ("laya", "english", "laya")],
+    [(None, "jev-latest", "jev"), ("typesafe", "jev-latest", "jev"), ("jev", "jev-latest", "jev"), ("laya", "english", "laya"), ("bespoke", "nimble-latest", "bespoke")],
 )
 def test_classifier_aliases_load_and_serialize_one_canonical_config(
     classifier_type: str, config_key: str, provider: str | None, model: str, canonical_provider: str
@@ -474,45 +474,47 @@ def test_classifier_aliases_load_and_serialize_one_canonical_config(
     assert incoming == original
 
 
-@pytest.mark.parametrize("config", [{"provider": "laya"}, {"provider": "laya", "model": " "}])
-def test_laya_requires_its_own_checkpoint(config: Mapping[str, object]) -> None:
-    with pytest.raises(ValueError, match="Laya model must be"):
-        JevClassifierConfig.model_validate(config)
+@pytest.mark.parametrize("provider", ["laya", "bespoke"])
+@pytest.mark.parametrize("model", [None, " "])
+def test_oss_requires_its_own_checkpoint(provider: str, model: str | None) -> None:
+    with pytest.raises(ValueError, match=f"{provider} model must be"):
+        JevClassifierConfig.model_validate({"provider": provider, **({"model": model} if model is not None else {})})
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("provider,model", [("laya", "english"), ("bespoke", "nimble-latest")])
 @pytest.mark.parametrize("custom_base", [False, True])
 @pytest.mark.parametrize("legacy", [False, True])
-async def test_laya_routes_with_its_own_credentials_and_accounts_the_checkpoint(
-    monkeypatch: pytest.MonkeyPatch, custom_base: bool, legacy: bool
+async def test_oss_routes_with_its_own_credentials_and_accounts_the_checkpoint(
+    monkeypatch: pytest.MonkeyPatch, custom_base: bool, legacy: bool, provider: str, model: str
 ) -> None:
     monkeypatch.setenv("TYPESAFE_API_KEY", "never-send-typesafe-key")
-    monkeypatch.setenv("LAYA_API_BASE", "https://laya.test")
-    monkeypatch.setenv("LAYA_API_KEY", "laya-env-key")
+    monkeypatch.setenv(f"{provider.upper()}_API_BASE", f"https://{provider}.test")
+    monkeypatch.setenv(f"{provider.upper()}_API_KEY", "oss-env-key")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    monkeypatch.setitem(litellm.model_cost, "laya/english", {"input_cost_per_token": 0.01})
-    recorder: Final = _UsageRecorder("laya/english")
+    monkeypatch.setitem(litellm.model_cost, f"{provider}/{model}", {"input_cost_per_token": 0.01})
+    recorder: Final = _UsageRecorder(f"{provider}/{model}")
     monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
     router: Final = ComplexityRouter(
-        "laya-route",
+        f"{provider}-route",
         litellm.Router(model_list=[]),
         {
             "classifier_type": "jev" if legacy else "oss_classifier",
             "jev_classifier_config" if legacy else "opensource_classifier_config": {
-                "provider": "laya",
-                "model": "english",
-                **({"api_base": "https://laya.test"} if custom_base else {}),
+                "provider": provider,
+                "model": model,
+                **({"api_base": f"https://{provider}.test"} if custom_base else {}),
             },
             "tiers": {"SIMPLE": "cheap"},
         },
         derive_savings_baseline=False,
     )
     with respx.mock(assert_all_called=True) as upstream:
-        route: Final = upstream.post("https://laya.test/v1/systemone").respond(
+        route: Final = upstream.post(f"https://{provider}.test/v1/systemone").respond(
             200,
             json={
-                "model": "laya-rl-agent",
-                "routing": {"model": "english"},
+                "model": "laya-rl-agent" if provider == "laya" else model,
+                **({"routing": {"model": model}} if provider == "laya" else {}),
                 "answers": {"tier": _answer().model_dump()},
                 "usage": {"input_tokens": 31, "output_tokens": 0},
             },
@@ -522,11 +524,11 @@ async def test_laya_routes_with_its_own_credentials_and_accounts_the_checkpoint(
 
     assert outcome.cause == "jev_classifier"
     assert outcome.jev_verdict is not None
-    assert (outcome.jev_verdict.provider, outcome.jev_verdict.model) == ("laya", "english")
+    assert (outcome.jev_verdict.provider, outcome.jev_verdict.model) == (provider, model)
     assert outcome.classifier_cost == pytest.approx(0.31)
     sent: Final = route.calls.last.request
-    assert sent.headers.get("authorization") == (None if custom_base else "Bearer laya-env-key")
-    assert json.loads(sent.content)["model"] == "english"
+    assert sent.headers.get("authorization") == (None if custom_base else "Bearer oss-env-key")
+    assert json.loads(sent.content)["model"] == model
     assert len(recorder.calls) == 1
     assert recorder.calls[0]["response_cost"] == pytest.approx(0.31)
 

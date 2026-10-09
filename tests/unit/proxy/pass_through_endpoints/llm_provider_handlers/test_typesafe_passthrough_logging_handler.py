@@ -14,7 +14,7 @@ from litellm.proxy.pass_through_endpoints.success_handler import PassThroughEndp
 
 
 @pytest.fixture(autouse=True)
-def local_model_cost_map(monkeypatch: pytest.MonkeyPatch):
+def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
@@ -142,60 +142,65 @@ def test_success_handler_dispatches_to_typesafe_handler():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("guardrail_cost", [0.0, 0.25])
 @pytest.mark.parametrize("metadata_slot", ["metadata", "litellm_metadata"])
-@pytest.mark.parametrize("routing_model", ["multilingual", None])
-async def test_laya_gateway_accounts_for_checkpoint_usage_and_registered_cost(
-    monkeypatch: pytest.MonkeyPatch, routing_model: str | None, metadata_slot: str, guardrail_cost: float
+@pytest.mark.parametrize("provider,requested,routing_model", [
+    ("laya", "english", "multilingual"), ("laya", "english", None),
+    ("bespoke", "nimble-latest", None),
+    ("bespoke", "bespokelabs/Bespoke-Nimble-9B", None),
+])
+async def test_oss_gateway_accounts_for_checkpoint_usage_and_registered_cost(
+    monkeypatch: pytest.MonkeyPatch, routing_model: str | None, metadata_slot: str, guardrail_cost: float,
+    provider: str, requested: str
 ) -> None:
-    checkpoint: Final = routing_model or "english"
-    model: Final = f"laya/{checkpoint}"
+    checkpoint: Final = routing_model or requested
+    model: Final = f"{provider}/{checkpoint}"
     input_rate: Final = 0.002
     output_rate: Final = 0.005
     monkeypatch.setitem(litellm.model_cost, model, {
         "input_cost_per_token": input_rate, "output_cost_per_token": output_rate,
-        "litellm_provider": "laya", "mode": "evaluation",
+        "litellm_provider": provider, "mode": "evaluation",
     })
     start: Final = datetime.now()
     logging_obj: Final = Logging(
-        model="english", messages=[], stream=False, call_type="pass_through_endpoint",
-        start_time=start, litellm_call_id="laya-accounting", function_id="laya-accounting", kwargs={},
+        model=requested, messages=[], stream=False, call_type="pass_through_endpoint",
+        start_time=start, litellm_call_id="oss-accounting", function_id="oss-accounting", kwargs={},
     )
     from fastapi import Request
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import HttpPassThroughEndpointHelpers
 
     request: Final = Request({
-        "type": "http", "method": "POST", "path": "/laya/v1/systemone",
+        "type": "http", "method": "POST", "path": f"/{provider}/v1/systemone",
         "headers": [], "query_string": b"",
     })
     auth: Final = UserAPIKeyAuth(
-        api_key="laya-budget-key", token="laya-budget-key",
-        model_max_budget={"laya/english": {"budget_limit": 0.01, "time_period": "1d"}},
+        api_key="oss-budget-key", token="oss-budget-key",
+        model_max_budget={f"{provider}/{requested}": {"budget_limit": 0.01, "time_period": "1d"}},
     )
-    request_body: Final = {"model": "english", metadata_slot: {"model_group": "unbounded-client-choice"}}
+    request_body: Final = {"model": requested, metadata_slot: {"model_group": "unbounded-client-choice"}}
     logging_kwargs: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
         request=request, user_api_key_dict=auth, logging_obj=logging_obj,
-        passthrough_logging_payload={"url": "https://laya.test/v1/systemone"}, _parsed_body=request_body,
+        passthrough_logging_payload={"url": f"https://{provider}.test/v1/systemone"}, _parsed_body=request_body,
     )
     logging_kwargs["litellm_params"]["metadata"]["standard_logging_guardrail_information"] = [
         {"guardrail_name": "trusted-hook", "guardrail_cost": guardrail_cost},
     ]
     logging_obj.update_environment_variables(
-        model="english", user="unknown", optional_params={},
+        model=requested, user="unknown", optional_params={},
         litellm_params=logging_kwargs["litellm_params"], call_type="pass_through_endpoint",
     )
     body: Final = {
-        "model": "laya-rl-agent", "usage": {"input_tokens": 10, "output_tokens": 3},
+        "model": "laya-rl-agent" if provider == "laya" else requested, "usage": {"input_tokens": 10, "output_tokens": 3},
         **({"routing": {"model": routing_model}} if routing_model else {}),
     }
     normalized: Final = PassThroughEndpointLogging().normalize_llm_passthrough_logging_payload(
-        httpx_response=httpx.Response(200, request=httpx.Request("POST", "https://laya.test/v1/systemone"), json=body),
-        response_body=body, request_body={"model": "english"}, logging_obj=logging_obj,
-        url_route="https://laya.test/v1/systemone", result="{}", start_time=start,
-        end_time=datetime.now(), cache_hit=False, custom_llm_provider="laya", **logging_kwargs,
+        httpx_response=httpx.Response(200, request=httpx.Request("POST", f"https://{provider}.test/v1/systemone"), json=body),
+        response_body=body, request_body={"model": requested}, logging_obj=logging_obj,
+        url_route=f"https://{provider}.test/v1/systemone", result="{}", start_time=start,
+        end_time=datetime.now(), cache_hit=False, custom_llm_provider=provider, **logging_kwargs,
     )
     logged: Final = normalized["kwargs"]
     expected_cost: Final = 10 * input_rate + 3 * output_rate
-    assert (logged["model"], logged["custom_llm_provider"]) == (model, "laya")
+    assert (logged["model"], logged["custom_llm_provider"]) == (model, provider)
     assert logged["response_cost"] == pytest.approx(expected_cost)
     assert logged["combined_usage_object"].model_dump(exclude_none=True) == {
         "prompt_tokens": 10, "completion_tokens": 3, "total_tokens": 13,
@@ -203,28 +208,31 @@ async def test_laya_gateway_accounts_for_checkpoint_usage_and_registered_cost(
     assert logging_obj.model_call_details["model"] == model
     assert logging_obj.model_call_details["response_cost"] == pytest.approx(expected_cost)
     assert logged["standard_logging_object"]["model"] == model
-    assert logged["standard_logging_object"]["model_group"] == "laya/english"
+    assert logged["standard_logging_object"]["model_group"] == f"{provider}/{requested}"
     assert logged["standard_logging_object"]["response_cost"] == pytest.approx(expected_cost + guardrail_cost)
 
     from litellm.caching.caching import DualCache
     from litellm.exceptions import BudgetExceededError
-    from litellm.proxy.hooks.model_max_budget_limiter import _PROXY_VirtualKeyModelMaxBudgetLimiter
+    from litellm.proxy.hooks.model_max_budget_limiter import PROXY_VirtualKeyModelMaxBudgetLimiter
 
-    budget_limiter: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(DualCache())
-    assert await budget_limiter.is_key_within_model_budget(auth, "laya/english")
+    budget_limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(DualCache())
+    assert await budget_limiter.is_key_within_model_budget(auth, f"{provider}/{requested}")
     await budget_limiter.async_log_success_event(logged, None, start, datetime.now())
     with pytest.raises(BudgetExceededError):
-        await budget_limiter.is_key_within_model_budget(auth, "laya/english")
+        await budget_limiter.is_key_within_model_budget(auth, f"{provider}/{requested}")
 
 
-def test_openrouter_decisions_response_is_priced_from_request_model_registry_row():
+def test_openrouter_decisions_response_uses_provider_cost_without_cost_map_row(
+    monkeypatch: pytest.MonkeyPatch,
+):
     logging_obj = _logging_obj()
-    model_cost = litellm.model_cost["openrouter/typesafe/jev-1.13"]
+    cost: Final = 1.5834e-5
+    monkeypatch.delitem(litellm.model_cost, "openrouter/typesafe/jev-1.13", raising=False)
     response = TypeSafePassthroughLoggingHandler.typesafe_passthrough_handler(
         httpx_response=_response(),
         response_body={
             "model": "typesafe/jev-1.13-20260917",
-            "usage": {"input_tokens": 282, "output_tokens": 20},
+            "usage": {"input_tokens": 282, "output_tokens": 20, "cost": cost},
         },
         logging_obj=logging_obj,
         url_route="https://openrouter.ai/api/alpha/decisions",
@@ -236,10 +244,9 @@ def test_openrouter_decisions_response_is_priced_from_request_model_registry_row
         custom_llm_provider="openrouter",
     )
 
-    expected_cost = 282 * model_cost["input_cost_per_token"] + 20 * model_cost["output_cost_per_token"]
     assert response["kwargs"]["model"] == "openrouter/typesafe/jev-1.13-20260917"
     assert response["kwargs"]["custom_llm_provider"] == "openrouter"
-    assert response["kwargs"]["response_cost"] == pytest.approx(expected_cost)
+    assert response["kwargs"]["response_cost"] == cost
     assert response["kwargs"]["combined_usage_object"].prompt_tokens == 282
     assert response["kwargs"]["combined_usage_object"].completion_tokens == 20
     assert response["kwargs"]["combined_usage_object"].total_tokens == 302

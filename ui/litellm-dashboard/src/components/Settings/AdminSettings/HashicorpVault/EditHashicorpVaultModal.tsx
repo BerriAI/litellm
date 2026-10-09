@@ -5,7 +5,7 @@ import { useUpdateHashicorpVaultConfig } from "@/app/(dashboard)/hooks/configOve
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { toast } from "@/lib/toast";
 import React, { useMemo } from "react";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { PasswordInput } from "@/components/shared/PasswordInput";

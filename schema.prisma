@@ -42,6 +42,7 @@ model LiteLLM_BudgetTable {
 model LiteLLM_CredentialsTable {
   credential_id String @id @default(uuid())
   credential_name String @unique
+  display_name String?
   credential_values Json
   credential_info Json? 
   created_at    DateTime               @default(now()) @map("created_at")
@@ -417,6 +418,7 @@ model LiteLLM_MCPServerTable {
   source_url            String?
   timeout               Float?
   max_concurrent_requests Int?
+  rpm                   Int?
   // BYOM submission lifecycle
   approval_status  String?   @default("active")
   submitted_by     String?
@@ -656,6 +658,7 @@ model LiteLLM_EndUserTable {
   spend      Float    @default(0.0)
   allowed_model_region String? // require all user requests to use models in this specific region
   default_model String? // use along with 'allowed_model_region'. if no available model in region, default to this model.
+  models String[] @default([])
   budget_id String?
   object_permission_id String?
   litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
@@ -1144,6 +1147,7 @@ model LiteLLM_ManagedFileTable {
   updated_by String?
 
   @@index([unified_file_id])
+  @@index([flat_model_file_ids], type: Gin)
   @@index([team_id, created_at(sort: Desc)])
 }
 
@@ -1354,6 +1358,34 @@ model LiteLLM_DailyGatewayRequests {
   updated_at          DateTime @updatedAt
 
   @@id([date, category, route])
+  @@index([date])
+}
+
+model LiteLLM_DailyGatewayFailedRequests {
+  date            String
+  category        String
+  route           String
+  status_code     Int
+  failed_requests BigInt   @default(0)
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  @@id([date, category, route, status_code])
+  @@index([date])
+}
+
+model LiteLLM_DailyRequestErrors {
+  date            String
+  api_key         String
+  team_id         String   @default("")
+  user_id         String   @default("")
+  model_group     String   @default("")
+  status_code     Int
+  failed_requests BigInt   @default(0)
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  @@id([date, api_key, team_id, user_id, model_group, status_code])
   @@index([date])
 }
 
@@ -1754,6 +1786,8 @@ model LiteLLM_AutoRouterDailySpend {
   router_name                    String
   router_type                    String
   turns                          Int      @default(0)
+  total_tokens                   BigInt   @default(0)
+  token_recorded_turns            Int      @default(0)
   spend                          Float    @default(0)
   saved_spend                    Float    @default(0)
   savings_estimated_turns        Int      @default(0)
@@ -1916,10 +1950,30 @@ model LiteLLM_WorkflowMessage {
   @@index([run_id])
 }
 
+// Pending billing settlements for background interactions, keyed by the
+// interaction id so any replica can settle one that another replica created.
+// `claimed_at` is the exactly-once gate: the first conditional update wins.
+model LiteLLM_BackgroundInteractionSettlement {
+  interaction_id      String    @id
+  custom_llm_provider String
+  create_context      Json
+  created_at          DateTime  @default(now())
+  claimed_at          DateTime?
+  claimed_by          String?
+  settled_at          DateTime?
+  outcome             String?
+
+  @@index([claimed_at], map: "idx_background_interaction_settlement_claimed_at")
+}
+
 model LiteLLM_Lens {
+  reviews LiteLLM_LensReview[]
   id      String @id
   version Int @default(0)
   data    Json
+  due_at  DateTime? @default(dbgenerated("'1970-01-01 00:00:00'::timestamp without time zone"))
+
+  @@index([due_at], map: "LiteLLM_Lens_due_at_idx")
 }
 
 model LiteLLM_LensRun {
@@ -1931,8 +1985,49 @@ model LiteLLM_LensRun {
   @@index([lens_id, created_at])
 }
 
+model LiteLLM_LensReview {
+  lens_id String
+  criteria_key String
+  execution_id String
+  data Json
+  lens LiteLLM_Lens @relation(fields: [lens_id], references: [id], onDelete: Cascade)
+
+  @@id([lens_id, criteria_key, execution_id])
+}
+
 model LiteLLM_LensWorker {
   id         String @id
   token_hash String @unique
   data       Json
+}
+
+model LiteLLM_LensIngestionKey {
+  id   String @id
+  data Json
+}
+
+model LiteLLM_LensDataset {
+  id         String
+  revision   Int
+  created_at DateTime
+  data       Json
+
+  @@id([id, revision])
+}
+
+model LiteLLM_LensSignalConfig {
+  id   String @id
+  data Json
+}
+
+model LiteLLM_LensTraceSignal {
+  trace_id      String
+  trace_ref     String @default("")
+  config_key    String
+  span_count    Int
+  claimed_until DateTime?
+  classified_at DateTime?
+  data          Json
+
+  @@id([trace_id, trace_ref])
 }

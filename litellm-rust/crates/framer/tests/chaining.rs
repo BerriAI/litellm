@@ -4,7 +4,7 @@ mod support;
 
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt};
-use litellm_framing::{
+use litellm_framer::{
     EventStreamError, SseError,
     aws_event_stream::{AwsEventStreamCodec, Message},
     frames,

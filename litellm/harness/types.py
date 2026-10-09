@@ -7,7 +7,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -27,6 +27,7 @@ class Harness(Enum):
     CODEX = "codex"
     OPENCODE = "opencode"
     DEEPAGENTS = "deepagents"
+    TOOL_LOOP = "tool_loop"
 
 
 def require_harness(harness: object) -> Harness:
@@ -70,7 +71,7 @@ class ToolCall:
     id: str
     name: str
     native_name: str
-    input: Mapping[str, Any]
+    input: Mapping[str, object]
     builtin: bool = True
 
 
@@ -99,7 +100,7 @@ class Approval:
     """A request to run a tool. The turn waits until allow() or deny() is called."""
 
     tool: str
-    input: Mapping[str, Any]
+    input: Mapping[str, object]
     _decision: asyncio.Future[tuple[bool, str]] = field(
         default_factory=lambda: asyncio.get_event_loop().create_future(),
         compare=False,

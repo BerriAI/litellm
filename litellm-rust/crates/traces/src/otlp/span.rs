@@ -1,3 +1,4 @@
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 use opentelemetry_proto::tonic::{
@@ -8,27 +9,37 @@ use opentelemetry_proto::tonic::{
 use super::{
     DecodedEvent, DecodedSpan,
     attributes::attributes,
-    limits::{Budget, MAX_ATTRIBUTES, MAX_DECODED_SPAN_BYTES, MAX_EVENTS, MAX_SPANS},
+    limits::{Budget, DecodeLimits},
 };
 use crate::{
-    DecodeError, Shared,
-    normalize::{CLAUDE_CODE_AGENT, CLAUDE_CODE_SCOPE, normalize},
+    Error, Shared,
+    normalize::{CLAUDE_CODE_EVENTS_SCOPE, CLAUDE_CODE_SCOPE, SpanContext, normalize},
 };
 
-pub(super) fn flatten(request: ExportTraceServiceRequest) -> Result<Vec<DecodedSpan>, DecodeError> {
-    let mut budget = Budget::new(MAX_DECODED_SPAN_BYTES);
+pub(super) fn flatten(
+    request: ExportTraceServiceRequest,
+    limits: DecodeLimits,
+) -> Result<Vec<DecodedSpan>, Error> {
+    flatten_with_budget(request, limits).map(|(spans, _)| spans)
+}
+
+pub(super) fn flatten_with_budget(
+    request: ExportTraceServiceRequest,
+    limits: DecodeLimits,
+) -> Result<(Vec<DecodedSpan>, Budget), Error> {
+    let mut budget = Budget::new(limits);
     let mut spans = Vec::new();
     for resource in request.resource_spans {
         append_resource(resource, &mut budget, &mut spans)?;
     }
-    Ok(spans)
+    Ok((spans, budget))
 }
 
 fn append_resource(
     resource: ResourceSpans,
     budget: &mut Budget,
     spans: &mut Vec<DecodedSpan>,
-) -> Result<(), DecodeError> {
+) -> Result<(), Error> {
     let attributes = Shared::new(attributes(
         resource
             .resource
@@ -47,19 +58,19 @@ fn append_scope(
     resource: &Shared<BTreeMap<String, String>>,
     budget: &mut Budget,
     spans: &mut Vec<DecodedSpan>,
-) -> Result<(), DecodeError> {
+) -> Result<(), Error> {
     let scope = scope_spans.scope.unwrap_or_default();
-    if scope.attributes.len() > MAX_ATTRIBUTES {
-        return Err(DecodeError::TooLarge);
+    if scope.attributes.len() > budget.limits.attributes {
+        return Err(Error::TooLarge);
     }
     budget.consume(scope.name.len() + scope.version.len())?;
     let scope_name: Shared<String> = scope.name.into();
     let scope_version: Shared<String> = scope.version.into();
     for span in scope_spans.spans {
-        if spans.len() >= MAX_SPANS {
-            return Err(DecodeError::TooLarge);
+        if spans.len() >= budget.limits.spans {
+            return Err(Error::TooLarge);
         }
-        validate_span(&span)?;
+        validate_span(&span, &budget.limits)?;
         budget.consume(
             span.name.len()
                 + span.trace_state.len()
@@ -85,7 +96,7 @@ fn valid_id(value: &[u8], length: usize) -> bool {
     value.len() == length && value.iter().any(|byte| *byte != 0)
 }
 
-fn validate_span(span: &Span) -> Result<(), DecodeError> {
+fn validate_span(span: &Span, limits: &DecodeLimits) -> Result<(), Error> {
     if !valid_id(&span.trace_id, 16)
         || !valid_id(&span.span_id, 8)
         || (!span.parent_span_id.is_empty() && !valid_id(&span.parent_span_id, 8))
@@ -97,21 +108,21 @@ fn validate_span(span: &Span) -> Result<(), DecodeError> {
             .iter()
             .any(|link| !valid_id(&link.trace_id, 16) || !valid_id(&link.span_id, 8))
     {
-        return Err(DecodeError::InvalidPayload);
+        return Err(Error::InvalidPayload);
     }
-    if span.events.len() > MAX_EVENTS
-        || span.links.len() > MAX_EVENTS
-        || span.attributes.len() > MAX_ATTRIBUTES
+    if span.events.len() > limits.events
+        || span.links.len() > limits.links
+        || span.attributes.len() > limits.attributes
         || span
             .links
             .iter()
-            .any(|link| link.attributes.len() > MAX_ATTRIBUTES)
+            .any(|link| link.attributes.len() > limits.attributes)
         || span
             .events
             .iter()
-            .any(|event| event.attributes.len() > MAX_ATTRIBUTES)
+            .any(|event| event.attributes.len() > limits.attributes)
     {
-        return Err(DecodeError::TooLarge);
+        return Err(Error::TooLarge);
     }
     Ok(())
 }
@@ -120,16 +131,40 @@ fn hex_bytes(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+pub(super) fn session_trace_id(session: &str) -> Vec<u8> {
+    Sha256::digest(format!("litellm.claude.session.v1\0{session}"))[..16].to_vec()
+}
+
 fn decoded_span(
     span: Span,
     resource_attributes: &Shared<BTreeMap<String, String>>,
     scope_name: &Shared<String>,
     scope_version: &Shared<String>,
     budget: &mut Budget,
-) -> Result<DecodedSpan, DecodeError> {
+) -> Result<DecodedSpan, Error> {
     let status = span.status.unwrap_or_default();
     let parent_span_id = hex_bytes(&span.parent_span_id);
-    let span_attributes = attributes(span.attributes, budget)?;
+    let mut span_attributes = attributes(span.attributes, budget)?;
+    let original_trace_id = hex_bytes(&span.trace_id);
+    let trace_id = if matches!(
+        scope_name.as_str(),
+        CLAUDE_CODE_SCOPE | CLAUDE_CODE_EVENTS_SCOPE
+    ) && resource_attributes
+        .get("lens.session.capture")
+        .is_some_and(|value| value == "true")
+        && let Some(session) = span_attributes
+            .get("session.id")
+            .filter(|value| !value.is_empty())
+    {
+        let trace_id = hex_bytes(&session_trace_id(session));
+        let actor = span_attributes.get("agent_id").unwrap_or(session).clone();
+        budget.consume(original_trace_id.len() + actor.len() + 256)?;
+        span_attributes.insert("lens.original_trace_id".to_owned(), original_trace_id);
+        span_attributes.insert("gen_ai.agent.id".to_owned(), actor);
+        trace_id
+    } else {
+        original_trace_id
+    };
     let events = span
         .events
         .into_iter()
@@ -140,44 +175,47 @@ fn decoded_span(
                 attributes: attributes(event.attributes, budget)?,
             })
         })
-        .collect::<Result<Vec<_>, DecodeError>>()?;
-    let normalization = normalize(
-        scope_name.as_ref(),
-        &span.name,
-        &parent_span_id,
-        &span_attributes,
-        &events,
-    )?;
-    let resource_agent_name = resource_attributes
-        .get("gen_ai.agent.name")
-        .filter(|name| !name.is_empty());
-    let agent_name = match (resource_agent_name, normalization.span.agent_name.as_str()) {
-        (Some(name), "") => name.clone(),
-        (Some(name), "hermes-agent") if scope_name.as_ref() == "hermes-otel-plugin" => name.clone(),
-        (Some(name), CLAUDE_CODE_AGENT) if scope_name.as_ref() == CLAUDE_CODE_SCOPE => name.clone(),
-        (None, CLAUDE_CODE_AGENT) if scope_name.as_ref() == CLAUDE_CODE_SCOPE => {
-            resource_attributes
-                .get("service.name")
-                .filter(|name| !name.is_empty())
-                .map_or_else(|| CLAUDE_CODE_AGENT.to_owned(), Clone::clone)
-        }
-        (_, name) => name.to_owned(),
-    };
-    let normalized = crate::normalize::NormalizedSpan {
-        agent_name,
-        ..normalization.span
-    };
+        .collect::<Result<Vec<_>, Error>>()?;
+    let normalization = normalize(&SpanContext {
+        scope: scope_name.as_ref(),
+        name: &span.name,
+        parent_span_id: &parent_span_id,
+        attributes: &span_attributes,
+        events: &events,
+        resource_attributes: resource_attributes.as_ref(),
+    })?;
+    let normalized = normalization.span;
     budget.consume(
         normalized.input.len()
             + normalized.output.len()
-            + normalized.agent_name.len()
-            + normalized.framework.len()
-            + normalized.litellm_request_id.len()
-            + normalized.model.len()
+            + normalized.agent_name.as_ref().map_or(0, String::len)
+            + normalized
+                .framework
+                .as_ref()
+                .map_or(0, |integration| match integration {
+                    crate::Integration::Other(name) => name.len(),
+                    _ => 0,
+                })
+            + normalized.agent_metadata.byte_len()
+            + normalized
+                .calls
+                .key_set()
+                .into_iter()
+                .flatten()
+                .map(|key| match key {
+                    crate::CallKey::LiteLlmRequest(id)
+                    | crate::CallKey::ProviderResponse(id)
+                    | crate::CallKey::ProviderRequest(id) => id.len() + size_of::<crate::CallKey>(),
+                    crate::CallKey::Transport | crate::CallKey::GatewayAttempt => {
+                        size_of::<crate::CallKey>()
+                    }
+                })
+                .sum::<usize>()
+            + normalized.model.as_ref().map_or(0, String::len)
             + normalization.display_name.as_ref().map_or(0, String::len),
     )?;
     Ok(DecodedSpan {
-        trace_id: hex_bytes(&span.trace_id),
+        trace_id,
         span_id: hex_bytes(&span.span_id),
         parent_span_id,
         trace_state: span.trace_state,

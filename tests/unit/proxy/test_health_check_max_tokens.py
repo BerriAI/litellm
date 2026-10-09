@@ -1,7 +1,10 @@
+import asyncio
 import json
 import logging
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 import respx
 
@@ -11,8 +14,8 @@ from litellm.proxy import health_check as hc_module
 from litellm.proxy.health_check import (
     _is_strategy_router_deployment,
     _resolve_health_check_max_tokens,
-    _resolve_health_check_mode,
-    _update_litellm_params_for_health_check,
+    resolve_health_check_mode,
+    update_litellm_params_for_health_check,
 )
 
 
@@ -26,7 +29,7 @@ async def test_update_litellm_params_max_tokens_default(monkeypatch):
     model_info = {}
     litellm_params = {"model": "gpt-4"}
 
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
 
     assert updated_params["max_tokens"] == 16
 
@@ -39,7 +42,7 @@ async def test_update_litellm_params_max_tokens_custom():
     model_info = {"health_check_max_tokens": 5}
     litellm_params = {"model": "gpt-4"}
 
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
 
     assert updated_params["max_tokens"] == 5
 
@@ -52,7 +55,7 @@ async def test_update_litellm_params_max_tokens_wildcard():
     model_info = {}
     litellm_params = {"model": "openai/*"}
 
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
 
     assert "max_tokens" not in updated_params
 
@@ -102,7 +105,7 @@ async def test_background_health_check_max_tokens_env_var(monkeypatch):
     model_info = {}
     litellm_params = {"model": "azure/gpt-4"}
 
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
 
     assert updated_params["max_tokens"] == 10
 
@@ -118,7 +121,7 @@ async def test_per_model_overrides_global_env_var(monkeypatch):
     model_info = {"health_check_max_tokens": 5}
     litellm_params = {"model": "azure/gpt-4"}
 
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
 
     assert updated_params["max_tokens"] == 5
 
@@ -133,7 +136,7 @@ async def test_global_env_var_applies_to_wildcard_models(monkeypatch):
     model_info = {}
     litellm_params = {"model": "openai/*"}
 
-    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated_params = update_litellm_params_for_health_check(model_info, litellm_params)
 
     assert updated_params["max_tokens"] == 15
 
@@ -184,12 +187,12 @@ async def test_background_split_env_reasoning_vs_non_reasoning(monkeypatch):
     litellm_params = {"model": "azure/gpt-4"}
 
     with patch.object(hc_module.litellm, "supports_reasoning", return_value=False):
-        updated = _update_litellm_params_for_health_check(model_info, litellm_params)
+        updated = update_litellm_params_for_health_check(model_info, litellm_params)
         assert updated["max_tokens"] == 16
 
     litellm_params2 = {"model": "openai/o1"}
     with patch.object(hc_module.litellm, "supports_reasoning", return_value=True):
-        updated2 = _update_litellm_params_for_health_check(model_info, litellm_params2)
+        updated2 = update_litellm_params_for_health_check(model_info, litellm_params2)
         assert updated2["max_tokens"] == 50
 
 
@@ -202,7 +205,7 @@ async def test_reasoning_env_precedence_over_global(monkeypatch):
     litellm_params = {"model": "openai/gpt-5.4"}
 
     with patch.object(hc_module.litellm, "supports_reasoning", return_value=True):
-        updated = _update_litellm_params_for_health_check(model_info, litellm_params)
+        updated = update_litellm_params_for_health_check(model_info, litellm_params)
         assert updated["max_tokens"] == 20
 
 
@@ -215,7 +218,7 @@ async def test_non_reasoning_uses_global_when_reasoning_env_set(monkeypatch):
     litellm_params = {"model": "azure/gpt-4"}
 
     with patch.object(hc_module.litellm, "supports_reasoning", return_value=False):
-        updated = _update_litellm_params_for_health_check(model_info, litellm_params)
+        updated = update_litellm_params_for_health_check(model_info, litellm_params)
         assert updated["max_tokens"] == 10
 
 
@@ -250,7 +253,7 @@ def test_image_generation_mode_skips_max_tokens():
     model_info = {"mode": "image_generation"}
     litellm_params = {"model": "openai/dall-e-3", "api_key": "sk-test"}
 
-    updated = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated = update_litellm_params_for_health_check(model_info, litellm_params)
 
     assert "max_tokens" not in updated
     # connection-level params must still pass through unchanged
@@ -267,7 +270,7 @@ def test_health_check_max_tokens_value_is_ignored_for_non_chat_modes():
     model_info = {"mode": "image_generation", "health_check_max_tokens": 50}
     litellm_params = {"model": "openai/dall-e-3"}
 
-    updated = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated = update_litellm_params_for_health_check(model_info, litellm_params)
 
     assert "max_tokens" not in updated
 
@@ -277,7 +280,7 @@ def test_chat_mode_still_injects_max_tokens():
     model_info = {"mode": "chat"}
     litellm_params = {"model": "gpt-4"}
 
-    updated = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated = update_litellm_params_for_health_check(model_info, litellm_params)
 
     assert updated["max_tokens"] == 16
 
@@ -287,7 +290,7 @@ def test_no_mode_still_injects_max_tokens():
     model_info: dict = {}
     litellm_params = {"model": "gpt-4"}
 
-    updated = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated = update_litellm_params_for_health_check(model_info, litellm_params)
 
     assert updated["max_tokens"] == 16
 
@@ -305,7 +308,7 @@ def test_no_mode_still_injects_max_tokens():
 
 @pytest.mark.parametrize("mode", ["chat", "completion", "responses"])
 def test_chat_style_modes_inject_max_tokens(mode):
-    updated = _update_litellm_params_for_health_check({"mode": mode}, {"model": f"openai/dummy-{mode}"})
+    updated = update_litellm_params_for_health_check({"mode": mode}, {"model": f"openai/dummy-{mode}"})
 
     assert updated["max_tokens"] == 16
 
@@ -326,7 +329,7 @@ def test_chat_style_modes_inject_max_tokens(mode):
     ],
 )
 def test_non_chat_modes_skip_max_tokens(mode):
-    updated = _update_litellm_params_for_health_check({"mode": mode}, {"model": f"openai/dummy-{mode}"})
+    updated = update_litellm_params_for_health_check({"mode": mode}, {"model": f"openai/dummy-{mode}"})
 
     assert "max_tokens" not in updated
 
@@ -339,7 +342,7 @@ def test_explicit_override_true_forces_injection_outside_allowlist():
     }
     litellm_params = {"model": "openai/some-future-image-model"}
 
-    updated = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated = update_litellm_params_for_health_check(model_info, litellm_params)
 
     assert updated["max_tokens"] == 16
 
@@ -349,7 +352,7 @@ def test_explicit_override_false_suppresses_injection_inside_allowlist():
     model_info = {"mode": "chat", "health_check_supports_max_tokens": False}
     litellm_params = {"model": "openai/strict-schema-chat"}
 
-    updated = _update_litellm_params_for_health_check(model_info, litellm_params)
+    updated = update_litellm_params_for_health_check(model_info, litellm_params)
 
     assert "max_tokens" not in updated
 
@@ -358,29 +361,29 @@ def test_update_litellm_params_health_check_reasoning_effort():
     """model_info.health_check_reasoning_effort sets reasoning_effort for chat-style health checks."""
     model_info = {"health_check_reasoning_effort": "low"}
     litellm_params = {"model": "openai/gpt-5", "api_key": "x"}
-    out = _update_litellm_params_for_health_check(model_info, dict(litellm_params))
+    out = update_litellm_params_for_health_check(model_info, dict(litellm_params))
     assert out.get("reasoning_effort") == "low"
 
     model_info = {"mode": "chat", "health_check_reasoning_effort": "none"}
-    out = _update_litellm_params_for_health_check(model_info, {"model": "openai/gpt-5", "api_key": "x"})
+    out = update_litellm_params_for_health_check(model_info, {"model": "openai/gpt-5", "api_key": "x"})
     assert out.get("reasoning_effort") == "none"
 
     model_info = {"mode": "completion", "health_check_reasoning_effort": "low"}
-    out = _update_litellm_params_for_health_check(model_info, {"model": "openai/gpt-5", "api_key": "x"})
+    out = update_litellm_params_for_health_check(model_info, {"model": "openai/gpt-5", "api_key": "x"})
     assert out.get("reasoning_effort") == "low"
 
     model_info = {
         "health_check_reasoning_effort": {"effort": "none", "summary": "auto"},
     }
-    out = _update_litellm_params_for_health_check(model_info, {"model": "openai/gpt-5.1", "api_key": "x"})
+    out = update_litellm_params_for_health_check(model_info, {"model": "openai/gpt-5.1", "api_key": "x"})
     assert out.get("reasoning_effort") == {"effort": "none", "summary": "auto"}
 
     model_info = {"mode": "embedding", "health_check_reasoning_effort": "low"}
-    out = _update_litellm_params_for_health_check(model_info, {"model": "text-embedding-3-small", "api_key": "x"})
+    out = update_litellm_params_for_health_check(model_info, {"model": "text-embedding-3-small", "api_key": "x"})
     assert "reasoning_effort" not in out
 
     model_info = {}
-    out = _update_litellm_params_for_health_check(model_info, {"model": "openai/gpt-4o", "api_key": "x"})
+    out = update_litellm_params_for_health_check(model_info, {"model": "openai/gpt-4o", "api_key": "x"})
     assert "reasoning_effort" not in out
 
 
@@ -406,9 +409,9 @@ def test_update_litellm_params_health_check_reasoning_effort():
 )
 def test_bedrock_embedding_without_explicit_mode_skips_max_tokens(deployment_model, expected_request_model):
     """Embedding mode auto-detected from model cost map -> no max_tokens, provider pinned."""
-    assert _resolve_health_check_mode({}, {"model": deployment_model}) == "embedding"
+    assert resolve_health_check_mode({}, {"model": deployment_model}) == "embedding"
 
-    updated = _update_litellm_params_for_health_check({}, {"model": deployment_model})
+    updated = update_litellm_params_for_health_check({}, {"model": deployment_model})
 
     assert "max_tokens" not in updated
     assert updated["custom_llm_provider"] == "bedrock"
@@ -417,17 +420,17 @@ def test_bedrock_embedding_without_explicit_mode_skips_max_tokens(deployment_mod
 
 def test_resolve_health_check_mode_prefers_explicit_model_info_mode():
     """An operator-set mode wins over model-cost lookup."""
-    assert _resolve_health_check_mode({"mode": "chat"}, {"model": "bedrock/amazon.titan-embed-text-v2:0"}) == "chat"
+    assert resolve_health_check_mode({"mode": "chat"}, {"model": "bedrock/amazon.titan-embed-text-v2:0"}) == "chat"
 
 
 def test_resolve_health_check_mode_unknown_model_returns_none():
-    assert _resolve_health_check_mode({}, {"model": "bedrock/not-a-real-model-xyz"}) is None
-    assert _resolve_health_check_mode({}, {}) is None
+    assert resolve_health_check_mode({}, {"model": "bedrock/not-a-real-model-xyz"}) is None
+    assert resolve_health_check_mode({}, {}) is None
 
 
 def test_bedrock_chat_without_mode_still_injects_max_tokens_and_pins_provider():
     """Regression guard: chat-style Bedrock deployments keep max_tokens and get the provider pin."""
-    updated = _update_litellm_params_for_health_check(
+    updated = update_litellm_params_for_health_check(
         {}, {"model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"}
     )
 
@@ -443,7 +446,7 @@ def test_bedrock_prefix_strip_preserves_explicit_custom_llm_provider():
     not clobber a more specific one, otherwise a converse deployment would be
     probed against the Invoke endpoint and report a spurious failure.
     """
-    updated = _update_litellm_params_for_health_check(
+    updated = update_litellm_params_for_health_check(
         {},
         {
             "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -481,6 +484,113 @@ async def test_run_model_health_check_threads_resolved_mode_to_ahealth_check():
     assert probed_params["model"] == "amazon.titan-embed-text-v2:0"
 
 
+_MANTLE_CLAUDE_DEPLOYMENT_PARAMS = {
+    "model": "bedrock_mantle/anthropic.claude-haiku-4-5",
+    "api_key": "test-bearer",
+    "aws_region_name": "us-east-2",
+}
+
+
+def _mantle_anthropic_response() -> dict[str, object]:
+    return {
+        "id": "msg_health",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic.claude-haiku-4-5",
+        "content": [{"type": "text", "text": "pong"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 3, "output_tokens": 1},
+    }
+
+
+@pytest.mark.parametrize(
+    "deployment_model",
+    ["bedrock_mantle/anthropic.claude-haiku-4-5", "bedrock_mantle/anthropic.claude-opus-5-5"],
+)
+def test_mantle_claude_without_mode_resolves_to_anthropic_messages(deployment_model):
+    """Mantle only serves Claude over /anthropic/v1/messages, so that is the probe surface by default."""
+    assert resolve_health_check_mode({}, {"model": deployment_model}) == "anthropic_messages"
+
+    updated = update_litellm_params_for_health_check({}, {"model": deployment_model})
+
+    assert updated["max_tokens"] == 16
+    assert [message["role"] for message in updated["messages"]] == ["user"]
+
+
+def test_mantle_claude_with_explicit_provider_param_resolves_to_anthropic_messages():
+    assert (
+        resolve_health_check_mode({}, {"model": "anthropic.claude-haiku-4-5", "custom_llm_provider": "bedrock_mantle"})
+        == "anthropic_messages"
+    )
+
+
+def test_mantle_claude_explicit_chat_mode_wins_over_the_native_default():
+    assert resolve_health_check_mode({"mode": "chat"}, {"model": "bedrock_mantle/anthropic.claude-haiku-4-5"}) == "chat"
+
+
+@pytest.mark.parametrize(
+    "deployment_model",
+    [
+        "bedrock_mantle/openai.gpt-oss-120b",
+        "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "anthropic/claude-haiku-4-5",
+    ],
+)
+def test_native_messages_default_is_scoped_to_mantle_claude(deployment_model):
+    """Non-Claude Mantle ids and Claude on other providers keep their chat-completions probe."""
+    assert resolve_health_check_mode({}, {"model": deployment_model}) == "chat"
+
+
+@pytest.mark.asyncio
+async def test_run_model_health_check_probes_mantle_claude_over_messages(monkeypatch):
+    """The deployment the ticket describes, probed end to end through the proxy's health runner.
+
+    Before the fix the probe went to /v1/chat/completions, which Mantle answers with a
+    validation_error for Claude ids, so every such deployment showed unhealthy.
+    """
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        messages_route = respx_mock.post("https://bedrock-mantle.us-east-2.api.aws/anthropic/v1/messages").respond(
+            json=_mantle_anthropic_response()
+        )
+        chat_route = respx_mock.post("https://bedrock-mantle.us-east-2.api.aws/v1/chat/completions").respond(
+            status_code=400, json={"type": "error", "error": {"type": "validation_error"}}
+        )
+        result = await hc_module._run_model_health_check(
+            {"litellm_params": dict(_MANTLE_CLAUDE_DEPLOYMENT_PARAMS), "model_info": {}}
+        )
+
+    assert "error" not in result, result
+    assert chat_route.call_count == 0
+    assert messages_route.call_count == 1
+    sent = messages_route.calls.last.request
+    assert sent.headers["authorization"] == "Bearer test-bearer"
+    body = json.loads(sent.content)
+    assert body["model"] == "anthropic.claude-haiku-4-5"
+    assert body["max_tokens"] == 16
+    assert [message["role"] for message in body["messages"]] == ["user"]
+
+
+@pytest.mark.asyncio
+async def test_run_model_health_check_honors_an_explicit_chat_mode_on_mantle_claude(monkeypatch):
+    """Negative control: an operator who pins mode=chat still gets the chat completions probe.
+
+    Since #43646 Mantle serves Claude chat completions over its Messages endpoint as well, so
+    the wire no longer tells the two probes apart and the probe mode is read off the health call.
+    """
+    fake_ahealth_check = AsyncMock(return_value={})
+    monkeypatch.setattr(litellm, "ahealth_check", fake_ahealth_check)
+
+    await hc_module._run_model_health_check(
+        {"litellm_params": dict(_MANTLE_CLAUDE_DEPLOYMENT_PARAMS), "model_info": {"mode": "chat"}}
+    )
+
+    assert fake_ahealth_check.call_args.kwargs["mode"] == "chat"
+
+
 def test_autodetected_embedding_skips_reasoning_effort():
     """reasoning_effort must not leak into an embedding probe whose mode is auto-detected.
 
@@ -490,7 +600,7 @@ def test_autodetected_embedding_skips_reasoning_effort():
     Bedrock embedding probe, which embeddings reject as an unknown field. The mode
     is now resolved from the cost map, so embeddings are excluded.
     """
-    updated = _update_litellm_params_for_health_check(
+    updated = update_litellm_params_for_health_check(
         {"health_check_reasoning_effort": "low"},
         {"model": "bedrock/amazon.titan-embed-text-v2:0"},
     )
@@ -542,7 +652,7 @@ def test_health_check_params_merge_into_probe_params():
     """health_check_params reach the probe request for the deployment that declares them."""
     media_source = {"s3Location": {"uri": "s3://my-bucket/clip.mp4"}}
 
-    updated = _update_litellm_params_for_health_check(
+    updated = update_litellm_params_for_health_check(
         {"mode": "chat", "health_check_params": {"mediaSource": media_source}},
         {"model": "bedrock/us.twelvelabs.pegasus-1-2-v1:0"},
     )
@@ -567,7 +677,7 @@ def test_health_check_params_lose_to_dedicated_health_check_knobs():
         "health_check_reasoning_effort": "none",
     }
 
-    updated = _update_litellm_params_for_health_check(model_info, {"model": "openai/dummy"})
+    updated = update_litellm_params_for_health_check(model_info, {"model": "openai/dummy"})
 
     assert updated["max_tokens"] == 5
     assert updated["model"] == "openai/cheap-model"
@@ -577,7 +687,7 @@ def test_health_check_params_lose_to_dedicated_health_check_knobs():
 
 def test_health_check_params_lose_to_the_audio_speech_voice_knob():
     """health_check_voice still wins for audio_speech deployments."""
-    updated = _update_litellm_params_for_health_check(
+    updated = update_litellm_params_for_health_check(
         {
             "mode": "audio_speech",
             "health_check_params": {"voice": "sage", "response_format": "wav"},
@@ -597,7 +707,7 @@ def test_health_check_params_lose_to_the_audio_speech_voice_knob():
 def test_health_check_params_ignored_when_not_a_dict(bad_value, caplog):
     """A misconfigured health_check_params is skipped with a warning instead of breaking the probe."""
     with caplog.at_level(logging.WARNING, logger="litellm.proxy.health_check"):
-        updated = _update_litellm_params_for_health_check(
+        updated = update_litellm_params_for_health_check(
             {"mode": "chat", "health_check_params": bad_value},
             {"model": "openai/dummy"},
         )
@@ -609,7 +719,7 @@ def test_health_check_params_ignored_when_not_a_dict(bad_value, caplog):
 
 def test_health_check_params_apply_to_non_chat_modes():
     """Non-chat probes get health_check_params too, and still no max_tokens."""
-    updated = _update_litellm_params_for_health_check(
+    updated = update_litellm_params_for_health_check(
         {"mode": "embedding", "health_check_params": {"dimensions": 8}},
         {"model": "bedrock/amazon.titan-embed-text-v2:0"},
     )
@@ -624,7 +734,7 @@ async def _pegasus_health_check_request_body(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
 
-    litellm_params = _update_litellm_params_for_health_check(
+    litellm_params = update_litellm_params_for_health_check(
         model_info,
         {
             "model": "bedrock/us.twelvelabs.pegasus-1-2-v1:0",
@@ -1024,3 +1134,166 @@ def test_transitive_probe_expansion_terminates_on_a_router_cycle():
     probes = hc_module._dependency_deployments_to_probe(a_only, router.model_list, router)
 
     assert {d["model_info"]["id"] for d in probes} == {"b-1"}
+
+
+@pytest.mark.asyncio
+async def test_background_audio_speech_health_check_uses_model_info_voice(
+    httpx_transport: None, respx_mock: respx.MockRouter
+) -> None:
+    upstream: Final = respx_mock.post("https://speech.example/v1/audio/speech").respond(
+        content=b"audio",
+        headers={"content-type": "audio/mpeg"},
+    )
+
+    healthy, unhealthy, _ = await hc_module.perform_health_check(
+        [
+            {
+                "litellm_params": {
+                    "model": "openai/tts-1",
+                    "api_key": "fake-key",
+                    "api_base": "https://speech.example/v1",
+                },
+                "model_info": {"id": "speech", "mode": "audio_speech", "health_check_voice": "nova"},
+            }
+        ],
+        max_concurrency=1,
+    )
+
+    assert len(healthy) == 1
+    assert unhealthy == []
+    assert upstream.called
+    assert json.loads(upstream.calls.last.request.content)["voice"] == "nova"
+
+
+@pytest.mark.asyncio
+async def test_background_health_check_observes_the_concurrency_limit_and_queue(
+    httpx_transport: None, respx_mock: respx.MockRouter
+) -> None:
+    request_started: Final = asyncio.Queue[None]()
+    release: Final = asyncio.Event()
+
+    async def complete_request(_: httpx.Request) -> httpx.Response:
+        request_started.put_nowait(None)
+        await release.wait()
+        return httpx.Response(
+            200,
+            content=b"audio",
+            headers={"content-type": "audio/mpeg"},
+        )
+
+    upstream: Final = respx_mock.post("https://health.example/v1/audio/speech").mock(side_effect=complete_request)
+    model_list: Final = [
+        {
+            "litellm_params": {
+                "model": "openai/tts-1",
+                "api_key": "fake-key",
+                "api_base": "https://health.example/v1",
+            },
+            "model_info": {"id": f"audio-{index}", "mode": "audio_speech"},
+        }
+        for index in range(10)
+    ]
+    tasks_before: Final = len(asyncio.all_tasks())
+    perform_task: Final = asyncio.create_task(hc_module.perform_health_check(model_list, max_concurrency=2))
+
+    try:
+        await asyncio.wait_for(request_started.get(), timeout=1)
+        await asyncio.wait_for(request_started.get(), timeout=1)
+        for _ in range(20):
+            await asyncio.sleep(0)
+        extra_requests_started: Final = request_started.qsize()
+        tasks_while_blocked: Final = len(asyncio.all_tasks()) - tasks_before
+    finally:
+        release.set()
+    healthy, unhealthy, _ = await perform_task
+
+    assert extra_requests_started == 0
+    assert tasks_while_blocked <= 5
+    assert upstream.call_count == 10
+    assert len(healthy) == 10
+    assert unhealthy == []
+
+
+@pytest.mark.asyncio
+async def test_background_health_check_timeout_marks_a_blocked_provider_unhealthy(
+    httpx_transport: None, respx_mock: respx.MockRouter
+) -> None:
+    never_release: Final = asyncio.Event()
+    request_started: Final = asyncio.Event()
+
+    async def blocked_response(_: httpx.Request) -> httpx.Response:
+        request_started.set()
+        await never_release.wait()
+        return httpx.Response(200, content=b"audio", headers={"content-type": "audio/mpeg"})
+
+    respx_mock.post("https://health.example/v1/audio/speech").mock(side_effect=blocked_response)
+    model_list: Final = [
+        {
+            "litellm_params": {
+                "model": "openai/tts-1",
+                "api_key": "fake-key",
+                "api_base": "https://health.example/v1",
+            },
+            "model_info": {"id": "blocked", "mode": "audio_speech", "health_check_timeout": 2},
+        }
+    ]
+
+    healthy, unhealthy, _ = await asyncio.wait_for(
+        hc_module.perform_health_check(model_list),
+        timeout=4,
+    )
+
+    assert request_started.is_set()
+    assert unhealthy[0]["error"] == "Timeout exceeded"
+    assert healthy == []
+    assert len(unhealthy) == 1
+    assert unhealthy[0]["model"] == "openai/tts-1"
+
+
+@pytest.mark.asyncio
+async def test_background_health_check_timeout_does_not_cancel_a_sibling(
+    httpx_transport: None, respx_mock: respx.MockRouter
+) -> None:
+    never_release: Final = asyncio.Event()
+    slow_request_started: Final = asyncio.Event()
+
+    async def blocked_response(_: httpx.Request) -> httpx.Response:
+        slow_request_started.set()
+        await never_release.wait()
+        return httpx.Response(200, content=b"audio", headers={"content-type": "audio/mpeg"})
+
+    respx_mock.post("https://slow.example/v1/audio/speech").mock(side_effect=blocked_response)
+    fast_upstream: Final = respx_mock.post("https://fast.example/v1/audio/speech").respond(
+        content=b"audio",
+        headers={"content-type": "audio/mpeg"},
+    )
+    model_list: Final = [
+        {
+            "litellm_params": {
+                "model": "openai/tts-1",
+                "api_key": "fake-key",
+                "api_base": "https://slow.example/v1",
+            },
+            "model_info": {"id": "slow", "mode": "audio_speech", "health_check_timeout": 1},
+        },
+        {
+            "litellm_params": {
+                "model": "openai/tts-1",
+                "api_key": "fake-key",
+                "api_base": "https://fast.example/v1",
+            },
+            "model_info": {"id": "fast", "mode": "audio_speech", "health_check_timeout": 2},
+        },
+    ]
+
+    healthy, unhealthy, _ = await asyncio.wait_for(
+        hc_module.perform_health_check(model_list, max_concurrency=1),
+        timeout=4,
+    )
+    healthy_model_ids: Final = {endpoint["model_id"] for endpoint in healthy}
+    unhealthy_model_ids: Final = {endpoint["model_id"] for endpoint in unhealthy}
+
+    assert slow_request_started.is_set()
+    assert fast_upstream.called
+    assert healthy_model_ids == {"fast"}
+    assert unhealthy_model_ids == {"slow"}

@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Protocol
 
+from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
+
 from litellm.types.utils import LlmProviders
 
 
@@ -87,6 +89,12 @@ def azure_ptu_capacity(model: str) -> PTUCapacity | None:
     return AZURE_PTU_CAPACITY.get(name) or AZURE_PTU_CAPACITY.get(_VERSION_SUFFIX.sub("", name))
 
 
+def is_str_keyed_mapping(
+    value: object,
+) -> TypeIs[Mapping[str, object]]:  # guard-ok: model_info and litellm_params are str-keyed config objects
+    return isinstance(value, Mapping)
+
+
 def deployment_ptu_capacity(deployment: Mapping[str, object]) -> PTUCapacity | None:
     """The sizing row a deployment resolves to: ``model_info.base_model`` first, since an
     Azure deployment name is arbitrary, then ``litellm_params.model``."""
@@ -95,8 +103,8 @@ def deployment_ptu_capacity(deployment: Mapping[str, object]) -> PTUCapacity | N
     candidates: Final = tuple(
         value
         for value in (
-            model_info.get("base_model") if isinstance(model_info, Mapping) else None,
-            litellm_params.get("model") if isinstance(litellm_params, Mapping) else None,
+            model_info.get("base_model") if is_str_keyed_mapping(model_info) else None,
+            litellm_params.get("model") if is_str_keyed_mapping(litellm_params) else None,
         )
         if isinstance(value, str) and value
     )
@@ -107,7 +115,7 @@ def is_azure_deployment(deployment: Mapping[str, object]) -> bool:
     """Whether ``litellm_params`` route this deployment to Azure OpenAI or Azure AI, by
     ``custom_llm_provider`` first and the ``model`` prefix otherwise."""
     litellm_params: Final = deployment.get("litellm_params")
-    if not isinstance(litellm_params, Mapping):
+    if not is_str_keyed_mapping(litellm_params):
         return False
     provider: Final = litellm_params.get("custom_llm_provider")
     if isinstance(provider, str):

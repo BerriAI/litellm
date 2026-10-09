@@ -1,10 +1,12 @@
 mod error;
 mod insert;
+mod migrate;
 mod read;
 
 pub use error::Error;
 pub use insert::{insert_compressed_rows, insert_encoded_rows};
-pub use read::{Parameter, execute_read};
+pub use migrate::{ClickHouseMigrate, execute_statement, storage_error};
+pub use read::{Parameter, Query, READ_LIMITS, ReadLimits, execute_read, fetch, fetch_json};
 use url::Url;
 
 #[derive(Clone)]

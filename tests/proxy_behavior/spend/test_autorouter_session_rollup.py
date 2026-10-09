@@ -20,8 +20,10 @@ from typing_extensions import ReadOnly
 from litellm.proxy.db.autorouter_session_rollup import (
     AUTOROUTER_BENCHMARKS_SQL,
     UPSERT_AUTOROUTER_SESSION_SQL,
+    UPSERT_AUTOROUTER_USER_SESSION_SQL,
     AutoRouterTurnTransaction,
     flush_autorouter_turn_transactions,
+    write_autorouter_turn,
 )
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
 
@@ -53,6 +55,7 @@ async def _turn(
     baseline: "str | None" = None,
     estimated: bool = True,
     user_id: str = "",
+    token_counts_recorded: bool = True,
 ) -> None:
     touched: Final = 1 if (hit or ttl is not None or not covered) else 0
     await db.execute_raw(
@@ -77,6 +80,7 @@ async def _turn(
         spend if estimated else 0.0,
         saved if estimated else 0.0,
         user_id,
+        int(token_counts_recorded),
     )
 
 
@@ -644,9 +648,9 @@ async def test_a_cross_midnight_session_splits_its_money_by_request_day(db):
     key = f"k-{uuid.uuid4()}"
     router = f"auto-{uuid.uuid4()}"
     midnight = datetime(2026, 9, 2)
-    await _turn(db, key, "A", midnight - timedelta(minutes=10), router=router, spend=1.0, saved=7.0, user_id="u1")
-    await _turn(db, key, "A", midnight + timedelta(minutes=10), router=router, spend=1.0, saved=3.0, user_id="u1")
-    await _turn(db, key, "B", midnight + timedelta(days=1), router=router, spend=1.0, saved=11.0, user_id="u1")
+    await _turn(db, key, "A", midnight - timedelta(minutes=10), router=router, tokens=100, spend=1.0, saved=7.0, user_id="u1")
+    await _turn(db, key, "A", midnight + timedelta(minutes=10), router=router, tokens=200, spend=1.0, saved=3.0, user_id="u1")
+    await _turn(db, key, "B", midnight + timedelta(days=1), router=router, tokens=300, spend=1.0, saved=11.0, user_id="u1")
 
     assert (await _row(db, key, router=router))["saved_spend"] == 21.0
     days = await db.query_raw(
@@ -661,6 +665,7 @@ async def test_a_cross_midnight_session_splits_its_money_by_request_day(db):
         (selected,) = await _benchmark_rows(db, midnight, midnight + timedelta(days=1), key, user_id)
         assert (selected["sessions"], selected["session_turns"]) == (1, 3)
         assert (selected["turns"], selected["spend"], selected["saved_spend"]) == (1, 1.0, 3.0)
+        assert (selected["day_total_tokens"], selected["total_tokens"]) == (200, 600)
 
 
 async def test_a_router_type_change_within_a_day_keeps_each_types_money_apart(db):
@@ -684,3 +689,142 @@ async def test_a_router_type_change_mid_session_keeps_session_shape_with_the_ses
     assert (rows["complexity"]["sessions"], rows["complexity"]["session_turns"], rows["complexity"]["turns"]) == (1, 2, 1)
     assert (rows["quality"]["sessions"], rows["quality"]["session_turns"], rows["quality"]["turns"]) == (0, 0, 1)
     assert rows["quality"]["spend"] == 2.0
+
+
+@pytest.mark.parametrize("statement", [UPSERT_AUTOROUTER_SESSION_SQL, UPSERT_AUTOROUTER_USER_SESSION_SQL])
+async def test_a_sessionless_turn_writes_its_router_day_row_and_no_session_row(db, statement: str):
+    key = f"k-{uuid.uuid4()}"
+    router = f"auto-{uuid.uuid4()}"
+    for offset in range(2):
+        await write_autorouter_turn(
+            db,
+            AutoRouterTurnTransaction(
+                api_key=key,
+                user_id="u-sessionless",
+                session_id="",
+                router_name=router,
+                router_type="complexity",
+                model="A",
+                turn_at=T0 + timedelta(seconds=offset),
+                total_tokens=10,
+                token_counts_recorded=True,
+                spend=1.0,
+                saved_spend=2.0,
+                classifier_cost=0.1,
+                covered=True,
+                cache_hit=False,
+                cache_ttl_seconds=None,
+                cache_touched=True,
+                savings_estimated_turns=1,
+                savings_estimated_actual_spend=1.0,
+                savings_estimated_saved_spend=2.0,
+            ),
+            statement,
+        )
+
+    (day,) = await _days(db, key, router=router)
+    assert (day["turns"], day["spend"], day["saved_spend"], day["classifier_cost"]) == (2, 2.0, 4.0, 0.2)
+    assert day["day_total_tokens"] == 20
+    assert (day["sessions"], day["session_turns"]) == (0, 0)
+    for table in ("LiteLLM_AutoRouterSession", "LiteLLM_AutoRouterUserSession"):
+        assert await db.query_raw(f'SELECT 1 FROM "{table}" WHERE router_name = $1', router) == []
+
+
+@pytest.mark.parametrize("historical", [True, False])
+async def test_daily_token_coverage_stays_unknown_with_old_writers(db: Prisma, historical: bool) -> None:
+    key: Final = f"k-{uuid.uuid4()}"
+    router: Final = f"auto-{uuid.uuid4()}"
+    if historical:
+        await db.execute_raw(
+            'INSERT INTO "LiteLLM_AutoRouterDailySpend" '
+            '(date, api_key, user_id, router_name, router_type, turns, spend) '
+            "VALUES ($1, $2, 'u1', $3, 'complexity', 1, 1)",
+            T0.date().isoformat(), key, router,
+        )
+    await _turn(db, key, "A", T0, router=router, tokens=123, spend=1.0, user_id="u1")
+    if not historical:
+        await db.execute_raw(
+            'UPDATE "LiteLLM_AutoRouterDailySpend" SET turns = turns + 1, spend = spend + 1 '
+            'WHERE api_key = $1 AND router_name = $2', key, router,
+        )
+    for user_id in (None, "u1"):
+        (day,) = await _days(db, key, user_id, router)
+        assert (day["turns"], day["spend"], day["day_total_tokens"]) == (2, 2.0, None)
+
+
+@pytest.mark.parametrize("missing_first", [True, False])
+async def test_missing_usage_never_completes_daily_token_coverage(db: Prisma, missing_first: bool) -> None:
+    key: Final = f"k-{uuid.uuid4()}"
+    router: Final = f"auto-{uuid.uuid4()}"
+    for offset, recorded in enumerate((not missing_first, missing_first)):
+        await _turn(
+            db, key, "A", T0 + timedelta(seconds=offset), router=router,
+            tokens=100 if recorded else 0, spend=1.0, user_id="u1", token_counts_recorded=recorded,
+        )
+    for user_id in (None, "u1"):
+        (day,) = await _days(db, key, user_id, router)
+        assert (day["turns"], day["spend"], day["day_total_tokens"]) == (2, 2.0, None)
+
+
+async def test_router_day_money_reconciles_with_the_overall_daily_total_including_sessionless_requests(db):
+    from litellm.proxy.db.daily_spend_bulk_upsert import DAILY_SPEND_TABLES, build_bulk_upsert, merge_by_conflict_key
+
+    key = f"k-{uuid.uuid4()}"
+    router = f"auto-{uuid.uuid4()}"
+    requests = (("session-1", 0.25, 1.5), ("session-1", 0.5, 2.0), ("", 0.1, 0.25))
+    for offset, (session_id, spend, saved) in enumerate(requests):
+        await write_autorouter_turn(
+            db,
+            AutoRouterTurnTransaction(
+                api_key=key,
+                user_id="u1",
+                session_id=session_id,
+                router_name=router,
+                router_type="complexity",
+                model="A",
+                turn_at=T0 + timedelta(seconds=offset),
+                total_tokens=10,
+                spend=spend,
+                saved_spend=saved,
+                classifier_cost=0.0,
+                covered=True,
+                cache_hit=False,
+                cache_ttl_seconds=None,
+                cache_touched=True,
+                savings_estimated_turns=1,
+                savings_estimated_actual_spend=spend,
+                savings_estimated_saved_spend=saved,
+            ),
+        )
+    table = DAILY_SPEND_TABLES["user"]
+    statement, values = build_bulk_upsert(
+        table,
+        merge_by_conflict_key(
+            table,
+            tuple(
+                {
+                    "user_id": "u1",
+                    "date": T0.date().isoformat(),
+                    "api_key": key,
+                    "model": "A",
+                    "custom_llm_provider": "anthropic",
+                    "model_group": router,
+                    "spend": spend,
+                    "api_requests": 1,
+                    "successful_requests": 1,
+                    "autorouter_savings_spend": saved,
+                }
+                for _, spend, saved in requests
+            ),
+        ),
+    )
+    await db.execute_raw(statement, *values)
+
+    (overall,) = await db.query_raw(
+        'SELECT SUM(autorouter_savings_spend)::float8 AS saved FROM "LiteLLM_DailyUserSpend" WHERE date = $1 AND api_key = $2',
+        T0.date().isoformat(),
+        key,
+    )
+    (row,) = await _days(db, key, router=router)
+    assert overall["saved"] == row["saved_spend"] == pytest.approx(3.75)
+    assert (row["turns"], row["spend"], row["sessions"], row["session_turns"]) == (3, pytest.approx(0.85), 1, 2)

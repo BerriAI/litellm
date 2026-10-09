@@ -16,15 +16,16 @@ from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
 import litellm
+from litellm.constants import SERVER_STREAMING_CLASSIFICATION_KEY, SERVER_STREAMING_CLASSIFICATION_MARKER
 from litellm.proxy._types import AddTeamCallback, ProxyException, TeamCallbackMetadata, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import (
     KeyAndTeamLoggingSettings,
     LiteLLMProxyRequestSetup,
     _apply_credential_overrides_from_model_config,
     _extract_credential_from_entry,
-    _get_dynamic_logging_metadata,
+    get_dynamic_logging_metadata,
     _get_enforced_params,
-    _get_metadata_variable_name,
+    get_metadata_variable_name,
     _match_and_track_policies,
     _promoted_trace_control_fields,
     _resolve_credential_from_model_config,
@@ -84,45 +85,45 @@ class TestGetMetadataVariableName:
 
     def test_returns_litellm_metadata_for_thread_routes(self):
         request = self._make_request("/v1/threads/thread_123/messages")
-        assert _get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request) == "litellm_metadata"
 
     def test_returns_litellm_metadata_for_assistant_routes(self):
         request = self._make_request("/v1/assistants/asst_123")
-        assert _get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request) == "litellm_metadata"
 
     def test_returns_litellm_metadata_for_batches_route(self):
         request = self._make_request("/v1/batches")
-        assert _get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request) == "litellm_metadata"
 
     def test_returns_litellm_metadata_for_messages_route(self):
         request = self._make_request("/v1/messages")
-        assert _get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request) == "litellm_metadata"
 
     def test_returns_litellm_metadata_for_files_route(self):
         request = self._make_request("/v1/files")
-        assert _get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request) == "litellm_metadata"
 
     def test_returns_metadata_for_chat_completions(self):
         request = self._make_request("/chat/completions")
-        assert _get_metadata_variable_name(request) == "metadata"
+        assert get_metadata_variable_name(request) == "metadata"
 
     def test_returns_metadata_for_completions(self):
         request = self._make_request("/v1/completions")
-        assert _get_metadata_variable_name(request) == "metadata"
+        assert get_metadata_variable_name(request) == "metadata"
 
     def test_returns_metadata_for_embeddings(self):
         request = self._make_request("/v1/embeddings")
-        assert _get_metadata_variable_name(request) == "metadata"
+        assert get_metadata_variable_name(request) == "metadata"
 
     def test_returns_litellm_metadata_for_bedrock_invoke(self):
         # GH#30629: bedrock passthrough must use litellm_metadata
         # to prevent key-level tags from leaking into provider body
         request = self._make_request("/bedrock/model/us.anthropic.claude-sonnet-4-6/invoke")
-        assert _get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request) == "litellm_metadata"
 
     def test_returns_litellm_metadata_for_bedrock_converse(self):
         request = self._make_request("/bedrock/model/us.anthropic.claude-sonnet-4-6/converse")
-        assert _get_metadata_variable_name(request) == "litellm_metadata"
+        assert get_metadata_variable_name(request) == "litellm_metadata"
 
 
 def test_get_enforced_params_for_service_account_settings():
@@ -850,8 +851,13 @@ def test_initial_snapshot_refresh_clears_a_previous_guardrail_checkpoint() -> No
     from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
 
     logging_obj: Final = Logging(
-        model="test-model", messages=[], stream=False, call_type="acompletion",
-        start_time=datetime.now(), litellm_call_id="new-request", function_id="new-request",
+        model="test-model",
+        messages=[],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.now(),
+        litellm_call_id="new-request",
+        function_id="new-request",
     )
     logging_obj.shadow_eval_request_snapshot = GuardrailRequestSnapshot.capture(
         {"messages": [{"role": "user", "content": "previous request"}]},
@@ -902,7 +908,7 @@ async def test_post_guardrail_snapshot_preserves_logging_only_masking_in_spend_l
     monkeypatch: pytest.MonkeyPatch, pre_call_ran: bool
 ) -> None:
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.proxy.guardrails.guardrail_hooks.presidio import _OPTIONAL_PresidioPIIMasking
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import OPTIONAL_PresidioPIIMasking
     from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
     from litellm.proxy.spend_tracking.spend_tracking_utils import _get_proxy_server_request_for_spend_logs_payload
 
@@ -913,24 +919,34 @@ async def test_post_guardrail_snapshot_preserves_logging_only_masking_in_spend_l
     }
     data: Final = {"messages": messages, "metadata": metadata, "proxy_server_request": {}}
     logging_obj: Final = Logging(
-        model="test-model", messages=messages, stream=False, call_type="acompletion",
-        start_time=datetime.now(), litellm_call_id="mask-spend", function_id="mask-spend", kwargs=data,
+        model="test-model",
+        messages=messages,
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.now(),
+        litellm_call_id="mask-spend",
+        function_id="mask-spend",
+        kwargs=data,
     )
     data["litellm_logging_obj"] = logging_obj
     refresh_proxy_server_request_body_snapshot(data, guardrails_applied=True)
     logging_obj.update_messages(messages)
     snapshot: Final = logging_obj.shadow_eval_request_snapshot
     assert (snapshot is not None) is pre_call_ran
-    guardrail: Final = _OPTIONAL_PresidioPIIMasking(
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
         mock_testing=True, logging_only=True, mock_redacted_text={"text": "email [EMAIL]", "items": []}
     )
 
     kwargs, _ = await guardrail.async_logging_hook(
         kwargs=logging_obj.model_call_details, result=None, call_type="acompletion"
     )
-    stored: Final = json.loads(_get_proxy_server_request_for_spend_logs_payload(
-        metadata={}, litellm_params=kwargs["litellm_params"], kwargs=kwargs,
-    ))
+    stored: Final = json.loads(
+        _get_proxy_server_request_for_spend_logs_payload(
+            metadata={},
+            litellm_params=kwargs["litellm_params"],
+            kwargs=kwargs,
+        )
+    )
 
     assert kwargs["messages"] == [{"role": "user", "content": "email [EMAIL]"}]
     assert stored["messages"] == kwargs["messages"]
@@ -1052,6 +1068,66 @@ async def test_add_litellm_data_to_request_strips_string_encoded_admin_injection
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "forged_field,forged_value",
+    [
+        ("fallback_depth", 1),
+        ("fallback_depth", True),
+        ("_target_order", 2),
+        ("attempted_targets", ["forged"]),
+    ],
+)
+async def test_add_litellm_data_to_request_strips_forged_fallback_hop_state(
+    forged_field: str, forged_value: object
+) -> None:
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/responses"
+    request_mock.url.__str__.return_value = "http://localhost/v1/responses"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "hop", "input": "hello", forged_field: forged_value},
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert forged_field not in updated
+    assert forged_field not in updated["proxy_server_request"]["body"]
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_keeps_the_request_max_fallbacks_cap() -> None:
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/responses"
+    request_mock.url.__str__.return_value = "http://localhost/v1/responses"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "hop", "input": "hello", "max_fallbacks": 0},
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated["max_fallbacks"] == 0
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_strips_user_control_fields():
     """Strip untrusted proxy-control fields before guardrails, logging, and headers read metadata."""
     request_mock = MagicMock(spec=Request)
@@ -1089,6 +1165,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "messages": [{"role": "user", "content": "hello"}],
         "mock_response": "free response",
         "mock_tool_calls": [{"id": "call_1"}],
+        "is_streaming_request": "caller-value",
         "disable_global_guardrails": True,
         "enable_prompt_caching": True,
         "routing_decision": {"cause": "forged", "routed_model": "spoofed"},
@@ -1114,6 +1191,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
     assert "enable_prompt_caching" not in updated
     assert "routing_decision" not in updated
     assert "litellm_gateway_injected_cache" not in updated
+    assert updated["is_streaming_request"] == "caller-value"
     assert "weights" not in updated
     assert "_router_weights" not in updated
     assert "weights" not in updated["proxy_server_request"]["body"]
@@ -1968,7 +2046,7 @@ async def test_add_litellm_data_to_request_audio_transcription_multipart():
     request_mock.query_params = {}
     request_mock.headers = {
         "Content-Type": "multipart/form-data",
-        "Authorization": "Bearer sk-1234",
+        "Authorization": "Bearer sk-9876",
     }
     request_mock.client = MagicMock()
     request_mock.client.host = "127.0.0.1"
@@ -2419,7 +2497,7 @@ def test_get_dynamic_logging_metadata_with_arize_team_logging():
     mock_proxy_config = MagicMock()
 
     # Call the function
-    result = _get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict, proxy_config=mock_proxy_config)
+    result = get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict, proxy_config=mock_proxy_config)
 
     # Verify the result
     assert result is not None
@@ -2466,7 +2544,7 @@ def test_get_dynamic_logging_metadata_ignores_env_reference_from_key_metadata(
         team_metadata={},
     )
 
-    result = _get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict, proxy_config=MagicMock())
+    result = get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict, proxy_config=MagicMock())
 
     assert result is None
 
@@ -2984,7 +3062,7 @@ async def test_add_litellm_metadata_from_request_headers():
     Relevant issue: https://github.com/BerriAI/litellm/issues/14008
     """
     # Set up test logger
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     test_logger = TestCustomLogger()
     original_callbacks = litellm.callbacks
     litellm.callbacks = [test_logger]
@@ -3095,7 +3173,7 @@ async def test_anthropic_messages_standard_logging_object_matches_fixture():
     Regression: /v1/messages calls routed to non-Anthropic providers should keep
     call_type=anthropic_messages in standard logging payloads.
     """
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     test_logger = TestCustomLogger()
     original_callbacks = litellm.callbacks
     litellm.callbacks = [test_logger]
@@ -3674,6 +3752,106 @@ def test_add_litellm_metadata_from_request_headers_explicit_trace_id_beats_trace
     assert data["litellm_session_id"] == "explicit-trace-id-value"
 
 
+def test_add_litellm_metadata_from_request_headers_body_trace_id_beats_traceparent():
+    headers = {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
+    data = {"metadata": {"trace_id": "caller-chosen-trace-id"}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["trace_id"] == "caller-chosen-trace-id"
+    assert "litellm_trace_id" not in data
+
+
+def test_add_litellm_metadata_from_request_headers_body_session_id_beats_baggage():
+    headers = {"baggage": "session.id=baggage-session-42"}
+    data = {"metadata": {"session_id": "caller-chosen-session-id"}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["session_id"] == "caller-chosen-session-id"
+    assert "litellm_session_id" not in data
+
+
+def test_add_litellm_metadata_from_request_headers_body_steering_is_per_field():
+    headers = {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        "baggage": "session.id=baggage-session-42",
+    }
+    data = {"metadata": {"trace_id": "caller-chosen-trace-id"}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["trace_id"] == "caller-chosen-trace-id"
+    assert data["litellm_session_id"] == "baggage-session-42"
+
+
+def test_add_litellm_metadata_from_request_headers_litellm_metadata_steering_honoured():
+    headers = {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}
+    data = {"litellm_metadata": {"trace_id": "caller-chosen-trace-id"}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="litellm_metadata"
+    )
+    assert data["litellm_metadata"]["trace_id"] == "caller-chosen-trace-id"
+    assert "litellm_trace_id" not in data
+
+
+@pytest.mark.parametrize("empty_session_id", ["", None])
+def test_add_litellm_metadata_from_request_headers_empty_body_session_id_falls_back_to_baggage(
+    empty_session_id: str | None,
+):
+    headers = {"baggage": "session.id=baggage-session-42"}
+    data = {"metadata": {"session_id": empty_session_id}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["litellm_session_id"] == "baggage-session-42"
+    assert data["metadata"]["session_id"] == "baggage-session-42"
+
+
+@pytest.mark.parametrize("field", ["trace_id", "session_id"])
+def test_add_litellm_metadata_from_request_headers_promoted_metadata_beats_headers(field: str):
+    headers = {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        "baggage": "session.id=baggage-session-42",
+    }
+    data = {"metadata": {field: "caller-chosen"}, "litellm_metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="litellm_metadata"
+    )
+    assert field not in data["litellm_metadata"]
+    assert f"litellm_{field}" not in data
+
+
+def test_add_litellm_metadata_from_request_headers_equal_ids_still_stamp_root_fields():
+    headers = {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        "baggage": "session.id=matching-session-42",
+    }
+    data = {
+        "metadata": {"trace_id": "4bf92f3577b34da6a3ce929d0e0e4736", "session_id": "matching-session-42"},
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["litellm_trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
+    assert data["litellm_session_id"] == "matching-session-42"
+    assert data["metadata"]["trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
+    assert data["metadata"]["session_id"] == "matching-session-42"
+
+
+@pytest.mark.parametrize("non_string_session_id", [4815162342, True, {"session": "nested"}])
+def test_add_litellm_metadata_from_request_headers_non_string_body_session_id_falls_back_to_baggage(
+    non_string_session_id: object,
+):
+    headers = {"baggage": "session.id=header-session-42"}
+    data = {"metadata": {"session_id": non_string_session_id}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["litellm_session_id"] == "header-session-42"
+    assert data["metadata"]["session_id"] == "header-session-42"
+
+
 def _otel_span_with_trace_id(trace_id: int) -> NonRecordingSpan:
     return NonRecordingSpan(SpanContext(trace_id=trace_id, span_id=0x00F067AA0BA902B7, is_remote=False))
 
@@ -4008,7 +4186,7 @@ async def test_team_guardrails_append_to_key_guardrails():
         team_metadata={"guardrails": ["team-guardrail-1", "key-guardrail-1"]},
     )
 
-    with patch("litellm.proxy.utils._premium_user_check"):
+    with patch("litellm.proxy.utils.premium_user_check"):
         updated_data = await add_litellm_data_to_request(
             data=data,
             request=request_mock,
@@ -4057,7 +4235,7 @@ async def test_request_guardrails_do_not_override_key_guardrails():
         "guardrails": [],
     }
 
-    with patch("litellm.proxy.utils._premium_user_check"):
+    with patch("litellm.proxy.utils.premium_user_check"):
         updated_data_empty = await add_litellm_data_to_request(
             data=data_with_empty,
             request=request_mock,
@@ -4103,7 +4281,7 @@ async def test_project_guardrails_merge_with_key_and_team():
         project_metadata={"guardrails": ["project-guardrail-1", "team-guardrail-1"]},
     )
 
-    with patch("litellm.proxy.utils._premium_user_check"):
+    with patch("litellm.proxy.utils.premium_user_check"):
         updated_data = await add_litellm_data_to_request(
             data=data,
             request=request_mock,
@@ -4152,7 +4330,7 @@ async def test_project_guardrails_only():
         project_metadata={"guardrails": ["project-guardrail-1", "project-guardrail-2"]},
     )
 
-    with patch("litellm.proxy.utils._premium_user_check"):
+    with patch("litellm.proxy.utils.premium_user_check"):
         updated_data = await add_litellm_data_to_request(
             data=data,
             request=request_mock,
@@ -4803,7 +4981,7 @@ async def test_bearer_token_not_in_debug_logs():
         "messages": [{"role": "user", "content": "hi"}],
     }
 
-    user_api_key_dict = UserAPIKeyAuth(api_key="sk-1234")
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-9876")
 
     # Capture all debug log output from the proxy logger
     log_capture = StringIO()
@@ -5459,7 +5637,7 @@ async def test_team_guardrail_merges_with_global_policy():
     attachment_registry._initialized = True
 
     try:
-        with patch("litellm.proxy.utils._premium_user_check"):
+        with patch("litellm.proxy.utils.premium_user_check"):
             await move_guardrails_to_metadata(
                 data=data,
                 _metadata_variable_name="metadata",
@@ -7127,7 +7305,7 @@ class TestPromotedTraceControlFields:
         )
 
     def test_returns_litellm_metadata_for_responses_route(self):
-        assert _get_metadata_variable_name(self._make_request("/v1/responses")) == "litellm_metadata"
+        assert get_metadata_variable_name(self._make_request("/v1/responses")) == "litellm_metadata"
 
     def test_promotes_trace_prefixed_and_allow_listed_fields(self):
         requester_metadata = {
@@ -8224,6 +8402,85 @@ async def test_missing_session_id_omit_keeps_client_supplied_session_id():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("path", "client_body"),
+    [
+        ("/v1/chat/completions", {"model": "gpt-4o", "messages": [], "metadata": {"session_id": ""}}),
+        ("/v1/responses", {"model": "gpt-4o", "input": "hi"}),
+    ],
+)
+async def test_missing_session_id_reject_accepts_baggage_session_id(path: str, client_body: dict[str, object]):
+    request = _request_for(path)
+    request.headers = {"baggage": "session.id=baggage-session-42"}
+
+    updated = await add_litellm_data_to_request(
+        data=client_body,
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": "reject"},
+    )
+
+    assert updated["litellm_session_id"] == "baggage-session-42"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/v1/responses", "/v1/messages"])
+@pytest.mark.parametrize("policy", [None, "reject", "generate"])
+async def test_promoted_caller_trace_ids_beat_traceparent_and_baggage(path: str, policy: str | None):
+    request = _request_for(path)
+    request.headers = {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        "baggage": "session.id=baggage-session-42",
+    }
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "metadata": {"trace_id": "caller-trace", "session_id": "caller-session"}},
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": policy} if policy else {},
+    )
+
+    assert updated["litellm_metadata"]["trace_id"] == "caller-trace"
+    assert updated["litellm_metadata"]["session_id"] == "caller-session"
+
+
+@pytest.mark.asyncio
+async def test_missing_session_id_reject_ignores_requester_session_id_shadowed_by_empty_litellm_metadata():
+    with pytest.raises(ProxyException) as exc_info:
+        await add_litellm_data_to_request(
+            data={
+                "model": "gpt-4o",
+                "input": "hi",
+                "metadata": {"session_id": "caller-session"},
+                "litellm_metadata": {"session_id": ""},
+            },
+            request=_request_for("/v1/responses"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings={"missing_session_id": "reject"},
+        )
+    assert exc_info.value.code == "400"
+
+
+def test_add_litellm_metadata_from_request_headers_empty_litellm_metadata_field_falls_back_to_headers():
+    headers = {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        "baggage": "session.id=baggage-session-42",
+    }
+    data = {
+        "metadata": {"trace_id": "caller-trace", "session_id": "caller-session"},
+        "litellm_metadata": {"trace_id": "", "session_id": ""},
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="litellm_metadata"
+    )
+    assert data["litellm_trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
+    assert data["litellm_session_id"] == "baggage-session-42"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "client_body",
     [
         {"model": "gpt-4o", "messages": [], "litellm_session_id": "cust-sess-1"},
@@ -8339,6 +8596,91 @@ async def test_missing_session_id_generate_reuses_traceparent_trace_id():
 
     assert updated["metadata"]["session_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
     assert _spend_log_session_id(updated) == "4bf92f3577b34da6a3ce929d0e0e4736"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/v1/responses", "/v1/messages"])
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"},
+        {},
+    ],
+    ids=["with_traceparent", "no_traceparent"],
+)
+async def test_missing_session_id_generate_reuses_promoted_caller_trace_id(path: str, headers: dict[str, str]):
+    request = _request_for(path)
+    request.headers = headers
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "input": "hi", "metadata": {"trace_id": "caller-trace"}},
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": "generate"},
+    )
+
+    caller_trace_msg: Final = "generate must derive the session from the caller's un-promoted metadata.trace_id"
+    assert updated["litellm_session_id"] == "caller-trace", caller_trace_msg
+    assert updated["litellm_metadata"]["session_id"] == "caller-trace", caller_trace_msg
+    assert updated["litellm_metadata"][SESSION_ID_GENERATED_METADATA_KEY] is True, (
+        "the derived session id must still be marked generated"
+    )
+    assert _spend_log_session_id(updated, "litellm_metadata") == "caller-trace", (
+        "spend log and callback session ids must agree on the caller trace id"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["generate", "reject"])
+async def test_missing_session_id_policy_promotes_caller_session_to_root_field(policy: str):
+    """A caller-supplied usable session id satisfies the missing_session_id policies on
+    litellm_metadata routes (where it is not yet the managed metadata field) and must also
+    land on the root ``litellm_session_id`` field: consumers that read the root field
+    (router fallbacks, spend logs, sandbox reuse) otherwise mint a fresh uuid4 per request."""
+    request = _request_for("/v1/responses")
+
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-4o",
+            "input": "hi",
+            "litellm_trace_id": "root-trace-42",
+            "metadata": {"session_id": "caller-session-42"},
+        },
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": policy},
+    )
+
+    assert updated["litellm_trace_id"] == "root-trace-42"
+    assert updated["litellm_session_id"] == "caller-session-42"
+    assert updated["litellm_metadata"]["session_id"] == "caller-session-42"
+    assert SESSION_ID_GENERATED_METADATA_KEY not in updated["litellm_metadata"]
+
+
+@pytest.mark.asyncio
+async def test_missing_session_id_generate_ignores_non_string_caller_session_id():
+    """A non-string session id is not a usable session: the generate policy must fall through
+    to generation instead of letting an unusable value strand the root session field."""
+    request = _request_for("/v1/responses")
+
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-4o",
+            "input": "hi",
+            "litellm_trace_id": "root-trace-42",
+            "metadata": {"session_id": 4815162342},
+        },
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": "generate"},
+    )
+
+    assert updated["litellm_session_id"] == "root-trace-42"
+    assert updated["litellm_metadata"]["session_id"] == "root-trace-42"
+    assert updated["litellm_metadata"][SESSION_ID_GENERATED_METADATA_KEY] is True
 
 
 @pytest.mark.asyncio
@@ -8539,20 +8881,27 @@ async def test_mcp_credentials_only_removed_from_logging_copies(path: str, custo
     request.headers = Headers(request.headers)
     settings: Final = {"mcp_client_side_auth_header_name": custom_auth, "user_header_name": "x-user-id"}
     server: Final = MCPServer(
-        server_id="header-test", name="header-test", transport="http", url="https://example.com/mcp",
+        server_id="header-test",
+        name="header-test",
+        transport="http",
+        url="https://example.com/mcp",
         extra_headers=["x-service-token", "x-user-id"],
     )
     with (
         patch("litellm.proxy.proxy_server.general_settings", settings),
         patch.dict(
             "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.config_mcp_servers",
-            {"header-test": server}, clear=True,
+            {"header-test": server},
+            clear=True,
         ),
     ):
         updated: Final = await add_litellm_data_to_request(
             data={"model": "test-model", "messages": [{"role": "user", "content": "hello"}]},
-            request=request, user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
-            proxy_config=MagicMock(), general_settings=settings, version="test",
+            request=request,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings=settings,
+            version="test",
         )
     for header_dict in _all_header_dicts(updated, metadata_name):
         assert not any(value in json.dumps(header_dict) for value in secrets.values())
@@ -8572,7 +8921,10 @@ def test_signoz_callback_vars_are_scoped_to_the_signoz_callback():
         data=AddTeamCallback(
             callback_name="signoz",
             callback_type="success",
-            callback_vars={"signoz_ingestion_key": "team-key", "signoz_ingestion_endpoint": "https://ingest.eu.signoz.cloud:443"},
+            callback_vars={
+                "signoz_ingestion_key": "team-key",
+                "signoz_ingestion_endpoint": "https://ingest.eu.signoz.cloud:443",
+            },
         ),
         team_callback_settings_obj=None,
     )
@@ -8590,3 +8942,86 @@ def test_signoz_callback_vars_are_scoped_to_the_signoz_callback():
         team_callback_settings_obj=None,
     )
     assert under_other.callback_vars == {"langfuse_host": "https://cloud.langfuse.com"}
+
+
+def test_body_snapshot_excludes_the_server_streaming_marker() -> None:
+    from litellm.constants import SERVER_STREAMING_CLASSIFICATION_KEY, SERVER_STREAMING_CLASSIFICATION_MARKER
+    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
+
+    proxy_request: Final = {"body": {}}
+    data: Final = {
+        "messages": [{"role": "user", "content": "hi"}],
+        SERVER_STREAMING_CLASSIFICATION_KEY: SERVER_STREAMING_CLASSIFICATION_MARKER,
+        "proxy_server_request": proxy_request,
+    }
+
+    refresh_proxy_server_request_body_snapshot(data)
+
+    assert proxy_request == {"body": {"messages": [{"role": "user", "content": "hi"}]}}
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        SERVER_STREAMING_CLASSIFICATION_MARKER,
+        json.loads(json.dumps(SERVER_STREAMING_CLASSIFICATION_MARKER)),
+    ],
+    ids=["enum", "json-string"],
+)
+def test_body_snapshot_drops_only_the_marker_and_keeps_caller_value(marker: str) -> None:
+    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
+
+    marker_request: Final = {"body": {}}
+    marker_data: Final = {
+        "messages": [{"role": "user", "content": "hi"}],
+        SERVER_STREAMING_CLASSIFICATION_KEY: marker,
+        "proxy_server_request": marker_request,
+    }
+
+    refresh_proxy_server_request_body_snapshot(marker_data)
+
+    assert SERVER_STREAMING_CLASSIFICATION_KEY not in marker_request["body"], marker_request
+
+    caller_request: Final = {"body": {}}
+    caller_data: Final = {
+        "messages": [{"role": "user", "content": "hi"}],
+        SERVER_STREAMING_CLASSIFICATION_KEY: "caller-value",
+        "proxy_server_request": caller_request,
+    }
+
+    refresh_proxy_server_request_body_snapshot(caller_data)
+
+    assert caller_request["body"][SERVER_STREAMING_CLASSIFICATION_KEY] == "caller-value", caller_request
+def test_arize_otlp_protocol_on_a_key_logging_entry_reaches_the_destination(monkeypatch):
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.proxy.litellm_pre_call_utils import resolve_tenant_otel_destinations
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.setenv("ARIZE_ENDPOINT", "https://arize.internal.example/v1")
+    monkeypatch.delenv("ARIZE_HTTP_ENDPOINT", raising=False)
+    is_otel_v2_enabled.cache_clear()
+    try:
+        auth = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={
+                "logging": [
+                    {
+                        "callback_name": "arize",
+                        "callback_type": "success",
+                        "callback_vars": {
+                            "arize_space_id": "s",
+                            "arize_api_key": "k",
+                            "arize_otlp_protocol": "http/protobuf",
+                        },
+                    }
+                ]
+            },
+            team_metadata={},
+        )
+
+        destinations = resolve_tenant_otel_destinations(auth)
+
+        assert [d.protocol for d in destinations] == ["otlp_http"]
+        assert destinations[0].endpoint == "https://arize.internal.example/v1/traces"
+    finally:
+        is_otel_v2_enabled.cache_clear()

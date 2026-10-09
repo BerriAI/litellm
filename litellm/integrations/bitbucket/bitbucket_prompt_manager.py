@@ -94,9 +94,9 @@ class BitBucketTemplateManager:
 
         # Load prompts from BitBucket if prompt_id is provided
         if self.prompt_id:
-            self._load_prompt_from_bitbucket(self.prompt_id)
+            self.load_prompt_from_bitbucket(self.prompt_id)
 
-    def _load_prompt_from_bitbucket(self, prompt_id: str) -> None:
+    def load_prompt_from_bitbucket(self, prompt_id: str) -> None:
         """Load a specific .prompt file from BitBucket."""
         try:
             # Fetch the .prompt file from BitBucket
@@ -107,6 +107,8 @@ class BitBucketTemplateManager:
                 self.prompts[prompt_id] = template
         except Exception as e:
             raise Exception(f"Failed to load prompt '{prompt_id}' from BitBucket: {e}")
+
+    _load_prompt_from_bitbucket = load_prompt_from_bitbucket
 
     def _parse_prompt_file(self, content: str, prompt_id: str) -> BitBucketPromptTemplate:
         """Parse a .prompt file content and extract metadata and template."""
@@ -446,7 +448,7 @@ class BitBucketPromptManager(CustomPromptManagement):
         try:
             # Load the prompt from BitBucket if not already loaded
             if prompt_id not in self.prompt_manager.prompts:
-                self.prompt_manager._load_prompt_from_bitbucket(prompt_id)
+                self.prompt_manager.load_prompt_from_bitbucket(prompt_id)
 
             # Get the rendered prompt and metadata
             rendered_prompt, prompt_metadata = self.get_prompt_template(prompt_id, prompt_variables)

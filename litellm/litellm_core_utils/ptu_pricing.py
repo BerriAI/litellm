@@ -153,12 +153,6 @@ def _is_mapping(
     return isinstance(value, Mapping)
 
 
-def is_model_info_mapping(
-    value: object,
-) -> TypeIs[Mapping[str, object]]:  # guard-ok: model_info is a str-keyed JSON object from config.yaml or the db
-    return isinstance(value, Mapping)
-
-
 def parsed_ptu_shares(raw: object) -> Mapping[str, int] | None:
     """``ptu_shares`` as team id -> whole PTUs, else None when empty or any entry is unusable.
 
@@ -211,6 +205,11 @@ def declares_ptu(model_info: Mapping[str, object]) -> bool:
     return any(model_info.get(field) is not None for field in PTU_MODEL_INFO_FIELDS)
 
 
+def declares_ptu_shares(model_info: Mapping[str, object]) -> bool:
+    """Whether ``ptu_shares`` is set here, including a split too malformed to honour."""
+    return model_info.get("ptu_shares") is not None
+
+
 def ptu_config_error(model_info: Mapping[str, object], *, model_name: str | None = None) -> str | None:
     """Why this PTU configuration cannot be honoured, else None.
 
@@ -229,7 +228,7 @@ def ptu_config_error(model_info: Mapping[str, object], *, model_name: str | None
 
     has_count: Final = model_info.get("ptu_count") is not None
     has_rate: Final = model_info.get("cost_per_ptu_per_hour") is not None
-    has_shares: Final = model_info.get("ptu_shares") is not None
+    has_shares: Final = declares_ptu_shares(model_info)
     if not has_count and not has_rate and not has_shares:
         return None
     if not has_count and not has_rate:

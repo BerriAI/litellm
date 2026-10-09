@@ -1,16 +1,23 @@
 import { z } from "zod";
 import type { ClassifierType } from "./classifier_types";
 
-export const LAYA_MODELS = ["english", "multilingual", "typed-decisions"] as const;
+export const OSS_CLASSIFIER_MODELS = {
+  laya: ["english", "multilingual", "typed-decisions"],
+  bespoke: ["nimble-latest", "nimble", "bespokelabs/Bespoke-Nimble-9B"],
+} as const;
 
 const jevClassifierConfigFields = {
-  provider: z.preprocess((value) => (value === "typesafe" ? "jev" : value), z.enum(["jev", "laya"]).optional()),
+  provider: z.preprocess(
+    (value) => (value === "typesafe" ? "jev" : value),
+    z.enum(["jev", "laya", "bespoke"]).optional(),
+  ),
   model: z.string().trim().min(1).optional(),
   timeout_ms: z.number().int().positive().default(3000),
   instructions: z
     .string()
     .nullish()
-    .transform((value) => value ?? undefined),
+    .transform((value) => value ?? undefined)
+    .optional(),
   circuit_breaker_enabled: z.boolean().optional(),
   circuit_breaker_cooldown_seconds: z.number().finite().positive().optional(),
 };
@@ -19,16 +26,21 @@ export const jevClassifierConfigSchema = z
   .object(jevClassifierConfigFields)
   .transform((config) => ({
     ...config,
-    model: config.model ?? (config.provider === "laya" ? "english" : "jev-latest"),
+    model:
+      config.model ??
+      (config.provider && config.provider !== "jev" ? OSS_CLASSIFIER_MODELS[config.provider][0] : "jev-latest"),
   }))
-  .refine((config) => config.provider !== "laya" || LAYA_MODELS.some((model) => model === config.model), {
-    message: "Select a supported Laya model",
-    path: ["model"],
-  });
+  .refine(
+    (config) =>
+      !config.provider ||
+      config.provider === "jev" ||
+      OSS_CLASSIFIER_MODELS[config.provider].some((model) => model === config.model),
+    { error: "Select a supported classifier model", path: ["model"] },
+  );
 
 export type JevClassifierConfig = z.infer<typeof jevClassifierConfigSchema>;
 
-export const defaultJevClassifierConfig = (provider: "jev" | "laya" = "jev"): JevClassifierConfig =>
+export const defaultJevClassifierConfig = (provider: JevClassifierConfig["provider"] = "jev"): JevClassifierConfig =>
   jevClassifierConfigSchema.parse({ provider });
 
 export const hydrateOssClassifier = (config: {

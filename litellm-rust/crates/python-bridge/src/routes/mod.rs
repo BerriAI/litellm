@@ -8,24 +8,52 @@ pub(crate) mod responses;
 pub(crate) mod token_counter;
 pub(crate) mod traces;
 
-use litellm_callbacks_legacy_python::LoggingOperation;
-use litellm_callbacks_legacy_python::{LegacyLogging, PublicCall};
+use litellm_callbacks_legacy_python::{LegacyLogging, LoggingOperation, PublicCall};
 use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol};
-use litellm_host_python::{HookChain, PythonBinding, PythonCallHooks, PythonHostCalls};
+use litellm_host_python::{
+    HookChain, PythonBinding, PythonCallHooks, PythonHostCalls, effective_py_args,
+};
 use pyo3::{
     prelude::*,
-    types::{PyDict, PyTuple},
+    types::{PyDict, PyMapping, PyTuple},
 };
+
+/// The public call as Python bound it: `base` holds the positional arguments by name plus
+/// the signature defaults, `kwargs` the caller's keyword dict.
+#[derive(FromPyObject)]
+pub(crate) struct NativeCall<'py> {
+    #[pyo3(attribute)]
+    args: Bound<'py, PyTuple>,
+    #[pyo3(attribute, from_py_with = mapping_dict)]
+    kwargs: Bound<'py, PyDict>,
+    #[pyo3(attribute, from_py_with = mapping_dict)]
+    base: Bound<'py, PyDict>,
+}
+
+impl<'py> NativeCall<'py> {
+    /// The call before any hook ran, for the reads that admit or decline it.
+    fn resolved(&self) -> PyResult<Bound<'py, PyDict>> {
+        effective_py_args(&self.base, &self.kwargs)
+    }
+}
+
+fn mapping_dict<'py>(value: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> {
+    if let Ok(dict) = value.cast::<PyDict>() {
+        return Ok(dict.clone());
+    }
+    let mapping = value.cast::<PyMapping>()?;
+    let dict = PyDict::new(value.py());
+    dict.update(mapping)?;
+    Ok(dict)
+}
 
 fn call_hooks(
     py: Python<'_>,
     operation: LoggingOperation,
-    request: &Bound<'_, PyAny>,
-    args: &Bound<'_, PyTuple>,
-    kwargs: &Bound<'_, PyDict>,
+    call: &NativeCall<'_>,
     asynchronous: bool,
 ) -> PyResult<(Py<PyDict>, impl PythonCallHooks + use<>)> {
-    let call = PublicCall::capture(request, args, kwargs)?;
+    let call = PublicCall::capture(&call.base, &call.args, &call.kwargs)?;
     let arguments = call.arguments(py);
     Ok((
         arguments,
@@ -73,45 +101,38 @@ mod tests {
         prelude::*,
         types::{PyDict, PyList},
     };
+    use rstest::rstest;
 
-    #[test]
-    fn sync_and_async_route_signatures_match_the_python_contract() {
-        Python::initialize();
-        Python::attach(|py| {
-            let module = crate::native_module(py);
-            let routes = [
-                (
-                    "transcription",
-                    "atranscription",
-                    "(model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None)",
-                ),
-                (
-                    "chat_completions",
-                    "achat_completions",
-                    "(model, messages, optional_params=None, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None)",
-                ),
-            ];
-
-            for (sync_name, async_name, expected) in routes {
-                let sync_signature: String = module
-                    .getattr(sync_name)
-                    .and_then(|function| function.getattr("__text_signature__"))
-                    .and_then(|signature| signature.extract())
-                    .expect("sync signature should be available");
-                let async_signature: String = module
-                    .getattr(async_name)
-                    .and_then(|function| function.getattr("__text_signature__"))
-                    .and_then(|signature| signature.extract())
-                    .expect("async signature should be available");
-
-                assert_eq!(sync_signature, expected);
-                assert_eq!(async_signature, expected);
-            }
-        });
+    fn value_call<'py>(
+        py: Python<'py>,
+        payload_name: &str,
+        payload: &Bound<'py, PyAny>,
+        kwargs: Option<&Bound<'py, PyDict>>,
+    ) -> Bound<'py, PyAny> {
+        let fields = PyDict::new(py);
+        fields.set_item("model", "model").unwrap();
+        fields.set_item(payload_name, payload).unwrap();
+        if let Some(kwargs) = kwargs {
+            fields.update(kwargs.as_mapping()).unwrap();
+        }
+        let attributes = PyDict::new(py);
+        attributes
+            .set_item("args", pyo3::types::PyTuple::empty(py))
+            .unwrap();
+        attributes.set_item("kwargs", &fields).unwrap();
+        attributes.set_item("base", PyDict::new(py)).unwrap();
+        py.import("types")
+            .unwrap()
+            .getattr("SimpleNamespace")
+            .unwrap()
+            .call((), Some(&attributes))
+            .unwrap()
     }
 
-    #[test]
-    fn route_arguments_that_fail_to_convert_raise_value_error() {
+    #[rstest]
+    #[case::sync("transcription")]
+    #[case::asynchronous("atranscription")]
+    fn route_arguments_that_fail_to_convert_raise_value_error(#[case] name: &str) {
         Python::initialize();
         Python::attach(|py| {
             let module = crate::native_module(py);
@@ -135,41 +156,23 @@ value = Broken()
                 .expect("locals should be readable")
                 .expect("helper value should exist");
 
-            for name in ["chat_completions", "achat_completions"] {
-                let error = module
-                    .getattr(name)
-                    .and_then(|function| function.call1(("model", &broken)))
-                    .expect_err("route should reject a value it cannot convert");
+            let error = module
+                .getattr(name)
+                .and_then(|function| function.call1((value_call(py, "audio", &broken, None),)))
+                .expect_err("route should reject a value it cannot convert");
 
-                assert!(
-                    error.is_instance_of::<pyo3::exceptions::PyValueError>(py),
-                    "{name} surfaced {error} instead of ValueError"
-                );
-            }
+            assert!(
+                error.is_instance_of::<pyo3::exceptions::PyValueError>(py),
+                "{name} surfaced {error} instead of ValueError"
+            );
         });
     }
 
-    #[test]
+    #[rstest]
     fn sync_and_async_routes_apply_the_same_input_validation() {
         Python::initialize();
         Python::attach(|py| {
             let module = crate::native_module(py);
-
-            let invalid_messages = PyDict::new(py);
-            let sync_chat_error = module
-                .getattr("chat_completions")
-                .and_then(|function| function.call1(("model", &invalid_messages)))
-                .expect_err("sync chat should reject a non-list messages value");
-            let async_chat_error = module
-                .getattr("achat_completions")
-                .and_then(|function| function.call1(("model", &invalid_messages)))
-                .expect_err("async chat should reject a non-list messages value");
-
-            assert_eq!(
-                sync_chat_error.to_string(),
-                "ValueError: messages must be a list"
-            );
-            assert_eq!(async_chat_error.to_string(), sync_chat_error.to_string());
 
             let invalid_headers = PyList::empty(py);
             let kwargs = PyDict::new(py);
@@ -180,11 +183,15 @@ value = Broken()
 
             let sync_error = module
                 .getattr("transcription")
-                .and_then(|function| function.call(("model", &audio), Some(&kwargs)))
+                .and_then(|function| {
+                    function.call1((value_call(py, "audio", &audio, Some(&kwargs)),))
+                })
                 .expect_err("sync route should reject non-dict extra_headers");
             let async_error = module
                 .getattr("atranscription")
-                .and_then(|function| function.call(("model", &audio), Some(&kwargs)))
+                .and_then(|function| {
+                    function.call1((value_call(py, "audio", &audio, Some(&kwargs)),))
+                })
                 .expect_err("async route should reject non-dict extra_headers");
 
             assert_eq!(
@@ -195,38 +202,42 @@ value = Broken()
         });
     }
 
-    #[test]
+    #[rstest]
+    fn missing_and_explicit_none_optional_params_share_the_next_error() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = crate::native_module(py);
+            let audio = PyDict::new(py);
+            let transcribe = |optional_params: Option<Bound<'_, PyAny>>| {
+                let kwargs = PyDict::new(py);
+                if let Some(optional_params) = optional_params {
+                    kwargs.set_item("optional_params", optional_params).unwrap();
+                }
+                module
+                    .getattr("transcription")
+                    .and_then(|function| {
+                        function.call1((value_call(py, "audio", &audio, Some(&kwargs)),))
+                    })
+                    .expect_err("model 'model' has no provider")
+                    .to_string()
+            };
+
+            let omitted = transcribe(None);
+            assert_eq!(transcribe(Some(py.None().into_bound(py))), omitted);
+            assert_ne!(omitted, "ValueError: optional_params must be a dict");
+            assert_eq!(
+                transcribe(Some(PyList::empty(py).into_any())),
+                "ValueError: optional_params must be a dict"
+            );
+        });
+    }
+
+    #[rstest]
     fn route_input_validation_preserves_left_to_right_order() {
         Python::initialize();
         Python::attach(|py| {
             let module = crate::native_module(py);
             let invalid = PyList::empty(py);
-
-            let chat_kwargs = PyDict::new(py);
-            chat_kwargs
-                .set_item("optional_params", &invalid)
-                .expect("kwargs should accept optional_params");
-            chat_kwargs
-                .set_item("extra_headers", &invalid)
-                .expect("kwargs should accept extra_headers");
-            let invalid_messages = PyDict::new(py);
-            let error = module
-                .getattr("chat_completions")
-                .and_then(|function| {
-                    function.call(("model", &invalid_messages), Some(&chat_kwargs))
-                })
-                .expect_err("messages should be validated first");
-            assert_eq!(error.to_string(), "ValueError: messages must be a list");
-
-            let valid_messages = PyList::empty(py);
-            let error = module
-                .getattr("chat_completions")
-                .and_then(|function| function.call(("model", &valid_messages), Some(&chat_kwargs)))
-                .expect_err("optional_params should be validated before headers");
-            assert_eq!(
-                error.to_string(),
-                "ValueError: optional_params must be a dict"
-            );
 
             let headers_kwargs = PyDict::new(py);
             headers_kwargs
@@ -237,45 +248,15 @@ value = Broken()
             let error = module
                 .getattr("transcription")
                 .and_then(|function| {
-                    function.call(("model", &invalid_payload), Some(&headers_kwargs))
+                    function.call1((value_call(
+                        py,
+                        "audio",
+                        &invalid_payload,
+                        Some(&headers_kwargs),
+                    ),))
                 })
                 .expect_err("payload should be validated before headers");
             assert!(!error.to_string().contains("extra_headers"));
-        });
-    }
-
-    #[test]
-    fn missing_and_explicit_none_optional_params_share_the_next_error() {
-        Python::initialize();
-        Python::attach(|py| {
-            let module = crate::native_module(py);
-            let messages = PyList::empty(py);
-            let headers = PyList::empty(py);
-            let omitted = PyDict::new(py);
-            omitted
-                .set_item("extra_headers", &headers)
-                .expect("kwargs should accept extra_headers");
-            let explicit = PyDict::new(py);
-            explicit
-                .set_item("optional_params", py.None())
-                .expect("kwargs should accept optional_params");
-            explicit
-                .set_item("extra_headers", &headers)
-                .expect("kwargs should accept extra_headers");
-
-            let omitted_error = module
-                .getattr("chat_completions")
-                .and_then(|function| function.call(("model", &messages), Some(&omitted)))
-                .expect_err("omitted optional_params should reach header validation");
-            let explicit_error = module
-                .getattr("chat_completions")
-                .and_then(|function| function.call(("model", &messages), Some(&explicit)))
-                .expect_err("None optional_params should reach header validation");
-            assert_eq!(
-                omitted_error.to_string(),
-                "ValueError: extra_headers must be a dict"
-            );
-            assert_eq!(explicit_error.to_string(), omitted_error.to_string());
         });
     }
 }

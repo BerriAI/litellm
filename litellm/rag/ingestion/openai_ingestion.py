@@ -7,7 +7,7 @@ so this implementation skips the embedding step and directly uploads files.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Final
 
 import litellm
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
@@ -106,7 +106,7 @@ class OpenAIRAGIngestion(BaseRAGIngestion):
                 vector_store_id=vector_store_id,
                 file_id=existing_file_id,
                 custom_llm_provider="openai",
-                chunking_strategy=cast(dict[str, Any] | None, self.chunking_strategy),
+                chunking_strategy=self.chunking_strategy,
                 api_key=api_key,
                 api_base=api_base,
             )
@@ -134,7 +134,7 @@ class OpenAIRAGIngestion(BaseRAGIngestion):
                 vector_store_id=vector_store_id,
                 file_id=result_file_id,
                 custom_llm_provider="openai",
-                chunking_strategy=cast(dict[str, Any] | None, self.chunking_strategy),
+                chunking_strategy=self.chunking_strategy,
                 api_key=api_key,
                 api_base=api_base,
             )

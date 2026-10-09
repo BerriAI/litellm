@@ -12,6 +12,8 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 
+ROUTER_SESSION_PINS_TARGET: Final = "router_session_pins"
+
 _PIN_JSON_ADAPTER: Final = TypeAdapter[JsonValue](JsonValue)
 
 _CLAIM_PIN_SCRIPT: Final = """

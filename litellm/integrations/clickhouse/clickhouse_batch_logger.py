@@ -11,7 +11,7 @@ gzip JSONEachRow insert, either every `CLICKHOUSE_FLUSH_INTERVAL_SECONDS` or as 
 import asyncio
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
-from typing import Any, ClassVar, Final
+from typing import ClassVar, Final
 
 from litellm._logging import verbose_logger
 from litellm.constants import (
@@ -21,7 +21,7 @@ from litellm.constants import (
     CLICKHOUSE_MAX_RETRIES,
 )
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
-from litellm.rust_bridge.traces import ClickHouseStorage
+from litellm.rust_bridge.trace.storage import ClickHouseStorage
 from litellm.tracing.config import trace_storage_config
 
 
@@ -89,7 +89,7 @@ class ClickHouseBatchLogger(CustomBatchLogger):
     async def async_send_batch(self) -> None:
         await self.flush_queue()
 
-    async def _insert(self, batch: list[dict[str, Any]]) -> bool:
+    async def _insert(self, batch: list[dict[str, object]]) -> bool:
         try:
             await self.storage.insert_rows(self.table, batch)
             self.rows_written += len(batch)
