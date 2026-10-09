@@ -188,22 +188,7 @@ Source: [GitHub Gist from troyharvey](https://gist.github.com/troyharvey/4506472
 
 ### Migration Job Settings
 
-The migration Job supports both ArgoCD and Helm hooks. These hooks run before the chart's ordinary resources, so PostgreSQL must already be running and reachable from the Job. Any Secrets, ConfigMaps and ServiceAccounts used by the Job must also exist before the hook runs
-
-This hook configuration does not apply to a first install with bundled PostgreSQL (`db.deployStandalone: true`, the default). A `pre-install` Job cannot use that database: Helm waits for the Job before creating the PostgreSQL Service and StatefulSet. Provision PostgreSQL and the Job's other dependencies before enabling migration hooks
-
-For a Helm CLI installation against an existing database (`db.useExisting: true`, `db.deployStandalone: false`), or an upgrade whose bundled PostgreSQL is already running, select Helm as the migration controller in your values file:
-
-```yaml
-migrationJob:
-  hooks:
-    helm:
-      enabled: true
-    argocd:
-      enabled: false
-```
-
-With those prerequisites met, Helm runs migrations before each install or upgrade and replaces the previous migration Job through its hook lifecycle. Argo-managed installations can use the default ArgoCD hook instead, with Helm hooks disabled. ArgoCD's `PreSync` hook also requires an already-running database; it cannot bootstrap PostgreSQL created in the same sync. Helm ignores ArgoCD hook annotations, so using those defaults with the Helm CLI can fail when a gateway image update changes an existing Job's immutable pod template
+The migration job supports both ArgoCD and Helm hooks to ensure database migrations run at the appropriate time during deployments.
 
 | Name                                   | Description                                                                                                          | Value   |
 | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ------- |
