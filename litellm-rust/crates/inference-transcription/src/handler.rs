@@ -4,11 +4,9 @@ use litellm_http::{
     Client,
     request::{string_headers, truncate_error_body, with_default_headers},
 };
-use litellm_llms::{
-    base_llm::{
-        audio_transcription::transformation::BaseAudioTranscriptionConfig,
-        auth::{ValidatedEnvironment, resolve_auth},
-    },
+use litellm_llms::base_llm::{
+    audio_transcription::transformation::BaseAudioTranscriptionConfig,
+    auth::{ValidatedEnvironment, resolve_auth},
 };
 use litellm_secrets::source::Secrets;
 use serde_json::Value;
@@ -53,8 +51,7 @@ pub(super) async fn execute(
         url,
         &body,
         Some(
-            call
-                .timeout
+            call.timeout
                 .unwrap_or(Duration::from_secs(AUDIO_TRANSCRIPTION_TIMEOUT_SECS)),
         ),
     )?;
