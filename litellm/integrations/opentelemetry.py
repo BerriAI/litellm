@@ -1552,13 +1552,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         Guarded to the LiteLLM-created proxy span (by name + recording) so
         externally provided parent spans are never mutated.
         """
-        litellm_params_value = kwargs.get("litellm_params")
+        litellm_params_value: Final[Any] = kwargs.get("litellm_params")
         litellm_params: Final[Mapping[str, Any]] = (
             litellm_params_value if isinstance(litellm_params_value, Mapping) else {}
         )
-        metadata_value = litellm_params.get("metadata")
+        metadata_value: Final[Any] = litellm_params.get("metadata")
         metadata: Final[Mapping[str, Any]] = metadata_value if isinstance(metadata_value, Mapping) else {}
-        litellm_metadata_value = litellm_params.get("litellm_metadata")
+        litellm_metadata_value: Final[Any] = litellm_params.get("litellm_metadata")
         litellm_metadata: Final[Mapping[str, Any]] = (
             litellm_metadata_value if isinstance(litellm_metadata_value, Mapping) else {}
         )
