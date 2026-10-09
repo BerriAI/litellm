@@ -1,6 +1,6 @@
 import json
 import logging
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, AsyncIterator, Iterator
 from datetime import datetime
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -250,21 +250,19 @@ async def test_failed_anthropic_stream_records_partial_usage_off_the_event_loop(
     assert_loop_stayed_free(took, lags)
 
 
-@pytest.mark.asyncio
-async def test_stream_attempt_abandoned_for_a_retry_logs_nothing() -> None:
+def _anthropic_stream_attempt(
+    litellm_params: dict[str, object],
+) -> tuple[MagicMock, AsyncMock, AsyncGenerator[bytes, None]]:
     model: Final = "claude-3-haiku"
     logging_obj: Final = _logging_obj()
-    litellm_params: Final[dict[str, object]] = {"metadata": {}}
     logging_obj.litellm_params = litellm_params
-    setattr(logging_obj, "_on_deferred_stream_complete", None)
     logging_obj.completion_start_time = None
-    response: Final = httpx.Response(
-        200,
-        stream=_AnthropicTestStream(tuple(_interrupted_anthropic_stream(model, "hi")[:2])),
-    )
     recorder: Final = AsyncMock()
     gen: Final = PassThroughStreamingHandler.chunk_processor(
-        response=response,
+        response=httpx.Response(
+            200,
+            stream=_AnthropicTestStream(tuple(_interrupted_anthropic_stream(model, "hi")[:2])),
+        ),
         request_body={"model": model, "stream": True},
         litellm_logging_obj=logging_obj,
         endpoint_type=EndpointType.ANTHROPIC,
@@ -273,9 +271,22 @@ async def test_stream_attempt_abandoned_for_a_retry_logs_nothing() -> None:
         url_route="/v1/messages",
         route_streaming_logging=recorder,
     )
+    return logging_obj, recorder, gen
 
-    await gen.__anext__()
-    record_retry_attempt(litellm_params, 1, 2)
+
+def _stamped_params(attempted_retries: int) -> dict[str, object]:
+    litellm_params: Final[dict[str, object]] = {"metadata": {}}
+    if attempted_retries:
+        record_retry_attempt(litellm_params, attempted_retries, 2)
+    return litellm_params
+
+
+@pytest.mark.asyncio
+async def test_stream_attempt_taken_over_by_a_retry_logs_nothing() -> None:
+    logging_obj, recorder, gen = _anthropic_stream_attempt(_stamped_params(0))
+
+    assert await gen.__anext__()
+    logging_obj.litellm_params = _stamped_params(1)
     await gen.aclose()
     await GLOBAL_LOGGING_WORKER.flush()
 
@@ -283,29 +294,36 @@ async def test_stream_attempt_abandoned_for_a_retry_logs_nothing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_attempt_closed_without_a_retry_logs_once() -> None:
-    model: Final = "claude-3-haiku"
-    logging_obj: Final = _logging_obj()
-    logging_obj.litellm_params = {"metadata": {}}
-    setattr(logging_obj, "_on_deferred_stream_complete", None)
-    logging_obj.completion_start_time = None
-    response: Final = httpx.Response(
-        200,
-        stream=_AnthropicTestStream(tuple(_interrupted_anthropic_stream(model, "hi")[:2])),
-    )
-    recorder: Final = AsyncMock()
-    gen: Final = PassThroughStreamingHandler.chunk_processor(
-        response=response,
-        request_body={"model": model, "stream": True},
-        litellm_logging_obj=logging_obj,
-        endpoint_type=EndpointType.ANTHROPIC,
-        start_time=datetime.now(),
-        passthrough_success_handler_obj=PassThroughEndpointLogging(),
-        url_route="/v1/messages",
-        route_streaming_logging=recorder,
-    )
+@pytest.mark.parametrize("opened_on_attempt", [0, 1])
+async def test_stream_attempt_closed_without_a_retry_logs_once(opened_on_attempt: int) -> None:
+    _, recorder, gen = _anthropic_stream_attempt(_stamped_params(opened_on_attempt))
 
-    await gen.__anext__()
+    assert await gen.__anext__()
+    await gen.aclose()
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    recorder.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_stream_whose_shared_metadata_is_bumped_in_place_still_logs_once() -> None:
+    litellm_params: Final = _stamped_params(0)
+    _, recorder, gen = _anthropic_stream_attempt(litellm_params)
+
+    assert await gen.__anext__()
+    record_retry_attempt(litellm_params, 1, 2)
+    await gen.aclose()
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    recorder.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_stream_whose_params_are_rebound_without_a_new_retry_logs_once() -> None:
+    logging_obj, recorder, gen = _anthropic_stream_attempt(_stamped_params(1))
+
+    assert await gen.__anext__()
+    logging_obj.litellm_params = _stamped_params(1)
     await gen.aclose()
     await GLOBAL_LOGGING_WORKER.flush()
 
