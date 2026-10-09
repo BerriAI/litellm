@@ -133,7 +133,7 @@ from litellm.proxy.common_utils.callback_utils import (
     strip_callback_config,
 )
 from litellm.proxy.common_utils.realtime_utils import (  # noqa: F401, RUF100  # legacy module exports
-    _realtime_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package ex
+    _realtime_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     realtime_request_body,
 )
 from litellm.proxy.management_helpers.auto_router_availability import AutoRouterCatalogEntry, build_auto_router_catalog
@@ -388,7 +388,7 @@ from litellm.proxy.auth.model_checks import (
 )
 from litellm.proxy.auth.password_policy import validate_password_not_breached, validate_password_policy
 from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401, RUF100  # legacy module exports
-    _fetch_global_spend_with_event_coordination,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-
+    _fetch_global_spend_with_event_coordination,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     fetch_global_spend_with_event_coordination,
     user_api_key_auth,
     user_api_key_auth_websocket,
@@ -401,8 +401,8 @@ from litellm.proxy.caching_routes import router as caching_router
 from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # legacy module exports
     KNOWN_PROXY_ROUTES,
     ProxyBaseLLMRequestProcessing,
-    _is_azure_model_router_request,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible pa
-    _should_return_raw_model_name,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible pac
+    _is_azure_model_router_request,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _should_return_raw_model_name,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     close_guarded_stream,
     create_response,
     is_azure_model_router_request,
@@ -445,7 +445,7 @@ from litellm.proxy.common_utils.html_forms.default_credentials_hint import shoul
 from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401, RUF100  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package
+    _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     check_file_size_under_limit,
     get_form_data,
     read_request_body,
@@ -580,12 +580,12 @@ from litellm.proxy.health_check import (
 from litellm.proxy.health_endpoints._health_endpoints import router as health_router
 from litellm.proxy.hooks.model_max_budget_limiter import (  # noqa: F401, RUF100  # legacy module exports
     PROXY_VirtualKeyModelMaxBudgetLimiter,
-    _PROXY_VirtualKeyModelMaxBudgetLimiter,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compa
+    _PROXY_VirtualKeyModelMaxBudgetLimiter,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import fail_closed_rate_limit_enforcement_enabled
 from litellm.proxy.hooks.prompt_injection_detection import (  # noqa: F401, RUF100  # legacy module exports
     OPTIONAL_PromptInjectionDetection,
-    _OPTIONAL_PromptInjectionDetection,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatibl
+    _OPTIONAL_PromptInjectionDetection,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
 )
 from litellm.proxy.hooks.proxy_track_cost_callback import (  # noqa: F401, RUF100  # legacy module exports
     ProxyDBLogger,
@@ -628,8 +628,8 @@ from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
 from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401, RUF100  # legacy module exports
-    _user_has_admin_privileges,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible packag
-    _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package expo
+    _user_has_admin_privileges,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     admin_can_invite_user,
     user_api_key_has_admin_view,
     user_has_admin_privileges,
@@ -675,10 +675,10 @@ from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V
 from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
     router as model_access_group_management_router,
 )
-from litellm.proxy.management_endpoints.model_management_endpoints import (  # noqa: F401, RUF100  # legacy module expor
+from litellm.proxy.management_endpoints.model_management_endpoints import (  # noqa: F401, RUF100  # legacy module exports
     _add_model_to_db,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    _add_team_model_to_db,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package exp
-    _deduplicate_litellm_router_models,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatibl
+    _add_team_model_to_db,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _deduplicate_litellm_router_models,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     add_model_to_db,
     add_team_model_to_db,
     deduplicate_litellm_router_models,
@@ -869,10 +869,10 @@ from litellm.proxy.utils import (  # noqa: F401, RUF100  # legacy module exports
     _cache_user_row,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _get_docs_url,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _get_openapi_url,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    _get_projected_spend_over_limit,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible p
+    _get_projected_spend_over_limit,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _get_redoc_url,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    _is_projected_spend_over_limit,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible pa
-    _is_valid_team_configs,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package ex
+    _is_projected_spend_over_limit,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _is_valid_team_configs,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     cache_user_row,
     evict_config_param,
     get_config_param,
@@ -1545,7 +1545,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
     ## when the proxy cache backend is not Redis ##
     transaction_buffer_redis_cache = redis_usage_cache
     if transaction_buffer_redis_cache is None:
-        transaction_buffer_redis_cache = ProxyStartupEvent.get_transaction_buffer_redis_cache(  # rebind-ok: pre-existin
+        transaction_buffer_redis_cache = ProxyStartupEvent.get_transaction_buffer_redis_cache(  # rebind-ok: pre-existing rebinding on a rename-only line
             general_settings=general_settings
         )
 
@@ -1790,7 +1790,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
 
             await _drain_spend_event_producer_on_shutdown()
 
-            # Shutdown event - finish or cancel in-flight scheduled jobs before the shutdown flushes and the DB disconne
+            # Shutdown event - finish or cancel in-flight scheduled jobs before the shutdown flushes and the DB disconnect
             if scheduler is not None and scheduler_executor is not None:
                 try:
                     await stop_in_flight_scheduler_jobs(scheduler, scheduler_executor)
@@ -6862,7 +6862,7 @@ class ProxyConfig:
             if env_coordination_redis_cache is not None:
                 _set_redis_usage_cache(env_coordination_redis_cache)
 
-        ## GENERAL SERVER SETTINGS (e.g. master key,..) # do this after initializing litellm, to ensure sentry logging w
+        ## GENERAL SERVER SETTINGS (e.g. master key,..) # do this after initializing litellm, to ensure sentry logging works for proxylogging
         general_settings = config.get("general_settings", {})
         if general_settings is None:
             general_settings = {}
@@ -8782,11 +8782,11 @@ class ProxyConfig:
         """
         from litellm.proxy.management_endpoints.config_override_endpoints import (
             CYBERARK_ENV_VAR_MAPPING,
-            _clear_cyberark_state,  # pyright: ignore[reportPrivateUsage]  # module-internal helper shared with the endp
-            _snapshot_cyberark_boot_env,  # pyright: ignore[reportPrivateUsage]  # module-internal helper shared with th
-            get_current_env_values,  # pyright: ignore[reportPrivateUsage]  # module-internal helper shared with the end
-            parse_config_value,  # pyright: ignore[reportPrivateUsage]  # module-internal helper shared with the endpoin
-            set_env_vars,  # pyright: ignore[reportPrivateUsage]  # module-internal helper shared with the endpoint modu
+            _clear_cyberark_state,  # pyright: ignore[reportPrivateUsage]  # module-internal helper shared with the endpoint module
+            _snapshot_cyberark_boot_env,  # pyright: ignore[reportPrivateUsage]  # module-internal helper shared with the endpoint module
+            get_current_env_values,  # pyright: ignore[reportPrivateUsage]  # module-internal helper shared with the endpoint module
+            parse_config_value,  # pyright: ignore[reportPrivateUsage]  # module-internal helper shared with the endpoint module
+            set_env_vars,  # pyright: ignore[reportPrivateUsage]  # module-internal helper shared with the endpoint module
         )
 
         try:
@@ -9010,7 +9010,7 @@ class ProxyConfig:
         def parse_row(db_prompt: object) -> PromptSpec | None:
             try:
                 return self._get_prompt_spec_for_db_prompt(db_prompt=db_prompt)
-            except Exception as row_error:  # noqa: BLE001  # a malformed row must not block syncing the remaining promp
+            except Exception as row_error:  # noqa: BLE001  # a malformed row must not block syncing the remaining prompts
                 verbose_proxy_logger.exception(
                     "litellm.proxy.proxy_server.py::ProxyConfig:_init_prompts_in_db - failed to parse prompt row %s: %s",
                     getattr(db_prompt, "prompt_id", None),
@@ -9027,7 +9027,7 @@ class ProxyConfig:
             for prompt_spec in parsed_specs:
                 try:
                     IN_MEMORY_PROMPT_REGISTRY.sync_prompt_from_db(prompt=prompt_spec)
-                except Exception as prompt_sync_error:  # noqa: BLE001  # one poisoned row must not block syncing the re
+                except Exception as prompt_sync_error:  # noqa: BLE001  # one poisoned row must not block syncing the remaining prompts
                     verbose_proxy_logger.exception(
                         "litellm.proxy.proxy_server.py::ProxyConfig:_init_prompts_in_db - failed to sync prompt %s: %s",
                         prompt_spec.prompt_id,
@@ -10834,7 +10834,7 @@ class ProxyStartupEvent:
                         )
                     }
                 )
-        except Exception as e:  # noqa: BLE001  # enforcement is skipped for this boot; refusing every tuned router on a
+        except Exception as e:  # noqa: BLE001  # enforcement is skipped for this boot; refusing every tuned router on a DB blip is the one outcome the gate forbids
             verbose_proxy_logger.warning("Heuristic-v1 tuning baseline unavailable, gate not enforced this boot: %s", e)
             return None
 
@@ -11592,7 +11592,7 @@ class ProxyStartupEvent:
             slack_alerting_args: Final = proxy_logging_obj.slack_alerting_instance.alerting_args
             user_spend_check_interval: Final = (
                 slack_alerting_args.user_spend_check_interval
-                if isinstance(slack_alerting_args, SlackAlertingArgs)  # pyright: ignore[reportUnnecessaryIsInstance]  # test
+                if isinstance(slack_alerting_args, SlackAlertingArgs)  # pyright: ignore[reportUnnecessaryIsInstance]  # tests inject a mock slack_alerting_instance
                 else SlackAlertingArgs().user_spend_check_interval
             )
 
@@ -11852,7 +11852,7 @@ async def _deployment_hidden_by_listing_callbacks(deployment: Deployment, user_a
     "/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"]
 )  # if project requires model list
 async def model_list(
-    request: Request = None,  # pyright: ignore[reportArgumentType]  # FastAPI always injects the Request; the None defa
+    request: Request = None,  # pyright: ignore[reportArgumentType]  # FastAPI always injects the Request; the None default only serves direct in-process callers
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     return_wildcard_routes: bool | None = False,
     team_id: str | None = None,
@@ -13365,7 +13365,7 @@ async def realtime_websocket_endpoint(
                 code=1011,
                 reason=websocket_close_reason(redacted_error, fallback="Internal server error"),
             )
-        except Exception:  # noqa: BLE001  # the lower layer may have closed the socket already; closing twice is not an
+        except Exception:  # noqa: BLE001  # the lower layer may have closed the socket already; closing twice is not an error
             verbose_proxy_logger.debug("Could not close realtime client websocket; it is already gone")
     finally:
         if not litellm_logging_obj.model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY):
@@ -20464,7 +20464,7 @@ async def _stream_mcp_asgi_response(handle_fn, scope: dict, receive) -> "Streami
 )
 async def proxy_mcp_route(request: Request) -> Response:
     """Serve the fixed three-tool MCP proxy surface."""
-    from litellm.proxy._experimental.mcp_server.mcp_context import (  # pyright: ignore[reportPrivateUsage]  # route-own
+    from litellm.proxy._experimental.mcp_server.mcp_context import (  # pyright: ignore[reportPrivateUsage]  # route-owned mode
         _mcp_proxy_mode,  # pyright: ignore[reportPrivateUsage]  # route-owned mode
     )
     from litellm.proxy._experimental.mcp_server.server import handle_streamable_http_mcp

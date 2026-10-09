@@ -78,7 +78,7 @@ def _decrypted(db_credential: CredentialItem) -> CredentialItem:
     )
     return CredentialItem(
         credential_name=db_credential.credential_name,
-        credential_values=decrypted_values,  # pyright: ignore[reportArgumentType]  # declared dict[str, str], and pydan
+        credential_values=decrypted_values,  # pyright: ignore[reportArgumentType]  # declared dict[str, str], and pydantic copies this mapping into one on validation; LIT002 rules out building that dict here
         credential_info=db_credential.credential_info,
     )
 

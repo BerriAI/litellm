@@ -240,7 +240,7 @@ def get_llm_provider(
             model.split("/", 1)[0] in litellm.provider_list
             and model.split("/", 1)[0] not in litellm.model_list_set
             and len(model.split("/"))
-            > 1  # handle edge case where user passes in `litellm --model mistral` https://github.com/BerriAI/litellm/is
+            > 1  # handle edge case where user passes in `litellm --model mistral` https://github.com/BerriAI/litellm/issues/1351
         ):
             return _get_openai_compatible_provider_info(
                 model=model,
@@ -411,7 +411,7 @@ def get_llm_provider(
                         raise Exception(f"dynamic_api_key needs to be a string. dynamic_api_key={dynamic_api_key}")
                     return model, custom_llm_provider, dynamic_api_key, api_base
 
-        # check if model in known model provider list  -> for huggingface models, raise exception as they don't have a f
+        # check if model in known model provider list  -> for huggingface models, raise exception as they don't have a fixed provider (can be togetherai, anyscale, baseten, runpod, et.)
         ## openai - chatcompletion + text completion
         if (
             model in litellm.open_ai_chat_completion_models
@@ -609,7 +609,7 @@ def _get_openai_compatible_provider_info(
         return model, custom_llm_provider, dynamic_api_key, api_base
 
     if custom_llm_provider == "perplexity":
-        # perplexity is openai compatible, we just need to set this to custom_openai and have the api_base be https://ap
+        # perplexity is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.perplexity.ai
         (
             api_base,
             dynamic_api_key,
@@ -617,7 +617,7 @@ def _get_openai_compatible_provider_info(
     elif custom_llm_provider == "aiohttp_openai":
         return model, "aiohttp_openai", api_key, api_base
     elif custom_llm_provider == "anyscale":
-        # anyscale is openai compatible, we just need to set this to custom_openai and have the api_base be https://api
+        # anyscale is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
         api_base = api_base or get_secret_str("ANYSCALE_API_BASE") or "https://api.endpoints.anyscale.com/v1"
         dynamic_api_key = api_key or get_secret_str("ANYSCALE_API_KEY")
     elif custom_llm_provider == "deepinfra":
@@ -644,7 +644,7 @@ def _get_openai_compatible_provider_info(
         )
         model = split_mantle_region_prefix(model)[1]  # rebind-ok: the prefix is routing only, not a Mantle model id
     elif custom_llm_provider == "nvidia_nim":
-        # nvidia_nim is openai compatible, we just need to set this to custom_openai and have the api_base be https://ap
+        # nvidia_nim is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
         api_base = api_base or get_secret("NVIDIA_NIM_API_BASE") or "https://integrate.api.nvidia.com/v1"
         dynamic_api_key = api_key or get_secret_str("NVIDIA_NIM_API_KEY")
     elif custom_llm_provider == "nvidia_riva":
@@ -692,11 +692,11 @@ def _get_openai_compatible_provider_info(
         dynamic_api_key = api_key or get_secret_str("AI21_API_KEY")
         custom_llm_provider = "ai21_chat"
     elif custom_llm_provider == "volcengine":
-        # volcengine is openai compatible, we just need to set this to custom_openai and have the api_base be https://ap
+        # volcengine is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
         api_base = api_base or get_secret("VOLCENGINE_API_BASE") or "https://ark.cn-beijing.volces.com/api/v3"
         dynamic_api_key = api_key or get_secret_str("VOLCENGINE_API_KEY")
     elif custom_llm_provider == "codestral":
-        # codestral is openai compatible, we just need to set this to custom_openai and have the api_base be https://cod
+        # codestral is openai compatible, we just need to set this to custom_openai and have the api_base be https://codestral.mistral.ai/v1
         api_base = api_base or get_secret("CODESTRAL_API_BASE") or "https://codestral.mistral.ai/v1"
         dynamic_api_key = api_key or get_secret_str("CODESTRAL_API_KEY")
     elif custom_llm_provider == "hosted_vllm":
@@ -724,7 +724,7 @@ def _get_openai_compatible_provider_info(
             dynamic_api_key,
         ) = litellm.LMStudioChatConfig().get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "deepseek":
-        # deepseek is openai compatible, we just need to set this to custom_openai and have the api_base be https://api
+        # deepseek is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.deepseek.com/v1
         api_base = api_base or get_secret("DEEPSEEK_API_BASE") or "https://api.deepseek.com/beta"
 
         dynamic_api_key = api_key or get_secret_str("DEEPSEEK_API_KEY")
@@ -733,7 +733,7 @@ def _get_openai_compatible_provider_info(
 
         dynamic_api_key = api_key or get_secret_str("TENCENT_API_KEY")
     elif custom_llm_provider == "fireworks_ai":
-        # fireworks is openai compatible, we just need to set this to custom_openai and have the api_base be https://api
+        # fireworks is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.fireworks.ai/inference/v1
         (
             api_base,
             dynamic_api_key,

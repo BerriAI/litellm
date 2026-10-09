@@ -1481,7 +1481,7 @@ def _complete_azure(ctx: CompletionDispatchContext) -> _CompletionDispatchResult
             },
         )
 
-    return response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch contra
+    return response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch contract
 
 
 def _complete_azure_text(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
@@ -1862,7 +1862,7 @@ def _complete_text_completion_openai(
             original_response=_response,
             additional_args={"headers": headers},
         )
-    return _response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch contr
+    return _response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch contract
 
 
 def _complete_fireworks_ai(
@@ -2141,7 +2141,7 @@ def _complete_groq(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     timeout: Final = ctx.timeout
 
     api_base = (
-        api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api b
+        api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
         or litellm.api_base
         or get_secret("GROQ_API_BASE")
         or "https://api.groq.com/openai/v1"
@@ -2150,7 +2150,7 @@ def _complete_groq(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     # set API KEY
     api_key = (
         api_key
-        or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass in the
+        or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass in the api key from there
         or litellm.groq_key
         or get_secret("GROQ_API_KEY")
     )
@@ -2180,7 +2180,7 @@ def _complete_groq(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
         headers=headers,
         encoding=_get_encoding(),
         api_key=api_key,
-        logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alph
+        logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
         client=client,
     )
 
@@ -2426,7 +2426,7 @@ def _complete_aiohttp_openai(
     timeout: Final = ctx.timeout
 
     api_base = (
-        api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api b
+        api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
         or litellm.api_base
         or get_secret("OPENAI_BASE_URL")
         or get_secret("OPENAI_API_BASE")
@@ -2435,7 +2435,7 @@ def _complete_aiohttp_openai(
     # set API KEY
     api_key = (
         api_key
-        or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass in the
+        or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass in the api key from there
         or litellm.openai_key
         or get_secret("OPENAI_API_KEY")
     )
@@ -2633,13 +2633,13 @@ def _complete_custom_openai(
         organization
         or litellm.organization
         or get_secret("OPENAI_ORGANIZATION")
-        or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/opena
+        or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
     )
     openai.organization = organization
     # set API KEY
     api_key = (
         api_key
-        or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass in the
+        or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass in the api key from there
         or litellm.openai_key
         or get_secret("OPENAI_API_KEY")
     )
@@ -2754,7 +2754,7 @@ def _complete_custom_openai(
             additional_args={"headers": outbound_headers},
         )
 
-    return response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch contra
+    return response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch contract
 
 
 def _complete_mistral(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
@@ -2904,7 +2904,7 @@ def _complete_anthropic_text(
         headers=headers,
         encoding=_get_encoding(),
         api_key=api_key,
-        logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alph
+        logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
     )
 
 
@@ -3021,7 +3021,7 @@ def _complete_nlp_cloud(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
             original_response=response,
         )
 
-    return response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch contra
+    return response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch contract
 
 
 def _complete_aleph_alpha(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
@@ -3059,7 +3059,7 @@ def _complete_aleph_alpha(ctx: CompletionDispatchContext) -> _CompletionDispatch
         encoding=_get_encoding(),
         default_max_tokens_to_sample=litellm.max_tokens,
         api_key=aleph_alpha_key,
-        logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alph
+        logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
     )
 
     if "stream" in optional_params and optional_params["stream"] is True:
@@ -3070,7 +3070,7 @@ def _complete_aleph_alpha(ctx: CompletionDispatchContext) -> _CompletionDispatch
             custom_llm_provider="aleph_alpha",
             logging_obj=logging,
         )
-    return model_response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch
+    return model_response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch contract
 
 
 def _complete_cohere_chat(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
@@ -3134,7 +3134,7 @@ def _complete_cohere_chat(ctx: CompletionDispatchContext) -> _CompletionDispatch
         encoding=_get_encoding(),
         api_key=cohere_key,
         provider_config=provider_config,
-        logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alph
+        logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
     )
 
 
@@ -3358,7 +3358,7 @@ def _complete_oobabooga(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
             custom_llm_provider="oobabooga",
             logging_obj=logging,
         )
-    return model_response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch
+    return model_response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch contract
 
 
 def _complete_databricks(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
@@ -3408,7 +3408,7 @@ def _complete_databricks(ctx: CompletionDispatchContext) -> _CompletionDispatchR
             headers=headers,
             encoding=_get_encoding(),
             api_key=api_key,
-            logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph
+            logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             client=client,
         )
     except Exception as e:
@@ -3538,7 +3538,7 @@ def _complete_openrouter(ctx: CompletionDispatchContext) -> _CompletionDispatchR
         headers=headers,
         encoding=_get_encoding(),
         api_key=api_key,
-        logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alph
+        logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
         client=client,
     )
     ## LOGGING
@@ -3643,7 +3643,7 @@ def _complete_vercel_ai_gateway(
         headers=headers,
         encoding=_get_encoding(),
         api_key=api_key,
-        logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alph
+        logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
         client=client,
     )
     ## LOGGING
@@ -3959,7 +3959,7 @@ def _complete_vertex_ai(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
                 custom_llm_provider="vertex_ai",
                 logging_obj=logging,
             )
-    return model_response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch
+    return model_response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch contract
 
 
 def _complete_predibase(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
@@ -4067,8 +4067,8 @@ def _complete_text_completion_codestral(
     )
 
     if "stream" in optional_params and optional_params["stream"] is True and acompletion is False:
-        return _model_response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the disp
-    return _model_response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch
+        return _model_response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch contract
+    return _model_response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch contract
 
 
 def _complete_text_completion_inception(
@@ -4132,7 +4132,7 @@ def _complete_text_completion_inception(
             original_response=_response,
             additional_args={"headers": headers},
         )
-    return _response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch contr
+    return _response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch contract
 
 
 def _complete_sagemaker_chat(
@@ -4167,7 +4167,7 @@ def _complete_sagemaker_chat(
         headers=headers,
         encoding=_get_encoding(),
         api_key=api_key,
-        logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alph
+        logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
         client=client,
     )
 
@@ -4308,7 +4308,7 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
             headers=headers,
             encoding=_get_encoding(),
             api_key=api_key,
-            logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph
+            logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             client=client,
         )
     else:
@@ -4442,7 +4442,7 @@ def _complete_watsonx_text(
         headers=headers,
         encoding=_get_encoding(),
         api_key=api_key,
-        logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alph
+        logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
         client=client,
     )
 
@@ -4519,7 +4519,7 @@ def _complete_ollama(ctx: CompletionDispatchContext) -> _CompletionDispatchResul
         headers=headers,
         encoding=_get_encoding(),
         api_key=api_key,
-        logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alph
+        logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
         client=client,
     )
 
@@ -4561,7 +4561,7 @@ def _complete_ollama_chat(ctx: CompletionDispatchContext) -> _CompletionDispatch
         headers=headers,
         encoding=_get_encoding(),
         api_key=api_key,
-        logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alph
+        logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
         client=client,
     )
 
@@ -4637,7 +4637,7 @@ def _complete_cloudflare(ctx: CompletionDispatchContext) -> _CompletionDispatchR
         headers=headers,
         encoding=_get_encoding(),
         api_key=api_key,
-        logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alph
+        logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
     )
 
 
@@ -5068,7 +5068,7 @@ def _complete_custom_providers(
             logging_obj=logging,
         )
 
-    return response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch contra
+    return response  # pyright: ignore[reportReturnType]  # provider SDK return type is broader than the dispatch contract
 
 
 def _complete_langgraph(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
@@ -5354,7 +5354,7 @@ def completion(
         # Cast tools to Optional[Iterable[ToolParam]] for type checking
         tools_for_mcp: Final = cast(Iterable[ToolParam] | None, tools)
         if LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(tools=tools_for_mcp):
-            return acompletion_with_mcp(  # pyright: ignore[reportReturnType]  # MCP path returns a coroutine that acomp
+            return acompletion_with_mcp(  # pyright: ignore[reportReturnType]  # MCP path returns a coroutine that acompletion() awaits; completion()'s sync return type omits it
                 model=model,
                 messages=messages,
                 functions=functions,
@@ -5539,12 +5539,12 @@ def completion(
         logging: Final[LiteLLMLoggingObj] = cast(LiteLLMLoggingObj, litellm_logging_obj)
         fallbacks = fallbacks or litellm.model_fallbacks
         if fallbacks is not None:
-            return completion_with_fallbacks(  # pyright: ignore[reportReturnType]  # fallback runner is untyped; resolv
+            return completion_with_fallbacks(  # pyright: ignore[reportReturnType]  # fallback runner is untyped; resolves to ModelResponse|CustomStreamWrapper at runtime
                 **args
             )
         if model_list is not None:
             deployments: Final = [m["litellm_params"] for m in model_list if m["model_name"] == model]
-            return litellm.batch_completion_models(  # pyright: ignore[reportReturnType]  # batch path returns a list of
+            return litellm.batch_completion_models(  # pyright: ignore[reportReturnType]  # batch path returns a list of responses, outside completion()'s single-response return type
                 deployments=deployments, **args
             )
         if litellm.model_alias_map and model in litellm.model_alias_map:
@@ -5836,7 +5836,7 @@ def completion(
         logging.update_environment_variables(
             model=model,
             user=user,
-            optional_params=processed_non_default_params,  # [IMPORTANT] - using processed_non_default_params ensures co
+            optional_params=processed_non_default_params,  # [IMPORTANT] - using processed_non_default_params ensures consistent params logged to langfuse for finetuning / eval datasets.
             litellm_params=litellm_params,
             custom_llm_provider=custom_llm_provider,
         )
@@ -5901,7 +5901,7 @@ def completion(
                 else:
                     optional_params["reasoning_effort"] = {"summary": rs_val}
 
-            return responses_api_bridge.completion(  # pyright: ignore[reportReturnType]  # bridge returns a coroutine o
+            return responses_api_bridge.completion(  # pyright: ignore[reportReturnType]  # bridge returns a coroutine on the acompletion path; awaited by the async caller
                 model=model,
                 messages=messages,
                 headers=headers,
@@ -6054,7 +6054,7 @@ def completion(
         elif custom_llm_provider == "mistral":
             response = _complete_mistral(_dispatch_ctx)
         elif "replicate" in model or custom_llm_provider == "replicate" or model in litellm.replicate_models:
-            # Setting the relevant API KEY for replicate, replicate defaults to using os.environ.get("REPLICATE_API_TOKE
+            # Setting the relevant API KEY for replicate, replicate defaults to using os.environ.get("REPLICATE_API_TOKEN")
             response = _complete_replicate(_dispatch_ctx)
         elif "clarifai" in model or custom_llm_provider == "clarifai" or model in litellm.clarifai_models:
             pass  # Deprecated - handled in the openai compatible provider section above
@@ -6628,7 +6628,7 @@ def embedding(
             openai.organization = (
                 litellm.organization
                 or get_secret_str("OPENAI_ORGANIZATION")
-                or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088d
+                or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
             )
             # set API KEY
             api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
@@ -7241,14 +7241,14 @@ def embedding(
             from litellm.llms.azure_ai.common_utils import get_azure_ai_entra_token
 
             api_base = (
-                api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in t
+                api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
                 or litellm.api_base
                 or get_secret_str("AZURE_AI_API_BASE")
             )
             # set API KEY
             api_key = (
                 api_key
-                or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass
+                or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass in the api key from there
                 or get_secret_str("AZURE_AI_API_KEY")
                 or get_azure_ai_entra_token(litellm_params=litellm_params_dict)
             )
@@ -7639,7 +7639,7 @@ def text_completion(
     text_completion_response = TextCompletionResponse()
 
     optional_params: Final[dict[str, Any]] = {}
-    # default values for all optional params are none, litellm only passes them to the llm when they are set to non None
+    # default values for all optional params are none, litellm only passes them to the llm when they are set to non None values
     if best_of is not None:
         optional_params["best_of"] = best_of
     if echo is not None:
@@ -7767,7 +7767,7 @@ def text_completion(
 
     if _model is not None and (
         custom_llm_provider == "openai"
-    ):  # for openai compatible endpoints - e.g. vllm, call the native /v1/completions endpoint for text completion call
+    ):  # for openai compatible endpoints - e.g. vllm, call the native /v1/completions endpoint for text completion calls
         if _model not in litellm.open_ai_chat_completion_models:
             model = "text-completion-openai/" + _model
             optional_params.pop("custom_llm_provider", None)
@@ -7932,7 +7932,7 @@ async def amoderation(
             api_key=optional_params.api_key,
         )
     except litellm.BadRequestError:
-        # `model` is optional field for moderation - get_llm_provider will throw BadRequestError if model is not set / n
+        # `model` is optional field for moderation - get_llm_provider will throw BadRequestError if model is not set / not recognized
         pass
 
     openai_client: Final = kwargs.get("client", None)
@@ -8182,7 +8182,7 @@ def transcription(
         openai.organization = (
             litellm.organization
             or get_secret("OPENAI_ORGANIZATION")
-            or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/o
+            or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
         )
         # set API KEY
 
@@ -8461,7 +8461,7 @@ def speech(
                 llm_provider=custom_llm_provider,
             )
         api_base = (
-            api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the a
+            api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
             or litellm.api_base
             or get_secret("OPENAI_BASE_URL")
             or get_secret("OPENAI_API_BASE")
@@ -8470,7 +8470,7 @@ def speech(
         # set API KEY
         api_key = (
             api_key
-            or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key
+            or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
             or litellm.openai_key
             or get_secret("OPENAI_API_KEY")
         )
@@ -8479,14 +8479,14 @@ def speech(
             organization
             or litellm.organization
             or get_secret("OPENAI_ORGANIZATION")
-            or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/o
+            or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
         )
 
         project = (
             project
             or litellm.project
             or get_secret("OPENAI_PROJECT")
-            or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/o
+            or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
         )
 
         headers = headers or litellm.headers
@@ -8992,7 +8992,7 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Sequence | None
     completion_tokens: Final = token_counter(
         model=model,
         text=combined_content,
-        count_response_tokens=True,  # count_response_tokens is a Flag to tell token counter this is a response, No need
+        count_response_tokens=True,  # count_response_tokens is a Flag to tell token counter this is a response, No need to add extra tokens we do for input messages
     )
 
     response: Final = {

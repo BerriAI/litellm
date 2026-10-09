@@ -75,7 +75,7 @@ from litellm.proxy.common_utils.callback_utils import (
     strip_callback_config,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
-    _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package
+    _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     safe_get_request_headers,
 )
 from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
@@ -2423,7 +2423,7 @@ async def add_litellm_data_to_request(
             if key not in data[_metadata_variable_name]:
                 data[_metadata_variable_name][key] = value
         if _metadata_variable_name == "metadata":
-            data["metadata"]["tags"] = LiteLLMProxyRequestSetup._merge_tags(  # pyright: ignore[reportPrivateUsage]  # same
+            data["metadata"]["tags"] = LiteLLMProxyRequestSetup._merge_tags(  # pyright: ignore[reportPrivateUsage]  # same-module helper, budget blocks the unsuppressed idiom sibling call sites use
                 request_tags=data["metadata"].get("tags"),
                 tags_to_add=data["litellm_metadata"].get("tags"),
             )
@@ -2655,7 +2655,7 @@ async def add_litellm_data_to_request(
 
     verbose_proxy_logger.debug(
         "[PROXY] returned data from litellm_pre_call_utils: %s",
-        cast("object", data),  # cast-ok: data is the untyped request body dict
+        data,
     )
 
     # Team/Project credential overrides from model_config
@@ -2826,9 +2826,9 @@ def _index_fallback_list(fallback_list: Sequence[object]) -> _FallbackIndex:
             if isinstance(key, str) and not ("*" in key or "/" in key):
                 exact[key] = exact.get(key, ()) + targets
             else:
-                fuzzy.append(cast("object", entry))  # cast-ok: fuzzy holds mixed entry shapes
+                fuzzy.append(entry)
         else:
-            fuzzy.append(cast("object", entry))  # cast-ok: fuzzy holds mixed entry shapes
+            fuzzy.append(entry)
     return exact, tuple(fuzzy)
 
 
@@ -2952,7 +2952,7 @@ def _per_user_credential_names_for_groups(
                 lp_map.get("model")
                 if lp_map is not None
                 else getattr(
-                    cast("object", litellm_params),  # cast-ok: litellm_params is Mapping or an object
+                    litellm_params,
                     "model",
                     None,
                 )
@@ -2963,7 +2963,7 @@ def _per_user_credential_names_for_groups(
                 lp_map.get("litellm_credential_name")
                 if lp_map is not None
                 else getattr(
-                    cast("object", litellm_params),  # cast-ok: litellm_params is Mapping or an object
+                    litellm_params,
                     "litellm_credential_name",
                     None,
                 )
@@ -3101,7 +3101,7 @@ async def _resolve_user_provider_credentials_for_request(
             user_id=user_id,
             credential_names=credential_names,
         )
-    except Exception:  # noqa: BLE001  # credential lookup failures degrade to the shared deployment, never break the re
+    except Exception:  # noqa: BLE001  # credential lookup failures degrade to the shared deployment, never break the request
         verbose_proxy_logger.exception(
             "_resolve_user_provider_credentials_for_request: failed to load user provider credentials"
         )

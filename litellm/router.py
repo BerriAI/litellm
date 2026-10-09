@@ -204,7 +204,7 @@ from litellm.router_utils.common_utils import (
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.cooldown_handlers import (
     DEFAULT_COOLDOWN_TIME_SECONDS,
-    _first_present,  # pyright: ignore[reportPrivateUsage] - shared internal helper across router_utils submodules, matc
+    _first_present,  # pyright: ignore[reportPrivateUsage] - shared internal helper across router_utils submodules, matching the other cooldown_handlers imports on this line
     async_get_cooldown_deployments,
     async_get_cooldown_deployments_with_debug_info,
     get_cooldown_deployments,
@@ -791,7 +791,7 @@ class FallbackAwareAnthropicMessagesStream:
         if source_params is None or source_params is self._followed_source_params:
             return
         self._followed_source_params = source_params
-        hidden_params, headers = Router._prepare_fallback_hidden_params(source)  # pyright: ignore[reportPrivateUsage]  # this
+        hidden_params, headers = Router._prepare_fallback_hidden_params(source)  # pyright: ignore[reportPrivateUsage]  # this wrapper is the Router's own stream type
         self.merge_fallback_hidden_params(hidden_params, headers)
 
     def __aiter__(self) -> "FallbackAwareAnthropicMessagesStream":
@@ -1065,7 +1065,7 @@ class Router:
         from litellm._service_logger import ServiceLogging
 
         self.service_logger_obj: ServiceLogging = ServiceLogging()
-        litellm.suppress_debug_info = True  # prevents 'Give Feedback/Get help' message from being emitted on Router - R
+        litellm.suppress_debug_info = True  # prevents 'Give Feedback/Get help' message from being emitted on Router - Relevant Issue: https://github.com/BerriAI/litellm/issues/5942
         if self.set_verbose is True:
             if debug_level == "INFO":
                 verbose_router_logger.setLevel(logging.INFO)
@@ -1141,7 +1141,7 @@ class Router:
         # Initialize model_group_alias early since it's used in set_model_list
         self.model_group_alias: dict[str, str | RouterModelGroupAliasItem] = (
             model_group_alias or {}
-        )  # dict to store aliases for router, ex. {"gpt-4": "gpt-3.5-turbo"}, all requests with gpt-4 -> get routed to
+        )  # dict to store aliases for router, ex. {"gpt-4": "gpt-3.5-turbo"}, all requests with gpt-4 -> get routed to gpt-3.5-turbo group
 
         # Initialize model ID to deployment index mapping for O(1) lookups
         self.model_id_to_deployment_index_map: dict[str, int] = {}
@@ -1190,7 +1190,7 @@ class Router:
                 if "model" in m["litellm_params"]:
                     self.deployment_latency_map[m["litellm_params"]["model"]] = 0
         else:
-            self.model_list: list = []  # initialize an empty list - to allow _add_deployment and delete_deployment to w
+            self.model_list: list = []  # initialize an empty list - to allow _add_deployment and delete_deployment to work
 
         if allowed_fails is not None:
             self.allowed_fails = allowed_fails
@@ -3588,7 +3588,7 @@ class Router:
 
         partial_usage: Final = Router._extract_partial_responses_usage(source_iterator)
         fallback_response = None  # rebind-ok: pre-init so finally can close it if a fallback was actually attempted
-        fallback_yielded = False  # rebind-ok: flipped on the first fallback item so a fallback that dies before its fir
+        fallback_yielded = False  # rebind-ok: flipped on the first fallback item so a fallback that dies before its first event still replays the primary's held announcement
         try:
             model_group: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: model group
             fallbacks: Final[list | None] = initial_kwargs.get(  # mutable-ok: matches the common_utils list|None param
@@ -4069,7 +4069,7 @@ class Router:
         effective_model_info: Final = kwargs.get("model_info")
         deployment_id: Final = effective_model_info.get("id") if isinstance(effective_model_info, Mapping) else None
         if isinstance(deployment_id, str) and deployment_id:
-            exception.retry_skip_deployment_id = deployment_id  # pyright: ignore[reportAttributeAccessIssue]  # dynamic
+            exception.retry_skip_deployment_id = deployment_id  # pyright: ignore[reportAttributeAccessIssue]  # dynamic stamp, read by _deployment_ids_to_skip_on_retry
 
     def _update_kwargs_with_default_litellm_params(
         self, kwargs: dict, metadata_variable_name: str | None = "metadata"
@@ -5444,7 +5444,7 @@ class Router:
         """
         if "endpoint" in kwargs and kwargs["endpoint"]:
             # For provider-specific endpoints, strip the provider prefix from model_name
-            # e.g., "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0" -> "us.anthropic.claude-3-5-sonnet-20240620-v
+            # e.g., "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0" -> "us.anthropic.claude-3-5-sonnet-20240620-v1:0"
             from litellm import get_llm_provider
 
             try:
@@ -5673,7 +5673,7 @@ class Router:
             # to take over there is nothing to buffer for, so every frame,
             # including pings and provider error frames, is forwarded live.
             model: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: kwargs always carries the model group
-            has_generated_content = not (  # rebind-ok: set once real content is seen, the buffer cap is hit, or neither
+            has_generated_content = not (  # rebind-ok: set once real content is seen, the buffer cap is hit, or neither a retry nor a fallback can take over
                 self._anthropic_messages_stream_can_retry(initial_kwargs)
                 or self._anthropic_messages_stream_can_fall_back(model, initial_kwargs)
             )
@@ -5689,8 +5689,8 @@ class Router:
                     # detection parses the accumulated buffer plus the current chunk, never the
                     # chunk alone; the buffer is already capped, which bounds this window too.
                     parse_window = (
-                        b"".join(c for c in (*buffered_lifecycle_chunks, chunk) if isinstance(c, (bytes, bytearray)))  # pyright: ignore[reportUnnecessaryIsInstance]  # brid
-                        if not has_generated_content and isinstance(chunk, (bytes, bytearray))  # pyright: ignore[reportUnnecessaryIsInstance]  # brid
+                        b"".join(c for c in (*buffered_lifecycle_chunks, chunk) if isinstance(c, (bytes, bytearray)))  # pyright: ignore[reportUnnecessaryIsInstance]  # bridge-path chunks are not always bytes at runtime
+                        if not has_generated_content and isinstance(chunk, (bytes, bytearray))  # pyright: ignore[reportUnnecessaryIsInstance]  # bridge-path chunks are not always bytes at runtime
                         else chunk
                     )
                     error_event = parse_anthropic_error_event(parse_window)
@@ -5962,7 +5962,7 @@ class Router:
             )
             try:
                 response = await self._ageneric_api_call_with_fallbacks_anthropic_messages_attempt(**retry_kwargs)
-            except Exception as retry_error:  # noqa: BLE001  # every failure of a retry before its stream opens is the
+            except Exception as retry_error:  # noqa: BLE001  # every failure of a retry before its stream opens is the fallback chain's to judge
                 wrapped = _anthropic_stream_fallback_error_for_raised(retry_error, model_group, False)
                 if wrapped is None:
                     return _AnthropicStreamRetriesExhausted(
@@ -6432,7 +6432,7 @@ class Router:
                     )
                 if (
                     "gcs_bucket_name" in data
-                ):  # TODO: Remove this once we have a better way to handle GCS bucket name:  Problem is that we need to
+                ):  # TODO: Remove this once we have a better way to handle GCS bucket name:  Problem is that we need to pass the gcs_bucket_name to the router for the create_file call but it doesn't show up there
                     kwargs_copy.setdefault("litellm_metadata", {})["gcs_bucket_name"] = data["gcs_bucket_name"]
                 async with self._deployment_slot(
                     deployment=deployment, kwargs=kwargs_copy, parent_otel_span=parent_otel_span
@@ -7726,7 +7726,7 @@ class Router:
         try:
             verbose_router_logger.info("Trying to fallback b/w models")
 
-            # check if client-side fallbacks are used (e.g. fallbacks = ["gpt-3.5-turbo", "claude-3-haiku"] or fallbacks
+            # check if client-side fallbacks are used (e.g. fallbacks = ["gpt-3.5-turbo", "claude-3-haiku"] or fallbacks=[{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hey, how's it going?"}]}]
             is_non_standard_fallback_format: Final = check_non_standard_fallback_format(fallbacks=fallbacks)
 
             if is_non_standard_fallback_format:
@@ -7891,7 +7891,7 @@ class Router:
         )
         if compaction_surface is not None:
             kwargs["_context_compaction_state"] = initialize_compaction_state(kwargs, compaction_surface)
-        clear_pre_routing_selection(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # **kwargs is untyped at this
+        clear_pre_routing_selection(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # **kwargs is untyped at this boundary
         if not isinstance(kwargs.get("attempted_targets"), AttemptedFallbackTargets):
             _fallback_metadata_key: Final = get_router_metadata_variable_name(
                 function_name=getattr(kwargs.get("original_function"), "__name__", None)
@@ -10409,7 +10409,7 @@ class Router:
                 previous_deployment.model_name,
                 model_id,
             )
-        except Exception as restore_error:  # noqa: BLE001  # best-effort restore: a second failure must not abort the r
+        except Exception as restore_error:  # noqa: BLE001  # best-effort restore: a second failure must not abort the reload
             verbose_router_logger.warning(
                 "Could not restore previously served deployment %s (id=%s) after the failed upsert: %s",
                 previous_deployment.model_name,
@@ -12437,7 +12437,7 @@ class Router:
                 custom_llm_provider=custom_llm_provider,
                 base_model=base_model if isinstance(base_model, str) else None,
             )
-        except Exception as e:  # noqa: BLE001  # best-effort filter: an unresolvable provider must not narrow the reque
+        except Exception as e:  # noqa: BLE001  # best-effort filter: an unresolvable provider must not narrow the request
             verbose_router_logger.debug(
                 "litellm.router.py::_deployment_accepts_param: keeping %s for model=%s. Got - %s", param, group, e
             )
@@ -13056,7 +13056,7 @@ class Router:
                         model=_dep_model_for_params,
                         litellm_params=LiteLLM_Params.model_validate(_litellm_params),
                     )
-                except Exception as e:  # noqa: BLE001  # best-effort filter: an unresolvable provider must not fail the
+                except Exception as e:  # noqa: BLE001  # best-effort filter: an unresolvable provider must not fail the request
                     verbose_router_logger.debug(
                         "litellm.router.py::_pre_call_checks: skipping supported-params check for model=%s. Got - %s",
                         _dep_model_for_params,
@@ -13503,7 +13503,7 @@ class Router:
             request_kwargs=request_kwargs,
         )
 
-        # IF TEAM ID SPECIFIED ON MODEL, AND REQUEST CONTAINS USER_API_KEY_TEAM_ID, FILTER OUT MODELS THAT ARE NOT IN TH
+        # IF TEAM ID SPECIFIED ON MODEL, AND REQUEST CONTAINS USER_API_KEY_TEAM_ID, FILTER OUT MODELS THAT ARE NOT IN THE TEAM
         ## THIS PREVENTS WRITING FILES OF OTHER TEAMS TO MODELS THAT ARE TEAM-ONLY MODELS
         healthy_deployments = filter_team_based_models(
             healthy_deployments=healthy_deployments,
@@ -13799,7 +13799,7 @@ class Router:
             and self.routing_strategy != "cost-based-routing"
             and self.routing_strategy != "latency-based-routing"
             and self.routing_strategy != "least-busy"
-        ):  # prevent regressions for other routing strategies, that don't have async get available deployments implemen
+        ):  # prevent regressions for other routing strategies, that don't have async get available deployments implemented.
             return self.get_available_deployment(
                 model=model,
                 messages=messages,
@@ -14728,7 +14728,7 @@ class Router:
                 "usage-based-routing-v2, cost-based-routing, latency-based-routing, least-busy), "
                 "or remove `plugins` from the Router config."
             )
-        # users need to explicitly call a specific deployment, by setting `specific_deployment = True` as completion()/e
+        # users need to explicitly call a specific deployment, by setting `specific_deployment = True` as completion()/embedding() kwarg
         # When this was no explicit we had several issues with fallbacks timing out
 
         model, healthy_deployments = self._common_checks_available_deployment(
