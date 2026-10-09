@@ -511,6 +511,7 @@ describe("CredentialModal with OpenAI workload identity federation", () => {
 
     await chooseOption(user, /^Authentication:/, "API key");
     await screen.findByLabelText("OpenAI API Key");
+    expect(screen.queryByText(/only reaches the OpenAI API/)).not.toBeInTheDocument();
     fill("OpenAI API Key", "sk-proj-new");
     await user.click(screen.getByRole("button", { name: "Add Credential" }));
 

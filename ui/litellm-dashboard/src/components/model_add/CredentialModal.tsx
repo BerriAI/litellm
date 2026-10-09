@@ -124,6 +124,11 @@ export default function CredentialModal({
     resetCredentialFormOnProviderChange(formAdapterFor(provider), provider, setSelectedProvider);
   };
 
+  const changeAuthMethod = (method: AuthMethod) => {
+    form.clearErrors(Object.keys(providerFieldValidators(selection)));
+    setAuthMethod(method);
+  };
+
   const handleSubmit = async () => {
     const isValid = await form.trigger(registry.mountedNames() as string[]);
     if (!isValid) {
@@ -215,7 +220,7 @@ export default function CredentialModal({
                   <Select
                     items={authMethodItems}
                     value={authMethod}
-                    onValueChange={(value) => setAuthMethod(value as AuthMethod)}
+                    onValueChange={(value) => changeAuthMethod(value as AuthMethod)}
                   >
                     <SelectTrigger id={AUTH_METHOD_SELECT_ID} className="w-full">
                       <SelectValue />
