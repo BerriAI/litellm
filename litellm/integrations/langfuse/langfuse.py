@@ -126,8 +126,8 @@ def _usage_token_value(usage_obj: object, standard_name: str, decision_name: str
         int: The token count, defaulting to 0.
     """
     value = getattr(usage_obj, standard_name, None)
-    if value is None and hasattr(usage_obj, "get"):
-        value = cast(dict[str, object], usage_obj).get(standard_name)
+    if value is None and isinstance(usage_obj, dict):
+        value = usage_obj.get(standard_name)
     if value is None and decision_name is not None:
         value = getattr(usage_obj, decision_name, None)
     return value or 0
