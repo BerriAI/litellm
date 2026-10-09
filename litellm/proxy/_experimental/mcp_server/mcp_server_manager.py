@@ -1296,7 +1296,7 @@ def _openapi_forwarded_extra_headers(
     )
     forwarded: Final[dict[str, str]] = {}
     for header_name in mcp_server.extra_headers:
-        if not isinstance(header_name, str):
+        if not isinstance(header_name, str) or header_name.lower() == "x-litellm-api-key":
             continue
         if skip_caller_authorization and header_name.lower() == "authorization":
             continue
@@ -6272,7 +6272,7 @@ class MCPServerManager:
             )
 
             for header in mcp_server.extra_headers:
-                if not isinstance(header, str):
+                if not isinstance(header, str) or header.lower() == "x-litellm-api-key":
                     continue
                 if header.lower() == "authorization" and strip_caller_authorization:
                     continue

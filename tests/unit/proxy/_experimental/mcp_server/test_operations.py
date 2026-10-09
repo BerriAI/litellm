@@ -1424,3 +1424,20 @@ async def test_initial_tool_listing_preserves_legacy_error_fallback(monkeypatch:
         assert listing.tools == []
         assert listing.next_cursor is None
     fetch.assert_awaited_once()
+
+
+@pytest.mark.parametrize("header_name", ("x-litellm-api-key", "X-LiteLLM-API-Key"))
+def test_discovery_extra_headers_exclude_gateway_admission_key(header_name: str) -> None:
+    caller_key: Final = "Bearer sk-admission-only"
+    raw_headers: Final = {"x-litellm-api-key": caller_key, "x-tenant": "tenant-control"}
+    server: Final = MCPServer(
+        server_id="header-boundary", name="header-boundary", transport=MCPTransport.http,
+        url="https://example.invalid/mcp", auth_type=MCPAuth.none,
+        extra_headers=[header_name, "X-Tenant"],
+    )
+    auth_header, extra_headers = operations._prepare_mcp_server_headers(
+        server, None, None, None, raw_headers, UserAPIKeyAuth(api_key="sk-admission-only"),
+    )
+    assert auth_header is None
+    assert extra_headers == {"X-Tenant": "tenant-control"}
+    assert raw_headers == {"x-litellm-api-key": caller_key, "x-tenant": "tenant-control"}

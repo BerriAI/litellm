@@ -2150,8 +2150,8 @@ async def test_list_tool_rest_api_with_server_specific_auth():
         ) as mock_get_server_auth:
             mock_get_auth.return_value = "Bearer default_token"
             mock_get_server_auth.return_value = {
-                "zapier": "Bearer zapier_token",
-                "slack": "Bearer slack_token",
+                "zapier": {"Authorization": "Bearer zapier_token"},
+                "slack": {"Authorization": "Bearer slack_token"},
             }
 
             # Mock the global_mcp_server_manager
@@ -2218,7 +2218,7 @@ async def test_list_tool_rest_api_with_server_specific_auth():
                     call_args = mock_get_tools.call_args
                     assert call_args[0][0] == mock_server  # server
                     assert (
-                        call_args[0][1] == "Bearer zapier_token"
+                        call_args[0][1] == {"Authorization": "Bearer zapier_token"}
                     )  # server_auth_header
 
 
@@ -2342,8 +2342,8 @@ async def test_list_tool_rest_api_all_servers_with_auth():
         ) as mock_get_server_auth:
             mock_get_auth.return_value = "Bearer default_token"
             mock_get_server_auth.return_value = {
-                "zapier": "Bearer zapier_token",
-                "slack": "Bearer slack_token",
+                "zapier": {"Authorization": "Bearer zapier_token"},
+                "slack": {"Authorization": "Bearer slack_token"},
             }
 
             # Mock the global_mcp_server_manager
@@ -2436,10 +2436,10 @@ async def test_list_tool_rest_api_all_servers_with_auth():
                     }
 
                     assert (
-                        server_auth_map.get(mock_zapier_server) == "Bearer zapier_token"
+                        server_auth_map.get(mock_zapier_server) == {"Authorization": "Bearer zapier_token"}
                     )
                     assert (
-                        server_auth_map.get(mock_slack_server) == "Bearer slack_token"
+                        server_auth_map.get(mock_slack_server) == {"Authorization": "Bearer slack_token"}
                     )
 
 
