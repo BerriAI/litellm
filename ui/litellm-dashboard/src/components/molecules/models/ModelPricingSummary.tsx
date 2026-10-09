@@ -1,10 +1,26 @@
-import { ModelData } from "@/components/model_dashboard/types";
+import { ModelData, ModelInfo } from "@/components/model_dashboard/types";
+import { Badge } from "@/components/ui/badge";
 import { formatPerSecondCost } from "@/utils/dataUtils";
 
 type PricingFields = Pick<
   ModelData,
   "input_cost" | "output_cost" | "output_cost_per_second" | "output_cost_per_second_tiers"
->;
+> & { model_info?: Pick<ModelInfo, "pricing_overrides"> };
+
+function PricingSource({ overrides }: { overrides: string[] | undefined }) {
+  if (overrides === undefined) return null;
+  if (overrides.length === 0) {
+    return <p className="mt-2 text-xs text-muted-foreground">Follows the model cost map</p>;
+  }
+  return (
+    <p className="mt-2 text-xs text-muted-foreground">
+      <Badge variant="outline" className="mr-1">
+        Custom pricing
+      </Badge>
+      Overrides the model cost map for {overrides.join(", ")}
+    </p>
+  );
+}
 
 export function ModelPricingSummary({ model }: { model: PricingFields }) {
   const perSecond = model.output_cost_per_second;
@@ -26,6 +42,7 @@ export function ModelPricingSummary({ model }: { model: PricingFields }) {
           Output ({resolution}): {formatPerSecondCost(cost)}
         </p>
       ))}
+      <PricingSource overrides={model.model_info?.pricing_overrides} />
     </div>
   );
 }

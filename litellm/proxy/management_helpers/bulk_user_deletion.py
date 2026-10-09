@@ -31,14 +31,14 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import delete_cache_key_objects, get_jwt_key_mapping_cache_keys_for_tokens
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
 from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem
-from litellm.proxy.management_endpoints.common_utils import (
-    _is_user_org_admin_for_team,  # pyright: ignore[reportPrivateUsage]  # same check /team/member_delete uses
-    _is_user_team_admin,  # pyright: ignore[reportPrivateUsage]  # same check /team/member_delete uses
-)
-from litellm.proxy.management_endpoints.key_management_endpoints import (
-    _persist_deleted_verification_tokens,  # pyright: ignore[reportPrivateUsage]  # same audit path /key/delete uses
+from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN
+from litellm.proxy.management.teams.dependencies import get_team_access
+from litellm.proxy.management_endpoints.key_management_endpoints import (  # noqa: F401  # legacy module exports
+    _persist_deleted_verification_tokens,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    persist_deleted_verification_tokens,  # pyright: ignore[reportPrivateUsage]  # same audit path /key/delete uses
 )
 from litellm.proxy.management_helpers.access_group_team_sync import TEAM_ADVISORY_LOCK_SQL
 from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -93,20 +93,28 @@ class _TeamRemoval:
     team: LiteLLM_TeamTable
     removed: frozenset[str]
     matched: frozenset[int]
-    deleted_key_tokens: tuple[str, ...]
+    deleted_keys: tuple["prisma_models.LiteLLM_VerificationToken", ...]
     jwt_mapping_cache_keys: tuple[str, ...]
+
+    @property
+    def deleted_key_tokens(self) -> tuple[str, ...]:
+        return tuple(k.token for k in self.deleted_keys)
 
 
 @dataclass(frozen=True, slots=True)
 class _UserBatchDeletion:
     removals: Mapping[str, _TeamRemoval]
-    deleted_key_tokens: tuple[str, ...]
+    deleted_keys: tuple["prisma_models.LiteLLM_VerificationToken", ...]
     jwt_mapping_cache_keys: tuple[str, ...]
+
+    @property
+    def deleted_key_tokens(self) -> tuple[str, ...]:
+        return tuple(k.token for k in self.deleted_keys)
 
 
 @dataclass(frozen=True, slots=True)
 class _DeletedKeys:
-    tokens: tuple[str, ...]
+    keys: tuple["prisma_models.LiteLLM_VerificationToken", ...]
     jwt_mapping_cache_keys: tuple[str, ...]
 
 
@@ -128,19 +136,19 @@ def _forbidden(detail: str) -> ManagementProblem:
 
 
 def _in_filter(field: str, values: Iterable[str]) -> Mapping[str, object]:
-    return {field: {"in": sorted(values)}}  # mutable-ok: Prisma query filters are dict-shaped
+    return {field: {"in": sorted(values)}}
 
 
 def _eq_filter(field: str, value: str) -> Mapping[str, object]:
-    return {field: value}  # mutable-ok: Prisma query filters are dict-shaped
+    return {field: value}
 
 
 def _team_users_filter(team_id: str, user_ids: Iterable[str]) -> Mapping[str, object]:
-    return {"team_id": team_id, **_in_filter("user_id", user_ids)}  # mutable-ok: Prisma query filters are dict-shaped
+    return {"team_id": team_id, **_in_filter("user_id", user_ids)}
 
 
 def _any_filter(*clauses: Mapping[str, object]) -> Mapping[str, object]:
-    return {"OR": clauses}  # mutable-ok: Prisma query filters are dict-shaped
+    return {"OR": clauses}
 
 
 def _team_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_TeamTable]":
@@ -195,7 +203,7 @@ def _error_message(exc: BaseException) -> str:
     if isinstance(exc, HTTPException) and isinstance(exc.detail, dict):
         return str(exc.detail.get("error", exc.detail))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # HTTPException.detail is untyped
     if isinstance(exc, HTTPException):
-        return str(exc.detail)  # pyright: ignore[reportUnknownArgumentType]  # HTTPException.detail is untyped
+        return str(exc.detail)
     return str(exc) or type(exc).__name__
 
 
@@ -260,7 +268,7 @@ async def _remove_members_from_team(
         await _user_tx_db(tx).update(where=_eq_filter("user_id", row.user_id), data=teams_data)
     await _membership_tx_db(tx).delete_many(where=_team_users_filter(team_id, cleanup_ids))
     if keys:
-        await _persist_deleted_verification_tokens(
+        await persist_deleted_verification_tokens(
             keys=keys,  # pyright: ignore[reportArgumentType]  # generated row model carries the same columns as LiteLLM_VerificationToken
             prisma_client=prisma_client,
             user_api_key_dict=user_api_key_dict,
@@ -276,7 +284,7 @@ async def _remove_members_from_team(
         ),
         removed=cleanup_ids,
         matched=matched,
-        deleted_key_tokens=tuple(k.token for k in keys),
+        deleted_keys=tuple(keys),
         jwt_mapping_cache_keys=jwt_mapping_cache_keys,
     )
 
@@ -315,11 +323,7 @@ async def bulk_remove_team_members(
     if team is None:
         raise _team_not_found(team_id)
 
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-        and not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team)
-        and not await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team)
-    ):
+    if not await get_team_access().allows(user_api_key_dict, team, TEAM_OR_ORG_ADMIN):
         raise _forbidden(
             "Call not allowed. User not proxy admin OR team admin OR org admin for this team. "
             f"route='/management/v1/teams/{team_id}/members/bulk_delete'"
@@ -330,6 +334,12 @@ async def bulk_remove_team_members(
     members: Final = tuple(data.members[i] for i in kept_indexes)
     async with prisma_client.tx(timeout=_BATCH_TX_TIMEOUT) as tx:
         removal: Final = await _remove_members_from_team(prisma_client, tx, team_id, members, user_api_key_dict)
+    if removal.deleted_keys:
+        KeyManagementEventHooks.create_key_deleted_audit_logs(
+            keys_being_deleted=removal.deleted_keys,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
     await delete_cache_key_objects(
         hashed_tokens=removal.deleted_key_tokens,
         user_api_key_cache=user_api_key_cache,
@@ -389,7 +399,7 @@ async def _delete_user_rows(
         prisma_client=prisma_client,
     )
     if keys:
-        await _persist_deleted_verification_tokens(
+        await persist_deleted_verification_tokens(
             keys=keys,  # pyright: ignore[reportArgumentType]  # generated row model carries the same columns as LiteLLM_VerificationToken
             prisma_client=prisma_client,
             user_api_key_dict=user_api_key_dict,
@@ -407,7 +417,7 @@ async def _delete_user_rows(
     await _org_membership_tx_db(tx).delete_many(where=_in_filter("user_id", user_ids))
     await _membership_tx_db(tx).delete_many(where=_in_filter("user_id", user_ids))
     await _user_tx_db(tx).delete_many(where=_in_filter("user_id", user_ids))
-    return _DeletedKeys(tokens=tuple(k.token for k in keys), jwt_mapping_cache_keys=jwt_mapping_cache_keys)
+    return _DeletedKeys(keys=tuple(keys), jwt_mapping_cache_keys=jwt_mapping_cache_keys)
 
 
 async def _delete_users_tx(
@@ -446,7 +456,7 @@ async def _delete_users_tx(
         )
     return _UserBatchDeletion(
         removals=removals,
-        deleted_key_tokens=deleted_keys.tokens + tuple(t for r in removals.values() for t in r.deleted_key_tokens),
+        deleted_keys=deleted_keys.keys + tuple(k for r in removals.values() for k in r.deleted_keys),
         jwt_mapping_cache_keys=deleted_keys.jwt_mapping_cache_keys
         + tuple(k for r in removals.values() for k in r.jwt_mapping_cache_keys),
     )
@@ -469,6 +479,12 @@ async def _delete_users(
     except Exception as e:  # noqa: BLE001  # the rolled-back batch is reported per row, not as a request failure
         verbose_proxy_logger.error("users/bulk_delete: failed to delete users %s: %s", sorted(user_ids), e)
         return _error_message(e)
+    if deletion.deleted_keys:
+        KeyManagementEventHooks.create_key_deleted_audit_logs(
+            keys_being_deleted=deletion.deleted_keys,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=litellm_changed_by,
+        )
     await delete_cache_key_objects(
         hashed_tokens=deletion.deleted_key_tokens,
         user_api_key_cache=user_api_key_cache,
@@ -555,7 +571,7 @@ async def bulk_delete_users(
             litellm_changed_by,
         )
         if candidates
-        else _UserBatchDeletion(removals=MappingProxyType({}), deleted_key_tokens=(), jwt_mapping_cache_keys=())
+        else _UserBatchDeletion(removals=MappingProxyType({}), deleted_keys=(), jwt_mapping_cache_keys=())
     )
 
     def result(index: int, user_id: str) -> UserDeleteResult:

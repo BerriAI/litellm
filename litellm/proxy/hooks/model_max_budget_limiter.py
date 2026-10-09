@@ -1,3 +1,4 @@
+import asyncio
 import json
 import time
 from collections.abc import Iterable, Mapping, Sequence
@@ -5,7 +6,10 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
+from openai.types import Batch
+
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import Span
@@ -13,6 +17,7 @@ from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
+from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import BudgetConfig, StandardLoggingPayload
 
@@ -115,6 +120,17 @@ def model_budget_start_time_cache_key(
     the longer one's window.
     """
     return f"{_BUDGET_START_TIME_KEY_PREFIXES[entity_type]}:{entity_id}:{budget_model}:{budget_duration}"
+
+
+def batch_charged_once_marker_key(spend_key: str, batch_id: str) -> str:
+    return f"{spend_key}:batch:{batch_id}"
+
+
+def batch_id_to_charge_once(call_type: object, response_obj: object, response_cost: float) -> str | None:
+    """A finished batch reports its whole cost on every poll, so its id is charged once per counter."""
+    if response_cost <= 0 or not is_batch_retrieve_call_type(call_type):
+        return None
+    return response_obj.id if isinstance(response_obj, Batch) else None
 
 
 def resolve_model_budget(model: str, model_max_budget: Mapping[str, object]) -> ResolvedModelBudget | None:
@@ -225,9 +241,10 @@ async def build_model_max_budget_usage(
     }
 
 
+@with_service_target("model_budgets")
 async def _current_window_spends(cache: DualCache, spend_keys: Sequence[str]) -> tuple[float, ...]:
     """Redis holds the window total across replicas; the in-memory copy is one replica's share."""
-    keys: Final = list(spend_keys)  # mutable-ok: both batch readers annotate their key argument as list
+    keys: Final = list(spend_keys)
     redis_cache: Final = cache.redis_cache
     if redis_cache is not None:
         shared: Final = await redis_cache.async_batch_get_cache(key_list=keys)
@@ -277,14 +294,18 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     """
     Handles budgets for model + virtual key
 
-    Example: key=sk-1234567890, model=gpt-4o, max_budget=100, time_period=1d
+    Example: key=$LITELLM_API_KEY, model=gpt-4o, max_budget=100, time_period=1d
     """
 
     def __init__(self, dual_cache: DualCache):
         self.dual_cache = dual_cache
         self.redis_increment_operation_queue = []
+        self._redis_increment_queue_lock = asyncio.Lock()
+        self._redis_increment_flush_lock = asyncio.Lock()
+        self._detached_increment_operations = None
         self.deployment_budget_config = None
 
+    @with_service_target("model_budgets")
     async def is_key_within_model_budget(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -307,6 +328,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             ),
         )
 
+    @with_service_target("model_budgets")
     async def get_fallback_model_within_budget(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -321,6 +343,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                 continue
         return None
 
+    @with_service_target("model_budgets")
     async def is_user_within_model_budget(
         self,
         user_id: str,
@@ -341,6 +364,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             exceeded_message=f"LiteLLM User: {user_id}, exceeded budget for model={model}",
         )
 
+    @with_service_target("model_budgets")
     async def is_end_user_within_model_budget(
         self,
         end_user_id: str,
@@ -361,6 +385,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             exceeded_message=f"LiteLLM End User: {end_user_id}, exceeded budget for model={model}",
         )
 
+    @with_service_target("model_budgets")
     async def is_team_within_model_budget(
         self,
         team_id: str,
@@ -456,6 +481,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             return await self.dual_cache.async_get_cache(key=spend_key)
         return await redis_cache.async_get_cache(key=spend_key)
 
+    @with_service_target("model_budgets")
     async def async_filter_deployments(
         self,
         model: str,
@@ -466,11 +492,12 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     ) -> list[dict]:
         return healthy_deployments
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    @with_service_target("model_budgets")
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         """
         Track spend for virtual key + model in DualCache
 
-        Example: key=sk-1234567890, model=gpt-4o, max_budget=100, time_period=1d
+        Example: key=$LITELLM_API_KEY, model=gpt-4o, max_budget=100, time_period=1d
         """
         verbose_proxy_logger.debug("in RouterBudgetLimiting.async_log_success_event")
         standard_logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
@@ -537,22 +564,18 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             )
             return
 
+        batch_id: Final = batch_id_to_charge_once(
+            call_type=kwargs.get("call_type"),
+            response_obj=response_obj,
+            response_cost=response_cost,
+        )
         for entity_type, entity_id, resolved in resolved_budgets:
-            await self._increment_spend_for_key(
-                budget_config=resolved.budget_config,
-                spend_key=model_budget_spend_cache_key(
-                    entity_type=entity_type,
-                    entity_id=entity_id,
-                    budget_model=resolved.budget_model,
-                    budget_duration=resolved.budget_config.budget_duration,
-                ),
-                start_time_key=model_budget_start_time_cache_key(
-                    entity_type=entity_type,
-                    entity_id=entity_id,
-                    budget_model=resolved.budget_model,
-                    budget_duration=resolved.budget_config.budget_duration,
-                ),
+            await self._charge_entity(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                resolved=resolved,
                 response_cost=response_cost,
+                batch_id=batch_id,
             )
 
         if self.dual_cache.redis_cache is not None:
@@ -562,3 +585,48 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             "current state of in memory cache %s",
             json.dumps(self.dual_cache.in_memory_cache.cache_dict, indent=4, default=str),
         )
+
+    async def _charge_entity(
+        self,
+        entity_type: Litellm_EntityType,
+        entity_id: str | None,
+        resolved: ResolvedModelBudget,
+        response_cost: float,
+        batch_id: str | None,
+    ) -> None:
+        budget_duration: Final = resolved.budget_config.budget_duration
+        if budget_duration is None:
+            return
+        spend_key: Final = model_budget_spend_cache_key(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            budget_model=resolved.budget_model,
+            budget_duration=budget_duration,
+        )
+        if batch_id is not None and not await self._claim_batch_charge(
+            spend_key=spend_key,
+            batch_id=batch_id,
+            ttl_seconds=duration_in_seconds(budget_duration),
+        ):
+            return
+        await self._increment_spend_for_key(
+            budget_config=resolved.budget_config,
+            spend_key=spend_key,
+            start_time_key=model_budget_start_time_cache_key(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                budget_model=resolved.budget_model,
+                budget_duration=budget_duration,
+            ),
+            response_cost=response_cost,
+        )
+
+    async def _claim_batch_charge(self, spend_key: str, batch_id: str, ttl_seconds: int) -> bool:
+        marker_key: Final = batch_charged_once_marker_key(spend_key=spend_key, batch_id=batch_id)
+        polls: Final = await self.dual_cache.async_increment_cache(
+            key=marker_key, value=1, ttl=ttl_seconds, refresh_ttl=True
+        )
+        return polls == 1
+
+
+PROXY_VirtualKeyModelMaxBudgetLimiter = _PROXY_VirtualKeyModelMaxBudgetLimiter

@@ -1,16 +1,20 @@
-use litellm_core::audio_transcription::{
-    Error, audio_transcription as run_audio_transcription, types::AudioTranscriptionRequest,
+use crate::execution::{run_async, run_sync};
+use litellm_inference_transcription::{
+    AudioTranscriptionRoute, Error, types::AudioTranscriptionRequest,
 };
-use litellm_host_python::{from_py_argument, run_async, run_sync};
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
 
+use super::NativeCall;
+
 use crate::{
-    errors::audio_transcription_error_to_pyerr,
-    marshal::{RouteOptions, extra_headers_argument, optional_params_argument, optional_timeout},
+    errors::route_error_to_pyerr,
+    marshal::{RouteOptions, optional_object_field, required_field, value_route_options},
 };
 
 async fn execute(
+    http: Result<litellm_http::Client, litellm_http::Error>,
+    secrets: std::sync::Arc<dyn litellm_secrets::source::SecretSource>,
     audio: Value,
     optional_params: Map<String, Value>,
     options: RouteOptions,
@@ -23,79 +27,51 @@ async fn execute(
         extra_headers,
         timeout,
     } = options;
-    run_audio_transcription(AudioTranscriptionRequest {
-        model: &model,
-        audio,
-        api_key: api_key.as_deref(),
-        api_base: api_base.as_deref(),
-        custom_llm_provider: custom_llm_provider.as_deref(),
-        extra_headers,
-        optional_params,
-        timeout,
-    })
-    .await
+    AudioTranscriptionRoute::new(http?, crate::http::resources().auth.clone(), secrets)
+        .execute(AudioTranscriptionRequest {
+            model: &model,
+            audio,
+            api_key: api_key.as_deref(),
+            api_base: api_base.as_deref(),
+            custom_llm_provider: custom_llm_provider.as_deref(),
+            extra_headers,
+            optional_params,
+            timeout,
+        })
+        .await
 }
 
 #[pyfunction]
-#[pyo3(signature = (model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one parameter per Python keyword"
-)]
-pub(crate) fn transcription(
-    py: Python<'_>,
-    model: String,
-    #[pyo3(from_py_with = from_py_argument)] audio: Value,
-    api_key: Option<String>,
-    api_base: Option<String>,
-    custom_llm_provider: Option<String>,
-    #[pyo3(from_py_with = extra_headers_argument)] extra_headers: Option<Map<String, Value>>,
-    #[pyo3(from_py_with = optional_params_argument)] optional_params: Option<Map<String, Value>>,
-    timeout_seconds: Option<f64>,
-) -> PyResult<Py<PyAny>> {
-    let options = RouteOptions {
-        model,
-        api_key,
-        api_base,
-        custom_llm_provider,
-        extra_headers,
-        timeout: optional_timeout(timeout_seconds),
-    };
+pub(crate) fn transcription(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
+    let arguments = call.resolved()?;
+    let audio: Value =
+        litellm_host_python::from_py_argument(&required_field(&arguments, "audio")?)?;
+    let options = value_route_options(&arguments)?;
+    let optional_params = optional_object_field(&arguments, "optional_params")?.unwrap_or_default();
+    let http = crate::http::provider_client(py, &call.kwargs, false)?;
+    let secrets = crate::secrets::source(py)?;
     run_sync(
         py,
-        execute(audio, optional_params.unwrap_or_default(), options),
-        audio_transcription_error_to_pyerr,
+        execute(http, secrets, audio, optional_params, options),
+        route_error_to_pyerr,
     )
 }
 
 #[pyfunction]
-#[pyo3(signature = (model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one parameter per Python keyword"
-)]
 pub(crate) fn atranscription<'py>(
     py: Python<'py>,
-    model: String,
-    #[pyo3(from_py_with = from_py_argument)] audio: Value,
-    api_key: Option<String>,
-    api_base: Option<String>,
-    custom_llm_provider: Option<String>,
-    #[pyo3(from_py_with = extra_headers_argument)] extra_headers: Option<Map<String, Value>>,
-    #[pyo3(from_py_with = optional_params_argument)] optional_params: Option<Map<String, Value>>,
-    timeout_seconds: Option<f64>,
+    call: NativeCall<'py>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let options = RouteOptions {
-        model,
-        api_key,
-        api_base,
-        custom_llm_provider,
-        extra_headers,
-        timeout: optional_timeout(timeout_seconds),
-    };
+    let arguments = call.resolved()?;
+    let audio: Value =
+        litellm_host_python::from_py_argument(&required_field(&arguments, "audio")?)?;
+    let options = value_route_options(&arguments)?;
+    let optional_params = optional_object_field(&arguments, "optional_params")?.unwrap_or_default();
+    let http = crate::http::provider_client(py, &call.kwargs, true)?;
+    let secrets = crate::secrets::source(py)?;
     run_async(
         py,
-        execute(audio, optional_params.unwrap_or_default(), options),
-        audio_transcription_error_to_pyerr,
+        execute(http, secrets, audio, optional_params, options),
+        route_error_to_pyerr,
     )
 }

@@ -6,7 +6,7 @@ import json
 import os
 import re
 import urllib.parse
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from functools import partial
@@ -15,7 +15,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, ParamSpec, TypeVar, cast, get_args, overload
 
 import httpx
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
@@ -33,7 +33,8 @@ from litellm.constants import (
 from litellm.litellm_core_utils.aws_partition import contains_bedrock_arn, get_aws_dns_suffix
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.secret_managers.main import get_secret, get_secret_str
-from litellm.types.llms.bedrock import AwsSessionTag
+from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams, AwsSessionTag
 
 if TYPE_CHECKING:
     from botocore.awsrequest import AWSPreparedRequest
@@ -168,7 +169,15 @@ def build_web_identity_session_policy() -> WebIdentitySessionPolicy:
     )
 
 
-class BedrockRequestTarget(BaseModel):
+def pop_aws_auth_params(
+    optional_params: MutableMapping[str, object],  # mutable-ok: pops the aws_* keys out of the caller's mapping
+) -> AwsAuthParams:
+    return AwsAuthParams.model_validate(
+        MappingProxyType({key: optional_params.pop(key, None) for key in AWS_AUTH_PARAM_KEYS})
+    )
+
+
+class BedrockRequestTarget(LiteLLMBaseModel):
     aws_region_name: str
     aws_bedrock_runtime_endpoint: str | None
 
@@ -186,7 +195,7 @@ def bedrock_bearer_token(api_key: str | None) -> str | None:
     return token or None
 
 
-class _WebIdentityTokenClaims(BaseModel):
+class _WebIdentityTokenClaims(LiteLLMBaseModel):
     aud: str | list[str] | None = None
     iss: str | None = None
 
@@ -274,7 +283,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         self,
         credential_args: Mapping[str, str | bool | tuple[AwsSessionTag, ...] | None],
         credential_fetcher: Callable[[], tuple[Credentials, int | None]],
-    ) -> Any:
+    ) -> Credentials:
         """
         Read-through IAM cache on the process-wide ``DualCache``.
 
@@ -500,6 +509,32 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             )
         else:
             return self._get_or_set_cached_credentials(args, self._auth_with_env_vars)
+
+    def resolve_credentials(self, auth_params: AwsAuthParams, aws_region_name: str | None) -> Credentials:
+        return self.get_credentials(
+            aws_access_key_id=auth_params.aws_access_key_id,
+            aws_secret_access_key=auth_params.aws_secret_access_key,
+            aws_session_token=auth_params.aws_session_token,
+            aws_region_name=aws_region_name,
+            aws_session_name=auth_params.aws_session_name,
+            aws_profile_name=auth_params.aws_profile_name,
+            aws_role_name=auth_params.aws_role_name,
+            aws_web_identity_token=auth_params.aws_web_identity_token,
+            aws_sts_endpoint=auth_params.aws_sts_endpoint,
+            aws_external_id=auth_params.aws_external_id,
+            aws_session_tags=_canonical_aws_session_tags(auth_params.aws_session_tags),
+        )
+
+    def resolve_s3_credentials(self, params: Mapping[str, object], aws_region_name: str | None) -> Credentials:
+        """S3 signing identity: the s3_* static pair as-is when both are set, otherwise the resolved aws_* params."""
+        from botocore.credentials import Credentials
+
+        from litellm.llms.bedrock.common_utils import s3_static_key_pair
+
+        s3_pair: Final = s3_static_key_pair(params)
+        if s3_pair is None:
+            return self.resolve_credentials(AwsAuthParams.model_validate(params), aws_region_name)
+        return Credentials(access_key=s3_pair[0], secret_key=s3_pair[1])
 
     def _get_aws_region_from_model_arn(self, model: str | None) -> str | None:
         try:
@@ -755,6 +790,14 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         self._validate_aws_region_name(aws_region_name)
         return aws_region_name
 
+    def get_aws_region_name(
+        self,
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        model: str | None = None,
+        model_id: str | None = None,
+    ) -> str:
+        return self._get_aws_region_name(optional_params, model, model_id)
+
     @staticmethod
     def _validate_aws_region_name(aws_region_name: str | None) -> None:
         """
@@ -768,6 +811,13 @@ class BaseAWSLLM(SignsRequestsWithAWS):
                 f"Invalid AWS region format: {aws_region_name!r}. "
                 "Region names must contain only lowercase letters, digits, and hyphens."
             )
+
+    @classmethod
+    def validate_aws_region_name(
+        cls,
+        aws_region_name: str | None,
+    ) -> None:
+        return cls._validate_aws_region_name(aws_region_name)
 
     @staticmethod
     def _parse_sts_region_from_endpoint(
@@ -1515,23 +1565,10 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             from botocore.credentials import Credentials
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
-        ## CREDENTIALS ##
-        # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
-        aws_secret_access_key: Final = optional_params.pop("aws_secret_access_key", None)
-        aws_access_key_id: Final = optional_params.pop("aws_access_key_id", None)
-        aws_session_token: Final = optional_params.pop("aws_session_token", None)
         aws_region_name: Final = self._get_aws_region_name(optional_params, model)
         optional_params.pop("aws_region_name", None)
-        aws_role_name: Final = optional_params.pop("aws_role_name", None)
-        aws_session_name: Final = optional_params.pop("aws_session_name", None)
-        aws_profile_name: Final = optional_params.pop("aws_profile_name", None)
-        aws_web_identity_token: Final = optional_params.pop("aws_web_identity_token", None)
-        aws_sts_endpoint: Final = optional_params.pop("aws_sts_endpoint", None)
-        aws_bedrock_runtime_endpoint: Final = optional_params.pop(
-            "aws_bedrock_runtime_endpoint", None
-        )  # https://bedrock-runtime.{region_name}.amazonaws.com
-        aws_external_id: Final = optional_params.pop("aws_external_id", None)
-        aws_session_tags: Final = optional_params.pop("aws_session_tags", None)
+        auth_params: Final = pop_aws_auth_params(optional_params)
+        aws_bedrock_runtime_endpoint: Final = optional_params.pop("aws_bedrock_runtime_endpoint", None)
 
         if bearer_token is not None:
             return BearerRequestTarget(
@@ -1539,19 +1576,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
                 aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             )
 
-        credentials: Final[Credentials] = self.get_credentials(
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-            aws_region_name=aws_region_name,
-            aws_session_name=aws_session_name,
-            aws_profile_name=aws_profile_name,
-            aws_role_name=aws_role_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_sts_endpoint=aws_sts_endpoint,
-            aws_external_id=aws_external_id,
-            aws_session_tags=aws_session_tags,
-        )
+        credentials: Final[Credentials] = self.resolve_credentials(auth_params, aws_region_name)
         return Boto3CredentialsInfo(
             credentials=credentials,
             aws_region_name=aws_region_name,
@@ -1685,33 +1710,9 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
-        ## CREDENTIALS ##
-        # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
-        aws_secret_access_key: Final = optional_params.get("aws_secret_access_key", None)
-        aws_access_key_id: Final = optional_params.get("aws_access_key_id", None)
-        aws_session_token: Final = optional_params.get("aws_session_token", None)
-        aws_role_name: Final = optional_params.get("aws_role_name", None)
-        aws_session_name: Final = optional_params.get("aws_session_name", None)
-        aws_profile_name: Final = optional_params.get("aws_profile_name", None)
-        aws_web_identity_token: Final = optional_params.get("aws_web_identity_token", None)
-        aws_sts_endpoint: Final = optional_params.get("aws_sts_endpoint", None)
-        aws_external_id: Final = optional_params.get("aws_external_id", None)
-        aws_session_tags: Final = optional_params.get("aws_session_tags", None)
+        auth_params: Final = AwsAuthParams.model_validate(optional_params)
         aws_region_name: Final = self._get_aws_region_name(optional_params=optional_params, model=model)
-
-        credentials: Final[Credentials] = self.get_credentials(
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-            aws_region_name=aws_region_name,
-            aws_session_name=aws_session_name,
-            aws_profile_name=aws_profile_name,
-            aws_role_name=aws_role_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_sts_endpoint=aws_sts_endpoint,
-            aws_external_id=aws_external_id,
-            aws_session_tags=aws_session_tags,
-        )
+        credentials: Final[Credentials] = self.resolve_credentials(auth_params, aws_region_name)
 
         sigv4: Final = SigV4Auth(credentials, service_name, aws_region_name)
         headers = headers or {}

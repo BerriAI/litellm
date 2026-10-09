@@ -146,7 +146,7 @@ class AlephAlphaConfig:
                 setattr(self.__class__, key, value)
 
     @classmethod
-    def get_config(cls):
+    def get_config(cls) -> dict[str, object]:
         return {
             k: v
             for k, v in cls.__dict__.items()
@@ -277,12 +277,7 @@ def completion(
 
         ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
         prompt_tokens: Final = len(encoding.encode(prompt))
-        completion_tokens: Final = len(
-            encoding.encode(
-                model_response["choices"][0]["message"]["content"],
-                disallowed_special=(),
-            )
-        )
+        completion_tokens: Final = len(encoding.encode(model_response["choices"][0]["message"]["content"]))
 
         model_response.created = int(time.time())
         model_response.model = model
