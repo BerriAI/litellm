@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Final, Literal
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm import Router
 import os
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 from litellm.integrations.custom_logger import CustomLogger
+from litellm._logging import verbose_logger, verbose_proxy_logger, verbose_router_logger
+from litellm.llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
 
 
 @pytest.mark.asyncio
@@ -504,3 +510,94 @@ class MyCustomHandler(CustomLogger):
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
         print(f"On Failure")
+
+
+def test_async_fallbacks(caplog, respx_mock: respx.MockRouter, monkeypatch):
+    monkeypatch.setattr(litellm, "set_verbose", False)
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            401,
+            json={
+                "error": {
+                    "message": "Incorrect API key provided: bad-key.",
+                    "type": "invalid_request_error",
+                    "code": "invalid_api_key",
+                }
+            },
+        )
+    )
+    verbose_router_logger.setLevel(level=logging.INFO)
+    verbose_logger.setLevel(logging.CRITICAL + 1)
+    verbose_proxy_logger.setLevel(logging.CRITICAL + 1)
+    model_list = [
+        {
+            "model_name": "azure/gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "azure/gpt-4.1-mini",
+                "api_key": os.getenv("AZURE_AI_API_KEY"),
+                "api_version": os.getenv("AZURE_API_VERSION"),
+                "api_base": os.getenv("AZURE_AI_API_BASE"),
+                "mock_response": "Hello world",
+            },
+            "tpm": 240000,
+            "rpm": 1800,
+        },
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "gpt-3.5-turbo",
+                "api_key": "bad-key",
+            },
+            "tpm": 1000000,
+            "rpm": 9000,
+        },
+    ]
+
+    router = Router(
+        model_list=model_list,
+        fallbacks=[{"gpt-3.5-turbo": ["azure/gpt-3.5-turbo"]}],
+        num_retries=1,
+    )
+
+    user_message = "Hello, how are you?"
+    messages = [{"content": user_message, "role": "user"}]
+
+    async def _make_request():
+        try:
+            await router.acompletion(model="gpt-3.5-turbo", messages=messages, max_tokens=1)
+            router.reset()
+        except litellm.Timeout:
+            pass
+        except Exception as e:
+            pytest.fail(f"An exception occurred: {e}")
+        finally:
+            router.reset()
+            await close_litellm_async_clients()
+
+    asyncio.run(_make_request())
+    captured_logs = [rec.message for rec in caplog.records]
+
+    captured_logs = [
+        log
+        for log in captured_logs
+        if "Task exception was never retrieved" not in log
+        and "Task was destroyed but it is pending" not in log
+        and "get_available_deployment" not in log
+        and "Selected deployment for model" not in log
+        and "in the Langfuse queue" not in log
+        and "Unclosed client session" not in log
+        and "Unclosed connector" not in log
+    ]
+
+    print("\n Captured caplog records - ", captured_logs)
+
+    expected_logs = [
+        "Falling back to model_group = azure/gpt-3.5-turbo",
+        "litellm.acompletion(model=azure/gpt-4.1-mini)\x1b[32m 200 OK\x1b[0m",
+        "Successful fallback b/w models.",
+    ]
+
+    assert captured_logs[-3:] == expected_logs

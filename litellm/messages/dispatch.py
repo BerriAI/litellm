@@ -60,21 +60,23 @@ def _public_request(
     max_tokens: Final = fields.get("max_tokens")
     if not isinstance(model, str) or messages is None or not isinstance(max_tokens, int):
         return None
-    return native_call(args, kwargs, fields)
+    return native_call(legacy, args, kwargs)
 
 
 def _resolved_provider(request: NativeCall) -> str | None:
     try:
-        return get_llm_provider(str(request.bound["model"]), optional_str(request.bound.get("custom_llm_provider")))[1]
+        return get_llm_provider(
+            str(request.resolved["model"]), optional_str(request.resolved.get("custom_llm_provider"))
+        )[1]
     except BadRequestError:
-        return optional_str(request.bound.get("custom_llm_provider"))
+        return optional_str(request.resolved.get("custom_llm_provider"))
 
 
 def _context(request: NativeCall) -> RouteContext:
     return RouteContext(
         Route.MESSAGES,
         provider=_resolved_provider(request),
-        model=str(request.bound["model"]),
+        model=str(request.resolved["model"]),
     )
 
 

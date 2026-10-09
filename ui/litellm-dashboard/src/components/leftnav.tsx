@@ -103,7 +103,7 @@ interface SidebarProps {
   allowVectorStoresForTeamAdmins?: boolean;
 }
 
-interface MenuItem {
+export interface MenuItem {
   key: string;
   page: string;
   route?: string;
@@ -114,11 +114,91 @@ interface MenuItem {
   external_url?: string;
 }
 
-interface MenuGroup {
+export interface MenuGroup {
   groupLabel: string;
   items: MenuItem[];
   roles?: string[];
 }
+
+export interface MenuVisibilityContext {
+  userRole: string;
+  isViewOnly: boolean;
+  isOrgAdmin: boolean;
+  isTeamAdmin: boolean;
+  enabledPagesInternalUsers?: string[] | null;
+  enableProjectsUI?: boolean;
+  disableAgentsForInternalUsers?: boolean;
+  allowAgentsForTeamAdmins?: boolean;
+  disableVectorStoresForInternalUsers?: boolean;
+  allowVectorStoresForTeamAdmins?: boolean;
+}
+
+const adminPageVisibility = (item: MenuItem, context: MenuVisibilityContext, isAdmin: boolean): boolean | null => {
+  if (item.key !== "organizations" && item.key !== "users") return null;
+  const hasRoleAccess = !item.roles || item.roles.includes(context.userRole) || context.isOrgAdmin;
+  if (!hasRoleAccess) return false;
+  if (!isAdmin && context.enabledPagesInternalUsers != null) {
+    return context.enabledPagesInternalUsers.includes(item.page);
+  }
+  return true;
+};
+
+const projectPageIsVisible = (item: MenuItem, context: MenuVisibilityContext): boolean => {
+  if (item.key !== "projects") return true;
+  if (!context.enableProjectsUI) return false;
+  return canViewProjectsPage({
+    userRole: context.userRole,
+    isOrgAdmin: context.isOrgAdmin,
+    isTeamAdmin: context.isTeamAdmin,
+  });
+};
+
+const pageIsDisabledForInternalUsers = (
+  item: MenuItem,
+  pageKey: "agents" | "vector-stores",
+  isAdmin: boolean,
+  context: MenuVisibilityContext,
+): boolean => {
+  const isDisabled =
+    pageKey === "agents" ? context.disableAgentsForInternalUsers : context.disableVectorStoresForInternalUsers;
+  const allowedForTeamAdmins =
+    pageKey === "agents" ? context.allowAgentsForTeamAdmins : context.allowVectorStoresForTeamAdmins;
+  if (item.key !== pageKey || isAdmin || !isDisabled) return false;
+  return !(allowedForTeamAdmins && context.isTeamAdmin);
+};
+
+const pageIsEnabledForInternalUser = (item: MenuItem, context: MenuVisibilityContext): boolean => {
+  const enabledPages = context.enabledPagesInternalUsers;
+  if (enabledPages == null) return true;
+  if (item.children?.some((child) => enabledPages.includes(child.page))) return true;
+  return enabledPages.includes(item.page);
+};
+
+const menuItemIsVisible = (item: MenuItem, context: MenuVisibilityContext, isAdmin: boolean): boolean => {
+  if (item.children && item.children.length === 0) return false;
+  if (item.key === "llm-playground" && context.isViewOnly) return false;
+  const adminVisibility = adminPageVisibility(item, context, isAdmin);
+  if (adminVisibility !== null) return adminVisibility;
+  if (!projectPageIsVisible(item, context)) return false;
+  if (pageIsDisabledForInternalUsers(item, "agents", isAdmin, context)) return false;
+  if (pageIsDisabledForInternalUsers(item, "vector-stores", isAdmin, context)) return false;
+  if (item.roles && !item.roles.includes(context.userRole)) return false;
+  if (!isAdmin && context.enabledPagesInternalUsers != null) return pageIsEnabledForInternalUser(item, context);
+  return true;
+};
+
+export const visibleMenuGroups = (groups: readonly MenuGroup[], context: MenuVisibilityContext): MenuGroup[] => {
+  const isAdmin = isAdminRole(context.userRole);
+  const filterItems = (items: MenuItem[]): MenuItem[] =>
+    items
+      .map((item) => ({ ...item, children: item.children ? filterItems(item.children) : undefined }))
+      .filter((item) => menuItemIsVisible(item, context, isAdmin));
+
+  return groups
+    .filter((group) => !group.roles || group.roles.includes(context.userRole))
+    .map((group) => ({ groupLabel: group.groupLabel, items: filterItems(group.items) }))
+    .filter((group) => group.items.length > 0);
+};
 
 // Menu groups organized by category - defined outside component for export.
 // Shape (key/page/label/roles/children) is consumed by page_utils.ts; only the
@@ -390,7 +470,7 @@ const menuGroups: MenuGroup[] = [
 
 const HOME_ROUTE = "api-keys";
 
-const routeOf = (item: MenuItem): string => item.route ?? item.page;
+export const routeOf = (item: MenuItem): string => item.route ?? item.page;
 
 const routeForPathname = (pathname: string): string => routeSegmentForPathname(pathname) || HOME_ROUTE;
 
@@ -422,6 +502,8 @@ const SECTION_DISPLAY: Record<string, string> = {
   SETTINGS: "Settings",
 };
 
+export const sectionText = (groupLabel: string): string => SECTION_DISPLAY[groupLabel] ?? groupLabel;
+
 const prettify = (key: string): string =>
   key
     .split(/[-_]/)
@@ -435,7 +517,7 @@ export const getBreadcrumb = (pathname: string): { section: string | null; title
   const route = routeForPathname(pathname);
   for (const group of menuGroups) {
     for (const item of group.items) {
-      const section = SECTION_DISPLAY[group.groupLabel] ?? group.groupLabel;
+      const section = sectionText(group.groupLabel);
       if (routeOf(item) === route) return { section, title: labelText(item) };
       const child = item.children?.find((c) => routeOf(c) === route);
       if (child) return { section, title: labelText(child) };
@@ -486,56 +568,32 @@ const Sidebar_: React.FC<SidebarProps> = ({
 
   const isTeamAdmin = useMemo(() => isUserTeamAdminForAnyTeam(teams ?? null, userId ?? ""), [teams, userId]);
 
-  const filterItemsByRole = (items: MenuItem[]): MenuItem[] => {
-    const isAdmin = isAdminRole(userRole);
-    return items
-      .map((item) => ({ ...item, children: item.children ? filterItemsByRole(item.children) : undefined }))
-      .filter((item) => {
-        // A parent whose children were all filtered out renders as a leaf link
-        // to its own page id, which is not a real route. Drop it instead.
-        if (item.children && item.children.length === 0) return false;
-        if (item.key === "llm-playground" && isViewOnly) return false;
-        if (item.key === "organizations" || item.key === "users") {
-          const hasRoleAccess = !item.roles || item.roles.includes(userRole) || isOrgAdmin;
-          if (!hasRoleAccess) return false;
-          if (!isAdmin && enabledPagesInternalUsers != null) return enabledPagesInternalUsers.includes(item.page);
-          return true;
-        }
-        if (
-          item.key === "projects" &&
-          !(enableProjectsUI && canViewProjectsPage({ userRole, isOrgAdmin, isTeamAdmin }))
-        )
-          return false;
-        if (
-          !isAdmin &&
-          item.key === "agents" &&
-          disableAgentsForInternalUsers &&
-          !(allowAgentsForTeamAdmins && isTeamAdmin)
-        )
-          return false;
-        if (
-          !isAdmin &&
-          item.key === "vector-stores" &&
-          disableVectorStoresForInternalUsers &&
-          !(allowVectorStoresForTeamAdmins && isTeamAdmin)
-        )
-          return false;
-        if (item.roles && !item.roles.includes(userRole)) return false;
-        if (!isAdmin && enabledPagesInternalUsers != null) {
-          if (item.children && item.children.length > 0) {
-            const hasVisibleChildren = item.children.some((child) => enabledPagesInternalUsers.includes(child.page));
-            if (hasVisibleChildren) return true;
-          }
-          return enabledPagesInternalUsers.includes(item.page);
-        }
-        return true;
-      });
-  };
-
-  const visibleGroups = menuGroups
-    .filter((group) => !group.roles || group.roles.includes(userRole))
-    .map((group) => ({ groupLabel: group.groupLabel, items: filterItemsByRole(group.items) }))
-    .filter((group) => group.items.length > 0);
+  const visibleGroups = useMemo(() => {
+    const context: MenuVisibilityContext = {
+      userRole,
+      isViewOnly,
+      isOrgAdmin,
+      isTeamAdmin,
+      enabledPagesInternalUsers,
+      enableProjectsUI,
+      disableAgentsForInternalUsers,
+      allowAgentsForTeamAdmins,
+      disableVectorStoresForInternalUsers,
+      allowVectorStoresForTeamAdmins,
+    };
+    return visibleMenuGroups(menuGroups, context);
+  }, [
+    allowAgentsForTeamAdmins,
+    allowVectorStoresForTeamAdmins,
+    disableAgentsForInternalUsers,
+    disableVectorStoresForInternalUsers,
+    enableProjectsUI,
+    enabledPagesInternalUsers,
+    isOrgAdmin,
+    isTeamAdmin,
+    isViewOnly,
+    userRole,
+  ]);
 
   const toggleGroup = (key: string) => {
     if (collapsed) {

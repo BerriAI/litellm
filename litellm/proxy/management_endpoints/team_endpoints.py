@@ -161,6 +161,7 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS,
     resolve_team_admin_editable_fields,
     team_admin_edit_verdict,
+    team_admin_may_raise_max_budget,
     team_admin_request_or_raise,
 )
 from litellm.proxy.management_helpers.access_group_team_sync import (
@@ -366,8 +367,9 @@ class _TeamIdWhere(TypedDict):
     team_id: ReadOnly[str]
 
 
-class _TeamIdAndBudgetWhere(_TeamIdWhere):
+class _TeamBudgetGuardWhere(_TeamIdWhere):
     max_budget: ReadOnly[float | None]
+    organization_id: ReadOnly[str | None]
 
 
 class _TeamCreateTx(AccessGroupSyncTx, Protocol):
@@ -514,7 +516,10 @@ def _caller_edit_access(role: TeamRole | None, general_settings: Mapping[str, ob
             )
             if not permitted:
                 return TeamEditAsTeamAdminDisabled()
-            return TeamEditAsTeamAdmin(editable_fields=tuple(sorted(permitted)))
+            return TeamEditAsTeamAdmin(
+                editable_fields=tuple(sorted(permitted)),
+                may_raise_max_budget=team_admin_may_raise_max_budget(general_settings),
+            )
         case None:
             return TeamEditNone()
         case _:
@@ -1198,34 +1203,44 @@ async def _check_user_team_limits(
 
 @dataclass(frozen=True, slots=True)
 class _MaxBudgetGuard:
-    """The team write only lands while the stored max_budget still equals `expected`."""
+    """The team write only lands while the stored max_budget and organization_id still match what the check read."""
 
-    expected: float | None
+    max_budget: float | None
+    organization_id: str | None
 
 
 def _check_team_budget_update_authority(
     data: UpdateTeamRequest,
     user_api_key_dict: UserAPIKeyAuth,
     existing_team_max_budget: float | None,
+    existing_team_organization_id: str | None,
+    may_raise: bool,
 ) -> _MaxBudgetGuard | None:
     """
     Restrict who can grow a team's spend ceiling on /team/update.
 
-    A team admin may keep or lower the team budget, but only a proxy admin may
-    grow it - by raising max_budget above the team's current value or by
-    removing the cap (setting it to None). Setting a finite budget on a team
-    that has no cap is a restriction and is allowed. Org admins editing
+    A team admin may keep or lower the team budget. Raising max_budget above the
+    team's current value also needs `may_raise`, which a proxy admin grants via
+    the `raise_max_budget` entry of team_admin_editable_team_fields; the org cap
+    _check_org_team_limits() enforces before this still applies. Removing the cap
+    (setting it to None) stays with the proxy admin. Setting a finite budget on a
+    team that has no cap is a restriction and is allowed. Org admins editing
     org-scoped teams are governed by _check_org_team_limits() instead.
 
-    The verdict holds only for the budget it was checked against, so a restricted
-    caller's budget write gets a guard; without it, a concurrent budget cut could
-    be overwritten with a higher value.
+    The verdict holds only for the budget and organization it was checked against,
+    so a restricted caller's budget write gets a guard; without it, a concurrent
+    budget cut could be overwritten with a higher value, and a concurrent move into
+    a budgeted organization could let the write exceed that organization's cap.
     """
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
         return None
 
     budget_explicitly_set: Final = "max_budget" in (getattr(data, "model_fields_set", None) or set())
-    guard: Final = _MaxBudgetGuard(expected=existing_team_max_budget) if budget_explicitly_set else None
+    guard: Final = (
+        _MaxBudgetGuard(max_budget=existing_team_max_budget, organization_id=existing_team_organization_id)
+        if budget_explicitly_set
+        else None
+    )
     if existing_team_max_budget is None:
         return guard
 
@@ -1237,7 +1252,7 @@ def _check_team_budget_update_authority(
             },
         )
 
-    if data.max_budget is not None and data.max_budget > existing_team_max_budget:
+    if data.max_budget is not None and data.max_budget > existing_team_max_budget and not may_raise:
         raise HTTPException(
             status_code=403,
             detail={
@@ -1267,11 +1282,15 @@ async def _write_team_update(
     by_id: Final[_TeamIdWhere] = {"team_id": team_id}
     if max_budget_guard is None:
         return await _team_db(prisma_client).update(where=by_id, data=team_update_data, include=_TEAM_UPDATE_INCLUDE)
-    by_id_and_budget: Final[_TeamIdAndBudgetWhere] = {"team_id": team_id, "max_budget": max_budget_guard.expected}
-    written: Final = await _team_db(prisma_client).update_many(where=by_id_and_budget, data=team_update_data)
+    as_checked: Final[_TeamBudgetGuardWhere] = {
+        "team_id": team_id,
+        "max_budget": max_budget_guard.max_budget,
+        "organization_id": max_budget_guard.organization_id,
+    }
+    written: Final = await _team_db(prisma_client).update_many(where=as_checked, data=team_update_data)
     if written == 0:
         conflict: Final[_ErrorDetail] = {
-            "error": "The team's max_budget changed during this update. Reload the team and try again."
+            "error": "The team's organization or max_budget changed during this update. Reload the team and try again."
         }
         raise HTTPException(status_code=409, detail=conflict)
     return await _team_db(prisma_client).find_unique(where=by_id, include=_TEAM_UPDATE_INCLUDE)
@@ -2417,13 +2436,15 @@ async def update_team(
                     prisma_client=prisma_client,
                 )
 
-        # A team admin never grows its own team's spend ceiling. Org admins grow org-scoped teams
-        # within the org limits _check_org_team_limits() enforced above.
+        # A team admin grows its own team's spend ceiling only when granted raise_max_budget, and then
+        # within the org limits _check_org_team_limits() enforced above. Org admins are governed by those alone.
         max_budget_guard: Final = (
             _check_team_budget_update_authority(
                 data=data,
                 user_api_key_dict=user_api_key_dict,
                 existing_team_max_budget=existing_team_row.max_budget,
+                existing_team_organization_id=existing_team_row.organization_id,
+                may_raise=access_role == "team_admin" and team_admin_may_raise_max_budget(_general_settings()),
             )
             if org_id_to_check is None or access_role == "team_admin"
             else None

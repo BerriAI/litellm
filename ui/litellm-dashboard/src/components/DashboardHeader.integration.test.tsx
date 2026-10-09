@@ -3,6 +3,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PluginModeProvider } from "@/contexts/PluginModeContext";
+import { CommandPaletteProvider } from "@/components/CommandPalette/CommandPaletteProvider";
 import { DashboardHeader } from "./DashboardHeader";
 
 vi.mock("next/navigation", () => ({ usePathname: () => "/ui/logs" }));
@@ -57,7 +58,9 @@ async function openTools() {
   render(
     <QueryClientProvider client={client}>
       <PluginModeProvider accessToken="test-session">
-        <DashboardHeader />
+        <CommandPaletteProvider>
+          <DashboardHeader />
+        </CommandPaletteProvider>
       </PluginModeProvider>
     </QueryClientProvider>,
   );

@@ -4,7 +4,7 @@
 .PHONY: help test test-unit test-unit-llms test-unit-proxy-guardrails test-unit-proxy-core test-unit-proxy-misc test-unit-proxy-root \
 	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
-	test-rust-extension rust-sqlx-prepare lens-dev \
+	test-rust-extension rust-sqlx-prepare \
 	info lint lint-inner lint-dev lint-checks format \
 	lint-basedpyright lint-e2e-basedpyright lint-type-discipline \
 	lint-ruff-strict lint-gate lint-test-quality \
@@ -54,7 +54,6 @@ help:
 	@echo "  make test-unit-helm     - Run helm unit tests"
 	@echo "  make test-rust-extension - Build the Rust extension and run its public Python tests"
 	@echo "  make rust-sqlx-prepare  - Refresh litellm-rust/crates/db/.sqlx against a migrated Postgres container"
-	@echo "  make lens-dev           - Run proxy + Lens worker + hot-reload dashboard (ARGS=\"--seed large --seed-logs\", LENS_DEV_PROXY_PORT, LENS_DEV_UI_PORT)"
 	@echo ""
 	@echo "Heavy targets (check, lint) queue for LITELLM_GATE_SLOTS machine-wide"
 	@echo "slots (default 2; 0 disables) so parallel sessions don't thrash one machine."
@@ -137,7 +136,7 @@ format-check: install-dev
 lint-fetch-base:
 	@$(RESOLVE_BASE)
 
-# Mirror test-linting.yml's lint job environment: the proxy-dev group plus a generated
+# Mirror test-linting.yml's python job environment: the proxy-dev group plus a generated
 # Prisma client, so `basedpyright tests/e2e` resolves the same modules CI does. The
 # basedpyright gate itself no longer measures here (scripts/type_check_gate.py provisions its
 # own .venv-typecheck). --inexact tops up the venv instead of pruning the proxy extras
@@ -236,7 +235,7 @@ check-circular-imports: $(LINT_DEP_INSTALL)
 check-import-safety: $(LINT_DEP_INSTALL)
 	@$(UV_RUN) python -c "from litellm import *; print('[from litellm import *] OK! no issues!');" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
 
-# Combined linting, isomorphic to test-linting.yml's lint job so a local pass means a
+# Combined linting, isomorphic to test-linting.yml's python job so a local pass means a
 # green CI lint: it installs the same env (proxy-dev + generated Prisma client) and then
 # runs the diff-scoped ruff format check, whole-tree ruff check, the strict-rule /
 # type-discipline / basedpyright gates as a delta vs the base, then the circular-import
@@ -260,8 +259,7 @@ lint-dev: lint-format-changed check-circular-imports check-import-safety
 # is staged (warning about changed files left unstaged); with nothing staged it falls
 # back to the working tree's diff against the merge base with the base branch, so a
 # fresh merge commit or an unstaged working tree still gets checked. Mirrors
-# test-linting.yml (Python), test-litellm-ui-build.yml's frontend-lint (dashboard), and
-# check-ui-api-types.yml (API-type drift), skipping any whose files aren't in scope.
+# test-linting.yml (Python, UI, and API types), skipping any whose files aren't in scope.
 # Not auto-installed as a git hook so it never slows an unrelated human commit.
 check:
 	@$(GATE_SLOT_LOCK) $(MAKE) check-inner
@@ -290,9 +288,6 @@ test-rust-extension:
 
 rust-sqlx-prepare:
 	cd litellm-rust && cargo run -p litellm-db-testing --bin sqlx-prepare
-
-lens-dev:
-	./scripts/lens_dev.sh $(ARGS)
 
 test: install-test-deps
 	$(UV_RUN) pytest tests/

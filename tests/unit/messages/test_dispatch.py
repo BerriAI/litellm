@@ -154,13 +154,13 @@ def test_native_receives_normalized_request_and_original_call_shape() -> None:
     )
     assert result is expected
     request, call_args, call_kwargs = captured[0]
-    assert request.bound["model"] == "anthropic/claude-sonnet-4-5"
-    assert request.bound["messages"] is MESSAGES
-    assert request.bound["max_tokens"] == 16
-    assert request.bound["stream"] is True
-    assert request.bound["api_key"] == "sk-test"
-    assert request.bound["api_base"] == "https://example.invalid"
-    assert request.bound["custom_llm_provider"] == "anthropic"
+    assert request.resolved["model"] == "anthropic/claude-sonnet-4-5"
+    assert request.resolved["messages"] is MESSAGES
+    assert request.resolved["max_tokens"] == 16
+    assert request.resolved["stream"] is True
+    assert request.resolved["api_key"] == "sk-test"
+    assert request.resolved["api_base"] == "https://example.invalid"
+    assert request.resolved["custom_llm_provider"] == "anthropic"
     assert request.kwargs == kwargs
     assert request.kwargs["litellm_metadata"] is metadata
     assert call_args == args
@@ -246,7 +246,7 @@ def test_anthropic_create_routes_through_dispatch(monkeypatch: pytest.MonkeyPatc
     finally:
         NATIVE_MESSAGES.reset()
     assert result is expected
-    assert [request.bound["model"] for request in captured] == ["claude-sonnet-4-5"]
+    assert [request.resolved["model"] for request in captured] == ["claude-sonnet-4-5"]
 
 
 @pytest.mark.asyncio
@@ -268,7 +268,7 @@ async def test_anthropic_acreate_routes_through_dispatch(monkeypatch: pytest.Mon
     finally:
         NATIVE_AMESSAGES.reset()
     assert result is expected
-    assert [request.bound["model"] for request in captured] == ["claude-sonnet-4-5"]
+    assert [request.resolved["model"] for request in captured] == ["claude-sonnet-4-5"]
 
 
 @pytest.mark.asyncio
@@ -287,10 +287,10 @@ def test_sync_messages_request_projects_public_arguments() -> None:
     expected: Final = AnthropicMessagesResponse(model="claude-test")
 
     def native(request: NativeCall) -> AnthropicMessagesResponse:
-        assert request.bound["model"] == "claude-test"
-        assert request.bound["messages"] == MESSAGES
-        assert request.bound["max_tokens"] == 10
-        assert request.bound["custom_llm_provider"] == "anthropic"
+        assert request.resolved["model"] == "claude-test"
+        assert request.resolved["messages"] == MESSAGES
+        assert request.resolved["max_tokens"] == 10
+        assert request.resolved["custom_llm_provider"] == "anthropic"
         return expected
 
     binding: Final[NativeBinding[NativeMessages]] = NativeBinding("messages", validate=lambda _: None)
