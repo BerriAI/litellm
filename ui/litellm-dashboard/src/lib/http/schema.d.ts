@@ -45431,6 +45431,11 @@ export interface components {
              */
             generic_authorization_endpoint?: string | null;
             /**
+             * Generic Authorization Params
+             * @description Extra query parameters for the generic provider's authorization request, in query-string form, e.g. 'resource=https://litellm.example.com' so AD FS issues tokens for that Web API
+             */
+            generic_authorization_params?: string | null;
+            /**
              * Generic Client Id
              * @description Generic OAuth Client ID for SSO authentication (used for Okta and other providers)
              */

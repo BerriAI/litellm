@@ -33,7 +33,7 @@ from typing import (
     cast,
     overload,
 )
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse
 
 if TYPE_CHECKING:
     import httpx
@@ -1423,6 +1423,21 @@ def _parse_generic_sso_headers() -> dict[str, str]:
             key, value = header.split("=")
             result[key] = value
     return result
+
+
+_GENERIC_SSO_RESERVED_AUTHORIZE_PARAMS: Final = frozenset(
+    {"client_id", "redirect_uri", "response_type", "scope", "state", "code_challenge", "code_challenge_method"}
+)
+
+
+def _parse_generic_sso_authorization_params() -> dict[str, str]:
+    """Parse the query-string GENERIC_AUTHORIZATION_PARAMS env var (``resource=https://api.example.com``) into
+    extra parameters for the authorization request. Keys the OAuth flow sets itself are ignored."""
+    raw: Final = os.getenv("GENERIC_AUTHORIZATION_PARAMS", "")
+    pairs: Final = parse_qsl(raw.strip(), keep_blank_values=False)
+    for key in sorted({key for key, _ in pairs if key in _GENERIC_SSO_RESERVED_AUTHORIZE_PARAMS}):
+        verbose_proxy_logger.warning("Ignoring GENERIC_AUTHORIZATION_PARAMS key %s, the SSO flow sets it", key)
+    return {key: value for key, value in pairs if key not in _GENERIC_SSO_RESERVED_AUTHORIZE_PARAMS}
 
 
 def _handle_generic_sso_error(
@@ -3117,7 +3132,9 @@ class SSOAuthenticationHandler:
                     state_only_params[key] = value
 
             # Get the redirect response from fastapi-sso with only state param
-            redirect_response: Final = await generic_sso.get_login_redirect(**state_only_params)
+            redirect_response: Final = await generic_sso.get_login_redirect(
+                params=_parse_generic_sso_authorization_params(), **state_only_params
+            )
 
             # If PKCE is enabled, add PKCE parameters to the redirect URL
             if code_verifier and "state" in redirect_params:
