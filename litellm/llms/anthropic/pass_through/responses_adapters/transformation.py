@@ -210,8 +210,6 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 },
             )
         if btype == "text":
-            # Emit text in block order so text before/after tool_use is not
-            # replayed as one trailing assistant message (#45470).
             return (
                 {
                     "type": "message",
