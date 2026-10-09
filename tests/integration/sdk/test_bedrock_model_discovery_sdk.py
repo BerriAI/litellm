@@ -4,7 +4,7 @@ import json
 import os
 import subprocess
 import sys
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Final
 
@@ -44,8 +44,13 @@ def plane(tmp_path_factory: pytest.TempPathFactory) -> Iterator[ControlPlane]:
 
 
 def _sdk_listing(
-    plane: ControlPlane, cwd: Path, *, provider: str | None, litellm_params: Mapping[str, JsonValue] | None, **env: str
-) -> list[str]:
+    plane: ControlPlane,
+    cwd: Path,
+    *,
+    provider: str | None,
+    litellm_params: Mapping[str, JsonValue] | None,
+    process_env: Mapping[str, str] | None = None,
+) -> Sequence[str]:
     environment: Final = {
         **{name: value for name, value in os.environ.items() if not name.startswith("AWS_")},
         **plane.environment(),
@@ -53,7 +58,7 @@ def _sdk_listing(
         "AWS_SHARED_CREDENTIALS_FILE": str(cwd / "empty-aws-config"),
         "AWS_EC2_METADATA_DISABLED": "true",
         "LITELLM_LOCAL_MODEL_COST_MAP": "True",
-        **env,
+        **(process_env or {}),
     }
     (cwd / "empty-aws-config").write_text("")
     arguments: Final = json.dumps({"provider": provider, "litellm_params": litellm_params})
@@ -99,9 +104,7 @@ def test_sdk_get_valid_models_with_only_aws_environment_never_infers_bedrock(
             tmp_path,
             provider=None,
             litellm_params=None,
-            AWS_ACCESS_KEY_ID=key,
-            AWS_SECRET_ACCESS_KEY=secret,
-            AWS_REGION_NAME=REGION,
+            process_env={"AWS_ACCESS_KEY_ID": key, "AWS_SECRET_ACCESS_KEY": secret, "AWS_REGION_NAME": REGION},
         )
     assert not any(name.startswith("bedrock/") for name in listed), listed
     assert mine(plane, key) == ()
@@ -119,9 +122,7 @@ def test_sdk_get_valid_models_infers_bedrock_from_its_api_key_and_lists_with_the
             tmp_path,
             provider=None,
             litellm_params=None,
-            BEDROCK_API_KEY=token,
-            AWS_BEARER_TOKEN_BEDROCK=token,
-            AWS_REGION_NAME=REGION,
+            process_env={"BEDROCK_API_KEY": token, "AWS_BEARER_TOKEN_BEDROCK": token, "AWS_REGION_NAME": REGION},
         )
     assert frozenset(name for name in listed if marker in name) == catalog.vendor_ids(), listed
     requests: Final = mine(plane, token)

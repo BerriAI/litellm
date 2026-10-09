@@ -14,7 +14,7 @@ def test_get_team_models_for_all_models_and_team_only_models():
     model_access_groups = {}
     include_model_access_groups = False
 
-    result = get_team_models(team_models, proxy_model_list, model_access_groups, include_model_access_groups)
+    result: Final = get_team_models(team_models, proxy_model_list, model_access_groups, include_model_access_groups)
     combined_models = team_models + proxy_model_list
     assert set(result) == set(combined_models)
 

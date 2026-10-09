@@ -35,7 +35,7 @@ from integration._support.client import Gateway, eventually, gateway_from_enviro
 from integration._support.process import graceful_stop_seconds
 from integration._support.wire import Reply
 
-pytestmark = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
 
 @dataclass(frozen=True, slots=True)

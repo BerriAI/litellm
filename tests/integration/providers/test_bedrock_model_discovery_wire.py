@@ -4,7 +4,7 @@ import threading
 import time
 import uuid
 from collections import Counter
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,7 +65,7 @@ from integration._support.process import graceful_stop_seconds
 from integration._support.wire import Reply, Wire, wire_server
 from pydantic import JsonValue
 
-pytestmark = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
 STREAM_TERMINALS: Final[Mapping[str, str]] = {
     "/v1/chat/completions": "data: [DONE]",
@@ -125,7 +125,7 @@ def test_admin_models_list_the_accounts_invocable_models_signed_for_the_deployme
         assert_sigv4(requests, key=key, secret=secret, region="us-east-1")
 
 
-def _info_rows(gateway: Gateway, path: str, marker: str, identity: str) -> dict[str, str]:
+def _info_rows(gateway: Gateway, path: str, marker: str, identity: str) -> Mapping[str, str]:
     entries: Final = gateway.get(path)["data"]
     assert isinstance(entries, list)
     rows: Final = tuple(object_value(entry) for entry in entries)
@@ -206,7 +206,7 @@ def test_bearer_token_deployment_lists_with_the_token_and_no_signature(rig: Rig)
     marker: Final = stem()
     catalog: Final = catalog_for(marker)
     with rig.gateway.scenario() as scenario, rig.plane.answering(token, catalog.respond):
-        deployment(scenario, api_key=token, aws_region_name="us-east-1")
+        deployment(scenario, litellm_params={"api_key": token, "aws_region_name": "us-east-1"})
         assert discovered(rig.gateway, catalog, marker) == catalog.invocable_ids()
         requests: Final = mine(rig.plane, token)
         assert_listing_shape(requests)
@@ -294,7 +294,7 @@ def _chat_rows_landed(ids: tuple[str, ...]) -> None:
     assert sorted(string_value(row["request_id"]) for row in rows) == sorted(ids), rows
 
 
-def _spend_row_id(rows: list[dict[str, JsonValue]], tag: str) -> str:
+def _spend_row_id(rows: Sequence[Mapping[str, JsonValue]], tag: str) -> str:
     tagged: Final = tuple(row for row in rows if tag in list_value(row["request_tags"]))
     assert len(tagged) == 1, (tag, rows)
     return string_value(tagged[0]["request_id"])
@@ -327,7 +327,9 @@ def test_discovered_model_is_callable_through_the_wildcard_on_every_endpoint(rig
     marker: Final = stem()
     catalog: Final = Catalog(active_profiles=(f"us.{marker}.sonnet-v1:0",), on_demand_models=(CONVERSE_MODEL,))
     with rig.gateway.scenario() as scenario, rig.plane.answering(key, catalog.respond):
-        sigv4_deployment(scenario, key, secret, "us-east-1", aws_bedrock_runtime_endpoint=rig.runtime.url)
+        sigv4_deployment(
+            scenario, key, secret, "us-east-1", litellm_params={"aws_bedrock_runtime_endpoint": rig.runtime.url}
+        )
         scoped: Final = scenario.key(models=["bedrock/*"])
         assert discovered(rig.gateway, catalog, marker, key=scoped) == from_stem(marker, catalog.invocable_ids())
         assert f"bedrock/{CONVERSE_MODEL}" in listed_ids(rig.gateway, key=scoped)
@@ -411,7 +413,7 @@ def test_deployment_without_credentials_never_reaches_the_control_plane(rig: Rig
     marker: Final = stem()
     rig.plane.drain()
     with rig.gateway.scenario() as scenario:
-        deployment(scenario, aws_region_name="us-east-1")
+        deployment(scenario, litellm_params={"aws_region_name": "us-east-1"})
         for _ in range(6):
             listed: Final = listed_ids(rig.gateway)
             assert from_stem(marker, listed) == frozenset() and CONTROL_MODEL in listed
@@ -542,7 +544,7 @@ def test_empty_api_key_falls_back_to_sigv4(rig: Rig) -> None:
     marker: Final = stem()
     catalog: Final = catalog_for(marker)
     with rig.gateway.scenario() as scenario, rig.plane.answering(key, catalog.respond):
-        sigv4_deployment(scenario, key, secret, "us-east-1", api_key="")
+        sigv4_deployment(scenario, key, secret, "us-east-1", litellm_params={"api_key": ""})
         assert discovered(rig.gateway, catalog, marker) == catalog.invocable_ids()
         requests: Final = mine(rig.plane, key)
         assert_listing_shape(requests)

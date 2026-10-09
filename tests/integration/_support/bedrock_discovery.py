@@ -137,14 +137,14 @@ def deployment(
     model_name: str = "bedrock/*",
     model: str = "bedrock/*",
     model_info: Mapping[str, JsonValue] | None = None,
-    **parameters: JsonValue,
+    litellm_params: Mapping[str, JsonValue] | None = None,
 ) -> str:
     """A wildcard deployment posted straight to /model/new, since Scenario.model fixes a non-wildcard name."""
     created: Final = scenario.gateway.post(
         "/model/new",
         {
             "model_name": model_name,
-            "litellm_params": {"model": model, **parameters},
+            "litellm_params": {"model": model, **(litellm_params or {})},
             "model_info": dict(model_info) if model_info is not None else {},
         },
     )
@@ -165,9 +165,28 @@ def settled_on_every_worker(gateway: Gateway, identity: str) -> None:
     held(present, lambda found: found, holding=RELOAD_SECONDS * 2, seconds=RELOAD_SECONDS * 6)
 
 
-def sigv4_deployment(scenario: Scenario, key: str, secret: str, region: str, **parameters: JsonValue) -> str:
+def sigv4_deployment(
+    scenario: Scenario,
+    key: str,
+    secret: str,
+    region: str,
+    *,
+    model_name: str = "bedrock/*",
+    model: str = "bedrock/*",
+    model_info: Mapping[str, JsonValue] | None = None,
+    litellm_params: Mapping[str, JsonValue] | None = None,
+) -> str:
     return deployment(
-        scenario, aws_access_key_id=key, aws_secret_access_key=secret, aws_region_name=region, **parameters
+        scenario,
+        model_name=model_name,
+        model=model,
+        model_info=model_info,
+        litellm_params={
+            "aws_access_key_id": key,
+            "aws_secret_access_key": secret,
+            "aws_region_name": region,
+            **(litellm_params or {}),
+        },
     )
 
 
@@ -211,7 +230,7 @@ def mine(plane: ControlPlane, credential_id: str) -> tuple[ControlPlaneRequest, 
     return tuple(request for request in plane.drain() if request.credential == credential_id)
 
 
-def listings(requests: tuple[ControlPlaneRequest, ...]) -> Counter[str]:
+def listings(requests: tuple[ControlPlaneRequest, ...]) -> Mapping[str, int]:
     return Counter(request.path for request in requests)
 
 

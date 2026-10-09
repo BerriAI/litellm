@@ -2540,7 +2540,7 @@ def test_get_valid_models_bedrock_lists_what_the_deployment_credentials_can_invo
     )
     expected_scope: Final = f"/{region}/bedrock/aws4_request"
 
-    def signed_by_the_deployment(request: httpx.Request, body: dict[str, object]) -> httpx.Response:
+    def signed_by_the_deployment(request: httpx.Request, body: Mapping[str, object]) -> httpx.Response:
         authorization: Final = request.headers.get("authorization", "")
         if not authorization.startswith("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/"):
             return httpx.Response(403, json={"message": "not signed with the deployment's key"})

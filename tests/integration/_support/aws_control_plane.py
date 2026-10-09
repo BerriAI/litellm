@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from queue import SimpleQueue
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeAlias
 from urllib.parse import parse_qsl, urlsplit
 
 from integration._support import tls
@@ -75,7 +75,7 @@ def verified_scope(request: ControlPlaneRequest, secret: str) -> str:
     return found.group("scope")
 
 
-Responder = Callable[[ControlPlaneRequest], Reply]
+Responder: TypeAlias = Callable[[ControlPlaneRequest], Reply]
 
 
 def json_reply(status: int, payload: Mapping[str, JsonValue]) -> Reply:
@@ -141,7 +141,7 @@ class ControlPlane:
     certificate: Path
     received: SimpleQueue[ControlPlaneRequest]
     refused: SimpleQueue[str]
-    responders: dict[str, Responder]
+    responders: dict[str, Responder]  # mutable-ok: answering() adds a responder per test and removes it
 
     def environment(self) -> Mapping[str, str]:
         return MappingProxyType(
@@ -173,6 +173,14 @@ def _header_map(handler: BaseHTTPRequestHandler) -> Mapping[str, str]:
     return MappingProxyType({name.lower(): value for name, value in handler.headers.items()})
 
 
+def _answer(request: ControlPlaneRequest, responders: Mapping[str, Responder], errors: SimpleQueue[Exception]) -> Reply:
+    try:
+        return responders.get(request.credential, _unregistered)(request)
+    except Exception as error:
+        errors.put(error)
+        return Reply(status=500)
+
+
 def _tunneled_handler(
     host: str,
     received: SimpleQueue[ControlPlaneRequest],
@@ -192,11 +200,7 @@ def _tunneled_handler(
                 self.rfile.read(int(self.headers.get("content-length", "0"))),
             )
             received.put(request)
-            try:
-                reply = responders.get(request.credential, _unregistered)(request)
-            except Exception as error:
-                errors.put(error)
-                reply = Reply(status=500)
+            reply: Final = _answer(request, responders, errors)
             if reply.drop_connection:
                 self.close_connection = True
                 return
@@ -248,7 +252,7 @@ def control_plane(directory: Path, hosts: tuple[str, ...]) -> Generator[ControlP
             self.end_headers()
             self.wfile.flush()
             try:
-                secured = context.wrap_socket(self.connection, server_side=True)
+                secured: Final = context.wrap_socket(self.connection, server_side=True)
             except OSError as error:
                 errors.put(error)
                 return

@@ -28,7 +28,7 @@ def string_value(value: JsonValue) -> str:
     return value
 
 
-def list_value(value: JsonValue) -> list[JsonValue]:
+def list_value(value: JsonValue) -> Sequence[JsonValue]:
     assert isinstance(value, list), f"Expected a list, received {type(value).__name__}"
     return value
 
