@@ -8,6 +8,7 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import inspect
 import json
@@ -43,6 +44,7 @@ from litellm.constants import (
     AZURE_SPEECH_STT_DOMAIN,
     AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
+    GEMINI_LIVE_SETUP_TIMEOUT_SECONDS,
 )
 from litellm.integrations.custom_guardrail import guardrail_request_data_with_streaming
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
@@ -79,6 +81,7 @@ from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy modul
     user_api_key_auth,
     user_api_key_auth_websocket,
     user_api_key_auth_websocket_for_model,
+    user_api_key_auth_websocket_for_verbatim_model,
 )
 from litellm.proxy.common_request_processing import open_sse_before_first_byte
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
@@ -3348,6 +3351,22 @@ _GEMINI_LIVE_MISSING_KEY_REASON: Final = (
     "Required 'GEMINI_API_KEY'/'GOOGLE_API_KEY' in environment to make pass-through calls to Google AI Studio."
 )
 _GEMINI_LIVE_SETUP_REQUIRED_REASON: Final = "The first frame must be a setup message naming a Gemini model"
+_GEMINI_LIVE_SETUP_TIMEOUT_REASON: Final = "No setup message arrived in time"
+
+
+def _gemini_live_presented_key(websocket: WebSocket) -> str | None:
+    return websocket.query_params.get("key") or websocket.headers.get("x-goog-api-key")
+
+
+async def gemini_live_user_api_key_auth(websocket: WebSocket) -> UserAPIKeyAuth:
+    """Rejects a caller without a valid LiteLLM key at the handshake, before the route accepts the socket"""
+    return await user_api_key_auth_websocket_for_model(
+        websocket, model=None, presented_api_key=_gemini_live_presented_key(websocket)
+    )
+
+
+def _gemini_live_setup_timeout() -> float:
+    return GEMINI_LIVE_SETUP_TIMEOUT_SECONDS
 
 
 async def _receive_client_frame(websocket: WebSocket) -> str | bytes | None:
@@ -3359,19 +3378,27 @@ async def _receive_client_frame(websocket: WebSocket) -> str | bytes | None:
     return data if isinstance(data, bytes) else None
 
 
-@router.websocket("/gemini/ws/google.ai.generativelanguage.{api_version}.GenerativeService.BidiGenerateContent")
+@router.websocket(
+    "/gemini/ws/google.ai.generativelanguage.{api_version}.GenerativeService.BidiGenerateContent",
+    dependencies=[Depends(gemini_live_user_api_key_auth)],
+)
 async def gemini_live_websocket_route(
     websocket: WebSocket,
     api_version: Annotated[str, Path(pattern=r"^v\d+(?:alpha|beta)?$")],
+    setup_timeout: Annotated[float, Depends(_gemini_live_setup_timeout)],
     relay: Annotated[_WebsocketRelay, Depends(_websocket_relay)],
 ) -> None:
     """
     Google AI Studio Live API (BidiGenerateContent) passthrough, on the path the Gen AI SDKs build from a
-    ``/gemini`` base URL. The model is only known from the client's first frame, so the LiteLLM key is
-    authorized against it after that frame arrives and before anything reaches Google
+    ``/gemini`` base URL. The key is checked at the handshake; the model is only known from the client's first
+    frame, so the key is authorized against that model once the frame arrives and before anything reaches Google
     """
     await websocket.accept()
-    setup_frame: Final = await _receive_client_frame(websocket)
+    try:
+        setup_frame: Final = await asyncio.wait_for(_receive_client_frame(websocket), timeout=setup_timeout)
+    except asyncio.TimeoutError:
+        await websocket.close(code=1008, reason=_GEMINI_LIVE_SETUP_TIMEOUT_REASON)
+        return
     setup_model: Final = gemini_live_setup_model(setup_frame) if setup_frame is not None else None
     if setup_model is None:
         if websocket.client_state == WebSocketState.CONNECTED:
@@ -3379,10 +3406,8 @@ async def gemini_live_websocket_route(
         return
 
     try:
-        user_api_key_dict: Final = await user_api_key_auth_websocket_for_model(
-            websocket,
-            model=setup_model,
-            presented_api_key=websocket.query_params.get("key") or websocket.headers.get("x-goog-api-key"),
+        user_api_key_dict: Final = await user_api_key_auth_websocket_for_verbatim_model(
+            websocket, model=setup_model, presented_api_key=_gemini_live_presented_key(websocket)
         )
     except HTTPException:
         return

@@ -1,4 +1,4 @@
-"""Google AI Studio Live API passthrough WebSocket route: SDK path, auth on the setup model, credential injection."""
+"""Google AI Studio Live API passthrough WebSocket route: SDK path, key and setup-model auth, credential injection."""
 
 import asyncio
 import json
@@ -11,22 +11,20 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import FastAPI, WebSocket
 from fastapi.testclient import TestClient
-from starlette.routing import WebSocketRoute
 from starlette.websockets import WebSocketDisconnect
 
 import litellm
 from litellm.caching.dual_cache import DualCache
-from litellm.proxy._lazy_features import LAZY_FEATURES
-from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
+from litellm.proxy._lazy_features import attach_lazy_features
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import cache_key_object
-from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import _websocket_relay, router
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import _gemini_live_setup_timeout, _websocket_relay
 from litellm.proxy.utils import hash_token
 
 GET_CREDENTIALS: Final = (
     "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials"
 )
 USER_API_KEY_AUTH: Final = "litellm.proxy.auth.user_api_key_auth.user_api_key_auth"
-ROUTE: Final = "/gemini/ws/google.ai.generativelanguage.{api_version}.GenerativeService.BidiGenerateContent"
 SDK_PATH: Final = "/gemini/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
 UPSTREAM: Final = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
 SETUP_FRAME: Final = json.dumps(
@@ -81,10 +79,11 @@ class _FakeRelay:
         await websocket.close()
 
 
-def _client(relay: _FakeRelay) -> TestClient:
+def _client(relay: _FakeRelay, setup_timeout: float = 10.0) -> TestClient:
     app = FastAPI()
-    app.include_router(router)
+    attach_lazy_features(app)
     app.dependency_overrides[_websocket_relay] = lambda: relay
+    app.dependency_overrides[_gemini_live_setup_timeout] = lambda: setup_timeout
     return TestClient(app)
 
 
@@ -96,17 +95,6 @@ def _open_session(
         with pytest.raises(WebSocketDisconnect) as disconnect:
             connection.receive_text()
     return disconnect.value
-
-
-def test_gemini_live_route_is_registered_on_the_sdk_path():
-    ws_paths = {route.path for route in router.routes if isinstance(route, WebSocketRoute)}
-    assert ROUTE in ws_paths
-
-
-def test_gemini_live_is_a_lazily_loaded_mapped_pass_through_route():
-    feature = next(feature for feature in LAZY_FEATURES if feature.name == "llm_passthrough")
-    assert feature.matches(SDK_PATH)
-    assert any(SDK_PATH.startswith(prefix) for prefix in LiteLLMRoutes.mapped_pass_through_routes.value)
 
 
 @pytest.mark.parametrize(
@@ -129,10 +117,11 @@ def test_gemini_live_authorizes_the_setup_model_and_relays_with_the_server_key_o
         disconnect = _open_session(relay, f"{SDK_PATH}{query}", headers=headers)
 
     assert disconnect.code == 1000
-    assert auth.await_args.kwargs["api_key"] == "Bearer sk-litellm-virtual"
-    assert json.loads(asyncio.run(auth.await_args.kwargs["request"].body())) == {
-        "model": "gemini-live-2.5-flash-preview"
-    }
+    assert [call.kwargs["api_key"] for call in auth.await_args_list] == ["Bearer sk-litellm-virtual"] * 2
+    assert [json.loads(asyncio.run(call.kwargs["request"].body())) for call in auth.await_args_list] == [
+        {"model": ""},
+        {"model": "gemini-live-2.5-flash-preview"},
+    ]
     assert get_credentials.call_args.kwargs == {"custom_llm_provider": "gemini", "region_name": None}
     assert relay.calls == [
         _RelayCall(
@@ -193,7 +182,7 @@ def test_gemini_live_rejects_api_versions_that_are_not_a_version(api_version):
 
     with (
         patch(GET_CREDENTIALS, return_value="gemini-server-key"),
-        patch(USER_API_KEY_AUTH, new=AsyncMock(return_value=UserAPIKeyAuth(api_key="hashed"))) as auth,
+        patch(USER_API_KEY_AUTH, new=AsyncMock(return_value=UserAPIKeyAuth(api_key="hashed"))),
     ):
         with pytest.raises(WebSocketDisconnect) as disconnect:
             with _client(relay).websocket_connect(
@@ -202,7 +191,6 @@ def test_gemini_live_rejects_api_versions_that_are_not_a_version(api_version):
                 pass
 
     assert disconnect.value.code == 1008
-    auth.assert_not_awaited()
     assert relay.calls == []
 
 
@@ -226,18 +214,49 @@ def test_gemini_live_refuses_a_session_whose_first_frame_names_no_model_it_can_a
 
     assert disconnect.code == 1008
     assert "setup" in disconnect.reason
-    auth.assert_not_awaited()
+    assert [json.loads(asyncio.run(call.kwargs["request"].body())) for call in auth.await_args_list] == [{"model": ""}]
     get_credentials.assert_not_called()
     assert relay.calls == []
 
 
-def test_gemini_live_rejects_a_session_without_a_litellm_key():
+@pytest.mark.parametrize(
+    ("query", "auth"),
+    [
+        pytest.param("", AsyncMock(return_value=UserAPIKeyAuth(api_key="hashed")), id="no litellm key"),
+        pytest.param("?key=sk-unknown", AsyncMock(side_effect=Exception("Invalid proxy server token")), id="bad key"),
+    ],
+)
+def test_gemini_live_refuses_the_handshake_of_a_caller_without_a_valid_key(query, auth):
     relay = _FakeRelay()
 
-    with patch(GET_CREDENTIALS, return_value="gemini-server-key") as get_credentials:
-        disconnect = _open_session(relay, SDK_PATH)
+    with (
+        patch(GET_CREDENTIALS, return_value="gemini-server-key") as get_credentials,
+        patch(USER_API_KEY_AUTH, new=auth),
+    ):
+        with pytest.raises(WebSocketDisconnect) as disconnect:
+            with _client(relay).websocket_connect(f"{SDK_PATH}{query}"):
+                pass
 
-    assert disconnect.code == 1008
+    assert disconnect.value.code == 1008
+    get_credentials.assert_not_called()
+    assert relay.calls == []
+
+
+@pytest.mark.timeout(10)
+def test_gemini_live_closes_an_authenticated_socket_that_never_sends_its_setup_frame():
+    relay = _FakeRelay()
+
+    with (
+        patch(GET_CREDENTIALS, return_value="gemini-server-key") as get_credentials,
+        patch(USER_API_KEY_AUTH, new=AsyncMock(return_value=UserAPIKeyAuth(api_key="hashed"))) as auth,
+    ):
+        with _client(relay, setup_timeout=0.05).websocket_connect(f"{SDK_PATH}?key=sk-1") as connection:
+            with pytest.raises(WebSocketDisconnect) as disconnect:
+                connection.receive_text()
+
+    assert disconnect.value.code == 1008
+    assert "setup" in disconnect.value.reason
+    assert auth.await_count == 1
     get_credentials.assert_not_called()
     assert relay.calls == []
 
@@ -256,11 +275,11 @@ def test_gemini_live_names_the_missing_server_key_only_to_an_authenticated_calle
     assert relay.calls == []
 
 
-async def _cache_restricted_key(virtual_key: str, models: list[str]) -> DualCache:
+async def _cache_restricted_key(virtual_key: str, models: list[str], **key_fields: object) -> DualCache:
     cache = DualCache()
     await cache_key_object(
         hashed_token=hash_token(virtual_key),
-        user_api_key_obj=UserAPIKeyAuth(token=hash_token(virtual_key), models=models),
+        user_api_key_obj=UserAPIKeyAuth(token=hash_token(virtual_key), models=models, **key_fields),
         user_api_key_cache=cache,
         proxy_logging_obj=None,
     )
@@ -301,4 +320,53 @@ def test_gemini_live_enforces_the_key_model_allowlist_on_the_setup_model(setup_m
         assert [call.model for call in relay.calls] == ["gemini-live-2.5-flash-preview"]
         return
     assert disconnect.code == 1008
+    assert relay.calls == []
+
+
+class _SpentLiveModelBudget:
+    """The key's budget for the Live model is spent and its configured fallback is still within budget"""
+
+    def __init__(self, spent_model: str, fallback_model: str) -> None:
+        self._spent_model = spent_model
+        self._fallback_model = fallback_model
+
+    async def is_key_within_model_budget(self, user_api_key_dict: UserAPIKeyAuth, model: str) -> bool:
+        if model == self._spent_model:
+            raise litellm.BudgetExceededError(current_cost=5.0, max_budget=1.0)
+        return True
+
+    async def get_fallback_model_within_budget(self, user_api_key_dict: UserAPIKeyAuth, model: str) -> str | None:
+        return self._fallback_model if model == self._spent_model else None
+
+
+def test_gemini_live_refuses_a_session_that_a_budget_fallback_would_reroute(monkeypatch):
+    monkeypatch.setattr(litellm, "max_budget", 0.0)
+    live_model = "gemini-live-2.5-flash-preview"
+    cache = asyncio.run(
+        _cache_restricted_key(
+            "sk-live-budget",
+            [live_model, "gemini-2.5-flash"],
+            model_max_budget={live_model: {"budget_limit": 1.0, "time_period": "1d"}},
+            budget_fallbacks={live_model: ["gemini-2.5-flash"]},
+        )
+    )
+    relay = _FakeRelay()
+
+    with (
+        patch(GET_CREDENTIALS, return_value="gemini-server-key") as get_credentials,
+        patch.multiple(  # test-quality-ok: the real key auth path reads these proxy_server globals and has no injection seam
+            "litellm.proxy.proxy_server",
+            master_key="sk-master",
+            prisma_client=MagicMock(),
+            user_api_key_cache=cache,
+            llm_model_list=None,
+            llm_router=None,
+            model_max_budget_limiter=_SpentLiveModelBudget(live_model, "gemini-2.5-flash"),
+        ),
+    ):
+        disconnect = _open_session(relay, f"{SDK_PATH}?key=sk-live-budget")
+
+    assert disconnect.code == 1008
+    assert "fallback" in disconnect.reason
+    get_credentials.assert_not_called()
     assert relay.calls == []
