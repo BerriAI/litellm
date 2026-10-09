@@ -17,6 +17,7 @@ import { authTypesFor, hiddenAuthFieldKeys, inferAuthTypeId } from "./provider_a
 import { ProviderCredentialFieldMetadata } from "../networking";
 import { Providers } from "../provider_info_helpers";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
+import type { ProviderFieldValidators } from "../model_add/credential_federation";
 
 interface ProviderSpecificFieldsProps {
   selectedProvider: string | null;
@@ -25,6 +26,7 @@ interface ProviderSpecificFieldsProps {
   onCreateCredential?: (authTypeId: string) => void;
   initialAuthTypeId?: string;
   onAuthTypeChange?: (authTypeId: string) => void;
+  fieldValidators?: ProviderFieldValidators;
 }
 
 const readTextFile = (file: File, onLoaded: (contents: string) => void) => {
@@ -93,6 +95,7 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
   onCreateCredential,
   initialAuthTypeId,
   onAuthTypeChange,
+  fieldValidators,
 }) => {
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
   const form = useFormContext<MountedFormValues>();
@@ -392,7 +395,12 @@ const ProviderSpecificFieldsContent: React.FC<ProviderSpecificFieldsProps> = ({
             label={field.tooltip ? labelWithHint(field.label, field.tooltip) : field.label}
             name={field.key}
             required={field.required}
-            rules={field.required ? { validate: { required: requiredRule("Required") } } : undefined}
+            rules={{
+              validate: {
+                ...(field.required ? { required: requiredRule("Required") } : {}),
+                ...(fieldValidators?.[field.key] ? { provider: fieldValidators[field.key] } : {}),
+              },
+            }}
             className={field.key === "vertex_credentials" ? "mb-0" : "mb-4"}
           >
             {(control) => renderFieldControl(field, control)}
