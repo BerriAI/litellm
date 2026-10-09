@@ -143,7 +143,7 @@ def test_ocr_unparseable_body_returns_400(
 
 
 def test_ocr_json_array_body_returns_400(gateway: Gateway) -> None:
-    pytest.skip("BUG: /v1/ocr with a JSON array body ([1,2]) answers 500 Internal server error; same on base")
+    pytest.skip("BUG: a JSON array body answers 500 on every route, from the auth pre-checks; same on base")
     response: Final = _raw(gateway, "/v1/ocr", b"[1,2]", "application/json")
     assert invalid_request(response).get("param") == "request_body", response.text
 
