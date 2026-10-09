@@ -37,7 +37,8 @@ export function useScopedTagOptions({
     })
       .then((tags) => {
         if (!cancelled) {
-          setOptions(Object.keys(tags).map((tag) => ({ label: tag, value: tag })));
+          // /tag/list returns an array of tags, so read names from the values, not the keys (indices).
+          setOptions(Object.values(tags).map((tag) => ({ label: tag.name, value: tag.name })));
         }
       })
       .catch(() => {

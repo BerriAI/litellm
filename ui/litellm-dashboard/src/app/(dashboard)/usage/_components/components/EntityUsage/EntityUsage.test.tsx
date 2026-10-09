@@ -166,8 +166,23 @@ vi.mock("@/components/common_components/team_multi_select", () => ({
 }));
 
 vi.mock("@/components/shared/PaginatedMultiSelect", () => ({
-  PaginatedMultiSelect: ({ onValueChange }: { onValueChange: (value: string[]) => void }) => (
-    <button onClick={() => onValueChange(["shared"])}>Tag Multi Select</button>
+  PaginatedMultiSelect: ({
+    options,
+    onValueChange,
+  }: {
+    options: { label: string; value: string }[];
+    onValueChange: (value: string[]) => void;
+  }) => (
+    <div>
+      <button onClick={() => onValueChange(["shared"])}>Tag Multi Select</button>
+      <ul aria-label="tag options">
+        {options.map((option) => (
+          <li key={option.value} data-value={option.value}>
+            {option.label}
+          </li>
+        ))}
+      </ul>
+    </div>
   ),
 }));
 
@@ -516,9 +531,10 @@ describe("EntityUsage", () => {
     mockAgentDailyActivityCall.mockResolvedValue(mockAgentSpendData);
     mockUserDailyActivityCall.mockResolvedValue(mockSpendData);
     mockTagListCall.mockReset();
-    mockTagListCall.mockResolvedValue({
-      "scoped-tag": { name: "scoped-tag", models: [], created_at: "2025-01-01", updated_at: "2025-01-01" },
-    });
+    // /tag/list returns a JSON array of tags (the TagListResponse type says Record, which it is not).
+    mockTagListCall.mockResolvedValue([
+      { name: "scoped-tag", models: [], created_at: "2025-01-01", updated_at: "2025-01-01" },
+    ] as unknown as Awaited<ReturnType<typeof networking.tagListCall>>);
     mockUseInfiniteUsers.mockClear();
     mockUseInfiniteUsers.mockReturnValue(
       infiniteUsersResult([
@@ -1665,6 +1681,24 @@ describe("EntityUsage", () => {
           expect.objectContaining({ teamIds: ["team-1"], usageOnly: true }),
         );
       });
+    });
+
+    it("lists tag names from the /tag/list array as dropdown options, not array indices", async () => {
+      mockTagListCall.mockResolvedValue([
+        { name: "cc-shared", models: [], created_at: "2025-01-01", updated_at: "2025-01-01" },
+        { name: "Café ☕", models: [], created_at: "2025-01-01", updated_at: "2025-01-01" },
+      ] as unknown as Awaited<ReturnType<typeof networking.tagListCall>>);
+
+      render(<EntityUsage {...teamProps} />);
+
+      const list = await screen.findByRole("list", { name: "tag options" });
+      await waitFor(() => {
+        expect(within(list).getAllByRole("listitem").map((item) => item.textContent)).toEqual(["cc-shared", "Café ☕"]);
+      });
+      expect(within(list).getAllByRole("listitem").map((item) => item.getAttribute("data-value"))).toEqual([
+        "cc-shared",
+        "Café ☕",
+      ]);
     });
 
     it("sends group_by=tag, renders tag-name rows under Spend Per Tag, and shows the note", async () => {
