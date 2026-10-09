@@ -114,13 +114,13 @@ class SignalStatusDatabase:
         return 1
 
 
-def signal_router() -> Router:
+def signal_router(mode: str = "decisions") -> Router:
     return Router(
         model_list=[
             {
                 "model_name": "decision",
                 "litellm_params": {"model": "openai/test-decision", "api_key": "test-key"},
-                "model_info": {"mode": "evaluation"},
+                "model_info": {"mode": mode},
             },
             {
                 "model_name": "chat",
@@ -708,11 +708,15 @@ async def test_put_signals_rejects_chat_and_unknown_model_groups(monkeypatch: py
         await put_signals(SignalConfig(model=model), auth)
 
     assert error.value.status_code == 400
-    assert error.value.detail == "Choose a System 1 model (evaluation mode) configured on this proxy"
+    assert error.value.detail == "Choose a System 1 model (decisions mode) configured on this proxy"
 
 
-def test_signal_model_accepts_only_evaluation_mode_groups() -> None:
+def test_signal_model_accepts_decisions_mode_groups() -> None:
     assert validate_signal_model(SignalConfig(model="decision"), signal_router()) is None
+
+
+def test_signal_model_accepts_legacy_evaluation_mode_groups() -> None:
+    assert validate_signal_model(SignalConfig(model="decision"), signal_router(mode="evaluation")) is None
 
 
 @pytest.mark.parametrize(

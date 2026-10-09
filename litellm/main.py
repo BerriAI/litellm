@@ -146,6 +146,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     RawRequestTypedDict,
     StreamingChoices,
+    canonical_model_mode,
 )
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 from litellm.utils import (
@@ -8822,6 +8823,7 @@ async def ahealth_check(
         mode = mode or default_health_check_mode(
             requested_model=requested_model, model=model, custom_llm_provider=custom_llm_provider
         )
+        mode = canonical_model_mode(mode)
         if "*" in model:
             return await HealthCheckHelpers.ahealth_check_wildcard_models(
                 model=model,

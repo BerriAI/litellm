@@ -589,7 +589,7 @@ def test_ocr_health_check_document_raises_without_the_extension():
         ("cloudflare/clef", "https://api.cloudflare.com/client/v4/accounts/acct-1/ai/run/@cf/cloudflare/clef"),
     ),
 )
-async def test_ahealth_check_probes_evaluation_models_through_the_decisions_api(
+async def test_ahealth_check_probes_decisions_models_through_the_decisions_api(
     model: str,
     upstream_url: str,
     monkeypatch: pytest.MonkeyPatch,
@@ -617,7 +617,7 @@ async def test_ahealth_check_probes_evaluation_models_through_the_decisions_api(
 
 
 @pytest.mark.asyncio
-async def test_ahealth_check_evaluation_uses_configured_probe_state_and_questions(
+async def test_ahealth_check_decisions_uses_configured_probe_state_and_questions(
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
 ) -> None:
@@ -638,7 +638,7 @@ async def test_ahealth_check_evaluation_uses_configured_probe_state_and_question
             "state": "custom probe",
             "questions": {"ok": {"type": "noul", "instructions": "Is it ok?"}},
         },
-        mode=None,
+        mode="evaluation",
     )
 
     assert "error" not in result, result

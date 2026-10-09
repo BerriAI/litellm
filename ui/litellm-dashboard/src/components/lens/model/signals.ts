@@ -1,6 +1,6 @@
 import type { AnalysisModelInfo, SignalConfig } from "./types";
 
-export const SYSTEM_ONE_MODE = "evaluation";
+export const SYSTEM_ONE_MODE = "decisions";
 
 export const signalsConfigured = (config: SignalConfig): boolean =>
   Boolean(config.model) && (config.signals?.length ?? 0) > 0;

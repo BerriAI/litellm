@@ -65,10 +65,10 @@ function SetupCallout({ hasModels }: { hasModels: boolean }) {
       <div className="space-y-1">
         <p className="font-medium">Choose a System 1 model to start flagging traces</p>
         {hasModels ? (
-          <p className="text-xs text-muted-foreground">Pick one of the evaluation models on this proxy below.</p>
+          <p className="text-xs text-muted-foreground">Pick one of the decisions models on this proxy below.</p>
         ) : (
           <p className="text-xs text-muted-foreground">
-            This proxy has no System 1 models yet. Add one with mode evaluation, for example typesafe/jev-latest, on{" "}
+            This proxy has no System 1 models yet. Add one with mode decisions, for example typesafe/jev-latest, on{" "}
             <Link
               href={uiHref("models-and-endpoints")}
               className="font-medium text-foreground underline underline-offset-2"

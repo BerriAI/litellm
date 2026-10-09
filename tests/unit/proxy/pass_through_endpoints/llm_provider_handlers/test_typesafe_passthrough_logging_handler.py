@@ -157,7 +157,7 @@ async def test_oss_gateway_accounts_for_checkpoint_usage_and_registered_cost(
     output_rate: Final = 0.005
     monkeypatch.setitem(litellm.model_cost, model, {
         "input_cost_per_token": input_rate, "output_cost_per_token": output_rate,
-        "litellm_provider": provider, "mode": "evaluation",
+        "litellm_provider": provider, "mode": "decisions",
     })
     start: Final = datetime.now()
     logging_obj: Final = Logging(

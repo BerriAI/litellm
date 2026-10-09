@@ -938,7 +938,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "container",
                         "image_edit",
                         "embedding",
-                        "evaluation",
+                        "decisions",
                         "guardrail",
                         "image_generation",
                         "video_generation",
@@ -8152,7 +8152,7 @@ def test_models_by_provider():
             or v["litellm_provider"] == "bedrock_converse"
         ):
             continue
-        elif v.get("mode") in ("search", "evaluation"):
+        elif v.get("mode") in ("search", "decisions"):
             continue
         else:
             providers.add(v["litellm_provider"])

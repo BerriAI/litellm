@@ -15984,7 +15984,7 @@
         "input_cost_per_token": 2.4e-07,
         "litellm_provider": "cloudflare",
         "max_input_tokens": 65536,
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/"
     },
@@ -15992,7 +15992,7 @@
         "input_cost_per_token": 9e-08,
         "litellm_provider": "cloudflare",
         "max_input_tokens": 65536,
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/"
     },
@@ -16000,7 +16000,7 @@
         "input_cost_per_token": 2.4e-07,
         "litellm_provider": "cloudflare",
         "max_input_tokens": 65536,
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/"
     },
@@ -16008,7 +16008,7 @@
         "input_cost_per_token": 9e-08,
         "litellm_provider": "cloudflare",
         "max_input_tokens": 65536,
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/"
     },
@@ -45061,7 +45061,7 @@
         "input_cost_per_token": 4e-08,
         "litellm_provider": "perplexity",
         "max_input_tokens": 262144,
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://docs.perplexity.ai/api-reference/decisions-post"
     },
@@ -73571,7 +73571,7 @@
         "max_input_tokens": 32000,
         "max_output_tokens": 28800,
         "max_tokens": 28800,
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://openrouter.ai/typesafe/jev-1.13"
     },
@@ -73596,7 +73596,7 @@
         "input_cost_per_token": 0.0,
         "litellm_provider": "bespoke",
         "max_input_tokens": 8192,
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://github.com/bespokelabsai/nimble",
         "supported_endpoints": [
@@ -73610,7 +73610,7 @@
         "input_cost_per_token": 0.0,
         "litellm_provider": "bespoke",
         "max_input_tokens": 8192,
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://ollama.com/library/nimble",
         "supported_endpoints": [
@@ -73624,7 +73624,7 @@
         "input_cost_per_token": 0.0,
         "litellm_provider": "bespoke",
         "max_input_tokens": 8192,
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://github.com/bespokelabsai/nimble",
         "supported_endpoints": [
@@ -73637,7 +73637,7 @@
     "laya/english": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "laya",
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://github.com/NandhaKishorM/laya",
         "supported_endpoints": [
@@ -73650,7 +73650,7 @@
     "laya/multilingual": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "laya",
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://github.com/NandhaKishorM/laya",
         "supported_endpoints": [
@@ -73663,7 +73663,7 @@
     "laya/typed-decisions": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "laya",
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://github.com/NandhaKishorM/laya",
         "supported_endpoints": [
@@ -73676,7 +73676,7 @@
     "strands_decider/strands-decider-2B-hobson-v19": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "strands_decider",
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://huggingface.co/StrandsAgents/strands-decider-2B-hobson-v19",
         "metadata": {
@@ -73686,21 +73686,21 @@
     "typesafe/jev-1.13.0": {
         "input_cost_per_token": 4.2e-08,
         "litellm_provider": "typesafe",
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://docs.typesafe.ai/models"
     },
     "typesafe/jev-latest": {
         "input_cost_per_token": 4.2e-08,
         "litellm_provider": "typesafe",
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://docs.typesafe.ai/models"
     },
     "typesafe/jev-preview": {
         "input_cost_per_token": 4.2e-08,
         "litellm_provider": "typesafe",
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://docs.typesafe.ai/models"
     },
