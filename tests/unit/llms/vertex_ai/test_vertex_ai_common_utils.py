@@ -1056,20 +1056,21 @@ def test_fix_enum_types():
         },
     }
 
-    # Expected output: Non-string enums removed, string enums kept
     expected_output = {
         "type": "object",
         "properties": {
             "truncateMode": {
-                "enum": ["auto", "none", "start", "end"],  # Kept - string type
+                "enum": ["auto", "none", "start", "end"],
                 "type": "string",
                 "description": "How to truncate content",
             },
-            "maxLength": {  # enum removed
+            "maxLength": {
                 "type": "integer",
+                "format": "enum",
+                "enum": ["100", "200", "500"],
                 "description": "Maximum length",
             },
-            "enabled": {  # enum removed
+            "enabled": {
                 "type": "boolean",
                 "description": "Whether feature is enabled",
             },
@@ -1077,10 +1078,14 @@ def test_fix_enum_types():
                 "type": "object",
                 "properties": {
                     "innerEnum": {
-                        "enum": ["a", "b", "c"],  # Kept - string type
+                        "enum": ["a", "b", "c"],
                         "type": "string",
                     },
-                    "innerNonStringEnum": {"type": "integer"},  # enum removed
+                    "innerNonStringEnum": {
+                        "type": "integer",
+                        "format": "enum",
+                        "enum": ["1", "2", "3"],
+                    },
                 },
             },
             "anyOfField": {
@@ -1088,21 +1093,24 @@ def test_fix_enum_types():
                     {
                         "type": "string",
                         "enum": ["option1", "option2"],
-                    },  # Kept - has string type
-                    {"type": "integer"},  # enum removed
+                    },
+                    {
+                        "type": "integer",
+                        "format": "enum",
+                        "enum": ["1", "2", "3"],
+                    },
                 ]
             },
         },
     }
 
-    # Apply the transformation
     _fix_enum_types(input_schema)
-
-    # Verify the transformation
     assert input_schema == expected_output
 
-    # Verify specific transformations:
-    # 1. String enums are preserved
+    # Repeating the transformation on reused schema dictionaries must be idempotent
+    _fix_enum_types(input_schema)
+    assert input_schema == expected_output
+
     assert "enum" in input_schema["properties"]["truncateMode"]
     assert input_schema["properties"]["truncateMode"]["enum"] == [
         "auto",
@@ -1110,29 +1118,30 @@ def test_fix_enum_types():
         "start",
         "end",
     ]
-
     assert "enum" in input_schema["properties"]["nested"]["properties"]["innerEnum"]
     assert input_schema["properties"]["nested"]["properties"]["innerEnum"]["enum"] == [
         "a",
         "b",
         "c",
     ]
-
-    # 2. Non-string enums are removed
-    assert "enum" not in input_schema["properties"]["maxLength"]
-    assert "enum" not in input_schema["properties"]["enabled"]
+    assert input_schema["properties"]["maxLength"]["format"] == "enum"
+    assert input_schema["properties"]["maxLength"]["enum"] == ["100", "200", "500"]
     assert (
-        "enum"
-        not in input_schema["properties"]["nested"]["properties"]["innerNonStringEnum"]
+        input_schema["properties"]["nested"]["properties"]["innerNonStringEnum"]["format"]
+        == "enum"
     )
-
-    # 3. anyOf with string type keeps enum, non-string removes it
+    assert input_schema["properties"]["nested"]["properties"]["innerNonStringEnum"]["enum"] == [
+        "1",
+        "2",
+        "3",
+    ]
+    assert "enum" not in input_schema["properties"]["enabled"]
     assert "enum" in input_schema["properties"]["anyOfField"]["anyOf"][0]
-    assert "enum" not in input_schema["properties"]["anyOfField"]["anyOf"][1]
-
-    # 4. Other properties preserved
+    assert input_schema["properties"]["anyOfField"]["anyOf"][1]["format"] == "enum"
+    assert input_schema["properties"]["anyOfField"]["anyOf"][1]["enum"] == ["1", "2", "3"]
     assert input_schema["properties"]["maxLength"]["type"] == "integer"
     assert input_schema["properties"]["enabled"]["type"] == "boolean"
+
 
 
 def test_get_token_url():
