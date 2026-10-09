@@ -1611,11 +1611,7 @@ class MCPRequestHandler:
             headers.get(custom_key_header_name)
             if custom_key_header_name is not None
             else next(
-                (
-                    header_value
-                    for header_name in admission_header_names
-                    if (header_value := headers.get(header_name)) is not None
-                ),
+                (header_value for header_name in admission_header_names if (header_value := headers.get(header_name))),
                 None,
             )
         )

@@ -9662,6 +9662,29 @@ class TestSessionBearerEgressScrub:
             {"other_srv": {"Authorization": upstream_authorization}},
         )
 
+    @pytest.mark.parametrize(
+        ("empty_header", "admission_header"),
+        (("x-litellm-api-key", "authorization"), ("authorization", "api-key")),
+    )
+    async def test_empty_admission_header_falls_back_to_authenticated_key(
+        self, empty_header: str, admission_header: str
+    ) -> None:
+        caller_key: Final = "sk-caller-admission-key-123"
+        headers: Final = Headers({empty_header: "", admission_header: caller_key})
+        credential: Final = MCPRequestHandler.caller_admission_credential(
+            headers, UserAPIKeyAuth(api_key="stored-key-hash"), custom_key_header_name=None
+        )
+        assert credential == caller_key
+        result: Final = MCPRequestHandler.scrub_gateway_admission_credentials(
+            admitted=False,
+            oauth2_headers={"Authorization": f"Bearer {caller_key}"},
+            raw_headers={**dict(headers), "x-upstream-token": caller_key, "x-tenant": "tenant-control"},
+            mcp_auth_header=caller_key,
+            mcp_server_auth_headers={"echo": {"Authorization": caller_key}},
+            admitted_credential=credential,
+        )
+        assert result == (None, {empty_header: "", "x-tenant": "tenant-control"}, None, {})
+
     async def test_caller_admission_credential_prefers_x_litellm_header(self) -> None:
         caller_key: Final = "sk-caller-admission-key-123"
         upstream_authorization: Final = "Bearer unrelated-upstream-token"
