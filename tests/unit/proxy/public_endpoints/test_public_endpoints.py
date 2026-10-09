@@ -484,7 +484,9 @@ def test_strands_decider_provider_fields():
         ("Bespoke", "Bespoke Nimble", LlmProviders.BESPOKE.value, "bespoke/nimble-latest"),
     ),
 )
-def test_oss_decisions_provider_fields(provider, display_name, litellm_provider, model_placeholder):
+def test_oss_decisions_provider_fields(
+    provider: str, display_name: str, litellm_provider: str, model_placeholder: str
+) -> None:
     entry: Final = _decisions_provider_entry(provider)
 
     assert entry.provider_display_name == display_name
