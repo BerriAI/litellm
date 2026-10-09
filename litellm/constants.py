@@ -1055,7 +1055,7 @@ openai_compatible_providers: Final[list] = [
     "reka",
 ]
 
-OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai", *openai_compatible_providers} - {"zerogpu"})
+OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
 
 openai_text_completion_compatible_providers: Final[list] = [  # providers that support `/v1/completions`
     "together_ai",
