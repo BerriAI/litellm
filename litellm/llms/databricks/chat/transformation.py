@@ -188,7 +188,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     def custom_llm_provider(self) -> str | None:
         return "databricks"
 
-    def get_json_schema_from_pydantic_object(self, response_format: type[BaseModel] | dict | None) -> dict | None:
+    def get_json_schema_from_pydantic_object(
+        self, response_format: type[BaseModel] | dict[str, object] | None
+    ) -> dict[str, object] | None:
         return type_to_response_format_param(response_format=response_format)
 
     @classmethod

@@ -668,7 +668,7 @@ def test_databricks_response_format_preserves_json_schema_reference() -> None:
         },
     }
 
-    optional_params = litellm.get_optional_params(
+    optional_params: Final = litellm.get_optional_params(
         model="system.ai.deepseek-v4-1-flash",
         custom_llm_provider="databricks",
         response_format=response_format,
