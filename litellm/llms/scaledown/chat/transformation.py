@@ -40,6 +40,9 @@ EXTRA_BODY_KEYS = {
     "decisions": frozenset({"questions", "state"}),
 }
 
+# Set by the LiteLLM router and proxy on every call; handled by LiteLLM, never sent upstream.
+ROUTER_PARAMS = frozenset({"max_retries"})
+
 STATE_DOCUMENT_KEYS = ("document", "document_mime_type")
 
 SCORE_MIN_LEVELS = 2
@@ -113,7 +116,7 @@ class ScaleDownChatConfig(BaseConfig):
         drop_params: bool,
     ) -> dict:
         supported = set(self.get_supported_openai_params(model))
-        unsupported = [key for key in non_default_params if key not in supported]
+        unsupported = [key for key in non_default_params if key not in supported and key not in ROUTER_PARAMS]
         if unsupported and not drop_params:
             raise ScaleDownError(
                 status_code=400,
@@ -149,7 +152,8 @@ class ScaleDownChatConfig(BaseConfig):
             raise ScaleDownError(
                 status_code=400,
                 message=(
-                    f"extra_body for scaledown/{operation} may only set {sorted(allowed) or 'nothing'}, "
+                    f"extra_body for scaledown/{operation} "
+                    f"{'may only set ' + str(sorted(allowed)) if allowed else 'is not accepted'}, "
                     f"got {unexpected}. Text and instructions must be passed as messages."
                 ),
             )

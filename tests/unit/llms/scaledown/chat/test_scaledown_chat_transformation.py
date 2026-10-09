@@ -272,7 +272,7 @@ def test_extra_body_may_set_extract_options(config):
     ],
 )
 def test_extra_body_cannot_override_the_model_or_prompt_text(config, model, extra_body):
-    with pytest.raises(ScaleDownError, match="may only set"):
+    with pytest.raises(ScaleDownError, match="may only set|is not accepted"):
         config.transform_extra_body(extra_body=extra_body, request={}, model=model, litellm_params={})
 
 
@@ -346,6 +346,15 @@ def test_max_completion_tokens_maps_to_max_tokens(config):
         model="scaledown/summarize",
         drop_params=False,
     ) == {"max_tokens": 50}
+
+
+def test_router_params_are_accepted_and_not_forwarded(config):
+    assert (
+        config.map_openai_params(
+            non_default_params={"max_retries": 2}, optional_params={}, model="scaledown/classify", drop_params=False
+        )
+        == {}
+    )
 
 
 def test_every_model_fakes_a_stream(config):
