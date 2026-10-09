@@ -890,7 +890,7 @@ from litellm.proxy.utils import (  # noqa: F401, RUF100  # legacy module exports
     is_projected_spend_over_limit,  # pyright: ignore[reportUnusedImport]  # backwards-compatible package export
     is_valid_team_configs,
     litellm_config_cache,
-    migrate_passwords_to_scrypt_async,
+    migrate_plaintext_passwords_async,
     model_dump_with_preserved_fields,
     prefetch_config_params,
     update_spend,
@@ -1481,7 +1481,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
 
         async def _run_pw_migration():
             try:
-                result: Final = await migrate_passwords_to_scrypt_async(prisma_client)
+                result: Final = await migrate_plaintext_passwords_async(prisma_client)
                 verbose_proxy_logger.info("Password migration: %s", result)
             except ValueError as e:
                 verbose_proxy_logger.error(
