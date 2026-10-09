@@ -26,11 +26,13 @@ export function buildDecisionModelParams(
 ): DecisionModelLitellmParams {
   return {
     decision_model: decisionModel,
-    checks: checks.filter((check) => check.enabled !== false).map((check) => ({
-      name: check.name,
-      ...(check.custom ? { instructions: check.instructions ?? "" } : {}),
-      action: check.action,
-      threshold: clampThreshold(check.threshold),
-    })),
+    checks: checks
+      .filter((check) => check.enabled !== false)
+      .map((check) => ({
+        name: check.name,
+        ...(check.custom ? { instructions: check.instructions ?? "" } : {}),
+        action: check.action,
+        threshold: clampThreshold(check.threshold),
+      })),
   };
 }

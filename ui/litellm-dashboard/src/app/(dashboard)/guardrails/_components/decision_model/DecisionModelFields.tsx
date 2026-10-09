@@ -150,9 +150,7 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
           <Button
             variant="outline"
             size="sm"
-            onClick={() =>
-              onChecksChange(checks.filter((c) => c.custom).map((c) => ({ ...c, enabled: false })))
-            }
+            onClick={() => onChecksChange(checks.filter((c) => c.custom).map((c) => ({ ...c, enabled: false })))}
           >
             Unselect all
           </Button>

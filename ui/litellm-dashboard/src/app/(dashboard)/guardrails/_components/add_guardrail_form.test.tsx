@@ -3,7 +3,12 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createGuardrailCall, getGuardrailProviderSpecificParams, getGuardrailUISettings, modelHubCall } from "@/components/networking";
+import {
+  createGuardrailCall,
+  getGuardrailProviderSpecificParams,
+  getGuardrailUISettings,
+  modelHubCall,
+} from "@/components/networking";
 import AddGuardrailForm from "./add_guardrail_form";
 
 vi.mock("@/components/networking", () => ({
