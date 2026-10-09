@@ -137,6 +137,7 @@ jobs:
         include:
           - shard: core-utils
             test-path: |-
+              tests/unit/batch_completion
               tests/unit/decisions
               tests/unit/litellm_core_utils
             python-version: "3.12"

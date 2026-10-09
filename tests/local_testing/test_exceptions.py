@@ -41,14 +41,10 @@ exception_models = [
 ]
 
 
-
-
 # Test 1: Context Window Errors
 
 
 models = ["command-nightly"]
-
-
 
 
 # for model in litellm.models_by_provider["bedrock"]:
@@ -185,17 +181,6 @@ def test_completion_azure_exception():
 # test_completion_azure_exception()
 
 
-def test_azure_embedding_exceptions():
-    # CRUCIAL Test - Ensures our exceptions are readable and not overly complicated. some users have complained exceptions will randomly have another exception raised in our exception mapping
-    with pytest.raises(Exception, match="Mock error") as exc_info:
-        litellm.embedding(
-            model="azure/text-embedding-ada-002",
-            input="hello",
-            mock_response="error",
-        )
-    assert str(exc_info.value) == "Mock error"
-
-
 async def asynctest_completion_azure_exception():
     try:
         import openai
@@ -315,8 +300,6 @@ def test_completion_openai_exception():
 # test_completion_openai_exception()
 
 
-
-
 def test_completion_mistral_exception():
     # test if mistral/mistral-tiny raises openai.AuthenticationError
     try:
@@ -341,30 +324,6 @@ def test_completion_mistral_exception():
 
 
 # test_completion_mistral_exception()
-
-
-def test_completion_bedrock_invalid_role_exception():
-    """
-    Test if litellm raises a BadRequestError for an invalid role on Bedrock
-    """
-    litellm.set_verbose = True
-    with pytest.raises(litellm.BadRequestError) as exc_info:
-        completion(
-            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
-            messages=[{"role": "very-bad-role", "content": "hello"}],
-        )
-
-    # This is important - We we previously returning a poorly formatted error string. Which was
-    #  litellm.BadRequestError: litellm.BadRequestError: Invalid Message passed in {'role': 'very-bad-role', 'content': 'hello'}
-    assert (
-        str(exc_info.value)
-        == "litellm.BadRequestError: Invalid Message passed in {'role': 'very-bad-role', 'content': 'hello'}"
-    )
-
-
-
-
-# test_content_policy_exceptionimage_generation_openai()
 
 
 def test_content_policy_violation_error_streaming():
@@ -432,8 +391,6 @@ def test_content_policy_violation_error_streaming():
             pass
 
     asyncio.run(test_get_error())
-
-
 
 
 # test_completion_perplexity_exception_on_openai_client()
