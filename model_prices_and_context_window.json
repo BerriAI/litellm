@@ -81916,5 +81916,25 @@
         "supports_video_input": true,
         "supports_vision": true,
         "supports_web_search": false
+    },
+    "us.twelvelabs.pegasus-1-5-v1:0": {
+        "input_cost_per_video_per_second": 0.00049,
+        "litellm_provider": "bedrock",
+        "max_output_tokens": 98304,
+        "max_tokens": 98304,
+        "mode": "chat",
+        "output_cost_per_token": 7.5e-06,
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json",
+        "supports_video_input": true
+    },
+    "global.twelvelabs.pegasus-1-5-v1:0": {
+        "input_cost_per_video_per_second": 0.00049,
+        "litellm_provider": "bedrock",
+        "max_output_tokens": 98304,
+        "max_tokens": 98304,
+        "mode": "chat",
+        "output_cost_per_token": 7.5e-06,
+        "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json",
+        "supports_video_input": true
     }
 }
