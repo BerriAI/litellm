@@ -62,6 +62,7 @@ vi.mock("@/components/networking", () => ({
   dailyActivityKeySearchCall: vi.fn(),
   dailyActivityModelTopKeysCall: vi.fn(),
   dailyActivityExportCall: vi.fn(),
+  tagListCall: vi.fn(),
 }));
 
 // Mock the child components to simplify testing
@@ -121,10 +122,12 @@ vi.mock("@/components/EntityUsageExport", () => ({
   UsageExportHeader: ({
     filterLabel,
     filterSlot,
+    extraSlot,
     showFilters,
   }: {
     filterLabel?: string;
     filterSlot?: ReactNode;
+    extraSlot?: ReactNode;
     showFilters?: boolean;
   }) => (
     <div>
@@ -132,6 +135,7 @@ vi.mock("@/components/EntityUsageExport", () => ({
       <span>{filterLabel}</span>
       <span>{`show-filters:${showFilters === true}`}</span>
       {filterSlot}
+      {extraSlot}
     </div>
   ),
 }));
@@ -173,6 +177,7 @@ describe("EntityUsage", () => {
     user: mockUserDailyActivityCall,
   };
   const mockUseInfiniteUsers = vi.mocked(useInfiniteUsers);
+  const mockTagListCall = vi.mocked(networking.tagListCall);
 
   const infiniteUsersResult = (users: { user_id: string; user_alias: string | null; user_email: string | null }[]) =>
     ({
@@ -490,6 +495,10 @@ describe("EntityUsage", () => {
     mockCustomerDailyActivityCall.mockResolvedValue(mockSpendData);
     mockAgentDailyActivityCall.mockResolvedValue(mockAgentSpendData);
     mockUserDailyActivityCall.mockResolvedValue(mockSpendData);
+    mockTagListCall.mockReset();
+    mockTagListCall.mockResolvedValue({
+      "scoped-tag": { name: "scoped-tag", models: [], created_at: "2025-01-01", updated_at: "2025-01-01" },
+    });
     mockUseInfiniteUsers.mockClear();
     mockUseInfiniteUsers.mockReturnValue(
       infiniteUsersResult([
@@ -1408,6 +1417,94 @@ describe("EntityUsage", () => {
           expect.objectContaining({ accessToken: "test-token", entityIds: null }),
         );
       });
+    });
+  });
+
+  describe("tag team filter and breakdown", () => {
+    const TEAM_NOTE =
+      "Requests with several tags count once per tag, so team totals here can be higher than actual team spend. See the Team tab for exact team totals.";
+
+    it("sends selected teams as teamIds to the aggregated call and scopes the tag options", async () => {
+      render(<EntityUsage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockTagDailyActivityCall).toHaveBeenCalledWith(
+          expect.objectContaining({ accessToken: "test-token", teamIds: null }),
+        );
+      });
+
+      fireEvent.click(screen.getByText("Team Multi Select"));
+
+      await waitFor(() => {
+        expect(mockTagDailyActivityCall).toHaveBeenCalledWith(
+          expect.objectContaining({ teamIds: ["team-1"] }),
+        );
+      });
+      await waitFor(() => {
+        expect(mockTagListCall).toHaveBeenCalledWith(
+          "test-token",
+          expect.any(Date),
+          expect.any(Date),
+          expect.objectContaining({ teamIds: ["team-1"], usageOnly: true }),
+        );
+      });
+    });
+
+    it("does not call tagListCall while no team is selected", async () => {
+      render(<EntityUsage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockTagDailyActivityCall).toHaveBeenCalled();
+      });
+      expect(mockTagListCall).not.toHaveBeenCalled();
+    });
+
+    it("sends group_by=team, shows the note, and labels rows by team alias", async () => {
+      const mockUseTeams = vi.mocked(useTeams);
+      mockUseTeams.mockReturnValue({
+        teams: [{ team_id: "tag-1", team_alias: "Team Alpha" }],
+        setTeams: vi.fn(),
+      } as unknown as ReturnType<typeof useTeams>);
+
+      render(<EntityUsage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockTagDailyActivityCall).toHaveBeenCalled();
+      });
+      expect(screen.queryByText(TEAM_NOTE)).not.toBeInTheDocument();
+      expect(mockTagDailyActivityCall.mock.lastCall?.[0].groupBy).toBeNull();
+
+      fireEvent.click(screen.getByRole("radio", { name: "Team" }));
+
+      await waitFor(() => {
+        expect(mockTagDailyActivityCall.mock.lastCall?.[0]).toEqual(
+          expect.objectContaining({ groupBy: "team" }),
+        );
+      });
+      expect(await screen.findByText(TEAM_NOTE)).toBeInTheDocument();
+      expect(screen.getAllByText("Team Alpha").length).toBeGreaterThan(0);
+    });
+
+    it("keeps tag mode unscoped to teams and without the note", async () => {
+      render(<EntityUsage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(mockTagDailyActivityCall).toHaveBeenCalled();
+      });
+      expect(mockTagDailyActivityCall.mock.lastCall?.[0]).toEqual(
+        expect.objectContaining({ teamIds: null, groupBy: null }),
+      );
+      expect(screen.queryByText(TEAM_NOTE)).not.toBeInTheDocument();
+    });
+
+    it("does not render the team filter or breakdown toggle on the team tab", async () => {
+      render(<EntityUsage {...defaultProps} entityType="team" />);
+
+      await waitFor(() => {
+        expect(mockTeamDailyActivityCall).toHaveBeenCalled();
+      });
+      expect(screen.queryByRole("radio", { name: "Tag" })).not.toBeInTheDocument();
+      expect(mockTeamDailyActivityCall.mock.lastCall?.[0]).not.toHaveProperty("groupBy", "team");
     });
   });
 });

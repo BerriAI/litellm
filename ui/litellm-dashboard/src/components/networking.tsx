@@ -1315,6 +1315,10 @@ const dailyActivityQuery = (
     end_date: formatDate(req.endTime),
     model: req.model,
     api_key: req.apiKey,
+    team_ids:
+      entity === "tag" && req.teamIds && req.teamIds.length > 0 ? req.teamIds.join(",") : undefined,
+    tags: entity === "team" && req.tags && req.tags.length > 0 ? req.tags.join(",") : undefined,
+    group_by: req.groupBy ?? undefined,
     [ENTITY_ID_QUERY_PARAM[entity]]: entityIdValue,
     ...(excludeParam
       ? { [excludeParam]: excludeEntityIds && excludeEntityIds.length > 0 ? excludeEntityIds.join(",") : undefined }
@@ -5257,16 +5261,25 @@ export const tagListCall = async (
   accessToken: string,
   startTime?: Date | null,
   endTime?: Date | null,
+  opts?: { teamIds?: readonly string[]; usageOnly?: boolean },
 ): Promise<TagListResponse> => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/list` : `/tag/list`;
 
+    const params = new URLSearchParams();
     if (startTime && endTime) {
-      const params = new URLSearchParams({
-        start_date: formatYmd(startTime),
-        end_date: formatYmd(endTime),
-      });
-      url = `${url}?${params.toString()}`;
+      params.set("start_date", formatYmd(startTime));
+      params.set("end_date", formatYmd(endTime));
+    }
+    if (opts?.teamIds && opts.teamIds.length > 0) {
+      params.set("team_ids", opts.teamIds.join(","));
+    }
+    if (opts?.usageOnly) {
+      params.set("usage_only", "true");
+    }
+    const queryString = params.toString();
+    if (queryString) {
+      url = `${url}?${queryString}`;
     }
 
     const response = await fetch(url, {

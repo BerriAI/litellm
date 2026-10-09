@@ -6,6 +6,7 @@ import {
   dailyActivityExportCall,
   dailyActivityKeySearchCall,
   dailyActivityModelTopKeysCall,
+  tagListCall,
 } from "./networking";
 import type { DailyActivityEntity, DailyActivityRequest } from "./UsagePage/dailyActivityApi";
 
@@ -132,6 +133,68 @@ describe("dailyActivityAggregatedCall", () => {
     expect(requestedUrl(mockFetch, 0).searchParams.has("api_key_limit")).toBe(false);
     expect(requestedUrl(mockFetch, 1).searchParams.get("api_key_limit")).toBe("250");
   });
+
+  it("emits team_ids and group_by for tag", async () => {
+    const mockFetch = captureFetch();
+
+    await dailyActivityAggregatedCall(
+      "tag",
+      req({ entityIds: ["shared"], teamIds: ["t1", "t2"], groupBy: "team" }),
+    );
+
+    const url = requestedUrl(mockFetch);
+    expect(url.searchParams.get("team_ids")).toBe("t1,t2");
+    expect(url.searchParams.get("group_by")).toBe("team");
+    expect(url.searchParams.get("tags")).toBe("shared");
+  });
+
+  it("emits tags for team", async () => {
+    const mockFetch = captureFetch();
+
+    await dailyActivityAggregatedCall("team", req({ entityIds: ["t1"], tags: ["shared", "x"], groupBy: "tag" }));
+
+    const url = requestedUrl(mockFetch);
+    expect(url.searchParams.get("tags")).toBe("shared,x");
+    expect(url.searchParams.get("group_by")).toBe("tag");
+    expect(url.searchParams.get("team_ids")).toBe("t1");
+  });
+
+  it("does not send the teamIds field on team routes or the tags field on tag routes", async () => {
+    const mockFetch = captureFetch();
+
+    await dailyActivityAggregatedCall("team", req({ teamIds: ["t1"], tags: ["shared"] }));
+    await dailyActivityAggregatedCall("tag", req({ teamIds: ["t1"], tags: ["shared"] }));
+
+    const teamCall = requestedUrl(mockFetch, 0);
+    expect(teamCall.searchParams.has("team_ids")).toBe(false);
+    expect(teamCall.searchParams.get("tags")).toBe("shared");
+    const tagCall = requestedUrl(mockFetch, 1);
+    expect(tagCall.searchParams.get("team_ids")).toBe("t1");
+    expect(tagCall.searchParams.has("tags")).toBe(false);
+    expect(tagCall.searchParams.has("exclude_tags")).toBe(false);
+  });
+
+  it("emits none of the new params when unset", async () => {
+    const mockFetch = captureFetch();
+
+    await dailyActivityAggregatedCall("tag", req());
+    await dailyActivityAggregatedCall("team", req());
+
+    for (const url of [requestedUrl(mockFetch, 0), requestedUrl(mockFetch, 1)]) {
+      const keys = [...url.searchParams.keys()].sort();
+      expect(keys).toEqual(["end_date", "start_date", "timezone"]);
+    }
+  });
+
+  it("omits empty team_ids and tags lists", async () => {
+    const mockFetch = captureFetch();
+
+    await dailyActivityAggregatedCall("tag", req({ teamIds: [] }));
+    await dailyActivityAggregatedCall("team", req({ tags: [] }));
+
+    expect(requestedUrl(mockFetch, 0).searchParams.has("team_ids")).toBe(false);
+    expect(requestedUrl(mockFetch, 1).searchParams.has("tags")).toBe(false);
+  });
 });
 
 describe("dailyActivityKeySearchCall", () => {
@@ -220,5 +283,51 @@ describe("cacheLeakageKeysCall", () => {
     await cacheLeakageKeysCall(req(), 75);
 
     expect(requestedUrl(mockFetch).searchParams.get("limit")).toBe("75");
+  });
+});
+
+describe("tagListCall", () => {
+  it("GETs /tag/list with no params when nothing is given", async () => {
+    const mockFetch = captureFetch();
+
+    await tagListCall("sk-key");
+
+    const url = requestedUrl(mockFetch);
+    expect(url.pathname).toBe("/tag/list");
+    expect([...url.searchParams.keys()]).toEqual([]);
+  });
+
+  it("sends start and end dates when both are given", async () => {
+    const mockFetch = captureFetch();
+
+    await tagListCall("sk-key", start, end);
+
+    const url = requestedUrl(mockFetch);
+    expect(url.searchParams.get("start_date")).toBe("2025-01-05");
+    expect(url.searchParams.get("end_date")).toBe("2025-01-31");
+  });
+
+  it("sends team_ids and usage_only with dates", async () => {
+    const mockFetch = captureFetch();
+
+    await tagListCall("sk-key", start, end, { teamIds: ["t1", "t2"], usageOnly: true });
+
+    const url = requestedUrl(mockFetch);
+    expect(url.searchParams.get("team_ids")).toBe("t1,t2");
+    expect(url.searchParams.get("usage_only")).toBe("true");
+    expect(url.searchParams.get("start_date")).toBe("2025-01-05");
+    expect(url.searchParams.get("end_date")).toBe("2025-01-31");
+  });
+
+  it("sends team_ids and usage_only without dates", async () => {
+    const mockFetch = captureFetch();
+
+    await tagListCall("sk-key", null, null, { teamIds: ["t1"], usageOnly: true });
+
+    const url = requestedUrl(mockFetch);
+    expect(url.searchParams.get("team_ids")).toBe("t1");
+    expect(url.searchParams.get("usage_only")).toBe("true");
+    expect(url.searchParams.has("start_date")).toBe(false);
+    expect(url.searchParams.has("end_date")).toBe(false);
   });
 });

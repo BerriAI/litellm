@@ -20,6 +20,9 @@ export interface DailyActivityRequest {
   endTime: Date;
   entityIds?: readonly string[] | null;
   excludeEntityIds?: readonly string[];
+  teamIds?: readonly string[] | null;
+  tags?: readonly string[] | null;
+  groupBy?: "tag" | "team" | null;
   apiKey?: string | null;
   model?: string | null;
   includeCurrentUtcDay?: boolean;

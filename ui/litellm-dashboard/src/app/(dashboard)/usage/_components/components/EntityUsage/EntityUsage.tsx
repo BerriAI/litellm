@@ -13,7 +13,8 @@ import { ChartLoader } from "@/components/shared/chart_loader";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/cva.config";
-import React, { type ReactNode, useCallback, useMemo, useState } from "react";
+import { tagListCall } from "@/components/networking";
+import React, { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import TeamMultiSelect from "@/components/common_components/team_multi_select";
 import UserDropdown from "@/components/common_components/UserDropdown";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
@@ -68,6 +69,10 @@ const SCALE_OPTIONS = [
   { value: "log", label: "Log" },
 ] as const satisfies readonly { value: StackedUsageScale; label: string }[];
 const QUIET_HEADER = { headerClassName: "font-normal" };
+const GROUP_BY_OPTIONS = [
+  { value: "tag", label: "Tag" },
+  { value: "team", label: "Team" },
+] as const satisfies readonly { value: "tag" | "team"; label: string }[];
 const FLAT_COST_KEY = "flat_cost";
 
 /** Stacks reserved-capacity flat cost on top of the per-model spend, so each bar is the day's full cost. */
@@ -135,6 +140,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const { teams } = useTeams();
   const teamList = useMemo(() => teams ?? [], [teams]);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [selectedTeamIds, setSelectedTeamIds] = useState<string[]>([]);
+  const [groupBy, setGroupBy] = useState<"tag" | "team">("tag");
+  const [scopedTagOptions, setScopedTagOptions] = useState<EntityList[] | null>(null);
   const [modelViewType, setModelViewType] = useState<ModelViewType>("groups");
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
@@ -150,6 +158,30 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const hasRequestWindow = !!accessToken && !!startTime && !!endTime;
   const enabled = hasRequestWindow && canViewEntity;
 
+  useEffect(() => {
+    if (entityType !== "tag" || selectedTeamIds.length === 0 || !hasRequestWindow) {
+      return;
+    }
+    let cancelled = false;
+    tagListCall(accessToken as string, startTime, endTime, {
+      teamIds: selectedTeamIds,
+      usageOnly: true,
+    })
+      .then((tags) => {
+        if (!cancelled) {
+          setScopedTagOptions(Object.keys(tags).map((tag) => ({ label: tag, value: tag })));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setScopedTagOptions([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [entityType, selectedTeamIds, hasRequestWindow, accessToken, startTime, endTime]);
+
   const request = useMemo<DailyActivityRequest | null>(
     () =>
       hasRequestWindow
@@ -158,9 +190,11 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
             startTime: startTime as Date,
             endTime: endTime as Date,
             entityIds: selectedTags.length > 0 ? selectedTags : null,
+            teamIds: entityType === "tag" && selectedTeamIds.length > 0 ? selectedTeamIds : null,
+            groupBy: entityType === "tag" && groupBy === "team" ? "team" : null,
           }
         : null,
-    [hasRequestWindow, accessToken, startTime, endTime, selectedTags],
+    [hasRequestWindow, accessToken, startTime, endTime, selectedTags, selectedTeamIds, groupBy, entityType],
   );
   const agentRequest = useMemo<DailyActivityRequest | null>(
     () =>
@@ -182,7 +216,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   } = useAggregatedDailyActivity({
     fetch: () => api.aggregated(request as DailyActivityRequest),
     enabled: enabled && request !== null,
-    deps: [entityType, accessToken, startTime, endTime, selectedTags],
+    deps: [entityType, accessToken, startTime, endTime, selectedTags, selectedTeamIds, groupBy],
   });
 
   const spendData = useMemo(
@@ -242,12 +276,25 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const agentMetrics = showAgentBreakdown ? processActivityData(agentSpendData, "entities", teamList) : {};
 
   const getAllTags = () => {
+    if (entityType === "tag" && selectedTeamIds.length > 0 && scopedTagOptions !== null) {
+      return scopedTagOptions;
+    }
     if (entityList) {
       return entityList;
     }
   };
 
   const getEntityLabel = (entity: string, metadata?: Record<string, any>): string => {
+    if (entityType === "tag" && groupBy === "team") {
+      const team = teamList.find((t) => t.team_id === entity);
+      if (team?.team_alias) {
+        return team.team_alias;
+      }
+      if (metadata?.team_alias) {
+        return metadata.team_alias;
+      }
+      return entity;
+    }
     if (entityList) {
       const entityItem = entityList.find((item) => item.value === entity);
       if (entityItem) {
@@ -307,6 +354,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
     const result = Object.values(entitySpend).sort((a, b) => b.metrics.spend - a.metrics.spend);
 
+    if (entityType === "tag" && groupBy === "team") {
+      return result;
+    }
     return filterDataByTags(result);
   };
   const entityRows = getEntityBreakdown().filter((entity) => entity.metrics.spend > 0);
@@ -652,6 +702,14 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           </AlertDescription>
         </Alert>
       )}
+      {entityType === "tag" && groupBy === "team" && (
+        <Alert>
+          <AlertDescription className="text-inherit">
+            Requests with several tags count once per tag, so team totals here can be higher than actual team
+            spend. See the Team tab for exact team totals.
+          </AlertDescription>
+        </Alert>
+      )}
       {showAgentBreakdown && agentFailed && (
         <Alert variant="error">
           <AlertDescription className="text-inherit">
@@ -677,6 +735,22 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           onFiltersChange={setSelectedTags}
           filterOptions={getAllTags() || undefined}
           teams={teamList}
+          extraSlot={
+            entityType === "tag" ? (
+              <div className="flex items-end gap-3">
+                <div>
+                  <label className="text-sm font-medium text-foreground block mb-2">Filter by team</label>
+                  <TeamMultiSelect value={selectedTeamIds} onChange={setSelectedTeamIds} />
+                </div>
+                <Segmented
+                  label="Break down by"
+                  value={groupBy}
+                  options={GROUP_BY_OPTIONS}
+                  onChange={setGroupBy}
+                />
+              </div>
+            ) : undefined
+          }
         />
       </div>
       <Tabs defaultValue={tabs[0].key} className="gap-3">

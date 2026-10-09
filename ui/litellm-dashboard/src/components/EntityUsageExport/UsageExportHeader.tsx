@@ -31,6 +31,7 @@ interface UsageExportHeaderProps {
   onFiltersChange?: (filters: string[]) => void;
   filterOptions?: Array<{ label: string; value: string }>;
   filterSlot?: React.ReactNode;
+  extraSlot?: React.ReactNode;
   customTitle?: string;
   compactLayout?: boolean;
   teams?: Team[];
@@ -47,6 +48,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   onFiltersChange,
   filterOptions = [],
   filterSlot,
+  extraSlot,
   customTitle,
   compactLayout = false,
   teams = [],
@@ -54,7 +56,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   const anchor = useComboboxAnchor();
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
-  const hasFilters = filterSlot != null || showFilters;
+  const hasFilters = filterSlot != null || extraSlot != null || showFilters;
   const optionValues = filterOptions.map((option) => option.value);
   const labelOf = (value: string) => filterOptions.find((option) => option.value === value)?.label ?? value;
   const hasNoOptions = filterOptions.length === 0;
@@ -114,9 +116,12 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
          */}
         <div className={`grid ${hasFilters ? "grid-cols-[1fr_auto]" : "grid-cols-[auto]"} items-end gap-3`}>
           {hasFilters && (
-            <div>
-              {filterLabel && <label className="text-sm font-medium text-foreground block mb-2">{filterLabel}</label>}
-              {filterSlot ?? builtInFilter}
+            <div className={extraSlot != null ? "flex items-end gap-3" : undefined}>
+              <div className="min-w-0 flex-1">
+                {filterLabel && <label className="text-sm font-medium text-foreground block mb-2">{filterLabel}</label>}
+                {filterSlot ?? builtInFilter}
+              </div>
+              {extraSlot}
             </div>
           )}
 
