@@ -59,6 +59,7 @@ from litellm.responses.streaming_iterator import (
 )
 from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ImageObject, ImageResponse, ModelResponse, TranscriptionResponse
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 
@@ -4643,6 +4644,62 @@ async def test_async_image_generation_handler_records_upstream_response_headers(
 
     assert response.data[0].b64_json == "abc"
     _assert_upstream_headers_recorded(response)
+
+
+class _OffLoopImageGenerationConfig(_HeaderImageGenerationConfig):
+    def validate_environment(
+        self,
+        headers: dict[str, object],
+        model: str,
+        messages: list[AllMessageValues],
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict[str, object]:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return {"Authorization": "Bearer from-worker-thread"}
+        raise AssertionError("validate_environment ran on the event loop")
+
+    def transform_image_generation_response(self, *args: object, **kwargs: object) -> ImageResponse:
+        raise AssertionError("sync transform_image_generation_response ran on the event loop")
+
+    async def async_transform_image_generation_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ImageResponse,
+        logging_obj: object,
+        request_data: dict[str, object],
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        encoding: object,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
+    ) -> ImageResponse:
+        return ImageResponse(data=[ImageObject(b64_json=raw_response.json()["b64_json"])])
+
+
+@pytest.mark.asyncio
+async def test_async_image_generation_handler_keeps_provider_auth_and_polling_off_the_event_loop():
+    seen_authorization: Final[list[str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_authorization.append(request.headers.get("Authorization"))
+        return httpx.Response(200, json={"b64_json": "abc"})
+
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    response: Final = await BaseLLMHTTPHandler().async_image_generation_handler(  # pyright: ignore[reportUnknownMemberType]  # handler params are untyped
+        client=client,
+        **{**_image_generation_call_kwargs(), "image_generation_provider_config": _OffLoopImageGenerationConfig()},  # pyright: ignore[reportUnknownArgumentType]  # call kwargs helper is untyped
+    )
+
+    assert response.data[0].b64_json == "abc"  # pyright: ignore[reportUnknownMemberType]  # ImageObject fields are partially untyped
+    assert seen_authorization == ["Bearer from-worker-thread"]
 
 
 class _HeaderTextToSpeechConfig(BaseTextToSpeechConfig):

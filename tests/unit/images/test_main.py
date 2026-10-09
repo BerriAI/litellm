@@ -1,10 +1,9 @@
 import asyncio
-import concurrent.futures
 import itertools
 import json
-import threading
 from datetime import datetime
-from typing import Callable, Coroutine, Final, cast
+from collections.abc import Coroutine
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -354,69 +353,31 @@ async def test_azure_image_generation_request_body():
         assert request_json == expected_body
 
 
-def test_aimage_generation_runs_vertex_requests_on_the_event_loop_not_the_executor(
-    respx_mock: respx.MockRouter,
-) -> None:
-    api_base: Final = "http://localhost:12348/generateContent"
+@pytest.mark.asyncio
+async def test_aimage_generation_runs_vertex_requests_concurrently_on_the_event_loop() -> None:
     response_json: Final = {
         "candidates": [{"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1n"}}]}}],
     }
     arrivals: Final = itertools.count(1)
-    released: Final = threading.Event()
+    both_in_flight: Final = asyncio.Event()
 
-    aimage_generation: Final = cast(
-        Callable[..., Coroutine[object, object, litellm.ImageResponse]],
-        getattr(litellm, "aimage_generation"),
-    )
-
-    def held_sync(request: httpx.Request) -> httpx.Response:
+    async def handler(request: httpx.Request) -> httpx.Response:
         if next(arrivals) == 2:
-            released.set()
-        released.wait()
+            both_in_flight.set()
+        await both_in_flight.wait()
         return httpx.Response(status_code=200, json=response_json)
 
-    respx_mock.post(api_base).mock(side_effect=held_sync)
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(handler))
 
-    async def scenario() -> tuple[litellm.ImageResponse, litellm.ImageResponse]:
-        asyncio.get_running_loop().set_default_executor(concurrent.futures.ThreadPoolExecutor(max_workers=1))
-        in_flight: Final = asyncio.Event()
+    def generate() -> Coroutine[object, object, litellm.ImageResponse]:
+        return litellm.aimage_generation(  # pyright: ignore[reportUnknownMemberType]  # aimage_generation kwargs are untyped
+            model="vertex_ai/gemini-2.5-flash-image",
+            prompt="a red circle",
+            api_base="http://localhost:1/generateContent",
+            vertex_location="us-central1",
+            client=client,
+        )
 
-        async def handler(request: httpx.Request) -> httpx.Response:
-            if next(arrivals) == 2:
-                in_flight.set()
-            await in_flight.wait()
-            return httpx.Response(status_code=200, json=response_json)
+    results: Final = await asyncio.wait_for(asyncio.gather(generate(), generate()), timeout=5)
 
-        client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(handler))
-        try:
-            return await asyncio.wait_for(
-                asyncio.gather(
-                    aimage_generation(
-                        model="vertex_ai/gemini-2.5-flash-image",
-                        prompt="a red circle",
-                        api_base=api_base,
-                        vertex_location="us-central1",
-                        client=client,
-                    ),
-                    aimage_generation(
-                        model="vertex_ai/gemini-2.5-flash-image",
-                        prompt="a red circle",
-                        api_base=api_base,
-                        vertex_location="us-central1",
-                        client=client,
-                    ),
-                ),
-                timeout=5,
-            )
-        finally:
-            released.set()
-
-    results: Final = asyncio.run(scenario())
-    first: Final = results[0]
-    second: Final = results[1]
-    assert isinstance(first, litellm.ImageResponse)
-    assert first.data is not None
-    assert first.data[0].b64_json == "aW1n"
-    assert isinstance(second, litellm.ImageResponse)
-    assert second.data is not None
-    assert second.data[0].b64_json == "aW1n"
+    assert [image.b64_json for result in results for image in result.data or []] == ["aW1n", "aW1n"]
