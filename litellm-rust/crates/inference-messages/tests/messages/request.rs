@@ -1,10 +1,10 @@
 use litellm_auth_gcp::VertexParams;
-use litellm_inference_messages::LitellmParams;
 use litellm_llms::base_llm::messages::context::{MessagesModelCapabilities, SupportedEffortTiers};
 use litellm_llms_types::{
     headers::{ProviderSpecificHeader, ProviderSpecificHeaders},
     providers::anthropic::{AnthropicBeta, BetaSet},
 };
+use litellm_router_types::LitellmParams;
 use rstest::rstest;
 
 use super::*;

@@ -14,9 +14,7 @@ use serde_json::{Value, json};
 use crate::{
     Error,
     anthropic::{
-        common_utils::{
-            filter_billing_headers_from_system, merge_beta_headers, supports_effort_param,
-        },
+        common_utils::{merge_beta_headers, supports_effort_param},
         messages::{
             handler::shape_anthropic_messages_request,
             transformation::{provider_feature_betas, transform_messages_request},
@@ -26,7 +24,7 @@ use crate::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
         messages::{
             context::MessagesTransformContext,
-            normalization::{fold_system_role_messages, strip_cache_control_scope},
+            normalization::{normalize_system_role_messages, strip_cache_control_scope},
             transformation::BaseMessagesConfig,
         },
     },
@@ -81,20 +79,14 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
         request: MessagesRequest,
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
-        let request = transform_messages_request(
-            MessagesRequest {
-                params: MessagesOptionalParams {
-                    system: request
-                        .params
-                        .system
-                        .and_then(filter_billing_headers_from_system),
-                    ..request.params
-                },
-                ..request
-            },
-            context,
-        )?;
-        let request = strip_cache_control_scope(fold_system_role_messages(request));
+        let request = transform_messages_request(request, context)?;
+        let request = strip_cache_control_scope(normalize_system_role_messages(
+            request,
+            context
+                .thinking
+                .capabilities
+                .supports_mid_conversation_system,
+        ));
         let accepts_effort = supports_effort_param(&context.thinking.capabilities);
         Ok(MessagesRequest {
             params: MessagesOptionalParams {
@@ -512,8 +504,8 @@ mod tests {
         assert_eq!(wire["anthropic_version"], json!("vertex-2023-10-16"));
     }
 
-    #[test]
-    fn system_roles_fold_billing_blocks_drop_and_scope_is_stripped() {
+    #[rstest]
+    fn leading_system_roles_are_hoisted_billing_blocks_drop_and_scope_is_stripped() {
         let body = transformed(
             json!({
                 "model": "claude-sonnet-4-5",
@@ -523,7 +515,10 @@ mod tests {
                     {"type": "text", "text": "be terse", "cache_control": {"type": "ephemeral", "scope": "global"}}
                 ],
                 "messages": [
-                    {"role": "system", "content": "leading system"},
+                    {"role": "system", "content": [
+                        {"type": "text", "text": "x-anthropic-billing-header: cc_version=2"},
+                        {"type": "text", "text": "leading system"}
+                    ]},
                     {"role": "user", "content": [
                         {"type": "text", "text": "hi", "cache_control": {"type": "ephemeral", "ttl": "1h", "scope": "global"}}
                     ]}
@@ -544,6 +539,41 @@ mod tests {
                 {"type": "text", "text": "hi", "cache_control": {"type": "ephemeral", "ttl": "1h"}}
             ]}])
         );
+    }
+
+    #[rstest]
+    #[case::converted_in_place_without_the_capability(false, "user")]
+    #[case::kept_in_place_with_the_capability(true, "system")]
+    fn a_later_system_turn_never_moves_into_the_prompt_prefix(
+        #[case] supports_mid_conversation_system: bool,
+        #[case] role: &str,
+    ) {
+        let body = transformed(
+            json!({
+                "model": "claude-sonnet-4-5",
+                "max_tokens": 16,
+                "system": "be terse",
+                "messages": [
+                    {"role": "user", "content": "a"},
+                    {"role": "assistant", "content": "b"},
+                    {"role": "system", "content": "reminder"},
+                    {"role": "user", "content": "c"}
+                ]
+            }),
+            &MessagesTransformContext {
+                thinking: ThinkingContext {
+                    capabilities: MessagesModelCapabilities {
+                        supports_mid_conversation_system,
+                        ..MessagesModelCapabilities::default()
+                    },
+                    ..ThinkingContext::default()
+                },
+                drop_params: false,
+            },
+        );
+        assert_eq!(body["system"], json!("be terse"));
+        assert_eq!(body["messages"][2]["role"], json!(role));
+        assert_eq!(body["messages"].as_array().unwrap().len(), 4);
     }
 
     fn with_output_config() -> MessagesTransformContext {
