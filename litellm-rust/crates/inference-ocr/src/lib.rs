@@ -15,7 +15,6 @@ use litellm_llms_types::formats::ocr::LiteLLMOcrResponse;
 
 use crate::{
     handler::execute,
-    provider_config::resolve_provider_config,
     types::{LiteLLMOcrRequest, OcrDocumentInput},
 };
 
@@ -57,12 +56,9 @@ impl OcrRoute {
         observers: Option<&ObservationSender>,
     ) -> Result<LiteLLMOcrResponse, Error> {
         litellm_inference::diagnostic::unary(async {
-            let original_model = call.requested_model.clone();
-            let custom_llm_provider = call.custom_llm_provider.clone();
             let caller_document = matches!(&call.document, OcrDocumentInput::Document(_));
             let call = document::resolve_document(call).await?;
-            let (provider, config) =
-                resolve_provider_config(&original_model, custom_llm_provider.as_deref())?;
+            let config = call.config;
             let secrets = self
                 .client
                 .secret_source()
@@ -73,7 +69,6 @@ impl OcrRoute {
                 Box::pin(execute(
                     &self.client,
                     config,
-                    provider,
                     call,
                     secrets,
                     interceptors,
