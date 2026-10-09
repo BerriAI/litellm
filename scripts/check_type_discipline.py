@@ -315,8 +315,8 @@ def _is_literal_subscript(node: ast.AST) -> bool:
 def mutable_names_in(annotation: ast.AST) -> Iterator[str]:
     """Yield mutable-collection names anywhere inside an annotation expression.
 
-    Matches bare names (`list`, `MutableSequence`) and dotted access (`typing.Dict`,
-    `collections.deque`, `collections.abc.MutableMapping`), descends through nesting
+    Matches bare names (`list`, `MutableSequence`) and dotted access (`typing.List`,
+    `collections.deque`, `collections.abc.MutableSequence`), descends through nesting
     (`dict[str, list[int]]`, `tuple[set[int], ...]`) and string forward references.
     Skips `Literal[...]` subtrees: their string arguments are values, not forward
     references, so `Literal["list"]` is not the `list` type.
