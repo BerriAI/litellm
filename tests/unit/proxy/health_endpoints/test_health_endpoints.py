@@ -2,7 +2,7 @@ import asyncio
 import copy
 import json
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from types import MappingProxyType, SimpleNamespace
@@ -705,6 +705,10 @@ def _test_connection_probe(
 ) -> Iterator[AsyncMock]:
     from litellm.types.router import Deployment, LiteLLM_Params
 
+    async def run_health_check(awaitable: Awaitable[object], _timeout: float) -> dict[str, str]:
+        await awaitable
+        return {"status": "healthy"}
+
     router: Final = MagicMock()
     router.get_deployment.side_effect = lambda model_id: (
         Deployment(
@@ -727,7 +731,7 @@ def _test_connection_probe(
         patch("litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check", ahealth_check),
         patch(
             "litellm.proxy.health_endpoints._health_endpoints.run_with_timeout",
-            AsyncMock(return_value={"status": "healthy"}),
+            AsyncMock(side_effect=run_health_check),
         ),
     ):
         yield ahealth_check
@@ -872,6 +876,28 @@ async def test_test_model_connection_request_mode_wins_over_resolved_mode():
         )
 
     assert ahealth_check.call_args.kwargs["mode"] == "chat"
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_evaluation_mode_uses_decisions_handler():
+    deployment: Final = MappingProxyType(
+        {
+            "model_name": "typesafe/jev-latest",
+            "litellm_params": {"model": "typesafe/jev-latest", "api_key": "fake-typesafe-key"},
+            "model_info": {"id": "typesafe-jev-id"},
+        }
+    )
+    with _test_connection_probe(deployment) as ahealth_check:
+        result: Final = await health_test_model_connection(
+            request=MagicMock(),
+            mode="evaluation",
+            litellm_params={"model": "typesafe/jev-latest"},
+            model_info={"id": "typesafe-jev-id"},
+            user_api_key_dict=UserAPIKeyAuth(user_id="test-user", token="test-token"),
+        )
+
+    assert result["status"] == "success"
+    assert ahealth_check.call_args.kwargs["mode"] == "evaluation"
 
 
 @pytest.mark.asyncio
@@ -4663,6 +4689,41 @@ def test_test_model_connection_accepts_image_edit_mode(monkeypatch):
 
     assert response.status_code == 200, response.text
     assert response.json()["status"] == "success"
+
+
+def test_test_model_connection_accepts_evaluation_mode(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    app = FastAPI()
+    app.include_router(_health_endpoints_module.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    client = TestClient(app)
+
+    with (
+        patch(  # test-quality-ok: endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ),
+        respx.mock(assert_all_called=True) as respx_mock,
+    ):
+        upstream = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(
+            json={
+                "model": "jev-latest",
+                "answers": {"reachable": {"type": "noul", "noul": 1.0}},
+                "usage": {"input_tokens": 12, "output_tokens": 1},
+            }
+        )
+        response = client.post(
+            "/health/test_connection",
+            json={
+                "mode": "evaluation",
+                "litellm_params": {"model": "typesafe/jev-latest", "api_key": "sk-test"},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "success"
+    assert upstream.called
 
 
 def _pointfive_admin() -> UserAPIKeyAuth:
