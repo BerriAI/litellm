@@ -34,8 +34,9 @@ from litellm.proxy.a2a.version_convert import (
     normalize_stream_event,
 )
 from litellm.proxy.agent_endpoints.databricks_oauth import (
-    DATABRICKS_OAUTH_PARAM,
+    has_databricks_oauth,
     resolve_databricks_app_auth_header,
+    without_databricks_oauth_params,
 )
 from litellm.proxy.agent_endpoints.utils import merge_agent_headers
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -170,7 +171,7 @@ async def _resolve_backend_auth_header(
     litellm_params: dict[str, object],
     custom_llm_provider: object,
 ) -> Mapping[str, str] | None:
-    if litellm_params.get(DATABRICKS_OAUTH_PARAM):
+    if has_databricks_oauth(litellm_params):
         return await resolve_databricks_app_auth_header(litellm_params)
     return await resolve_a2a_hop_auth_header(litellm_params, custom_llm_provider)
 
@@ -828,6 +829,7 @@ async def invoke_agent_a2a(
             ),
             backend_auth_header=await _resolve_backend_auth_header(litellm_params, custom_llm_provider),
         )
+        forwarded_litellm_params: Final = without_databricks_oauth_params(litellm_params)
 
         # Merge agent-level guardrails into data so post_call_success_hook and
         # _handle_stream_message both pick them up.  A2A agents use model
@@ -872,7 +874,7 @@ async def invoke_agent_a2a(
                 model=f"a2a_agent/{agent_name}",
                 request=a2a_request,
                 api_base=agent_url,
-                litellm_params=litellm_params,
+                litellm_params=forwarded_litellm_params,
                 agent_id=agent.agent_id,
                 metadata=data.get("metadata", {}),
                 proxy_server_request=data.get("proxy_server_request"),
@@ -912,7 +914,7 @@ async def invoke_agent_a2a(
                 api_base=agent_url,
                 request_id=request_id if request_id is not None else "",
                 params=params,
-                litellm_params=litellm_params,
+                litellm_params=forwarded_litellm_params,
                 agent_id=agent.agent_id,
                 metadata=data.get("metadata", {}),
                 proxy_server_request=data.get("proxy_server_request"),

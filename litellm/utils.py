@@ -8676,6 +8676,10 @@ class ProviderConfigManager:
                 lambda: ProviderConfigManager._get_langflow_config(),
                 False,
             ),
+            LlmProviders.DATABRICKS_AGENT: (
+                lambda: ProviderConfigManager._get_databricks_agent_config(),
+                False,
+            ),
             LlmProviders.GDC: (
                 lambda: litellm.GDCGeminiConfig(),
                 False,
@@ -8771,6 +8775,12 @@ class ProviderConfigManager:
         from litellm.llms.langflow.chat.transformation import LangFlowConfig
 
         return LangFlowConfig()
+
+    @staticmethod
+    def _get_databricks_agent_config() -> BaseConfig:
+        from litellm.llms.databricks.agent.transformation import DatabricksAgentConfig
+
+        return DatabricksAgentConfig()
 
     @staticmethod
     def get_provider_chat_config(

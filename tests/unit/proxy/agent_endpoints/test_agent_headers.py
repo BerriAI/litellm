@@ -379,6 +379,35 @@ async def test_databricks_oauth_overrides_static_authorization():
 
 
 @pytest.mark.asyncio
+async def test_databricks_agent_flat_oauth_fields_mint_the_token_and_stay_off_the_bridge():
+    from litellm.proxy.agent_endpoints import databricks_oauth
+
+    databricks_oauth.databricks_app_oauth_token_cache.flush_cache()
+
+    mock_agent = _make_mock_agent(url="https://adb-1.azuredatabricks.net")
+    mock_agent.litellm_params = {
+        "custom_llm_provider": "databricks_agent",
+        "model": "my-agent",
+        "api_base": "https://adb-1.azuredatabricks.net",
+        "client_id": "cid",
+        "client_secret": "secret",
+    }
+    token_client = _mock_databricks_token_client("flat-minted")
+
+    with patch(
+        "litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client",
+        return_value=token_client,
+    ):
+        mock_asend = await _invoke(mock_agent, _make_mock_request(), None)
+
+    assert token_client.post.call_args.args[0] == "https://adb-1.azuredatabricks.net/oidc/v1/token"
+    call_kwargs = mock_asend.call_args.kwargs
+    assert call_kwargs["agent_extra_headers"].get("Authorization") == "Bearer flat-minted"
+    assert not {"client_id", "client_secret"} & set(call_kwargs["litellm_params"])
+    assert call_kwargs["litellm_params"]["custom_llm_provider"] == "databricks_agent"
+
+
+@pytest.mark.asyncio
 async def test_non_databricks_agent_skips_oauth_resolution():
     """Agents without a databricks_oauth block never enter the OAuth path."""
     mock_agent = _make_mock_agent(static_headers={"x-custom": "v"})

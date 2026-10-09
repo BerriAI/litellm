@@ -19,6 +19,7 @@ from litellm.proxy.agent_endpoints.databricks_oauth import (
     DatabricksAppOAuthTokenCache,
     parse_databricks_oauth_config,
     resolve_databricks_app_auth_header,
+    without_databricks_oauth_params,
 )
 
 
@@ -494,3 +495,111 @@ async def test_resolve_returns_bearer_header():
         header = await resolve_databricks_app_auth_header(litellm_params)
 
     assert header == {"Authorization": "Bearer resolved-token"}
+
+
+def test_parse_builds_config_from_flat_databricks_agent_fields():
+    config = parse_databricks_oauth_config(
+        {
+            "custom_llm_provider": "databricks_agent",
+            "api_base": "https://adb-1.azuredatabricks.net/serving-endpoints",
+            "model": "my-agent",
+            "client_id": "sp-id",
+            "client_secret": "sp-secret",
+        }
+    )
+    assert config == DatabricksAppOAuthConfig(
+        client_id="sp-id",
+        client_secret="sp-secret",
+        token_url="https://adb-1.azuredatabricks.net/oidc/v1/token",
+        scope="all-apis",
+    )
+
+
+def test_parse_flat_fields_prefer_an_explicit_workspace_url_for_an_app():
+    config = parse_databricks_oauth_config(
+        {
+            "custom_llm_provider": "databricks_agent",
+            "api_base": "https://my-app-1.azure.databricksapps.com/responses",
+            "client_id": "sp-id",
+            "client_secret": "sp-secret",
+            "workspace_url": "https://adb-1.azuredatabricks.net",
+            "scope": "custom-scope",
+        }
+    )
+    assert config is not None
+    assert config.token_url == "https://adb-1.azuredatabricks.net/oidc/v1/token"
+    assert config.scope == "custom-scope"
+
+
+def test_parse_flat_fields_with_only_a_client_id_raise_on_the_missing_secret():
+    with pytest.raises(ValueError, match="client_secret"):
+        parse_databricks_oauth_config(
+            {"custom_llm_provider": "databricks_agent", "api_base": "https://adb-1.azuredatabricks.net", "client_id": "sp"}
+        )
+
+
+def test_parse_ignores_flat_client_fields_of_other_providers():
+    assert (
+        parse_databricks_oauth_config(
+            {"custom_llm_provider": "azure_ai", "client_id": "entra-id", "client_secret": "entra-secret", "tenant_id": "t"}
+        )
+        is None
+    )
+    assert parse_databricks_oauth_config({"custom_llm_provider": "databricks_agent", "api_key": "pat"}) is None
+
+
+def test_parse_nested_block_wins_over_flat_fields():
+    config = parse_databricks_oauth_config(
+        {
+            "custom_llm_provider": "databricks_agent",
+            "client_id": "flat-id",
+            "client_secret": "flat-secret",
+            "databricks_oauth": {
+                "client_id": "nested-id",
+                "client_secret": "nested-secret",
+                "workspace_url": "https://adb-2.azuredatabricks.net",
+            },
+        }
+    )
+    assert config is not None
+    assert (config.client_id, config.token_url) == ("nested-id", "https://adb-2.azuredatabricks.net/oidc/v1/token")
+
+
+def test_without_oauth_params_drops_every_consumed_key_of_a_databricks_agent():
+    forwarded = without_databricks_oauth_params(
+        {
+            "custom_llm_provider": "databricks_agent",
+            "model": "my-agent",
+            "api_base": "https://adb-1.azuredatabricks.net",
+            "client_id": "sp-id",
+            "client_secret": "sp-secret",
+            "workspace_url": "https://adb-1.azuredatabricks.net",
+            "scope": "all-apis",
+            "databricks_oauth": {"client_id": "nested-id", "client_secret": "nested-secret"},
+            "custom_inputs": {"tenant": "t-1"},
+        }
+    )
+    assert forwarded == {
+        "custom_llm_provider": "databricks_agent",
+        "model": "my-agent",
+        "api_base": "https://adb-1.azuredatabricks.net",
+        "custom_inputs": {"tenant": "t-1"},
+    }
+
+
+def test_without_oauth_params_keeps_other_providers_client_credentials():
+    forwarded = without_databricks_oauth_params(
+        {
+            "custom_llm_provider": "azure_ai",
+            "client_id": "entra-id",
+            "client_secret": "entra-secret",
+            "tenant_id": "t",
+            "databricks_oauth": {"client_id": "sp"},
+        }
+    )
+    assert forwarded == {
+        "custom_llm_provider": "azure_ai",
+        "client_id": "entra-id",
+        "client_secret": "entra-secret",
+        "tenant_id": "t",
+    }

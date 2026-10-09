@@ -28,8 +28,10 @@ import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
+from urllib.parse import urlsplit
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -38,10 +40,13 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 DATABRICKS_OAUTH_PARAM: Final = "databricks_oauth"
+DATABRICKS_AGENT_PROVIDER: Final = "databricks_agent"
+_FLAT_OAUTH_FIELDS: Final = ("client_id", "client_secret", "workspace_url", "scope")
 
 _DEFAULT_SCOPE: Final = "all-apis"
 _TOKEN_EXPIRY_BUFFER_SECONDS: Final = 60
 _DEFAULT_TTL_SECONDS: Final = 3600
+_OAUTH_BLOCK: Final = TypeAdapter(Mapping[str, object])
 
 
 def _resolve_secret(value: object) -> str | None:
@@ -75,6 +80,54 @@ class DatabricksAppOAuthConfig:
         return f"{self.token_url}|{self.client_id}|{self.scope}|{secret_digest}"
 
 
+def _workspace_origin(url: object) -> str | None:
+    if not isinstance(url, str) or not url.strip():
+        return None
+    parts: Final = urlsplit(url.strip())
+    if not parts.scheme or not parts.netloc:
+        return None
+    return f"{parts.scheme}://{parts.netloc}"
+
+
+def _is_databricks_agent(litellm_params: Mapping[str, object]) -> bool:
+    return litellm_params.get("custom_llm_provider") == DATABRICKS_AGENT_PROVIDER
+
+
+def _flat_databricks_agent_oauth(litellm_params: Mapping[str, object]) -> Mapping[str, object] | None:
+    """The Admin UI catalog cannot nest fields, so a ``databricks_agent`` spells its OAuth block as flat
+    ``client_id`` / ``client_secret`` / ``workspace_url`` / ``scope``. ``workspace_url`` falls back to the
+    ``api_base`` origin, which holds for Model Serving but not for a Databricks App host."""
+    if not _is_databricks_agent(litellm_params):
+        return None
+    if not litellm_params.get("client_id") and not litellm_params.get("client_secret"):
+        return None
+    return {
+        "client_id": litellm_params.get("client_id"),
+        "client_secret": litellm_params.get("client_secret"),
+        "workspace_url": litellm_params.get("workspace_url") or _workspace_origin(litellm_params.get("api_base")),
+        "scope": litellm_params.get("scope"),
+    }
+
+
+def _raw_oauth_block(litellm_params: Mapping[str, object]) -> object:
+    return litellm_params.get(DATABRICKS_OAUTH_PARAM) or _flat_databricks_agent_oauth(litellm_params)
+
+
+def has_databricks_oauth(litellm_params: Mapping[str, object]) -> bool:
+    return bool(_raw_oauth_block(litellm_params))
+
+
+def without_databricks_oauth_params(
+    litellm_params: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: asend_message takes litellm_params as a dict
+    consumed: Final = (
+        frozenset({DATABRICKS_OAUTH_PARAM, *_FLAT_OAUTH_FIELDS})
+        if _is_databricks_agent(litellm_params)
+        else frozenset({DATABRICKS_OAUTH_PARAM})
+    )
+    return {key: value for key, value in litellm_params.items() if key not in consumed}
+
+
 def parse_databricks_oauth_config(
     litellm_params: Mapping[str, object] | None,
 ) -> DatabricksAppOAuthConfig | None:
@@ -87,29 +140,33 @@ def parse_databricks_oauth_config(
     if not litellm_params:
         return None
 
-    raw: Final = litellm_params.get(DATABRICKS_OAUTH_PARAM)
-    if raw is None:
+    raw: Final = _raw_oauth_block(litellm_params)
+    if not raw:
         return None
-    if not isinstance(raw, dict):
-        raise ValueError(f"'{DATABRICKS_OAUTH_PARAM}' must be a mapping of OAuth settings, got {type(raw).__name__}")
+    try:
+        block: Final = _OAUTH_BLOCK.validate_python(raw)
+    except ValidationError as e:
+        raise ValueError(
+            f"'{DATABRICKS_OAUTH_PARAM}' must be a mapping of OAuth settings, got {type(raw).__name__}"
+        ) from e
 
-    client_id: Final = _resolve_secret(raw.get("client_id"))
-    client_secret: Final = _resolve_secret(raw.get("client_secret"))
-    workspace_url: Final = _resolve_secret(raw.get("workspace_url"))
+    client_id: Final = _resolve_secret(block.get("client_id"))
+    client_secret: Final = _resolve_secret(block.get("client_secret"))
+    workspace_url: Final = _resolve_secret(block.get("workspace_url"))
 
-    missing: Final = [
-        name
-        for name, value in (
-            ("client_id", client_id),
-            ("client_secret", client_secret),
-            ("workspace_url", workspace_url),
+    if not (client_id and client_secret and workspace_url):
+        missing: Final = tuple(
+            name
+            for name, value in (
+                ("client_id", client_id),
+                ("client_secret", client_secret),
+                ("workspace_url", workspace_url),
+            )
+            if not value
         )
-        if not value
-    ]
-    if missing:
         raise ValueError(f"Databricks App OAuth config is missing required field(s): {', '.join(missing)}")
 
-    scope: Final = _resolve_secret(raw.get("scope")) or _DEFAULT_SCOPE
+    scope: Final = _resolve_secret(block.get("scope")) or _DEFAULT_SCOPE
 
     return DatabricksAppOAuthConfig(
         client_id=client_id,

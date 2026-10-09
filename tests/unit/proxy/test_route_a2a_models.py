@@ -183,3 +183,105 @@ async def test_route_a2a_model_read_through_recovers_agent_created_on_sibling_re
     assert call_kwargs["model"] == f"a2a/{agent_name}"
     assert call_kwargs["api_base"] == "http://sibling-db-agent.example.com"
     prisma_client.db.litellm_agentstable.find_unique.assert_awaited()
+
+
+def _registry_with(agent) -> Mock:
+    registry = Mock()
+    registry.get_agent_by_id = Mock(return_value=None)
+    registry.get_agent_by_name = Mock(return_value=agent)
+    return registry
+
+
+@pytest.mark.asyncio
+async def test_route_a2a_bridge_agent_completes_with_the_agent_provider_and_params():
+    from litellm.types.agents import AgentResponse
+
+    agent = AgentResponse(
+        agent_id="dbx-agent-id",
+        agent_name="dbx-agent",
+        agent_card_params={"url": "https://adb-1.azuredatabricks.net"},
+        litellm_params={
+            "custom_llm_provider": "databricks_agent",
+            "model": "my-agent",
+            "api_base": "https://adb-1.azuredatabricks.net",
+            "api_key": "pat-1",
+            "custom_inputs": {"tenant": "t-1"},
+            "is_public": True,
+        },
+    )
+    data = {"model": "a2a/dbx-agent", "messages": [{"role": "user", "content": "ping"}], "stream": True}
+    mock_acompletion = AsyncMock(return_value={"id": "bridge-response"})
+
+    with patch("litellm.acompletion", mock_acompletion):
+        with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(agent)):
+            pending = await route_a2a_agent_request(data=data, route_type="acompletion")
+
+    assert await pending == {"id": "bridge-response"}
+    call_kwargs = mock_acompletion.call_args.kwargs
+    assert call_kwargs["model"] == "databricks_agent/my-agent"
+    assert call_kwargs["messages"] == data["messages"]
+    assert call_kwargs["stream"] is True
+    assert call_kwargs["api_base"] == "https://adb-1.azuredatabricks.net"
+    assert call_kwargs["api_key"] == "pat-1"
+    assert call_kwargs["custom_inputs"] == {"tenant": "t-1"}
+    assert "is_public" not in call_kwargs
+    assert "custom_llm_provider" not in call_kwargs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "oauth_params",
+    [
+        {"databricks_oauth": {"client_id": "sp", "client_secret": "s", "workspace_url": "https://adb-1.example"}},
+        {"client_id": "sp", "client_secret": "s", "workspace_url": "https://adb-1.example", "scope": "all-apis"},
+    ],
+)
+async def test_route_a2a_agent_with_databricks_oauth_sends_the_minted_token(oauth_params):
+    from litellm.types.agents import AgentResponse
+
+    agent = AgentResponse(
+        agent_id="dbx-app-id",
+        agent_name="dbx-app",
+        agent_card_params={"url": "https://my-app-1.azure.databricksapps.com/responses"},
+        litellm_params={"custom_llm_provider": "databricks_agent", **oauth_params},
+    )
+    data = {"model": "a2a/dbx-app", "messages": [{"role": "user", "content": "ping"}], "extra_headers": {"X-Tenant": "t"}}
+    mock_acompletion = AsyncMock(return_value={"id": "oauth-response"})
+    mint = AsyncMock(return_value={"Authorization": "Bearer minted-oauth"})
+
+    with patch("litellm.acompletion", mock_acompletion):
+        with patch("litellm.proxy.agent_endpoints.a2a_routing.resolve_databricks_app_auth_header", mint):
+            with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(agent)):
+                await (await route_a2a_agent_request(data=data, route_type="acompletion"))
+
+    mint.assert_awaited_once_with(agent.litellm_params)
+    call_kwargs = mock_acompletion.call_args.kwargs
+    assert call_kwargs["model"] == "databricks_agent/agent"
+    assert call_kwargs["api_base"] == "https://my-app-1.azure.databricksapps.com/responses"
+    assert call_kwargs["extra_headers"] == {"X-Tenant": "t", "Authorization": "Bearer minted-oauth"}
+    assert not set(oauth_params) & set(call_kwargs)
+
+
+@pytest.mark.asyncio
+async def test_route_a2a_url_agent_with_databricks_oauth_sends_the_minted_token():
+    from litellm.types.agents import AgentResponse
+
+    agent = AgentResponse(
+        agent_id="a2a-app-id",
+        agent_name="a2a-app",
+        agent_card_params={"url": "https://my-a2a-app.azure.databricksapps.com"},
+        litellm_params={"databricks_oauth": {"client_id": "sp", "client_secret": "s", "workspace_url": "https://w"}},
+    )
+    data = {"model": "a2a/a2a-app", "messages": [{"role": "user", "content": "ping"}]}
+    mock_acompletion = AsyncMock(return_value={"id": "a2a-response"})
+    mint = AsyncMock(return_value={"Authorization": "Bearer minted-oauth"})
+
+    with patch("litellm.acompletion", mock_acompletion):
+        with patch("litellm.proxy.agent_endpoints.a2a_routing.resolve_databricks_app_auth_header", mint):
+            with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(agent)):
+                await (await route_a2a_agent_request(data=data, route_type="acompletion"))
+
+    call_kwargs = mock_acompletion.call_args.kwargs
+    assert call_kwargs["model"] == "a2a/a2a-app"
+    assert call_kwargs["api_base"] == "https://my-a2a-app.azure.databricksapps.com"
+    assert call_kwargs["extra_headers"] == {"Authorization": "Bearer minted-oauth"}

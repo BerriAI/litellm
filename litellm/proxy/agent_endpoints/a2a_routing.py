@@ -5,17 +5,53 @@ Handles routing for A2A agents (models with "a2a/<agent-name>" prefix).
 Looks up agents in the registry and injects their API base URL.
 """
 
+from collections.abc import Mapping
 from typing import Any, Final
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+    agent_completion_kwargs,
+    bridge_model_name,
+)
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.agent_endpoints.databricks_oauth import (
+    resolve_databricks_app_auth_header,
+    without_databricks_oauth_params,
+)
+from litellm.proxy.agent_endpoints.utils import merge_agent_headers
+from litellm.types.agents import AgentResponse
+
+_HEADERS: Final = TypeAdapter(Mapping[str, str])
+
+
+def _client_extra_headers(data: Mapping[str, object]) -> Mapping[str, str] | None:
+    extra_headers: Final = data.get("extra_headers")
+    return None if extra_headers is None else _HEADERS.validate_python(extra_headers)
+
+
+def _with_backend_auth(data: Mapping[str, object], backend_auth: Mapping[str, str] | None) -> Mapping[str, object]:
+    if not backend_auth:
+        return data
+    return {
+        **data,
+        "extra_headers": merge_agent_headers(dynamic_headers=_client_extra_headers(data), static_headers=backend_auth),
+    }
+
+
+def _bridge_request_data(data: Mapping[str, object], litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        **data,
+        **agent_completion_kwargs(without_databricks_oauth_params(litellm_params)),
+        "model": bridge_model_name(litellm_params),
+    }
 
 
 async def route_a2a_agent_request(
-    data: dict,
+    data: dict[str, object],  # mutable-ok: the URL agent path writes api_base into the caller's request
     route_type: str,
     user_api_key_dict: UserAPIKeyAuth | None = None,
 ) -> Any | None:
@@ -68,6 +104,14 @@ async def route_a2a_agent_request(
                 detail=f"Agent '{agent_name}' is not allowed for your key/team. Contact proxy admin for access.",
             )
 
+    litellm_params: Final = agent.litellm_params or {}
+    backend_auth: Final = await resolve_databricks_app_auth_header(litellm_params)
+
+    if litellm_params.get("custom_llm_provider"):
+        return _call_route(
+            route_type, _with_backend_auth(_bridge_agent_request(data, agent, litellm_params), backend_auth)
+        )
+
     # Get API base URL from agent config
     if not agent.agent_card_params or "url" not in agent.agent_card_params:
         verbose_proxy_logger.error("[A2A] Agent '%s' has no URL configured", agent_name)
@@ -78,4 +122,22 @@ async def route_a2a_agent_request(
     data["api_base"] = agent.agent_card_params["url"]
     verbose_proxy_logger.debug("[A2A] Routing %s to %s", model_name, data["api_base"])
 
-    return getattr(litellm, f"{route_type}")(**data)
+    return _call_route(route_type, _with_backend_auth(data, backend_auth))
+
+
+def _bridge_agent_request(
+    data: Mapping[str, object],
+    agent: AgentResponse,
+    litellm_params: Mapping[str, object],
+) -> Mapping[str, object]:
+    card_url: Final[object] = (agent.agent_card_params or {}).get("url")
+    api_base: Final = {"api_base": card_url} if card_url else {}
+    request_data: Final = {**api_base, **_bridge_request_data(data, litellm_params)}
+    verbose_proxy_logger.debug(
+        "[A2A] Routing %s through the completion bridge as %s", data.get("model"), request_data["model"]
+    )
+    return request_data
+
+
+def _call_route(route_type: str, request_data: Mapping[str, object]) -> object:
+    return getattr(litellm, route_type)(**request_data)
