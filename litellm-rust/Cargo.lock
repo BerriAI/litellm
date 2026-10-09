@@ -4243,6 +4243,7 @@ dependencies = [
  "litellm-llms-types",
  "litellm-python-compat",
  "litellm-secrets",
+ "percent-encoding",
  "reqwest 0.12.28",
  "rstest",
  "serde",

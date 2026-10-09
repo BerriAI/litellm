@@ -30,7 +30,11 @@ use crate::{
             transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
         },
     },
-    bedrock::chat::invoke_handler::{decode_invoke_anthropic_chunk, invoke_chunk_stream},
+    bedrock::{
+        chat::invoke_handler::{decode_invoke_anthropic_chunk, invoke_chunk_stream},
+        messages::connection::BedrockMessagesConnection,
+        request_metadata::{BedrockRequestMetadataInput, bedrock_request_metadata_headers},
+    },
 };
 
 const INVOCATION_METRICS_KEY: &str = "amazon-bedrock-invocationMetrics";
@@ -45,6 +49,11 @@ const METRICS_USAGE_KEYS: [(&str, &str); 4] = [
 const INVOKE_PATH: &str = "invoke";
 const INVOKE_STREAM_PATH: &str = "invoke-with-response-stream";
 const INVOKE_MODEL_PREFIX: &str = "invoke/";
+const MODEL_SEGMENT: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'-')
+    .remove(b'~');
 
 const SECRET_NAMES: &[&str] = &[
     AWS_BEARER_TOKEN_BEDROCK,
@@ -70,22 +79,107 @@ fn bearer_token(
     .filter(|token| !token.is_empty())
 }
 
+fn connection_params(connection: &BedrockMessagesConnection) -> Map<String, Value> {
+    connection
+        .region
+        .as_deref()
+        .map(str::trim)
+        .filter(|region| !region.is_empty())
+        .map(|region| {
+            Map::from_iter([(
+                "aws_region_name".to_string(),
+                Value::String(region.to_string()),
+            )])
+        })
+        .unwrap_or_default()
+}
+
 fn invoke_url(
     api_base: Option<&str>,
     model: &str,
+    connection: &BedrockMessagesConnection,
     env_lookup: &dyn Fn(&str) -> Option<String>,
     path: &str,
 ) -> String {
-    let (model_id, model_region) =
+    let (derived_id, model_region) =
         bedrock_model_id_and_region(model.strip_prefix(INVOKE_MODEL_PREFIX).unwrap_or(model));
-    let region = resolve_bedrock_region(model_region.as_deref(), &Map::new(), env_lookup);
+    let params = connection_params(connection);
+    let region = resolve_bedrock_region(model_region.as_deref(), &params, env_lookup);
     let endpoint = api_base
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+        .or_else(|| {
+            connection
+                .api_base
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
         .or_else(|| env_lookup(AWS_BEDROCK_RUNTIME_ENDPOINT))
         .unwrap_or_else(|| BEDROCK_RUNTIME_ENDPOINT_TEMPLATE.replace("{region}", &region));
+    let model_id = connection
+        .model_id
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .map(|value| percent_encoding::utf8_percent_encode(value, MODEL_SEGMENT).to_string())
+        .unwrap_or(derived_id);
     format!("{}/model/{model_id}/{path}", endpoint.trim_end_matches('/'))
+}
+
+impl AmazonAnthropicClaudeMessagesConfig {
+    pub fn connection_url(
+        &self,
+        api_base: Option<&str>,
+        model: &str,
+        stream: bool,
+        connection: &BedrockMessagesConnection,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<String, Error> {
+        let path = if stream {
+            INVOKE_STREAM_PATH
+        } else {
+            INVOKE_PATH
+        };
+        Ok(invoke_url(api_base, model, connection, env_lookup, path))
+    }
+
+    pub fn connection_environment(
+        &self,
+        headers: Headers,
+        api_key: Option<&str>,
+        model: &str,
+        connection: &BedrockMessagesConnection,
+        request_metadata: Option<&BedrockRequestMetadataInput>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<ValidatedEnvironment, Error> {
+        let headers = connection.headers(headers);
+        let headers = match request_metadata {
+            Some(input) => bedrock_request_metadata_headers(headers, input)?,
+            None => headers,
+        };
+        if let Some(token) = bearer_token(api_key, env_lookup) {
+            return Ok(ValidatedEnvironment {
+                headers,
+                auth: AuthScheme::Credential {
+                    placement: CredentialPlacement::Bearer,
+                    secret: SecretValue::new(token),
+                },
+            });
+        }
+        let (_, model_region) =
+            bedrock_model_id_and_region(model.strip_prefix(INVOKE_MODEL_PREFIX).unwrap_or(model));
+        let params = connection_params(connection);
+        Ok(ValidatedEnvironment {
+            headers,
+            auth: AuthScheme::AwsSigV4 {
+                region: resolve_bedrock_region(model_region.as_deref(), &params, env_lookup),
+                service: BEDROCK_SERVICE,
+                credentials: Box::new(AwsCredentialSource::from_params(&params, env_lookup)),
+            },
+        })
+    }
 }
 
 impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
@@ -103,7 +197,13 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
-        Ok(invoke_url(api_base, model, env_lookup, INVOKE_PATH))
+        Ok(invoke_url(
+            api_base,
+            model,
+            &BedrockMessagesConnection::default(),
+            env_lookup,
+            INVOKE_PATH,
+        ))
     }
 
     fn complete_stream_url(
@@ -112,7 +212,13 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
-        Ok(invoke_url(api_base, model, env_lookup, INVOKE_STREAM_PATH))
+        Ok(invoke_url(
+            api_base,
+            model,
+            &BedrockMessagesConnection::default(),
+            env_lookup,
+            INVOKE_STREAM_PATH,
+        ))
     }
 
     fn transform_anthropic_messages_request(
@@ -138,26 +244,14 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
-        if let Some(token) = bearer_token(api_key, env_lookup) {
-            return Ok(ValidatedEnvironment {
-                headers,
-                auth: AuthScheme::Credential {
-                    placement: CredentialPlacement::Bearer,
-                    secret: SecretValue::new(token),
-                },
-            });
-        }
-        let (_, model_region) =
-            bedrock_model_id_and_region(model.strip_prefix(INVOKE_MODEL_PREFIX).unwrap_or(model));
-        let params = Map::new();
-        Ok(ValidatedEnvironment {
+        self.connection_environment(
             headers,
-            auth: AuthScheme::AwsSigV4 {
-                region: resolve_bedrock_region(model_region.as_deref(), &params, env_lookup),
-                service: BEDROCK_SERVICE,
-                credentials: Box::new(AwsCredentialSource::from_params(&params, env_lookup)),
-            },
-        })
+            api_key,
+            model,
+            &BedrockMessagesConnection::default(),
+            None,
+            env_lookup,
+        )
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
