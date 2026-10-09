@@ -10,6 +10,7 @@ This test file verifies the fixes for Issue #19923:
 
 import pytest
 
+import litellm
 
 from litellm.llms.minimax.chat.transformation import MinimaxChatConfig
 from litellm.llms.openrouter.chat.transformation import OpenrouterConfig
@@ -256,8 +257,18 @@ def test_openrouter_glm_transform_moves_cache_control_to_content():
     assert user_message["content"][0]["cache_control"] == {"type": "ephemeral"}
 
 
-def test_openrouter_supports_thinking_param_for_reasoning_models():
+def test_openrouter_supports_thinking_param_for_reasoning_models(monkeypatch: pytest.MonkeyPatch):
     """OpenRouter should support thinking parameter for reasoning-capable models."""
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "openrouter/minimax/minimax-m2",
+        {"litellm_provider": "openrouter", "supports_reasoning": True},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "openrouter/z-ai/glm-4.6",
+        {"litellm_provider": "openrouter", "supports_reasoning": True},
+    )
     config = OpenrouterConfig()
 
     # Test MiniMax (supports reasoning)

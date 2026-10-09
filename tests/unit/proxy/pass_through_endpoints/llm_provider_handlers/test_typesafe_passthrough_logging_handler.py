@@ -222,9 +222,15 @@ async def test_oss_gateway_accounts_for_checkpoint_usage_and_registered_cost(
         await budget_limiter.is_key_within_model_budget(auth, f"{provider}/{requested}")
 
 
-def test_openrouter_decisions_response_is_priced_from_request_model_registry_row():
+def test_openrouter_decisions_response_is_priced_from_request_model_registry_row(
+    monkeypatch: pytest.MonkeyPatch,
+):
     logging_obj = _logging_obj()
-    model_cost = litellm.model_cost["openrouter/typesafe/jev-1.13"]
+    model_cost: Final = {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+    }
+    monkeypatch.setitem(litellm.model_cost, "openrouter/typesafe/jev-1.13", model_cost)
     response = TypeSafePassthroughLoggingHandler.typesafe_passthrough_handler(
         httpx_response=_response(),
         response_body={
