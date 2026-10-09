@@ -597,6 +597,81 @@ def test_model_info_team_key_cannot_see_other_teams_byok_model(
 
 
 # ---------------------------------------------------------------------------
+# GET /v1/model/info — customer/end-user allowlist narrowing (customer analogue of #42159)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def customer_scope_router(monkeypatch):
+    """Router with three plain deployments so only the customer narrowing selects them."""
+    model_names = ["kimi", "gpt-4o", "claude-3"]
+    deployments = [
+        {
+            "model_name": name,
+            "litellm_params": {"model": name},
+            "model_info": {"id": f"dep-{name}", "db_model": False},
+        }
+        for name in model_names
+    ]
+    router = MagicMock()
+    router.model_list = deployments
+    router.get_model_names = MagicMock(return_value=model_names)
+    router.get_model_access_groups = MagicMock(return_value={})
+    router.get_model_list_from_model_alias = MagicMock(return_value=[])
+    router.get_model_list = MagicMock(return_value=[])
+    router.model_group_alias = {}
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", deployments)
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "_get_proxy_model_info", lambda model: model)
+    yield router
+
+
+def _patch_end_user_object(monkeypatch, models):
+    """Make the handler's cache-backed end-user load return a restricted (or unrestricted) customer."""
+    from litellm.proxy._types import LiteLLM_EndUserTable
+
+    async def _loader(**_kwargs):
+        if models is None:
+            return None
+        return LiteLLM_EndUserTable(user_id="c1", blocked=False, models=list(models))
+
+    monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_end_user_object", _loader)
+
+
+@pytest.mark.parametrize("path", ["/v1/model/info", "/model/info"])
+def test_v1_model_info_narrows_to_customer_allowed_models(
+    client, auth_as, customer_scope_router, mock_prisma, monkeypatch, path
+):
+    """A restricted customer (models=['kimi']) sees only kimi from /v1/model/info."""
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+    _patch_end_user_object(monkeypatch, ["kimi"])
+
+    with auth_as(end_user_id="c1"):
+        response = client.get(path)
+
+    assert response.status_code == 200, response.text
+    surfaced_names = [m.get("model_name") for m in response.json()["data"]]
+    assert surfaced_names == ["kimi"]
+
+
+@pytest.mark.parametrize("path", ["/v1/model/info", "/model/info"])
+def test_v1_model_info_unrestricted_customer_sees_full_list(
+    client, auth_as, customer_scope_router, mock_prisma, monkeypatch, path
+):
+    """A customer with an empty allowlist is unrestricted: the full model set is returned (regression guard)."""
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma)
+    _patch_end_user_object(monkeypatch, [])
+
+    with auth_as(end_user_id="c1"):
+        response = client.get(path)
+
+    assert response.status_code == 200, response.text
+    surfaced_names = sorted(m.get("model_name") for m in response.json()["data"])
+    assert surfaced_names == ["claude-3", "gpt-4o", "kimi"]
+
+
+# ---------------------------------------------------------------------------
 # GET /model_group/info
 # ---------------------------------------------------------------------------
 

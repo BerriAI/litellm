@@ -16295,11 +16295,37 @@ def _deployment_matches_allowed_model_names(model: dict[str, JsonValue], allowed
     return isinstance(team_public_model_name, str) and team_public_model_name in allowed_model_names
 
 
+def _get_customer_allowed_v1_model_names(
+    customer_object: LiteLLM_EndUserTable,
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: Router,
+) -> set[str]:
+    """Public model names the customer/end-user is allowed to call, via the same inference-time gate."""
+    from litellm.proxy.auth.auth_checks import customer_can_call_model
+
+    return {
+        model
+        for model in llm_router.get_model_names()
+        if customer_can_call_model(
+            model=model,
+            end_user_object=customer_object,
+            llm_router=llm_router,
+            valid_token=user_api_key_dict,
+        )
+    }
+
+
 def _get_v1_model_info_allowed_model_names(
     user_api_key_dict: UserAPIKeyAuth,
     llm_router: Router,
+    customer_object: LiteLLM_EndUserTable | None = None,
 ) -> set[str] | None:
-    """Return key/team allowlisted public model names, or None if unrestricted."""
+    """Return key/team allowlisted public model names, or None if unrestricted.
+
+    When the caller is a restricted customer/end-user, intersect the key/team result with the
+    customer-allowed names (same inference-time gate). Unrestricted customer (None/empty models)
+    leaves the result unchanged.
+    """
     model_access_groups: Final = llm_router.get_model_access_groups()
     proxy_model_list: Final = llm_router.get_model_names()
     key_models: Final = get_key_models(
@@ -16312,9 +16338,18 @@ def _get_v1_model_info_allowed_model_names(
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
     )
+    customer_allowed: Final = (
+        _get_customer_allowed_v1_model_names(
+            customer_object=customer_object,
+            user_api_key_dict=user_api_key_dict,
+            llm_router=llm_router,
+        )
+        if customer_object is not None and customer_object.models
+        else None
+    )
     if not key_models and not team_models:
-        return None
-    return set(
+        return customer_allowed
+    key_team_allowed: Final = set(
         get_complete_model_list(
             key_models=key_models,
             team_models=team_models,
@@ -16325,6 +16360,9 @@ def _get_v1_model_info_allowed_model_names(
             return_wildcard_routes=False,
         )
     )
+    if customer_allowed is None:
+        return key_team_allowed
+    return key_team_allowed & customer_allowed
 
 
 def _filter_v1_model_info_deployments(
@@ -16532,9 +16570,25 @@ async def model_info_v1(
 
     all_models = expand_wildcard_deployments_for_model_info(all_models)
 
+    # Narrow the listing by the customer/end-user allowlist (same gate inference enforces).
+    # Skip entirely when there is no end-user on the token or no DB to load from.
+    customer_object: LiteLLM_EndUserTable | None = None
+    if user_api_key_dict.end_user_id is not None and prisma_client is not None:
+        from litellm.proxy.auth.auth_checks import get_end_user_object
+
+        customer_object = await get_end_user_object(
+            end_user_id=user_api_key_dict.end_user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            token_end_user_max_budget=user_api_key_dict.end_user_max_budget,
+            key_end_user_budget_id=None,
+        )
+
     allowed_model_names: Final = _get_v1_model_info_allowed_model_names(
         user_api_key_dict=user_api_key_dict,
         llm_router=llm_router,
+        customer_object=customer_object,
     )
 
     all_models = _filter_v1_model_info_deployments(
