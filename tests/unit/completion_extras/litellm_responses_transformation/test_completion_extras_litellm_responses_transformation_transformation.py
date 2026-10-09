@@ -3329,7 +3329,12 @@ def test_convert_response_output_merges_raw_dict_message_and_function_call() -> 
     assert len(choices[0].message.tool_calls) == 1
 
 
-def _bridge_message(item_id: str, text: str, annotations: Optional[list] = None) -> "ResponseOutputMessage":
+def _bridge_message(
+    item_id: str,
+    text: str,
+    annotations: Optional[list] = None,
+    phase: Optional[str] = None,
+) -> "ResponseOutputMessage":
     return ResponseOutputMessage(
         id=item_id,
         content=[
@@ -3338,6 +3343,7 @@ def _bridge_message(item_id: str, text: str, annotations: Optional[list] = None)
         role="assistant",
         status="completed",
         type="message",
+        phase=phase,
     )
 
 
@@ -3475,6 +3481,101 @@ def test_transform_response_incomplete_two_messages_still_one_length_choice() ->
     assert len(result.choices) == 1
     assert result.choices[0].finish_reason == "length"
     assert result.choices[0].message.content == "partial one. partial two."
+
+
+def test_convert_response_output_routes_commentary_phase_to_provider_specific_fields() -> None:
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (
+            _bridge_message("msg_1", "Let me answer that.", phase="commentary"),
+            _bridge_message("msg_2", '{"city": "Paris"}', phase="final_answer"),
+        )
+    )
+
+    assert len(choices) == 1
+    assert choices[0].index == 0
+    assert choices[0].message.content == '{"city": "Paris"}'
+    assert choices[0].message.provider_specific_fields == {"commentary": "Let me answer that."}
+    assert choices[0].finish_reason == "stop"
+
+
+def test_convert_response_output_commentary_only_with_tool_call_keeps_content_none() -> None:
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (
+            _bridge_message("msg_1", "Let me check.", phase="commentary"),
+            _bridge_message("msg_2", " Looking up Paris.", phase="commentary"),
+            ResponseFunctionToolCall(
+                id="fc_1",
+                type="function_call",
+                status="completed",
+                arguments='{"city":"Paris"}',
+                call_id="call_1",
+                name="get_weather",
+            ),
+        )
+    )
+
+    assert len(choices) == 1
+    assert choices[0].message.content is None
+    assert choices[0].message.provider_specific_fields == {"commentary": "Let me check. Looking up Paris."}
+    assert choices[0].finish_reason == "tool_calls"
+    assert len(choices[0].message.tool_calls) == 1
+    assert choices[0].message.tool_calls[0]["function"]["name"] == "get_weather"
+
+
+def test_convert_response_output_raw_dict_commentary_phase_routes_to_commentary() -> None:
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (
+            {
+                "type": "message",
+                "id": "msg_1",
+                "role": "assistant",
+                "phase": "commentary",
+                "content": [{"type": "output_text", "text": "note", "annotations": []}],
+            },
+            {
+                "type": "message",
+                "id": "msg_2",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "answer", "annotations": []}],
+            },
+        )
+    )
+
+    assert len(choices) == 1
+    assert choices[0].message.content == "answer"
+    assert choices[0].message.provider_specific_fields == {"commentary": "note"}
+    assert choices[0].finish_reason == "stop"
+
+
+def test_chunk_parser_streams_commentary_deltas_to_provider_specific_fields() -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    chunks: Final = (
+        {"type": "response.output_item.added", "output_index": 0,
+         "item": {"type": "message", "id": "msg_1", "phase": "commentary", "role": "assistant"}},
+        {"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0,
+         "content_index": 0, "delta": "Let me answer that."},
+        {"type": "response.output_item.added", "output_index": 1,
+         "item": {"type": "message", "id": "msg_2", "phase": "final_answer", "role": "assistant"}},
+        {"type": "response.output_text.delta", "item_id": "msg_2", "output_index": 1,
+         "content_index": 0, "delta": '{"city": "Paris"}'},
+    )
+
+    results: Final = [iterator.chunk_parser(chunk) for chunk in chunks]
+
+    joined_content: Final = "".join(
+        r.choices[0].delta.content or "" for r in results if r.choices
+    )
+    joined_commentary: Final = "".join(
+        (r.choices[0].delta.provider_specific_fields or {}).get("commentary", "")
+        for r in results
+        if r.choices
+    )
+    assert joined_content == '{"city": "Paris"}'
+    assert joined_commentary == "Let me answer that."
 
 
 def test_convert_tools_to_responses_format_flattens_nested_custom_tool():

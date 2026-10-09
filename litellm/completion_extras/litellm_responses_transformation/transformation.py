@@ -888,7 +888,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
     @staticmethod
     def _shifted_url_citation(annotation: ChatCompletionAnnotation, offset: int) -> ChatCompletionAnnotation:
-        annotation_dict: Final[dict[str, object]] = dict(annotation)  # mutable-ok: working copy shifted into a new annotation
+        annotation_dict: Final[dict[str, object]] = dict(  # mutable-ok: working copy shifted into a new annotation
+            annotation
+        )
         start_index: Final[object] = annotation_dict.get("start_index")
         end_index: Final[object] = annotation_dict.get("end_index")
         if not isinstance(start_index, int) or not isinstance(end_index, int):
@@ -907,8 +909,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         """One output_text part folded into the merged chat message: its text plus its
         annotations with url_citation indices shifted into the merged content."""
         text: Final = part_text if isinstance(part_text, str) else ""
-        annotations_input: Final[list[object] | None] = cast(  # cast-ok: provider annotations arrive as a json list or nothing
-            "list[object] | None", raw_annotations if isinstance(raw_annotations, list) else None
+        annotations_input: Final[list[object] | None] = (  # mutable-ok: provider annotations list or nothing
+            cast(  # cast-ok: provider annotations arrive as a json list or nothing
+                "list[object] | None", raw_annotations if isinstance(raw_annotations, list) else None
+            )
         )
         converted: Final = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(annotations_input)
         return text, [
@@ -917,6 +921,31 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             else annotation
             for annotation in converted or ()
         ]
+
+    @staticmethod
+    def _fold_message_text_parts(
+        parts: Iterable[tuple[object, object]],
+        is_commentary: bool,
+        content_parts: list[str],  # mutable-ok: ordered fold accumulator
+        commentary_parts: list[str],  # mutable-ok: ordered fold accumulator
+        folded_annotations: list[ChatCompletionAnnotation],  # mutable-ok: ordered fold accumulator
+        content_length: int,
+    ) -> int:
+        """Fold (text, annotations) pairs into content or commentary. Commentary
+        text never enters content and its annotations are dropped. Returns the
+        content length added, so the caller can keep url_citation offsets right."""
+        added_length = 0
+        for part_text, raw_annotations in parts:
+            text, annotations = LiteLLMResponsesTransformationHandler._fold_output_text_part(
+                part_text, None if is_commentary else raw_annotations, content_length + added_length
+            )
+            if is_commentary:
+                commentary_parts.append(text)
+            else:
+                content_parts.append(text)
+                folded_annotations.extend(annotations)
+                added_length += len(text)
+        return added_length
 
     @staticmethod
     def _convert_response_output_to_choices(
@@ -935,10 +964,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         """
         from litellm.types.utils import Choices, Message
 
-        # The bridge never requests n>1, so the whole output folds into one
-        # choice at index 0: chat clients that read only choices[0] (Google ADK)
-        # would otherwise drop the tool call or trailing text
+        # The bridge never requests n>1, so the whole output folds into one choice at
+        # index 0; commentary-phase text goes to provider_specific_fields, not content
         content_parts: Final[list[str]] = []  # mutable-ok: ordered fold accumulator
+        commentary_parts: Final[list[str]] = []  # mutable-ok: ordered fold accumulator
         folded_annotations: Final[list[ChatCompletionAnnotation]] = []  # mutable-ok: ordered fold accumulator
         reasoning_items: Final[list[_BuiltReasoningItem]] = []  # mutable-ok: ordered fold accumulator
         accumulated_tool_calls: Final[list[Mapping[str, object]]] = []  # mutable-ok: ordered fold accumulator
@@ -952,13 +981,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 reasoning_items.append(reasoning_item)
             elif isinstance(item, ResponseOutputMessage):
                 first_message_role = first_message_role or item.role
-                for content in item.content:
-                    part_text, part_annotations = LiteLLMResponsesTransformationHandler._fold_output_text_part(
-                        getattr(content, "text", ""), getattr(content, "annotations", None), content_length
-                    )
-                    content_parts.append(part_text)
-                    folded_annotations.extend(part_annotations)
-                    content_length += len(part_text)
+                content_length += LiteLLMResponsesTransformationHandler._fold_message_text_parts(
+                    ((getattr(content, "text", ""), getattr(content, "annotations", None)) for content in item.content),
+                    item.phase == "commentary",
+                    content_parts,
+                    commentary_parts,
+                    folded_annotations,
+                    content_length,
+                )
             elif (tool_call_dict := _typed_tool_call_dict(item, tool_call_index)) is not None:
                 accumulated_tool_calls.append(tool_call_dict)
                 tool_call_index += 1
@@ -979,13 +1009,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         if first_message_role is None:
                             raw_role = raw_item.get("role")
                             first_message_role = raw_role if isinstance(raw_role, str) else "assistant"
-                        for raw_text, raw_annotations in raw_parts:
-                            part_text, part_annotations = LiteLLMResponsesTransformationHandler._fold_output_text_part(
-                                raw_text, raw_annotations, content_length
-                            )
-                            content_parts.append(part_text)
-                            folded_annotations.extend(part_annotations)
-                            content_length += len(part_text)
+                        content_length += LiteLLMResponsesTransformationHandler._fold_message_text_parts(
+                            raw_parts,
+                            raw_item.get("phase") == "commentary",
+                            content_parts,
+                            commentary_parts,
+                            folded_annotations,
+                            content_length,
+                        )
                 elif handle_raw_dict_callback is not None:
                     callback_choice, _ = handle_raw_dict_callback(item=raw_item, index=0)
                     if callback_choice is not None and isinstance(callback_choice.message.content, str):
@@ -998,7 +1029,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             else:
                 pass  # don't fail request if item in list is not supported
 
-        if not content_parts and not accumulated_tool_calls:
+        if not content_parts and not commentary_parts and not accumulated_tool_calls:
             return []
 
         reasoning_summary_texts: Final = tuple(
@@ -1011,7 +1042,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         )
         merged_message: Final = Message(
             role=merged_role,
-            content="".join(content_parts) if content_parts else None,
+            content="".join(content_parts)
+            if content_parts
+            else ("" if commentary_parts and not accumulated_tool_calls else None),
+            provider_specific_fields={"commentary": "".join(commentary_parts)} if commentary_parts else None,
             tool_calls=accumulated_tool_calls or None,
             annotations=folded_annotations or None,
             reasoning_content=" ".join(reasoning_summary_texts) or None,
@@ -1587,6 +1621,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         self._chat_completion_id: str | None = None
         self._served_service_tier: str | None = None
         self._tool_call_index_map: dict[int, int] = {}  # mutable-ok: per-stream accumulator state
+        self._commentary_item_ids: set[str] = set()  # mutable-ok: per-stream accumulator state
 
     def _handle_string_chunk(
         self, str_line: Union[str, "BaseModel"]
@@ -1627,6 +1662,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
     def translate_responses_chunk_to_openai_stream(
         parsed_chunk: dict | BaseModel,
         tool_call_index_map: dict[int, int] | None = None,  # mutable-ok: per-stream state, remapped in place
+        commentary_item_ids: set[str] | None = None,  # mutable-ok: per-stream state, extended in place
     ) -> "ModelResponseStream":
         """
         Translate a Responses API streaming chunk to OpenAI chat completion streaming format.
@@ -1634,6 +1670,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         Args:
             parsed_chunk: Dict containing the Responses API event chunk
             tool_call_index_map: Per-stream output_index -> sequential tool_call index map
+            commentary_item_ids: Per-stream set of commentary-phase message item ids
 
         Returns:
             ModelResponseStream: OpenAI-formatted streaming chunk
@@ -1686,6 +1723,17 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         elif event_type == "response.output_item.added":
             # New output item added
             output_item = parsed_chunk.get("item", {})
+            output_item_map: Final = cast(  # cast-ok: output_item.added items are string-keyed json objects
+                "Mapping[str, object]", output_item
+            )
+            if (
+                commentary_item_ids is not None
+                and output_item_map.get("type") == "message"
+                and output_item_map.get("phase") == "commentary"
+            ):
+                commentary_item_id: Final = output_item_map.get("id")
+                if isinstance(commentary_item_id, str):
+                    commentary_item_ids.add(commentary_item_id)
             if output_item.get("type") in ("function_call", "custom_tool_call"):
                 converted: Final = tool_call_dict_from_output_item(output_item, parsed_chunk.get("output_index", 0))
                 provider_specific_fields: Final = converted.get("provider_specific_fields")
@@ -1802,6 +1850,19 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             # Content part added to output
             content_part = parsed_chunk.get("delta", None)
             if content_part is not None:
+                delta_item_id: Final = cast(  # cast-ok: delta events are string-keyed json objects
+                    "Mapping[str, object]", parsed_chunk
+                ).get("item_id")
+                if commentary_item_ids is not None and delta_item_id in commentary_item_ids:
+                    return ModelResponseStream(
+                        choices=[
+                            StreamingChoices(
+                                index=0,
+                                delta=Delta(content=None, provider_specific_fields={"commentary": content_part}),
+                                finish_reason=None,
+                            )
+                        ]
+                    )
                 return ModelResponseStream(
                     choices=[
                         StreamingChoices(
@@ -1901,7 +1962,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         return self._with_served_service_tier(
             self._with_stream_scoped_id(
                 OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
-                    chunk, tool_call_index_map=self._tool_call_index_map
+                    chunk,
+                    tool_call_index_map=self._tool_call_index_map,
+                    commentary_item_ids=self._commentary_item_ids,
                 )
             )
         )
