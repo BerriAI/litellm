@@ -36,6 +36,7 @@ from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attributio
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import PrismaTableRepository
+from litellm.utils import get_utc_datetime
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -62,10 +63,6 @@ _HOURS_PER_DAY: Final = 24
 _PRUNE_ID_CHUNK_SIZE: Final = 5_000
 _UPSERT_ATTEMPTS: Final = 3
 _UPSERT_RETRY_BACKOFF_SECONDS: Final = 0.5
-
-
-def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 @dataclass(frozen=True, slots=True)
@@ -612,7 +609,7 @@ async def run_scheduled_ptu_rollup(
     alert: Callable[[str], Awaitable[None]] | None = None,
     router: object | None = None,
     *,
-    clock: Callable[[], datetime] = _utc_now,
+    clock: Callable[[], datetime] = get_utc_datetime,
 ) -> RollupResult | None:
     """Run the daily rollup under a cross-pod lock so only one proxy reconciles a day.
 

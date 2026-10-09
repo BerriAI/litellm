@@ -21,7 +21,7 @@ the deployment as a whole costs the primary one statement per interval.
 
 import json
 from collections.abc import AsyncIterator, Callable, Iterable
-from datetime import datetime, timezone
+from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeAlias
@@ -40,6 +40,7 @@ from litellm.types.proxy.gateway_requests import (
     GatewayRequestKey,
     GatewayRequestSnapshot,
 )
+from litellm.utils import get_utc_datetime
 
 _GATEWAY_REQUEST_QUEUE_TARGET: Final = "gateway_request_queue"
 
@@ -58,14 +59,10 @@ _BUFFERED_ENTRIES: Final = TypeAdapter(tuple[str | bytes, ...])
 _NO_COUNTS: Final[GatewayRequestSnapshot] = MappingProxyType({})
 
 
-def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
 class GatewayRequestAccumulator:
     """Sink for the request-metrics middleware. ``record`` is sync and never awaits."""
 
-    def __init__(self, *, clock: Callable[[], datetime] = _utc_now) -> None:
+    def __init__(self, *, clock: Callable[[], datetime] = get_utc_datetime) -> None:
         self._clock: Final = clock
         self._counts: dict[GatewayRequestKey, GatewayRequestCounts] = {}  # mutable-ok: bounded fold, drained per flush
 

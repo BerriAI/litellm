@@ -29,15 +29,12 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import MAVVRIK_FOCUS_EXPORT_JOB_NAME
 from litellm.integrations.focus.destinations.base import FocusTimeWindow
 from litellm.integrations.focus.focus_logger import FocusLogger
+from litellm.utils import get_utc_datetime
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 else:
     AsyncIOScheduler = Any
-
-
-def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def _parse_metrics_marker(
@@ -88,7 +85,7 @@ def _is_empty_metrics_marker(marker: object | None) -> bool:
 class MavvrikFocusLogger(FocusLogger):
     """FOCUS-based export logger that routes to the Mavvrik destination."""
 
-    def __init__(self, *, clock: Callable[[], datetime] = _utc_now, **kwargs: Any) -> None:
+    def __init__(self, *, clock: Callable[[], datetime] = get_utc_datetime, **kwargs: Any) -> None:
         self._clock: Final = clock
         frequency: Final = os.getenv("MAVVRIK_FOCUS_FREQUENCY", "daily").lower()
         if frequency != "daily":
