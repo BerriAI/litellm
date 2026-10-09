@@ -2639,11 +2639,7 @@ class LiteLLMCompletionResponsesConfig:
                             # summary is required by the SDK/spec; the bridge has
                             # no summarized reasoning, so it stays empty
                             summary=[],
-                            content=[
-                                {"type": "reasoning_text", "text": text}
-                                for text in (reasoning_content,)
-                                if text
-                            ],
+                            content=[{"type": "reasoning_text", "text": text} for text in (reasoning_content,) if text],
                             # the map only returns completed/incomplete, both
                             # valid for a reasoning item's narrower status union
                             status=cast(
