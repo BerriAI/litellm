@@ -2475,14 +2475,11 @@ describe("KeyEditView", () => {
       expect(betaOption).toHaveTextContent("team-2");
     });
 
-    it("shows a team without an alias by its ID once", async () => {
+    it("shows a dash with the ID underneath for a team without an alias", async () => {
       renderWithProviders(
         <KeyEditView
           keyData={{ ...MOCK_KEY_DATA, team_id: null }}
-          teams={[
-            { team_id: "team-3", team_alias: null },
-            { team_id: "team-4", team_alias: "team-4" },
-          ]}
+          teams={[{ team_id: "team-3", team_alias: null }]}
           onCancel={() => {}}
           onSubmit={async () => {}}
           accessToken=""
@@ -2494,8 +2491,7 @@ describe("KeyEditView", () => {
 
       await userEvent.click(screen.getByRole("combobox", { name: "Team" }));
 
-      const options = await screen.findAllByRole("option");
-      expect(options.map((option) => option.textContent)).toEqual(["team-3", "team-4"]);
+      expect(await screen.findByRole("option")).toHaveTextContent(/^-team-3$/);
     });
 
     it("clears the team in the update payload and keeps the organization", async () => {

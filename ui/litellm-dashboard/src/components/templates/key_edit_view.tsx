@@ -360,10 +360,11 @@ export function KeyEditView({
   const teamOptionsFor = (selectedTeamId: string | null): SearchSelectOption[] => {
     const selectedTeamOutsideFilter = teams?.find((t) => t.team_id === selectedTeamId && !visibleTeams?.includes(t));
     return [...(selectedTeamOutsideFilter ? [selectedTeamOutsideFilter] : []), ...(visibleTeams ?? [])].map(
-      ({ team_id, team_alias }: { team_id: string; team_alias?: string | null }) =>
-        team_alias && team_alias !== team_id
-          ? { label: team_alias, value: team_id, sublabel: team_id }
-          : { label: team_id, value: team_id },
+      ({ team_id, team_alias }: { team_id: string; team_alias?: string | null }) => ({
+        label: team_alias || "-",
+        value: team_id,
+        sublabel: team_id,
+      }),
     );
   };
 
