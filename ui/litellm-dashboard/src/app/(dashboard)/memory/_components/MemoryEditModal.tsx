@@ -2,7 +2,7 @@
 
 import { CircleHelp } from "lucide-react";
 import React, { useEffect, useState } from "react";
-import { z } from "zod/v4";
+import { z } from "zod";
 
 import type { MemoryRow } from "@/components/networking";
 import { FieldGroup } from "@/components/ui/field";

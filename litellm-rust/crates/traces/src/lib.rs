@@ -1,73 +1,49 @@
+macro_rules_attribute::attribute_alias! {
+    #[apply(wire_type)] =
+        #[derive(serde::Serialize, serde::Deserialize)]
+        #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
+    #[apply(response_type)] =
+        #[derive(serde::Serialize)]
+        #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
+    #[apply(request_type)] =
+        #[derive(serde::Deserialize)]
+        #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
+}
+
 mod error;
-mod insert;
-mod schema;
-mod sql;
+mod normalize;
+mod otlp;
+pub mod query;
+mod query_access;
+pub mod request;
+mod resolve;
+pub mod response;
+#[cfg(feature = "schema")]
+pub mod schema;
+mod shared;
+mod tenant;
+mod truncate;
+mod ui;
+mod view;
+pub mod wire;
 
-pub use error::Error;
-pub use insert::encode_rows;
-pub use schema::{ensure_schema, schema_statements};
-pub use sql::{Parameter, execute_read};
-use url::Url;
-
-#[derive(Clone)]
-pub struct Connection {
-    url: Url,
-}
-
-impl Connection {
-    pub fn parse(value: &str) -> Result<Self, Error> {
-        let url = Url::parse(value).map_err(|_| Error::InvalidUrl)?;
-        if !matches!(url.scheme(), "http" | "https") || url.host().is_none() {
-            return Err(Error::InvalidUrl);
-        }
-        Ok(Self { url })
-    }
-
-    pub fn configured(
-        url: &str,
-        database: &str,
-        user: &str,
-        password: &str,
-    ) -> Result<Self, Error> {
-        let mut connection = Self::parse(url)?;
-        connection
-            .url
-            .set_username(user)
-            .map_err(|_| Error::InvalidUrl)?;
-        connection
-            .url
-            .set_password(Some(password))
-            .map_err(|_| Error::InvalidUrl)?;
-        let pairs: Vec<_> = connection
-            .url
-            .query_pairs()
-            .filter(|(key, _)| !matches!(key.as_ref(), "database" | "user" | "password"))
-            .map(|(key, value)| (key.into_owned(), value.into_owned()))
-            .collect();
-        connection
-            .url
-            .query_pairs_mut()
-            .clear()
-            .extend_pairs(pairs)
-            .append_pair("database", database);
-        Ok(connection)
-    }
-
-    pub fn writer(url: &str, user: &str, password: &str) -> Result<Self, Error> {
-        let mut connection = Self::parse(url)?;
-        connection
-            .url
-            .set_username(user)
-            .map_err(|_| Error::InvalidUrl)?;
-        connection
-            .url
-            .set_password(Some(password))
-            .map_err(|_| Error::InvalidUrl)?;
-        connection.url.set_query(None);
-        Ok(connection)
-    }
-
-    pub fn url(&self) -> &Url {
-        &self.url
-    }
-}
+pub use error::{Error, InvalidCallKey, InvalidQuery, InvalidScope};
+pub use normalize::{
+    AgentMetadata, AgentType, CallEvidence, CallEvidenceKind, CallKey, Integration, NormalizedSpan,
+    ObservationType,
+};
+pub use otlp::{
+    DecodeLimits, DecodedEvent, DecodedSpan, decode_otlp, decode_otlp_logs,
+    decode_otlp_logs_with_limits, decode_otlp_with_limits,
+};
+pub use query::ReadQuery;
+pub use query_access::QueryScope;
+pub use resolve::{SpendLookup, iso_time, listed_summary, resolve_trace};
+pub use shared::{Shared, SharedIdentity};
+pub use tenant::Tenant;
+pub use truncate::{truncate_messages, truncate_value};
+pub use ui::{ChatRole, UiContent, UiField, UiMessage, UiToolCall, to_ui_content};
+pub use view::{
+    AgentNode, RunSource, RunSourceType, Span, SpanDetail, SpanErrorPage, SpanStatus, SpendMatch,
+    Trace, TracePage, TraceSummary,
+};

@@ -21,6 +21,8 @@ if TYPE_CHECKING:
 
 T = TypeVar("T", bound=BaseModel)
 
+AUTH_OBJECTS_TARGET: Final = "auth_objects"
+
 _HASHED_TOKEN_CACHE_KEY: Final = re.compile(r"[0-9a-f]{64}")
 
 

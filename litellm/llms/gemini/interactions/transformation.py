@@ -274,8 +274,8 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         verbose_logger.debug("Google AI Interactions response: %s", raw_json)
 
         response: Final = InteractionsAPIResponse(**raw_json)
-        response._hidden_params["headers"] = dict(raw_response.headers)
-        response._hidden_params["additional_headers"] = process_response_headers(dict(raw_response.headers))
+        response.hidden_params["headers"] = dict(raw_response.headers)
+        response.hidden_params["additional_headers"] = process_response_headers(dict(raw_response.headers))
 
         return response
 
@@ -313,6 +313,12 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> InteractionsAPIResponse:
+        if not 200 <= raw_response.status_code < 300:
+            raise GeminiError(
+                message=raw_response.text,
+                status_code=raw_response.status_code,
+                headers=dict(raw_response.headers),
+            )
         try:
             raw_json: Final = _interaction_body(raw_response)
         except Exception:
@@ -322,7 +328,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
                 headers=dict(raw_response.headers),
             )
         response: Final = InteractionsAPIResponse(**raw_json)
-        response._hidden_params["headers"] = dict(raw_response.headers)
+        response.hidden_params["headers"] = dict(raw_response.headers)
         return response
 
     def transform_delete_interaction_request(

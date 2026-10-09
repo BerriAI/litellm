@@ -67,6 +67,24 @@ def assert_config_write_refused(gateway: Gateway) -> None:
         assert "config file" in str(error["error"]), refused.text
 
 
+def test_list_page_zero_returns_same_stores_as_page_one_and_page_size_zero_is_400(gateway: Gateway) -> None:
+    page_one: Final = gateway.request("GET", "/vector_store/list?page=1&page_size=100")
+    assert page_one.status_code == 200, page_one.text
+    page_zero: Final = gateway.request("GET", "/vector_store/list?page=0&page_size=100")
+    assert page_zero.status_code == 200, page_zero.text
+
+    page_one_ids: Final = {str(row["vector_store_id"]) for row in listed_rows(page_one)}
+    page_zero_ids: Final = {str(row["vector_store_id"]) for row in listed_rows(page_zero)}
+    assert page_one_ids == page_zero_ids
+    assert CONFIG_STORE_ID in page_one_ids
+    assert CONFIG_STORE_ID in page_zero_ids
+    assert object_value(page_zero.json())["current_page"] == 0, page_zero.text
+
+    zero_page_size: Final = gateway.request("GET", "/vector_store/list?page=1&page_size=0")
+    assert zero_page_size.status_code == 400, zero_page_size.text
+    assert "page_size must be >= 1" in zero_page_size.text, zero_page_size.text
+
+
 def burst_list(gateway: Gateway) -> tuple[int, str]:
     response: Final = gateway.request("GET", "/vector_store/list")
     if response.status_code != 200:

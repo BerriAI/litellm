@@ -4,7 +4,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
 from fastapi import HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 
 # Defined above the `litellm.proxy.*` imports so the name is bound even when
@@ -43,7 +43,7 @@ def validate_budget_duration(budget_duration: str | None, status_code: int = 400
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
-from litellm.proxy._types import (
+from litellm.proxy._types import (  # re-exported
     CommonProxyErrors,
     KeyRequestBase,
     LiteLLM_ManagementEndpoint_MetadataFields,
@@ -56,18 +56,25 @@ from litellm.proxy._types import (
     NewProjectRequest,
     UpdateProjectRequest,
     UserAPIKeyAuth,
-)
-from litellm.proxy._types import (  # noqa: F401  re-exported
-    user_api_key_has_admin_view as _user_has_admin_view,
+    user_api_key_has_admin_view,
 )
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-from litellm.proxy.utils import _premium_user_check
+from litellm.proxy.management.teams.authz import is_team_admin
+from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
+    _premium_user_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    premium_user_check,
+)
 from litellm.repositories.team_repository import TeamRepository
 from litellm.types.utils import BudgetConfig
 
 if TYPE_CHECKING:
     from litellm.proxy._types import NewProjectRequest, UpdateProjectRequest
     from litellm.proxy.utils import PrismaClient, ProxyLogging
+
+_user_has_admin_view: Final = user_api_key_has_admin_view
+
+# TODO: drop once the litellm-enterprise pin moves past 0.1.71, which imports this name
+_is_user_team_admin: Final = is_team_admin
 
 
 def validate_team_model_max_budget(
@@ -146,34 +153,95 @@ def require_caller_user_id_for_non_admin(
     return user_api_key_dict.user_id
 
 
-def _check_passthrough_routes_caller_permission(
-    data: BaseModel,
+_ROUTE_LIST: Final = TypeAdapter(list[str] | None)
+
+
+def _passthrough_routes_permission_error(field: str, entity: str) -> HTTPException:
+    return HTTPException(
+        status_code=403,
+        detail={"error": f"Only proxy admins can set `{field}` on a {entity}."},
+    )
+
+
+def check_passthrough_routes_caller_permission(
+    data: BaseModel | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    entity: str = "key",
+    existing_metadata: Mapping[str, object] | None = None,
+) -> None:
+    """
+    Only proxy admins may set `allowed_passthrough_routes` or `denied_passthrough_routes`
+    (top-level or under `metadata`), since the runtime route checker reads both from key and
+    team metadata.
+    """
+    check_allowed_passthrough_routes_caller_permission(data, user_api_key_dict, entity=entity)
+    check_denied_passthrough_routes_caller_permission(
+        data, user_api_key_dict, entity=entity, existing_metadata=existing_metadata
+    )
+
+
+_check_passthrough_routes_caller_permission: Final = check_passthrough_routes_caller_permission
+
+
+def check_allowed_passthrough_routes_caller_permission(
+    data: BaseModel | None,
     user_api_key_dict: UserAPIKeyAuth,
     *,
     entity: str = "key",
 ) -> None:
-    """
-    Only proxy admins may set `allowed_passthrough_routes` (top-level or under
-    `metadata`) — it short-circuits the role-based route gate, so keys and teams
-    must be gated identically.
-    """
+    if data is None:
+        return
+    metadata: Final = getattr(data, "metadata", None)
+    if isinstance(metadata, dict):
+        try:
+            _ROUTE_LIST.validate_python(metadata.get("denied_passthrough_routes"))
+        except ValidationError as e:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "`metadata.denied_passthrough_routes` must be a list of route strings."},
+            ) from e
     # view-only admins excluded by design; blocked upstream from writes anyway
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
     if getattr(data, "allowed_passthrough_routes", None):
-        raise HTTPException(
-            status_code=403,
-            detail={"error": f"Only proxy admins can set `allowed_passthrough_routes` on a {entity}."},
-        )
-    metadata: Final = getattr(data, "metadata", None)
+        raise _passthrough_routes_permission_error("allowed_passthrough_routes", entity)
     if isinstance(metadata, dict) and metadata.get("allowed_passthrough_routes"):
-        raise HTTPException(
-            status_code=403,
-            detail={"error": f"Only proxy admins can set `metadata.allowed_passthrough_routes` on a {entity}."},
-        )
+        raise _passthrough_routes_permission_error("metadata.allowed_passthrough_routes", entity)
 
 
-def _check_disable_global_guardrails_caller_permission(
+def check_denied_passthrough_routes_caller_permission(
+    data: BaseModel | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    entity: str = "key",
+    existing_metadata: Mapping[str, object] | None = None,
+) -> None:
+    """
+    A non-admin request must leave an existing deny list as it is: clearing it, or replacing
+    `metadata` without it, would widen access. The outcome depends on the stored deny list, so
+    run this only after the caller is known to be allowed to edit the object.
+    """
+    if data is None or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    metadata: Final = getattr(data, "metadata", None)
+    existing_denied: Final = (existing_metadata or {}).get("denied_passthrough_routes") or None
+    if (
+        "denied_passthrough_routes" in data.model_fields_set
+        and (getattr(data, "denied_passthrough_routes", None) or None) != existing_denied
+    ):
+        raise _passthrough_routes_permission_error("denied_passthrough_routes", entity)
+    if _metadata_changes_denied_routes(data, metadata, existing_denied):
+        raise _passthrough_routes_permission_error("metadata.denied_passthrough_routes", entity)
+
+
+def _metadata_changes_denied_routes(data: BaseModel, metadata: object, existing_denied: object) -> bool:
+    if isinstance(metadata, dict):
+        return (metadata.get("denied_passthrough_routes") or None) != existing_denied
+    return metadata is None and "metadata" in data.model_fields_set and existing_denied is not None
+
+
+def check_disable_global_guardrails_caller_permission(
     disable_global_guardrails: bool | None,
     metadata: Mapping[str, object] | None,
     user_api_key_dict: UserAPIKeyAuth,
@@ -201,50 +269,10 @@ def _check_disable_global_guardrails_caller_permission(
     )
 
 
-def _is_user_team_admin(user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable) -> bool:
-    for member in team_obj.members_with_roles:
-        if (member.user_id is not None and member.user_id == user_api_key_dict.user_id) and member.role == "admin":
-            return True
-
-    return False
+_check_disable_global_guardrails_caller_permission: Final = check_disable_global_guardrails_caller_permission
 
 
-async def _is_user_org_admin_for_team(user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable) -> bool:
-    """
-    Check if user is an org admin for the team's organization.
-
-    Returns True if:
-    - The team belongs to an organization, AND
-    - The user has org_admin role in that organization
-    """
-    if not team_obj.organization_id or not user_api_key_dict.user_id:
-        return False
-
-    from litellm.proxy.auth.auth_checks import get_user_object
-    from litellm.proxy.proxy_server import (
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
-    )
-
-    caller_user: Final = await get_user_object(
-        user_id=user_api_key_dict.user_id,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        user_id_upsert=False,
-        proxy_logging_obj=proxy_logging_obj,
-    )
-    if caller_user is None:
-        return False
-
-    for m in caller_user.organization_memberships or []:
-        if m.organization_id == team_obj.organization_id and m.user_role == LitellmUserRoles.ORG_ADMIN.value:
-            return True
-
-    return False
-
-
-def _team_member_has_permission(
+def team_member_has_permission(
     user_api_key_dict: UserAPIKeyAuth,
     team_obj: LiteLLM_TeamTable,
     permission: str,
@@ -260,7 +288,10 @@ def _team_member_has_permission(
     return False
 
 
-async def _user_has_admin_privileges(
+_team_member_has_permission: Final = team_member_has_permission
+
+
+async def user_has_admin_privileges(
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: Optional["PrismaClient"] = None,
     user_api_key_cache: Optional["DualCache"] = None,
@@ -315,7 +346,7 @@ async def _user_has_admin_privileges(
 
             for team in teams:
                 team_obj = LiteLLM_TeamTable.model_validate(team.model_dump())
-                if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+                if is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
                     return True
 
     except Exception as e:
@@ -324,6 +355,9 @@ async def _user_has_admin_privileges(
         return False
 
     return False
+
+
+_user_has_admin_privileges: Final = user_has_admin_privileges
 
 
 def _org_admin_can_invite_user(
@@ -384,7 +418,7 @@ async def _team_admin_can_invite_user(
     admin_team_ids: Final = [
         team.team_id
         for team in teams
-        if _is_user_team_admin(
+        if is_team_admin(
             user_api_key_dict=user_api_key_dict,
             team_obj=LiteLLM_TeamTable.model_validate(team.model_dump()),
         )
@@ -468,7 +502,7 @@ async def admin_can_invite_user(
         return False
 
 
-def _set_object_metadata_field(
+def set_object_metadata_field(
     object_data: Union[
         LiteLLM_TeamTable,
         KeyRequestBase,
@@ -489,10 +523,13 @@ def _set_object_metadata_field(
         value: Value to set for the field
     """
     if field_name in LiteLLM_ManagementEndpoint_MetadataFields_Premium and value:
-        _premium_user_check(field_name)
+        premium_user_check(field_name)
 
     object_data.metadata = object_data.metadata or {}
     object_data.metadata[field_name] = value
+
+
+_set_object_metadata_field: Final = set_object_metadata_field
 
 
 _TEAM_MEMBER_BUDGET_LIMIT_FIELDS: Final = (
@@ -554,7 +591,7 @@ def _has_meaningful_budget_limit(budget_values: Mapping[str, object]) -> bool:
     return any(_is_set_budget_value(budget_values.get(field)) for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS)
 
 
-async def _upsert_budget_and_membership(
+async def upsert_budget_and_membership(
     tx,
     *,
     team_id: str,
@@ -564,7 +601,7 @@ async def _upsert_budget_and_membership(
     budget_patch: Mapping[str, object],
     team_default_budget_id: str | None = None,
     shared_budget_ids: frozenset[str] | None = None,
-):
+) -> None:
     """
     Apply a merge-patch of per-member budget fields to a team membership.
 
@@ -675,6 +712,9 @@ async def _upsert_budget_and_membership(
     )
 
 
+_upsert_budget_and_membership: Final = upsert_budget_and_membership
+
+
 def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
     """
     Helper function to update metadata fields that require premium user checks in the update endpoint
@@ -689,7 +729,7 @@ def _update_metadata_field(updated_kv: dict, field_name: str) -> None:
         # only for a truthy value. The falsy value is still persisted below so a
         # previously-set field can be cleared.
         if updated_kv.get(field_name):
-            _premium_user_check()
+            premium_user_check()
 
     if field_name in updated_kv and updated_kv[field_name] is not None:
         # remove field from updated_kv
@@ -711,7 +751,7 @@ def _has_non_empty_value(value: object) -> bool:
     return True
 
 
-def _update_metadata_fields(updated_kv: dict) -> None:
+def update_metadata_fields(updated_kv: dict) -> None:
     """
     Helper function to update all metadata fields (both premium and standard).
 
@@ -725,3 +765,6 @@ def _update_metadata_fields(updated_kv: dict) -> None:
     for field in LiteLLM_ManagementEndpoint_MetadataFields:
         if field in updated_kv and updated_kv[field] is not None:
             _update_metadata_field(updated_kv=updated_kv, field_name=field)
+
+
+_update_metadata_fields: Final = update_metadata_fields

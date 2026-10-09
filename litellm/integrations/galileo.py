@@ -4,12 +4,12 @@ import json
 import os
 import re
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone, tzinfo
 from typing import Any, Final, Protocol, cast
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import ConfigDict, Field, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -24,6 +24,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     HttpxBinaryResponseContent,
@@ -34,6 +35,11 @@ GALILEO_CLOUD_API_BASE_URL: Final = "https://api.galileo.ai"
 # Cap the in-memory buffer so persistent flush failures (e.g. Galileo
 # unavailable, invalid credentials) cannot leak memory unboundedly.
 GALILEO_MAX_IN_MEMORY_RECORDS: Final = 1000
+
+_UNTYPED_VALUE: Final = TypeAdapter(object)
+_ZERO_ARGUMENT_CALLABLE: Final[TypeAdapter[Callable[[], object]]] = TypeAdapter(
+    Callable[[], object], config=ConfigDict(hide_input_in_errors=True)
+)
 
 
 class _GalileoLoginBody(TypedDict):
@@ -75,7 +81,7 @@ class GalileoStandardLoggingFields(TypedDict, total=False):
     endTime: float
 
 
-class LLMResponse(BaseModel):
+class LLMResponse(LiteLLMBaseModel):
     latency_ms: int
     status_code: int
     input_text: str
@@ -473,9 +479,9 @@ class GalileoObserve(CustomLogger):
         if isinstance(value, str):
             return value
 
-        def _json_default(obj: Any) -> object:
+        def _json_default(obj: object) -> object:
             if hasattr(obj, "model_dump"):
-                return obj.model_dump()
+                return _ZERO_ARGUMENT_CALLABLE.validate_python(getattr(obj, "model_dump", None))()
             return str(obj)
 
         return json.dumps(value, default=_json_default)
@@ -492,11 +498,11 @@ class GalileoObserve(CustomLogger):
     @staticmethod
     def _get_chat_content_for_galileo(response_obj: litellm.ModelResponse) -> object:
         if response_obj.choices and len(response_obj.choices) > 0:
-            message: Final = response_obj["choices"][0]["message"]
+            message: Final = response_obj.choices[0].message
             if hasattr(message, "json"):
                 message_json: Final[object] = message.json()
                 if isinstance(message_json, str):
-                    return json.loads(message_json)
+                    return _UNTYPED_VALUE.validate_python(json.loads(message_json))
                 return message_json
             return message
         return None

@@ -1,11 +1,11 @@
 import asyncio
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
-from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
@@ -17,6 +17,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ChatCompletionMessageToolCall, Message, ModelResponse
 
 if TYPE_CHECKING:
+    from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
     from litellm.responses.litellm_completion_transformation.transformation import (
         ChatCompletionSession,
     )
@@ -39,6 +40,11 @@ def _normalize_redacted_tool_call_arguments(message: Message) -> None:
     function_call: Final = message.function_call
     if function_call is not None and function_call.arguments == REDACTED_BY_LITELLM:
         function_call.arguments = REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
+
+
+def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> str | None:
+    instructions: Final = None if proxy_server_request is None else proxy_server_request.get("instructions")
+    return instructions if isinstance(instructions, str) and instructions else None
 
 
 class ResponsesSessionHandler:
@@ -70,10 +76,15 @@ class ResponsesSessionHandler:
             | ChatCompletionResponseMessage
             | Message
         ] = []
-        for spend_log in all_spend_logs:
+        proxy_server_requests: Final = [
+            await ResponsesSessionHandler.get_proxy_server_request_from_spend_log(spend_log=spend_log)
+            for spend_log in all_spend_logs
+        ]
+        for spend_log, proxy_server_request_dict in zip(all_spend_logs, proxy_server_requests):
             chat_completion_message_history = (
-                await ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
+                ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
                     spend_log=spend_log,
+                    proxy_server_request_dict=proxy_server_request_dict,
                     chat_completion_message_history=chat_completion_message_history,
                 )
             )
@@ -85,11 +96,20 @@ class ResponsesSessionHandler:
         return ChatCompletionSession(
             messages=chat_completion_message_history,
             litellm_session_id=litellm_session_id,
+            instructions=next(
+                (
+                    instructions
+                    for instructions in map(_stored_instructions, reversed(proxy_server_requests))
+                    if instructions
+                ),
+                None,
+            ),
         )
 
     @staticmethod
-    async def extend_chat_completion_message_with_spend_log_payload(
-        spend_log: SpendLogsPayload,
+    def extend_chat_completion_message_with_spend_log_payload(
+        spend_log: "SpendLogsPayload",
+        proxy_server_request_dict: Mapping[str, object] | None,
         chat_completion_message_history: list[
             AllMessageValues
             | GenericChatCompletionMessage
@@ -105,46 +125,31 @@ class ResponsesSessionHandler:
             LiteLLMCompletionResponsesConfig,
         )
 
-        proxy_server_request_dict: Final = await ResponsesSessionHandler.get_proxy_server_request_from_spend_log(
-            spend_log=spend_log,
-        )
         response_input_param: str | ResponseInputParam | None = None
-        _messages: str | ResponseInputParam | None = None
 
         ############################################################
         # Add Input messages for this Spend Log
         ############################################################
         if proxy_server_request_dict:
-            _response_input_param: Final = proxy_server_request_dict.get("input", None)
-            _messages = proxy_server_request_dict.get("messages", None)
+            _response_input_param: Final = proxy_server_request_dict.get("input") or proxy_server_request_dict.get(
+                "messages"
+            )
             if isinstance(_response_input_param, (str, list)):
                 response_input_param = _response_input_param
             elif isinstance(_response_input_param, dict):
                 response_input_param = cast(
                     ResponseInputParam,
-                    [_response_input_param],  # mutable-ok: a lone input item still has to arrive as a list
+                    [_response_input_param],
                 )
 
         if response_input_param:
-            chat_completion_messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-                input=response_input_param,
-                responses_api_request=proxy_server_request_dict or {},
-                replay_reasoning=True,
+            chat_completion_message_history.extend(
+                LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                    input=response_input_param,
+                    responses_api_request={},
+                    replay_reasoning=True,
+                )
             )
-            chat_completion_message_history.extend(chat_completion_messages)
-
-        ############################################################
-        # Check if `messages` field is present in the proxy server request dict
-        ############################################################
-        elif _messages:
-            # ensure all messages are /chat/completions/messages
-            # certain requests can be stored as Responses API format - this ensures they are transformed to /chat/completions/messages
-            chat_completion_messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-                input=_messages,
-                responses_api_request=proxy_server_request_dict or {},
-                replay_reasoning=True,
-            )
-            chat_completion_message_history.extend(chat_completion_messages)
 
         ############################################################
         # Add Output messages for this Spend Log
@@ -161,8 +166,8 @@ class ResponsesSessionHandler:
 
     @staticmethod
     async def get_proxy_server_request_from_spend_log(
-        spend_log: SpendLogsPayload,
-    ) -> dict | None:
+        spend_log: "SpendLogsPayload",
+    ) -> dict[str, object] | None:
         """
         Get the parsed proxy server request from the spend log
         """
@@ -194,7 +199,7 @@ class ResponsesSessionHandler:
 
     @staticmethod
     def _get_cold_storage_object_key_from_spend_log(
-        spend_log: SpendLogsPayload,
+        spend_log: "SpendLogsPayload",
     ) -> str | None:
         """
         Extract the cold storage object key from spend log metadata.
@@ -265,7 +270,7 @@ class ResponsesSessionHandler:
     @staticmethod
     async def get_all_spend_logs_for_previous_response_id(
         previous_response_id: str,
-    ) -> list[SpendLogsPayload]:
+    ) -> "list[SpendLogsPayload]":
         """
         Get all spend logs for a previous response id
 
@@ -287,7 +292,7 @@ class ResponsesSessionHandler:
 
         verbose_proxy_logger.debug("decoding response id=%s", previous_response_id)
 
-        decoded_response_id: Final = ResponsesAPIRequestUtils._decode_responses_api_response_id(previous_response_id)
+        decoded_response_id: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(previous_response_id)
         response_id: Final = decoded_response_id.get("response_id", previous_response_id)
         if prisma_client is None:
             return []
@@ -317,4 +322,4 @@ class ResponsesSessionHandler:
                 return spend_logs
 
         verbose_proxy_logger.debug("Found no spend logs for previous response id %s", response_id)
-        return []  # mutable-ok: an empty result the caller only reads
+        return []

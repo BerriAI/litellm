@@ -54,7 +54,7 @@ class MistralTextToSpeechConfig(BaseTextToSpeechConfig):
     )
 
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: base class contract returns a plain list
-        return ["voice", "response_format"]  # mutable-ok: base class contract returns a plain list
+        return ["voice", "response_format"]
 
     def _map_openai_voice(self, voice_id: str) -> str:
         return self.OPENAI_VOICE_ALIASES.get(voice_id.lower(), voice_id)
@@ -83,7 +83,7 @@ class MistralTextToSpeechConfig(BaseTextToSpeechConfig):
         ref_audio: Final = kwargs.get("ref_audio") if kwargs else None
         voice_id_kwarg: Final = kwargs.get("voice_id") if kwargs else None
         mapped_voice: Final = self._resolve_voice_id(voice) or self._resolve_voice_id(voice_id_kwarg)
-        mapped_params: Final = {  # mutable-ok: base class contract returns a plain dict
+        mapped_params: Final = {
             key: value
             for key, value in (("response_format", response_format), ("ref_audio", ref_audio))
             if isinstance(value, str)
@@ -103,7 +103,7 @@ class MistralTextToSpeechConfig(BaseTextToSpeechConfig):
                 status_code=401,
                 message="Mistral API key is required. Set MISTRAL_API_KEY or pass api_key.",
             )
-        return {  # mutable-ok: base class contract returns a plain dict
+        return {
             **headers,
             "Authorization": f"Bearer {resolved_key}",
             "Content-Type": "application/json",

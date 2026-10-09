@@ -12,7 +12,10 @@ use serde::Deserialize;
 pub use error::Error;
 pub use mcp::{McpAuth, McpServer, McpTransport};
 pub use model::{LiteLlmParams, Model};
-pub use settings::{GeneralSettings, LiteLlmSettings, RouterSettings};
+pub use settings::{
+    ClickHouseStoreSettings, GeneralSettings, LiteLlmSettings, RouterSettings, TracingSettings,
+    TracingStoreSettings,
+};
 pub use value::{AdditionalFields, Flag, NumberOrString, Object, OneOrMany, Value};
 
 #[derive(Clone, Default, Deserialize)]

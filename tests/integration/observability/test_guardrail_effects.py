@@ -1,12 +1,21 @@
+import asyncio
 import json
 import os
+import re
 import signal
 import socket
+import threading
 import uuid
+from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
+import anthropic
 import httpx
 import psutil
 import pytest
@@ -14,9 +23,10 @@ import yaml
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
 from integration._support.mcp import mcp_peer, register_mcp, tool_names
-from integration._support.process import group_members, owned_proxy, owned_proxy_process
-from integration._support.wire import Reply, Request, wire_server
+from integration._support.process import OwnedProxy, group_members, owned_proxy, owned_proxy_process
+from integration._support.wire import Reply, Request, Wire, wire_server
 from openai import AsyncOpenAI, OpenAI
+from pydantic import JsonValue
 
 
 @pytest.mark.covers("other.observability.guardrails.rewrite_reaches_correct_anthropic_positions")
@@ -1796,3 +1806,892 @@ def test_responses_pre_call_denial_stream_survives_worker_kill(gateway: Gateway,
             for response in responses:
                 assert response.status_code == 200, response.text
                 assert response.headers["content-type"].startswith("text/event-stream"), response.text
+@pytest.mark.parametrize(
+    ("logging_only_scope", "scanned_directions"),
+    (("input", ("request",)), ("output", ("response",)), ("both", ("request", "response"))),
+)
+def test_logging_only_scope_observes_only_the_configured_direction_without_blocking(
+    gateway: Gateway, tmp_path: Path, logging_only_scope: str, scanned_directions: tuple[str, ...]
+) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    prompt: Final = "synthetic observed prompt " + identity
+    reply: Final = "synthetic observed reply " + identity
+    texts_by_direction: Final = {"request": [prompt], "response": [reply]}
+
+    def guardrail(request: Request) -> Reply:
+        assert request.target == "/beta/litellm_basic_guardrail_api"
+        return Reply(body=json.dumps({"action": "BLOCKED", "blocked_reason": "synthetic observed denial"}).encode())
+
+    def provider(request: Request) -> Reply:
+        assert request.target == "/v1/chat/completions"
+        assert json.loads(request.body)["messages"] == [{"role": "user", "content": prompt}]
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": identity,
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "gpt-4o-mini",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": reply}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 9, "completion_tokens": 5, "total_tokens": 14},
+                }
+            ).encode()
+        )
+
+    with wire_server(guardrail) as policy, wire_server(provider) as upstream:
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["guardrails"] = [
+            {
+                "guardrail_name": identity,
+                "litellm_params": {
+                    "guardrail": "generic_guardrail_api",
+                    "mode": "logging_only",
+                    "logging_only_scope": logging_only_scope,
+                    "default_on": True,
+                    "api_base": policy.url,
+                    "api_key": "synthetic-guardrail-key",
+                },
+            }
+        ]
+        path: Final = tmp_path / "logging-only-scope.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model(api_base=upstream.url + "/v1")
+            response: Final = candidate.request(
+                "POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": prompt}]}
+            )
+            assert response.status_code == 200, response.text
+            assert response.json()["choices"][0]["message"]["content"] == reply, response.text
+            assert len(upstream.drain()) == 1
+            rows: Final = eventually(
+                lambda: read_rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE model_group=%s', (model,)),
+                lambda values: len(values) == 1,
+                seconds=70,
+            )
+            scans: Final = tuple(json.loads(scan.body) for scan in policy.drain())
+            assert [(scan["input_type"], scan["texts"]) for scan in scans] == [
+                (direction, texts_by_direction[direction]) for direction in scanned_directions
+            ], scans
+            entries: Final = object_value(rows[0]["metadata"])["guardrail_information"]
+            assert isinstance(entries, list), rows[0]
+            assert [
+                (entry["guardrail_name"], entry["guardrail_mode"], entry["guardrail_status"])
+                for entry in map(object_value, entries)
+            ] == [(identity, "logging_only", "guardrail_intervened")] * len(scanned_directions), entries
+            today: Final = datetime.now(timezone.utc).date().isoformat()
+            guardrail_id: Final = next(
+                object_value(row)["guardrail_id"]
+                for row in candidate.get("/v2/guardrails/list")["guardrails"]
+                if object_value(row)["guardrail_name"] == identity
+            )
+            detail: Final = eventually(
+                lambda: candidate.request(
+                    "GET",
+                    f"/guardrails/usage/detail/{guardrail_id}",
+                    params={"start_date": today, "end_date": today},
+                ).json(),
+                lambda body: body["requestsEvaluated"] >= len(scanned_directions),
+                seconds=30,
+                return_last_on_timeout=True,
+            )
+            assert detail["requestsEvaluated"] == len(scanned_directions), detail
+
+
+@pytest.mark.parametrize("logging_only_scope", ("input", "Input"))
+def test_logging_only_scope_literal_or_mode_mismatch_is_ignored_at_load_and_keeps_blocking(
+    gateway: Gateway, tmp_path: Path, logging_only_scope: str
+) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    prompt: Final = "synthetic invalid-scope prompt pineapple " + identity
+
+    def guardrail(request: Request) -> Reply:
+        assert request.target == "/beta/litellm_basic_guardrail_api"
+        return Reply(body=json.dumps({"action": "BLOCKED", "blocked_reason": "synthetic policy denial"}).encode())
+
+    def provider(request: Request) -> Reply:
+        assert request.target == "/v1/chat/completions"
+        assert json.loads(request.body)["messages"] == [{"role": "user", "content": prompt}]
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": identity,
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "gpt-4o-mini",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "unchanged provider reply"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 9, "completion_tokens": 5, "total_tokens": 14},
+                }
+            ).encode()
+        )
+
+    with wire_server(guardrail) as policy, wire_server(provider) as upstream:
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["guardrails"] = [
+            {
+                "guardrail_name": identity,
+                "litellm_params": {
+                    "guardrail": "generic_guardrail_api",
+                    "mode": "pre_call",
+                    "logging_only_scope": logging_only_scope,
+                    "default_on": True,
+                    "blocked_words": [{"keyword": "pineapple", "action": "BLOCK"}],
+                    "api_base": policy.url,
+                    "api_key": "synthetic-guardrail-key",
+                },
+            }
+        ]
+        path: Final = tmp_path / "invalid-scope-pre-call.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model(api_base=upstream.url + "/v1")
+            response: Final = candidate.request(
+                "POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": prompt}]}
+            )
+            assert response.status_code == 400, response.text
+            assert "synthetic policy denial" in response.text, response.text
+            assert len(policy.drain()) == 1
+            assert len(upstream.drain()) == 0
+            guardrails: Final = candidate.get("/v2/guardrails/list")["guardrails"]
+            assert any(object_value(row)["guardrail_name"] == identity for row in guardrails), guardrails
+_TOKEN: Final = re.compile(rb"token-[0-9a-f]{32}-\d+")
+
+
+def _secret_for(request: Request) -> str:
+    token: Final = _TOKEN.search(request.body)
+    assert token is not None, request.body
+    return "synthetic-leaked-secret-" + token.group().decode()
+
+
+def _chat_frame(identity: str, choices: tuple[dict[str, JsonValue], ...]) -> bytes:
+    payload: Final = {
+        "id": identity,
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "gpt-4o-mini",
+        "choices": list(choices),
+    }
+    return b"data: " + json.dumps(payload).encode() + b"\n\n"
+
+
+def _chat_choice(index: int, delta: dict[str, JsonValue], finish: str | None = None) -> dict[str, JsonValue]:
+    return {"index": index, "delta": delta, "finish_reason": finish}
+
+
+def _chat_stream_frames(secret: str, shape: str) -> tuple[bytes, ...]:
+    identity: Final = "chatcmpl-" + uuid.uuid4().hex
+    tool_call: Final = {
+        "index": 0,
+        "id": "call_" + identity,
+        "type": "function",
+        "function": {"name": "lookup", "arguments": json.dumps({"query": secret})},
+    }
+    released: Final = {
+        "text": (_chat_choice(0, {"role": "assistant", "content": secret}),),
+        "empty": (_chat_choice(0, {"role": "assistant", "content": ""}),),
+        "tool_call": (_chat_choice(0, {"role": "assistant", "tool_calls": [tool_call]}),),
+        "two_choices": (
+            _chat_choice(0, {"role": "assistant", "content": secret + "-first"}),
+            _chat_choice(1, {"role": "assistant", "content": secret + "-second"}),
+        ),
+    }[shape]
+    finish: Final = "tool_calls" if shape == "tool_call" else "stop"
+    tail: Final = tuple(_chat_choice(int(str(choice["index"])), {"content": " tail"}, finish) for choice in released)
+    return (_chat_frame(identity, released), _chat_frame(identity, tail), b"data: [DONE]\n\n")
+
+
+def _chat_completion_body(secret: str) -> bytes:
+    return json.dumps(
+        {
+            "id": "chatcmpl-" + uuid.uuid4().hex,
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gpt-4o-mini",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": secret}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 9, "completion_tokens": 4, "total_tokens": 13},
+        }
+    ).encode()
+
+
+def _responses_tool_call_frames(secret: str, *, with_text: bool) -> tuple[bytes, ...]:
+    identity: Final = "resp_" + uuid.uuid4().hex
+    arguments: Final = json.dumps({"query": secret})
+    pending: Final = {"type": "function_call", "id": "fc_" + identity, "call_id": "call_" + identity, "name": "lookup"}
+    finished: Final = {**pending, "arguments": arguments, "status": "completed"}
+    envelope: Final = {"id": identity, "object": "response", "created_at": 1, "model": "gpt-4o-mini", "output": []}
+    message: Final = {
+        "type": "message",
+        "id": "msg_" + identity,
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": secret, "annotations": []}],
+    }
+    text_delta: Final = {
+        "type": "response.output_text.delta",
+        "item_id": "msg_" + identity,
+        "output_index": 0,
+        "content_index": 0,
+        "delta": secret,
+    }
+    text_events: Final = (text_delta,) if with_text else ()
+    tool_index: Final = len(text_events)
+    output: Final = [*((message,) if with_text else ()), finished]
+    events: Final = (
+        {"type": "response.created", "response": {**envelope, "status": "in_progress"}},
+        *text_events,
+        {
+            "type": "response.output_item.added",
+            "output_index": tool_index,
+            "item": {**pending, "arguments": "", "status": "in_progress"},
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "item_id": "fc_" + identity,
+            "output_index": tool_index,
+            "delta": arguments,
+        },
+        {"type": "response.output_item.done", "output_index": tool_index, "item": finished},
+        {"type": "response.completed", "response": {**envelope, "status": "completed", "output": output}},
+    )
+    encoded: Final = tuple(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in events)
+    released_through: Final = len(events) - 1 if with_text else 3
+    return (b"".join(encoded[:released_through]), b"".join(encoded[released_through:]))
+
+
+def _responses_stream_frames(secret: str) -> tuple[bytes, ...]:
+    identity: Final = "resp_" + uuid.uuid4().hex
+    completed: Final = {
+        "id": identity,
+        "object": "response",
+        "created_at": 1,
+        "status": "completed",
+        "model": "gpt-4o-mini",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_" + identity,
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": secret, "annotations": []}],
+            }
+        ],
+        "usage": {
+            "input_tokens": 11,
+            "output_tokens": 4,
+            "total_tokens": 15,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens_details": {"reasoning_tokens": 0},
+        },
+    }
+    events: Final = (
+        {"type": "response.created", "response": {**completed, "status": "in_progress", "output": [], "usage": None}},
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_" + identity,
+            "output_index": 0,
+            "content_index": 0,
+            "delta": secret,
+        },
+        {"type": "response.completed", "response": completed},
+    )
+    encoded: Final = tuple(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in events)
+    return (encoded[0] + encoded[1], encoded[2])
+
+
+def _gemini_stream_frames(secret: str) -> tuple[bytes, ...]:
+    def frame(text: str, finish: str | None) -> bytes:
+        candidate: Final = {
+            "content": {"parts": [{"text": text}], "role": "model"},
+            "index": 0,
+            **({"finishReason": finish} if finish else {}),
+        }
+        payload: Final = {
+            "candidates": [candidate],
+            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5, "totalTokenCount": 15},
+            "modelVersion": "gemini-2.5-flash",
+        }
+        return b"data: " + json.dumps(payload).encode() + b"\r\n\r\n"
+
+    return (frame(secret, None), frame(" tail", "STOP"))
+
+
+def _scripted_provider(gate: threading.Event | None, pause: float, shape: str) -> Callable[[Request], Reply]:
+    def provider(request: Request) -> Reply:
+        secret: Final = _secret_for(request)
+        path: Final = request.target.split("?")[0]
+        if path.endswith("/chat/completions") and not json.loads(request.body).get("stream"):
+            return Reply(body=_chat_completion_body(secret))
+        frames: Final = (
+            _gemini_stream_frames(secret)
+            if "streamGenerateContent" in path
+            else (
+                _responses_tool_call_frames(secret, with_text=shape == "text_then_tool_call")
+                if shape in ("tool_call", "text_then_tool_call")
+                else _responses_stream_frames(secret)
+            )
+            if path.endswith("/responses")
+            else _chat_stream_frames(secret, shape)
+        )
+        return Reply(content_type="text/event-stream", chunks=frames, gate_after_first=gate, pause_between_chunks=pause)
+
+    return provider
+
+
+def _allowing_guardrail(request: Request) -> Reply:
+    assert request.target == "/beta/litellm_basic_guardrail_api", request.target
+    return Reply(body=json.dumps({"action": "NONE"}).encode())
+
+
+def _failing_response_scans(reply: Reply) -> Callable[[Request], Reply]:
+    def guardrail(request: Request) -> Reply:
+        assert request.target == "/beta/litellm_basic_guardrail_api", request.target
+        if json.loads(request.body)["input_type"] == "response":
+            return reply
+        return Reply(body=json.dumps({"action": "NONE"}).encode())
+
+    return guardrail
+
+
+def _post_call_config(
+    tmp_path: Path, identity: str, policy_url: str, params: Mapping[str, JsonValue], default_on: bool
+) -> Path:
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config["guardrails"] = [
+        {
+            "guardrail_name": identity,
+            "litellm_params": {
+                "guardrail": "generic_guardrail_api",
+                "mode": "post_call",
+                "default_on": default_on,
+                "api_base": policy_url,
+                "api_key": "synthetic-guardrail-key",
+                **params,
+            },
+        }
+    ]
+    path: Final = tmp_path / f"{identity}.yaml"
+    path.write_text(yaml.safe_dump(config))
+    return path
+
+
+class _ScanLog:
+    def __init__(self, policy: Wire) -> None:
+        self.policy: Final = policy
+        self.seen: tuple[dict[str, JsonValue], ...] = ()
+
+    def response_scans(self, secret: str) -> tuple[dict[str, JsonValue], ...]:
+        self.seen = (*self.seen, *(object_value(json.loads(request.body)) for request in self.policy.drain()))
+        return tuple(body for body in self.seen if body["input_type"] == "response" and secret in json.dumps(body))
+
+
+@dataclass(frozen=True, slots=True)
+class _DisconnectRig:
+    owned: OwnedProxy
+    model: str
+    gemini: str
+    scans: _ScanLog
+    identity: str
+    gate: threading.Event
+    upstream: Wire
+
+    @property
+    def candidate(self) -> Gateway:
+        return self.owned.gateway
+
+    def token(self, index: int = 0) -> str:
+        return f"token-{self.identity.removeprefix('guardrail')}-{index}"
+
+    def secret(self, index: int = 0) -> str:
+        return "synthetic-leaked-secret-" + self.token(index)
+
+
+_END_OF_STREAM_ONLY: Final = MappingProxyType({"streaming_end_of_stream_only": True})
+
+
+@contextmanager
+def _disconnect_rig(
+    gateway: Gateway,
+    tmp_path: Path,
+    *,
+    params: Mapping[str, JsonValue] = _END_OF_STREAM_ONLY,
+    guardrail: Callable[[Request], Reply] = _allowing_guardrail,
+    gated: bool = True,
+    pause: float = 0,
+    shape: str = "text",
+    default_on: bool = True,
+    workers: int = 1,
+) -> Iterator[_DisconnectRig]:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    gate: Final = threading.Event()
+    with (
+        wire_server(guardrail) as policy,
+        wire_server(_scripted_provider(gate if gated else None, pause, shape)) as upstream,
+    ):
+        config: Final = _post_call_config(tmp_path, identity, policy.url, params, default_on)
+        try:
+            with (
+                owned_proxy_process(gateway, tmp_path, {}, config=config, workers=workers) as owned,
+                owned.gateway.scenario() as scenario,
+            ):
+                yield _DisconnectRig(
+                    owned,
+                    scenario.model(api_base=upstream.url + "/v1", api_key="synthetic-openai-key"),
+                    scenario.model(
+                        model="gemini/gemini-2.5-flash", api_base=upstream.url, api_key="synthetic-gemini-key"
+                    ),
+                    _ScanLog(policy),
+                    identity,
+                    gate,
+                    upstream,
+                )
+        finally:
+            gate.set()
+
+
+def _close_on(response: httpx.Response, marker: str) -> str:
+    assert response.status_code == 200, response.read()
+    for line in response.iter_lines():
+        if marker in line:
+            return line
+    raise AssertionError(f"The stream ended before the client received {marker}")
+
+
+def _stream_and_close(rig: _DisconnectRig, path: str, body: Mapping[str, JsonValue], marker: str) -> str:
+    with rig.candidate.client.stream(
+        "POST", path, json=dict(body), headers={"Authorization": f"Bearer {rig.candidate.key}"}
+    ) as response:
+        return _close_on(response, marker)
+
+
+def _chat_body(rig: _DisconnectRig, index: int, stream: bool = True) -> dict[str, JsonValue]:
+    return {
+        "model": rig.model,
+        "messages": [{"role": "user", "content": "synthetic prompt " + rig.token(index)}],
+        "stream": stream,
+    }
+
+
+def _chat_httpx(rig: _DisconnectRig, index: int = 0) -> str:
+    return _stream_and_close(rig, "/v1/chat/completions", _chat_body(rig, index), rig.secret(index))
+
+
+def _responses_httpx(rig: _DisconnectRig, index: int = 0) -> str:
+    body: Final = {"model": rig.model, "input": "synthetic prompt " + rig.token(index), "stream": True}
+    return _stream_and_close(rig, "/v1/responses", body, rig.secret(index))
+
+
+def _messages_httpx(rig: _DisconnectRig, index: int = 0) -> str:
+    body: Final = {**_chat_body(rig, index), "max_tokens": 64}
+    return _stream_and_close(rig, "/v1/messages", body, rig.secret(index))
+
+
+def _gemini_httpx(rig: _DisconnectRig, index: int = 0) -> str:
+    body: Final = {"contents": [{"role": "user", "parts": [{"text": "synthetic prompt " + rig.token(index)}]}]}
+    path: Final = f"/v1beta/models/{rig.gemini}:streamGenerateContent?alt=sse"
+    return _stream_and_close(rig, path, body, rig.secret(index))
+
+
+def _chat_async_openai_sdk(rig: _DisconnectRig, index: int = 0) -> str:
+    async def read() -> str:
+        client: Final = AsyncOpenAI(
+            base_url=str(rig.candidate.client.base_url) + "/v1",
+            api_key=rig.candidate.key,
+            max_retries=0,
+            http_client=httpx.AsyncClient(trust_env=False, timeout=30),
+        )
+        async with client:
+            stream: Final = await client.chat.completions.create(
+                model=rig.model,
+                messages=[{"role": "user", "content": "synthetic prompt " + rig.token(index)}],
+                stream=True,
+            )
+            async for chunk in stream:
+                if chunk.choices and rig.secret(index) in (chunk.choices[0].delta.content or ""):
+                    await stream.close()
+                    return chunk.choices[0].delta.content or ""
+        raise AssertionError("The stream ended before the client received the streamed content")
+
+    return asyncio.run(read())
+
+
+def _responses_openai_sdk(rig: _DisconnectRig, index: int = 0) -> str:
+    client: Final = OpenAI(
+        base_url=str(rig.candidate.client.base_url) + "/v1",
+        api_key=rig.candidate.key,
+        max_retries=0,
+        http_client=httpx.Client(trust_env=False, timeout=30),
+    )
+    with client:
+        stream: Final = client.responses.create(
+            model=rig.model, input="synthetic prompt " + rig.token(index), stream=True
+        )
+        for event in stream:
+            if event.type == "response.output_text.delta" and rig.secret(index) in event.delta:
+                stream.close()
+                return event.delta
+    raise AssertionError("The stream ended before the client received the streamed content")
+
+
+def _messages_anthropic_sdk(rig: _DisconnectRig, index: int = 0) -> str:
+    client: Final = anthropic.Anthropic(
+        base_url=str(rig.candidate.client.base_url),
+        api_key=rig.candidate.key,
+        max_retries=0,
+        http_client=httpx.Client(trust_env=False, timeout=30),
+    )
+    with client:
+        stream: Final = client.messages.create(
+            model=rig.model,
+            max_tokens=64,
+            messages=[{"role": "user", "content": "synthetic prompt " + rig.token(index)}],
+            stream=True,
+        )
+        for event in stream:
+            text: Final = (
+                event.delta.text if event.type == "content_block_delta" and event.delta.type == "text_delta" else ""
+            )
+            if rig.secret(index) in text:
+                stream.close()
+                return text
+    raise AssertionError("The stream ended before the client received the streamed content")
+
+
+def _scanned_while_upstream_is_held(
+    rig: _DisconnectRig, disconnect: Callable[[_DisconnectRig, int], str], index: int = 0
+) -> tuple[dict[str, JsonValue], ...]:
+    try:
+        received: Final = disconnect(rig, index)
+        assert rig.secret(index) in received, received
+        return eventually(
+            lambda: rig.scans.response_scans(rig.secret(index)), lambda values: len(values) >= 1, seconds=4
+        )
+    finally:
+        rig.gate.set()
+
+
+def _post_call_statuses(rig: _DisconnectRig, model: str, rows: int = 1) -> tuple[tuple[str, ...], ...]:
+    found: Final = eventually(
+        lambda: read_rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE model_group=%s', (model,)),
+        lambda values: len(values) == rows,
+        seconds=70,
+    )
+
+    def statuses(metadata: JsonValue) -> tuple[str, ...]:
+        entries: Final = object_value(metadata).get("guardrail_information") or []
+        assert isinstance(entries, list), metadata
+        post_call: Final = tuple(
+            entry
+            for entry in (object_value(value) for value in entries)
+            if entry.get("guardrail_name") == rig.identity and entry.get("guardrail_mode") == "post_call"
+        )
+        return tuple(str(entry["guardrail_status"]) for entry in post_call)
+
+    return tuple(statuses(row["metadata"]) for row in found)
+
+
+_ENDPOINT_CLIENTS: Final = (
+    pytest.param(_chat_httpx, id="chat-httpx"),
+    pytest.param(_chat_async_openai_sdk, id="chat-async-openai-sdk"),
+    pytest.param(_responses_httpx, id="responses-httpx"),
+    pytest.param(_responses_openai_sdk, id="responses-openai-sdk"),
+    pytest.param(_messages_httpx, id="messages-httpx"),
+    pytest.param(_messages_anthropic_sdk, id="messages-anthropic-sdk"),
+    pytest.param(_gemini_httpx, id="native-gemini-stream-generate-content"),
+)
+
+
+_NO_DISCONNECT_ROW_LIT_8603: Final = pytest.mark.skip(
+    reason="BUG: LIT-8603 a mid-stream disconnect writes no spend row"
+)
+
+
+@pytest.mark.parametrize("disconnect", _ENDPOINT_CLIENTS)
+def test_client_disconnect_mid_stream_still_scans_the_content_it_already_received(
+    gateway: Gateway, tmp_path: Path, disconnect: Callable[[_DisconnectRig, int], str]
+) -> None:
+    with _disconnect_rig(gateway, tmp_path) as rig:
+        scans: Final = _scanned_while_upstream_is_held(rig, disconnect)
+        assert len(scans) == 1, scans
+
+
+@pytest.mark.parametrize(
+    "disconnect",
+    (
+        pytest.param(_chat_httpx, id="chat-httpx"),
+        pytest.param(_chat_async_openai_sdk, id="chat-async-openai-sdk"),
+        pytest.param(_responses_httpx, id="responses-httpx", marks=_NO_DISCONNECT_ROW_LIT_8603),
+        pytest.param(_messages_anthropic_sdk, id="messages-anthropic-sdk", marks=_NO_DISCONNECT_ROW_LIT_8603),
+        pytest.param(
+            _gemini_httpx,
+            id="native-gemini-stream-generate-content",
+            marks=pytest.mark.skip(reason="BUG: LIT-9087 a mid-stream disconnect writes no spend row"),
+        ),
+    ),
+)
+def test_client_disconnect_mid_stream_records_the_post_call_verdict_on_the_spend_row(
+    gateway: Gateway, tmp_path: Path, disconnect: Callable[[_DisconnectRig, int], str]
+) -> None:
+    with _disconnect_rig(gateway, tmp_path) as rig:
+        _scanned_while_upstream_is_held(rig, disconnect)
+        model: Final = rig.gemini if disconnect is _gemini_httpx else rig.model
+        assert _post_call_statuses(rig, model) == (("success",),)
+
+
+@pytest.mark.parametrize(
+    "reply",
+    (
+        pytest.param(Reply(status=500, body=b'{"error": "synthetic guardrail outage"}'), id="guardrail-500"),
+        pytest.param(Reply(body=b"synthetic non-json guardrail body"), id="guardrail-malformed-200"),
+    ),
+)
+def test_client_disconnect_mid_stream_records_a_failed_scan_when_the_guardrail_errors(
+    gateway: Gateway, tmp_path: Path, reply: Reply
+) -> None:
+    with _disconnect_rig(gateway, tmp_path, guardrail=_failing_response_scans(reply)) as rig:
+        _scanned_while_upstream_is_held(rig, _chat_httpx)
+        assert _post_call_statuses(rig, rig.model) == (("guardrail_failed_to_respond",),)
+
+
+def test_client_disconnect_mid_stream_records_a_blocking_verdict_and_keeps_serving(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    blocked: Final = Reply(body=json.dumps({"action": "BLOCKED", "blocked_reason": "synthetic leak"}).encode())
+    with _disconnect_rig(gateway, tmp_path, guardrail=_failing_response_scans(blocked)) as rig:
+        _scanned_while_upstream_is_held(rig, _chat_httpx)
+        statuses: Final = _post_call_statuses(rig, rig.model)
+        assert len(statuses) == 1 and len(statuses[0]) == 1 and statuses[0][0] != "success", statuses
+        health: Final = rig.candidate.request("GET", "/health/liveliness")
+        assert health.status_code == 200, health.text
+
+
+def test_client_disconnect_while_end_of_stream_scan_is_in_flight_still_records_the_verdict(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    scan_started: Final = threading.Event()
+    scan_released: Final = threading.Event()
+
+    def guardrail(request: Request) -> Reply:
+        assert request.target == "/beta/litellm_basic_guardrail_api", request.target
+        if json.loads(request.body)["input_type"] == "response":
+            scan_started.set()
+            assert scan_released.wait(timeout=30), "The in-flight scan was never released"
+        return Reply(body=json.dumps({"action": "NONE"}).encode())
+
+    with _disconnect_rig(gateway, tmp_path, guardrail=guardrail, gated=False) as rig:
+        with rig.candidate.client.stream(
+            "POST",
+            "/v1/chat/completions",
+            json=_chat_body(rig, 0),
+            headers={"Authorization": f"Bearer {rig.candidate.key}"},
+        ) as response:
+            try:
+                assert rig.secret() in _close_on(response, rig.secret())
+                assert scan_started.wait(timeout=10), "The end-of-stream scan never started"
+            finally:
+                pass
+        scan_released.set()
+        assert _post_call_statuses(rig, rig.model) == (("success",),)
+        assert len(rig.scans.response_scans(rig.secret())) == 1
+
+
+@pytest.mark.parametrize(
+    ("params", "shape", "expected"),
+    (
+        pytest.param(
+            {"streaming_buffer_until_moderated": False},
+            "text",
+            ("synthetic-leaked-secret-",),
+            id="sampled-before-the-sampling-threshold",
+        ),
+        pytest.param(
+            {"streaming_buffer_until_moderated": False, "streaming_transform_mode": "incremental_diff"},
+            "tool_call",
+            ('\\"query\\": \\"synthetic-leaked-secret-',),
+            id="incremental-diff-tool-call-in-flight",
+        ),
+        pytest.param(dict(_END_OF_STREAM_ONLY), "two_choices", ("-first", "-second"), id="two-choices"),
+    ),
+)
+def test_client_disconnect_mid_stream_scans_what_each_streaming_mode_released(
+    gateway: Gateway, tmp_path: Path, params: dict[str, JsonValue], shape: str, expected: tuple[str, ...]
+) -> None:
+    with _disconnect_rig(gateway, tmp_path, params=params, shape=shape) as rig:
+        marker: Final = rig.secret() + ("-first" if shape == "two_choices" else "")
+        try:
+            received: Final = _stream_and_close(rig, "/v1/chat/completions", _chat_body(rig, 0), rig.token())
+            assert rig.token() in received, received
+            scans: Final = eventually(
+                lambda: rig.scans.response_scans(rig.secret()), lambda values: len(values) >= 1, seconds=4
+            )
+        finally:
+            rig.gate.set()
+        payload: Final = json.dumps(scans[-1])
+        assert all(fragment in payload for fragment in expected), (marker, scans)
+        assert _post_call_statuses(rig, rig.model)[0][-1:] == ("success",)
+
+
+def _tool_call_request(rig: _DisconnectRig, path: str) -> dict[str, JsonValue]:
+    if path == "/v1/responses":
+        return {"model": rig.model, "input": "synthetic prompt " + rig.token(), "stream": True}
+    if path == "/v1/messages":
+        return {**_chat_body(rig, 0), "max_tokens": 64}
+    return _chat_body(rig, 0)
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        pytest.param("/v1/chat/completions", id="chat"),
+        pytest.param("/v1/responses", id="responses"),
+        pytest.param("/v1/messages", id="messages"),
+    ),
+)
+def test_client_disconnect_mid_tool_call_scans_the_tool_call_it_already_received(
+    gateway: Gateway, tmp_path: Path, path: str
+) -> None:
+    with _disconnect_rig(gateway, tmp_path, shape="tool_call") as rig:
+        try:
+            received: Final = _stream_and_close(rig, path, _tool_call_request(rig, path), rig.token())
+            assert rig.token() in received, received
+            scans: Final = eventually(
+                lambda: rig.scans.response_scans(rig.secret()), lambda values: len(values) >= 1, seconds=4
+            )
+        finally:
+            rig.gate.set()
+        assert rig.secret() in json.dumps(scans[-1].get("tool_calls")), scans
+
+
+def test_client_disconnect_after_a_finished_responses_tool_call_scans_the_text_and_tool_call_it_received(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with _disconnect_rig(gateway, tmp_path, shape="text_then_tool_call") as rig:
+        try:
+            received: Final = _stream_and_close(
+                rig, "/v1/responses", _tool_call_request(rig, "/v1/responses"), "response.output_item.done"
+            )
+            assert rig.token() in received, received
+            scans: Final = eventually(
+                lambda: tuple(scan for scan in rig.scans.response_scans(rig.secret()) if scan.get("texts")),
+                lambda values: len(values) >= 1,
+                seconds=4,
+            )
+        finally:
+            rig.gate.set()
+        assert rig.secret() in json.dumps(scans[-1].get("texts")), scans
+        assert rig.secret() in json.dumps(scans[-1].get("tool_calls")), scans
+
+
+def test_client_disconnect_mid_stream_scans_for_a_guardrail_the_request_opted_into(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with _disconnect_rig(gateway, tmp_path, default_on=False) as rig:
+        body: Final = {**_chat_body(rig, 0), "guardrails": [rig.identity]}
+        try:
+            received: Final = _stream_and_close(rig, "/v1/chat/completions", body, rig.secret())
+            assert rig.secret() in received, received
+            eventually(lambda: rig.scans.response_scans(rig.secret()), lambda values: len(values) == 1, seconds=4)
+        finally:
+            rig.gate.set()
+        assert _post_call_statuses(rig, rig.model) == (("success",),)
+
+
+def test_client_disconnect_before_any_content_sends_no_response_scan(gateway: Gateway, tmp_path: Path) -> None:
+    with _disconnect_rig(gateway, tmp_path, shape="empty") as rig:
+        try:
+            _stream_and_close(rig, "/v1/chat/completions", _chat_body(rig, 0), "data: ")
+        finally:
+            rig.gate.set()
+        rows: Final = _post_call_statuses(rig, rig.model)
+        assert rig.scans.response_scans(rig.secret()) == (), rig.scans.seen
+        assert len(rows) == 1 and "success" not in rows[0], rows
+
+
+@pytest.mark.parametrize(
+    "params",
+    (
+        pytest.param(dict(_END_OF_STREAM_ONLY), id="end-of-stream-only"),
+        pytest.param({"streaming_buffer_until_moderated": True}, id="buffered"),
+    ),
+)
+def test_a_fully_read_stream_is_scanned_exactly_once(
+    gateway: Gateway, tmp_path: Path, params: dict[str, JsonValue]
+) -> None:
+    with _disconnect_rig(gateway, tmp_path, params=params, gated=False) as rig:
+        response: Final = rig.candidate.request("POST", "/v1/chat/completions", _chat_body(rig, 0))
+        assert response.status_code == 200, response.text
+        assert rig.secret() in response.text and "[DONE]" in response.text, response.text
+        assert _post_call_statuses(rig, rig.model) == (("success",),)
+        assert len(rig.scans.response_scans(rig.secret())) == 1, rig.scans.seen
+
+
+def _cached_twin_rows(rig: _DisconnectRig) -> tuple[tuple[str, ...], ...]:
+    first: Final = rig.candidate.request("POST", "/v1/chat/completions", _chat_body(rig, 0, stream=False))
+    second: Final = rig.candidate.request("POST", "/v1/chat/completions", _chat_body(rig, 0, stream=False))
+    assert first.status_code == second.status_code == 200, (first.text, second.text)
+    assert first.json()["choices"] == second.json()["choices"], (first.text, second.text)
+    assert len(rig.upstream.drain()) == 1, "the second request must be served from the cache"
+    return _post_call_statuses(rig, rig.model, rows=2)
+
+
+def test_a_non_streaming_response_and_its_cache_hit_are_each_scanned_once(gateway: Gateway, tmp_path: Path) -> None:
+    with _disconnect_rig(gateway, tmp_path, gated=False) as rig:
+        rows: Final = _cached_twin_rows(rig)
+        assert rows[0] == ("success",), rows
+        assert len(rig.scans.response_scans(rig.secret())) == 2, (rows, rig.scans.seen)
+
+
+def test_a_cache_hit_row_records_the_post_call_verdict_of_its_scan(gateway: Gateway, tmp_path: Path) -> None:
+    pytest.skip("BUG: LIT-9088 the cache-hit spend row drops the post_call verdict of the scan that ran on it")
+    with _disconnect_rig(gateway, tmp_path, gated=False) as rig:
+        assert _cached_twin_rows(rig) == (("success",), ("success",))
+
+
+def test_concurrent_disconnects_during_a_guardrail_outage_each_record_exactly_one_verdict(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    def guardrail(request: Request) -> Reply:
+        assert request.target == "/beta/litellm_basic_guardrail_api", request.target
+        body: Final = json.loads(request.body)
+        index: Final = int(_secret_for(request).rsplit("-", 1)[1])
+        if body["input_type"] == "response" and index % 3 == 0:
+            return Reply(status=503, body=b'{"error": "synthetic guardrail outage"}')
+        return Reply(body=json.dumps({"action": "NONE"}).encode())
+
+    clients: Final = (_chat_httpx, _responses_httpx, _messages_httpx)
+    with _disconnect_rig(gateway, tmp_path, guardrail=guardrail, gated=False, pause=3, workers=2) as rig:
+        with ThreadPoolExecutor(max_workers=30) as pool:
+            received: Final = tuple(pool.map(lambda index: clients[index % 3](rig, index), range(30)))
+        assert all(rig.secret(index) in line for index, line in enumerate(received)), received
+        scanned: Final = eventually(
+            lambda: tuple(len(rig.scans.response_scans(rig.secret(index) + '"')) for index in range(30)),
+            lambda counts: all(count >= 1 for count in counts),
+            seconds=20,
+        )
+        assert scanned == (1,) * 30, scanned
+        chat_rows: Final = _post_call_statuses(rig, rig.model, rows=10)
+        assert sorted(chat_rows) == sorted(
+            ("guardrail_failed_to_respond",) if index % 3 == 0 else ("success",) for index in range(0, 30, 3)
+        ), chat_rows
+
+
+def test_disconnect_scans_keep_recording_after_a_worker_is_killed(gateway: Gateway, tmp_path: Path) -> None:
+    with _disconnect_rig(gateway, tmp_path, gated=False, pause=3, workers=2) as rig:
+        members: Final = tuple(
+            member for member in group_members(rig.owned.process.pid) if member.pid != rig.owned.process.pid
+        )
+        workers: Final = tuple(member for member in members if any("spawn_main" in part for part in member.cmdline()))
+        assert len(workers) >= 2, members
+        workers[0].send_signal(signal.SIGKILL)
+        psutil.wait_procs((workers[0],), timeout=10)
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            received: Final = tuple(pool.map(lambda index: _chat_httpx(rig, index), range(8)))
+        assert all(rig.secret(index) in line for index, line in enumerate(received)), received
+        assert _post_call_statuses(rig, rig.model, rows=8) == (("success",),) * 8
+        assert rig.owned.process.poll() is None

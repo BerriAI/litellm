@@ -20,8 +20,8 @@ from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAP
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.interactions import (
     CancelInteractionResult,
@@ -57,7 +57,7 @@ class _BaseHTTPHandler:
         litellm_params: GenericLiteLLMParams,
         client: HTTPHandler | None,
     ) -> HTTPHandler:
-        return client or _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
+        return client or get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
 
     def _async_client(
         self,
@@ -129,7 +129,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
             )
 
         if client is None:
-            sync_httpx_client = _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
+            sync_httpx_client = get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
         else:
             sync_httpx_client = client
 
@@ -363,7 +363,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
             )
 
         if client is None:
-            sync_httpx_client = _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
+            sync_httpx_client = get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
         else:
             sync_httpx_client = client
 
@@ -482,7 +482,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
             )
 
         if client is None:
-            sync_httpx_client = _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
+            sync_httpx_client = get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
         else:
             sync_httpx_client = client
 
@@ -603,7 +603,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
             )
 
         if client is None:
-            sync_httpx_client = _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
+            sync_httpx_client = get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
         else:
             sync_httpx_client = client
 

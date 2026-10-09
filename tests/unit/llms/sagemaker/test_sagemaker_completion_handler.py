@@ -267,3 +267,29 @@ def test_load_credentials_assumes_role_with_session_tags(monkeypatch):
     assert credentials.access_key == "ASIASMCOMPTAGGED"
     assert aws_region_name == "us-east-1"
     assert "aws_session_tags" not in optional_params
+
+
+def test_missing_botocore_keeps_dependency_identity():
+    from unittest.mock import patch
+
+    import pytest
+
+    from litellm.llms.sagemaker.completion.handler import SagemakerLLM
+
+    with patch.dict("sys.modules", {"botocore": None}):
+        with pytest.raises(ModuleNotFoundError, match="pip install boto3") as caught:
+            SagemakerLLM()._load_credentials({})
+    assert caught.value.name == "botocore"
+
+
+def test_installed_botocore_signs_the_completion_request():
+    from botocore.credentials import Credentials
+
+    from litellm.llms.sagemaker.completion.handler import SagemakerLLM
+
+    request = SagemakerLLM()._prepare_request(
+        credentials=Credentials("test-key", "test-secret"), model="test-endpoint", data={"inputs": "ping"},
+        messages=[], litellm_params={}, optional_params={}, aws_region_name="us-west-2",
+    )
+    assert request.body == b'{"inputs": "ping"}'
+    assert "/us-west-2/sagemaker/aws4_request" in request.headers["Authorization"]

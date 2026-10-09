@@ -3,13 +3,15 @@ User repository for database operations on LiteLLM_UserTable.
 """
 
 import json
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Final
+from collections.abc import Mapping, Sequence
+from itertools import chain
+from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter
 
 from litellm.models.user import LiteLLM_UserTable, SCIMPlaceholder
 from litellm.repositories.base_repository import BaseRepository, DbRecord, record_to_dict
+from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
 from litellm.repositories.prisma_protocols import TableActions
 
 if TYPE_CHECKING:
@@ -35,6 +37,19 @@ ORDER BY p.user_id
 _PLACEHOLDER_ROWS_ADAPTER: Final = TypeAdapter(tuple[SCIMPlaceholder, ...])
 
 
+class _UserDb(Protocol):
+    @property
+    def litellm_usertable(self) -> TableActions["prisma_models.LiteLLM_UserTable"]: ...
+
+
+class _PrismaClientView(Protocol):
+    @property
+    def db(self) -> _UserDb: ...
+
+    @property
+    def writer_db(self) -> _UserDb: ...
+
+
 class UserRepository(BaseRepository[LiteLLM_UserTable]):
     """Repository for user database operations."""
 
@@ -44,7 +59,8 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
 
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_UserTable"]:
-        database: Final = self.prisma_client.writer_db if self._use_writer else self.prisma_client.db
+        client: Final[_PrismaClientView] = self.prisma_client
+        database: Final = client.writer_db if self._use_writer else client.db
         return database.litellm_usertable
 
     @property
@@ -70,6 +86,31 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
         """Find a user by email."""
         records: Final = await self.find_many(where={"user_email": user_email})
         return records[0] if records else None
+
+    async def find_by_emails(self, user_emails: Sequence[str]) -> Sequence[LiteLLM_UserTable]:
+        """Every user whose email matches one of ``user_emails``, ignoring case.
+
+        A roster entry stored by email can differ in case from its user row (member_add
+        resolves emails case-insensitively), so an exact match would miss it. The list goes
+        out in slices of ``IN_LIST_CHUNK_SIZE`` so one statement stays under Postgres's
+        bind-parameter cap; ``chunked_in.find_many_in`` cannot carry the insensitive mode.
+        """
+        unique: Final = sorted(frozenset(user_emails))
+        pages: Final = tuple(
+            [
+                await self.find_many(
+                    where={
+                        "user_email": {
+                            # bounded-ok: sliced to IN_LIST_CHUNK_SIZE values per statement
+                            "in": unique[start : start + IN_LIST_CHUNK_SIZE],
+                            "mode": "insensitive",
+                        }
+                    }
+                )
+                for start in range(0, len(unique), IN_LIST_CHUNK_SIZE)
+            ]
+        )
+        return tuple(chain.from_iterable(pages))
 
     async def find_by_sso_id(self, sso_user_id: str) -> LiteLLM_UserTable | None:
         """Find a user by SSO ID."""
@@ -234,8 +275,8 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
         Returns the number of rows updated: 0 means another writer already set an email.
         """
         updated_count: Final[int] = await self.table.update_many(
-            where={"user_id": user_id, "user_email": None},  # mutable-ok: Prisma query filters are dict-shaped
-            data={"user_email": user_email},  # mutable-ok: Prisma update payloads are dict-shaped
+            where={"user_id": user_id, "user_email": None},
+            data={"user_email": user_email},
         )
         return updated_count
 

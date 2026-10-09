@@ -15,6 +15,7 @@ from pydantic import JsonValue, TypeAdapter
 from tests.integration._support.database import read_rows
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+GATEWAY_LIMITS: Final = httpx.Limits(keepalive_expiry=2)
 T = TypeVar("T")
 
 
@@ -243,7 +244,7 @@ class Scenario:
 def gateway_from_environment() -> Iterator[Gateway]:
     url: Final = os.environ["INTEGRATION_PROXY_URL"]
     upstream: Final = os.environ["INTEGRATION_UPSTREAM_URL"]
-    with httpx.Client(base_url=url, timeout=15, trust_env=False) as client:
+    with httpx.Client(base_url=url, timeout=15, trust_env=False, limits=GATEWAY_LIMITS) as client:
         yield Gateway(client, os.environ["INTEGRATION_MASTER_KEY"], upstream)
 
 

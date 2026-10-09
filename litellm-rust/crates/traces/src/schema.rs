@@ -1,61 +1,99 @@
-use litellm_http::Client;
+use std::collections::BTreeMap;
 
-use crate::Connection;
-use crate::Error;
+use schemars::{JsonSchema, Schema, SchemaGenerator, generate::SchemaSettings};
+use serde_json::json;
 
-const MIGRATIONS: [&str; 4] = [
-    include_str!("../migrations/0001_otel_traces.sql"),
-    include_str!("../migrations/0002_agent_traces.sql"),
-    include_str!("../migrations/0003_agent_traces_mv.sql"),
-    include_str!("../migrations/0004_spend_logs.sql"),
-];
-
-pub fn schema_statements(
-    database: &str,
-    trace_retention_days: u32,
-    spend_log_retention_days: u32,
-) -> Result<Vec<String>, Error> {
-    if database.is_empty()
-        || !database
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || c == b'_')
-        || trace_retention_days == 0
-        || spend_log_retention_days == 0
-    {
-        return Err(Error::InvalidSchema);
-    }
-    let database = format!("`{database}`");
-    Ok(
-        std::iter::once(format!("CREATE DATABASE IF NOT EXISTS {database}"))
-            .chain(MIGRATIONS.iter().map(|sql| {
-                sql.replace("{database}", &database)
-                    .replace("{trace_retention_days}", &trace_retention_days.to_string())
-                    .replace(
-                        "{spend_log_retention_days}",
-                        &spend_log_retention_days.to_string(),
-                    )
-            }))
-            .collect(),
-    )
+pub fn flag(_: &mut SchemaGenerator) -> Schema {
+    json!({"type": "integer", "enum": [0, 1]})
+        .try_into()
+        .unwrap()
 }
 
-pub async fn ensure_schema(
-    client: &Client,
-    connection: &Connection,
-    database: &str,
-    trace_retention_days: u32,
-    spend_log_retention_days: u32,
-) -> Result<(), Error> {
-    for statement in schema_statements(database, trace_retention_days, spend_log_retention_days)? {
-        let response = client
-            .post(connection.url().clone())
-            .body(statement)
-            .send()
-            .await
-            .map_err(|_| Error::Transport)?;
-        if !response.status().is_success() {
-            return Err(Error::SchemaFailed(response.status().as_u16()));
-        }
+pub fn integer_bounds(schema: &mut Schema) {
+    let bounds = match schema.get("format").and_then(serde_json::Value::as_str) {
+        Some("uint8") => Some((json!(0), json!(u8::MAX))),
+        Some("uint16") => Some((json!(0), json!(u16::MAX))),
+        Some("uint32") => Some((json!(0), json!(u32::MAX))),
+        Some("uint64") => Some((json!(0), json!(u64::MAX))),
+        Some("uint") => Some((json!(0), json!(usize::MAX))),
+        Some("int32") => Some((json!(i32::MIN), json!(i32::MAX))),
+        Some("int64") => Some((json!(i64::MIN), json!(i64::MAX))),
+        Some("int") => Some((json!(isize::MIN), json!(isize::MAX))),
+        _ => None,
+    };
+    if let Some((minimum, maximum)) = bounds {
+        schema.insert("minimum".to_owned(), minimum);
+        schema.insert("maximum".to_owned(), maximum);
     }
-    Ok(())
+    schemars::transform::transform_subschemas(&mut integer_bounds, schema);
+}
+
+fn received<T: JsonSchema>() -> Schema {
+    SchemaSettings::draft2020_12()
+        .for_deserialize()
+        .with_transform(integer_bounds)
+        .into_generator()
+        .into_root_schema_for::<T>()
+}
+
+fn requested<T: JsonSchema>() -> Schema {
+    SchemaSettings::draft2020_12()
+        .for_deserialize()
+        .into_generator()
+        .into_root_schema_for::<T>()
+}
+
+fn emitted<T: JsonSchema>() -> Schema {
+    SchemaSettings::draft2020_12()
+        .for_serialize()
+        .with_transform(integer_bounds)
+        .into_generator()
+        .into_root_schema_for::<T>()
+}
+
+pub fn schemas() -> BTreeMap<&'static str, Schema> {
+    BTreeMap::from([
+        (
+            "TraceScope",
+            received::<crate::query::named::ReadAccessParams>(),
+        ),
+        ("QueryScope", received::<crate::QueryScope>()),
+        ("Tenant", received::<crate::Tenant>()),
+        ("TracePage", emitted::<crate::TracePage>()),
+        ("Trace", emitted::<crate::Trace>()),
+        ("SpanDetail", emitted::<crate::SpanDetail>()),
+        ("SpanErrorPage", emitted::<crate::SpanErrorPage>()),
+    ])
+}
+
+pub fn request_schemas() -> BTreeMap<&'static str, Schema> {
+    BTreeMap::from([
+        (
+            "TraceListRequest",
+            requested::<crate::request::TraceListRequest>(),
+        ),
+        (
+            "TraceDetailRequest",
+            requested::<crate::request::TraceDetailRequest>(),
+        ),
+        (
+            "TraceSpanRequest",
+            requested::<crate::request::TraceSpanRequest>(),
+        ),
+        (
+            "TraceErrorPageRequest",
+            requested::<crate::request::TraceErrorPageRequest>(),
+        ),
+        (
+            "TraceQueryRequest",
+            requested::<crate::request::TraceQueryRequest>(),
+        ),
+    ])
+}
+
+pub fn response_schemas() -> BTreeMap<&'static str, Schema> {
+    BTreeMap::from([(
+        "TraceSQLResponse",
+        emitted::<crate::response::TraceSQLResponse>(),
+    )])
 }

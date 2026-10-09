@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "all_teams": {
+      "enum": [
+        0,
+        1
+      ],
+      "type": "integer"
+    },
+    "key_hash": {
+      "type": "string"
+    },
+    "team": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "all_teams",
+    "team",
+    "key_hash"
+  ],
+  "title": "LensAccessParams",
+  "type": "object"
+}

@@ -9,6 +9,7 @@ NOTE 1: S3 does not provide a BATCH PUT API endpoint; by default each element is
 import asyncio
 import contextvars
 import logging
+import os
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
@@ -28,6 +29,7 @@ from litellm.constants import (
     DEFAULT_S3_FLUSH_INTERVAL_SECONDS,
     DEFAULT_S3_MAX_ADAPTIVE_CONCURRENCY,
     DEFAULT_S3_MAX_CONCURRENT_UPLOADS,
+    S3_PARTITION_GRANULARITY_ENV_VAR,
 )
 from litellm.integrations.adaptive_concurrency import AdaptiveConcurrencyLimiter, PutSample
 from litellm.integrations.s3 import (
@@ -42,6 +44,7 @@ from litellm.integrations.s3 import (
     resolve_s3_max_concurrent_uploads,
     resolve_s3_max_queue_size,
     resolve_s3_max_retry_age_seconds,
+    resolve_s3_partition_granularity,
     resolve_sse_params,
 )
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
@@ -49,11 +52,11 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
+from litellm.types.integrations.s3_v2 import S3PartitionGranularity, s3BatchLoggingElement
 from litellm.types.utils import StandardAuditLogPayload, StandardLoggingPayload
 
 from .custom_batch_logger import CustomBatchLogger
@@ -119,6 +122,8 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
     _upload_limiter: asyncio.Semaphore | AdaptiveConcurrencyLimiter | None = None
     s3_drop_on_terminal_error: bool = True
     s3_max_retry_age_seconds: int | None = 3600
+    s3_partition_granularity: object = None
+    _partition_granularity_cache: tuple[object, S3PartitionGranularity] | None = None
 
     def __init__(
         self,
@@ -147,6 +152,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_server_side_encryption: str | None = None,
         s3_sse_kms_key_id: str | None = None,
         s3_log_prompts_only: bool | None = None,
+        s3_partition_granularity: str | None = None,
         s3_max_concurrent_uploads: int = DEFAULT_S3_MAX_CONCURRENT_UPLOADS,
         s3_max_queue_size: int | None = None,
         s3_max_retry_age_seconds: int | None = 3600,
@@ -195,6 +201,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 s3_server_side_encryption=s3_server_side_encryption,
                 s3_sse_kms_key_id=s3_sse_kms_key_id,
                 s3_log_prompts_only=s3_log_prompts_only,
+                s3_partition_granularity=s3_partition_granularity,
                 s3_max_concurrent_uploads=s3_max_concurrent_uploads,
                 s3_max_queue_size=s3_max_queue_size,
                 s3_max_retry_age_seconds=s3_max_retry_age_seconds,
@@ -271,6 +278,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         s3_server_side_encryption: str | None = None,
         s3_sse_kms_key_id: str | None = None,
         s3_log_prompts_only: bool | None = None,
+        s3_partition_granularity: str | None = None,
         s3_max_concurrent_uploads: int = DEFAULT_S3_MAX_CONCURRENT_UPLOADS,
         s3_max_queue_size: int | None = None,
         s3_max_retry_age_seconds: int | None = 3600,
@@ -330,6 +338,11 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         self.s3_log_prompts_only: object = (
             params.get("s3_log_prompts_only") if s3_log_prompts_only is None else s3_log_prompts_only
         )
+
+        self.s3_partition_granularity = (
+            params.get("s3_partition_granularity") if s3_partition_granularity is None else s3_partition_granularity
+        )
+        self._partition_granularity_cache = None
 
         self.s3_server_side_encryption, self.s3_sse_kms_key_id = resolve_sse_params(
             params.get("s3_server_side_encryption") or s3_server_side_encryption,
@@ -482,6 +495,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 "audit_logs/",
                 now,
                 f"{now.strftime('%H-%M-%S')}_{audit_log_id}",
+                partition_granularity=self.resolve_partition_granularity(),
             )
 
             element: Final = s3BatchLoggingElement(
@@ -581,7 +595,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                     and not (self.s3_drop_on_terminal_error and _is_terminal(response))
                     and attempt < max_retries - 1
                 ):
-                    wait_time = 2**attempt  # 1s, 2s
+                    wait_time = 1 << attempt  # 1s, 2s
                     verbose_logger.log(
                         logging.DEBUG if _in_flush.get() else logging.WARNING,
                         "S3 upload returned %s, retrying in %ss (attempt %s/%s) key=%s",
@@ -628,7 +642,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         #########################################################
         uploads: Final = self._batch_file_elements(batch) if self._batch_file_mode_active() else batch
         self._flush_retries = 0
-        self._flush_dropped = {}  # mutable-ok: per-flush drop marks read back by _upload_bounded
+        self._flush_dropped = {}
         stale: Final = min(self._requeued_count, len(uploads)) if len(uploads) == len(batch) else 0
         order: Final = (*range(stale, len(uploads)), *range(stale))
         ordered: Final = await asyncio.gather(*(self._upload_outcome(uploads[i]) for i in order))
@@ -680,7 +694,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 self.max_queue_size,
                 overflow,
             )
-        self.log_queue = [  # mutable-ok: log_queue is the flush buffer shared with custom_batch_logger
+        self.log_queue = [
             *requeued,
             *arrivals,
         ][overflow:]
@@ -758,6 +772,19 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             ),
         )
 
+    def resolve_partition_granularity(self) -> S3PartitionGranularity:
+        raw: Final = (
+            os.environ.get(S3_PARTITION_GRANULARITY_ENV_VAR)
+            if self.s3_partition_granularity is None
+            else self.s3_partition_granularity
+        )
+        cached: Final = self._partition_granularity_cache
+        if cached is not None and cached[0] == raw:
+            return cached[1]
+        resolved: Final = resolve_s3_partition_granularity(raw)
+        self._partition_granularity_cache = (raw, resolved)
+        return resolved
+
     def create_s3_batch_logging_element(
         self,
         start_time: datetime,
@@ -803,11 +830,27 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             prefix_path,
             s3_file_name,
         )
-        s3_object_key: Final = get_s3_object_key(
-            s3_path=cast(str | None, self.s3_path) or "",
-            prefix=prefix_path,
-            start_time=start_time,
-            s3_file_name=s3_file_name,
+
+        def object_key(partition_granularity: S3PartitionGranularity) -> str:
+            return get_s3_object_key(
+                s3_path=cast(str | None, self.s3_path) or "",
+                prefix=prefix_path,
+                start_time=start_time,
+                s3_file_name=s3_file_name,
+                partition_granularity=partition_granularity,
+            )
+
+        metadata: Final = standard_logging_payload.get("metadata")
+        cold_storage_object_key: Final = (
+            metadata.get("cold_storage_object_key")
+            if metadata is not None and litellm.cold_storage_custom_logger == "s3_v2"
+            else None
+        )
+        s3_object_key: Final = (
+            cold_storage_object_key
+            if cold_storage_object_key is not None
+            and cold_storage_object_key in (object_key("day"), object_key("hour"))
+            else object_key(self.resolve_partition_granularity())
         )
         verbose_logger.debug("s3_object_key=%s", s3_object_key)
 
@@ -832,7 +875,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
             prepared: Final = self._prepare_put(batch_logging_element)
 
-            httpx_client: Final = _get_httpx_client(
+            httpx_client: Final = get_httpx_client(
                 params=({"ssl_verify": self.s3_verify} if self.s3_verify is not None else None)
             )
 
@@ -854,7 +897,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                     and not (self.s3_drop_on_terminal_error and _is_terminal(response))
                     and attempt < max_retries - 1
                 ):
-                    wait_time = 2**attempt  # 1s, 2s
+                    wait_time = 1 << attempt  # 1s, 2s
                     verbose_logger.warning(
                         "S3 upload returned %s, retrying in %ss (attempt %s/%s) key=%s",
                         response.status_code,

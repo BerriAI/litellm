@@ -177,11 +177,10 @@ class AgentRequestHandler:
 
         registered: Final = global_agent_registry.get_agent_by_id(agent_id)
         registry_managed: Final = isinstance(registered, AgentResponse) and registered.identity_managed
-        if registry_managed or (registered is None and prisma_client is not None):
+        if registry_managed or prisma_client is not None:
             target: Final = await AgentIdentityStore.from_client(prisma_client).agent(agent_id)
             if isinstance(target, AgentIdentityFailure):
-                if registry_managed:
-                    raise_identity_failure(target)
+                raise_identity_failure(target)
             elif target is None and registry_managed:
                 return False
             elif isinstance(target, AgentResponse) and target.identity_managed:
@@ -200,6 +199,7 @@ class AgentRequestHandler:
                     if key_hash
                     and managed_agent_policy(user_api_key_auth) is None
                     and not user_api_key_auth.is_session_token
+                    and not user_api_key_auth.authenticated_by_custom_auth
                     else user_api_key_auth
                 )
                 fresh_auth: Final = authority.model_copy(
@@ -459,9 +459,9 @@ class AgentRequestHandler:
         """
         Resolve unified access group ids to agent IDs.
         """
-        from litellm.proxy.auth.auth_checks import _get_agent_ids_from_access_groups
+        from litellm.proxy.auth.auth_checks import get_agent_ids_from_access_groups
 
-        return await _get_agent_ids_from_access_groups(access_group_ids=access_group_ids, check_db_only=check_db_only)
+        return await get_agent_ids_from_access_groups(access_group_ids=access_group_ids, check_db_only=check_db_only)
 
     @staticmethod
     async def _get_agents_from_access_groups(
@@ -678,14 +678,44 @@ async def _managed_actor_agent_access(auth: UserAPIKeyAuth) -> AgentAccess:
     return RestrictedAgentAccess(capped.intersection(human_ids))
 
 
-async def verified_human_agent_grants(user_id: str | None, team_id: str | None = None) -> frozenset[str]:
+async def _verified_human_agent_sources(
+    user_id: str | None, *, allowed_team_ids: frozenset[str] | None = None
+) -> tuple[tuple[str | None, frozenset[str]], ...]:
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
 
     if user_id is None:
-        return frozenset()
+        return ()
     human: Final = await MCPRequestHandler.reload_admitted_user(user_id, requires_fresh_policy=True)
-    sources: Final = await MCPRequestHandler.admitted_subject_sources(
-        human, allowed_team_ids=frozenset((team_id,)) if team_id else frozenset()
+    sources: Final = await MCPRequestHandler.admitted_subject_sources(human, allowed_team_ids=allowed_team_ids)
+    access: Final = await asyncio.gather(*(_strict_agent_access(source) for source in sources))
+    return tuple((source.team_id, _granted_ids(grant)) for source, grant in zip(sources, access, strict=True))
+
+
+async def verified_human_agent_grants(user_id: str | None, team_id: str | None = None) -> frozenset[str]:
+    sources: Final = await _verified_human_agent_sources(
+        user_id, allowed_team_ids=frozenset((team_id,)) if team_id else frozenset()
     )
-    human_access: Final = await asyncio.gather(*(_strict_agent_access(source) for source in sources))
-    return frozenset().union(*(_granted_ids(access) for access in human_access))
+    return frozenset().union(*(grants for source, grants in sources if source is None or source == team_id))
+
+
+async def resolve_delegated_agent_team(
+    user_id: str | None,
+    agent_id: str,
+    team_id: str | None,
+    *,
+    explicit_team: bool,
+    allowed_team_ids: frozenset[str] | None = None,
+) -> str | None:
+    sources: Final = await _verified_human_agent_sources(user_id)
+    if any(source is None and agent_id in grants for source, grants in sources):
+        return team_id
+    granting_teams: Final = frozenset(
+        source
+        for source, grants in sources
+        if source is not None and agent_id in grants and (allowed_team_ids is None or source in allowed_team_ids)
+    )
+    if team_id in granting_teams:
+        return team_id
+    if not explicit_team and granting_teams:
+        return min(granting_teams)
+    raise HTTPException(403, "Select a team that grants access to this agent using x-litellm-team-id")

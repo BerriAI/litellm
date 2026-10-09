@@ -6,6 +6,7 @@ macro_rules_attribute::attribute_alias! {
 
 pub mod formats;
 pub mod headers;
+pub mod json_schema;
 pub mod providers;
 pub mod recognized;
 pub mod serde_compat;

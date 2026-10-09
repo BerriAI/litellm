@@ -85,6 +85,7 @@ CONNECTION_NAMES: Final = (
     "litellm_credential_name",
     "configurable_clientside_auth_params",
     "use_xai_oauth",
+    "fireworks_forward_user_id",
     "aws_batch_role_arn",
     "s3_bucket_name",
     "s3_region_name",
@@ -95,6 +96,27 @@ CONNECTION_NAMES: Final = (
     "s3_secret_access_key",
     "s3_encryption_key_id",
     "bedrock_tags",
+    "anthropic_federation_rule_id",
+    "anthropic_organization_id",
+    "anthropic_service_account_id",
+    "anthropic_federation_workspace_id",
+    "anthropic_identity_token_file",
+    "anthropic_identity_token",
+    "anthropic_identity_source",
+    "anthropic_issuer_url",
+    "anthropic_issuer_subject",
+    "anthropic_issuer_audience",
+    "anthropic_issuer_ttl_seconds",
+    "anthropic_issuer_signing_key_ref",
+    "anthropic_keycloak_token_url",
+    "anthropic_keycloak_client_id",
+    "anthropic_keycloak_auth_method",
+    "anthropic_keycloak_client_secret_ref",
+    "anthropic_keycloak_scope",
+    "anthropic_disable_workload_identity_federation",
+    "openai_identity_provider_id",
+    "openai_service_account_id",
+    "openai_identity_token_file",
 )
 
 OPTION_NAMES: Final = (
@@ -129,6 +151,7 @@ OPTION_NAMES: Final = (
     "order",
     "tag_regex",
     "max_file_size_mb",
+    "silent_model",
     "auto_router_config_path",
     "auto_router_config",
     "auto_router_default_model",
@@ -317,7 +340,7 @@ def test_caching_groups_is_a_flat_sequence_of_model_groups_that_share_one_cache_
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     for callback_list in ("input_callback", "success_callback", "_async_success_callback"):
-        monkeypatch.setattr(litellm, callback_list, [])  # mutable-ok: Cache() appends "cache" to these lists
+        monkeypatch.setattr(litellm, callback_list, [])
     options: Final = CachingOptions(caching_groups=(("gpt-4", "gpt-4o"), ("claude-3",)))
     cache: Final = Cache()
 
@@ -394,7 +417,7 @@ def test_owned_wire_names_refuse_a_root_that_declares_a_kwarg_outside_a_leaf() -
 
 
 def test_agentic_loop_names_concatenate_as_a_list() -> None:
-    extended: Final = agentic_loop_internal_litellm_params + ["caller_added"]  # mutable-ok: list contract under test
+    extended: Final = agentic_loop_internal_litellm_params + ["caller_added"]
 
     assert (type(extended), len(extended), frozenset(extended)) == (
         list,
@@ -417,7 +440,7 @@ def test_proxy_stamped_fields_keep_their_wire_names() -> None:
 
 
 def test_all_litellm_params_concatenates_with_a_list_like_the_completion_entrypoint_does() -> None:
-    extended: Final = ["aembedding", "extra_headers"] + all_litellm_params  # mutable-ok: list contract under test
+    extended: Final = ["aembedding", "extra_headers"] + all_litellm_params
 
     assert (type(extended), frozenset(extended)) == (list, frozenset(("aembedding", "extra_headers", *OWNED_NAMES)))
 
@@ -490,6 +513,12 @@ TYPE_HINT_NAMESPACE: Final[Mapping[str, object]] = {
 LEAF_SAMPLES: Final[Mapping[type, Mapping[str, object]]] = {
     litellm_params.ProviderConnection: {"api_key": "k", "request_timeout": 1.5},
     litellm_params.BedrockBatchConnection: {"aws_batch_role_arn": "arn", "bedrock_tags": ({"k": "v"},)},
+    litellm_params.AnthropicFederationConnection: {
+        "anthropic_federation_rule_id": "fdrl_1",
+        "anthropic_issuer_ttl_seconds": 300,
+        "anthropic_disable_workload_identity_federation": True,
+    },
+    litellm_params.OpenAIFederationConnection: {"openai_identity_provider_id": "idp_1"},
     litellm_params.DispatchOptions: {"custom_llm_provider": "openai"},
     litellm_params.RoutingOptions: {
         "fallbacks": [{"model": "gpt-4o", "api_key": "k", "temperature": 0}],
@@ -525,6 +554,8 @@ LEAF_SAMPLES: Final[Mapping[type, Mapping[str, object]]] = {
 LEAF_BAD_SAMPLES: Final[Mapping[type, Mapping[str, object]]] = {
     litellm_params.ProviderConnection: {"api_key": 1},
     litellm_params.BedrockBatchConnection: {"aws_batch_role_arn": 1},
+    litellm_params.AnthropicFederationConnection: {"anthropic_issuer_ttl_seconds": "300"},
+    litellm_params.OpenAIFederationConnection: {"openai_identity_provider_id": 1},
     litellm_params.DispatchOptions: {"custom_llm_provider": 1},
     litellm_params.RoutingOptions: {"num_retries": "2"},
     litellm_params.DeploymentOptions: {"rpm": "2"},
@@ -619,6 +650,24 @@ def test_routing_options_accept_every_strategy_the_router_accepts(strategy: str)
 NAMES_SHARED_WITH_TYPED_MODELS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     {
         "credentials": (
+            "anthropic_disable_workload_identity_federation",
+            "anthropic_federation_rule_id",
+            "anthropic_federation_workspace_id",
+            "anthropic_identity_source",
+            "anthropic_identity_token",
+            "anthropic_identity_token_file",
+            "anthropic_issuer_audience",
+            "anthropic_issuer_signing_key_ref",
+            "anthropic_issuer_subject",
+            "anthropic_issuer_ttl_seconds",
+            "anthropic_issuer_url",
+            "anthropic_keycloak_auth_method",
+            "anthropic_keycloak_client_id",
+            "anthropic_keycloak_client_secret_ref",
+            "anthropic_keycloak_scope",
+            "anthropic_keycloak_token_url",
+            "anthropic_organization_id",
+            "anthropic_service_account_id",
             "api_base",
             "api_key",
             "api_version",
@@ -629,6 +678,9 @@ NAMES_SHARED_WITH_TYPED_MODELS: Final[Mapping[str, tuple[str, ...]]] = MappingPr
             "bedrock_tags",
             "client_id",
             "client_secret",
+            "openai_identity_provider_id",
+            "openai_identity_token_file",
+            "openai_service_account_id",
             "region_name",
             "s3_access_key_id",
             "s3_bucket_name",

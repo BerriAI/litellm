@@ -5,20 +5,21 @@ Type definitions for WebSearch Interception integration.
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, TypeAlias, TypedDict
 
-from pydantic import BaseModel
 from typing_extensions import ReadOnly
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.llms.base_llm.search.transformation import SearchResponse
 
 
-class AnthropicSearchQuery(BaseModel):
+class AnthropicSearchQuery(LiteLLMBaseModel):
     """``input`` of an Anthropic ``server_tool_use`` block for a web search."""
 
     query: str
 
 
-class AnthropicServerToolUseBlock(BaseModel):
+class AnthropicServerToolUseBlock(LiteLLMBaseModel):
     """
     The ``server_tool_use`` block that must accompany a ``web_search_tool_result``.
 

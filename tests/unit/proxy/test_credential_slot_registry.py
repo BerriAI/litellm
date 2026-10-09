@@ -89,6 +89,7 @@ CALLBACK_PARAM_CLASSIFICATION: Final[Mapping[str, Classification]] = MappingProx
         "arize_space_id": NotSecret("space identifier"),
         "arize_success_sampling_rate": NotSecret("sampling rate"),
         "arize_error_sampling_rate": NotSecret("sampling rate"),
+        "arize_otlp_protocol": NotSecret("transport protocol enum"),
         "posthog_api_key": Unplanted(),
         "posthog_api_url": NotSecret("sink endpoint URL"),
         "wandb_api_key": Unplanted(),
@@ -124,6 +125,15 @@ DEPLOYMENT_PARAM_CLASSIFICATION: Final[Mapping[str, Classification]] = MappingPr
         "default_api_key_tpm_limit": NotSecret("rate limit number"),
         "default_api_key_rpm_limit": NotSecret("rate limit number"),
         "valkey_password": Unplanted(),
+        "anthropic_identity_token": Unplanted(),
+        "anthropic_identity_token_file": Unplanted(),
+        "anthropic_issuer_signing_key_ref": Unplanted(),
+        "anthropic_keycloak_token_url": NotSecret("Keycloak token endpoint URL"),
+        "anthropic_keycloak_client_id": NotSecret("Keycloak client identifier"),
+        "anthropic_keycloak_auth_method": NotSecret("name of the client authentication method"),
+        "anthropic_keycloak_client_secret_ref": Unplanted(),
+        "anthropic_keycloak_scope": NotSecret("OAuth scope string"),
+        "openai_identity_token_file": Unplanted(),
     }
 )
 

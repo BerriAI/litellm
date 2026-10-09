@@ -1,0 +1,14 @@
+- Shared base and layering rules: [`../inference/AGENTS.md`](../inference/AGENTS.md)
+- This crate owns provider-independent Messages call orchestration: the entrypoint, call envelopes, provider selection, credential resolution, transport coordination, hooks, and stream lifecycle
+  - shared API data contracts belong in `litellm-llms-types::formats::messages`
+  - adapter contracts and execution inputs in `llms/src/base_llm/messages`
+  - provider implementations in `llms/src/<provider>/messages`
+- Select concrete provider adapters and invoke their contracts
+  - delegate authentication policy, beta selection, payload rewriting, and response interpretation to those adapters
+  - keep provider policy out of request preparation and transport handlers
+  - calling a concrete provider helper for every provider is still a policy dependency
+- Route types such as `MessagesCall`, prepared requests, and response wrappers containing live streams describe execution; reuse the shared Messages payload types inside them instead of defining another request or response schema here
+- The route returns `litellm_host::call::CallOutput`: a completed response, or a stream head and chunks
+- Per-call dependencies are grouped in `litellm_inference::context::CallContext`; `src/lib.rs` explicitly sequences cache lookup, provider execution, result acceptance (`CallContext::result_ready`), and cache storage
+- Preserve the order of validation, normalization, caller-requested parameter removal, and provider transformation when that order affects observable behavior
+- Test provider dispatch, auth precedence, header handling, transformations, and responses through behavior, not source structure

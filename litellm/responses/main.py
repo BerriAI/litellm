@@ -18,7 +18,11 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     LiteLLMResponsesTransformationHandler,
 )
 from litellm.constants import DEFAULT_CHAT_COMPLETION_PARAM_VALUES, request_timeout
-from litellm.integrations.anthropic_cache_control_hook import CARRY_UNMATCHED_MESSAGE_POINTS
+from litellm.integrations.anthropic_cache_control_hook import (
+    CARRY_UNMATCHED_MESSAGE_POINTS,
+    AnthropicCacheControlHook,
+    configured_injection_points,
+)
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -202,7 +206,7 @@ async def aresponses_api_with_mcp(
     (
         mcp_tools_with_litellm_proxy,
         other_tools,
-    ) = await LiteLLM_Proxy_MCP_Handler._split_mcp_tools(tools)
+    ) = await LiteLLM_Proxy_MCP_Handler.split_mcp_tools(tools)
 
     # Process MCP tools through the complete pipeline (fetch + filter + deduplicate + transform)
     # Extract user_api_key_auth from litellm_metadata (where it's added by add_user_api_key_auth_to_request_metadata)
@@ -220,16 +224,16 @@ async def aresponses_api_with_mcp(
     (
         original_mcp_tools,
         tool_server_map,
-    ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
+    ) = await LiteLLM_Proxy_MCP_Handler.process_mcp_tools_without_openai_transform(
         user_api_key_auth=user_api_key_auth,
         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
         litellm_trace_id=kwargs.get("litellm_trace_id"),
         mcp_auth_header=mcp_auth_header,
         mcp_server_auth_headers=mcp_server_auth_headers,
-        request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(kwargs),
+        request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(kwargs),
         raw_headers=discovery_raw_headers,
     )
-    openai_tools: Final = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(original_mcp_tools)
+    openai_tools: Final = LiteLLM_Proxy_MCP_Handler.transform_mcp_tools_to_openai(original_mcp_tools)
 
     # Combine with other tools
     all_tools: Final = openai_tools + other_tools if (openai_tools or other_tools) else None
@@ -286,6 +290,7 @@ async def aresponses_api_with_mcp(
             call_params=call_params,
             previous_response_id=previous_response_id,
             tool_server_map=tool_server_map,
+            served_tools=original_mcp_tools,
             **kwargs,
         )
         await mcp_streaming_response._create_initial_response_iterator()
@@ -294,12 +299,12 @@ async def aresponses_api_with_mcp(
         return mcp_streaming_response
 
     # Determine if we should auto-execute tools
-    should_auto_execute = bool(mcp_tools_with_litellm_proxy) and LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(
+    should_auto_execute = bool(mcp_tools_with_litellm_proxy) and LiteLLM_Proxy_MCP_Handler.should_auto_execute_tools(
         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy
     )
 
     # Prepare parameters for the initial call
-    initial_call_params: Final = LiteLLM_Proxy_MCP_Handler._prepare_initial_call_params(
+    initial_call_params: Final = LiteLLM_Proxy_MCP_Handler.prepare_initial_call_params(
         call_params=call_params, should_auto_execute=should_auto_execute
     )
 
@@ -321,7 +326,7 @@ async def aresponses_api_with_mcp(
     # If auto-execute tools is True, then we need to execute the tool calls
     #########################################################
     if should_auto_execute and isinstance(response, ResponsesAPIResponse):
-        tool_calls: Final = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_response(response=response)
+        tool_calls: Final = LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_response(response=response)
 
         if tool_calls:
             user_api_key_auth = kwargs.get("litellm_metadata", {}).get("user_api_key_auth")
@@ -337,8 +342,9 @@ async def aresponses_api_with_mcp(
                 tools=tools,
             )
 
-            tool_results: Final = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+            tool_results: Final = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
                 tool_server_map=tool_server_map,
+                served_tools=original_mcp_tools,
                 tool_calls=tool_calls,
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
@@ -347,16 +353,16 @@ async def aresponses_api_with_mcp(
                 raw_headers=raw_headers_from_request,
                 litellm_call_id=kwargs.get("litellm_call_id"),
                 litellm_trace_id=kwargs.get("litellm_trace_id"),
-                request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(kwargs),
+                request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(kwargs),
                 guardrail_context=MCPRequestContext.resolve_guardrail_context(
                     MappingProxyType({**kwargs, "metadata": metadata, "model": model})
                 ),
             )
 
             if tool_results:
-                persistence_disabled: Final = LiteLLM_Proxy_MCP_Handler._is_persistence_disabled(call_params)
+                persistence_disabled: Final = LiteLLM_Proxy_MCP_Handler.is_persistence_disabled(call_params)
 
-                follow_up_input: Final = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
+                follow_up_input: Final = LiteLLM_Proxy_MCP_Handler.create_follow_up_input(
                     response=response,
                     tool_results=tool_results,
                     original_input=input,
@@ -364,18 +370,18 @@ async def aresponses_api_with_mcp(
                 )
 
                 # Prepare parameters for follow-up call (restores original stream setting)
-                follow_up_call_params: Final = LiteLLM_Proxy_MCP_Handler._prepare_follow_up_call_params(
+                follow_up_call_params: Final = LiteLLM_Proxy_MCP_Handler.prepare_follow_up_call_params(
                     call_params=call_params, original_stream_setting=stream or False
                 )
 
                 # Create tool execution events for streaming if needed
                 tool_execution_events = []
                 if stream:
-                    tool_execution_events = LiteLLM_Proxy_MCP_Handler._create_tool_execution_events(
+                    tool_execution_events = LiteLLM_Proxy_MCP_Handler.create_tool_execution_events(
                         tool_calls=tool_calls, tool_results=tool_results
                     )
 
-                final_response = await LiteLLM_Proxy_MCP_Handler._make_follow_up_call(
+                final_response = await LiteLLM_Proxy_MCP_Handler.make_follow_up_call(
                     follow_up_input=follow_up_input,
                     model=model,
                     all_tools=all_tools,
@@ -395,6 +401,7 @@ async def aresponses_api_with_mcp(
 
                     final_response = MCPEnhancedStreamingIterator(
                         tool_server_map=tool_server_map,
+                        served_tools=original_mcp_tools,
                         base_iterator=final_response,
                         mcp_events=tool_execution_events,
                         user_api_key_auth=user_api_key_auth,
@@ -406,15 +413,15 @@ async def aresponses_api_with_mcp(
                     (
                         mcp_tools_for_output,
                         _,
-                    ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
+                    ) = await LiteLLM_Proxy_MCP_Handler.process_mcp_tools_without_openai_transform(
                         user_api_key_auth=user_api_key_auth,
                         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
                         mcp_auth_header=mcp_auth_header,
                         mcp_server_auth_headers=mcp_server_auth_headers,
-                        request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(kwargs),
+                        request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(kwargs),
                         raw_headers=discovery_raw_headers,
                     )
-                    final_response = LiteLLM_Proxy_MCP_Handler._add_mcp_output_elements_to_response(
+                    final_response = LiteLLM_Proxy_MCP_Handler.add_mcp_output_elements_to_response(
                         response=final_response,
                         mcp_tools_fetched=mcp_tools_for_output,
                         tool_results=tool_results,
@@ -523,6 +530,13 @@ def _api_base_kwarg(kwargs: Mapping[str, object]) -> str | None:
     return api_base if isinstance(api_base, str) else None
 
 
+def _dispatched_model_name(model: str, custom_llm_provider: str, api_base: str | None) -> str:
+    provider_model, _, _, _ = litellm.get_llm_provider(
+        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
+    )
+    return _strip_responses_routing_prefix(provider_model)
+
+
 def _will_bridge_to_chat_completions(
     model: str,
     custom_llm_provider: str | None,
@@ -533,17 +547,47 @@ def _will_bridge_to_chat_completions(
     """``_bridges_to_chat_completions`` for callers running before the provider config is resolved.
 
     Resolving the config is a pure lookup, so this asks the same question the dispatch
-    asks rather than restating its condition. Both callers resolve the provider before
-    this runs, so the only way to be wrong is a prompt manager that moves the model
-    across the bridge boundary, which would leave the deferred points to a pass that
-    never comes.
+    asks rather than restating its condition, with the model name the dispatch hands the
+    lookup: a provider whose config is keyed by model name (Bedrock Mantle reads the
+    price map) answers nothing for ``bedrock_mantle/openai.gpt-5.6-sol`` and would read
+    as bridged. Both callers resolve the provider before this runs, so the only way to be
+    wrong is a prompt manager that moves the model across the bridge boundary, which
+    would leave the deferred points to a pass that never comes.
     """
     normalized_model: Final = _normalize_openai_chat_completions_responses_model(model)
     if custom_llm_provider is None:
         return True
     return _bridges_to_chat_completions(
-        _resolve_responses_api_provider_config(normalized_model[0], custom_llm_provider, model_info, api_base),
+        _resolve_responses_api_provider_config(
+            _dispatched_model_name(normalized_model[0], custom_llm_provider, api_base),
+            custom_llm_provider,
+            model_info,
+            api_base,
+        ),
         use_chat_completions_api or normalized_model[1],
+    )
+
+
+def _stamp_injection_points_with_dialect(
+    kwargs: dict[str, object],  # mutable-ok: the points are rewritten in the caller's own kwargs for the hook to read
+    model: str,
+    custom_llm_provider: str | None,
+) -> None:
+    """Carry the provider this layer resolved onto the points.
+
+    The hook reads ``custom_llm_provider`` from the request kwargs, which never hold the one
+    resolved here, and resolving the model name alone reads a Foundry deployment of an OpenAI
+    model (``azure_ai/gpt-6-astra``) as Azure OpenAI, which left it on the Anthropic dialect.
+    """
+    points: Final = configured_injection_points(kwargs.get("cache_control_injection_points"))
+    if not points:
+        return
+    kwargs["cache_control_injection_points"] = AnthropicCacheControlHook._stamped_with_dialect(
+        points,
+        model,
+        custom_llm_provider,
+        kwargs.get("api_base") or kwargs.get("base_url"),
+        kwargs.get("prompt_cache_options"),
     )
 
 
@@ -656,6 +700,7 @@ async def aresponses(
                     _api_base_kwarg(kwargs),
                 ),
             ):
+                _stamp_injection_points_with_dialect(kwargs, model, custom_llm_provider)
                 (
                     model,
                     merged_input,
@@ -738,14 +783,14 @@ async def aresponses(
 
         # Update the responses_api_response_id with the model_id
         if isinstance(response, ResponsesAPIResponse):
-            response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+            response = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
                 responses_api_response=response,
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
                 custom_llm_provider=custom_llm_provider,
             )
             # Stamp custom_llm_provider so callbacks can identify the provider
             # (mirrors litellm/main.py:1371 for chat completions)
-            response._hidden_params["custom_llm_provider"] = custom_llm_provider
+            response.hidden_params["custom_llm_provider"] = custom_llm_provider
 
         if response is None:
             raise ValueError(f"Got an unexpected None response from the Responses API: {response}")
@@ -826,6 +871,7 @@ def _apply_prompt_management_to_responses_call(
                 _api_base_kwarg(kwargs),
             ),
         ):
+            _stamp_injection_points_with_dialect(kwargs, model, custom_llm_provider)
             (
                 model,
                 merged_input,
@@ -994,13 +1040,18 @@ def _responses_try_dispatch_mcp_gateway(
     kwargs: dict[str, object],
     _is_async: bool,
     skip_mcp_handler: bool,
-) -> Any | None:
+) -> (
+    ResponsesAPIResponse
+    | BaseResponsesAPIStreamingIterator
+    | Coroutine[object, object, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]
+    | None
+):
     """Return a response when MCP gateway handles the call; otherwise None."""
     from litellm.responses.mcp.litellm_proxy_mcp_handler import (
         LiteLLM_Proxy_MCP_Handler,
     )
 
-    if skip_mcp_handler or not LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools=tools):
+    if skip_mcp_handler or not LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(tools=tools):
         return None
     mcp_call_kwargs: Final = {
         "input": input,
@@ -1318,15 +1369,13 @@ def responses(
         )
         reasoning_effort: Final = local_vars.get("reasoning_effort")
         request_reasoning: Final = (
-            LiteLLMResponsesTransformationHandler()._map_reasoning_effort(reasoning_effort)
+            LiteLLMResponsesTransformationHandler().map_reasoning_effort(reasoning_effort)
             if current_reasoning is None and reasoning_effort is not None
             else current_reasoning
         )
         response_api_optional_params: Final[ResponsesAPIOptionalRequestParams] = (
             ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
-                {  # mutable-ok: callee pops keys off the dict it is given
-                    k: v for k, v in {**local_vars, "reasoning": request_reasoning}.items() if k != "reasoning_effort"
-                }
+                {k: v for k, v in {**local_vars, "reasoning": request_reasoning}.items() if k != "reasoning_effort"}
             )
         )
 
@@ -1412,7 +1461,7 @@ def responses(
         )
 
         # Decode any litellm-encoded encrypted-content item IDs back to their original IDs
-        input = ResponsesAPIRequestUtils._restore_encrypted_content_item_ids_in_input(input)
+        input = ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(input)
 
         # Call the handler with _is_async flag instead of directly calling the async handler
         if custom_llm_provider is None:
@@ -1440,14 +1489,14 @@ def responses(
 
         # Update the responses_api_response_id with the model_id
         if isinstance(response, ResponsesAPIResponse):
-            response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+            response = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
                 responses_api_response=response,
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
                 custom_llm_provider=custom_llm_provider,
             )
             # Stamp custom_llm_provider so callbacks can identify the provider
             # (mirrors litellm/main.py:1371 for chat completions)
-            response._hidden_params["custom_llm_provider"] = custom_llm_provider
+            response.hidden_params["custom_llm_provider"] = custom_llm_provider
 
         return response
     except Exception as e:
@@ -1485,7 +1534,7 @@ async def adelete_responses(
         kwargs["adelete_responses"] = True
 
         # get custom llm provider from response_id
-        decoded_response_id: Final[DecodedResponseId] = ResponsesAPIRequestUtils._decode_responses_api_response_id(
+        decoded_response_id: Final[DecodedResponseId] = ResponsesAPIRequestUtils.decode_responses_api_response_id(
             response_id=response_id,
         )
         response_id = decoded_response_id.get("response_id") or response_id
@@ -1550,7 +1599,7 @@ def delete_responses(
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
         # get custom llm provider from response_id
-        decoded_response_id: Final[DecodedResponseId] = ResponsesAPIRequestUtils._decode_responses_api_response_id(
+        decoded_response_id: Final[DecodedResponseId] = ResponsesAPIRequestUtils.decode_responses_api_response_id(
             response_id=response_id,
         )
         response_id = decoded_response_id.get("response_id") or response_id
@@ -1643,7 +1692,7 @@ async def aget_responses(
         kwargs["aget_responses"] = True
 
         # get custom llm provider from response_id
-        decoded_response_id: Final[DecodedResponseId] = ResponsesAPIRequestUtils._decode_responses_api_response_id(
+        decoded_response_id: Final[DecodedResponseId] = ResponsesAPIRequestUtils.decode_responses_api_response_id(
             response_id=response_id,
         )
         response_id = decoded_response_id.get("response_id") or response_id
@@ -1671,7 +1720,7 @@ async def aget_responses(
 
         # Update the responses_api_response_id with the model_id
         if isinstance(response, ResponsesAPIResponse):
-            response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+            response = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
                 responses_api_response=response,
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
                 custom_llm_provider=custom_llm_provider,
@@ -1722,7 +1771,7 @@ def get_responses(
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
         # get custom llm provider from response_id
-        decoded_response_id: Final[DecodedResponseId] = ResponsesAPIRequestUtils._decode_responses_api_response_id(
+        decoded_response_id: Final[DecodedResponseId] = ResponsesAPIRequestUtils.decode_responses_api_response_id(
             response_id=response_id,
         )
         response_id = decoded_response_id.get("response_id") or response_id
@@ -1775,7 +1824,7 @@ def get_responses(
 
         # Update the responses_api_response_id with the model_id
         if isinstance(response, ResponsesAPIResponse):
-            response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+            response = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
                 responses_api_response=response,
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
                 custom_llm_provider=custom_llm_provider,
@@ -1811,7 +1860,7 @@ async def alist_input_items(
         loop: Final = asyncio.get_event_loop()
         kwargs["alist_input_items"] = True
 
-        decoded_response_id: Final = ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id=response_id)
+        decoded_response_id: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(response_id=response_id)
         response_id = decoded_response_id.get("response_id") or response_id
         custom_llm_provider = decoded_response_id.get("custom_llm_provider") or custom_llm_provider
 
@@ -1870,7 +1919,7 @@ def list_input_items(
 
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
-        decoded_response_id: Final = ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id=response_id)
+        decoded_response_id: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(response_id=response_id)
         response_id = decoded_response_id.get("response_id") or response_id
         custom_llm_provider = decoded_response_id.get("custom_llm_provider") or custom_llm_provider
 
@@ -1952,7 +2001,7 @@ async def acancel_responses(
         kwargs["acancel_responses"] = True
 
         # get custom llm provider from response_id
-        decoded_response_id: Final[DecodedResponseId] = ResponsesAPIRequestUtils._decode_responses_api_response_id(
+        decoded_response_id: Final[DecodedResponseId] = ResponsesAPIRequestUtils.decode_responses_api_response_id(
             response_id=response_id,
         )
         response_id = decoded_response_id.get("response_id") or response_id
@@ -2017,7 +2066,7 @@ def cancel_responses(
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
         # get custom llm provider from response_id
-        decoded_response_id: Final[DecodedResponseId] = ResponsesAPIRequestUtils._decode_responses_api_response_id(
+        decoded_response_id: Final[DecodedResponseId] = ResponsesAPIRequestUtils.decode_responses_api_response_id(
             response_id=response_id,
         )
         response_id = decoded_response_id.get("response_id") or response_id
@@ -2140,7 +2189,7 @@ async def acompact_responses(
 
         # Update the responses_api_response_id with the model_id
         if isinstance(response, ResponsesAPIResponse):
-            response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+            response = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
                 responses_api_response=response,
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
                 custom_llm_provider=custom_llm_provider,
@@ -2243,7 +2292,7 @@ def compact_responses(
 
         # Decode any litellm-encoded encrypted-content item IDs back to their original IDs
         # before forwarding to the upstream provider.
-        input = ResponsesAPIRequestUtils._restore_encrypted_content_item_ids_in_input(input)
+        input = ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(input)
 
         # Call the handler with _is_async flag instead of directly calling the async handler
         response = base_llm_http_handler.compact_response_api_handler(
@@ -2264,7 +2313,7 @@ def compact_responses(
 
         # Update the responses_api_response_id with the model_id
         if isinstance(response, ResponsesAPIResponse):
-            response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+            response = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
                 responses_api_response=response,
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
                 custom_llm_provider=custom_llm_provider,
@@ -2305,7 +2354,7 @@ def _deployment_reasoning_default(kwargs: Mapping[str, object]) -> Reasoning | d
         return None
     if isinstance(reasoning_effort, Mapping):
         return _JSON_OBJECT_ADAPTER.validate_python(reasoning_effort)
-    return LiteLLMResponsesTransformationHandler()._map_reasoning_effort(reasoning_effort)
+    return LiteLLMResponsesTransformationHandler().map_reasoning_effort(reasoning_effort)
 
 
 _RESPONSES_WS_ROUTING_HINT_KEYS: Final = frozenset({"input", "previous_response_id"})
