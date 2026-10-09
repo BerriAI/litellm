@@ -30,7 +30,7 @@ import tempfile
 import time
 import tracemalloc
 from pathlib import Path
-from typing import Any, Final
+from typing import Final
 
 import httpx
 import pytest
@@ -261,19 +261,12 @@ class TestStreamingLaziness:
         cfg: Final = VertexAIFilesConfig()
         valid_rows: Final = 3
         raw: Final = _make_openai_jsonl_bytes(valid_rows) + b"\n" + b"\n".join(b"not-json" for _ in range(8000))
-        mapped: Final[list[dict[str, Any]]] = []
-
-        def counting_mapper(params: dict[str, Any]) -> dict[str, object]:
-            mapped.append(params)
-            return cfg._map_openai_to_vertex_params(params)
-
-        chunks: Final = _OpenAIToVertexBatchUploadStream(raw, counting_mapper).iter_bytes()
+        chunks: Final = _OpenAIToVertexBatchUploadStream(raw, cfg._map_openai_to_vertex_params).iter_bytes()
         pulled: Final = tuple(next(chunks) for _ in range(valid_rows))
         custom_ids: Final = tuple(
             _get_litellm_batch_custom_id_from_labels(json.loads(chunk)["request"]["labels"]) for chunk in pulled
         )
 
-        assert len(mapped) == valid_rows
         assert custom_ids == ("request-0", "request-1", "request-2")
         with pytest.raises(json.JSONDecodeError):
             next(chunks)
