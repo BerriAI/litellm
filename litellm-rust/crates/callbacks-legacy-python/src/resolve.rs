@@ -57,14 +57,22 @@ impl CallHooks<PythonRuntime> for Resolve {
         if !self.body {
             return Ok(HookStep::Ready(resolved.unbind()));
         }
+        let before = resolved.clone().unbind();
         let awaitable = Body::PrepareRequest.call(py, (resolved,))?;
         Ok(HookStep::Await(
             awaitable.unbind(),
             Box::new(move |_, py, result| {
                 let replacement = result?.into_bound(py).cast_into::<PyDict>()?;
+                let before = before.bind(py);
                 let layer = kwargs.bind(py);
-                layer.clear();
-                layer.update(replacement.as_mapping())?;
+                for (name, value) in replacement.iter() {
+                    let unchanged = before
+                        .get_item(&name)?
+                        .is_some_and(|previous| previous.is(&value));
+                    if !unchanged {
+                        layer.set_item(name, value)?;
+                    }
+                }
                 Ok(HookStep::Ready(replacement.unbind()))
             }),
         ))
@@ -225,7 +233,7 @@ assert kwargs == {'model': 'kwargs-model', 'api_key': 'secret'}
     }
 
     #[rstest]
-    fn the_pre_request_fan_out_sees_the_resolved_call_and_its_answer_becomes_the_keywords() {
+    fn the_pre_request_fan_out_sees_the_resolved_call_and_only_its_rewrites_join_the_keywords() {
         Python::initialize();
         Python::attach(|py| {
             let (mut hooks, locals) = resolve(
@@ -252,7 +260,7 @@ kwargs = {'model': 'anthropic/claude', 'temperature': 0.25}
 assert prepared['tools'] is tools
 assert prepared['temperature'] == 0.25
 assert prepared['stream'] is False
-assert kwargs == prepared, kwargs
+assert kwargs == {'model': 'anthropic/claude', 'temperature': 0.25, 'tools': tools}, kwargs
 assert kwargs['tools'] is tools
 assert 'tools' not in bound
 ",

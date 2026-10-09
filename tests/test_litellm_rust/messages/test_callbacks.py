@@ -11,6 +11,7 @@ from litellm.llms.anthropic.pass_through.messages.handler import anthropic_messa
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.rust_bridge import catalog
+from litellm.rust_bridge.bindings import native_exception_types
 from litellm.rust_bridge.catalog import Route, RouteRule
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES
@@ -211,6 +212,46 @@ async def test_native_messages_agentic_loop_runs_inside_the_wrapper_and_its_answ
     choice: Final = logged.choices[0]
     assert isinstance(choice, Choices)
     assert choice.message.content == "from the agentic loop"
+
+
+@pytest.mark.asyncio
+async def test_streaming_with_an_agentic_loop_hook_falls_back_to_python_which_runs_the_loop_at_end_of_stream(
+    messages_server: RecordingServer,
+) -> None:
+    messages_server.enqueue(STREAM)
+    seen: Final[list[bool]] = []
+
+    class Loop(CustomLogger):
+        async def async_should_run_agentic_loop(
+            self,
+            response: object,
+            model: str,
+            messages: object,
+            tools: object,
+            stream: bool,
+            custom_llm_provider: str,
+            kwargs: dict[str, object],
+        ) -> tuple[bool, dict[str, object]]:
+            seen.append(stream)
+            return False, {}
+
+    binding: Final = NATIVE_AMESSAGES.load()
+    assert binding is not None
+    exceptions: Final = native_exception_types()
+    assert exceptions is not None
+    declined, _ = exceptions
+    with rebound(litellm, "callbacks", [Loop()]):
+        with pytest.raises(declined):
+            await binding(native_call(signature(anthropic_messages), (), arguments(messages_server, stream=True)))
+        assert not messages_server.requests
+        stream: Final = await litellm.anthropic.messages.acreate(**arguments(messages_server, stream=True))
+        assert isinstance(stream, AsyncIterator)
+        assert not seen
+        chunks: Final = [chunk async for chunk in stream]
+
+    assert chunks
+    assert len(messages_server.requests) == 1
+    assert seen == [True]
 
 
 @pytest.mark.asyncio

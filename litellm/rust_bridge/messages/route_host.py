@@ -24,6 +24,26 @@ class MessagesSettings:
     additional_drop_params: Sequence[str]
 
 
+def _listed(value: object) -> tuple[object, ...]:
+    return tuple(value) if isinstance(value, (list, tuple)) else ()
+
+
+def decline_reason(request: Mapping[str, object]) -> str | None:
+    """A streaming call whose callbacks run the agentic loop stays on the Python handler, which runs it at end of stream."""
+    if not request.get("stream"):
+        return None
+    from litellm.llms.custom_httpx.llm_http_handler import overrides_agentic_loop_gate, resolve_custom_loggers
+
+    registered: Final = (
+        *litellm.callbacks,
+        *_listed(request.get("callbacks")),
+        *_listed(request.get("success_callback")),
+    )
+    if overrides_agentic_loop_gate(resolve_custom_loggers(registered)):
+        return "native Messages streaming with an agentic loop hook"
+    return None
+
+
 def response(value: Mapping[str, object]) -> AnthropicMessagesResponse:
     return cast(  # cast-ok: AnthropicMessagesResponse is a TypedDict over the normalized native payload
         AnthropicMessagesResponse,

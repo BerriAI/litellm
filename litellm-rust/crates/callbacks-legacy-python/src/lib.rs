@@ -212,6 +212,8 @@ assert kwargs == {'logger': logger, 'model': 'anthropic/claude', 'litellm_creden
                 c"
 assert logger.update['kwargs']['api_key'] == 'inherited'
 assert logger.update['kwargs']['pages'] is replacement
+assert 'max_tokens' not in logger.update['kwargs']
+assert 'body' not in logger.update['kwargs']
 assert logger.pre['complete_input_dict']['pages'] is replacement
 assert original == [0]
 ",
