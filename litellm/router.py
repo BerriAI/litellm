@@ -8621,7 +8621,12 @@ class Router:
                 )
                 return False
 
-            caller_failure_model_id: Final = _model_info.get("id") if isinstance(_model_info, dict) else None
+            caller_failure_model_info: Final = (
+                _MODEL_INFO_ADAPTER.validate_python(_model_info) if isinstance(_model_info, dict) else None
+            )
+            caller_failure_model_id: Final = (
+                caller_failure_model_info.get("id") if caller_failure_model_info is not None else None
+            )
             caller_failure_deployment: Final = (
                 self.get_deployment(model_id=caller_failure_model_id)
                 if isinstance(caller_failure_model_id, str)
