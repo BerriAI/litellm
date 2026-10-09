@@ -520,6 +520,15 @@ class MistralConfig(OpenAIGPTConfig):
         return "\n".join([block.get("text", "") for block in thinking_blocks["thinking"]])
 
     @staticmethod
+    def _extract_content_block_text(block: dict) -> str:
+        if block.get("type") == "text":
+            return str(block.get("text", ""))
+        if block.get("type") == "reference":
+            ref_ids: Final = block.get("reference_ids") or []
+            return "".join(f"[{rid}]" for rid in ref_ids)
+        return ""
+
+    @staticmethod
     def _handle_content_list_to_str_conversion(response_data: dict) -> dict:
         """
         Handle Mistral's content list format and extract thinking content.
@@ -537,7 +546,6 @@ class MistralConfig(OpenAIGPTConfig):
                     # Only process if content is a list
                     if isinstance(content, list):
                         thinking_content = ""
-                        text_segments: list[str] = []
 
                         # Process each content block
                         for block in content:
@@ -548,11 +556,10 @@ class MistralConfig(OpenAIGPTConfig):
                                     if thinking_block.get("type") == "text":
                                         thinking_texts.append(thinking_block.get("text", ""))
                                 thinking_content = "\n".join(thinking_texts)
-                            elif block.get("type") == "text":
-                                text_segments.append(block.get("text", ""))
-                            elif block.get("type") == "reference":
-                                ref_ids = block.get("reference_ids") or []
-                                text_segments.append("".join(f"[{rid}]" for rid in ref_ids))
+
+                        text_segments: Final = tuple(
+                            MistralConfig._extract_content_block_text(block) for block in content
+                        )
 
                         # Set the extracted content
                         choice["message"]["content"] = "".join(text_segments)
@@ -700,7 +707,7 @@ class MistralChatResponseIterator(OpenAIChatCompletionStreamingHandler):
             elif block_type == "text":
                 text_segments.append(block.get("text", ""))
             elif block_type == "reference":
-                ref_ids = block.get("reference_ids") or []
+                ref_ids: Final = block.get("reference_ids") or []
                 text_segments.append("".join(f"[{rid}]" for rid in ref_ids))
 
         normalized_text: Final = "".join(text_segments) if text_segments else None
