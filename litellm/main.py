@@ -8820,10 +8820,12 @@ async def ahealth_check(
         )
 
         model_params["cache"] = {"no-cache": True}  # don't used cached responses for making health check calls
-        mode = mode or default_health_check_mode(
-            requested_model=requested_model, model=model, custom_llm_provider=custom_llm_provider
+        mode = canonical_model_mode(
+            mode
+            or default_health_check_mode(
+                requested_model=requested_model, model=model, custom_llm_provider=custom_llm_provider
+            )
         )
-        mode = canonical_model_mode(mode)
         if "*" in model:
             return await HealthCheckHelpers.ahealth_check_wildcard_models(
                 model=model,
