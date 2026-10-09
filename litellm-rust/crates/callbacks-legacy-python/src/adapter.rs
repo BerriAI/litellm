@@ -462,6 +462,14 @@ impl LegacyLogging {
             ),
         )?;
         let details = logger.getattr("model_call_details")?;
+        let reported_cost = facts
+            .reported_cost
+            .as_ref()
+            .and_then(serde_json::Number::as_f64);
+        details.set_item("provider_reported_cost", reported_cost)?;
+        if let Some(cost) = reported_cost {
+            details.set_item("response_cost", cost)?;
+        }
         self.cache_key = match &facts.source {
             ResultSource::Provider => None,
             ResultSource::Cache { key } => Some(key.clone()),
@@ -957,6 +965,55 @@ logger = PayloadLogger()
 on_pre_call = lambda additional_args: None
 check = lambda: None
 ";
+
+    #[rstest]
+    #[case::reported(Some(0.37), 0.37)]
+    #[case::free(Some(0.0), 0.0)]
+    #[case::estimate(None, 7.0)]
+    fn result_ready_puts_reported_cost_in_the_spend_logging_record(
+        #[case] reported: Option<f64>,
+        #[case] expected: f64,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, PAYLOAD_LOGGER);
+            run(
+                py,
+                &locals,
+                c"
+logger.litellm_params = {}
+logger.optional_params = {}
+logger.model_call_details = {'response_cost': 7.0}
+",
+            );
+            let mut logging = LegacyLogging {
+                logger: Some(PythonLogger::new(local(&locals, "logger").unbind())),
+                ..legacy_call(py, &locals, false)
+            };
+            let facts = litellm_host::interceptors::ExecutionFacts {
+                provider: litellm_host::interceptors::ProviderIdentity {
+                    model: "native-test".into(),
+                    provider: "edenai".into(),
+                },
+                source: litellm_host::interceptors::ResultSource::Provider,
+                reported_cost: reported.and_then(serde_json::Number::from_f64),
+            };
+            let step = logging.result_ready(py, &facts).unwrap();
+            assert!(matches!(step, HookStep::Ready(())));
+            locals.set_item("expected", expected).unwrap();
+            locals.set_item("reported", reported).unwrap();
+            run(
+                py,
+                &locals,
+                c"
+assert logger.model_call_details['response_cost'] == expected, logger.model_call_details
+assert logger.model_call_details['provider_reported_cost'] == reported, logger.model_call_details
+assert logger.model_call_details['cache_hit'] is False, logger.model_call_details
+assert logger.update['custom_llm_provider'] == 'edenai', logger.update
+",
+            );
+        });
+    }
 
     const DOCUMENT: &str = "data:application/pdf;base64,YWJj";
     const EDITED: &str = "data:application/pdf;base64,ZWRpdGVk";

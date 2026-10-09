@@ -7,6 +7,7 @@ use litellm_llms::{
     base_llm::messages::transformation::BaseMessagesConfig,
     bedrock::messages::invoke_transformations::anthropic_claude3_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
     deepseek::messages::transformation::DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG,
+    edenai::messages::transformation::EDENAI_MESSAGES_CONFIG,
     vertex_ai::messages::transformation::VERTEX_ANTHROPIC_MESSAGES_CONFIG,
 };
 use serde_json::{Map, Value};
@@ -21,6 +22,7 @@ pub(crate) enum MessagesProvider {
     AzureAi,
     Bedrock,
     Deepseek,
+    Edenai,
     VertexAi,
 }
 
@@ -31,6 +33,7 @@ impl MessagesProvider {
             Self::AzureAi => LlmProviders::AzureAi,
             Self::Bedrock => LlmProviders::Bedrock,
             Self::Deepseek => LlmProviders::Deepseek,
+            Self::Edenai => LlmProviders::Edenai,
             Self::VertexAi => LlmProviders::VertexAi,
         }
         .into()
@@ -42,6 +45,7 @@ impl MessagesProvider {
             Self::AzureAi => &AZURE_ANTHROPIC_MESSAGES_CONFIG,
             Self::Bedrock => &BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
             Self::Deepseek => &DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG,
+            Self::Edenai => &EDENAI_MESSAGES_CONFIG,
             Self::VertexAi => &VERTEX_ANTHROPIC_MESSAGES_CONFIG,
         }
     }
@@ -55,6 +59,7 @@ pub(crate) fn messages_provider(provider: LlmProviders, model: &str) -> Option<M
         LlmProviders::AzureAi => Some(MessagesProvider::AzureAi),
         LlmProviders::Bedrock => Some(MessagesProvider::Bedrock),
         LlmProviders::Deepseek => Some(MessagesProvider::Deepseek),
+        LlmProviders::Edenai => Some(MessagesProvider::Edenai),
         LlmProviders::VertexAi if model.to_ascii_lowercase().contains("claude") => {
             Some(MessagesProvider::VertexAi)
         }

@@ -5,6 +5,7 @@ import copy
 import datetime
 import functools
 import json
+import math
 import os
 import re
 import subprocess
@@ -1851,6 +1852,10 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if cache_hit is True:
             return 0.0
+
+        reported_cost: Final[object] = self.model_call_details.get("provider_reported_cost")
+        if isinstance(reported_cost, float) and math.isfinite(reported_cost) and reported_cost >= 0:
+            return reported_cost
 
         if is_unbilled_non_inference_call(
             self.call_type, StandardLoggingPayloadSetup.merge_litellm_metadata(self.litellm_params), result

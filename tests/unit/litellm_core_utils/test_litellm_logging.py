@@ -4496,6 +4496,34 @@ def test_process_hidden_params_recalculates_cost_after_failure_handler_zero():
     assert slo.get("response_cost", 0) > 0
 
 
+@pytest.mark.parametrize("reported_cost", [0.0, 0.37])
+@pytest.mark.parametrize("cache_hit", [False, True])
+def test_provider_reported_cost_reaches_metadata_and_spend(reported_cost: float, cache_hit: bool) -> None:
+    started: Final = datetime_standard_logging(2026, 1, 1)
+    logging_obj: Final = LitellmLogging(
+        model="native-test",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=started,
+        litellm_call_id="reported-cost",
+        function_id="reported-cost",
+    )
+    logging_obj.model_call_details.update(
+        {"provider_reported_cost": reported_cost, "cache_hit": cache_hit, "litellm_params": {}}
+    )
+    response: Final = ModelResponse(
+        id="reported-cost",
+        model="native-test",
+        choices=[{"message": {"role": "assistant", "content": "ok"}}],
+    )
+    expected: Final = 0.0 if cache_hit else reported_cost
+    assert logging_obj.response_cost_calculator(response) == expected
+    logging_obj._process_hidden_params_and_response_cost(response, started, started)
+    assert logging_obj.model_call_details["response_cost"] == expected
+    assert logging_obj.model_call_details["standard_logging_object"]["response_cost"] == expected
+
+
 def test_process_hidden_params_preserves_zero_cost_in_hidden_params():
     """Pass-through handlers often set response_cost on result._hidden_params (including 0)."""
     from datetime import datetime
