@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -7,6 +8,7 @@ import uuid
 from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
 from typing import Final
@@ -16,6 +18,11 @@ import httpx
 import jwt
 import pytest
 import yaml
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
+from onelogin.saml2.utils import OneLogin_Saml2_Utils
 
 from tests.integration._support.client import JSON_OBJECT, Gateway, Scenario, gateway_from_environment, string_value
 from tests.integration._support.database import read_rows, write_rows
@@ -134,6 +141,119 @@ def _entra_environment(graph_url: str) -> Mapping[str, str]:
         "MICROSOFT_GRAPH_ENDPOINT": f"{graph_url}/v1.0",
         "OAUTHLIB_INSECURE_TRANSPORT": "1",
     }
+
+
+SAML_SP_ENTITY: Final = "litellm-integration-sp"
+SAML_IDP_ENTITY: Final = "https://idp.integration.invalid/metadata"
+SAML_STATE_COOKIE: Final = "litellm_saml_authn"
+
+
+@dataclass(frozen=True, slots=True)
+class SamlIdp:
+    """A signing SAML IdP the test speaks for: its metadata and signed answers to a proxy login request"""
+
+    key_pem: str
+    cert_pem: str
+
+    def metadata(self) -> str:
+        body: Final = "".join(line for line in self.cert_pem.splitlines() if "CERTIFICATE" not in line)
+        return (
+            f'<EntityDescriptor xmlns="urn:oasis:names:tc:SAML:2.0:metadata" entityID="{SAML_IDP_ENTITY}">'
+            '<IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">'
+            '<KeyDescriptor use="signing"><KeyInfo xmlns="http://www.w3.org/2000/09/xmldsig#">'
+            f"<X509Data><X509Certificate>{body}</X509Certificate></X509Data></KeyInfo></KeyDescriptor>"
+            '<SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" '
+            'Location="https://idp.integration.invalid/sso"/>'
+            "</IDPSSODescriptor></EntityDescriptor>"
+        )
+
+    def response(self, acs: str, request_id: str, name_id: str, email: str | None) -> str:
+        now: Final = datetime.now(timezone.utc)
+        issued: Final = (now - timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        not_before: Final = (now - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        expires: Final = (now + timedelta(seconds=300)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        attributes: Final = (
+            '<saml:Attribute Name="givenName"><saml:AttributeValue>Saml</saml:AttributeValue></saml:Attribute>'
+            if email is None
+            else f'<saml:Attribute Name="email"><saml:AttributeValue>{email}</saml:AttributeValue></saml:Attribute>'
+        )
+        assertion: Final = (
+            '<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" '
+            f'ID="_assertion_{uuid.uuid4().hex}" Version="2.0" IssueInstant="{issued}">'
+            f"<saml:Issuer>{SAML_IDP_ENTITY}</saml:Issuer>"
+            '<saml:Subject><saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified">'
+            f"{name_id}</saml:NameID>"
+            '<saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">'
+            f'<saml:SubjectConfirmationData InResponseTo="{request_id}" NotOnOrAfter="{expires}" Recipient="{acs}"/>'
+            "</saml:SubjectConfirmation></saml:Subject>"
+            f'<saml:Conditions NotBefore="{not_before}" NotOnOrAfter="{expires}">'
+            f"<saml:AudienceRestriction><saml:Audience>{SAML_SP_ENTITY}</saml:Audience>"
+            "</saml:AudienceRestriction></saml:Conditions>"
+            f'<saml:AuthnStatement AuthnInstant="{issued}" SessionIndex="_session">'
+            "<saml:AuthnContext><saml:AuthnContextClassRef>"
+            "urn:oasis:names:tc:SAML:2.0:ac:classes:Password"
+            "</saml:AuthnContextClassRef></saml:AuthnContext></saml:AuthnStatement>"
+            f"<saml:AttributeStatement>{attributes}</saml:AttributeStatement>"
+            "</saml:Assertion>"
+        )
+        signed: Final = OneLogin_Saml2_Utils.add_sign(assertion, self.key_pem, self.cert_pem)
+        signed_text: Final = (signed.decode() if isinstance(signed, bytes) else signed).replace(
+            '<?xml version="1.0"?>', ""
+        )
+        document: Final = (
+            '<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" '
+            'xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" '
+            f'ID="_response_{uuid.uuid4().hex}" Version="2.0" IssueInstant="{issued}" '
+            f'Destination="{acs}" InResponseTo="{request_id}">'
+            f"<saml:Issuer>{SAML_IDP_ENTITY}</saml:Issuer>"
+            '<samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>'
+            f"{signed_text}</samlp:Response>"
+        )
+        return base64.b64encode(document.encode()).decode()
+
+
+@pytest.fixture(scope="module")
+def saml_idp() -> SamlIdp:
+    key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name: Final = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "idp.integration.invalid")])
+    now: Final = datetime.now(timezone.utc)
+    cert: Final = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(days=1))
+        .not_valid_after(now + timedelta(days=1))
+        .sign(key, hashes.SHA256())
+    )
+    return SamlIdp(
+        key_pem=key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()
+        ).decode(),
+        cert_pem=cert.public_bytes(serialization.Encoding.PEM).decode(),
+    )
+
+
+@pytest.fixture(scope="module")
+def saml(saml_idp: SamlIdp, gateway_module: Gateway, tmp_path_factory: pytest.TempPathFactory) -> Iterator[OwnedProxy]:
+    with owned_proxy_process(
+        gateway_module,
+        tmp_path_factory.mktemp("sso-blank-identity-saml"),
+        {"SAML_IDP_METADATA_XML": saml_idp.metadata(), "SAML_SP_ENTITY_ID": SAML_SP_ENTITY},
+        remove_environment=("PROXY_BASE_URL",),
+        workers=2,
+    ) as owned:
+        yield owned
+
+
+def _saml_sign_in(proxy: Gateway, idp: SamlIdp, name_id: str, email: str | None) -> httpx.Response:
+    acs: Final = f"{_proxy_url(proxy)}/sso/saml/callback"
+    with _browser() as browser:
+        login: Final = browser.get(f"{_proxy_url(proxy)}/sso/saml/login")
+        assert login.is_redirect, f"{login.status_code} {login.text}"
+        request_id: Final = login.cookies[SAML_STATE_COOKIE]
+        return browser.post(acs, data={"SAMLResponse": idp.response(acs, request_id, name_id, email)})
 
 
 @pytest.fixture(scope="module")
@@ -593,3 +713,34 @@ def test_custom_mapped_sign_in_is_refused_when_the_account_lookup_loses_the_data
         assert callback.status_code == 401 and session is None, (
             f"{callback.status_code}: session for user_id={None if session is None else session['user_id']!r}"
         )
+
+
+def test_saml_sign_in_with_a_whitespace_name_id_and_no_email_is_refused(
+    saml: OwnedProxy, saml_idp: SamlIdp, gateway_module: Gateway, clean_slate: None
+) -> None:
+    proxy: Final = saml.gateway
+    with gateway_module.scenario() as scenario:
+        victim_token: Final = _victim(scenario)
+        callback: Final = _saml_sign_in(proxy, saml_idp, "   ", None)
+        assert callback.status_code == 401 and _session(callback) is None, _refusal_report(
+            proxy, callback, victim_token
+        )
+    assert JSON_OBJECT.validate_json(callback.content)["detail"] == REFUSED, callback.text
+    assert _blank_accounts() == (), _blank_accounts()
+
+
+@pytest.mark.parametrize("blank_name_id", [True, False], ids=["whitespace-name-id", "name-id"])
+def test_saml_sign_in_with_an_email_signs_in_as_a_real_account(
+    saml: OwnedProxy, saml_idp: SamlIdp, gateway_module: Gateway, clean_slate: None, blank_name_id: bool
+) -> None:
+    proxy: Final = saml.gateway
+    email: Final = f"saml-{uuid.uuid4().hex[:12]}@example.com"
+    name_id: Final = "   " if blank_name_id else f"saml-subject-{uuid.uuid4().hex[:12]}"
+    expected: Final = email if blank_name_id else name_id
+    with gateway_module.scenario() as scenario:
+        _forget_sign_in(scenario, email)
+        callback: Final = _saml_sign_in(proxy, saml_idp, name_id, email)
+        session: Final = _session(callback)
+        assert callback.status_code == 303 and session is not None, f"{callback.status_code} {callback.text}"
+        assert session["user_id"] == expected, f"session issued for user_id={session['user_id']!r}"
+    assert _blank_accounts() == (), _blank_accounts()
