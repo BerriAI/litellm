@@ -5,14 +5,13 @@ pub use litellm_inference::RouteError as Error;
 mod common_utils;
 pub mod constants;
 pub(crate) mod handler;
-mod prepare;
+mod provider_config;
 use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
-use prepare::{prepare_provider_request, resolve_request};
 
 use litellm_auth::AuthServices;
 use litellm_secrets::source::SecretSource;
 use std::sync::Arc;
-use types::ChatCompletionsRequest;
+use types::{ChatCompletionsCall, ChatCompletionsRequest};
 
 #[derive(Clone)]
 pub struct ChatCompletionsRoute {
@@ -55,7 +54,7 @@ impl ChatCompletionsRoute {
         } = options.into();
         litellm_host::lifecycle::observe_unary(
             observers.clone(),
-            self.run_call(
+            self.run(
                 request.into(),
                 cache_options,
                 interceptors,
@@ -65,30 +64,49 @@ impl ChatCompletionsRoute {
         .await
     }
 
+    #[tracing::instrument(name = "litellm.route", skip_all, fields(
+        route = "chat_completions",
+        model = %call.model,
+        provider,
+        resolved_model,
+        stream = false,
+        outcome
+    ))]
     async fn run(
         &self,
-        request: ChatCompletionsRequest<'_>,
+        call: ChatCompletionsCall,
         cache_options: Option<litellm_cache_response::CachePolicy>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
     ) -> Result<ChatCompletionsResponse, Error> {
-        let resolved = resolve_request(request)?;
-        let snapshot = self
-            .secrets
-            .resolve(&resolved.config.secret_names())
-            .await?;
-        let prepared = prepare_provider_request(resolved, snapshot)?;
-        litellm_inference::diagnostic::provider(&prepared.model, &prepared.custom_llm_provider);
-        let execute: futures_util::future::BoxFuture<'_, Result<ChatCompletionsResponse, Error>> =
-            Box::pin(handler::execute(
+        litellm_inference::diagnostic::unary(async {
+            let model = call.model.clone();
+            let custom_llm_provider = call.custom_llm_provider.clone();
+            let (provider, config) =
+                provider_config::resolve_provider_config(&model, custom_llm_provider.as_deref())?;
+            let call = common_utils::resolve_request(call, config)?;
+            litellm_inference::diagnostic::provider(
+                provider.model,
+                <&'static str>::from(provider.provider),
+            );
+            let secrets = self.secrets.resolve(&config.secret_names()).await?;
+            let execute: futures_util::future::BoxFuture<
+                '_,
+                Result<ChatCompletionsResponse, Error>,
+            > = Box::pin(handler::execute(
                 &self.http,
                 &self.auth,
-                prepared,
+                config,
+                provider,
+                call,
+                secrets,
                 self.cache.clone(),
                 cache_options,
                 interceptors,
                 observers,
             ));
-        execute.await
+            execute.await
+        })
+        .await
     }
 }
