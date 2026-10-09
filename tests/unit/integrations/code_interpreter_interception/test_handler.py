@@ -6,23 +6,26 @@ config and records how it is called.
 """
 
 import time
+from typing import Final
 
 import pytest
 
 from litellm.integrations.code_interpreter_interception.handler import (
-    CodeInterpreterInterceptionLogger,
-    LITELLM_CODE_EXECUTION_TOOL_NAME,
     _INTERCEPTION_ACTIVE_KEY as _ACTIVE_KEY,
+)
+from litellm.integrations.code_interpreter_interception.handler import (
     _SANDBOX_KEY,
     _SESSION_SCOPED_KEY,
+    LITELLM_CODE_EXECUTION_TOOL_NAME,
+    CodeInterpreterInterceptionLogger,
 )
+from litellm.llms.base_llm.sandbox.transformation import CodeExecutionResult
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
     CODE_INTERPRETER_STREAM_OPTIONS_KEY,
     NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
     is_interception_internal_key,
 )
-from litellm.llms.base_llm.sandbox.transformation import CodeExecutionResult
 from litellm.types.utils import CallTypes
 
 
@@ -520,16 +523,16 @@ async def test_pre_call_forces_non_stream_for_loop():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("call_type", (CallTypes.acompletion, CallTypes.aresponses))
 async def test_pre_call_moves_stream_options_off_the_forced_non_stream_call(call_type: CallTypes):
-    logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
-    stream_options = {"include_usage": True}
-    kwargs: dict[str, object] = {
+    logger: Final = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
+    stream_options: Final = {"include_usage": True}
+    kwargs: Final[dict[str, object]] = {
         "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}],
         "custom_llm_provider": "azure",
         "stream": True,
         "stream_options": stream_options,
     }
 
-    out = await logger.async_pre_call_deployment_hook(kwargs, call_type)
+    out: Final = await logger.async_pre_call_deployment_hook(kwargs, call_type)
 
     assert out is not None
     assert out["stream"] is False

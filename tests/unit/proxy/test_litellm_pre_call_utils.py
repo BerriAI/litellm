@@ -1240,7 +1240,7 @@ async def test_add_litellm_data_to_request_strips_callback_control_fields(
         "_headroom_interception_converted_stream": True,
         "max_agentic_loops": 9999,
     }
-    sample_value = sample_values.get(control_field, "forged")
+    sample_value: Final = sample_values.get(control_field, "forged")
 
     updated = await add_litellm_data_to_request(
         data={

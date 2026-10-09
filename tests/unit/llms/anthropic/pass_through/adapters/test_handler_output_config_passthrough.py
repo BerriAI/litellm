@@ -27,6 +27,7 @@ Tests cover (consolidating PRs #23706 and #22727):
 
 import os
 import sys
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -252,7 +253,7 @@ class TestPromptCacheOptionsForwarded:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("converted_stream_key", sorted(CONVERTED_STREAM_KEYS))
 async def test_messages_layer_converted_stream_flag_still_gets_a_message_back(converted_stream_key: str):
-    response = await LiteLLMMessagesToCompletionTransformationHandler.async_anthropic_messages_handler(
+    response: Final = await LiteLLMMessagesToCompletionTransformationHandler.async_anthropic_messages_handler(
         max_tokens=16,
         messages=MESSAGES,
         model="openai/gpt-4o",

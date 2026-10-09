@@ -5279,7 +5279,7 @@ def test_websearch_interception_control_fields_never_reach_the_provider():
 
 @pytest.mark.parametrize("stash_key", STREAM_OPTIONS_STASH_KEYS)
 def test_converted_stream_options_stash_never_reaches_the_provider(stash_key: str):
-    non_default = get_non_default_completion_params(
+    non_default: Final = get_non_default_completion_params(
         {"a_real_provider_specific_param": 1, stash_key: {"include_usage": True}}
     )
 

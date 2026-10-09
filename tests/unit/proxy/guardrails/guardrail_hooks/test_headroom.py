@@ -2184,7 +2184,7 @@ async def test_pre_call_deployment_hook_moves_stream_options_off_the_forced_non_
         "tools": [_retrieve_tool_definition()],
     }
 
-    result = await guardrail.async_pre_call_deployment_hook(kwargs=kwargs, call_type=call_type)
+    result: Final = await guardrail.async_pre_call_deployment_hook(kwargs=kwargs, call_type=call_type)
 
     assert result is not None
     assert result["stream"] is False

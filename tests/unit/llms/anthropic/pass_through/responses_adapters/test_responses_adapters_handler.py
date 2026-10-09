@@ -2,6 +2,7 @@ import datetime
 import json
 import os
 import sys
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -33,7 +34,7 @@ RESPONSES_SSE_BODY = (
 
 
 def test_build_responses_kwargs_never_asks_the_nested_call_to_replay_a_stream():
-    responses_kwargs = _build_responses_kwargs(
+    responses_kwargs: Final = _build_responses_kwargs(
         max_tokens=1024,
         messages=MESSAGES,
         model="azure/gpt-5.6-luna",

@@ -478,12 +478,12 @@ async def test_converted_stream_replays_the_final_answer_with_the_requested_usag
     """A streamed web search request runs non-streaming and is replayed as a fake
     stream at depth 0. The stream_options the interception moved out of the provider
     request decide whether the replay ends with the usage-only chunk the client asked for."""
-    plan = AgenticLoopPlan(
+    plan: Final = AgenticLoopPlan(
         run_agentic_loop=True,
         request_patch=AgenticLoopRequestPatch(messages=_patched_messages()),
     )
     gate: Final = _RecordingGateLogger(plan=plan, tool_calls={"tool_calls": [{"id": "call_abc"}]})
-    logging_obj = Logging(
+    logging_obj: Final = Logging(
         model="gpt-4o",
         messages=[{"role": "user", "content": "what is 6*7?"}],
         stream=False,
@@ -493,7 +493,7 @@ async def test_converted_stream_replays_the_final_answer_with_the_requested_usag
         function_id="fn-websearch",
         dynamic_success_callbacks=[gate],
     )
-    stash = {f"{prefix}_stream_options": {"include_usage": True}} if include_usage else {}
+    stash: Final = {f"{prefix}_stream_options": {"include_usage": True}} if include_usage else {}
 
     result: Final = await maybe_run_chat_completion_agentic_loop(
         response=_tool_call_model_response(),
@@ -507,9 +507,9 @@ async def test_converted_stream_replays_the_final_answer_with_the_requested_usag
     )
 
     assert isinstance(result, CustomStreamWrapper)
-    chunks = [chunk async for chunk in result]
-    content = "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices)
-    usages = [chunk.usage for chunk in chunks if getattr(chunk, "usage", None) is not None]
+    chunks: Final = [chunk async for chunk in result]
+    content: Final = "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices)
+    usages: Final = [chunk.usage for chunk in chunks if getattr(chunk, "usage", None) is not None]
     (followup,) = gate.followups
 
     assert content == "done"

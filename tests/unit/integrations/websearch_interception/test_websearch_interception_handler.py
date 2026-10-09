@@ -5,7 +5,7 @@ Tests the WebSearchInterceptionLogger class and helper functions.
 """
 
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
@@ -849,8 +849,8 @@ async def test_converted_stream_moves_stream_options_out_of_the_provider_request
     stream_options with it: a provider that validates its body (Azure chat completions)
     rejects stream_options on a non-streaming request, so the converted kwargs carry no
     stream_options and stash the client's value for the replayed stream instead."""
-    logger = WebSearchInterceptionLogger(enabled_providers=["azure"])
-    kwargs = {
+    logger: Final = WebSearchInterceptionLogger(enabled_providers=["azure"])
+    kwargs: Final = {
         "model": "azure/gpt-4o",
         "messages": [{"role": "user", "content": "Search for LiteLLM"}],
         "custom_llm_provider": "azure",
@@ -865,7 +865,7 @@ async def test_converted_stream_moves_stream_options_out_of_the_provider_request
         "stream_options": dict(_STREAM_USAGE_OPTIONS),
     }
 
-    result = await convert(logger, kwargs)
+    result: Final = await convert(logger, kwargs)
 
     assert result is not None
     assert (
