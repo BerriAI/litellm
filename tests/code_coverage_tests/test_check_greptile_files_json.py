@@ -13,14 +13,17 @@ def _git(repo: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
 
 
+def _write_agents_md(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# conventions\n")
+
+
 def _repo_with(tmp_path: Path, files: tuple[str, ...]) -> Path:
     guard_copy: Final = tmp_path / "tests" / "code_coverage_tests" / GUARD.name
     guard_copy.parent.mkdir(parents=True)
     shutil.copy(GUARD, guard_copy)
     for relative_path in files:
-        target = tmp_path / relative_path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("# conventions\n")
+        _write_agents_md(tmp_path / relative_path)
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "add", "-A")
     return guard_copy
@@ -46,9 +49,7 @@ def test_write_scopes_each_nested_agents_md_to_its_own_directory(tmp_path: Path)
 def test_new_agents_md_missing_from_files_json_fails(tmp_path: Path) -> None:
     guard: Final = _repo_with(tmp_path, ("tests/AGENTS.md",))
     assert _run(guard, "--write").returncode == 0
-    new_agents_md: Final = tmp_path / "ui" / "AGENTS.md"
-    new_agents_md.parent.mkdir()
-    new_agents_md.write_text("# conventions\n")
+    _write_agents_md(tmp_path / "ui" / "AGENTS.md")
     _git(tmp_path, "add", "-A")
 
     result: Final = _run(guard)
