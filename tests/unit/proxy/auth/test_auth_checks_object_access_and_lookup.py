@@ -11128,3 +11128,113 @@ async def test_authoritative_group_grants_propagate_policy_outages(
             await get_agent_ids_from_access_groups(["group"], check_db_only=True)
     else:
         assert await get_agent_ids_from_access_groups(["group"]) == []
+
+
+def _end_user_with_models(models: list[str]) -> LiteLLM_EndUserTable:
+    return LiteLLM_EndUserTable(user_id="end-user-1", blocked=False, models=models)
+
+
+def test_customer_can_call_model_true_for_allowed_false_for_disallowed() -> None:
+    from litellm.proxy.auth.auth_checks import customer_can_call_model
+
+    end_user_object: Final = _end_user_with_models(["somemodel"])
+
+    assert (
+        customer_can_call_model(
+            model="somemodel",
+            end_user_object=end_user_object,
+            llm_router=None,
+            valid_token=None,
+        )
+        is True
+    )
+    assert (
+        customer_can_call_model(
+            model="othermodel",
+            end_user_object=end_user_object,
+            llm_router=None,
+            valid_token=None,
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize("models", [[], None])
+def test_customer_can_call_model_unrestricted_when_allowlist_empty(models: list[str] | None) -> None:
+    from litellm.proxy.auth.auth_checks import customer_can_call_model
+
+    end_user_object: Final = LiteLLM_EndUserTable(user_id="end-user-1", blocked=False, models=models or [])
+
+    assert (
+        customer_can_call_model(
+            model="any-model",
+            end_user_object=end_user_object,
+            llm_router=None,
+            valid_token=None,
+        )
+        is True
+    )
+
+
+def test_customer_can_call_model_honors_wildcard_allowlist() -> None:
+    from litellm.proxy.auth.auth_checks import customer_can_call_model
+
+    end_user_object: Final = _end_user_with_models(["openai/*"])
+
+    assert (
+        customer_can_call_model(
+            model="openai/gpt-4o",
+            end_user_object=end_user_object,
+            llm_router=None,
+            valid_token=None,
+        )
+        is True
+    )
+    assert (
+        customer_can_call_model(
+            model="anthropic/claude-sonnet-4-5",
+            end_user_object=end_user_object,
+            llm_router=None,
+            valid_token=None,
+        )
+        is False
+    )
+
+
+def test_customer_can_call_model_resolves_router_access_group() -> None:
+    from litellm import Router
+    from litellm.proxy.auth.auth_checks import customer_can_call_model
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "fast-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"},
+                "model_info": {"access_groups": ["fast-models"]},
+            },
+            {
+                "model_name": "slow-model",
+                "litellm_params": {"model": "openai/gpt-4.1", "api_key": "sk-test"},
+            },
+        ]
+    )
+    end_user_object: Final = _end_user_with_models(["fast-models"])
+
+    assert (
+        customer_can_call_model(
+            model="fast-model",
+            end_user_object=end_user_object,
+            llm_router=router,
+            valid_token=None,
+        )
+        is True
+    )
+    assert (
+        customer_can_call_model(
+            model="slow-model",
+            end_user_object=end_user_object,
+            llm_router=router,
+            valid_token=None,
+        )
+        is False
+    )
