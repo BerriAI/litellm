@@ -487,23 +487,21 @@ async def update_tag(
             # Refresh the live spend counter immediately, the same way /key/update does for
             # spend:key:<hash> - otherwise the tag stays blocked on the stale cached value
             # until the counter's TTL expires.
-            from litellm.proxy.proxy_server import spend_counter_cache
+            from litellm.proxy.proxy_server import spend_counter_store
 
-            counter_key: Final = f"spend:tag:{tag.name}"
-            spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=tag.spend, ttl=60)
-            if spend_counter_cache.redis_cache is not None:
-                try:
-                    await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=tag.spend, ttl=60)
-                except Exception as redis_err:  # noqa: BLE001  # best-effort refresh: a Redis failure must not fail the request
-                    # tag.name is admin-supplied; strip CR/LF before it reaches the logs so it
-                    # cannot forge additional log lines.
-                    safe_counter_key: Final = counter_key.replace("\r", "").replace("\n", "")
-                    verbose_proxy_logger.warning(
-                        "Failed to update spend counter %s in Redis after tag spend update: %s. "
-                        "Budget checks may use stale value until counter expires.",
-                        safe_counter_key,
-                        redis_err,
-                    )
+            counter_key: Final = tag_counter(tag.name)
+            try:
+                await spend_counter_store.set(counter_key, tag.spend, ttl=60)
+            except Exception as redis_err:  # noqa: BLE001  # best-effort refresh: a Redis failure must not fail the request
+                # tag.name is admin-supplied; strip CR/LF before it reaches the logs so it
+                # cannot forge additional log lines.
+                safe_counter_key: Final = counter_key.replace("\r", "").replace("\n", "")
+                verbose_proxy_logger.warning(
+                    "Failed to update spend counter %s in Redis after tag spend update: %s. "
+                    "Budget checks may use stale value until counter expires.",
+                    safe_counter_key,
+                    redis_err,
+                )
 
         # Build response
         tag_config: Final = TagConfig(
