@@ -28,6 +28,8 @@ _LITELLM_PROVIDER_IDS: Final = frozenset(provider.value for provider in LlmProvi
 _FEDERATION_SURFACE_FIELDS: Final = frozenset(
     (
         *clientside_credential_keys,
+        "client_id",
+        "client_secret",
         "configurable_clientside_auth_params",
         "litellm_credential_name",
         *server_owned_wif_litellm_params,
@@ -40,7 +42,8 @@ def write_touches_federation_surface(incoming: Mapping[str, object] | None) -> b
 
     Three groups of fields can. The federation parameters choose which server-side secret is read
     and what the minted token is scoped to. OAuth token-exchange parameters select the server-side
-    token endpoint and grant profile. ``litellm_credential_name`` resolves to those same parameters
+    token endpoint and grant profile, with ``client_id`` and ``client_secret`` authenticating to it.
+    ``litellm_credential_name`` resolves to those same parameters
     by reference. ``api_key``, ``api_base``, ``base_url``, and the
     ``configurable_clientside_auth_params`` that let a caller override them decide where the
     resulting token is sent. A write setting none of them leaves the delegated-token configuration

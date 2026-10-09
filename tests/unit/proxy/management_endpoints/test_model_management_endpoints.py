@@ -8784,6 +8784,132 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
             assert exc_info.value.param == "token_exchange_endpoint"
             mock_prisma.db.litellm_proxymodeltable.create.assert_not_called()
 
+    @staticmethod
+    def _team_admin_patch_fixtures(
+        *,
+        server_owned_oauth: bool,
+    ) -> tuple[UserAPIKeyAuth, MagicMock, MagicMock]:
+        team_id: Final = "oauth-client-patch-team"
+        team_admin: Final = UserAPIKeyAuth(
+            user_id="team_admin",
+            team_id=team_id,
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        existing_row: Final = MagicMock()
+        existing_row.litellm_params = {
+            "model": "microsoft_365_copilot/chat",
+            "api_key": "stored-api-key",
+            "client_id": "stored-client-id",
+            "client_secret": "stored-client-secret",
+            **(
+                {"token_exchange_endpoint": "https://identity.example.com/token"}
+                if server_owned_oauth
+                else {}
+            ),
+        }
+        existing_row.model_dump.return_value = {
+            "model_name": "copilot",
+            "litellm_params": existing_row.litellm_params,
+            "model_info": {"id": "oauth-client-patch-1", "team_id": team_id},
+        }
+        existing_row.model_dump_json.return_value = "{}"
+
+        mock_prisma: Final = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=existing_row)
+        mock_prisma.db.litellm_proxymodeltable.update = AsyncMock(return_value=existing_row)
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=LiteLLM_TeamTable(
+                team_id=team_id,
+                team_alias=team_id,
+                members_with_roles=[Member(user_id="team_admin", role="admin")],
+            )
+        )
+        return team_admin, mock_prisma, existing_row
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        (
+            ("client_secret", "replacement-client-secret"),
+            ("client_id", "replacement-client-id"),
+        ),
+    )
+    async def test_team_admin_cannot_patch_oauth_client_credentials(
+        self,
+        field: str,
+        value: str,
+    ) -> None:
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import patch_model
+
+        team_admin, mock_prisma, _ = self._team_admin_patch_fixtures(server_owned_oauth=True)
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: proxy wiring under test
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.llm_router",
+                MagicMock(**{"get_model_ids.return_value": ["oauth-client-patch-1"]}),
+            ),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: proxy wiring under test
+            patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: proxy wiring under test
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
+                side_effect=lambda value: value,
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
+                new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await patch_model(
+                    model_id="oauth-client-patch-1",
+                    patch_data=updateDeployment(
+                        litellm_params=updateLiteLLMParams.model_validate({field: value})
+                    ),
+                    user_api_key_dict=team_admin,
+                )
+
+        assert exc_info.value.code == "403"
+        mock_prisma.db.litellm_proxymodeltable.update.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_team_admin_can_patch_client_secret_without_server_owned_oauth(self) -> None:
+        from litellm.proxy.management_endpoints.model_management_endpoints import patch_model
+
+        team_admin, mock_prisma, existing_row = self._team_admin_patch_fixtures(server_owned_oauth=False)
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: proxy wiring under test
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.proxy_server.llm_router",
+                MagicMock(**{"get_model_ids.return_value": ["oauth-client-patch-1"]}),
+            ),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: proxy wiring under test
+            patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: proxy wiring under test
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
+                side_effect=lambda value: value,
+            ),
+            patch(  # test-quality-ok: the proxy wiring under test is what this patches
+                "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
+                new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
+            ),
+        ):
+            result = await patch_model(
+                model_id="oauth-client-patch-1",
+                patch_data=updateDeployment(
+                    litellm_params=updateLiteLLMParams(client_secret="replacement-client-secret")
+                ),
+                user_api_key_dict=team_admin,
+            )
+
+        assert result is existing_row
+        saved_params = json.loads(
+            mock_prisma.db.litellm_proxymodeltable.update.await_args.kwargs["data"]["litellm_params"]
+        )
+        assert saved_params["client_secret"] == "replacement-client-secret"
+
     @pytest.mark.asyncio
     async def test_add_new_model_proxy_admin_can_set_oauth_token_exchange_endpoint(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
