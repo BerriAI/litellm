@@ -632,20 +632,20 @@
     }
   },
   "embedded_ui": {
-    "qualification": "Published source pin verified; release artifact adoption and final image qualification pending",
+    "qualification": "Exact published source pin verified; installed package passes companion integration tests and full production frontend build",
     "companion_base_sha": "a54b38e779c5d960b2515e2807c1858cc5842b4d",
     "package": {
       "path": "ui/litellm-dashboard/vendor/litellm-lens-ui-0.1.0-dev.0.tgz",
-      "sha256": "490d2848dce174826d275959fbb1a5d456acdca45f58cd283487dce89ea3b602",
-      "integrity": "sha512-Rht4jazqGbdJSGHeBHOs6L2AW2O/X1Q6hBavKv8GgtmDkFUWa9KDp/o0mgiCS4+B+kKa78qLSuIPbVbHbYIGSg==",
+      "sha256": "ae1303e59a8169bafbe2322bfec0c5b20e4cc94c46e62a17eaeb5cc7a2931d05",
+      "integrity": "sha512-Zhk75Cx87jPYfkt/OGEb1PaBmL9HPXo3cXNyDGncxgKv7ufryF5v3WIpJfZX6T/LM7xoh1TKxvmUTYS/9Yirjg==",
       "source": {
         "repository": "https://github.com/BerriAI/lens",
-        "commit": "b0f3d5b447eae749b2665c7fbbaf19c71d4d3e38",
+        "commit": "0b8e2c23f73588c4b3e40e850edd1bad1654c19c",
         "source_directory": "src/ui/lib",
-        "entries": 394,
+        "entries": 383,
         "all_package_files_match_commit": true,
-        "file_manifest_sha256": "d64c1288133b26eea271c95c9e6e917a8c876aecf9e932739c37dd2052df85a7",
-        "comparison": "Every regular file in the tarball matches the committed source byte for byte; inherited LICENSE resolves at repository root"
+        "file_manifest_sha256": "28daacf6fc0ddf1b9776c52ea40512d28b313449aacc7782850f471b43c933b0",
+        "comparison": "Every regular package file matches the published commit byte for byte; LICENSE resolves at repository root"
       }
     },
     "sources": {
@@ -654,13 +654,21 @@
     },
     "checks": [
       {
-        "command": "npx vitest run src/components/lens/EmbeddedLens.integration.test.tsx 'src/app/(dashboard)/lens/page.test.tsx'",
+        "command": "npm ci --ignore-scripts --prefer-offline",
+        "result": "passed",
+        "log": {
+          "path": "/tmp/lens-host-clean-ui-install.log",
+          "sha256": "ca4b31e2c2ad9dce07c3b4f985850802bb1b311295e5d2c0a60a447529d320b4"
+        }
+      },
+      {
+        "command": "npx vitest run src/components/lens/EmbeddedLens.integration.test.tsx 'src/app/(dashboard)/lens/page.test.tsx' --maxWorkers2",
         "result": "passed",
         "files": 2,
         "tests": 7,
         "log": {
-          "path": "/tmp/lens-host-final-ui-tests.log",
-          "sha256": "d64e39806ff66f843d3df4f5f1aaac3163281ebf84c13ea20fe3d4b189351fc4"
+          "path": "/tmp/lens-host-clean-ui-tests.log",
+          "sha256": "6f27f9f04290f3ccc26e1ccb782510ec68be95c697c8336d0fb245c37c56c485"
         }
       },
       {
@@ -668,8 +676,8 @@
         "result": "passed",
         "includes_typecheck": true,
         "log": {
-          "path": "/tmp/lens-host-final-ui-build.log",
-          "sha256": "a81b24957fb39967df81896c883ea0d15252bda74739d6d451718ce93c18ccdc"
+          "path": "/tmp/lens-host-clean-ui-build.log",
+          "sha256": "4fa1a513c52f9715fb6eea3b7c8585b72aa14045a832651b9b44e80fb49dc6c1"
         }
       }
     ],
@@ -755,13 +763,174 @@
           "sha256": "8fd3e9f2e57cae2556c05c8f151c4e91c7d9f179d302ef3b4ca4e69e62cbf46f"
         }
       }
+    },
+    "previous_package_qualification": {
+      "package": {
+        "path": "ui/litellm-dashboard/vendor/litellm-lens-ui-0.1.0-dev.0.tgz",
+        "sha256": "490d2848dce174826d275959fbb1a5d456acdca45f58cd283487dce89ea3b602",
+        "integrity": "sha512-Rht4jazqGbdJSGHeBHOs6L2AW2O/X1Q6hBavKv8GgtmDkFUWa9KDp/o0mgiCS4+B+kKa78qLSuIPbVbHbYIGSg==",
+        "source": {
+          "repository": "https://github.com/BerriAI/lens",
+          "commit": "b0f3d5b447eae749b2665c7fbbaf19c71d4d3e38",
+          "source_directory": "src/ui/lib",
+          "entries": 394,
+          "all_package_files_match_commit": true,
+          "file_manifest_sha256": "d64c1288133b26eea271c95c9e6e917a8c876aecf9e932739c37dd2052df85a7",
+          "comparison": "Every regular file in the tarball matches the committed source byte for byte; inherited LICENSE resolves at repository root"
+        }
+      },
+      "checks": [
+        {
+          "command": "npx vitest run src/components/lens/EmbeddedLens.integration.test.tsx 'src/app/(dashboard)/lens/page.test.tsx'",
+          "result": "passed",
+          "files": 2,
+          "tests": 7,
+          "log": {
+            "path": "/tmp/lens-host-final-ui-tests.log",
+            "sha256": "d64e39806ff66f843d3df4f5f1aaac3163281ebf84c13ea20fe3d4b189351fc4"
+          }
+        },
+        {
+          "command": "npm run build",
+          "result": "passed",
+          "includes_typecheck": true,
+          "log": {
+            "path": "/tmp/lens-host-final-ui-build.log",
+            "sha256": "a81b24957fb39967df81896c883ea0d15252bda74739d6d451718ce93c18ccdc"
+          }
+        }
+      ]
+    },
+    "checked_at": "2026-10-09T07:50:19.706Z",
+    "security_audit": {
+      "scope": "npm audit current companion vs upstreama3236ba947",
+      "production_findings": 0,
+      "full_audit_high": 6,
+      "introduced_findings": 0,
+      "detail": "Identical preexisting development-tooling braces3.0.3 advisory and dependent paths on current main; no blanket upgrade performed",
+      "comparison": {
+        "recorded_at": "2026-10-09T07:49:23.144Z",
+        "baseline": "a3236ba9479e32ee914d43f12082f4423403e3ca",
+        "merged_tip": "80f5c853bbbbc6b9ff4cac87e98e647b1d88b86f",
+        "baseline_counts": {
+          "info": 0,
+          "low": 0,
+          "moderate": 0,
+          "high": 6,
+          "critical": 0,
+          "total": 6
+        },
+        "current_counts": {
+          "info": 0,
+          "low": 0,
+          "moderate": 0,
+          "high": 6,
+          "critical": 0,
+          "total": 6
+        },
+        "identical_findings": true,
+        "packages": [
+          {
+            "name": "@next/eslint-plugin-next",
+            "severity": "high",
+            "nodes": [
+              {
+                "path": "node_modules/@next/eslint-plugin-next",
+                "current_version": "16.3.3",
+                "baseline_version": "16.3.3",
+                "dev": true,
+                "identical_lock_entry": true
+              }
+            ]
+          },
+          {
+            "name": "braces",
+            "severity": "high",
+            "nodes": [
+              {
+                "path": "node_modules/braces",
+                "current_version": "3.0.3",
+                "baseline_version": "3.0.3",
+                "dev": true,
+                "identical_lock_entry": true
+              }
+            ]
+          },
+          {
+            "name": "eslint-config-next",
+            "severity": "high",
+            "nodes": [
+              {
+                "path": "node_modules/eslint-config-next",
+                "current_version": "16.3.3",
+                "baseline_version": "16.3.3",
+                "dev": true,
+                "identical_lock_entry": true
+              }
+            ]
+          },
+          {
+            "name": "fast-glob",
+            "severity": "high",
+            "nodes": [
+              {
+                "path": "node_modules/fast-glob",
+                "current_version": "3.3.1",
+                "baseline_version": "3.3.1",
+                "dev": true,
+                "identical_lock_entry": true
+              },
+              {
+                "path": "node_modules/knip/node_modules/fast-glob",
+                "current_version": "3.3.3",
+                "baseline_version": "3.3.3",
+                "dev": true,
+                "identical_lock_entry": true
+              }
+            ]
+          },
+          {
+            "name": "knip",
+            "severity": "high",
+            "nodes": [
+              {
+                "path": "node_modules/knip",
+                "current_version": "5.83.1",
+                "baseline_version": "5.83.1",
+                "dev": true,
+                "identical_lock_entry": true
+              }
+            ]
+          },
+          {
+            "name": "micromatch",
+            "severity": "high",
+            "nodes": [
+              {
+                "path": "node_modules/micromatch",
+                "current_version": "4.0.8",
+                "baseline_version": "4.0.8",
+                "dev": true,
+                "identical_lock_entry": true
+              }
+            ]
+          }
+        ],
+        "scope": "Read-only npm audit; no dependency or lockfile changes"
+      }
+    },
+    "chart_archive": {
+      "path": "helm/litellm/charts/lens-0.1.0-dev.0.tgz",
+      "sha256": "a412ce369a6ba59cb9e170a4cd6c7575a831ee6632e4ebfc6c5637b1fb83c743",
+      "second_path": "helm/litellm-helm/charts/lens-0.1.0-dev.0.tgz",
+      "source_commit": "0b8e2c23f73588c4b3e40e850edd1bad1654c19c"
     }
   },
   "publication_preflight": {
     "companion_integration_commit": "59b577dd0a7e238f212b0b18e70a8d15b95eb381",
     "companion_default_branch": "main",
-    "companion_merge_base": "145d382089ccf578684ffb79e54752ae98d32b61",
-    "lens_source_commit": "b0f3d5b447eae749b2665c7fbbaf19c71d4d3e38",
+    "companion_merge_base": "a3236ba9479e32ee914d43f12082f4423403e3ca",
+    "lens_source_commit": "0b8e2c23f73588c4b3e40e850edd1bad1654c19c",
     "checks": [
       {
         "command": "make check",

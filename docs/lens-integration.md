@@ -69,7 +69,7 @@ Lens attaches a short-lived signed marker only to requests under that explicit g
 
 Lens changes belong in its repository. LiteLLM contains the thin gateway adapter and embedded wrapper; it consumes the same Lens UI package used by the standalone product. Run the Lens quickstart for backend and UI development instead of the retired `make lens-dev` helper
 
-The LiteLLM dashboard uses the checked-in `@litellm/lens-ui` tarball and npm lockfile. This branch pins its UI to [Lens commit `b0f3d5b447eae749b2665c7fbbaf19c71d4d3e38`](https://github.com/BerriAI/lens/commit/b0f3d5b447eae749b2665c7fbbaf19c71d4d3e38). All 394 packaged files match that commit; [qualification evidence](evidence/lens-gateway.json) records the package checksum, npm integrity and source comparison. Update the package, lockfile and provenance together when adopting a new UI release
+The LiteLLM dashboard uses the checked-in `@litellm/lens-ui` tarball and npm lockfile. This branch pins its UI to [Lens commit `0b8e2c23f73588c4b3e40e850edd1bad1654c19c`](https://github.com/BerriAI/lens/commit/0b8e2c23f73588c4b3e40e850edd1bad1654c19c). All 383 packaged files match that commit; [qualification evidence](evidence/lens-gateway.json) records the package checksum, npm integrity and source comparison. Update the package, lockfile and provenance together when adopting a new UI release
 
 From `ui/litellm-dashboard`, run `npm ci` followed by `npm run dev` to work on gateway integration. The focused packaged-UI check is:
 
