@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 import threading
 from collections import OrderedDict
 from collections.abc import Callable, Coroutine, Mapping
@@ -33,12 +32,15 @@ from .transformation import (
     to_openai_batch_list,
     xai_batch_output_file_id,
     xai_batch_results_file_object,
+    xai_batches_error,
     xai_batches_url,
 )
 
 _JSONL_CONTENT_TYPE: Final = ("content-type", "application/jsonl")
 _RESULTS_SIZE_CACHE_SIZE: Final = 1024
+_NO_HEADERS: Final = httpx.Headers()
 _ResultsKey: TypeAlias = tuple[str, str]
+_DownloadKey: TypeAlias = tuple[_ResultsKey, str]
 
 
 class _PageParams(TypedDict):
@@ -68,11 +70,20 @@ def _jsonl_response(url: str, results: tuple[XAIBatchResult, ...]) -> HttpxBinar
 
 
 def _results_key(url: str, headers: Mapping[str, str]) -> _ResultsKey:
-    return url, hashlib.sha256(headers["Authorization"].encode()).hexdigest()
+    return url, headers["Authorization"]
 
 
 def _request_total(batch: LiteLLMBatch) -> int | None:
     return batch.request_counts.total if batch.request_counts is not None else None
+
+
+def _complete_size(batch: LiteLLMBatch, size: int, count: int) -> int:
+    total: Final = _request_total(batch)
+    if count != total:
+        raise xai_batches_error(
+            f"xAI batch {batch.id} results are not complete yet ({count} of {total} results)", 409, _NO_HEADERS
+        )
+    return size
 
 
 class _ResultsSizes:
@@ -82,7 +93,7 @@ class _ResultsSizes:
         self._capacity: Final = _RESULTS_SIZE_CACHE_SIZE
         self._lock: Final = threading.Lock()
         self._sizes: Final[OrderedDict[_ResultsKey, tuple[int, int]]] = OrderedDict()  # mutable-ok: LRU state
-        self._downloads: Final[dict[_ResultsKey, asyncio.Task[int]]] = {}  # mutable-ok: in-flight downloads
+        self._downloads: Final[dict[_DownloadKey, asyncio.Task[tuple[int, int]]]] = {}  # mutable-ok: in flight
 
     def record(self, key: _ResultsKey, size: int, count: int) -> None:
         with self._lock:
@@ -99,7 +110,9 @@ class _ResultsSizes:
             self._sizes.move_to_end(key)
             return observed[0]
 
-    def shared_download(self, key: _ResultsKey, start: Callable[[], Coroutine[None, None, int]]) -> asyncio.Task[int]:
+    def shared_download(
+        self, key: _DownloadKey, start: Callable[[], Coroutine[None, None, tuple[int, int]]]
+    ) -> asyncio.Task[tuple[int, int]]:
         loop: Final = asyncio.get_running_loop()
         with self._lock:
             running: Final = self._downloads.get(key)
@@ -112,7 +125,7 @@ class _ResultsSizes:
         download.add_done_callback(partial(self._finished, key))
         return download
 
-    def _finished(self, key: _ResultsKey, download: asyncio.Task[int]) -> None:
+    def _finished(self, key: _DownloadKey, download: asyncio.Task[tuple[int, int]]) -> None:
         with self._lock:
             if self._downloads.get(key) is download:
                 del self._downloads[key]
@@ -291,23 +304,26 @@ class XAIBatchesHandler:
             batch: Final = self._get_batch(batch_url, headers, timeout)
             output_file_id: Final = xai_batch_output_file_id(batch)
             known_size: Final = self._results_sizes.complete_size(key, _request_total(batch))
-            size: Final = (
-                known_size if known_size is not None else len(self._get_results(results_url, headers, timeout).content)
+            if known_size is not None:
+                return xai_batch_results_file_object(output_file_id, batch.created_at, known_size)
+            content: Final = self._get_results(results_url, headers, timeout).content
+            return xai_batch_results_file_object(
+                output_file_id, batch.created_at, _complete_size(batch, len(content), len(content.splitlines()))
             )
-            return xai_batch_results_file_object(output_file_id, size)
 
-        async def _measure() -> int:
-            return len((await self._aget_results(results_url, headers, timeout)).content)
+        async def _measure() -> tuple[int, int]:
+            downloaded: Final = (await self._aget_results(results_url, headers, timeout)).content
+            return len(downloaded), len(downloaded.splitlines())
 
         async def _afile() -> OpenAIFileObject:
             completed: Final = await self._aget_batch(batch_url, headers, timeout)
             completed_file_id: Final = xai_batch_output_file_id(completed)
             already_measured: Final = self._results_sizes.complete_size(key, _request_total(completed))
-            measured: Final = (
-                already_measured
-                if already_measured is not None
-                else await asyncio.shield(self._results_sizes.shared_download(key, _measure))
+            if already_measured is not None:
+                return xai_batch_results_file_object(completed_file_id, completed.created_at, already_measured)
+            size, count = await asyncio.shield(self._results_sizes.shared_download((key, repr(timeout)), _measure))
+            return xai_batch_results_file_object(
+                completed_file_id, completed.created_at, _complete_size(completed, size, count)
             )
-            return xai_batch_results_file_object(completed_file_id, measured)
 
         return _afile()

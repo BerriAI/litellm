@@ -1,6 +1,5 @@
 import asyncio
 import json
-from types import SimpleNamespace
 from collections.abc import Coroutine
 from typing import Final
 
@@ -12,7 +11,6 @@ import litellm
 import litellm.files.main as files_main
 from litellm.llms.xai.batches import handler as xai_batches_handler
 from litellm.llms.xai.batches.handler import XAIBatchesHandler
-from litellm.llms.xai.batches import transformation as xai_batches_transformation
 from litellm.llms.xai.batches.transformation import XAIBatchesError
 from litellm.types.llms.openai import OpenAIFileObject
 from litellm.types.utils import LiteLLMBatch
@@ -322,10 +320,7 @@ def _completed_batch(batch_id: str) -> respx.Route:
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @respx.mock
-async def test_file_retrieve_of_a_batch_id_reports_the_results_file_without_a_files_lookup(
-    sync_mode: bool, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(xai_batches_transformation, "time", SimpleNamespace(time=lambda: 1791500000.7))
+async def test_file_retrieve_of_a_batch_id_reports_the_results_file_without_a_files_lookup(sync_mode: bool) -> None:
     batch_id: Final = f"batch_retrieve_{sync_mode}"
     batch: Final = _completed_batch(batch_id)
     results: Final = respx.get(f"{API_BASE}/v1/batches/{batch_id}/results").mock(side_effect=_two_results_pages)
@@ -349,7 +344,7 @@ async def test_file_retrieve_of_a_batch_id_reports_the_results_file_without_a_fi
         f"{batch_id}_results.jsonl",
         len(content.content),
         "processed",
-        1791500000,
+        1790121600,
     )
     assert [json.loads(line)["custom_id"] for line in content.content.decode().splitlines()] == ["r1", "r2"]
 
@@ -601,7 +596,7 @@ async def test_file_retrieve_measures_again_when_the_batch_gains_requests(sync_m
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @respx.mock
-async def test_file_retrieve_does_not_reuse_a_download_missing_results(sync_mode: bool) -> None:
+async def test_file_retrieve_of_a_download_missing_results_is_a_retryable_error(sync_mode: bool) -> None:
     batch_id: Final = f"batch_short_{sync_mode}"
     _completed_batch(batch_id)
     complete: Final = [False]
@@ -620,12 +615,15 @@ async def test_file_retrieve_does_not_reuse_a_download_missing_results(sync_mode
     results: Final = respx.get(f"{API_BASE}/v1/batches/{batch_id}/results").mock(side_effect=_pages)
     kwargs: Final = {"file_id": batch_id, "custom_llm_provider": "xai", "api_key": KEY, "api_base": API_BASE}
 
-    short: Final = litellm.file_retrieve(**kwargs) if sync_mode else await litellm.afile_retrieve(**kwargs)
+    with pytest.raises(XAIBatchesError, match="1 of 2 results") as short:
+        litellm.file_retrieve(**kwargs) if sync_mode else await litellm.afile_retrieve(**kwargs)
     complete[0] = True
     full: Final = litellm.file_retrieve(**kwargs) if sync_mode else await litellm.afile_retrieve(**kwargs)
     again: Final = litellm.file_retrieve(**kwargs) if sync_mode else await litellm.afile_retrieve(**kwargs)
+    content: Final = litellm.file_content(**kwargs)
 
-    assert (results.call_count, full.bytes > short.bytes, again.bytes) == (3, True, full.bytes)
+    assert (short.value.status_code, results.call_count) == (409, 5)
+    assert (full.bytes, again.bytes) == (len(content.content), len(content.content))
 
 
 @respx.mock
@@ -649,6 +647,24 @@ async def test_async_file_retrieve_keeps_a_recently_read_batch_over_an_older_one
         "batch_idle": 2,
         "batch_latest": 2,
     }
+
+
+@respx.mock
+async def test_async_file_retrieve_does_not_share_a_download_across_timeouts() -> None:
+    batch_id: Final = "batch_two_timeouts"
+    _completed_batch(batch_id)
+    results: Final = respx.get(f"{API_BASE}/v1/batches/{batch_id}/results").mock(side_effect=_two_results_pages)
+
+    await asyncio.gather(
+        *(
+            litellm.afile_retrieve(
+                file_id=batch_id, custom_llm_provider="xai", api_key=KEY, api_base=API_BASE, timeout=timeout
+            )
+            for timeout in (5.0, 5.0, 60.0)
+        )
+    )
+
+    assert results.call_count == 4
 
 
 @respx.mock
