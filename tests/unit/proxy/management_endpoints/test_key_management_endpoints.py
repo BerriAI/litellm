@@ -45,6 +45,7 @@ from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, project_cache_key
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy.management_endpoints.key_management_endpoints import (
+    _KeyListAuthorization,
     _check_org_key_limits,
     _check_project_key_limits,
     _check_team_key_limits,
@@ -121,162 +122,6 @@ async def test_list_keys():
     )
 
 
-@pytest.mark.asyncio
-async def test_list_keys_include_created_by_keys():
-    """
-    Test that include_created_by_keys parameter correctly includes keys created by the user
-    and applies specific filtering to both user's own keys and created_by keys.
-    """
-    mock_prisma_client = AsyncMock()
-    mock_find_many = AsyncMock(return_value=[])
-    mock_count = AsyncMock(return_value=0)
-    mock_prisma_client.db.litellm_verificationtoken.find_many = mock_find_many
-    mock_prisma_client.db.litellm_verificationtoken.count = mock_count
-
-    test_user_id = "user-123"
-    test_org_id = "org-456"
-    test_key_alias = "test-alias"
-    test_key_hash = "hashed-token-789"
-
-    # Test Case 1: include_created_by_keys=True with specific filters
-    args = {
-        "prisma_client": mock_prisma_client,
-        "page": 1,
-        "size": 50,
-        "user_id": test_user_id,
-        "team_id": None,
-        "organization_id": test_org_id,
-        "key_alias": test_key_alias,
-        "key_hash": test_key_hash,
-        "exclude_team_id": None,
-        "return_full_object": True,
-        "admin_team_ids": None,
-        "include_created_by_keys": True,
-    }
-
-    try:
-        result = await list_key_helper(**args)
-    except Exception as e:
-        print(f"error: {e}")
-
-    mock_find_many.assert_called_once()
-    mock_count.assert_called_once()
-
-    where_condition = mock_find_many.call_args.kwargs["where"]
-    print(f"where_condition with include_created_by_keys=True: {where_condition}")
-
-    def _flatten_and(node):
-        if set(node.keys()) == {"AND"}:
-            return [c for child in node["AND"] for c in _flatten_and(child)]
-        return [node]
-
-    def _find_visibility_or(node):
-        return next(
-            c["OR"]
-            for c in _flatten_and(node)
-            if "OR" in c and any("user_id" in branch or "created_by" in branch for branch in c["OR"])
-        )
-
-    conditions = _flatten_and(where_condition)
-    assert {"key_alias": test_key_alias} in conditions
-    assert {"token": test_key_hash} in conditions
-
-    or_conditions = _find_visibility_or(where_condition)
-
-    # Should have 2 OR conditions: user's own keys and created_by keys
-    assert len(or_conditions) == 2
-
-    # First condition should be user's own keys with all filters applied
-    user_condition = None
-    created_by_condition = None
-
-    for condition in or_conditions:
-        if "user_id" in condition:
-            user_condition = condition
-        elif "created_by" in condition:
-            created_by_condition = condition
-
-    assert user_condition is not None, "User condition should be present"
-    assert created_by_condition is not None, "Created by condition should be present"
-
-    assert user_condition["user_id"] == test_user_id
-    assert user_condition["organization_id"] == test_org_id
-    assert "key_alias" not in user_condition
-    assert "token" not in user_condition
-
-    # Verify created_by condition only has the created_by filter (no other filters applied)
-    # This is the current behavior - created_by keys don't inherit other filters
-    assert created_by_condition["created_by"] == test_user_id
-    assert (
-        len(created_by_condition) == 1
-    ), "Created by condition should only have created_by field"
-
-    # Reset mocks for Test Case 2
-    mock_find_many.reset_mock()
-    mock_count.reset_mock()
-
-    # Test Case 2: include_created_by_keys=False should not include created_by condition
-    args["include_created_by_keys"] = False
-
-    try:
-        result = await list_key_helper(**args)
-    except Exception as e:
-        print(f"error: {e}")
-
-    where_condition_no_created_by = mock_find_many.call_args.kwargs["where"]
-    print(
-        f"where_condition with include_created_by_keys=False: {where_condition_no_created_by}"
-    )
-
-    # Should not have OR conditions when include_created_by_keys=False and no admin_team_ids
-    # The user condition should be merged directly into the where clause
-    assert "created_by" not in json.dumps(where_condition_no_created_by)
-
-    # Reset mocks for Test Case 3
-    mock_find_many.reset_mock()
-    mock_count.reset_mock()
-
-    # Test Case 3: include_created_by_keys=True with exclude_team_id
-    args.update(
-        {
-            "include_created_by_keys": True,
-            "exclude_team_id": "excluded-team-123",
-            "team_id": None,  # Make sure no specific team is set
-        }
-    )
-
-    try:
-        result = await list_key_helper(**args)
-    except Exception as e:
-        print(f"error: {e}")
-
-    where_condition_with_exclude = mock_find_many.call_args.kwargs["where"]
-    print(f"where_condition with exclude_team_id: {where_condition_with_exclude}")
-
-    or_conditions_with_exclude = _find_visibility_or(where_condition_with_exclude)
-
-    # Find the user condition and created_by condition
-    user_condition_with_exclude = None
-    created_by_condition_with_exclude = None
-
-    for condition in or_conditions_with_exclude:
-        if "user_id" in condition:
-            user_condition_with_exclude = condition
-        elif "created_by" in condition:
-            created_by_condition_with_exclude = condition
-
-    # Verify exclude_team_id is applied to user condition
-    assert (
-        user_condition_with_exclude is not None
-    ), "User condition with exclude should be present"
-    assert user_condition_with_exclude["team_id"] == {"not": "excluded-team-123"}
-
-    # Verify created_by condition still only has created_by filter
-    assert (
-        created_by_condition_with_exclude is not None
-    ), "Created by condition with exclude should be present"
-    assert created_by_condition_with_exclude["created_by"] == test_user_id
-    assert len(created_by_condition_with_exclude) == 1
 
 
 @pytest.mark.asyncio
@@ -6146,7 +5991,6 @@ async def test_list_keys_with_expand_user():
             "exclude_team_id": None,
             "return_full_object": False,  # This should be overridden by expand=user
             "admin_team_ids": None,
-            "include_created_by_keys": False,
             "expand": ["user"],  # Test the expand parameter
         }
 
@@ -6257,7 +6101,6 @@ async def test_list_keys_with_expand_user_includes_created_by_user():
             "exclude_team_id": None,
             "return_full_object": False,
             "admin_team_ids": None,
-            "include_created_by_keys": False,
             "expand": ["user"],
         }
 
@@ -6338,7 +6181,6 @@ async def test_list_keys_with_status_deleted():
         "exclude_team_id": None,
         "return_full_object": False,
         "admin_team_ids": None,
-        "include_created_by_keys": False,
         "status": "deleted",  # Test the status parameter
     }
 
@@ -6413,6 +6255,7 @@ async def test_list_keys_accepts_live_status_filters(monkeypatch, status_filter)
         page=1,
         size=10,
         user_id=None,
+        user_email=None,
         team_id=None,
         organization_id=None,
         key_hash=None,
@@ -6420,7 +6263,6 @@ async def test_list_keys_accepts_live_status_filters(monkeypatch, status_filter)
         search=None,
         return_full_object=False,
         include_team_keys=False,
-        include_created_by_keys=False,
         sort_by=None,
         sort_order="desc",
         expand=None,
@@ -6493,7 +6335,6 @@ async def test_list_key_helper_revoked_status_filters_live_table_on_blocked():
         exclude_team_id=None,
         return_full_object=True,
         admin_team_ids=None,
-        include_created_by_keys=False,
         status="revoked",
     )
 
@@ -6669,7 +6510,7 @@ async def test_list_keys_non_admin_user_id_auto_set():
     with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
         with patch(
             "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_list_check",
-            return_value=mock_user_info,
+            return_value=_KeyListAuthorization(user_info=mock_user_info),
         ):
             with patch(
                 "litellm.proxy.management_endpoints.key_management_endpoints.get_admin_team_ids",
@@ -6686,6 +6527,7 @@ async def test_list_keys_non_admin_user_id_auto_set():
                         request=mock_request,
                         user_api_key_dict=mock_user_api_key_dict,
                         user_id=None,  # This should be auto-set to test_user_id
+                        user_email=None,
                         status=None,  # Explicitly set status to None to avoid validation errors
                     )
 
@@ -6748,7 +6590,7 @@ async def _invoke_list_keys_and_capture_helper_kwargs(
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
         patch(
             "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_list_check",
-            return_value=mock_user_info,
+            return_value=_KeyListAuthorization(user_info=mock_user_info),
         ),
         patch(
             "litellm.proxy.management_endpoints.key_management_endpoints._fetch_user_team_objects",
@@ -6939,7 +6781,6 @@ def test_build_key_filter_conditions_full_visibility_team_includes_service_accou
         exclude_team_id=None,
         admin_team_ids=[full_visibility_team],
         member_team_ids=[full_visibility_team],
-        include_created_by_keys=False,
     )
 
     serialized = json.dumps(where)
@@ -6979,7 +6820,6 @@ def test_build_key_filter_conditions_member_only_team_restricts_to_service_accou
         exclude_team_id=None,
         admin_team_ids=[],
         member_team_ids=[member_only_team],
-        include_created_by_keys=False,
     )
 
     serialized = json.dumps(where)
@@ -7012,7 +6852,6 @@ def test_build_key_filter_conditions_agent_id_narrows_visibility():
         exclude_team_id=None,
         admin_team_ids=["team-a"],
         member_team_ids=None,
-        include_created_by_keys=False,
         agent_id=agent_id,
     )
 
@@ -7031,7 +6870,6 @@ def test_build_key_filter_conditions_agent_id_narrows_visibility():
         exclude_team_id=None,
         admin_team_ids=["team-a"],
         member_team_ids=None,
-        include_created_by_keys=False,
     )
     assert "agent_id" not in json.dumps(where_without)
 
@@ -7055,7 +6893,6 @@ def test_build_key_filter_conditions_key_alias_narrows_team_admin_visibility():
         exclude_team_id=None,
         admin_team_ids=["team-a"],
         member_team_ids=["team-a"],
-        include_created_by_keys=False,
     )
 
     assert where.get("AND"), f"expected top-level AND, got: {where}"
@@ -7071,7 +6908,6 @@ def test_build_key_filter_conditions_key_alias_narrows_team_admin_visibility():
         exclude_team_id=None,
         admin_team_ids=["team-a"],
         member_team_ids=["team-a"],
-        include_created_by_keys=False,
         use_key_alias_substring_matching=True,
     )
     assert {"key_alias": {"contains": "member-key", "mode": "insensitive"}} in where_substring["AND"], (
@@ -7098,7 +6934,6 @@ def test_build_key_filter_conditions_key_hash_narrows_team_admin_visibility():
         exclude_team_id=None,
         admin_team_ids=["team-a"],
         member_team_ids=["team-a"],
-        include_created_by_keys=False,
     )
 
     assert where.get("AND"), f"expected top-level AND, got: {where}"
@@ -7157,7 +6992,6 @@ def test_build_key_filter_conditions_search_narrows_team_admin_visibility():
                 exclude_team_id=None,
                 admin_team_ids=["team-a"],
                 member_team_ids=["team-a"],
-                include_created_by_keys=False,
                 search="member-key-id",
             )
         )
@@ -8873,7 +8707,7 @@ async def test_validate_key_list_check_proxy_admin():
         prisma_client=mock_prisma_client,
     )
 
-    assert result is None
+    assert result.user_info is None
 
 
 @pytest.mark.asyncio
@@ -8906,7 +8740,8 @@ async def test_validate_key_list_check_team_admin_success():
     )
 
     assert result is not None
-    assert result.user_id == "test-user"
+    assert result.user_info is not None
+    assert result.user_info.user_id == "test-user"
 
 
 @pytest.mark.asyncio
@@ -8986,7 +8821,8 @@ async def test_validate_key_list_check_key_hash_authorized():
         )
 
         assert result is not None
-        assert result.user_id == "test-user"
+        assert result.user_info is not None
+        assert result.user_info.user_id == "test-user"
 
 
 @pytest.mark.asyncio
@@ -9141,7 +8977,7 @@ async def test_validate_key_list_check_proxy_admin_viewer_skips_db_lookup():
         prisma_client=mock_prisma_client,
     )
 
-    assert result is None
+    assert result.user_info is None
     mock_prisma_client.db.litellm_usertable.find_unique.assert_not_awaited()
     assert mock_prisma_client.mock_calls == []
 
@@ -9178,6 +9014,95 @@ async def test_validate_key_list_check_internal_user_cannot_query_other_user():
 
     assert exc_info.value.code == "403"
     assert "not authorized to check another user's keys" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_role", "permissions"),
+    [("user", ["/key/list"]), ("admin", None)],
+)
+async def test_validate_key_list_check_authorizes_shared_list_or_admin_team(team_role, permissions):
+    caller = LiteLLM_UserTable(user_id="caller", teams=["shared-team"])
+    target = LiteLLM_UserTable(user_id="target", teams=["shared-team"])
+    users = {"caller": caller, "target": target}
+    team = LiteLLM_TeamTable(
+        team_id="shared-team",
+        members_with_roles=[
+            Member(user_id="caller", role=team_role),
+            Member(user_id="target", role="user"),
+        ],
+        team_member_permissions=permissions,
+    )
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        side_effect=lambda where, **_: users.get(where["user_id"])
+    )
+    mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[team])
+
+    authorization = await validate_key_list_check(
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="caller"),
+        user_id="target",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert authorization.user_team_ids == ("shared-team",)
+
+
+@pytest.mark.asyncio
+async def test_validate_key_list_check_rejects_target_without_qualifying_shared_team():
+    caller = LiteLLM_UserTable(user_id="caller", teams=["caller-team"])
+    target = LiteLLM_UserTable(user_id="target", teams=["target-team"])
+    users = {"caller": caller, "target": target}
+    team = LiteLLM_TeamTable(
+        team_id="caller-team",
+        members_with_roles=[
+            Member(user_id="caller", role="user"),
+            Member(user_id="other", role="user"),
+        ],
+        team_member_permissions=["/key/list"],
+    )
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        side_effect=lambda where, **_: users.get(where["user_id"])
+    )
+    mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[team])
+
+    with pytest.raises(ProxyException) as exc_info:
+        await validate_key_list_check(
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="caller"),
+            user_id="target",
+            team_id=None,
+            organization_id=None,
+            key_alias=None,
+            key_hash=None,
+            prisma_client=mock_prisma_client,
+        )
+
+    assert exc_info.value.code == "403"
+    assert exc_info.value.message == "You are not authorized to check another user's keys"
+    assert exc_info.value.param == "user_id"
+
+
+@pytest.mark.asyncio
+async def test_list_keys_rejects_both_user_selectors(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+
+    with pytest.raises(ProxyException) as exc_info:
+        await list_keys(
+            request=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            user_id="user-id",
+            user_email="user@example.com",
+            status=None,
+            expires=None,
+        )
+
+    assert exc_info.value.code == "400"
+    assert "user_id and user_email cannot both be provided" in str(exc_info.value.message)
 
 
 @pytest.mark.asyncio
@@ -9763,7 +9688,6 @@ async def test_build_key_filter_member_team_service_accounts():
         exclude_team_id=None,
         admin_team_ids=None,
         member_team_ids=member_team_ids,
-        include_created_by_keys=False,
     )
 
     # Should have AND with OR conditions
@@ -9808,7 +9732,6 @@ async def test_build_key_filter_admin_sees_all_team_keys():
         exclude_team_id=None,
         admin_team_ids=admin_team_ids,
         member_team_ids=member_team_ids,
-        include_created_by_keys=False,
     )
 
     assert "AND" in where
@@ -9841,148 +9764,10 @@ async def test_build_key_filter_admin_sees_all_team_keys():
     assert {"user_id": None} in and_parts
 
 
-@pytest.mark.asyncio
-async def test_build_key_filter_created_by_scoped_to_current_teams():
-    """
-    Test that created_by filter is scoped to teams user currently belongs to.
-    A former team member should NOT see service accounts they created for
-    a team they've left.
-    """
-    from litellm.proxy.management_endpoints.key_management_endpoints import (
-        _build_key_filter_conditions,
-    )
-
-    user_id = "user-456"
-    # User is currently only a member of team-A (left team-B)
-    member_team_ids = ["team-A"]
-
-    where = _build_key_filter_conditions(
-        user_id=user_id,
-        team_id=None,
-        organization_id=None,
-        key_alias=None,
-        key_hash=None,
-        exclude_team_id=None,
-        admin_team_ids=None,
-        member_team_ids=member_team_ids,
-        include_created_by_keys=True,
-    )
-
-    assert "AND" in where
-    or_conditions = where["AND"][1]["OR"]
-
-    # Find the created_by condition
-    created_by_cond = None
-    for cond in or_conditions:
-        if "AND" in cond:
-            and_parts = cond["AND"]
-            for part in and_parts:
-                if isinstance(part, dict) and "created_by" in part:
-                    created_by_cond = cond
-                    break
-
-    assert created_by_cond is not None, "Created by condition should be present"
-
-    # created_by should be scoped: created_by=user AND (team_id in [team-A] OR team_id=None)
-    and_parts = created_by_cond["AND"]
-    assert {"created_by": user_id} in and_parts
-
-    # Find the OR part that scopes to current teams
-    team_scope = None
-    for part in and_parts:
-        if isinstance(part, dict) and "OR" in part:
-            team_scope = part["OR"]
-
-    assert team_scope is not None, "Team scope OR condition should be present"
-    assert {"team_id": {"in": member_team_ids}} in team_scope
-    assert {"team_id": None} in team_scope
 
 
-@pytest.mark.asyncio
-async def test_build_key_filter_created_by_no_teams():
-    """
-    Test that when user has no team memberships (empty list), created_by
-    only returns non-team keys (personal keys).
-    """
-    from litellm.proxy.management_endpoints.key_management_endpoints import (
-        _build_key_filter_conditions,
-    )
-
-    user_id = "user-no-teams"
-    member_team_ids = []  # User has no team memberships
-
-    where = _build_key_filter_conditions(
-        user_id=user_id,
-        team_id=None,
-        organization_id=None,
-        key_alias=None,
-        key_hash=None,
-        exclude_team_id=None,
-        admin_team_ids=None,
-        member_team_ids=member_team_ids,
-        include_created_by_keys=True,
-    )
-
-    assert "AND" in where
-    or_conditions = where["AND"][1]["OR"]
-
-    # Find the created_by condition
-    created_by_cond = None
-    for cond in or_conditions:
-        if "AND" in cond:
-            and_parts = cond["AND"]
-            for part in and_parts:
-                if isinstance(part, dict) and "created_by" in part:
-                    created_by_cond = cond
-                    break
-
-    assert created_by_cond is not None
-    and_parts = created_by_cond["AND"]
-    assert {"created_by": user_id} in and_parts
-    assert {"team_id": None} in and_parts
-    # Should NOT have an OR with team_id in [] - just a simple team_id=None
-    for part in and_parts:
-        if isinstance(part, dict) and "OR" in part:
-            pytest.fail("Should not have OR condition when member_team_ids is empty")
 
 
-@pytest.mark.asyncio
-async def test_build_key_filter_backward_compat_no_member_team_ids():
-    """
-    Test backward compatibility: when member_team_ids is None (not provided),
-    created_by filter should use the old unrestricted behavior.
-    This ensures direct callers of _list_key_helper (like Prometheus) still work.
-    """
-    from litellm.proxy.management_endpoints.key_management_endpoints import (
-        _build_key_filter_conditions,
-    )
-
-    user_id = "user-789"
-
-    where = _build_key_filter_conditions(
-        user_id=user_id,
-        team_id=None,
-        organization_id=None,
-        key_alias=None,
-        key_hash=None,
-        exclude_team_id=None,
-        admin_team_ids=None,
-        member_team_ids=None,  # Not provided
-        include_created_by_keys=True,
-    )
-
-    assert "AND" in where
-    or_conditions = where["AND"][1]["OR"]
-
-    # Find the created_by condition - should be simple {"created_by": user_id}
-    created_by_cond = None
-    for cond in or_conditions:
-        if "created_by" in cond:
-            created_by_cond = cond
-
-    assert created_by_cond is not None
-    assert created_by_cond == {"created_by": user_id}
-    assert len(created_by_cond) == 1, "Should be simple created_by without team scoping"
 
 
 @pytest.mark.asyncio
@@ -10008,7 +9793,6 @@ async def test_build_key_filter_admin_all_member_overlap():
         exclude_team_id=None,
         admin_team_ids=admin_team_ids,
         member_team_ids=member_team_ids,
-        include_created_by_keys=False,
     )
 
     assert "AND" in where
@@ -10051,7 +9835,6 @@ async def test_build_key_filter_project_id():
         exclude_team_id=None,
         admin_team_ids=None,
         member_team_ids=None,
-        include_created_by_keys=False,
         project_id=project_id,
     )
 
@@ -10086,7 +9869,6 @@ async def test_build_key_filter_access_group_id():
         exclude_team_id=None,
         admin_team_ids=None,
         member_team_ids=None,
-        include_created_by_keys=False,
         access_group_id=access_group_id,
     )
 
@@ -10122,7 +9904,6 @@ async def test_build_key_filter_project_id_and_access_group_id():
         exclude_team_id=None,
         admin_team_ids=None,
         member_team_ids=None,
-        include_created_by_keys=False,
         project_id=project_id,
         access_group_id=access_group_id,
     )
@@ -10152,7 +9933,6 @@ async def test_build_key_filter_team_id_scoped():
         exclude_team_id=None,
         admin_team_ids=["team-A", "team-B"],
         member_team_ids=["team-A", "team-B"],
-        include_created_by_keys=True,
     )
 
     # The team_id filter must be a direct child of the outermost AND,
@@ -10188,7 +9968,6 @@ async def test_build_key_filter_admin_substring_matching():
         exclude_team_id=None,
         admin_team_ids=None,
         member_team_ids=None,
-        include_created_by_keys=False,
         use_substring_matching=True,
         use_key_alias_substring_matching=True,
     )
@@ -10220,7 +9999,6 @@ async def test_build_key_filter_non_admin_exact_matching():
         exclude_team_id=None,
         admin_team_ids=None,
         member_team_ids=None,
-        include_created_by_keys=False,
         use_substring_matching=False,
     )
 
@@ -10250,11 +10028,78 @@ async def test_build_key_filter_default_is_exact_matching():
         exclude_team_id=None,
         admin_team_ids=None,
         member_team_ids=None,
-        include_created_by_keys=False,
     )
 
     # Single OR condition is flattened into the top-level where dict
     assert where["user_id"] == user_id
+
+
+def test_build_key_filter_self_selector_ignores_team_visibility():
+    from litellm.proxy.management_endpoints.key_management_endpoints import _build_key_filter_conditions
+
+    where = _build_key_filter_conditions(
+        user_id="caller",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=["admin-team"],
+        member_team_ids=["member-team"],
+        has_user_filter=True,
+    )
+
+    assert where["user_id"] == "caller"
+    assert "admin-team" not in str(where)
+    assert "admin-team" not in str(where)
+    assert "member-team" not in str(where)
+
+
+def test_build_key_filter_other_user_intersection_composes_with_excluded_team():
+    from litellm.proxy.management_endpoints.key_management_endpoints import _build_key_filter_conditions
+
+    where = _build_key_filter_conditions(
+        user_id="target",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id="excluded-team",
+        admin_team_ids=["ignored-admin-team"],
+        member_team_ids=["ignored-member-team"],
+        user_team_ids=["shared-team"],
+        has_user_filter=True,
+    )
+
+    assert "ignored-admin-team" not in str(where)
+    assert "ignored-member-team" not in str(where)
+    assert where["AND"] == [
+        {"user_id": "target"},
+        {"team_id": {"in": ["shared-team"]}},
+        {"team_id": {"not": "excluded-team"}},
+    ]
+
+
+def test_build_key_filter_no_user_selector_includes_team_key_visibility():
+    from litellm.proxy.management_endpoints.key_management_endpoints import _build_key_filter_conditions
+
+    where = _build_key_filter_conditions(
+        user_id="caller",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=["list-team"],
+        member_team_ids=["plain-team"],
+    )
+
+    visibility = where["AND"][1]["OR"]
+    assert {"user_id": "caller"} in visibility
+    assert {"team_id": {"in": ["list-team"]}} in visibility
+    assert {
+        "AND": [{"team_id": {"in": ["plain-team"]}}, {"user_id": None}]
+    } in visibility
 
 
 @pytest.mark.asyncio
@@ -17155,7 +17000,7 @@ async def _list_keys_capture_helper_kwargs(user_api_key_dict, **list_kwargs):
     with patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()):
         with patch(
             "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_list_check",
-            return_value=mock_user_info,
+            return_value=_KeyListAuthorization(user_info=mock_user_info),
         ):
             with patch(
                 "litellm.proxy.management_endpoints.key_management_endpoints.list_key_helper",
@@ -17274,7 +17119,7 @@ def _list_team_a_keys_as(user_role, members_with_roles, query):
         "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
     ):
         response = TestClient(test_app).get(
-            f"/key/list?team_id=team-a&include_team_keys=true&include_created_by_keys=true&{query}"
+            f"/key/list?team_id=team-a&include_team_keys=true&{query}"
         )
     assert response.status_code == 200, response.text
     return sorted(response.json()["keys"])
@@ -18464,7 +18309,7 @@ async def test_list_keys_forwards_expires_filter(expires_value, expected_forward
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
         patch(
             "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_list_check",
-            return_value=mock_user_info,
+            return_value=_KeyListAuthorization(user_info=mock_user_info),
         ),
         patch(
             "litellm.proxy.management_endpoints.key_management_endpoints.list_key_helper",
@@ -18503,7 +18348,7 @@ async def test_list_keys_without_expires_param_forwards_none():
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
         patch(
             "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_list_check",
-            return_value=mock_user_info,
+            return_value=_KeyListAuthorization(user_info=mock_user_info),
         ),
         patch(
             "litellm.proxy.management_endpoints.key_management_endpoints.list_key_helper",

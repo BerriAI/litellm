@@ -8,6 +8,8 @@ import { KEY_TABLE_HIDDEN_COLUMNS, KEY_TABLE_SORT_FIELDS } from "./keyTableColum
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { useAllTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { regenerateKeyCall } from "../networking";
 
@@ -36,9 +38,25 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: vi.fn(() => ({
     accessToken: "test-token",
     userId: "test-user",
+    userEmail: "me@example.com",
     userRole: "Admin",
     premiumUser: true,
     token: "test-token",
+  })),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/users/useUsers", () => ({
+  useInfiniteUsers: vi.fn(() => ({
+    data: {
+      pages: [
+        {
+          users: [
+            { user_id: "user-42", user_email: "user-42@example.com" },
+            { user_id: "test-user", user_email: "me@example.com" },
+          ],
+        },
+      ],
+    },
   })),
 }));
 
@@ -195,6 +213,18 @@ beforeEach(() => {
 
   mockUseKeys.mockReturnValue(keysResult([mockKey]));
   mockUseKeyInfo.mockReturnValue(keyInfoResult(undefined));
+  vi.mocked(useAuthorized).mockReturnValue({
+    accessToken: "test-token",
+    userId: "test-user",
+    userEmail: "me@example.com",
+    userRole: "Admin",
+    premiumUser: true,
+    token: "test-token",
+  } as ReturnType<typeof useAuthorized>);
+  vi.mocked(useAllTeams).mockReturnValue({
+    data: [{ team_id: "team-1", team_alias: "Test Team", members_with_roles: [] }],
+    isLoading: false,
+  } as unknown as ReturnType<typeof useAllTeams>);
 
   mockUseTeams.mockReturnValue({
     teams: [mockTeam],
@@ -205,6 +235,83 @@ beforeEach(() => {
 it("should render VirtualKeysTable component", () => {
   renderWithProviders(<VirtualKeysTable />);
   expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
+});
+
+it("pins the current user before searchable user options", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(<VirtualKeysTable />);
+  openFilters();
+  const input = await screen.findByRole("combobox", { name: "User Email" });
+  await user.click(input);
+
+  const options = await screen.findAllByRole("option");
+  expect(options[0]).toHaveTextContent("me@example.com");
+  expect(options[0]).toHaveTextContent("(you)");
+  expect(options[1]).toHaveTextContent("user-42@example.com");
+});
+
+it("sources non-admin user options from qualifying team rosters", async () => {
+  vi.mocked(useAuthorized).mockReturnValue({
+    accessToken: "test-token",
+    userId: "test-user",
+    userEmail: "me@example.com",
+    userRole: "Internal User",
+    premiumUser: false,
+    token: "test-token",
+  } as ReturnType<typeof useAuthorized>);
+  vi.mocked(useAllTeams).mockReturnValue({
+    data: [
+      {
+        team_id: "list-team",
+        members_with_roles: [
+          { user_id: "test-user", user_email: "me@example.com", role: "user" },
+          { user_id: "list-user", user_email: "list@example.com", role: "user" },
+        ],
+        team_member_permissions: ["/key/list"],
+      },
+      {
+        team_id: "plain-team",
+        members_with_roles: [
+          { user_id: "test-user", user_email: "me@example.com", role: "user" },
+          { user_id: "plain-user", user_email: "plain@example.com", role: "user" },
+        ],
+        team_member_permissions: [],
+      },
+    ] as Team[],
+    isLoading: false,
+  } as ReturnType<typeof useAllTeams>);
+  const user = userEvent.setup();
+  renderWithProviders(<VirtualKeysTable />);
+  openFilters();
+  await user.click(await screen.findByRole("combobox", { name: "User Email" }));
+
+  expect(await screen.findByRole("option", { name: "list@example.com" })).toBeInTheDocument();
+  expect(screen.queryByRole("option", { name: "plain@example.com" })).not.toBeInTheDocument();
+});
+
+it("maps the team-keys switch into the key-list options and disables it with a user filter", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(<VirtualKeysTable />);
+  openFilters();
+
+  const teamKeysSwitch = screen.getByRole("switch", { name: "Include team keys" });
+  expect(teamKeysSwitch).toBeChecked();
+  await user.click(teamKeysSwitch);
+  await chooseSelectOption(
+    user,
+    await screen.findByRole("combobox", { name: "User Email" }),
+    "user-42@example.com",
+  );
+  expect(teamKeysSwitch).toHaveAttribute("aria-disabled", "true");
+  fireEvent.click(screen.getByTestId("filter-drawer-apply"));
+
+  await waitFor(() => {
+    expect(mockUseKeys).toHaveBeenLastCalledWith(
+      1,
+      50,
+      expect.objectContaining({ userID: "user-42", includeTeamKeys: false }),
+    );
+  });
 });
 
 it("right-aligns the Spend / Budget column", async () => {
@@ -610,13 +717,17 @@ it("should display 'Unknown' for last_active when value is null", async () => {
 });
 
 describe("server-side filtering – the LIT-4080 regression guard", () => {
-  it("threads an applied User ID filter into the useKeys query so any refetch keeps it", async () => {
+  it("threads an applied User Email filter into the useKeys query so any refetch keeps it", async () => {
+    const user = userEvent.setup();
     renderWithProviders(<VirtualKeysTable />);
 
     openFilters();
 
-    const userIdInput = await screen.findByPlaceholderText(/Enter User ID/);
-    fireEvent.change(userIdInput, { target: { value: "user-42" } });
+    await chooseSelectOption(
+      user,
+      await screen.findByRole("combobox", { name: "User Email" }),
+      "user-42@example.com",
+    );
     fireEvent.click(screen.getByTestId("filter-drawer-apply"));
 
     await waitFor(() => {
@@ -632,12 +743,16 @@ describe("server-side filtering – the LIT-4080 regression guard", () => {
   });
 
   it("drops the filter from the useKeys query when it is cleared", async () => {
+    const user = userEvent.setup();
     const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
     renderWithProviders(<VirtualKeysTable />, { onUrlUpdate });
 
     openFilters();
-    const userIdInput = await screen.findByPlaceholderText(/Enter User ID/);
-    fireEvent.change(userIdInput, { target: { value: "user-42" } });
+    await chooseSelectOption(
+      user,
+      await screen.findByRole("combobox", { name: "User Email" }),
+      "user-42@example.com",
+    );
     fireEvent.click(screen.getByTestId("filter-drawer-apply"));
 
     await waitFor(() => {
@@ -853,7 +968,7 @@ describe("table state lives in the URL so it survives leaving and returning to t
     });
     expect(screen.getByTestId("filter-chip-team_id")).toHaveTextContent("Test Team");
     expect(screen.getByTestId("filter-chip-org_id")).toHaveTextContent("Test Organization");
-    expect(screen.getByTestId("filter-chip-user_id")).toHaveTextContent("user-42");
+    expect(screen.getByTestId("filter-chip-user_id")).toHaveTextContent("user-42@example.com");
     expect(screen.getByTestId("filter-chip-key_hash")).toHaveTextContent(mockKey.token);
   });
 
@@ -915,10 +1030,15 @@ describe("table state lives in the URL so it survives leaving and returning to t
 
   it("writes an applied drawer filter to the URL and clears it again", async () => {
     const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    const user = userEvent.setup();
     renderWithProviders(<VirtualKeysTable />, { onUrlUpdate });
 
     openFilters();
-    fireEvent.change(await screen.findByPlaceholderText(/Enter User ID/), { target: { value: "user-42" } });
+    await chooseSelectOption(
+      user,
+      await screen.findByRole("combobox", { name: "User Email" }),
+      "user-42@example.com",
+    );
     fireEvent.click(screen.getByTestId("filter-drawer-apply"));
 
     await waitFor(() => {

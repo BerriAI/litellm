@@ -19,6 +19,7 @@ import re
 import secrets
 import traceback
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeVar, cast
@@ -6342,6 +6343,49 @@ async def reset_key_spend_fn(
         raise handle_exception_on_proxy(e)
 
 
+@dataclass(frozen=True, slots=True)
+class _KeyListAuthorization:
+    user_info: LiteLLM_UserTable | None
+    user_team_ids: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedKeyListUser:
+    user_id: str | None
+    user_ids: tuple[str, ...] | None = None
+
+
+async def _resolve_key_list_user_email(
+    user_email: str,
+    is_admin_view: bool,
+    use_substring_matching: bool,
+    prisma_client: PrismaClient,
+) -> _ResolvedKeyListUser:
+    user_table: Final = _prisma_table(UserRepository(prisma_client))
+    if is_admin_view and use_substring_matching:
+        matching_users: Final = await user_table.find_many(
+            where={"user_email": {"contains": user_email, "mode": "insensitive"}}
+        )
+        return _ResolvedKeyListUser(
+            user_id=None,
+            user_ids=tuple(user.user_id for user in matching_users or ()),
+        )
+
+    matching_user: Final[BaseModel | None] = await user_table.find_first(
+        where={"user_email": {"equals": user_email, "mode": "insensitive"}}
+    )
+    if matching_user is not None:
+        return _ResolvedKeyListUser(user_id=matching_user.user_id)
+    if is_admin_view:
+        return _ResolvedKeyListUser(user_id=None, user_ids=())
+    raise ProxyException(
+        message="You are not authorized to check another user's keys",
+        type=ProxyErrorTypes.bad_request_error,
+        param="user_id",
+        code=status.HTTP_403_FORBIDDEN,
+    )
+
+
 async def validate_key_list_check(
     user_api_key_dict: UserAPIKeyAuth,
     user_id: str | None,
@@ -6350,9 +6394,9 @@ async def validate_key_list_check(
     key_alias: str | None,
     key_hash: str | None,
     prisma_client: PrismaClient,
-) -> LiteLLM_UserTable | None:
+) -> _KeyListAuthorization:
     if user_api_key_has_admin_view(user_api_key_dict):
-        return None
+        return _KeyListAuthorization(user_info=None)
 
     if user_api_key_dict.user_id is None:
         raise ProxyException(
@@ -6376,15 +6420,16 @@ async def validate_key_list_check(
 
     complete_user_info: Final = LiteLLM_UserTable.model_validate(complete_user_info_db_obj.model_dump())
 
-    # internal user can only see their own keys
-    if user_id:
-        if complete_user_info.user_id != user_id:
-            raise ProxyException(
-                message="You are not authorized to check another user's keys",
-                type=ProxyErrorTypes.bad_request_error,
-                param="user_id",
-                code=status.HTTP_403_FORBIDDEN,
-            )
+    user_team_ids: Final[tuple[str, ...] | None] = (
+        await _get_authorized_key_list_user_teams(
+            user_api_key_dict=user_api_key_dict,
+            target_user_id=user_id,
+            complete_user_info=complete_user_info,
+            prisma_client=prisma_client,
+        )
+        if user_id is not None and complete_user_info.user_id != user_id
+        else None
+    )
 
     if team_id:
         if team_id not in complete_user_info.teams:
@@ -6437,7 +6482,45 @@ async def validate_key_list_check(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"You are not allowed to access this key's info. Your role={user_api_key_dict.user_role}",
             )
-    return complete_user_info
+    return _KeyListAuthorization(user_info=complete_user_info, user_team_ids=user_team_ids)
+
+
+async def _get_authorized_key_list_user_teams(
+    user_api_key_dict: UserAPIKeyAuth,
+    target_user_id: str,
+    complete_user_info: LiteLLM_UserTable,
+    prisma_client: PrismaClient,
+) -> tuple[str, ...]:
+    target_user_db_obj: Final[BaseModel | None] = await _prisma_table(UserRepository(prisma_client)).find_unique(
+        where={"user_id": target_user_id}
+    )
+    if target_user_db_obj is None:
+        raise ProxyException(
+            message="You are not authorized to check another user's keys",
+            type=ProxyErrorTypes.bad_request_error,
+            param="user_id",
+            code=status.HTTP_403_FORBIDDEN,
+        )
+    target_user_info: Final = LiteLLM_UserTable.model_validate(target_user_db_obj.model_dump())
+    caller_team_objects: Final = await _fetch_user_team_objects(
+        complete_user_info=complete_user_info,
+        prisma_client=prisma_client,
+    )
+    qualifying_team_ids: Final = frozenset(
+        (
+            *_get_admin_team_ids_from_objects(user_api_key_dict, caller_team_objects),
+            *_get_team_ids_with_key_list_permission_from_objects(user_api_key_dict, caller_team_objects),
+        )
+    )
+    user_team_ids: Final = tuple(team_id for team_id in target_user_info.teams or () if team_id in qualifying_team_ids)
+    if not user_team_ids:
+        raise ProxyException(
+            message="You are not authorized to check another user's keys",
+            type=ProxyErrorTypes.bad_request_error,
+            param="user_id",
+            code=status.HTTP_403_FORBIDDEN,
+        )
+    return user_team_ids
 
 
 async def _fetch_user_team_objects(
@@ -6562,6 +6645,9 @@ async def list_keys(
         None,
         description="Filter keys by user ID. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching.",
     ),
+    user_email: str | None = Query(
+        None, description="Filter keys by user email. Exact match by default; admins may use substring_matching=true."
+    ),
     team_id: str | None = Query(None, description="Filter keys by team ID"),
     organization_id: str | None = Query(None, description="Filter keys by organization ID"),
     key_hash: str | None = Query(None, description="Filter keys by key hash"),
@@ -6574,8 +6660,10 @@ async def list_keys(
         description="Combined search: matches keys whose token (key hash) equals the value OR whose key_alias contains it (case-insensitive).",
     ),
     return_full_object: bool = Query(False, description="Return full key object"),
-    include_team_keys: bool = Query(False, description="Include all keys for teams that user is an admin of."),
-    include_created_by_keys: bool = Query(False, description="Include keys created by the user"),
+    include_team_keys: bool = Query(
+        False,
+        description="Include every key in teams where you are a team admin or have /key/list through team_member_permissions, plus service-account keys (user_id NULL) in your other teams.",
+    ),
     sort_by: str | None = Query(
         default=None,
         description="Column to sort by (e.g. 'user_id', 'created_at', 'spend')",
@@ -6639,9 +6727,29 @@ async def list_keys(
                 detail={"error": "Invalid expires value. Supported: 'active', 'expired'."},
             )
 
-        complete_user_info: Final = await validate_key_list_check(
+        requested_user_id: Final = user_id if isinstance(user_id, str) else None
+        requested_user_email: Final = user_email if isinstance(user_email, str) else None
+        if requested_user_id is not None and requested_user_email is not None:
+            raise HTTPException(status_code=400, detail={"error": "user_id and user_email cannot both be provided"})
+
+        is_admin_view: Final = user_api_key_has_admin_view(user_api_key_dict)
+        use_substring_matching: Final = substring_matching and is_admin_view
+        use_key_alias_substring_matching: Final = substring_matching
+        resolved_user: Final = (
+            await _resolve_key_list_user_email(
+                user_email=requested_user_email,
+                is_admin_view=is_admin_view,
+                use_substring_matching=use_substring_matching,
+                prisma_client=prisma_client,
+            )
+            if requested_user_email is not None
+            else _ResolvedKeyListUser(user_id=requested_user_id)
+        )
+        target_user_id: Final = resolved_user.user_id
+
+        authorization: Final = await validate_key_list_check(
             user_api_key_dict=user_api_key_dict,
-            user_id=user_id,
+            user_id=target_user_id,
             team_id=team_id,
             organization_id=organization_id,
             key_alias=key_alias,
@@ -6649,42 +6757,41 @@ async def list_keys(
             prisma_client=prisma_client,
         )
 
-        # Fetch team objects once when needed for either admin or member filtering.
-        # This avoids duplicate DB queries for the same team data.
-        if include_team_keys or include_created_by_keys:
-            team_objects = await _fetch_user_team_objects(
-                complete_user_info=complete_user_info,
+        has_user_filter: Final = requested_user_id is not None or requested_user_email is not None
+        team_objects: Final = (
+            await _fetch_user_team_objects(
+                complete_user_info=authorization.user_info,
                 prisma_client=prisma_client,
             )
-            member_team_ids = _get_member_team_ids_from_objects(
+            if include_team_keys and not has_user_filter
+            else []
+        )
+        member_team_ids: Final = (
+            _get_member_team_ids_from_objects(
                 user_api_key_dict=user_api_key_dict,
                 team_objects=team_objects,
             )
-        else:
-            team_objects = []
-            member_team_ids = None
-
-        if include_team_keys:
-            admin_team_ids = _get_admin_team_ids_from_objects(
-                user_api_key_dict=user_api_key_dict,
-                team_objects=team_objects,
+            if include_team_keys and not has_user_filter
+            else None
+        )
+        admin_team_ids: Final = (
+            list(
+                dict.fromkeys(
+                    [
+                        *_get_admin_team_ids_from_objects(
+                            user_api_key_dict=user_api_key_dict,
+                            team_objects=team_objects,
+                        ),
+                        *_get_team_ids_with_key_list_permission_from_objects(
+                            user_api_key_dict=user_api_key_dict,
+                            team_objects=team_objects,
+                        ),
+                    ]
+                )
             )
-            # Non-admin members with /key/list permission get full team-key
-            # visibility for that team — matching the UI contract that
-            # granting this permission lets them see all keys within the team.
-            list_permission_team_ids: Final = _get_team_ids_with_key_list_permission_from_objects(
-                user_api_key_dict=user_api_key_dict,
-                team_objects=team_objects,
-            )
-            if list_permission_team_ids:
-                admin_team_ids = list({*admin_team_ids, *list_permission_team_ids})
-        else:
-            admin_team_ids = None
-
-        is_proxy_admin: Final = user_api_key_dict.user_role in [
-            LitellmUserRoles.PROXY_ADMIN.value,
-            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
-        ]
+            if include_team_keys
+            else None
+        )
 
         # Substring matching is opt-in. /key/list matched user_id and key_alias
         # exactly before substring search was added; auto-applying a substring
@@ -6692,18 +6799,16 @@ async def list_keys(
         # an exact user_id (e.g. an integration scoping to one user with an admin
         # key) receive other users' keys (user_id="alice" -> "alice2"). Exact by
         # default restores the prior behavior; the dashboard opts in explicitly.
-        use_substring_matching: Final = substring_matching and is_proxy_admin
-        use_key_alias_substring_matching: Final = substring_matching
-
-        # Admins may omit user_id to list all keys; non-admins are scoped to self.
-        if not user_id and not is_proxy_admin:
-            user_id = user_api_key_dict.user_id
+        effective_user_id: Final = (
+            user_api_key_dict.user_id if not has_user_filter and not is_admin_view else target_user_id
+        )
 
         response: Final = await list_key_helper(
             prisma_client=prisma_client,
             page=page,
             size=size,
-            user_id=user_id,
+            user_id=effective_user_id,
+            user_filter_ids=list(resolved_user.user_ids) if resolved_user.user_ids is not None else None,
             team_id=team_id,
             key_alias=key_alias,
             key_hash=key_hash,
@@ -6711,7 +6816,8 @@ async def list_keys(
             organization_id=organization_id,
             admin_team_ids=admin_team_ids,
             member_team_ids=member_team_ids,
-            include_created_by_keys=include_created_by_keys,
+            user_team_ids=list(authorization.user_team_ids) if authorization.user_team_ids is not None else None,
+            has_user_filter=has_user_filter,
             sort_by=sort_by,
             sort_order=sort_order,
             expand=expand,
@@ -6973,7 +7079,9 @@ def _build_key_filter_conditions(
     exclude_team_id: str | None,
     admin_team_ids: list[str] | None,
     member_team_ids: list[str] | None = None,
-    include_created_by_keys: bool = False,
+    user_ids: Sequence[str] | None = None,
+    user_team_ids: Sequence[str] | None = None,
+    has_user_filter: bool = False,
     project_id: str | None = None,
     access_group_id: str | None = None,
     agent_id: str | None = None,
@@ -6990,19 +7098,19 @@ def _build_key_filter_conditions(
     - Team admins see ALL keys for their admin teams (via admin_team_ids)
     - Regular team members see only service accounts (user_id=NULL) for their
       teams (via member_team_ids). This prevents leaking other members' spend data.
-    - created_by visibility is scoped to teams the user currently belongs to,
-      so former members cannot see service accounts they created after leaving.
     """
     # Prepare filter conditions
     where: dict[str, object] = {}
     where.update(_get_condition_to_filter_out_ui_session_tokens())
 
     # Build the OR conditions for user's keys and admin team keys
-    or_conditions: Final[list[dict[str, object]]] = []
+    or_conditions: Final[list[Mapping[str, object]]] = []
 
-    # Base conditions for user's own keys
+    # Base conditions for user-owned keys
     user_condition: Final[dict[str, object]] = {}
-    if user_id and isinstance(user_id, str):
+    if user_ids is not None:
+        user_condition["user_id"] = {"in": user_ids}
+    elif user_id and isinstance(user_id, str):
         if use_substring_matching:
             user_condition["user_id"] = {
                 "contains": user_id,
@@ -7010,47 +7118,22 @@ def _build_key_filter_conditions(
             }
         else:
             user_condition["user_id"] = user_id
-    if exclude_team_id and isinstance(exclude_team_id, str):
-        user_condition["team_id"] = {"not": exclude_team_id}
-    if organization_id and isinstance(organization_id, str):
-        user_condition["organization_id"] = organization_id
-
-    if user_condition:
-        or_conditions.append(user_condition)
-
-    # Add condition for created_by keys, scoped to user's current teams
-    if include_created_by_keys and user_id:
-        if member_team_ids is not None:
-            if member_team_ids:
-                # Scope created_by keys to teams user is still a member of,
-                # or keys that have no team (personal keys)
-                or_conditions.append(
-                    {
-                        "AND": [
-                            {"created_by": user_id},
-                            {
-                                "OR": [
-                                    {"team_id": {"in": member_team_ids}},
-                                    {"team_id": None},
-                                ]
-                            },
-                        ]
-                    }
-                )
-            else:
-                # User is not a member of any team, only show non-team created_by keys
-                or_conditions.append({"AND": [{"created_by": user_id}, {"team_id": None}]})
-        else:
-            # No team membership info provided (backward compatibility for
-            # direct _list_key_helper callers like Prometheus)
-            or_conditions.append({"created_by": user_id})
+    user_team_conditions: Final[tuple[Mapping[str, object], ...]] = (
+        *(({"team_id": {"in": user_team_ids}},) if user_team_ids is not None else ()),
+        *(({"team_id": {"not": exclude_team_id}},) if exclude_team_id else ()),
+    )
+    if user_condition or user_team_conditions:
+        user_visibility_condition: Final[Mapping[str, object]] = (
+            {"AND": [user_condition, *user_team_conditions]} if user_team_conditions else user_condition
+        )
+        or_conditions.append(user_visibility_condition)
 
     # Add condition for admin team keys (admins see ALL team keys)
-    if admin_team_ids:
+    if not has_user_filter and admin_team_ids:
         or_conditions.append({"team_id": {"in": admin_team_ids}})
 
     # Add condition for member team service accounts (members only see keys with user_id=NULL)
-    if member_team_ids:
+    if not has_user_filter and member_team_ids:
         # Exclude teams where user is already admin (those are covered above with full visibility)
         member_only_team_ids: Final = [tid for tid in member_team_ids if tid not in (admin_team_ids or [])]
         if member_only_team_ids:
@@ -7086,6 +7169,7 @@ def _build_key_filter_conditions(
         *(({"token": key_hash},) if key_hash and isinstance(key_hash, str) else ()),
         *((_build_key_search_where(search),) if isinstance(search, str) and search else ()),
         *(({"team_id": team_id},) if team_id and isinstance(team_id, str) else ()),
+        *(({"organization_id": organization_id},) if organization_id and isinstance(organization_id, str) else ()),
         *(({"project_id": project_id},) if project_id else ()),
         *(({"access_group_ids": {"hasSome": [access_group_id]}},) if access_group_id else ()),
         *(({"agent_id": agent_id},) if agent_id and isinstance(agent_id, str) else ()),
@@ -7115,7 +7199,9 @@ async def list_key_helper(
     admin_team_ids: list[str] | None = None,  # New parameter for teams where user is admin
     member_team_ids: list[str]
     | None = None,  # Team IDs where user is a member (any role) - for service account visibility
-    include_created_by_keys: bool = False,
+    user_filter_ids: Sequence[str] | None = None,
+    user_team_ids: Sequence[str] | None = None,
+    has_user_filter: bool = False,
     sort_by: str | None = None,
     sort_order: str = "desc",
     expand: list[str] | None = None,
@@ -7159,7 +7245,9 @@ async def list_key_helper(
         exclude_team_id=exclude_team_id,
         admin_team_ids=admin_team_ids,
         member_team_ids=member_team_ids,
-        include_created_by_keys=include_created_by_keys,
+        user_ids=user_filter_ids,
+        user_team_ids=user_team_ids,
+        has_user_filter=has_user_filter,
         project_id=project_id,
         access_group_id=access_group_id,
         agent_id=agent_id,

@@ -156,7 +156,6 @@ export function liveLensApi(client: LensClient, apiClient: ApiClient, accessToke
             key_alias: alias || undefined,
             substring_matching: "true",
             include_team_keys: "true",
-            include_created_by_keys: "true",
             status: "active",
           },
         }),

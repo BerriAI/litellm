@@ -39,6 +39,7 @@ export interface KeyListCallOptions {
   agentID?: string | null;
   selectedKeyAlias?: string | null;
   userID?: string | null;
+  includeTeamKeys?: boolean;
   keyHash?: string | null;
   search?: string | null;
   sortBy?: string | null;
@@ -71,8 +72,7 @@ const keyListCall = async (accessToken: string, page: number, pageSize: number, 
         expand: options.expand,
         status: options.status,
         return_full_object: "true",
-        include_team_keys: "true",
-        include_created_by_keys: "true",
+        include_team_keys: String(options.includeTeamKeys ?? true),
         // Opt into substring matching so the admin key-list search box keeps
         // matching partial user_id/key_alias. /key/list is exact by default.
         substring_matching: "true",

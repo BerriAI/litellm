@@ -23,6 +23,7 @@ interface SearchSelectProps {
   options: SearchSelectOption[];
   value?: string | null;
   onValueChange: (value: string | null) => void;
+  onSearchChange?: (value: string) => void;
   placeholder?: string;
   emptyText?: string;
   disabled?: boolean;
@@ -42,6 +43,7 @@ export function SearchSelect({
   options,
   value,
   onValueChange,
+  onSearchChange,
   placeholder = "Select…",
   emptyText = "No results",
   disabled = false,
@@ -60,6 +62,7 @@ export function SearchSelect({
       items={items}
       value={selected}
       onValueChange={(item: SearchSelectOption | null) => onValueChange(item?.value ?? null)}
+      onInputValueChange={onSearchChange}
       isItemEqualToValue={(a: SearchSelectOption, b: SearchSelectOption) => a.value === b.value}
       itemToStringLabel={(item: SearchSelectOption) => item.label}
       filter={matchesQuery}

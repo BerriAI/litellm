@@ -5,6 +5,8 @@ import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useApplyUserBudgetToTeamKeys } from "@/app/(dashboard)/hooks/uiSettings/useApplyUserBudgetToTeamKeys";
 import { useAllTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import {
   DataTable,
@@ -16,6 +18,7 @@ import {
   type UrlTableStateOptions,
 } from "@/components/shared/DataTable";
 import { SearchSelect } from "@/components/shared/SearchSelect";
+import { Switch } from "@/components/ui/switch";
 import { PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { Input } from "@/components/ui/input";
@@ -29,6 +32,7 @@ import React, { useCallback, useMemo, useState } from "react";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "../templates/key_info_view";
 import { getKeyTableColumns, KEY_TABLE_HIDDEN_COLUMNS, KEY_TABLE_SORT_FIELDS } from "./keyTableColumns";
+import { canListUsers } from "@/utils/roles";
 
 interface VirtualKeysTableProps {
   headerActions?: React.ReactNode;
@@ -40,7 +44,7 @@ type FilterColumn = (typeof FILTER_COLUMNS)[number];
 const FILTER_LABELS: Record<FilterColumn, string> = {
   team_id: "Team",
   org_id: "Organization",
-  user_id: "User ID",
+  user_id: "User Email",
   key_hash: "Key ID",
   status: "Status",
 };
@@ -88,6 +92,8 @@ const appliedFilter = (filters: ColumnFiltersState, column: FilterColumn): strin
 };
 
 export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
+  const { userEmail, userId, userRole } = useAuthorized();
+  const canListAllUsers = canListUsers(userRole);
   const { data: fetchedOrganizations } = useOrganizations();
   const organizations = useMemo(() => fetchedOrganizations ?? [], [fetchedOrganizations]);
   const { data: fetchedTeams } = useAllTeams();
@@ -115,6 +121,11 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   );
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [searchQuery] = useDebouncedValue(searchInput, { wait: DEBOUNCE_WAIT_MS });
+  const [userEmailSearchInput, setUserEmailSearchInput] = useState("");
+  const [userEmailSearch] = useDebouncedValue(userEmailSearchInput, { wait: DEBOUNCE_WAIT_MS });
+  const [includeTeamKeys, setIncludeTeamKeys] = useState(true);
+  const { data: fetchedUsers } = useInfiniteUsers(50, userEmailSearch);
+  const listedUsers = useMemo(() => fetchedUsers?.pages.flatMap((page) => page.users) ?? [], [fetchedUsers]);
 
   const [activeSort] = sorting;
   const keyListOptions = {
@@ -122,6 +133,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
     organizationID: appliedFilter(columnFilters, "org_id"),
     search: searchQuery.trim() || undefined,
     userID: appliedFilter(columnFilters, "user_id"),
+    includeTeamKeys,
     keyHash: appliedFilter(columnFilters, "key_hash"),
     status: appliedFilter(columnFilters, "status"),
     sortBy: activeSort.id,
@@ -184,6 +196,30 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
     [organizations],
   );
 
+  const userOptions = useMemo(() => {
+    const visibleTeamUsers = canListAllUsers
+      ? listedUsers.map((user) => ({ user_id: user.user_id, user_email: user.user_email }))
+      : allTeams.flatMap((team) => {
+          const callerIsMember = team.members_with_roles.some((member) => member.user_id === userId);
+          const callerIsAdmin = team.members_with_roles.some(
+            (member) => member.user_id === userId && member.role === "admin",
+          );
+          if (!callerIsMember || (!callerIsAdmin && !team.team_member_permissions?.includes("/key/list"))) return [];
+          return team.members_with_roles;
+        });
+    const otherUserOptions = visibleTeamUsers
+      .flatMap((user) =>
+        user.user_id && user.user_email && user.user_id !== userId
+          ? [{ label: user.user_email, value: user.user_id }]
+          : [],
+      )
+      .filter((option, index, options) => options.findIndex((candidate) => candidate.value === option.value) === index);
+    const currentUserOption = userId
+      ? [{ label: userEmail || userId, value: userId, sublabel: "(you)" }]
+      : [];
+    return [...currentUserOption, ...otherUserOptions];
+  }, [allTeams, canListAllUsers, listedUsers, userEmail, userId]);
+
   const handleSelectedKeyDataUpdate = useCallback(
     (updated: Partial<KeyResponse>) => {
       const rotatedToken = updated.token ?? updated.token_id;
@@ -203,12 +239,15 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
       if (columnId === "org_id") {
         return organizations.find((org) => org.organization_id === raw)?.organization_alias || raw;
       }
+      if (columnId === "user_id") {
+        return userOptions.find((user) => user.value === raw)?.label || raw;
+      }
       if (columnId === "status" && isKeyStatusFilter(raw)) {
         return KEY_STATUS_LABELS[raw];
       }
       return raw;
     },
-    [allTeams, organizations],
+    [allTeams, organizations, userOptions],
   );
 
   if (selectedKeyId) {
@@ -282,6 +321,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
               onOpenChange={setFiltersOpen}
               title="Filters"
               description="Narrow down virtual keys"
+              onReset={() => setIncludeTeamKeys(true)}
             >
               {({ get, set }) => (
                 <>
@@ -303,11 +343,23 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
                       emptyText="No organizations found"
                     />
                   </DataTableFilterField>
-                  <DataTableFilterField label="User ID">
-                    <Input
-                      value={(get("user_id") as string) ?? ""}
-                      onChange={(event) => set("user_id", event.target.value)}
-                      placeholder="Enter User ID…"
+                  <DataTableFilterField label="User Email">
+                    <SearchSelect
+                      options={userOptions}
+                      value={(get("user_id") as string) || undefined}
+                      onValueChange={(value) => set("user_id", value ?? undefined)}
+                      onSearchChange={setUserEmailSearchInput}
+                      placeholder="Search by email…"
+                      emptyText="No users found"
+                      aria-label="User Email"
+                    />
+                  </DataTableFilterField>
+                  <DataTableFilterField label="Include team keys">
+                    <Switch
+                      aria-label="Include team keys"
+                      checked={includeTeamKeys}
+                      onCheckedChange={setIncludeTeamKeys}
+                      disabled={Boolean(get("user_id"))}
                     />
                   </DataTableFilterField>
                   <DataTableFilterField label="Key ID">

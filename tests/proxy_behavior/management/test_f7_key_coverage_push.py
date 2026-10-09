@@ -811,13 +811,12 @@ async def test_key_aliases_non_admin_scoped(proxy_client, world):
 @pytest.mark.parametrize(
     "query",
     [
-        "include_created_by_keys=true",
         "include_team_keys=true",
         "return_full_object=true",
         "sort_by=created_at&sort_order=asc",
         "key_alias=behavior",
     ],
-    ids=["created_by", "team_keys", "full_object", "sort", "alias_substring"],
+    ids=["team_keys", "full_object", "sort", "alias_substring"],
 )
 async def test_key_list_filter_branches(query: str, proxy_client, world):
     seeder = world.keys[Actor.PROXY_ADMIN].cleartext

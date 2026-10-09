@@ -62964,6 +62964,8 @@ export interface operations {
                 size?: number;
                 /** @description Filter keys by user ID. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching. */
                 user_id?: string | null;
+                /** @description Filter keys by user email. Exact match by default; admins may use substring_matching=true. */
+                user_email?: string | null;
                 /** @description Filter keys by team ID */
                 team_id?: string | null;
                 /** @description Filter keys by organization ID */
@@ -62976,10 +62978,8 @@ export interface operations {
                 search?: string | null;
                 /** @description Return full key object */
                 return_full_object?: boolean;
-                /** @description Include all keys for teams that user is an admin of. */
+                /** @description Include every key in teams where you are a team admin or have /key/list through team_member_permissions, plus service-account keys (user_id NULL) in your other teams. */
                 include_team_keys?: boolean;
-                /** @description Include keys created by the user */
-                include_created_by_keys?: boolean;
                 /** @description Column to sort by (e.g. 'user_id', 'created_at', 'spend') */
                 sort_by?: string | null;
                 /** @description Sort order ('asc' or 'desc') */
