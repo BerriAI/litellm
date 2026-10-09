@@ -5,14 +5,14 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from time import time
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, ClassVar, Final, Literal
 
 from fastapi import HTTPException
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import CustomGuardrail, log_guardrail_information
 from litellm.litellm_core_utils.llm_judge import default_router_provider, judge_target
 from litellm.types.decisions import MAX_DECISION_QUESTIONS, OpenAIDecisionResponse, OpenAIPredicateAnswer
 from litellm.types.guardrails import GuardrailEventHooks, Mode
@@ -97,6 +97,8 @@ def _predicate_verdict(answer: object | None, check: DecisionModelCheck) -> _Che
 
 class DecisionModelGuardrail(CustomGuardrail):
     """Runs predicate checks on request/response text via the Decisions API and blocks on flagged checks."""
+
+    records_own_guardrail_information: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -219,6 +221,7 @@ class DecisionModelGuardrail(CustomGuardrail):
             end_time=time(),
         )
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
