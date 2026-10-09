@@ -1,13 +1,13 @@
 {
   "schema": 1,
-  "gateway_sha": "8b8ea77a7ddd0d9f788270a92aa54aad0bdfa7f6",
-  "lens_sha": "e56021e23153e8ce6c47e4508b37cec2234695ad",
+  "gateway_sha": "fd6009b2ab6c0b8a1b6513c0173645e41f768f1a",
+  "lens_sha": "c33720fd5e5b54de40911ec0cd27ac9402b9b1e1",
   "lens_version": "0.1.0-dev.0",
   "package": "vendor/litellm-lens-ui-0.1.0-dev.0.tgz",
-  "sha256": "c89fbf735ff91fc9da72f131a4158b8a4a114a55405b0268732b6a6183a75ad6",
-  "integrity": "sha512-WKpSCYP4a7wHvOOBQulMTOEbA7N4K/c4cq7hhHABPxZjyTplafMAIwYWG72t1k3G8hg6D5Bur55N6wmCuyqU6w==",
+  "sha256": "d307e5954cd24ca6f12ee995678a329f0747df598603cd7cc36a5cd4236edc1f",
+  "integrity": "sha512-Gby6FbofLRb0UecSIs43l6Y2qr/NwKcT7JPSpxjMp/3xA4Fz56+AgjkXb9g8B8+NKsc0krAFCEvLNDne0vcTTg==",
   "source_repository": "BerriAI/lens",
-  "source_commit": "e56021e23153e8ce6c47e4508b37cec2234695ad",
+  "source_commit": "c33720fd5e5b54de40911ec0cd27ac9402b9b1e1",
   "archive": "ui/litellm-dashboard/vendor/litellm-lens-ui-0.1.0-dev.0.tgz",
   "files": 398,
   "all_files_equal_committed_source": true,
@@ -17,6 +17,7 @@
   "validation": {
     "embedded_wrapper_and_route_tests": 7,
     "gateway_production_build": "passed",
-    "make_check": "passed"
+    "make_check": "passed",
+    "post_main_lens_auth_tests": 417
   }
 }
