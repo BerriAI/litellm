@@ -803,6 +803,7 @@ fn wire() -> Box<WireRequest> {
 
 #[test]
 fn native_hooks_rewrite_the_wire_request_in_chain_order() {
+    Python::initialize();
     Python::attach(|py| {
         let log = Arc::default();
         let mut hooks = native_chain(&log, None);
