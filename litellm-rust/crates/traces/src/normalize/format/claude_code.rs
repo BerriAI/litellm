@@ -438,15 +438,15 @@ mod tests {
 
     #[rstest]
     #[case::event_output(
-        vec![DecodedEvent { name: "tool.output".to_owned(), attributes: attributes(&[("output", "stdout text")]) }],
+        vec![DecodedEvent { name: "tool.output".to_owned(), timestamp_ns: 0, attributes: attributes(&[("output", "stdout text")]) }],
         "stdout text"
     )]
     #[case::event_diff(
-        vec![DecodedEvent { name: "tool.output".to_owned(), attributes: attributes(&[("diff", "+line")]) }],
+        vec![DecodedEvent { name: "tool.output".to_owned(), timestamp_ns: 0, attributes: attributes(&[("diff", "+line")]) }],
         "+line"
     )]
     #[case::other_event_ignored(
-        vec![DecodedEvent { name: "other".to_owned(), attributes: attributes(&[("output", "nope")]) }],
+        vec![DecodedEvent { name: "other".to_owned(), timestamp_ns: 0, attributes: attributes(&[("output", "nope")]) }],
         "{\"stdout\":\"ctx\"}"
     )]
     fn tool_output_prefers_event_then_context(

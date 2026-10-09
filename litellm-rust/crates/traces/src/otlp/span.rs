@@ -104,6 +104,10 @@ fn validate_span(span: &Span, limits: &DecodeLimits) -> Result<(), Error> {
         || span.end_time_unix_nano > i64::MAX as u64
         || span.end_time_unix_nano < span.start_time_unix_nano
         || span
+            .events
+            .iter()
+            .any(|event| event.time_unix_nano > i64::MAX as u64)
+        || span
             .links
             .iter()
             .any(|link| !valid_id(&link.trace_id, 16) || !valid_id(&link.span_id, 8))
@@ -172,6 +176,7 @@ fn decoded_span(
             budget.consume(event.name.len() + 96)?;
             Ok(DecodedEvent {
                 name: event.name,
+                timestamp_ns: event.time_unix_nano,
                 attributes: attributes(event.attributes, budget)?,
             })
         })

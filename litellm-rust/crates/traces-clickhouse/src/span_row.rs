@@ -133,6 +133,41 @@ pub fn span_rows(
                 ("Duration", json(span.end_ns - span.start_ns)),
                 ("StatusCode", Value::String(span.status_code)),
                 ("StatusMessage", Value::String(status_message)),
+                (
+                    "Events.Timestamp",
+                    json(
+                        span.events
+                            .iter()
+                            .map(|event| event.timestamp_ns)
+                            .collect::<Vec<_>>(),
+                    ),
+                ),
+                (
+                    "Events.Name",
+                    json(
+                        span.events
+                            .iter()
+                            .map(|event| &event.name)
+                            .collect::<Vec<_>>(),
+                    ),
+                ),
+                (
+                    "Events.Attributes",
+                    json(
+                        span.events
+                            .iter()
+                            .map(|event| {
+                                event
+                                    .attributes
+                                    .iter()
+                                    .map(|(key, value)| {
+                                        (key, truncate_value(value.clone(), max_value_bytes))
+                                    })
+                                    .collect::<BTreeMap<_, _>>()
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
+                ),
                 ("TeamId", Value::from(tenant.team_id.as_str())),
                 ("ApiKeyHash", Value::from(tenant.api_key_hash.as_str())),
                 ("UserId", Value::from(tenant.user_id.as_str())),

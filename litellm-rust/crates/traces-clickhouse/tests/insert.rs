@@ -139,6 +139,38 @@ fn insert_encoding_rejects_invalid_span_timestamps(#[case] timestamp: Value) {
     assert!(encode_rows(vec![BTreeMap::from([("Timestamp".into(), timestamp)])]).is_err());
 }
 
+#[rstest]
+fn insert_encoding_formats_event_timestamps_as_datetime64_values() {
+    let rows = vec![BTreeMap::from([(
+        "Events.Timestamp".into(),
+        json!([1_234_567_890_i64, 0_i64]),
+    )])];
+    let encoded = encode_rows(rows).expect("valid event timestamps");
+    let actual: Value = serde_json::from_str(&encoded).expect("JSONEachRow record");
+    assert_eq!(
+        actual,
+        json!({
+            "Events.Timestamp": [
+                "1970-01-01T00:00:01.23456789Z",
+                "1970-01-01T00:00:00Z",
+            ],
+        })
+    );
+}
+
+#[rstest]
+#[case::not_array(json!(1))]
+#[case::invalid_timestamp(json!([u64::MAX]))]
+fn insert_encoding_rejects_invalid_event_timestamps(#[case] timestamps: Value) {
+    assert!(
+        encode_rows(vec![BTreeMap::from([(
+            "Events.Timestamp".into(),
+            timestamps,
+        )])])
+        .is_err()
+    );
+}
+
 #[test]
 fn insert_byte_limit_environment_controls_transport() {
     for value in ["1", "1024", "0", "invalid"] {

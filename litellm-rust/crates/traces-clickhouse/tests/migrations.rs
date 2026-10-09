@@ -146,8 +146,15 @@ async fn schema_supports_span_rollups_and_spend_joins(
     let span = serde_json::from_value(serde_json::json!({
         "Timestamp": timestamp, "TraceId": "trace-1", "SpanId": "span-1", "ParentSpanId": "",
         "ServiceName": "proxy", "SpanName": "request", "Input": "hello world",
-        "ResourceAttributes": {"litellm.team_id": "team-1", "litellm.api_key_hash": "hash-1", "litellm.user_id": "exporter-claim"},
-        "SpanAttributes": {"gen_ai.response.id": "response-1", "gen_ai.usage.input_tokens": "12"}
+        "ResourceAttributes": {
+            "litellm.team_id": "team-1", "litellm.api_key_hash": "hash-1", "litellm.user_id": "exporter-claim"
+        },
+        "Events.Timestamp": [timestamp + 1_000_000],
+        "Events.Name": ["generic.event"],
+        "Events.Attributes": [{"event.marker": "event-value"}],
+        "SpanAttributes": {
+            "gen_ai.response.id": "response-1", "gen_ai.usage.input_tokens": "12"
+        }
     }))?;
     let spend = serde_json::from_value(serde_json::json!({
         "request_id": "request-1", "response_id": "response-1", "team_id": "team-1", "spend": 0.125,
@@ -156,6 +163,21 @@ async fn schema_supports_span_rollups_and_spend_joins(
     }))?;
     insert_rows(&database, "otel_traces", vec![span]).await?;
     insert_rows(&database, "spend_logs", vec![spend]).await?;
+    let events = read_json(
+        &database,
+        "SELECT arrayMap(event_timestamp -> toUnixTimestamp64Nano(event_timestamp), `Events.Timestamp`) AS timestamps, \
+         `Events.Name` AS names, `Events.Attributes` AS attributes \
+         FROM trace_test.otel_traces WHERE TraceId = 'trace-1'",
+    )
+    .await?;
+    assert_eq!(
+        events["data"][0],
+        serde_json::json!({
+            "timestamps": [timestamp + 1_000_000],
+            "names": ["generic.event"],
+            "attributes": [{"event.marker": "event-value"}],
+        })
+    );
     let reader = Connection::reader(&database.url, "trace_test")?;
     let detail =
         litellm_storage_clickhouse::fetch::<litellm_traces_clickhouse::query::named::SpanDetail>(
