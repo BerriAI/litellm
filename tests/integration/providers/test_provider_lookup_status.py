@@ -3,20 +3,136 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Literal
+from typing import Final, Literal, Protocol
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value
 from integration._support.process import owned_proxy_process
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
+from integration._support.wire import Reply, Request, wire_server
 from openai import APIStatusError, AsyncOpenAI, OpenAI
-from pydantic import JsonValue
+from openai.pagination import SyncCursorPage
+from openai.types.eval_create_response import EvalCreateResponse as _Eval
+from openai.types.eval_delete_response import EvalDeleteResponse as _EvalDelete
+from openai.types.eval_list_response import EvalListResponse as _EvalList
+from openai.types.eval_retrieve_response import EvalRetrieveResponse as _EvalRetrieve
+from openai.types.eval_update_response import EvalUpdateResponse as _EvalUpdate
+from openai.types.evals.run_cancel_response import RunCancelResponse as _EvalRunCancel
+from openai.types.evals.run_create_response import RunCreateResponse as _EvalRunCreate
+from openai.types.evals.run_delete_response import RunDeleteResponse as _EvalRunDelete
+from openai.types.evals.run_list_response import RunListResponse as _EvalRunList
+from openai.types.evals.run_retrieve_response import RunRetrieveResponse as _EvalRunRetrieve
+from pydantic import BaseModel, JsonValue
 
 from litellm.proxy.openai_files_endpoints.common_utils import encode_file_id_with_model
 from litellm.types.videos.utils import encode_video_id_with_provider
 from tests.integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse
+
+_EVAL_DATA_SOURCE_CONFIG: Final[dict[str, JsonValue]] = {
+    "type": "custom",
+    "item_schema": {"type": "object", "properties": {"a": {"type": "string"}}},
+}
+_EVAL_DATA_SOURCE_CONFIG_RESPONSE: Final[dict[str, JsonValue]] = {
+    "type": "custom",
+    "schema": {"type": "object", "properties": {"a": {"type": "string"}}},
+}
+_EVAL_TESTING_CRITERIA: Final[list[JsonValue]] = [
+    {"type": "string_check", "name": "exact", "input": "{{item.a}}", "reference": "{{item.a}}", "operation": "eq"}
+]
+_EVAL_CREATE_UPSTREAM_RESPONSE: Final[dict[str, JsonValue]] = {
+    "id": "eval_abc",
+    "object": "eval",
+    "created_at": 1700000000,
+    "name": "nightly",
+    "data_source_config": _EVAL_DATA_SOURCE_CONFIG_RESPONSE,
+    "testing_criteria": _EVAL_TESTING_CRITERIA,
+    "metadata": {"suite": "nightly"},
+}
+_EVAL_CREATE_RESPONSE: Final[dict[str, JsonValue]] = {
+    **_EVAL_CREATE_UPSTREAM_RESPONSE,
+    "updated_at": None,
+}
+_EVAL_UPDATE_UPSTREAM_RESPONSE: Final[dict[str, JsonValue]] = {
+    **_EVAL_CREATE_UPSTREAM_RESPONSE,
+    "name": "renamed",
+    "metadata": {"team": "search"},
+}
+_EVAL_UPDATE_RESPONSE: Final[dict[str, JsonValue]] = {
+    **_EVAL_UPDATE_UPSTREAM_RESPONSE,
+    "updated_at": None,
+}
+_EVAL_RUN_DATA_SOURCE: Final[dict[str, JsonValue]] = {
+    "type": "jsonl",
+    "source": {"type": "file_id", "id": "file-abc"},
+}
+_EVAL_RUN_RESPONSE: Final[dict[str, JsonValue]] = {
+    "id": "run_abc",
+    "object": "eval.run",
+    "created_at": 1700000001,
+    "eval_id": "eval_abc",
+    "started_at": None,
+    "completed_at": None,
+    "data_source": _EVAL_RUN_DATA_SOURCE,
+    "error": None,
+    "per_model_usage": [],
+    "per_testing_criteria_results": [],
+    "report_url": "https://example.invalid/evals/run_abc",
+    "result_counts": {"errored": 0, "failed": 0, "passed": 0, "total": 0},
+    "shared_with_openai": None,
+    "name": "run-1",
+    "model": "gpt-4o-mini",
+    "metadata": {"suite": "nightly"},
+    "status": "queued",
+}
+_EVAL_RUN_CANCEL_RESPONSE: Final[dict[str, JsonValue]] = {
+    **_EVAL_RUN_RESPONSE,
+    "status": "cancelled",
+}
+_EVAL_DELETE_RESPONSE: Final[dict[str, JsonValue]] = {"object": "eval.deleted", "deleted": True, "eval_id": "eval_abc"}
+_EVAL_RUN_DELETE_RESPONSE: Final[dict[str, JsonValue]] = {
+    "object": "eval.run.deleted",
+    "deleted": True,
+    "run_id": "run_abc",
+}
+_EVAL_LIST_UPSTREAM_RESPONSE: Final[dict[str, JsonValue]] = {
+    "object": "list",
+    "data": [_EVAL_CREATE_UPSTREAM_RESPONSE],
+    "first_id": "eval_abc",
+    "last_id": "eval_abc",
+    "has_more": False,
+}
+_EVAL_LIST_RESPONSE: Final[dict[str, JsonValue]] = {**_EVAL_LIST_UPSTREAM_RESPONSE, "data": [_EVAL_CREATE_RESPONSE]}
+_EVAL_RUN_LIST_RESPONSE: Final[dict[str, JsonValue]] = {
+    "object": "list",
+    "data": [_EVAL_RUN_RESPONSE],
+    "first_id": "run_abc",
+    "last_id": "run_abc",
+    "has_more": False,
+}
+_EVAL_UPSTREAM_RESPONSES: Final[dict[tuple[str, str], dict[str, JsonValue]]] = {
+    ("POST", "/v1/evals"): _EVAL_CREATE_UPSTREAM_RESPONSE,
+    ("GET", "/v1/evals"): _EVAL_LIST_UPSTREAM_RESPONSE,
+    ("GET", "/v1/evals/eval_abc"): _EVAL_CREATE_UPSTREAM_RESPONSE,
+    ("POST", "/v1/evals/eval_abc"): _EVAL_UPDATE_UPSTREAM_RESPONSE,
+    ("DELETE", "/v1/evals/eval_abc"): _EVAL_DELETE_RESPONSE,
+    ("POST", "/v1/evals/eval_abc/runs"): _EVAL_RUN_RESPONSE,
+    ("GET", "/v1/evals/eval_abc/runs"): _EVAL_RUN_LIST_RESPONSE,
+    ("GET", "/v1/evals/eval_abc/runs/run_abc"): _EVAL_RUN_RESPONSE,
+    ("POST", "/v1/evals/eval_abc/runs/run_abc"): _EVAL_RUN_CANCEL_RESPONSE,
+    ("DELETE", "/v1/evals/eval_abc/runs/run_abc"): _EVAL_RUN_DELETE_RESPONSE,
+}
+
+
+def _evals_respond(request: Request) -> Reply:
+    body: Final = _EVAL_UPSTREAM_RESPONSES.get((request.method, urlsplit(request.target).path))
+    if body is None:
+        return Reply(status=404, body=b'{"error":"unexpected upstream request"}')
+    return Reply(body=json.dumps(body).encode())
 
 
 def _provider_error(status: int) -> dict[str, JsonValue]:
@@ -104,6 +220,290 @@ def _assert_provider_error(response: httpx.Response, status: int) -> None:
     error: Final = object_value(body["error"])
     assert str(error.get("code")) == str(status), response.text
     assert "scripted provider status" in str(error.get("message")), response.text
+
+
+def test_eval_update_forwards_only_client_fields(gateway: Gateway) -> None:
+    pytest.skip(
+        "BUG: evals.update returns 500 Object of type datetime is not JSON serializable and never reaches the upstream"
+    )
+    with wire_server(_evals_respond) as wire, gateway.scenario() as scenario:
+        alias: Final = scenario.model(model="openai/gpt-4o-mini", api_base=wire.url, api_key="synthetic-openai-key")
+        _ready(gateway, alias)
+        wire.drain()
+        with OpenAI(
+            base_url=f"{str(gateway.client.base_url).rstrip('/')}/v1", api_key=gateway.key, max_retries=0
+        ) as client:
+            try:
+                raw: Final = client.evals.with_raw_response.update(
+                    "eval_abc", name="renamed", metadata={"team": "search"}, extra_body={"model": alias}
+                )
+            except APIStatusError as error:
+                failure_text: Final = error.response.text
+                failed_requests: Final = wire.drain()
+                assert [(request.method, request.target) for request in failed_requests] == [
+                    ("POST", "/v1/evals/eval_abc")
+                ], failure_text
+                assert failed_requests[0].headers["authorization"] == "Bearer synthetic-openai-key", failure_text
+                assert json.loads(failed_requests[0].body) == {"name": "renamed", "metadata": {"team": "search"}}, (
+                    failure_text
+                )
+                pytest.fail(f"SDK Eval update failed with HTTP {error.response.status_code}: {failure_text}")
+        assert raw.status_code == 200, raw.http_response.text
+        requests: Final = wire.drain()
+        assert [(request.method, request.target) for request in requests] == [("POST", "/v1/evals/eval_abc")], (
+            raw.http_response.text
+        )
+        assert requests[0].headers["authorization"] == "Bearer synthetic-openai-key", raw.http_response.text
+        assert json.loads(requests[0].body) == {"name": "renamed", "metadata": {"team": "search"}}, (
+            raw.http_response.text
+        )
+        evaluation: Final[_EvalUpdate] = raw.parse()
+        assert json.loads(raw.http_response.text) == _EVAL_UPDATE_RESPONSE, raw.http_response.text
+        assert evaluation.name == "renamed", raw.http_response.text
+
+
+class _RawResponse(Protocol):
+    @property
+    def http_response(self) -> httpx.Response: ...
+
+    def parse(self) -> object: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _ModelRouting:
+    body: dict[str, object] | None
+    query: dict[str, object] | None
+    headers: dict[str, str] | None
+
+
+@dataclass(frozen=True, slots=True)
+class _EvalCall:
+    send: Callable[[OpenAI, _ModelRouting], _RawResponse]
+    parsed: type[BaseModel]
+    upstream: tuple[str, str, dict[str, list[str]], JsonValue]
+    response: dict[str, JsonValue]
+
+
+_EVAL_CREATE_CALL: Final = _EvalCall(
+    send=lambda client, routing: client.evals.with_raw_response.create(
+        name="nightly",
+        data_source_config=_EVAL_DATA_SOURCE_CONFIG,
+        testing_criteria=_EVAL_TESTING_CRITERIA,
+        extra_body=routing.body,
+    ),
+    parsed=_Eval,
+    upstream=(
+        "POST",
+        "/v1/evals",
+        {},
+        {"name": "nightly", "data_source_config": _EVAL_DATA_SOURCE_CONFIG, "testing_criteria": _EVAL_TESTING_CRITERIA},
+    ),
+    response=_EVAL_CREATE_RESPONSE,
+)
+_EVAL_CREATE_WITH_METADATA_CALL: Final = _EvalCall(
+    send=lambda client, routing: client.evals.with_raw_response.create(
+        name="nightly",
+        data_source_config=_EVAL_DATA_SOURCE_CONFIG,
+        testing_criteria=_EVAL_TESTING_CRITERIA,
+        metadata={"suite": "nightly"},
+        extra_body=routing.body,
+    ),
+    parsed=_Eval,
+    upstream=(
+        "POST",
+        "/v1/evals",
+        {},
+        {
+            "name": "nightly",
+            "data_source_config": _EVAL_DATA_SOURCE_CONFIG,
+            "testing_criteria": _EVAL_TESTING_CRITERIA,
+            "metadata": {"suite": "nightly"},
+        },
+    ),
+    response=_EVAL_CREATE_RESPONSE,
+)
+_EVAL_LIST_CALL: Final = _EvalCall(
+    send=lambda client, routing: client.evals.with_raw_response.list(
+        limit=2, after="eval_000", order="asc", order_by="updated_at", extra_query=routing.query
+    ),
+    parsed=_EvalList,
+    upstream=(
+        "GET",
+        "/v1/evals",
+        {"limit": ["2"], "after": ["eval_000"], "order": ["asc"], "order_by": ["updated_at"]},
+        None,
+    ),
+    response=_EVAL_LIST_RESPONSE,
+)
+_EVAL_RETRIEVE_CALL: Final = _EvalCall(
+    send=lambda client, routing: client.evals.with_raw_response.retrieve("eval_abc", extra_query=routing.query),
+    parsed=_EvalRetrieve,
+    upstream=("GET", "/v1/evals/eval_abc", {}, None),
+    response=_EVAL_CREATE_RESPONSE,
+)
+_EVAL_UPDATE_CALL: Final = _EvalCall(
+    send=lambda client, routing: client.evals.with_raw_response.update(
+        "eval_abc", name="renamed", metadata={"team": "search"}, extra_body=routing.body
+    ),
+    parsed=_EvalUpdate,
+    upstream=("POST", "/v1/evals/eval_abc", {}, {"name": "renamed", "metadata": {"team": "search"}}),
+    response=_EVAL_UPDATE_RESPONSE,
+)
+_EVAL_DELETE_CALL: Final = _EvalCall(
+    send=lambda client, routing: client.evals.with_raw_response.delete("eval_abc", extra_query=routing.query),
+    parsed=_EvalDelete,
+    upstream=("DELETE", "/v1/evals/eval_abc", {}, None),
+    response=_EVAL_DELETE_RESPONSE,
+)
+_EVAL_RUN_CREATE_WITH_METADATA_CALL: Final = _EvalCall(
+    send=lambda client, routing: client.evals.runs.with_raw_response.create(
+        "eval_abc",
+        data_source=_EVAL_RUN_DATA_SOURCE,
+        name="run-1",
+        metadata={"suite": "nightly"},
+        extra_body=routing.body,
+    ),
+    parsed=_EvalRunCreate,
+    upstream=(
+        "POST",
+        "/v1/evals/eval_abc/runs",
+        {},
+        {"data_source": _EVAL_RUN_DATA_SOURCE, "name": "run-1", "metadata": {"suite": "nightly"}},
+    ),
+    response=_EVAL_RUN_RESPONSE,
+)
+_EVAL_RUN_LIST_CALL: Final = _EvalCall(
+    send=lambda client, routing: client.evals.runs.with_raw_response.list(
+        "eval_abc", limit=3, after="run_000", order="desc", extra_query=routing.query
+    ),
+    parsed=_EvalRunList,
+    upstream=("GET", "/v1/evals/eval_abc/runs", {"limit": ["3"], "after": ["run_000"], "order": ["desc"]}, None),
+    response=_EVAL_RUN_LIST_RESPONSE,
+)
+_EVAL_RUN_LIST_BY_STATUS_CALL: Final = _EvalCall(
+    send=lambda client, routing: client.evals.runs.with_raw_response.list(
+        "eval_abc", limit=3, after="run_000", order="desc", status="completed", extra_query=routing.query
+    ),
+    parsed=_EvalRunList,
+    upstream=(
+        "GET",
+        "/v1/evals/eval_abc/runs",
+        {"limit": ["3"], "after": ["run_000"], "order": ["desc"], "status": ["completed"]},
+        None,
+    ),
+    response=_EVAL_RUN_LIST_RESPONSE,
+)
+_EVAL_RUN_RETRIEVE_CALL: Final = _EvalCall(
+    send=lambda client, routing: client.evals.runs.with_raw_response.retrieve(
+        "run_abc", eval_id="eval_abc", extra_query=routing.query
+    ),
+    parsed=_EvalRunRetrieve,
+    upstream=("GET", "/v1/evals/eval_abc/runs/run_abc", {}, None),
+    response=_EVAL_RUN_RESPONSE,
+)
+_EVAL_RUN_CANCEL_CALL: Final = _EvalCall(
+    send=lambda client, routing: client.evals.runs.with_raw_response.cancel(
+        "run_abc", eval_id="eval_abc", extra_query=routing.query
+    ),
+    parsed=_EvalRunCancel,
+    upstream=("POST", "/v1/evals/eval_abc/runs/run_abc", {}, {}),
+    response=_EVAL_RUN_CANCEL_RESPONSE,
+)
+_EVAL_RUN_DELETE_CALL: Final = _EvalCall(
+    send=lambda client, routing: client.evals.runs.with_raw_response.delete(
+        "run_abc", eval_id="eval_abc", extra_query=routing.query
+    ),
+    parsed=_EvalRunDelete,
+    upstream=("DELETE", "/v1/evals/eval_abc/runs/run_abc", {}, None),
+    response=_EVAL_RUN_DELETE_RESPONSE,
+)
+_EVAL_ROUTES_WITHOUT_KNOWN_BUGS: Final = (
+    _EVAL_CREATE_CALL,
+    _EVAL_LIST_CALL,
+    _EVAL_RETRIEVE_CALL,
+    _EVAL_DELETE_CALL,
+    _EVAL_RUN_LIST_CALL,
+    _EVAL_RUN_DELETE_CALL,
+)
+_EVERY_EVAL_ROUTE: Final = (
+    _EVAL_CREATE_WITH_METADATA_CALL,
+    _EVAL_LIST_CALL,
+    _EVAL_RETRIEVE_CALL,
+    _EVAL_UPDATE_CALL,
+    _EVAL_DELETE_CALL,
+    _EVAL_RUN_CREATE_WITH_METADATA_CALL,
+    _EVAL_RUN_LIST_BY_STATUS_CALL,
+    _EVAL_RUN_RETRIEVE_CALL,
+    _EVAL_RUN_CANCEL_CALL,
+    _EVAL_RUN_DELETE_CALL,
+)
+
+
+def _model_routing(alias: str, spelling: str) -> _ModelRouting:
+    if spelling == "x-litellm-model":
+        return _ModelRouting(body=None, query=None, headers={"x-litellm-model": alias})
+    return _ModelRouting(body={"model": alias}, query={"model": alias}, headers=None)
+
+
+def _parsed_types(parsed: object) -> tuple[type, ...]:
+    if isinstance(parsed, SyncCursorPage):
+        return tuple(type(item) for item in parsed.data)
+    return (type(parsed),)
+
+
+def _observed(request: Request) -> tuple[str, str, dict[str, list[str]], JsonValue]:
+    target: Final = urlsplit(request.target)
+    body: Final[JsonValue] = json.loads(request.body) if request.body else None
+    return request.method, target.path, parse_qs(target.query), body
+
+
+def _assert_eval_sdk_paths(gateway: Gateway, suffix: str, spelling: str, calls: tuple[_EvalCall, ...]) -> None:
+    with wire_server(_evals_respond) as wire, gateway.scenario() as scenario:
+        alias: Final = scenario.model(
+            model="openai/gpt-4o-mini", api_base=f"{wire.url}{suffix}", api_key="synthetic-openai-key"
+        )
+        _ready(gateway, alias)
+        wire.drain()
+        routing: Final = _model_routing(alias, spelling)
+        with OpenAI(
+            base_url=f"{str(gateway.client.base_url).rstrip('/')}/v1",
+            api_key=gateway.key,
+            max_retries=0,
+            default_headers=routing.headers,
+        ) as client:
+            try:
+                raws: Final = tuple(call.send(client, routing) for call in calls)
+            except APIStatusError as error:
+                failure_text: Final = error.response.text
+                observed: Final = [_observed(request) for request in wire.drain()]
+                pytest.fail(f"SDK eval call failed with HTTP {error.response.status_code}: {failure_text}\n{observed}")
+        response_text: Final = "\n".join(raw.http_response.text for raw in raws)
+        requests: Final = wire.drain()
+        assert [_observed(request) for request in requests] == [call.upstream for call in calls], response_text
+        assert {request.headers["authorization"] for request in requests} == {"Bearer synthetic-openai-key"}, (
+            response_text
+        )
+        assert [json.loads(raw.http_response.text) for raw in raws] == [call.response for call in calls], response_text
+        assert [_parsed_types(raw.parse()) for raw in raws] == [(call.parsed,) for call in calls], response_text
+
+
+@pytest.mark.parametrize("spelling", ("model-param", "x-litellm-model"))
+def test_eval_routes_reach_sdk_paths_with_bare_api_base(gateway: Gateway, spelling: str) -> None:
+    _assert_eval_sdk_paths(gateway, "", spelling, _EVAL_ROUTES_WITHOUT_KNOWN_BUGS)
+
+
+@pytest.mark.parametrize("spelling", ("model-param", "x-litellm-model"))
+@pytest.mark.parametrize("suffix", ("", "/v1", "/v1/"), ids=("bare", "v1", "v1-trailing-slash"))
+def test_every_eval_route_reaches_sdk_path_and_relays_upstream_body(
+    gateway: Gateway, suffix: str, spelling: str
+) -> None:
+    pytest.skip(
+        "BUG: evals.runs.cancel goes to /runs/{run_id}/cancel and returns only {id, object, status}, "
+        "evals.update returns 500, create and run create drop metadata, runs.list drops status, "
+        "run create and retrieve overwrite the run's model with the routing alias, "
+        "and an api_base ending in /v1 sends every eval request to /v1/v1/evals"
+    )
+    _assert_eval_sdk_paths(gateway, suffix, spelling, _EVERY_EVAL_ROUTE)
 
 
 @pytest.mark.parametrize(

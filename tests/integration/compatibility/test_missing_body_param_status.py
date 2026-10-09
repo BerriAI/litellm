@@ -22,7 +22,10 @@ from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventual
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
-from openai import AsyncOpenAI, BadRequestError, OpenAI
+from integration._support.wire import Reply, Request, wire_server
+from openai import APIStatusError, AsyncOpenAI, BadRequestError, OpenAI
+from openai.types.eval_create_response import EvalCreateResponse as _Eval
+from openai.types.evals.run_create_response import RunCreateResponse as _EvalRun
 from pydantic import JsonValue
 
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -35,6 +38,64 @@ from tests.integration.cost_calculation.cost_tracking_case import (
 )
 
 _Route = tuple[str, str, tuple[str, ...], dict[str, JsonValue], str]
+_EVAL_DATA_SOURCE_CONFIG: Final[dict[str, JsonValue]] = {
+    "type": "custom",
+    "item_schema": {"type": "object", "properties": {"a": {"type": "string"}}},
+}
+_EVAL_DATA_SOURCE_CONFIG_RESPONSE: Final[dict[str, JsonValue]] = {
+    "type": "custom",
+    "schema": {"type": "object", "properties": {"a": {"type": "string"}}},
+}
+_EVAL_TESTING_CRITERIA: Final[list[JsonValue]] = [
+    {"type": "string_check", "name": "exact", "input": "{{item.a}}", "reference": "{{item.a}}", "operation": "eq"}
+]
+_EVAL_RUN_DATA_SOURCE: Final[dict[str, JsonValue]] = {
+    "type": "jsonl",
+    "source": {"type": "file_id", "id": "file-abc"},
+}
+_EVAL_CREATE_REQUEST: Final[dict[str, JsonValue]] = {
+    "data_source_config": _EVAL_DATA_SOURCE_CONFIG,
+    "testing_criteria": _EVAL_TESTING_CRITERIA,
+    "name": "nightly",
+    "metadata": {"suite": "nightly"},
+}
+_EVAL_RUN_REQUEST: Final[dict[str, JsonValue]] = {
+    "data_source": _EVAL_RUN_DATA_SOURCE,
+    "name": "run-1",
+    "metadata": {"suite": "nightly"},
+}
+_EVAL_CREATE_UPSTREAM_RESPONSE: Final[dict[str, JsonValue]] = {
+    "id": "eval_abc",
+    "object": "eval",
+    "created_at": 1700000000,
+    "name": "nightly",
+    "data_source_config": _EVAL_DATA_SOURCE_CONFIG_RESPONSE,
+    "testing_criteria": _EVAL_TESTING_CRITERIA,
+    "metadata": {"suite": "nightly"},
+}
+_EVAL_CREATE_RESPONSE: Final[dict[str, JsonValue]] = {
+    **_EVAL_CREATE_UPSTREAM_RESPONSE,
+    "updated_at": None,
+}
+_EVAL_RUN_RESPONSE: Final[dict[str, JsonValue]] = {
+    "id": "run_abc",
+    "object": "eval.run",
+    "created_at": 1700000001,
+    "eval_id": "eval_abc",
+    "started_at": None,
+    "completed_at": None,
+    "data_source": _EVAL_RUN_DATA_SOURCE,
+    "error": None,
+    "per_model_usage": [],
+    "per_testing_criteria_results": [],
+    "report_url": "https://example.invalid/evals/run_abc",
+    "result_counts": {"errored": 0, "failed": 0, "passed": 0, "total": 0},
+    "shared_with_openai": None,
+    "name": "run-1",
+    "model": "gpt-4o-mini",
+    "metadata": {"suite": "nightly"},
+    "status": "queued",
+}
 _ROUTES: Final[dict[str, _Route]] = {
     "acompletion": (
         "/v1/chat/completions",
@@ -1661,3 +1722,91 @@ def test_upstream_pause_and_worker_kill_preserve_required_body_status(
             ), [response.text for response in post_kill]
             recovered: Final = _post(candidate, "/v1/chat/completions", _chat_body(chat_model, "recovered", True))
             assert recovered.status_code == 200, recovered.text
+
+
+def test_eval_create_and_run_forward_client_metadata(gateway: Gateway) -> None:
+    pytest.skip(
+        "BUG: evals.create and evals.runs.create drop the client metadata upstream, "
+        "and the run response model is overwritten with the routing alias"
+    )
+
+    def respond(request: Request) -> Reply:
+        if request.method == "POST" and request.target == "/v1/evals":
+            return Reply(body=json.dumps(_EVAL_CREATE_UPSTREAM_RESPONSE).encode())
+        if request.method == "POST" and request.target == "/v1/evals/eval_abc/runs":
+            return Reply(body=json.dumps(_EVAL_RUN_RESPONSE).encode())
+        return Reply(status=404, body=b'{"error":"unexpected upstream request"}')
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        alias: Final = scenario.model(model="openai/gpt-4o-mini", api_base=wire.url, api_key="synthetic-openai-key")
+        eventually(
+            lambda: gateway.request(
+                "POST",
+                "/v1/chat/completions",
+                {"model": alias, "messages": [{"role": "user", "content": "model readiness"}]},
+            ),
+            lambda response: not (response.status_code == 400 and "Invalid model name" in response.text),
+            seconds=30,
+        )
+        wire.drain()
+        with OpenAI(
+            base_url=f"{str(gateway.client.base_url).rstrip('/')}/v1", api_key=gateway.key, max_retries=0
+        ) as client:
+            try:
+                create_raw: Final = client.evals.with_raw_response.create(
+                    name="nightly",
+                    data_source_config=_EVAL_DATA_SOURCE_CONFIG,
+                    testing_criteria=_EVAL_TESTING_CRITERIA,
+                    metadata={"suite": "nightly"},
+                    extra_body={"model": alias},
+                )
+            except APIStatusError as error:
+                create_error_text: Final = error.response.text
+                create_failed_requests: Final = wire.drain()
+                assert [(request.method, request.target) for request in create_failed_requests] == [
+                    ("POST", "/v1/evals")
+                ], create_error_text
+                assert create_failed_requests[0].headers["authorization"] == "Bearer synthetic-openai-key", (
+                    create_error_text
+                )
+                assert json.loads(create_failed_requests[0].body) == _EVAL_CREATE_REQUEST, create_error_text
+                pytest.fail(f"SDK Eval creation failed with HTTP {error.response.status_code}: {create_error_text}")
+            try:
+                run_raw: Final = client.evals.runs.with_raw_response.create(
+                    "eval_abc",
+                    data_source=_EVAL_RUN_DATA_SOURCE,
+                    name="run-1",
+                    metadata={"suite": "nightly"},
+                    extra_body={"model": alias},
+                )
+            except APIStatusError as error:
+                run_error_text: Final = error.response.text
+                run_failed_requests: Final = wire.drain()
+                assert [(request.method, request.target) for request in run_failed_requests] == [
+                    ("POST", "/v1/evals"),
+                    ("POST", "/v1/evals/eval_abc/runs"),
+                ], run_error_text
+                assert tuple(request.headers["authorization"] for request in run_failed_requests) == (
+                    "Bearer synthetic-openai-key",
+                    "Bearer synthetic-openai-key",
+                ), run_error_text
+                assert json.loads(run_failed_requests[0].body) == _EVAL_CREATE_REQUEST, run_error_text
+                assert json.loads(run_failed_requests[1].body) == _EVAL_RUN_REQUEST, run_error_text
+                pytest.fail(f"SDK Eval run creation failed with HTTP {error.response.status_code}: {run_error_text}")
+        response_text: Final = "\n".join((create_raw.http_response.text, run_raw.http_response.text))
+        requests: Final = wire.drain()
+        assert [(request.method, request.target) for request in requests] == [
+            ("POST", "/v1/evals"),
+            ("POST", "/v1/evals/eval_abc/runs"),
+        ], response_text
+        assert tuple(request.headers["authorization"] for request in requests) == (
+            "Bearer synthetic-openai-key",
+            "Bearer synthetic-openai-key",
+        ), response_text
+        assert json.loads(requests[0].body) == _EVAL_CREATE_REQUEST, response_text
+        assert json.loads(requests[1].body) == _EVAL_RUN_REQUEST, response_text
+        assert (create_raw.status_code, run_raw.status_code) == (200, 200), response_text
+        assert isinstance(create_raw.parse(), _Eval), response_text
+        assert json.loads(create_raw.http_response.text) == _EVAL_CREATE_RESPONSE, response_text
+        assert isinstance(run_raw.parse(), _EvalRun), response_text
+        assert json.loads(run_raw.http_response.text) == _EVAL_RUN_RESPONSE, response_text
