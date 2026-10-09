@@ -25,6 +25,11 @@ import { CREDENTIAL_LABELS, ERROR_CODE_OPTIONS } from "../constants";
 import { LOG_FILTER_IDS, type LogsWindow } from "./useLogFilterLogic";
 
 const ALL_VALUE = "all";
+const KEY_ALIAS_OPERATORS = [
+  { value: "is", label: "is" },
+  { value: "is not", label: "is not" },
+] as const;
+type KeyAliasOperator = (typeof KEY_ALIAS_OPERATORS)[number]["value"];
 
 const STATUS_FILTER_ITEMS = [
   { value: ALL_VALUE, label: "All Statuses" },
@@ -91,14 +96,32 @@ function TeamFilterField({
 
 function KeyAliasFilterField({
   value,
+  excludeValue,
   onChange,
+  onExcludeChange,
   teamId,
 }: {
   value: string;
+  excludeValue: string;
   onChange: (value: string | undefined) => void;
+  onExcludeChange: (value: string | undefined) => void;
   teamId: string;
 }) {
   const [search, setSearch] = useState("");
+  const [operator, setOperator] = useState<KeyAliasOperator>("is");
+  let activeOperator: KeyAliasOperator = operator;
+  if (excludeValue !== "") {
+    activeOperator = "is not";
+  } else if (value !== "") {
+    activeOperator = "is";
+  }
+  const handleOperatorChange = (next: KeyAliasOperator | null) => {
+    if (next === null || next === activeOperator) return;
+    const selectedAlias = value || excludeValue || undefined;
+    setOperator(next);
+    onChange(next === "is" ? selectedAlias : undefined);
+    onExcludeChange(next === "is not" ? selectedAlias : undefined);
+  };
   const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteKeyAliases(
     PAGE_SIZE,
     emptyToUndefined(search),
@@ -118,10 +141,24 @@ function KeyAliasFilterField({
 
   return (
     <DataTableFilterField label="Key Alias">
+      <Select items={KEY_ALIAS_OPERATORS} value={activeOperator} onValueChange={handleOperatorChange}>
+        <SelectTrigger className="w-full" aria-label="Key Alias operator">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {KEY_ALIAS_OPERATORS.map((item) => (
+            <SelectItem key={item.value} value={item.value}>
+              {item.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
       <PaginatedSearchSelect
         options={options}
-        value={value}
-        onValueChange={(next) => onChange(next ?? undefined)}
+        value={activeOperator === "is not" ? excludeValue : value}
+        onValueChange={(next) =>
+          activeOperator === "is not" ? onExcludeChange(next ?? undefined) : onChange(next ?? undefined)
+        }
         onSearchChange={setSearch}
         onLoadMore={() => void fetchNextPage()}
         hasNextPage={hasNextPage}
@@ -425,7 +462,9 @@ export function RequestLogsFilters({ get, set, teams, logsWindow }: RequestLogsF
 
       <KeyAliasFilterField
         value={valueOf(LOG_FILTER_IDS.KEY_ALIAS)}
+        excludeValue={valueOf(LOG_FILTER_IDS.EXCLUDE_KEY_ALIAS)}
         onChange={setter(LOG_FILTER_IDS.KEY_ALIAS)}
+        onExcludeChange={setter(LOG_FILTER_IDS.EXCLUDE_KEY_ALIAS)}
         teamId={valueOf(LOG_FILTER_IDS.TEAM_ID)}
       />
 

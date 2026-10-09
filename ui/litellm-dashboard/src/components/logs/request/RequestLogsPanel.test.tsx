@@ -55,8 +55,26 @@ vi.mock("../detail", () => ({
 
 const debounce = vi.hoisted(() => ({ settled: null as string | null }));
 
-vi.mock("@tanstack/react-pacer/debouncer", () => ({
+vi.mock("@tanstack/react-pacer/debouncer", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-pacer/debouncer")>()),
   useDebouncedValue: vi.fn((value: unknown) => [debounce.settled ?? value, { cancel: vi.fn(), flush: vi.fn() }]),
+}));
+
+const emptyAliases = vi.hoisted(() => ({
+  data: { pages: [], pageParams: [] },
+  fetchNextPage: vi.fn(),
+  hasNextPage: false,
+  isFetchingNextPage: false,
+  isLoading: false,
+}));
+vi.mock("@/app/(dashboard)/hooks/keys/useKeyAliases", () => ({ useInfiniteKeyAliases: () => emptyAliases }));
+vi.mock("@/app/(dashboard)/hooks/models/useModels", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/app/(dashboard)/hooks/models/useModels")>()),
+  useInfiniteModelInfo: () => emptyAliases,
+}));
+vi.mock("@/app/(dashboard)/hooks/spendLogs/useSpendLogUsers", () => ({ useInfiniteSpendLogUsers: () => emptyAliases }));
+vi.mock("@/app/(dashboard)/hooks/spendLogs/useSpendLogEndUsers", () => ({
+  useInfiniteSpendLogEndUsers: () => emptyAliases,
 }));
 
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
@@ -321,6 +339,46 @@ describe("RequestLogsPanel", () => {
       });
     });
 
+    it("drops the cursor and returns to the first page when the alias changes through URL navigation", async () => {
+      const firstPage = Array.from({ length: 50 }, (_, index) => logEntry({ request_id: `req-${index}` }));
+      vi.mocked(uiSpendLogsCall).mockImplementation(async ({ page }) => ({
+        data: firstPage,
+        total: 80,
+        page: page ?? 1,
+        page_size: 50,
+        total_pages: 2,
+        next_session_cursor: "2026-07-07 09:50:13|key-1|sess-1",
+        has_more: true,
+      }));
+      const tree = (searchParams: string) => (
+        <NuqsTestingAdapter searchParams={searchParams} hasMemory>
+          <QueryClientProvider client={testQueryClient}>
+            <RequestLogsPanel {...defaultProps} />
+          </QueryClientProvider>
+        </NuqsTestingAdapter>
+      );
+      const view = render(tree(""));
+
+      await waitFor(() => expect(row("req-0")).not.toBeNull());
+      fireEvent.click(screen.getByTestId("pagination-next"));
+      await waitFor(() => expect(lastCall()?.page).toBe(2));
+
+      const callCountBeforeAliasNavigation = vi.mocked(uiSpendLogsCall).mock.calls.length;
+      view.rerender(tree("exclude_key_alias=noisy"));
+
+      await waitFor(() => {
+        const aliasCalls = vi
+          .mocked(uiSpendLogsCall)
+          .mock.calls.slice(callCountBeforeAliasNavigation)
+          .map(([options]) => options)
+          .filter((options) => options.params?.exclude_key_alias === "noisy");
+        expect(aliasCalls.length).toBeGreaterThan(0);
+        expect(aliasCalls.every((options) => options.page === 1 && options.params?.session_cursor === undefined)).toBe(
+          true,
+        );
+      });
+    });
+
     it("ignores another next click while the next page is still fetching", async () => {
       const firstPage = Array.from({ length: 50 }, (_, index) => logEntry({ request_id: `req-${index}` }));
       const firstResponse = {
@@ -479,6 +537,63 @@ describe("RequestLogsPanel", () => {
   });
 
   describe("time range", () => {
+    it("applies is not to an existing Key Alias and puts the exclusion in the URL", async () => {
+      const user = userEvent.setup();
+      renderPanel("key_alias=noisy");
+
+      await waitFor(() => expect(lastCall()?.params?.key_alias).toBe("noisy"));
+      await user.click(screen.getByTestId("datatable-filters-trigger"));
+      await user.click(screen.getByRole("combobox", { name: "Key Alias operator" }));
+      await user.click(await screen.findByRole("option", { name: "is not" }));
+      await user.click(screen.getByTestId("filter-drawer-apply"));
+
+      await waitFor(() => expect(urlParams().get("exclude_key_alias")).toBe("noisy"));
+      expect(urlParams().get("key_alias")).toBeNull();
+      await waitFor(() => expect(lastCall()?.params?.exclude_key_alias).toBe("noisy"));
+      expect(lastCall()?.params?.key_alias).toBeUndefined();
+    });
+
+    it("restores an excluded Key Alias from a bookmarked URL and clears it on reset", async () => {
+      const user = userEvent.setup();
+      renderPanel("exclude_key_alias=noisy");
+
+      await waitFor(() => expect(lastCall()?.params?.exclude_key_alias).toBe("noisy"));
+      expect(screen.getByTestId("filter-chip-exclude_key_alias")).toHaveTextContent("noisy");
+
+      await user.click(screen.getByRole("button", { name: "Reset Filters" }));
+
+      await waitFor(() => expect(urlParams().get("exclude_key_alias")).toBeNull());
+      await waitFor(() => expect(lastCall()?.params?.exclude_key_alias).toBeUndefined());
+    });
+
+    it("treats conflicting Key Alias URL parameters as one mutually exclusive filter", async () => {
+      renderPanel("key_alias=quiet&exclude_key_alias=noisy");
+
+      await waitFor(() => expect(lastCall()?.params?.exclude_key_alias).toBe("noisy"));
+      expect(lastCall()?.params?.key_alias).toBeUndefined();
+      expect(screen.getByTestId("filter-chip-exclude_key_alias")).toHaveTextContent("noisy");
+      expect(screen.queryByTestId("filter-chip-key_alias")).not.toBeInTheDocument();
+    });
+
+    it("keeps an excluded Key Alias on the next page", async () => {
+      vi.mocked(uiSpendLogsCall).mockResolvedValue({
+        data: Array.from({ length: 25 }, (_, index) => logEntry({ request_id: `req-${index}` })),
+        total: 60,
+        page: 1,
+        page_size: 25,
+        total_pages: 3,
+        next_session_cursor: "2026-07-07 09:50:13|key-1|sess-1",
+        has_more: true,
+      });
+      renderPanel("exclude_key_alias=noisy");
+
+      await waitFor(() => expect(row("req-0")).not.toBeNull());
+      fireEvent.click(screen.getByTestId("pagination-next"));
+
+      await waitFor(() => expect(lastCall()?.page).toBe(2));
+      expect(lastCall()?.params?.exclude_key_alias).toBe("noisy");
+    });
+
     it("requests a ~15 minute window when Last 15 Minutes is picked", async () => {
       const user = userEvent.setup();
       renderPanel();

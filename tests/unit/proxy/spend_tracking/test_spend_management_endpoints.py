@@ -120,6 +120,7 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
         gte = re.search(r'"startTime" >= \(\$(\d+)', cond)
         lte = re.search(r'"startTime" <= \(\$(\d+)', cond)
         alias = re.search(r"user_api_key_alias' LIKE \$(\d+)", cond)
+        excluded_alias = re.search(r"user_api_key_alias' IS DISTINCT FROM \$(\d+)", cond)
         code = re.search(r"error_code' = \$(\d+)", cond)
         msg = re.search(r"error_message' LIKE \$(\d+)", cond)
         credential = re.fullmatch(r"metadata->>'used_client_oauth_token' = \$(\d+)", cond)
@@ -166,6 +167,8 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
                     "string_contains": str(params[int(alias.group(1)) - 1]).strip("%"),
                 }
             )
+        elif excluded_alias:
+            where["exclude_key_alias"] = params[int(excluded_alias.group(1)) - 1]
         elif code:
             metadata_conds.append(
                 {
@@ -3591,6 +3594,71 @@ async def test_ui_view_spend_logs_with_model_group(client, monkeypatch):
         assert data["total"] == 1
         assert len(data["data"]) == 1
         assert data["data"][0]["model_group"] == "gpt-4"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/spend/logs/ui", "/spend/logs/v2"])
+async def test_ui_view_spend_logs_excludes_exact_key_alias_before_pagination(client, monkeypatch, route):
+    aliases = ["noisy", "noisy-other", None, "quiet", "noisy"]
+    logs = [
+        {
+            "id": f"log{i}",
+            "request_id": f"req{i}",
+            "api_key": "sk-test-key",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+            "metadata": json.dumps({"user_api_key_alias": alias}) if alias is not None else "{}",
+        }
+        for i, alias in enumerate(aliases)
+    ]
+    queries = []
+
+    def filter_by_alias(where):
+        if where.get("exclude_key_alias") != "noisy":
+            return logs
+        return [log for log, alias in zip(logs, aliases) if alias != "noisy"]
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(
+            logs, filter_by_alias, query_observer=lambda sql, params: queries.append((sql, params))
+        ),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+    try:
+        start_date, end_date = _default_date_range()
+        responses = [
+            client.get(
+                route,
+                params={
+                    "exclude_key_alias": "noisy",
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "page": page,
+                    "page_size": 2,
+                },
+                headers={"Authorization": "Bearer sk-test"},
+            )
+            for page in (1, 2)
+        ]
+        assert [response.status_code for response in responses] == [200, 200]
+        assert [response.json()["total"] for response in responses] == [3, 3]
+        assert [response.json()["total_pages"] for response in responses] == [2, 2]
+        assert [[row["request_id"] for row in response.json()["data"]] for response in responses] == [
+            ["req1", "req2"],
+            ["req3"],
+        ]
+        for sql, params in queries:
+            if "WHERE" not in sql:
+                continue
+            alias_placeholder = re.search(r"user_api_key_alias' IS DISTINCT FROM \$(\d+)", sql)
+            assert alias_placeholder is not None
+            assert params[int(alias_placeholder.group(1)) - 1] == "noisy"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
@@ -7101,6 +7169,77 @@ async def test_ui_view_spend_logs_group_by_session_first_page(client, monkeypatc
         ) in rep_call[0]
         assert rep_call[-2] == ["sess-1", "req-solo"]
         assert rep_call[-1] == ["hashed-key", "hashed-key"]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_grouped_exclusion_reaches_page_count_and_representatives(client, monkeypatch):
+    page_rows = [
+        _session_page_row("sess-1", "2026-08-29 10:00:00"),
+        _session_page_row("sess-2", "2026-08-29 09:00:00"),
+        _session_page_row("sess-3", "2026-08-29 08:00:00"),
+    ]
+    session_aliases = {"sess-1": "noisy", "sess-2": "quiet", "sess-3": "quiet"}
+    representatives = []
+    for request_id, session_id in (("req-1", "sess-1"), ("req-2", "sess-2"), ("req-3", "sess-3")):
+        representative = _session_representative_row(request_id, session_id)
+        representative["metadata"] = {"user_api_key_alias": session_aliases[session_id]}
+        representatives.append(representative)
+
+    async def mock_query_raw(sql_query, *params):
+        excluded_alias_match = re.search(r"user_api_key_alias' IS DISTINCT FROM \$(\d+)", sql_query)
+        excluded_alias = params[int(excluded_alias_match.group(1)) - 1] if excluded_alias_match else None
+        visible_session_ids = {session_id for session_id, alias in session_aliases.items() if alias != excluded_alias}
+        if "COUNT(*) AS total_count" in sql_query:
+            return [{"total_count": len(visible_session_ids)}]
+        if "DISTINCT ON" in sql_query:
+            requested_sessions = set(params[-2])
+            requested_api_keys = set(params[-1])
+            return [
+                representative
+                for representative in representatives
+                if representative["session_id"] in visible_session_ids
+                and representative["session_id"] in requested_sessions
+                and representative["api_key"] in requested_api_keys
+            ]
+        if "COALESCE(SUM(spend)" in sql_query:
+            return []
+        return [row for row in page_rows if row["session_key"] in visible_session_ids]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+                "group_by_session": "true",
+                "exclude_key_alias": "noisy",
+                "page_size": 1,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["total"] == 2
+        assert [row["request_id"] for row in response.json()["data"]] == ["req-2"]
+        queries = [call.args for call in mock_prisma.db.query_raw.await_args_list]
+        assert len(queries) >= 3
+        for sql, *params in queries[:3]:
+            alias_placeholder = re.search(r"user_api_key_alias' IS DISTINCT FROM \$(\d+)", sql)
+            assert alias_placeholder is not None
+            assert params[int(alias_placeholder.group(1)) - 1] == "noisy"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
