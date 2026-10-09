@@ -2101,7 +2101,6 @@ def test_user_connection_poll_reports_503_when_the_cache_overwrite_cannot_land(m
     assert poll.status_code == 503, poll.text
     assert "cache could not be refreshed" in poll.text
     table.upsert.assert_awaited_once()
-||||||| dc59dd123b
 
 
 def _labeled_credential(name: str = "openai-prod", display_name: str | None = "Prod OpenAI") -> CredentialItem:
