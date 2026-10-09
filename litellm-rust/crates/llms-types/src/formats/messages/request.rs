@@ -30,16 +30,24 @@ pub enum MessageContent {
 )]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(from = "String", into = "String"))]
-#[strum(serialize_all = "snake_case")]
 pub enum ContentBlockType {
+    #[strum(serialize = "text")]
     Text,
+    #[strum(serialize = "thinking")]
     Thinking,
+    #[strum(serialize = "redacted_thinking")]
     RedactedThinking,
+    #[strum(serialize = "tool_use")]
     ToolUse,
+    #[strum(serialize = "server_tool_use")]
     ServerToolUse,
+    #[strum(serialize = "tool_result")]
     ToolResult,
+    #[strum(serialize = "compaction")]
     Compaction,
+    #[strum(serialize = "advisor_tool_result")]
     AdvisorToolResult,
+    #[strum(serialize = "web_search_tool_result")]
     WebSearchToolResult,
     #[strum(default, transparent)]
     Other(String),
@@ -124,21 +132,19 @@ pub struct Message {
 }
 
 #[macro_rules_attribute::apply(crate::wire_type)]
-#[derive(Copy, Hash, IntoStaticStr, Eq)]
+#[derive(Copy, Hash, IntoStaticStr, Eq, strum::VariantArray)]
 #[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
 pub enum EffortLevel {
+    #[strum(serialize = "low")]
     Low,
+    #[strum(serialize = "medium")]
     Medium,
+    #[strum(serialize = "high")]
     High,
+    #[strum(serialize = "xhigh")]
     Xhigh,
+    #[strum(serialize = "max")]
     Max,
-}
-
-impl EffortLevel {
-    pub fn as_str(self) -> &'static str {
-        self.into()
-    }
 }
 
 impl From<EffortLevel> for ReasoningEffort {
@@ -156,16 +162,11 @@ impl From<EffortLevel> for ReasoningEffort {
 #[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Copy, IntoStaticStr, Eq)]
 #[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
 pub enum Speed {
+    #[strum(serialize = "fast")]
     Fast,
+    #[strum(serialize = "standard")]
     Standard,
-}
-
-impl Speed {
-    pub fn as_str(self) -> &'static str {
-        self.into()
-    }
 }
 
 /// The tools whose presence changes how the request is sent. Every other tool, custom or
@@ -691,7 +692,10 @@ mod tests {
 
     #[rstest]
     fn speed_names_match_the_wire(#[values(Speed::Fast, Speed::Standard)] speed: Speed) {
-        assert_eq!(serde_json::to_value(speed).unwrap(), json!(speed.as_str()));
+        assert_eq!(
+            serde_json::to_value(speed).unwrap(),
+            json!(<&'static str>::from(speed))
+        );
     }
 
     #[rstest]
@@ -705,10 +709,13 @@ mod tests {
         )]
         level: EffortLevel,
     ) {
-        assert_eq!(serde_json::to_value(level).unwrap(), json!(level.as_str()));
+        assert_eq!(
+            serde_json::to_value(level).unwrap(),
+            json!(<&'static str>::from(level))
+        );
         assert_eq!(
             serde_json::to_value(ReasoningEffort::from(level)).unwrap(),
-            json!(level.as_str())
+            json!(<&'static str>::from(level))
         );
     }
 }

@@ -9,39 +9,23 @@ pub use content::{
 
 /// Reasoning effort level accepted or applied by the model.
 #[macro_rules_attribute::apply(crate::wire_type)]
-#[derive(Copy, Eq, IntoStaticStr)]
+#[derive(Copy, Eq, IntoStaticStr, strum::EnumString, strum::VariantArray)]
 #[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
 pub enum ReasoningEffort {
+    #[strum(serialize = "none")]
     None,
+    #[strum(serialize = "minimal")]
     Minimal,
+    #[strum(serialize = "low")]
     Low,
+    #[strum(serialize = "medium")]
     Medium,
+    #[strum(serialize = "high")]
     High,
+    #[strum(serialize = "xhigh")]
     Xhigh,
+    #[strum(serialize = "max")]
     Max,
-}
-
-impl ReasoningEffort {
-    pub const ALL: [Self; 7] = [
-        Self::None,
-        Self::Minimal,
-        Self::Low,
-        Self::Medium,
-        Self::High,
-        Self::Xhigh,
-        Self::Max,
-    ];
-
-    pub fn as_str(self) -> &'static str {
-        self.into()
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|effort| effort.as_str() == value)
-    }
 }
 
 #[macro_rules_attribute::apply(crate::wire_type)]
@@ -195,6 +179,7 @@ pub struct ChatCompletionChunk {
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
+    use strum::VariantArray;
 
     use super::*;
 
@@ -213,10 +198,10 @@ mod tests {
     ) {
         assert_eq!(
             serde_json::to_value(effort).unwrap(),
-            Value::String(effort.as_str().to_string())
+            Value::String(<&'static str>::from(effort).to_string())
         );
-        assert_eq!(ReasoningEffort::parse(effort.as_str()), Some(effort));
-        assert!(ReasoningEffort::ALL.contains(&effort));
+        assert_eq!(<&'static str>::from(effort).parse(), Ok(effort));
+        assert!(ReasoningEffort::VARIANTS.contains(&effort));
     }
 
     #[rstest]
@@ -224,6 +209,6 @@ mod tests {
     #[case::uppercase("HIGH")]
     #[case::empty("")]
     fn reasoning_effort_parse_rejects(#[case] value: &str) {
-        assert_eq!(ReasoningEffort::parse(value), None);
+        assert!(value.parse::<ReasoningEffort>().is_err());
     }
 }

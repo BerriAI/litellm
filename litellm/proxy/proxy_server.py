@@ -6313,7 +6313,10 @@ class ProxyConfig:
         credential_list_dict: Final = config.get("credential_list")
         credential_list = []
         if credential_list_dict:
-            credential_list = [CredentialItem(**cred) for cred in credential_list_dict]
+            credential_list = [
+                CredentialItem.model_validate({**cred, "display_name": None, "source": "config"})
+                for cred in credential_list_dict
+            ]
         return credential_list
 
     def parse_search_tools(self, config: dict) -> list[SearchToolTypedDict] | None:
@@ -6948,6 +6951,13 @@ class ProxyConfig:
                             {"user_api_key_cache_max_size": general_settings["user_api_key_cache_max_size"]}
                         )
                     ).user_api_key_cache_max_size
+                )
+
+            if "spend_logs_metadata_fields" in general_settings:
+                _ = ConfigGeneralSettings.model_validate(
+                    MappingProxyType(
+                        {"spend_logs_metadata_fields": typed_general_settings["spend_logs_metadata_fields"]}
+                    )
                 )
 
             ### PKCE MULTI-INSTANCE PREREQUISITE CHECK ###

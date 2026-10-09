@@ -56,15 +56,21 @@ enum PathPart {
 #[macro_rules_attribute::apply(crate::response_type)]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, strum::Display)]
 #[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
 #[cfg_attr(feature = "schema", schemars(rename = "MetadataValueType"))]
 enum JsonKind {
+    #[strum(serialize = "array")]
     Array,
+    #[strum(serialize = "boolean")]
     Boolean,
+    #[strum(serialize = "integer")]
     Integer,
+    #[strum(serialize = "null")]
     Null,
+    #[strum(serialize = "number")]
     Number,
+    #[strum(serialize = "object")]
     Object,
+    #[strum(serialize = "string")]
     String,
 }
 

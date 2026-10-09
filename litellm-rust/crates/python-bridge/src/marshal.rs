@@ -19,13 +19,6 @@ pub(crate) struct RouteOptions {
     pub(crate) timeout: Option<Duration>,
 }
 
-pub(crate) fn messages_argument(value: &Bound<'_, PyAny>) -> PyResult<Vec<Value>> {
-    match from_py_argument(value)? {
-        Value::Array(values) => Ok(values),
-        _ => Err(PyValueError::new_err("messages must be a list")),
-    }
-}
-
 fn required_object(name: &'static str, value: Value) -> PyResult<Map<String, Value>> {
     match value {
         Value::Object(values) => Ok(values),
@@ -449,18 +442,6 @@ module.__getattr__ = fail
     fn argument_converters_keep_nested_values_and_accept_explicit_none() {
         Python::initialize();
         Python::attach(|py| {
-            let messages = py
-                .eval(
-                    c"[{'role': 'user', 'content': [{'type': 'text', 'text': 'hi'}]}]",
-                    None,
-                    None,
-                )
-                .unwrap();
-            assert_eq!(
-                Value::Array(messages_argument(&messages).unwrap()),
-                json!([{"role": "user", "content": [{"type": "text", "text": "hi"}]}])
-            );
-
             let params = py.eval(c"{'temperature': 0.2}", None, None).unwrap();
             assert_eq!(
                 optional_object("optional_params", &params).unwrap(),

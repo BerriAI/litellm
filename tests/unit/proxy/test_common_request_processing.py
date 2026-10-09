@@ -6951,19 +6951,13 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         primary_model = "gpt-4"
         fallback_model = "gpt-3.5-turbo"
 
-        # Freeze the limiter's clock so the per-minute counter key is stable and
-        # the pre-seeded counter is guaranteed to be the one it reads.
-        class _FrozenClock(datetime.datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return cls(2026, 1, 1, 12, 30, 0)
-
         precise_minute = "2026-01-01-12-30"
 
         # Real per-key per-model TPM limiter + a key carrying the customer's
         # `model_tpm_limit` metadata (only the primary is capped).
         limiter = PROXY_MaxParallelRequestsHandler(
-            internal_usage_cache=InternalUsageCache(DualCache())
+            internal_usage_cache=InternalUsageCache(DualCache()),
+            clock=lambda: datetime.datetime(2026, 1, 1, 12, 30, 0),
         )
         user_api_key_dict = UserAPIKeyAuth(
             api_key="sk-lit3890",
@@ -7006,30 +7000,27 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         mock_router = MagicMock()
         mock_router.fallbacks = [{primary_model: [fallback_model]}]
 
-        with patch(
-            "litellm.proxy.hooks.parallel_request_limiter.datetime", _FrozenClock
+        with patch.object(
+            processor,
+            "common_processing_pre_call_logic",
+            side_effect=real_limiter_pre_call,
         ):
-            with patch.object(
-                processor,
-                "common_processing_pre_call_logic",
-                side_effect=real_limiter_pre_call,
-            ):
-                data, logging_obj = await processor._pre_call_with_fallbacks(
-                    request=MagicMock(),
-                    general_settings={},
-                    proxy_logging_obj=MagicMock(),
-                    user_api_key_dict=user_api_key_dict,
-                    version=None,
-                    proxy_config=MagicMock(),
-                    user_model=None,
-                    user_temperature=None,
-                    user_request_timeout=None,
-                    user_max_tokens=None,
-                    user_api_base=None,
-                    model=primary_model,
-                    route_type="acompletion",
-                    llm_router=mock_router,
-                )
+            data, logging_obj = await processor._pre_call_with_fallbacks(
+                request=MagicMock(),
+                general_settings={},
+                proxy_logging_obj=MagicMock(),
+                user_api_key_dict=user_api_key_dict,
+                version=None,
+                proxy_config=MagicMock(),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model=primary_model,
+                route_type="acompletion",
+                llm_router=mock_router,
+            )
 
         # The capped primary tripped the real limiter, and the fallback (which
         # has no per-model cap) served the request — no 429 to the client.
@@ -7038,19 +7029,16 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
         # Sanity-check the premise: the limiter genuinely raises a
         # ProxyRateLimitError for the capped primary under the frozen clock.
-        with patch(
-            "litellm.proxy.hooks.parallel_request_limiter.datetime", _FrozenClock
-        ):
-            with pytest.raises(ProxyRateLimitError):
-                await limiter.async_pre_call_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    cache=DualCache(),
-                    data={
-                        "model": primary_model,
-                        "messages": [{"role": "user", "content": "hi"}],
-                    },
-                    call_type="acompletion",
-                )
+        with pytest.raises(ProxyRateLimitError):
+            await limiter.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=DualCache(),
+                data={
+                    "model": primary_model,
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+                call_type="acompletion",
+            )
 
     @staticmethod
     def _v3_limiter_rig(

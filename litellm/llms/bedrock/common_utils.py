@@ -27,6 +27,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -907,6 +908,17 @@ def bedrock_runtime_chat_completions_enforces_response_format(model: str) -> boo
 def bedrock_model_is_openai_gpt(model: str) -> bool:
     """A GPT-5.x or GPT-6.x id, never GPT-OSS: the families whose sampling params AWS ties to reasoning being off."""
     return _openai_gpt_version(model) is not None
+
+
+def bedrock_runtime_chat_completions_serves_reasoning_inline(model: str) -> bool:
+    """Whether AWS's native Chat Completions writes this model's reasoning inline in the answer text.
+
+    Data-driven from the price-map ``supports_bedrock_runtime_chat_completions_inline_reasoning`` flag (gpt-oss).
+    A flagged model opens its answer with a ``<reasoning>...</reasoning>`` block instead of a
+    ``reasoning_content`` field, so litellm splits that block out for it and keeps every other model's
+    text as sent.
+    """
+    return _bedrock_price_map_flag(model, "supports_bedrock_runtime_chat_completions_inline_reasoning")
 
 
 BEDROCK_CONVERSE_ONLY_REQUEST_KEYS: Final = frozenset(
@@ -1832,6 +1844,7 @@ class BedrockEventStreamDecoderBase:
     """
 
     def __init__(self):
+        ensure_optional_import("botocore")
         from botocore.parsers import EventStreamJSONParser
 
         self.parser = EventStreamJSONParser()
@@ -2052,11 +2065,9 @@ class CommonBatchFilesUtils:
         Returns:
             Tuple of (signed_headers, signed_data)
         """
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        ensure_optional_import("botocore")
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
 
         aws_region_name: Final = self._base_aws.get_aws_region_name(optional_params=optional_params, model="")
         credentials: Final = self._base_aws.resolve_credentials(

@@ -22,6 +22,7 @@ LITELLM_LOGGING_NAMES: Final = (
 
 # Utils names that support lazy loading via _lazy_import_utils
 UTILS_NAMES: Final = (
+    "run_server",
     "exception_type",
     "get_optional_params",
     "get_response_string",
@@ -161,6 +162,7 @@ LLM_CONFIG_NAMES: Final = (
     "OpenRouterDecisionsConfig",
     "CloudflareDecisionsConfig",
     "StrandsDeciderDecisionsConfig",
+    "HostedVLLMDecisionsConfig",
     "OpenAIDecisionsConfig",
     "NvidiaNimRerankConfig",
     "NvidiaNimRankingConfig",
@@ -459,6 +461,7 @@ UTILS_MODULE_NAMES: Final = (
 
 # Import maps for registry pattern - reduces repetition
 _UTILS_IMPORT_MAP: Final = {
+    "run_server": ("litellm.proxy.proxy_cli", "run_server"),
     "exception_type": (".utils", "exception_type"),
     "get_optional_params": (".utils", "get_optional_params"),
     "get_response_string": (".utils", "get_response_string"),
@@ -720,6 +723,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "StrandsDeciderDecisionsConfig": (
         ".llms.strands_decider.decisions.transformation",
         "StrandsDeciderDecisionsConfig",
+    ),
+    "HostedVLLMDecisionsConfig": (
+        ".llms.hosted_vllm.decisions.transformation",
+        "HostedVLLMDecisionsConfig",
     ),
     "OpenAIDecisionsConfig": (".llms.openai.decisions.transformation", "OpenAIDecisionsConfig"),
     "NvidiaNimRerankConfig": (

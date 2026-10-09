@@ -36,6 +36,7 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token
 from litellm.llms.bedrock.common_utils import (
     BedrockError,
     bedrock_model_is_openai_gpt,
+    bedrock_runtime_chat_completions_serves_reasoning_inline,
     split_bedrock_region_path,
 )
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
@@ -213,7 +214,12 @@ def split_reasoning_tag(content: str) -> tuple[str | None, str]:
 
 
 class BedrockRuntimeChatCompletionsStreamingHandler(OpenAIChatCompletionStreamingHandler):
-    """OpenAI chunk parsing plus the ``<reasoning>`` split, tracked per choice index."""
+    """OpenAI chunk parsing plus the inline ``<reasoning>`` split, tracked per choice index.
+
+    Every chunk echoes the model id litellm sent, so the split engages only when that id's price-map
+    row carries ``supports_bedrock_runtime_chat_completions_inline_reasoning`` (gpt-oss); a GPT 5.6 or Grok
+    answer that starts with a literal ``<reasoning>`` tag streams as content.
+    """
 
     def __init__(
         self,
@@ -226,6 +232,8 @@ class BedrockRuntimeChatCompletionsStreamingHandler(OpenAIChatCompletionStreamin
 
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:  # mutable-ok: BaseModelResponseIterator signature
         parsed: Final = super().chunk_parser(chunk)
+        if not bedrock_runtime_chat_completions_serves_reasoning_inline(parsed.model or ""):
+            return parsed
         for choice in parsed.choices:
             next_state, reasoning, content = _split_streamed_content(
                 self._splitters.get(choice.index, ReasoningTagSplitter()),
@@ -475,6 +483,8 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
             json_mode=json_mode,
         )
         set_provider_response_headers_in_hidden_params(response, raw_response.headers)
+        if not bedrock_runtime_chat_completions_serves_reasoning_inline(model):
+            return response
         for choice in response.choices:
             if not isinstance(choice, Choices) or not isinstance(choice.message.content, str):
                 continue

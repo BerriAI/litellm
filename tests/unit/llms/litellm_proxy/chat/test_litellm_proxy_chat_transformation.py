@@ -9,6 +9,7 @@ from openai import AsyncOpenAI, OpenAI
 from openai.types import CreateEmbeddingResponse, Embedding
 from openai.types.create_embedding_response import Usage
 import pytest
+import re
 
 import litellm
 from litellm import completion
@@ -624,3 +625,18 @@ async def test_litellm_gateway_image_generation_direct(is_async):
     # Verify the response structure
     assert response is not None
     assert hasattr(response, "data") or isinstance(response, dict)
+
+
+@pytest.mark.respx(assert_all_called=False)
+def test_litellm_gateway_from_sdk_with_thinking_param(respx_mock):
+    respx_mock.route(host="0.0.0.0", port=4000).mock(side_effect=httpx.ConnectError("[Errno 61] Connection refused"))
+    with pytest.raises(Exception, match=re.escape("Connection error.")) as exc_info:
+        response = litellm.completion(
+            model="litellm_proxy/anthropic.claude-sonnet-4-5-20250929-v1:0",
+            messages=[{"role": "user", "content": "Hello world"}],
+            api_base="http://0.0.0.0:4000",
+            api_key="sk-PIp1h0RekR",
+            thinking={"type": "enabled", "max_budget": 100},
+        )
+    e = exc_info.value
+    assert "Connection error." in str(e)

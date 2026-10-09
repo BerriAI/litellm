@@ -39,10 +39,6 @@ def stream_hidden_params(headers: Sequence[tuple[str, str]]) -> Mapping[str, obj
     return anthropic_messages_stream_hidden_params(httpx.Headers(list(headers)))
 
 
-def arguments(request: Mapping[str, object]) -> Mapping[str, object]:
-    return request
-
-
 def map_failure(error: Exception, request: Mapping[str, object], request_provider: str) -> Exception:
     if getattr(error, "messages_request_error", False):
         return litellm.BadRequestError(
@@ -51,7 +47,7 @@ def map_failure(error: Exception, request: Mapping[str, object], request_provide
             llm_provider=request_provider,
         )
     return failures.map_native_failure(
-        error, str(request["model"]), request_provider, arguments(request), optional_str(request.get("api_base"))
+        error, str(request["model"]), request_provider, request, optional_str(request.get("api_base"))
     )
 
 

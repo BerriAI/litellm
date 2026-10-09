@@ -7,17 +7,26 @@ pub struct CustomLlmProvider<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, IntoStaticStr)]
-#[strum(serialize_all = "snake_case")]
 pub enum LlmProviders {
+    #[strum(serialize = "anthropic")]
     Anthropic,
+    #[strum(serialize = "aws_textract")]
     AwsTextract,
+    #[strum(serialize = "azure_ai")]
     AzureAi,
+    #[strum(serialize = "bedrock")]
     Bedrock,
+    #[strum(serialize = "cohere")]
     Cohere,
+    #[strum(serialize = "mistral")]
     Mistral,
+    #[strum(serialize = "openai")]
     Openai,
+    #[strum(serialize = "openai_like")]
     OpenaiLike,
+    #[strum(serialize = "reducto")]
     Reducto,
+    #[strum(serialize = "vertex_ai")]
     VertexAi,
 }
 

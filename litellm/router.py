@@ -500,7 +500,24 @@ _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_FALLBACK_HOP_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _DEPLOYMENT_SELECTED_EVENT: Final = "litellm.request.deployment_selected"
+
+
+def _is_fallback_hop(request_kwargs: Mapping[str, object]) -> bool:
+    fallback_depth: Final = request_kwargs.get("fallback_depth")
+    return isinstance(fallback_depth, int) and fallback_depth > 0
+
+
+def _deployment_that_just_failed(request_metadata: object) -> str | None:
+    try:
+        model_info: Final = _FALLBACK_HOP_ADAPTER.validate_python(
+            _FALLBACK_HOP_ADAPTER.validate_python(request_metadata).get("model_info")
+        )
+    except ValidationError:
+        return None
+    model_id: Final = model_info.get("id")
+    return model_id if isinstance(model_id, str) else None
 
 
 def _deployment_pick_attributes(model: str, request_kwargs: Mapping[str, object] | None) -> Mapping[str, str | int]:
@@ -509,10 +526,7 @@ def _deployment_pick_attributes(model: str, request_kwargs: Mapping[str, object]
     metadata: Final = kwargs.get("litellm_metadata", kwargs.get("metadata"))
     attempted_retries: Final = metadata.get("attempted_retries") if isinstance(metadata, Mapping) else None
     retries: Final = attempted_retries if isinstance(attempted_retries, int) else 0
-    fallback_depth: Final = kwargs.get("fallback_depth")
-    reason: Final = (
-        "retry" if retries > 0 else "fallback" if isinstance(fallback_depth, int) and fallback_depth > 0 else "initial"
-    )
+    reason: Final = "retry" if retries > 0 else "fallback" if _is_fallback_hop(kwargs) else "initial"
     return MappingProxyType(
         {
             "litellm.deployment.attempt": retries + 1,
@@ -4139,10 +4153,11 @@ class Router:
         function_name: str | None = None,
     ) -> None:
         """
-        3 jobs:
+        4 jobs:
         - Adds selected deployment, model_info and api_base to kwargs["metadata"] (used for logging)
         - Adds default litellm params to kwargs, if set.
         - Merges tools from deployment with request (proxy-configured tools + request tools).
+        - On a fallback hop, drops the encrypted reasoning this deployment cannot decrypt, keeping its summary.
         """
         for key in self._forwarded_alias_marker_keys_the_deployment_sets(
             deployment=deployment, forwarded_keys=kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ())
@@ -4164,6 +4179,9 @@ class Router:
 
         metadata_variable_name: Final = get_router_metadata_variable_name(
             function_name=function_name,
+        )
+        deployment_that_just_failed: Final = _deployment_that_just_failed(
+            _FALLBACK_HOP_ADAPTER.validate_python(kwargs).get(metadata_variable_name)
         )
 
         kwargs.setdefault(metadata_variable_name, {}).update(
@@ -4237,6 +4255,15 @@ class Router:
             kwargs["timeout"] = self._get_timeout(kwargs=kwargs, data=deployment["litellm_params"])
 
         self._update_kwargs_with_default_litellm_params(kwargs=kwargs, metadata_variable_name=metadata_variable_name)
+        hop_kwargs: Final = _FALLBACK_HOP_ADAPTER.validate_python(kwargs)
+        if _is_fallback_hop(hop_kwargs):
+            EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
+                self,
+                hop_kwargs.get("input"),
+                hop_kwargs.get("messages"),
+                (_FALLBACK_HOP_ADAPTER.validate_python(deployment),),
+                unmarked_origin=deployment_that_just_failed,
+            )
 
     def _get_async_openai_model_client(self, deployment: dict, kwargs: dict):
         """
@@ -5532,6 +5559,7 @@ class Router:
             model=model, original_generic_function=original_generic_function, **kwargs
         )
         carry_over_pre_routing_selection(live_kwargs=kwargs, snapshot=hop_kwargs)
+        carry_over_routed_deployment(live_kwargs=kwargs, snapshot=hop_kwargs)
         if kwargs.get("stream") and isinstance(response, BaseResponsesAPIStreamingIterator):
             return await self._aresponses_streaming_iterator(response=response, initial_kwargs=hop_kwargs)
         return response
@@ -10423,6 +10451,7 @@ class Router:
                 model_cost={model_id: model_info},
                 persist_across_reloads=False,
                 warning_display_name=model,
+                custom_llm_provider=custom_llm_provider,
             )
 
         ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
