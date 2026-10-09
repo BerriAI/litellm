@@ -400,8 +400,8 @@ shutdown drain window.
 - name: LENS_GATEWAY_SECRET
   valueFrom:
     secretKeyRef:
-      name: {{ include "litellm.lensWorker.serviceTokenSecretName" . | quote }}
-      key: {{ .Values.lensWorker.serviceTokenSecret.key | quote }}
+      name: {{ .Values.lensWorker.gateway.secretName | default (include "litellm.lensWorker.serviceTokenSecretName" .) | quote }}
+      key: {{ if .Values.lensWorker.gateway.secretName }}{{ .Values.lensWorker.gateway.secretKey | quote }}{{ else }}{{ .Values.lensWorker.serviceTokenSecret.key | quote }}{{ end }}
 - name: LITELLM_LENS_SERVICE_TOKEN
   valueFrom:
     secretKeyRef:

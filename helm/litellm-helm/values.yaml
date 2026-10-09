@@ -661,6 +661,9 @@ lensWorker:
   mode: ""
   externalUrl: ""
   externalServiceName: ""
+  gateway:
+    secretName: ""
+    secretKey: gateway-secret
   standaloneUrl: ""
   adminTokenSecret:
     name: ""

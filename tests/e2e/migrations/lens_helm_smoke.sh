@@ -25,9 +25,9 @@ kind create cluster --name "$cluster" \
   --wait 120s
 for component in gateway backend ui migrations monolith; do
   kind load docker-image --name "$cluster" "lens-ci-$component:v0.0.0-lens-ci"
-  docker tag "lens-ci-$component:v0.0.0-lens-ci" "lens-ci-$component:gateway-upgrade"
-  kind load docker-image --name "$cluster" "lens-ci-$component:gateway-upgrade"
 done
+test "$(docker image inspect lens-ci-worker:baseline --format '{{.Id}}')" != \
+  "$(docker image inspect lens-ci-worker:upgrade --format '{{.Id}}')"
 kind load docker-image --name "$cluster" lens-ci-worker:baseline lens-ci-worker:upgrade
 test -f helm/litellm-helm/charts/lens-0.1.0-dev.0.tgz
 
@@ -83,6 +83,12 @@ stop_forwards() {
   forward_pids=()
 }
 
+forward_bundled() {
+  stop_forwards
+  forward "$control" 14418 "$control_port"
+  forward lens-lens-worker 14419 4318
+}
+
 for chart in litellm-helm litellm; do
   namespace="lens-$chart"
   kubectl create namespace "$namespace"
@@ -90,6 +96,7 @@ for chart in litellm-helm litellm; do
   kubectl -n "$namespace" create secret generic lens-secrets \
     --from-literal="master-key=$master_key" \
     --from-literal="service-token=$(openssl rand -hex 32)" \
+    --from-literal="gateway-secret=$(openssl rand -hex 32)" \
     --from-literal="url=http://clickhouse:8123" \
     --from-literal=username=litellm --from-literal=password=isolated-helm-test
   kubectl -n "$namespace" apply -f - <<'YAML'
@@ -170,6 +177,7 @@ lensWorker:
   enabled: true
   image: {repository: lens-ci-worker, tag: baseline, pullPolicy: Never}
   serviceTokenSecret: {name: lens-secrets, key: service-token}
+  gateway: {secretName: lens-secrets, secretKey: gateway-secret}
   clickhouseSecret: {name: lens-secrets, key: url}
   clickhouseDatabase: existing_traces
   retentionDays: 45
@@ -234,8 +242,7 @@ YAML
   install=(helm upgrade --install lens "helm/$chart" -n "$namespace" \
     -f "$qa_dir/common.yaml" -f "$qa_dir/chart.yaml" --wait --wait-for-jobs --timeout 8m)
   "${install[@]}" || diagnose
-  forward "$control" 14418 "$control_port"
-  forward lens-lens-worker 14419 4318
+  forward_bundled
   for attempt in $(seq 1 30); do
     if api /lens/service > "$qa_dir/status.json" && jq -e '.connected and .status.storage_ready' "$qa_dir/status.json"; then break; fi
     sleep 1
@@ -255,6 +262,7 @@ YAML
   kubectl -n "$namespace" exec deployment/clickhouse -- clickhouse-client --query \
     "SELECT count() FROM existing_traces.otel_traces WHERE TraceId = '$trace_id'" | grep -qx 1
   "${install[@]}" || diagnose
+  forward_bundled
   saved_trace
   kubectl -n "$namespace" get deployments -l app.kubernetes.io/instance=lens -o json \
     | jq -S '[.items[] | select(.metadata.name != "lens-lens-worker") | {name:.metadata.name,template:.spec.template}] | sort_by(.name)' \
@@ -264,34 +272,40 @@ YAML
     | jq -S '[.items[] | select(.metadata.name != "lens-lens-worker") | {name:.metadata.name,template:.spec.template}] | sort_by(.name)' \
     > "$qa_dir/gateway-after.json"
   cmp "$qa_dir/gateway-before.json" "$qa_dir/gateway-after.json"
+  forward_bundled
   saved_trace
   "${install[@]}" || diagnose
+  forward_bundled
   saved_trace
   kubectl -n "$namespace" get deployment lens-lens-worker -o json \
     | jq -S .spec.template > "$qa_dir/lens-before.json"
-  gateway_upgrade=(--set image.tag=gateway-upgrade)
+  gateway_rollout=(--set-string podAnnotations.lens-smoke-rollout=independent)
   if [[ "$chart" == litellm ]]; then
-    gateway_upgrade=(--set gateway.image.tag=gateway-upgrade --set backend.image.tag=gateway-upgrade \
-      --set ui.image.tag=gateway-upgrade --set migrationJob.image.tag=gateway-upgrade)
+    gateway_rollout=(--set-string gateway.podAnnotations.lens-smoke-rollout=independent \
+      --set-string backend.podAnnotations.lens-smoke-rollout=independent \
+      --set-string ui.podAnnotations.lens-smoke-rollout=independent)
   fi
-  "${install[@]}" "${gateway_upgrade[@]}" || diagnose
+  "${install[@]}" "${gateway_rollout[@]}" || diagnose
   kubectl -n "$namespace" get deployment lens-lens-worker -o json \
     | jq -S .spec.template > "$qa_dir/lens-after.json"
   cmp "$qa_dir/lens-before.json" "$qa_dir/lens-after.json"
+  forward_bundled
+  saved_trace
   stop_forwards
   kubectl -n "$namespace" rollout restart "deployment/$control" deployment/lens-lens-worker
   kubectl -n "$namespace" rollout status "deployment/$control" --timeout=180s
   kubectl -n "$namespace" rollout status deployment/lens-lens-worker --timeout=180s
   forward "$control" 14418 "$control_port"
   saved_trace
-  printf '%s: fresh install, ingestion, independent upgrades, Lens rollback, and restart passed\n' "$chart"
+  printf '%s: fresh install, ingestion, Lens upgrade and rollback, independent gateway rollout, and restart passed\n' "$chart"
   stop_forwards
   helm upgrade --install external-lens helm/litellm-helm/charts/lens-0.1.0-dev.0.tgz \
     -n "$namespace" --wait --timeout 5m \
     --set fullnameOverride=external-lens \
     --set image.repository=lens-ci-worker --set image.tag=upgrade --set image.pullPolicy=Never \
     --set adminTokenSecret.name=lens-secrets --set adminTokenSecret.key=master-key \
-    --set gateway.enabled=true --set serviceTokenSecret.name=lens-secrets \
+    --set gateway.enabled=true --set gateway.secretName=lens-secrets \
+    --set gateway.secretKey=gateway-secret --set serviceTokenSecret.name=lens-secrets \
     --set clickhouseSecret.name=lens-secrets --set clickhouseDatabase=existing_traces \
     --set publicUrl=http://127.0.0.1:14419
   "${install[@]}" --set lensWorker.mode=external \
