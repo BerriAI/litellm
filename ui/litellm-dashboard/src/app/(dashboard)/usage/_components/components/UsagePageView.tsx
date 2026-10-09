@@ -124,6 +124,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     },
     [builderId, closeBuilder],
   );
+  const handleBuilderClose = useCallback(() => {
+    setUsageView("builders");
+    closeBuilder();
+  }, [closeBuilder]);
 
   const [showCredentialBanner, setShowCredentialBanner] = useState(true);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
@@ -616,7 +620,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               dateValue={dateValue}
             />
           )}
-          {usageView === "builders" && isAdmin && <BuilderInsights />}
+          {usageView === "builders" && isAdmin && <BuilderInsights onClose={handleBuilderClose} />}
           {/* User Agent Activity Panel */}
           {usageView === "user-agent-activity" && (
             <UserAgentActivity

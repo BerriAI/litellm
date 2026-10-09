@@ -139,13 +139,11 @@ vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
 
 vi.mock("./builders/BuilderInsights", async () => {
   const React = await import("react");
-  const { useBuilderInsightsRoute } = await import("./builders/builderInsightsRoute");
-  const MockBuilderInsights = () => {
-    const { closeBuilder } = useBuilderInsightsRoute();
+  const MockBuilderInsights = ({ onClose }: { onClose: () => void }) => {
     return React.createElement(
       "div",
       { "data-testid": "builder-insights-view" },
-      React.createElement("button", { onClick: closeBuilder }, "Close builder"),
+      React.createElement("button", { onClick: onClose }, "Close builder"),
     );
   };
   return {

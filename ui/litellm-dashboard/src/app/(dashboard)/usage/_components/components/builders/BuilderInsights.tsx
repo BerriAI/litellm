@@ -10,10 +10,10 @@ import { sortBuilders, teamTotals, type BuilderSort } from "./builderInsightsDat
 import { useBuilderInsightsRoute } from "./builderInsightsRoute";
 import { useBuilderInsights } from "./useBuilderInsights";
 
-export default function BuilderInsights() {
+export default function BuilderInsights({ onClose }: { onClose: () => void }) {
   const { data, isPending, isError } = useBuilderInsights();
   const [sort, setSort] = useState<BuilderSort>("spend");
-  const { builderId, selectBuilder, closeBuilder } = useBuilderInsightsRoute();
+  const { builderId, selectBuilder } = useBuilderInsightsRoute();
   const sortedBuilders = useMemo(() => (data ? sortBuilders(data.builders, sort) : []), [data, sort]);
   const selectedBuilder = sortedBuilders.find((builder) => builder.id === builderId);
   const selectedIndex = selectedBuilder ? sortedBuilders.indexOf(selectedBuilder) : -1;
@@ -105,7 +105,7 @@ export default function BuilderInsights() {
           teamSpend={totals.spend}
           dateMeta={dateMeta}
           onSelectBuilder={selectBuilder}
-          onClose={closeBuilder}
+          onClose={onClose}
         />
       )}
       <p className="text-xs text-muted-foreground">
