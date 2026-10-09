@@ -316,7 +316,7 @@ def _router_serves_model(llm_router: LitellmRouter, model_name: str) -> bool:
     return (
         llm_router.default_deployment is not None
         or llm_router.is_recognized_model(model_name)
-        or model_name in llm_router.deployment_names
+        or model_name in llm_router.deployment_names  # pyright: ignore[reportUnknownMemberType]  # Router.deployment_names is an untyped list
         or model_name in llm_router.team_public_model_names
     )
 
@@ -662,7 +662,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
 
     data.pop("enable_tag_filtering", None)
     if "user_config" in data and data["user_config"] is None:
-        data.pop("user_config")
+        data.pop("user_config")  # pyright: ignore[reportUnknownMemberType]  # route_request takes an untyped dict body
 
     team_id: Final = get_team_id_from_data(data)
     router_model_names: Final = llm_router.model_names if llm_router is not None else []

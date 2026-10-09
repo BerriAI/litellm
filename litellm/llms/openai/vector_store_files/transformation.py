@@ -26,7 +26,7 @@ def _clean_dict(source: Mapping[str, object]) -> dict[str, object]:
     return {k: v for k, v in source.items() if v is not None}
 
 
-def _visible_attributes(attributes: Mapping[str, object]) -> dict[str, str]:
+def _visible_attributes(attributes: Mapping[str, object]) -> Mapping[str, str]:
     """The caller's string attributes, all of them, so the provider enforces its own key limit."""
     return {str(k): v for k, v in attributes.items() if k != "hidden_params" and isinstance(v, str)}
 

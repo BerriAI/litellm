@@ -37,7 +37,9 @@ class OCRRequestError(ProxyException):
     """A malformed OCR request, answered with a 400 before any provider call."""
 
     def __init__(self, message: str, param: str | None = None) -> None:
-        super().__init__(message=message, type="invalid_request_error", param=param, code=400)
+        super().__init__(  # pyright: ignore[reportUnknownMemberType]  # ProxyException.__init__ takes an untyped provider_specific_fields dict
+            message=message, type="invalid_request_error", param=param, code=400
+        )
 
 
 def _build_document_from_upload(
