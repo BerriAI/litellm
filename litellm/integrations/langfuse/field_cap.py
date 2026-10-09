@@ -1,13 +1,17 @@
-"""Per-field byte caps that keep huge payloads out of Langfuse's ClickHouse rows.
+"""Per-field caps that keep huge payloads out of Langfuse's ClickHouse rows.
 
 Every string bound for a span attribute is capped before export, mirroring the
-agent-runtime capture discipline: 32 KiB per field, cut on a UTF-8 rune boundary,
-marked with ``...(truncated)``. The 413 backstop in ``langfuse_sdk`` stays as the
-last resort; this makes it rare.
+agent-runtime capture discipline: 32 KiB per field, cut on a code-point boundary,
+marked with ``...(truncated)``. The budget is the ``ensure_ascii``-escaped width,
+which is what ``safe_dumps`` actually emits, so CJK and emoji content cannot
+inflate a capped field past the limit. The 413 backstop in ``langfuse_sdk`` stays
+as the last resort; this makes it rare.
 """
 
+import json
 import os
 from collections.abc import Mapping
+from itertools import accumulate
 from typing import Final, cast
 
 from litellm._logging import verbose_logger
@@ -64,13 +68,44 @@ def cap_payload(value: object, max_field_bytes: int) -> object:
 
 def _cap(value: object, limit: int) -> object:
     if isinstance(value, str):
-        encoded: Final = value.encode("utf-8")
-        if len(encoded) <= limit:
+        if _serialized_width(value) <= limit:
             return value
-        prefix: Final = _utf8_safe_prefix(encoded, limit)
-        return prefix.decode("utf-8", errors="ignore") + _TRUNCATION_SUFFIX
+        budget: Final = limit - len(_TRUNCATION_SUFFIX) - 2
+        kept: Final = "" if budget <= 0 else _serialized_prefix(value, budget)
+        return kept + _TRUNCATION_SUFFIX
     rebuilt: Final = _capped_container(value, limit)
     return value if rebuilt is None else rebuilt
+
+
+def _serialized_width(value: str) -> int:
+    """Bytes ``safe_dumps`` emits for this string: the quotes plus the ``ensure_ascii`` escapes."""
+    return len(json.dumps(value))
+
+
+def _serialized_prefix(value: str, budget: int) -> str:
+    """Longest head of ``value`` whose ``ensure_ascii``-escaped form fits ``budget`` bytes.
+
+    ``safe_dumps`` escapes non-ASCII as ``\\uXXXX`` (6 bytes, 12 per astral code point), so a raw
+    byte cap understates what reaches ClickHouse; the cut budgets the escaped form instead.
+    Escapes are self-contained per code point, so cutting between code points is always safe.
+    """
+    running_widths: Final = accumulate(_escaped_width(char) for char in value)
+    cut: Final = next((index for index, total in enumerate(running_widths) if total > budget), len(value))
+    return value[:cut]
+
+
+def _escaped_width(char: str) -> int:
+    """Bytes ``json.dumps`` emits for one code point under ``ensure_ascii``."""
+    point: Final[int] = ord(char)
+    if point in (0x08, 0x09, 0x0A, 0x0C, 0x0D) or point in (0x22, 0x5C):
+        return 2
+    if point < 0x20:
+        return 6
+    if point < 0x7F:
+        return 1
+    if point <= 0xFFFF:
+        return 6
+    return 12
 
 
 def _capped_container(value: object, limit: int) -> object | None:
@@ -106,17 +141,3 @@ def _as_object_tuple(value: object) -> tuple[object, ...] | None:
     if isinstance(value, tuple):
         return cast(tuple[object, ...], value)
     return None
-
-
-def _utf8_safe_prefix(encoded: bytes, limit: int) -> bytes:
-    prefix: Final = encoded[:limit]
-    return prefix[: len(prefix) - _continuation_bytes_at_end(prefix)]
-
-
-def _continuation_bytes_at_end(prefix: bytes) -> int:
-    total: Final = len(prefix)
-    window: Final = min(3, total)
-    for count in range(1, window + 1):
-        if (prefix[total - count] & 0b11000000) != 0b10000000:
-            return count - 1
-    return window
