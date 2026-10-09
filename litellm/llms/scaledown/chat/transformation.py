@@ -14,13 +14,19 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
-DEFAULT_API_BASE = "https://api.scaledown.xyz/v1"
+DEFAULT_API_BASE = "https://api.scaledown.xyz"
 
 DOMAIN_MODELS = frozenset({"extract", "summarize", "compress"})
 
 DECISIONS_MODELS = frozenset({"classify", "decisions"})
 
 DECISIONS_UPSTREAM_MODEL = "classify-1"
+
+NATIVE_PATHS = {
+    "extract": "/extract",
+    "summarize": "/summarization/abstractive",
+    "compress": "/compress/raw/",
+}
 
 DECISION_QUESTION_TYPES = frozenset({"choice", "noul", "score"})
 
@@ -65,21 +71,22 @@ class ScaleDownChatConfig(BaseConfig):
         stream: bool | None = None,
     ) -> str:
         base = (api_base or get_secret_str("SCALEDOWN_API_BASE") or DEFAULT_API_BASE).rstrip("/")
-        if not base.endswith("/v1"):
-            base = f"{base}/v1"
-        if _operation(model) in DECISIONS_MODELS:
-            return f"{base}/scaledown"
-        return f"{base}/chat/completions"
+        if base.endswith("/v1"):
+            base = base[: -len("/v1")]
+        operation = _operation(model)
+        if operation in DECISIONS_MODELS:
+            return f"{base}/v1/scaledown"
+        return f"{base}{NATIVE_PATHS[operation]}"
 
     def get_supported_openai_params(self, model: str) -> list[str]:
         operation = _operation(model)
         if operation in DECISIONS_MODELS:
             return []
         if operation == "extract":
-            return ["response_format", "max_tokens"]
+            return ["response_format"]
         if operation == "summarize":
             return ["max_tokens"]
-        return ["max_tokens", "temperature", "stream"]
+        return []
 
     def map_openai_params(
         self,
@@ -113,7 +120,12 @@ class ScaleDownChatConfig(BaseConfig):
     ) -> dict:
         if _operation(model) in DECISIONS_MODELS:
             return _decisions_request(messages, optional_params)
-        return {"model": _operation(model), "messages": messages, **optional_params}
+        operation = _operation(model)
+        if operation == "extract":
+            return _extract_request(messages, optional_params)
+        if operation == "summarize":
+            return _summarize_request(messages, optional_params)
+        return _compress_request(messages, optional_params)
 
     def transform_response(
         self,
@@ -140,7 +152,7 @@ class ScaleDownChatConfig(BaseConfig):
         operation = _operation(model)
         if operation in DECISIONS_MODELS:
             return _decisions_response(operation, raw, model_response)
-        return _domain_response(operation, raw, model_response)
+        return _native_response(operation, raw, model_response)
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return ScaleDownError(status_code=status_code, message=error_message, headers=headers)
@@ -155,6 +167,86 @@ def _last_user_text(messages: list[AllMessageValues]) -> str | None:
         if message.get("role") == "user" and isinstance(message.get("content"), str):
             return str(message["content"])
     return None
+
+
+def _text_of(message: AllMessageValues) -> str | None:
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text"]
+        return "\n".join(parts) if parts else None
+    return None
+
+
+def _last_user_text_or_raise(operation: str, messages: list[AllMessageValues]) -> str:
+    for message in reversed(messages):
+        if message.get("role") == "user":
+            text = _text_of(message)
+            if text:
+                return text
+    raise ScaleDownError(status_code=400, message=f"ScaleDown {operation} requires the text in the last user message.")
+
+
+def _schema_to_entities(properties: dict) -> dict:
+    """Turn JSON-schema properties into the /extract entity map.
+
+    Each property becomes an entity whose value is its description (or its name when
+    there is none). Nested objects stay nested and arrays of objects become a
+    one-element list holding the item's entity map.
+    """
+    entities: dict[str, Any] = {}
+    for name, prop in properties.items():
+        prop = prop if isinstance(prop, dict) else {}
+        if isinstance(prop.get("properties"), dict):
+            entities[name] = _schema_to_entities(prop["properties"])
+        elif prop.get("type") == "array" and isinstance((prop.get("items") or {}).get("properties"), dict):
+            entities[name] = [_schema_to_entities(prop["items"]["properties"])]
+        else:
+            entities[name] = prop.get("description") or name
+    return entities
+
+
+def _extract_request(messages: list[AllMessageValues], optional_params: dict) -> dict:
+    schema = ((optional_params.get("response_format") or {}).get("json_schema") or {}).get("schema") or {}
+    properties = schema.get("properties")
+    if not isinstance(properties, dict) or not properties:
+        raise ScaleDownError(
+            status_code=400,
+            message=(
+                "ScaleDown extract needs response_format={'type': 'json_schema', ...} with a non-empty "
+                "'properties' map; each property becomes an entity and its description the extraction hint."
+            ),
+        )
+    body: dict[str, Any] = {
+        "text": _last_user_text_or_raise("extract", messages),
+        "entities": _schema_to_entities(properties),
+    }
+    body.update({key: optional_params[key] for key in ("threshold", "top_n") if key in optional_params})
+    return body
+
+
+def _summarize_request(messages: list[AllMessageValues], optional_params: dict) -> dict:
+    body: dict[str, Any] = {"text": _last_user_text_or_raise("summarize", messages)}
+    instructions = [
+        text for message in messages if message.get("role") == "system" and (text := _text_of(message))
+    ]
+    if instructions:
+        body["instructions"] = "\n".join(instructions)
+    if "max_tokens" in optional_params:
+        body["max_tokens"] = optional_params["max_tokens"]
+    return body
+
+
+def _compress_request(messages: list[AllMessageValues], optional_params: dict) -> dict:
+    prompt = _last_user_text_or_raise("compress", messages)
+    last_user_index = max(i for i, m in enumerate(messages) if m.get("role") == "user" and _text_of(m))
+    context = "\n\n".join(text for i, m in enumerate(messages) if i != last_user_index and (text := _text_of(m)))
+    return {
+        "context": context,
+        "prompt": prompt,
+        "scaledown": {"rate": optional_params.get("compression_rate", "auto")},
+    }
 
 
 def _decisions_request(messages: list[AllMessageValues], optional_params: dict) -> dict:
@@ -228,30 +320,34 @@ def _validate_questions(questions: object) -> None:
                 )
 
 
-def _domain_response(operation: str, raw: dict, model_response: ModelResponse) -> ModelResponse:
-    choices = raw.get("choices") or []
-    if not choices:
+def _native_response(operation: str, raw: dict, model_response: ModelResponse) -> ModelResponse:
+    """Wrap a native /extract, /summarization/abstractive or /compress/raw/ payload.
+
+    The upstream payload is returned as-is, as JSON on choices[0].message.content, so
+    nested extraction values keep their upstream shape. The native APIs report input
+    tokens only; they return no output token count, so completion_tokens stays 0
+    because it is unmeasured, not because nothing was generated.
+    """
+    if not isinstance(raw, dict) or not raw:
         raise ScaleDownError(
             status_code=500,
-            message=f"ScaleDown '{operation}' response contained no choices: {json.dumps(raw)[:500]}",
+            message=f"ScaleDown '{operation}' returned an empty or malformed response: {json.dumps(raw)[:500]}",
         )
 
-    model_response.id = raw.get("id") or f"chatcmpl-{uuid.uuid4().hex}"
-    model_response.created = raw.get("created") or int(time.time())
+    model_response.id = f"chatcmpl-{uuid.uuid4().hex}"
+    model_response.created = int(time.time())
     model_response.model = f"scaledown/{operation}"
     model_response.object = "chat.completion"
     model_response.choices = [
         Choices(
-            index=choice.get("index", index),
-            message=Message(
-                role=(choice.get("message") or {}).get("role") or "assistant",
-                content=(choice.get("message") or {}).get("content"),
-            ),
-            finish_reason=choice.get("finish_reason") or "stop",
+            index=0,
+            message=Message(role="assistant", content=json.dumps(raw, separators=(",", ":"))),
+            finish_reason="stop",
         )
-        for index, choice in enumerate(choices)
     ]
-    _set_usage(model_response, raw.get("usage") or {})
+    input_tokens = raw.get("original_prompt_tokens") if operation == "compress" else raw.get("input_tokens")
+    _set_usage(model_response, {"prompt_tokens": input_tokens or 0})
+    model_response._hidden_params["scaledown_response"] = raw
     return model_response
 
 
@@ -284,8 +380,6 @@ def _decisions_response(operation: str, raw: dict, model_response: ModelResponse
         },
     )
     model_response._hidden_params["scaledown_response"] = raw
-    if usage.get("cost") is not None:
-        model_response._hidden_params["response_cost"] = usage["cost"]
     return model_response
 
 

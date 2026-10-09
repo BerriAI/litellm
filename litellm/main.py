@@ -1954,7 +1954,7 @@ def _complete_together_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatc
 
 
 def _complete_scaledown(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
-    """ScaleDown: domain tasks on /v1/chat/completions, decisions on /v1/scaledown.
+    """ScaleDown: native /extract, /summarization/abstractive and /compress/raw/, decisions on /v1/scaledown.
 
     Routed through the HTTP handler (not the OpenAI passthrough) because the
     provider authenticates with x-api-key and the classify/decisions models use

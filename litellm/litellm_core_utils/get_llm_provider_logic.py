@@ -824,7 +824,7 @@ def _get_openai_compatible_provider_info(
             dynamic_api_key,
         ) = litellm.FeatherlessAIConfig()._get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "scaledown":
-        api_base = api_base or get_secret_str("SCALEDOWN_API_BASE") or "https://api.scaledown.xyz/v1"
+        api_base = api_base or get_secret_str("SCALEDOWN_API_BASE") or "https://api.scaledown.xyz"
         dynamic_api_key = api_key or get_secret_str("SCALEDOWN_API_KEY")
     elif custom_llm_provider == "nscale":
         (
