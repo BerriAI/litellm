@@ -12,6 +12,8 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from litellm.integrations.clickhouse.context import lens_analysis
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import inherit_message_logging_privacy
 
+CLOCK_SKEW_SECONDS: Final = 5
+
 
 class Claims(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
@@ -44,7 +46,7 @@ def verified(token: str, secret: str, now: int) -> bool:
         )
     except (jwt.InvalidTokenError, ValidationError):
         return False
-    return claims.iat <= now < claims.exp and 0 < claims.exp - claims.iat <= 60
+    return claims.iat <= now + CLOCK_SKEW_SECONDS and now < claims.exp and 0 < claims.exp - claims.iat <= 60
 
 
 class LensInternalMiddleware:

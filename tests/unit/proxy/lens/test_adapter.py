@@ -92,9 +92,14 @@ def test_delegated_token_contains_only_authenticated_identity(connection: Connec
     ),
     ids=("admin", "admin_viewer", "user", "user_viewer", "default_user"),
 )
-async def test_delegated_identity_preserves_authenticated_lens_scope_without_log_permissions(
+async def test_delegated_identity_preserves_authenticated_lens_scope_and_log_permissions(
     role: LitellmUserRoles | None,
 ) -> None:
+    async def log_team_lookup(auth: UserAPIKeyAuth) -> tuple[str, ...]:
+        assert auth.user_id == "user"
+        assert role not in (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+        return ("permitted-team",)
+
     identity: Final = await delegated_identity(
         UserAPIKeyAuth(
             user_role=role,
@@ -104,6 +109,7 @@ async def test_delegated_identity_preserves_authenticated_lens_scope_without_log
             token="token-hash",
             models=["model"],
         ),
+        log_team_lookup,
     )
     assert identity == Identity(
         user_role=role or LitellmUserRoles.INTERNAL_USER,
@@ -112,8 +118,22 @@ async def test_delegated_identity_preserves_authenticated_lens_scope_without_log
         org_id="org",
         token="token-hash",
         models=("model",),
-        log_team_ids=(),
+        log_team_ids=()
+        if role in (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+        else ("permitted-team",),
     )
+
+
+@pytest.mark.asyncio
+async def test_delegation_permission_failure_falls_back_to_own_user_scope() -> None:
+    async def unavailable(auth: UserAPIKeyAuth) -> tuple[str, ...]:
+        raise RuntimeError("Permission database unavailable")
+
+    identity: Final = await delegated_identity(
+        UserAPIKeyAuth(user_id="user", user_role=LitellmUserRoles.INTERNAL_USER), unavailable
+    )
+    assert identity.user_id == "user"
+    assert identity.log_team_ids == ()
 
 
 @pytest.mark.asyncio

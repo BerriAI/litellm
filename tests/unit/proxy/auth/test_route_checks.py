@@ -2566,6 +2566,8 @@ def test_admin_viewer_delegates_lens_authorization_to_service(route: str) -> Non
     request: Final = Request({"type": "http", "method": "POST", "path": route, "query_string": b""})
     auth: Final = UserAPIKeyAuth(user_id="viewer", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
 
+    assert not RouteChecks.is_llm_api_route(route)
+
     assert (
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=LiteLLM_UserTable(user_id="viewer", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY),

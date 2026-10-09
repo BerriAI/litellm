@@ -15,7 +15,7 @@ tests:
     template: lens/secrets.yaml
     asserts:
       - hasDocuments:
-          count: 3
+          count: 4
       - matchRegex:
           path: data.service-token
           pattern: '^[A-Za-z0-9+/]{86}==$'
@@ -79,6 +79,7 @@ tests:
       lensWorker.clickhouseSecret.name: external-clickhouse
       lensWorker.serviceTokenSecret.name: external-service
       lensWorker.adminTokenSecret.name: external-admin
+      lensWorker.gateway.secretName: external-signing
     asserts:
       - hasDocuments:
           count: 0

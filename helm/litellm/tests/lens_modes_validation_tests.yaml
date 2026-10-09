@@ -8,11 +8,21 @@ values:
 set:
   lensWorker.publicUrl: https://traces.example
 tests:
+- it: requires a separate identity signing reference for external Lens
+  template: backend/deployment.yaml
+  set:
+    lensWorker.mode: external
+    lensWorker.externalUrl: http://lens.other-namespace:4318
+    lensWorker.serviceTokenSecret.name: worker-service
+  asserts:
+  - failedTemplate:
+      errorMessage: lensWorker.gateway.secretName is required for external Lens
 - it: requires an external service address
   template: backend/deployment.yaml
   set:
     lensWorker.mode: external
     lensWorker.serviceTokenSecret.name: external-lens-signing
+    lensWorker.gateway.secretName: external-lens-signing
   asserts:
   - failedTemplate:
       errorMessage: lensWorker.externalUrl is required for external Lens
@@ -30,6 +40,7 @@ tests:
     lensWorker.mode: external
     lensWorker.externalUrl: http://lens.other-namespace:4318
     lensWorker.serviceTokenSecret.name: external-lens-signing
+    lensWorker.gateway.secretName: external-lens-signing
     lensWorker.publicUrl: ''
   asserts:
   - failedTemplate:

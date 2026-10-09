@@ -507,6 +507,9 @@ shutdown drain window.
 {{- if and (eq $mode "external") (not .Values.lensWorker.serviceTokenSecret.name) -}}
 {{- fail "lensWorker.serviceTokenSecret.name is required for external Lens" -}}
 {{- end }}
+{{- if and (eq $mode "external") (not .Values.lensWorker.gateway.secretName) -}}
+{{- fail "lensWorker.gateway.secretName is required for external Lens" -}}
+{{- end -}}
 - name: LITELLM_LENS_URL
   value: {{ if eq $mode "external" }}{{ required "lensWorker.externalUrl is required for external Lens" .Values.lensWorker.externalUrl | quote }}{{ else }}{{ printf "http://%s-lens-worker:%v" (include "litellm.fullname" .) .Values.lensWorker.service.port | quote }}{{ end }}
 - name: LITELLM_LENS_PUBLIC_URL
@@ -514,8 +517,8 @@ shutdown drain window.
 - name: LENS_GATEWAY_SECRET
   valueFrom:
     secretKeyRef:
-      name: {{ .Values.lensWorker.gateway.secretName | default (include "litellm.lensWorker.serviceTokenSecretName" .) | quote }}
-      key: {{ if .Values.lensWorker.gateway.secretName }}{{ .Values.lensWorker.gateway.secretKey | quote }}{{ else }}{{ .Values.lensWorker.serviceTokenSecret.key | quote }}{{ end }}
+      name: {{ include "litellm.lensWorker.gatewaySecretName" . | quote }}
+      key: {{ .Values.lensWorker.gateway.secretKey | quote }}
 - name: LITELLM_LENS_SERVICE_TOKEN
   valueFrom:
     secretKeyRef:
@@ -532,6 +535,10 @@ shutdown drain window.
 
 {{- define "litellm.lensWorker.serviceTokenSecretName" -}}
 {{- .Values.lensWorker.serviceTokenSecret.name | default (printf "%s-lens-service" (include "litellm.fullname" .)) -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.gatewaySecretName" -}}
+{{- .Values.lensWorker.gateway.secretName | default (printf "%s-lens-gateway" (include "litellm.fullname" . | trunc 50 | trimSuffix "-")) -}}
 {{- end -}}
 
 {{- define "litellm.lensWorker.bundledClickhouse" -}}
@@ -574,6 +581,7 @@ shutdown drain window.
 {{- $_ := set $values "nameOverride" (printf "%s-lens-worker" (include "litellm.name" $root | trunc 51 | trimSuffix "-")) -}}
 {{- $_ := set $values "imagePullSecrets" $root.Values.imagePullSecrets -}}
 {{- $_ := set $values.gateway "enabled" true -}}
+{{- $_ := set $values.gateway "generatedName" (include "litellm.lensWorker.gatewaySecretName" $root) -}}
 {{- $_ := set $values.clickhouse "nameOverride" (include "litellm.lensWorker.clickhouseName" $root) -}}
 {{- $_ := set $values.serviceTokenSecret "generatedName" (include "litellm.lensWorker.serviceTokenSecretName" $root) -}}
 {{- $_ := set $values "publicUrl" ($root.Values.lensWorker.standaloneUrl | default $root.Subcharts.lens.Values.publicUrl) -}}

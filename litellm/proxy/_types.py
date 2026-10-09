@@ -545,8 +545,6 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/rag/ingest",
         "/rag/query",
         "/v1/rag/query",
-        "/lens",
-        "/lens/{path:path}",
         "/v1/traces",
         "/v1/logs",
         "/v1/traces/query",

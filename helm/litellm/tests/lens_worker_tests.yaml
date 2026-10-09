@@ -4,6 +4,7 @@ templates:
 values:
   - ./values/required.yaml
 set:
+  fullnameOverride: lens-test
   lensWorker.enabled: true
   lensWorker.publicUrl: https://traces.example
   lensWorker.serviceTokenSecret.name: lens-service
@@ -66,7 +67,7 @@ tests:
           content:
             name: LENS_GATEWAY_SECRET
             valueFrom:
-              secretKeyRef: {name: lens-service, key: service-token}
+              secretKeyRef: {name: lens-test-lens-gateway, key: gateway-secret}
       - equal:
           path: spec.template.spec.automountServiceAccountToken
           value: false

@@ -6,6 +6,27 @@ For product setup, use Lens's [standalone quickstart](https://github.com/BerriAI
 
 This companion change is under qualification. The vendored UI and chart are development artifacts, not a published release. Existing Lens data needs transfer before the clean cutover; follow the [Lens migration guide](https://github.com/BerriAI/lens/blob/main/docs/migration.md) and its qualification requirements
 
+## Connect through either LiteLLM Helm chart
+
+For `lensWorker.mode=bundled`, both charts generate separate service and identity-signing credentials and share the matching references with Lens. For `lensWorker.mode=external`, supply both references to the credentials already configured in Lens:
+
+```yaml
+lensWorker:
+  mode: external
+  externalUrl: http://lens.lens.svc.cluster.local:4318
+  publicUrl: https://lens.example.com
+  gateway:
+    secretName: lens-connection
+    secretKey: gateway-secret
+  serviceTokenSecret:
+    name: lens-connection
+    key: service-token
+```
+
+Replace the service and public addresses with those reachable from your gateway and agents respectively. Provision `lens-connection` in the gateway's namespace through your secret manager. Its two keys must contain the separate values described below, matching the Lens deployment. The identity-signing key grants delegated user authority; do not reuse the service-token value for it
+
+For GitOps, follow the Lens chart's [offline rendering instructions](https://github.com/BerriAI/lens/blob/main/helm/lens/README.md#render-with-gitops). Generated credentials depend on live Helm lookup and must be provisioned separately for offline renderers
+
 ## Connect a development gateway
 
 Start Lens using its quickstart, then run the gateway directly on the same host with its existing configuration and database settings. The optional [gateway Compose example](../docker/docker-compose.tracing.yml) connects to an existing Lens deployment; its PostgreSQL service belongs to LiteLLM
@@ -79,6 +100,8 @@ From `ui/litellm-dashboard`, run `npm ci` followed by `npm run dev` to work on g
 npx vitest run src/components/lens/EmbeddedLens.integration.test.tsx \
   'src/app/(dashboard)/lens/page.test.tsx'
 ```
+
+A source installation with `pip install .` does not build the dashboard. To serve the current UI from that installation, run `npm ci` and `bash build_ui.sh` from `ui/litellm-dashboard` before packaging or starting the gateway. This refreshes the local `litellm/proxy/_experimental/out` directory. Official image and wheel builds receive the compiled UI from the release pipeline
 
 For gateway adapter and telemetry changes, run the focused Python checks from the repository root:
 

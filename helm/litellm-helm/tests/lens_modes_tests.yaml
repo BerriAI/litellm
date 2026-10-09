@@ -30,6 +30,7 @@ tests:
     lensWorker.mode: external
     lensWorker.externalUrl: http://lens.other-namespace:4318
     lensWorker.serviceTokenSecret.name: external-lens-signing
+    lensWorker.gateway.secretName: external-lens-signing
   asserts:
   - hasDocuments:
       count: 0
@@ -39,6 +40,7 @@ tests:
     lensWorker.mode: external
     lensWorker.externalUrl: http://lens.other-namespace:4318
     lensWorker.serviceTokenSecret.name: external-lens-signing
+    lensWorker.gateway.secretName: external-lens-signing
   asserts:
   - contains:
       path: spec.template.spec.containers[0].env
@@ -52,7 +54,7 @@ tests:
         valueFrom:
           secretKeyRef:
             name: external-lens-signing
-            key: service-token
+            key: gateway-secret
 - it: disables Lens explicitly even with a retained legacy enable flag
   template: lens/deployment.yaml
   set:
@@ -116,6 +118,7 @@ tests:
     lensWorker.externalUrl: http://existing-lens:4318
     lensWorker.externalServiceName: ""
     lensWorker.serviceTokenSecret.name: worker-service
+    lensWorker.gateway.secretName: external-lens-signing
   asserts:
   - contains:
       path: spec.rules[0].http.paths
@@ -137,6 +140,7 @@ tests:
     lensWorker.externalUrl: http://existing-lens:4318
     lensWorker.externalServiceName: "existing-lens"
     lensWorker.serviceTokenSecret.name: worker-service
+    lensWorker.gateway.secretName: external-lens-signing
   asserts:
   - contains:
       path: spec.rules[0].http.paths
@@ -158,6 +162,7 @@ tests:
     lensWorker.externalUrl: http://existing-lens:4318
     lensWorker.externalServiceName: ""
     lensWorker.serviceTokenSecret.name: worker-service
+    lensWorker.gateway.secretName: external-lens-signing
   asserts:
   - notContains:
       path: spec.rules[0].http.paths
@@ -174,6 +179,7 @@ tests:
     lensWorker.externalUrl: http://existing-lens:4318
     lensWorker.externalServiceName: ""
     lensWorker.serviceTokenSecret.name: worker-service
+    lensWorker.gateway.secretName: external-lens-signing
   asserts:
   - notContains:
       path: spec.rules[0].http.paths

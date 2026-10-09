@@ -2,6 +2,7 @@ import os
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import partial
 from io import BytesIO
 from typing import Annotated, Final
 from urllib.parse import quote
@@ -13,6 +14,8 @@ from pydantic import BaseModel, ConfigDict
 from starlette.responses import JSONResponse
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.authorization import OwnedRows, resolve_trace_read_scope
+from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.tracing.remote import MAX_RESPONSE_BYTES, LensConnection, bounded_response
 
@@ -68,12 +71,14 @@ class Connection:
 
 async def delegated_identity(
     auth: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    log_team_lookup: LogTeamLookupDependency,
 ) -> Identity:
+    scope: Final = await resolve_trace_read_scope(auth, partial(log_team_lookup, auth))
     return Identity.model_validate(
         {
             **auth.model_dump(include={"user_id", "team_id", "org_id", "token", "models"}),
             "user_role": auth.user_role or LitellmUserRoles.INTERNAL_USER,
-            "log_team_ids": (),
+            "log_team_ids": scope.team_ids if isinstance(scope, OwnedRows) else (),
         }
     )
 
