@@ -217,13 +217,7 @@ class DecisionModelGuardrail(CustomGuardrail):
             self._handle_call_failure(call_error)
             return inputs
 
-        try:
-            verdicts: Final = self._verdicts(response)
-        except Exception as error:  # noqa: BLE001  # unexpected verdict errors stay non-blocking
-            verbose_logger.warning("decision_model guardrail %s unexpected error: %s", self.guardrail_name, error)
-            self._log(request_data, (), "success", start_time)
-            return inputs
-
+        verdicts: Final = self._verdicts(response)
         flagged: Final = tuple(v for v in verdicts if v["flagged"])
         status: Final = (
             "guardrail_intervened"

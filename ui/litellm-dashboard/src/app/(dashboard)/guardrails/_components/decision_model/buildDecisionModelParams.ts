@@ -27,8 +27,6 @@ export function buildDecisionModelParams(
     decision_model: decisionModel,
     checks: checks.map((check) => ({
       name: check.name,
-      // Preset checks omit instructions so the backend resolves the canonical preset text;
-      // custom checks must carry their own.
       ...(check.custom ? { instructions: check.instructions ?? "" } : {}),
       action: check.action,
       threshold: clampThreshold(check.threshold),

@@ -248,7 +248,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     createEmptyToolPermissionConfig,
   );
 
-  // Decision Model state
   const [decisionModels, setDecisionModels] = useState<string[]>([]);
   const [decisionChecks, setDecisionChecks] = useState<DecisionModelCheckDraft[]>([]);
 
@@ -383,7 +382,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       form.setValue("mode", "post_call");
     }
 
-    // Decision Model starts with prompt_injection pre-selected
     if (guardrail_provider_map[value] === "decision_model") {
       const preset = guardrailSettings?.decision_model_check_presets?.find((p) => p.name === "prompt_injection");
       setDecisionChecks(preset ? [{ name: preset.name, label: preset.label, action: "block", threshold: 0.5 }] : []);
