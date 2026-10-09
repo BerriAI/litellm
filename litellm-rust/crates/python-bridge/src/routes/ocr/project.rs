@@ -1,5 +1,6 @@
 use litellm_auth::SecretValue;
-use litellm_host_python::{from_py, present};
+use litellm_host_python::from_py;
+use litellm_host_python::present;
 use litellm_inference_ocr::{
     types::{LiteLLMOcrRequest, OcrDocumentInput},
     wire::{OcrWireRequest, consumed_optional_params, decode_document, decode_request_input},
@@ -11,7 +12,7 @@ use serde_json::{Map, Value};
 use super::{document::FileDocumentInput, errors::to_pyerr as ocr_error_to_pyerr};
 use crate::{
     credentials::{self, CallerTokenProvider},
-    marshal::{project_optional_fields, python_timeout_seconds, request_input_sources},
+    marshal::{project_optional_fields, request_input_sources, request_timeout},
 };
 
 /// What the host keeps after projection: the caller's token callable that answers the
@@ -21,14 +22,12 @@ pub(super) struct OcrHostHandles {
     pub provider: &'static str,
 }
 
-struct OcrArguments<'a, 'py> {
-    bound: &'a Bound<'py, PyDict>,
-    kwargs: &'a Bound<'py, PyDict>,
-}
+struct OcrArguments<'a, 'py>(&'a Bound<'py, PyDict>);
 
 impl<'py> OcrArguments<'_, 'py> {
     fn lookup(&self, name: &str) -> PyResult<Bound<'py, PyAny>> {
-        litellm_host_python::lookup(self.kwargs, self.bound, name)?
+        self.0
+            .get_item(name)?
             .ok_or_else(|| PyValueError::new_err(format!("missing argument: {name}")))
     }
 
@@ -58,17 +57,12 @@ impl<'py> OcrArguments<'_, 'py> {
     fn extra_headers(&self) -> PyResult<Option<Map<String, Value>>> {
         self.lookup("extra_headers")?
             .extract::<Option<Py<PyAny>>>()?
-            .map(|value| from_py(value.bind(self.bound.py())))
+            .map(|value| from_py(value.bind(self.0.py())))
             .transpose()
     }
 
     fn timeout_seconds(&self) -> PyResult<Option<f64>> {
-        Ok(self
-            .lookup("timeout")?
-            .extract::<Option<Py<PyAny>>>()?
-            .map(|value| python_timeout_seconds(self.bound.py(), value))
-            .transpose()?
-            .flatten())
+        request_timeout(self.0.py(), self.0)
     }
 }
 
@@ -110,10 +104,9 @@ impl ProjectedDocument {
 }
 
 pub(super) fn project_request(
-    bound: &Bound<'_, PyDict>,
-    kwargs: &Bound<'_, PyDict>,
+    resolved: &Bound<'_, PyDict>,
 ) -> PyResult<(LiteLLMOcrRequest<OcrDocumentInput>, OcrHostHandles)> {
-    let arguments = OcrArguments { bound, kwargs };
+    let arguments = OcrArguments(resolved);
     let model = arguments.model()?;
     let custom_llm_provider = arguments.custom_llm_provider()?;
     let document = ProjectedDocument::project(&arguments.document()?)?;
@@ -122,21 +115,21 @@ pub(super) fn project_request(
         .map_err(ocr_error_to_pyerr)?;
     let names = specs.iter().map(|spec| spec.name).collect::<Vec<_>>();
     let optional_params =
-        project_optional_fields(names.iter().copied(), |name| present(kwargs, bound, name))?;
+        project_optional_fields(names.iter().copied(), |name| present(resolved, name))?;
     let input_sources = request_input_sources(
-        kwargs,
+        resolved,
         names
             .iter()
             .copied()
             .chain(["api_key", "api_base", "extra_headers"]),
     )?;
-    let azure_ad_token_provider = credentials::azure_ad_token_provider(kwargs)?;
+    let azure_ad_token_provider = credentials::azure_ad_token_provider(resolved)?;
     let api_base = arguments.api_base()?;
     let extra_headers = arguments.extra_headers()?;
     let timeout_seconds = arguments.timeout_seconds()?;
     let wire = OcrWireRequest {
         model,
-        document: document.resolve(bound.py())?,
+        document: document.resolve(resolved.py())?,
         api_key,
         api_base,
         custom_llm_provider,
@@ -178,13 +171,6 @@ mod tests {
             .unwrap()
     }
 
-    fn arguments<'a, 'py>(
-        bound: &'a Bound<'py, PyDict>,
-        kwargs: &'a Bound<'py, PyDict>,
-    ) -> OcrArguments<'a, 'py> {
-        OcrArguments { bound, kwargs }
-    }
-
     fn project_document(document: &Bound<'_, PyAny>) -> PyResult<OcrDocumentInput> {
         ProjectedDocument::project(document)?.resolve(document.py())
     }
@@ -197,7 +183,48 @@ mod tests {
         .into()
     }
 
-    fn stub_timeout_conversion(py: Python<'_>) {
+    struct TimeoutConversion {
+        modules: Py<PyDict>,
+        previous: Py<PyDict>,
+    }
+
+    impl Drop for TimeoutConversion {
+        fn drop(&mut self) {
+            Python::attach(|py| {
+                let modules = self.modules.bind(py);
+                for name in [
+                    "litellm",
+                    "litellm.rust_bridge",
+                    "litellm.rust_bridge.timeouts",
+                ] {
+                    if let Some(previous) = self.previous.bind(py).get_item(name).unwrap() {
+                        modules.set_item(name, previous).unwrap();
+                    } else {
+                        modules.del_item(name).unwrap();
+                    }
+                }
+            });
+        }
+    }
+
+    fn stub_timeout_conversion(py: Python<'_>) -> TimeoutConversion {
+        let modules = py
+            .import("sys")
+            .unwrap()
+            .getattr("modules")
+            .unwrap()
+            .cast_into::<PyDict>()
+            .unwrap();
+        let previous = PyDict::new(py);
+        for name in [
+            "litellm",
+            "litellm.rust_bridge",
+            "litellm.rust_bridge.timeouts",
+        ] {
+            if let Some(module) = modules.get_item(name).unwrap() {
+                previous.set_item(name, module).unwrap();
+            }
+        }
         eval(
             py,
             c"
@@ -210,34 +237,40 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
 sys.modules['litellm.rust_bridge.timeouts'] = timeouts
 ",
         );
+        TimeoutConversion {
+            modules: modules.unbind(),
+            previous: previous.unbind(),
+        }
     }
 
     #[test]
-    fn kwargs_override_bound_values_including_explicit_none() {
+    fn an_explicit_none_is_an_unset_optional_and_a_missing_required_argument_is_named() {
         Python::initialize();
         Python::attach(|py| {
             let locals = eval(
                 py,
                 c"
-bound = {'model': 'from-bound', 'custom_llm_provider': 'mistral'}
-kwargs = {'model': 'from-kwargs', 'custom_llm_provider': None}
+arguments = {'model': 'mistral/mistral-ocr-latest', 'custom_llm_provider': None}
 ",
             );
-            let (bound, kwargs) = (dict(&locals, "bound"), dict(&locals, "kwargs"));
-            let arguments = arguments(&bound, &kwargs);
-            assert_eq!(arguments.model().unwrap(), "from-kwargs");
+            let resolved = dict(&locals, "arguments");
+            let arguments = OcrArguments(&resolved);
+            assert_eq!(arguments.model().unwrap(), "mistral/mistral-ocr-latest");
             assert_eq!(arguments.custom_llm_provider().unwrap(), None);
+            let error = arguments.document().unwrap_err();
+            assert!(error.is_instance_of::<PyValueError>(py));
+            assert_eq!(error.value(py).to_string(), "missing argument: document");
         });
     }
 
-    /// A reader that rewrites the bound arguments while it runs shows which arguments
-    /// projection read before it and which after: every other argument is read first, and
-    /// the read happens exactly once.
+    /// A reader that rewrites the arguments while it runs shows which arguments projection
+    /// read before it and which after: every other argument is read first, and the read
+    /// happens exactly once.
     #[test]
     fn document_readers_are_read_once_after_every_other_argument() {
         Python::initialize();
         Python::attach(|py| {
-            stub_timeout_conversion(py);
+            let _conversion = stub_timeout_conversion(py);
             let locals = eval(
                 py,
                 c"
@@ -245,11 +278,11 @@ class Reader:
     reads = 0
     def read(self):
         Reader.reads += 1
-        bound['api_base'] = 'https://mutated.example.com'
-        bound['extra_headers'] = {'x-source': 'mutated'}
-        bound['timeout'] = 9
+        arguments['api_base'] = 'https://mutated.example.com'
+        arguments['extra_headers'] = {'x-source': 'mutated'}
+        arguments['timeout'] = 9
         return b'abc'
-bound = {
+arguments = {
     'model': 'mistral/mistral-ocr-latest',
     'custom_llm_provider': None,
     'api_key': None,
@@ -258,11 +291,9 @@ bound = {
     'timeout': 1,
     'document': {'type': 'file', 'file': Reader(), 'mime_type': 'application/pdf'},
 }
-kwargs = {}
 ",
             );
-            let (projected, _) =
-                project_request(&dict(&locals, "bound"), &dict(&locals, "kwargs")).unwrap();
+            let (projected, _) = project_request(&dict(&locals, "arguments")).unwrap();
             assert_eq!(
                 py.eval(c"Reader.reads", Some(&locals), Some(&locals))
                     .unwrap()
@@ -409,14 +440,13 @@ document = Document()
         });
     }
 
-    fn bound_and_kwargs<'py>(
-        py: Python<'py>,
-        kwargs: &std::ffi::CStr,
-    ) -> (Bound<'py, PyDict>, Bound<'py, PyDict>) {
+    /// The resolved call over a full set of signature defaults, with `script`'s edits laid
+    /// over it the way the legacy layer resolves a caller's keywords.
+    fn resolved<'py>(py: Python<'py>, script: &std::ffi::CStr) -> Bound<'py, PyDict> {
         let locals = eval(
             py,
             c"
-bound = {
+arguments = {
     'model': 'mistral/mistral-ocr-latest',
     'custom_llm_provider': 'mistral',
     'document': {'type': 'document_url', 'document_url': 'https://example.com/bound.pdf'},
@@ -427,20 +457,19 @@ bound = {
 }
 ",
         );
-        py.run(kwargs, Some(&locals), Some(&locals)).unwrap();
-        (dict(&locals, "bound"), dict(&locals, "kwargs"))
+        py.run(script, Some(&locals), Some(&locals)).unwrap();
+        dict(&locals, "arguments")
     }
 
     #[test]
     fn unconsumed_kwargs_stay_out_of_optional_params_and_response_limit_goes_to_transport() {
         Python::initialize();
         Python::attach(|py| {
-            stub_timeout_conversion(py);
-            let (bound, kwargs) = bound_and_kwargs(
+            let _conversion = stub_timeout_conversion(py);
+            let arguments = resolved(
                 py,
                 c"
-kwargs = {
-    'model': 'mistral/mistral-ocr-latest',
+arguments.update({
     'custom_llm_provider': None,
     'pages': [0],
     'max_response_bytes': 1234,
@@ -449,10 +478,10 @@ kwargs = {
     'shared_session': object(),
     'guardrails': ['guard'],
     'opaque': object(),
-}
+})
 ",
             );
-            let (projected, _) = project_request(&bound, &kwargs).unwrap();
+            let (projected, _) = project_request(&arguments).unwrap();
             assert_eq!(
                 projected.optional_params.keys().collect::<Vec<_>>(),
                 ["pages"]
@@ -462,41 +491,38 @@ kwargs = {
     }
 
     #[rstest::rstest]
-    #[case::explicit_none_is_unset(c"bound['pages'] = [1]\nkwargs = {'pages': None}", None)]
-    #[case::bound_fallback(c"bound['pages'] = [1]\nkwargs = {}", Some(serde_json::json!([1])))]
-    #[case::keyword_wins(c"bound['pages'] = [1]\nkwargs = {'pages': [0]}", Some(serde_json::json!([0])))]
-    fn optional_params_read_through_bound_and_drop_none(
-        #[case] script: &std::ffi::CStr,
-        #[case] expected: Option<Value>,
-    ) {
+    #[case::explicit_none_is_unset(c"arguments['pages'] = None", None)]
+    #[case::absent(c"", None)]
+    #[case::supplied(c"arguments['pages'] = [0]", Some(serde_json::json!([0])))]
+    fn optional_params_drop_none(#[case] script: &std::ffi::CStr, #[case] expected: Option<Value>) {
         Python::initialize();
         Python::attach(|py| {
-            stub_timeout_conversion(py);
-            let (bound, kwargs) = bound_and_kwargs(py, script);
-            let (projected, _) = project_request(&bound, &kwargs).unwrap();
+            let _conversion = stub_timeout_conversion(py);
+            let arguments = resolved(py, script);
+            let (projected, _) = project_request(&arguments).unwrap();
             assert_eq!(projected.optional_params.get("pages").cloned(), expected);
         });
     }
 
     #[test]
-    fn replacement_kwargs_project_provider_connection_and_timeout() {
+    fn the_resolved_call_projects_provider_connection_and_timeout() {
         Python::initialize();
         Python::attach(|py| {
-            stub_timeout_conversion(py);
-            let (bound, kwargs) = bound_and_kwargs(
+            let _conversion = stub_timeout_conversion(py);
+            let arguments = resolved(
                 py,
                 c"
-kwargs = {
+arguments.update({
     'model': 'mistral-ocr-latest',
     'custom_llm_provider': 'azure_ai',
     'document': {'type': 'document_url', 'document_url': 'https://example.com/kwargs.pdf'},
     'api_base': 'https://kwargs.example.com',
     'extra_headers': {'x-source': 'kwargs'},
     'timeout': 5,
-}
+})
 ",
             );
-            let (projected, handles) = project_request(&bound, &kwargs).unwrap();
+            let (projected, handles) = project_request(&arguments).unwrap();
             assert_eq!(handles.provider, "azure_ai");
             assert_eq!(projected.model, "mistral-ocr-latest");
             assert_eq!(

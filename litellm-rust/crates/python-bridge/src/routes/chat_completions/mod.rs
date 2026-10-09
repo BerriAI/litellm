@@ -1,7 +1,9 @@
+use litellm_host_python::present;
 mod host;
 
 use std::sync::Arc;
 
+use crate::errors::RustBridgeDeclined;
 use host::ChatCompletionsPythonHost;
 use litellm_auth::AuthServices;
 use litellm_cache_response::{CachePolicy, ScopedCache};
@@ -21,10 +23,16 @@ fn run_chat_completions(
     call: NativeCall<'_>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
-    let host = InferenceHost::new(
-        call.resolved()?.unbind(),
-        "litellm.rust_bridge.chat_completions.route_host",
-    );
+    if present(&call.resolved, "stream")?
+        .map(|value| value.is_truthy())
+        .transpose()?
+        .unwrap_or(false)
+    {
+        return Err(RustBridgeDeclined::new_err(
+            "native Python chat_completions streaming",
+        ));
+    }
+    let host = InferenceHost::new(py, "litellm.rust_bridge.chat_completions.route_host");
     run_inference::<ChatCompletionsRoute, _>(
         py,
         call,

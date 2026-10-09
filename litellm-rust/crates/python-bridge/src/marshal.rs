@@ -188,6 +188,21 @@ pub(crate) fn marshal_headers(headers: Option<Value>) -> PyResult<HashMap<String
         .collect()
 }
 
+pub(crate) fn request_timeout(
+    py: Python<'_>,
+    arguments: &Bound<'_, PyDict>,
+) -> PyResult<Option<f64>> {
+    timeout_argument(arguments)?
+        .map(|value| python_timeout_seconds(py, value.unbind()))
+        .transpose()
+        .map(Option::flatten)
+}
+
+fn timeout_argument<'py>(arguments: &Bound<'py, PyDict>) -> PyResult<Option<Bound<'py, PyAny>>> {
+    Ok(litellm_host_python::present(arguments, "timeout")?
+        .or(litellm_host_python::present(arguments, "request_timeout")?))
+}
+
 #[cfg(test)]
 mod tests {
     use pyo3::exceptions::PyTypeError;
@@ -195,6 +210,32 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[rstest]
+    #[case::unset(None, None, None)]
+    #[case::timeout(Some(3.0), None, Some(3.0))]
+    #[case::request_timeout(None, Some(5.0), Some(5.0))]
+    #[case::timeout_wins(Some(3.0), Some(5.0), Some(3.0))]
+    #[case::zero_is_supplied(Some(0.0), Some(5.0), Some(0.0))]
+    fn request_timeouts_share_one_key_precedence(
+        #[case] timeout: Option<f64>,
+        #[case] fallback: Option<f64>,
+        #[case] expected: Option<f64>,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let arguments = PyDict::new(py);
+            arguments.set_item("timeout", timeout).unwrap();
+            arguments.set_item("request_timeout", fallback).unwrap();
+
+            assert_eq!(
+                timeout_argument(&arguments)
+                    .unwrap()
+                    .map(|value| value.extract::<f64>().unwrap()),
+                expected
+            );
+        });
+    }
 
     fn eval<'py>(py: Python<'py>, source: &std::ffi::CStr) -> Bound<'py, PyDict> {
         let locals = PyDict::new(py);

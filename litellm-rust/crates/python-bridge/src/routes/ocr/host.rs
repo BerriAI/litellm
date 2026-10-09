@@ -5,17 +5,16 @@ use litellm_inference_ocr::route::{Ocr, OcrCall, OcrOp};
 use litellm_llms::base_llm::ocr::error::Error;
 use litellm_llms_types::formats::ocr::LiteLLMOcrResponse;
 use pyo3::{
-    exceptions::{PyBaseException, PyException},
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     types::PyDict,
 };
 
-use super::{
-    errors::to_pyerr as ocr_error_to_pyerr,
-    project::{OcrHostHandles, project_request},
+use super::project::{OcrHostHandles, project_request};
+use crate::{
+    errors::{NativeFailure, native_failure},
+    marshal::public_response,
 };
-use crate::marshal::public_response;
 
 enum OcrHostData {
     Unprojected,
@@ -23,18 +22,15 @@ enum OcrHostData {
     Released,
 }
 
-/// The Python side of the OCR route: projects the prepared arguments (reading a file-like
-/// document as it goes), acquires Azure AD tokens, and builds the public response and
-/// exception.
 pub(super) struct OcrPythonHost {
     request: Py<PyDict>,
     data: OcrHostData,
 }
 
 impl OcrPythonHost {
-    pub(super) fn new(request: Py<PyDict>) -> Self {
+    pub(super) fn new(py: Python<'_>) -> Self {
         Self {
-            request,
+            request: PyDict::new(py).unbind(),
             data: OcrHostData::Unprojected,
         }
     }
@@ -54,11 +50,12 @@ impl OcrPythonHost {
             .acquire(py)
     }
 
-    fn projection(&mut self, py: Python<'_>, arguments: &Bound<'_, PyDict>) -> PyResult<OcrCall> {
+    fn projection(&mut self, arguments: &Bound<'_, PyDict>) -> PyResult<OcrCall> {
         let OcrHostData::Unprojected = self.data else {
             return Err(missing_state());
         };
-        let (request, handles) = project_request(self.request.bind(py), arguments)?;
+        self.request = arguments.clone().unbind();
+        let (request, handles) = project_request(arguments)?;
         let caller_token = handles.azure_ad_token_provider.is_some();
         self.data = OcrHostData::Projected(Box::new(handles));
         Ok(OcrCall {
@@ -68,22 +65,17 @@ impl OcrPythonHost {
     }
 
     fn map_failure(&self, py: Python<'_>, error: PyErr) -> PyErr {
-        if !error.is_instance_of::<PyException>(py) {
-            return error;
-        }
         let provider = match &self.data {
             OcrHostData::Projected(handles) => handles.provider,
             _ => "",
         };
-        let mapped = py
-            .import("litellm.rust_bridge.ocr.route_host")
-            .and_then(|module| module.getattr("map_failure"))
-            .and_then(|map| map.call1((error.value(py), self.request.bind(py), provider)))
-            .and_then(|mapped| mapped.extract::<Py<PyBaseException>>().map_err(PyErr::from));
-        match mapped {
-            Ok(mapped) => PyErr::from_value(mapped.into_bound(py).into_any()),
-            Err(_) => error,
-        }
+        super::super::map_failure(
+            py,
+            "litellm.rust_bridge.ocr.route_host",
+            error,
+            self.request.bind(py),
+            Some(provider),
+        )
     }
 }
 
@@ -96,7 +88,7 @@ impl PythonBinding for OcrPythonHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> Result<OcrCall, InvokeError<Error>> {
-        self.projection(py, arguments)
+        self.projection(arguments)
             .map_err(|error| InvokeError::Python(self.map_failure(py, error)))
     }
 
@@ -125,12 +117,9 @@ impl PythonBinding for OcrPythonHost {
     }
 
     fn map_error(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
-        if let Error::Secret(source) = &error
-            && let Some(original) = crate::secrets::python_error(py, source)
-        {
-            return Ok(original);
-        }
-        Ok(self.map_failure(py, ocr_error_to_pyerr(error)))
+        native_failure(py, NativeFailure::Ocr(error), |error| {
+            self.map_failure(py, error)
+        })
     }
 
     fn host_error(error: &PyErr) -> Error {
@@ -150,7 +139,8 @@ impl PythonHostCalls<Ocr> for OcrPythonHost {
 }
 
 impl PythonOwned for OcrPythonHost {
-    fn close(&mut self, _: Python<'_>) {
+    fn close(&mut self, py: Python<'_>) {
+        self.request = PyDict::new(py).unbind();
         self.data = OcrHostData::Released;
     }
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
@@ -209,7 +199,7 @@ del provider
                 .unwrap()
                 .cast_into::<PyDict>()
                 .unwrap();
-            let mut host = OcrPythonHost::new(PyDict::new(py).unbind());
+            let mut host = OcrPythonHost::new(py);
             assert!(host.decode_request(py, &kwargs).unwrap().caller_token);
             locals.del_item("kwargs").unwrap();
             drop(kwargs);

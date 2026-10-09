@@ -4,9 +4,9 @@ use pyo3::{
     prelude::*,
 };
 
-use crate::errors::{RustUpstreamError, by_fault};
+use crate::errors::{by_fault, upstream_error};
 
-pub(super) fn to_pyerr(error: Error) -> PyErr {
+pub(crate) fn to_pyerr(error: Error) -> PyErr {
     let status = error.http_status_code();
     let mapped = Python::attach(|py| -> PyResult<PyErr> {
         Ok(match error {
@@ -49,17 +49,6 @@ fn is_request(error: &Error) -> bool {
         )
 }
 
-fn upstream_error(
-    py: Python<'_>,
-    status: u16,
-    body: String,
-    headers: Vec<(String, String)>,
-) -> PyResult<PyErr> {
-    let error = RustUpstreamError::new_err((status, body));
-    error.value(py).setattr("headers", headers)?;
-    Ok(error)
-}
-
 fn attach_status(error: PyErr, status: Option<u16>) -> PyErr {
     if let Some(status) = status {
         Python::attach(|py| {
@@ -73,6 +62,7 @@ fn attach_status(error: PyErr, status: Option<u16>) -> PyErr {
 
 #[cfg(test)]
 mod tests {
+    use crate::errors::RustUpstreamError;
     use pyo3::exceptions::PyValueError;
 
     use super::*;

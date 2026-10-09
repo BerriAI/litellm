@@ -12,7 +12,7 @@ use pyo3::{
 pub(super) struct ChatCompletionsPythonHost(pub InferenceHost);
 
 pub(super) fn project(
-    host: &InferenceHost,
+    host: &mut InferenceHost,
     py: Python<'_>,
     arguments: &Bound<'_, PyDict>,
 ) -> PyResult<ChatCompletionsCall> {
@@ -38,17 +38,8 @@ impl PythonBinding for ChatCompletionsPythonHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> Result<ChatCompletionsCall, InvokeError<Error>> {
-        let call = project(&self.0, py, arguments).map_err(InvokeError::Python)?;
-        if call
-            .optional_params
-            .get("stream")
-            .is_some_and(|value| value == &serde_json::Value::Bool(true))
-        {
-            return Err(InvokeError::Native(Error::Unsupported(
-                "native Python chat_completions streaming",
-            )));
-        }
-        Ok(call)
+        project(&mut self.0, py, arguments)
+            .map_err(|error| InvokeError::Python(self.0.map_failure(py, error)))
     }
 
     fn encode_response(
@@ -94,8 +85,10 @@ impl PythonHostCalls<ChatCompletions> for ChatCompletionsPythonHost {
 }
 
 impl PythonOwned for ChatCompletionsPythonHost {
-    fn close(&mut self, _: Python<'_>) {}
+    fn close(&mut self, py: Python<'_>) {
+        self.0.close(py);
+    }
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-        visit.call(&self.0.request)
+        self.0.traverse(visit)
     }
 }
