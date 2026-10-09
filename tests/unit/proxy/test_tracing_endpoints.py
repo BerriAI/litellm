@@ -4,7 +4,7 @@ Tests for the agent tracing endpoints (litellm/proxy/tracing_endpoints.py).
 
 import asyncio
 import json
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Callable, Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from types import ModuleType
@@ -32,12 +32,12 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.tracing_runtime import manage_tracing, provide_storage
 from litellm.rust_bridge import loader
 from litellm.rust_bridge.trace.errors import TraceChanged
-from litellm.rust_bridge.trace.generated.models import TraceQueryHelp
+from litellm.rust_bridge.trace.generated.models import LensAccessParams, TraceQueryHelp
 from litellm.rust_bridge.trace.generated.responses import TraceSQLResponse
 from litellm.rust_bridge.trace.generated.types import AllQueryScope, TraceScope
 from litellm.rust_bridge.trace.storage import ClickHouseStorage, TraceStorageConfig
 from litellm.tracing import TraceReceiver
-from litellm.tracing.remote import RemoteTraceStore
+from litellm.tracing.remote import LensConnection, RemoteTraceStore
 from litellm.tracing.types import TraceAgent, TraceAgentList
 
 SQL_ROWS: Final[tuple[Mapping[str, JsonValue], ...]] = (
@@ -782,6 +782,33 @@ def test_unconfigured_lifespan_receiver_returns_501(enabled: bool, monkeypatch: 
     assert response.status_code == 501
     storage.ensure_schema.assert_not_awaited()
     storage.list_traces.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_lifespan_sends_background_reads_through_their_own_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_LENS_URL", "http://lens.test")
+    monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "test-service-token-with-32-characters")
+    received: Final = asyncio.Queue[tuple[str, httpx.Request]]()
+
+    def recording(pool: str) -> Callable[[LensConnection], httpx.AsyncClient]:
+        def accept(request: httpx.Request) -> httpx.Response:
+            received.put_nowait((pool, request))
+            return httpx.Response(200, json={"data": []})
+
+        return lambda connection: httpx.AsyncClient(base_url=connection.url, transport=httpx.MockTransport(accept))
+
+    access: Final = LensAccessParams(all_teams=1, team="", key_hash="")
+    async with manage_tracing(
+        True, client_factory=recording("interactive"), background_client_factory=recording("background")
+    ) as receiver:
+        assert receiver is not None
+        await receiver.storage.lens_availability(access)
+        await receiver.background_storage.lens_agents(access)
+    interactive_pool, interactive_request = received.get_nowait()
+    background_pool, background_request = received.get_nowait()
+    assert received.empty()
+    assert (interactive_pool, json.loads(interactive_request.content)["name"]) == ("interactive", "availability")
+    assert (background_pool, json.loads(background_request.content)["name"]) == ("background", "agents")
 
 
 def test_lens_reads_from_the_lifespan_storage(monkeypatch: pytest.MonkeyPatch) -> None:

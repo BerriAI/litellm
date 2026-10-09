@@ -1,5 +1,5 @@
 use litellm_lens::{
-    State, Storage,
+    READ_CLASS_HEADER, State, Storage,
     auth::{Credential, Snapshot, unix_seconds},
     config::http_client,
     router,
@@ -117,6 +117,95 @@ async fn agent_picker_query_preserves_scope_through_the_internal_read_route() {
         .unwrap();
     assert_eq!(response.status(), 200);
     assert_eq!(response.json::<serde_json::Value>().await.unwrap(), result);
+}
+
+fn agent_read(owner: &str) -> serde_json::Value {
+    json!({
+        "operation": "query", "name": "trace_agents", "parameters": {
+            "all_teams": 0, "user_id": owner, "team_ids": ["team"],
+            "start_ms": 1, "end_ms": 2, "limit": 1
+        }
+    })
+}
+
+#[rstest]
+#[tokio::test]
+async fn interactive_reads_do_not_queue_behind_saturated_background_reads() {
+    let store = MockServer::start().await;
+    let stall = Duration::from_secs(2);
+    Mock::given(method("POST"))
+        .and(query_param("param_user_id", "background"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"data": []}))
+                .set_delay(stall),
+        )
+        .mount(&store)
+        .await;
+    Mock::given(method("POST"))
+        .and(query_param("param_user_id", "interactive"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": []})))
+        .mount(&store)
+        .await;
+    let server = serve(&store.uri(), true).await;
+    let client = http_client().unwrap();
+    let background = (0..8)
+        .map(|_| {
+            client
+                .post(format!("{}/internal/read", server.url))
+                .bearer_auth(SERVICE_TOKEN)
+                .header(READ_CLASS_HEADER, "background")
+                .json(&agent_read("background"))
+                .send()
+        })
+        .map(tokio::spawn)
+        .collect::<Vec<_>>();
+    while store
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .is_empty()
+    {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let started = tokio::time::Instant::now();
+    let response = client
+        .post(format!("{}/internal/read", server.url))
+        .bearer_auth(SERVICE_TOKEN)
+        .json(&agent_read("interactive"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert!(started.elapsed() < stall / 2);
+    assert!(background.iter().all(|task| !task.is_finished()));
+    for task in background {
+        assert_eq!(task.await.unwrap().unwrap().status(), 200);
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn unknown_read_class_is_rejected_before_storage() {
+    let store = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&store)
+        .await;
+    let server = serve(&store.uri(), true).await;
+    let response = http_client()
+        .unwrap()
+        .post(format!("{}/internal/read", server.url))
+        .bearer_auth(SERVICE_TOKEN)
+        .header(READ_CLASS_HEADER, "bulk")
+        .json(&agent_read("anyone"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400);
 }
 
 #[rstest]
