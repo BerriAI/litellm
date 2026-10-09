@@ -17,11 +17,18 @@ import httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import ed25519, rsa
-from integration._support.client import Gateway, eventually
+from integration._support.client import Gateway, eventually, gateway_from_environment
 from integration._support.mcp import mcp_peer, register_mcp, tool_calls, tool_names
 from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 from jwt.algorithms import OKPAlgorithm, RSAAlgorithm
+
+
+@pytest.fixture(scope="module")
+def signer_gateway(tmp_path_factory: pytest.TempPathFactory) -> Generator[Gateway]:
+    with gateway_from_environment() as shared:
+        with owned_proxy_process(shared, tmp_path_factory.mktemp("signer"), {}) as owned:
+            yield owned.gateway
 
 
 @contextmanager
@@ -111,32 +118,32 @@ def _call_with_bearer(
 
 @pytest.mark.parametrize("key_and_token", (_hs256_key_and_token, _eddsa_key_and_token), ids=("oct-HS256", "OKP-EdDSA"))
 def test_jwks_key_with_non_approved_alg_cannot_verify_the_incoming_token(
-    gateway: Gateway, key_and_token: Callable[[], tuple[dict[str, object], str]]
+    signer_gateway: Gateway, key_and_token: Callable[[], tuple[dict[str, object], str]]
 ) -> None:
     jwks_key, token = key_and_token()
-    with _idp_server([jwks_key]) as discovery_uri, _jwt_signer_guardrail(gateway, discovery_uri):
-        with mcp_peer() as peer, gateway.scenario() as scenario:
+    with _idp_server([jwks_key]) as discovery_uri, _jwt_signer_guardrail(signer_gateway, discovery_uri):
+        with mcp_peer() as peer, signer_gateway.scenario() as scenario:
             alias: Final = "jwksalg" + uuid.uuid4().hex[:8]
             identity: Final = register_mcp(scenario, peer, alias)
             key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
-            name: Final = tool_names(gateway, key, identity)["add"]
+            name: Final = tool_names(signer_gateway, key, identity)["add"]
             peer.drain()
-            response: Final = _call_with_bearer(gateway, key, identity, name, {"a": 4, "b": 5}, token)
+            response: Final = _call_with_bearer(signer_gateway, key, identity, name, {"a": 4, "b": 5}, token)
             assert response.status_code == 401, response.text
             assert "incoming token verification failed" in response.text, response.text
             assert tool_calls(peer.drain()) == (), "rejected call reached the peer"
 
 
-def test_jwks_rs256_key_still_verifies_the_incoming_token(gateway: Gateway) -> None:
+def test_jwks_rs256_key_still_verifies_the_incoming_token(signer_gateway: Gateway) -> None:
     jwks_key, token = _rs256_key_and_token()
-    with _idp_server([jwks_key]) as discovery_uri, _jwt_signer_guardrail(gateway, discovery_uri):
-        with mcp_peer() as peer, gateway.scenario() as scenario:
+    with _idp_server([jwks_key]) as discovery_uri, _jwt_signer_guardrail(signer_gateway, discovery_uri):
+        with mcp_peer() as peer, signer_gateway.scenario() as scenario:
             alias: Final = "jwksok" + uuid.uuid4().hex[:8]
             identity: Final = register_mcp(scenario, peer, alias)
             key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
-            name: Final = tool_names(gateway, key, identity)["add"]
+            name: Final = tool_names(signer_gateway, key, identity)["add"]
             peer.drain()
-            response: Final = _call_with_bearer(gateway, key, identity, name, {"a": 4, "b": 5}, token)
+            response: Final = _call_with_bearer(signer_gateway, key, identity, name, {"a": 4, "b": 5}, token)
             assert response.status_code == 200, response.text
             assert response.json()["content"][0]["text"] == "9", response.text
             assert len(tool_calls(peer.drain())) == 1, "accepted call never reached the peer"
@@ -162,30 +169,30 @@ def _signer_call(gateway: Gateway, key: str, identity: str, name: str, bearer: s
         return 0, repr(error)
 
 
-def test_jwks_rs256_key_without_alg_field_still_verifies_the_token(gateway: Gateway) -> None:
+def test_jwks_rs256_key_without_alg_field_still_verifies_the_token(signer_gateway: Gateway) -> None:
     jwks_key, token = _rs256_key_and_token_no_alg()
-    with _idp_server([jwks_key]) as discovery_uri, _jwt_signer_guardrail(gateway, discovery_uri):
-        with mcp_peer() as peer, gateway.scenario() as scenario:
+    with _idp_server([jwks_key]) as discovery_uri, _jwt_signer_guardrail(signer_gateway, discovery_uri):
+        with mcp_peer() as peer, signer_gateway.scenario() as scenario:
             identity: Final = register_mcp(scenario, peer, "jwksc4" + uuid.uuid4().hex[:8])
             key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
-            name: Final = tool_names(gateway, key, identity)["add"]
+            name: Final = tool_names(signer_gateway, key, identity)["add"]
             peer.drain()
-            response: Final = _call_with_bearer(gateway, key, identity, name, {"a": 4, "b": 5}, token)
+            response: Final = _call_with_bearer(signer_gateway, key, identity, name, {"a": 4, "b": 5}, token)
             assert response.status_code == 200, response.text
             assert response.json()["content"][0]["text"] == "9", response.text
             assert len(tool_calls(peer.drain())) == 1, "accepted call never reached the peer"
 
 
-def test_rs256_token_verifies_when_jwks_also_carries_a_non_approved_key(gateway: Gateway) -> None:
+def test_rs256_token_verifies_when_jwks_also_carries_a_non_approved_key(signer_gateway: Gateway) -> None:
     okp_key, _eddsa_token = _eddsa_key_and_token()
     jwks_key, token = _rs256_key_and_token()
-    with _idp_server([okp_key, jwks_key]) as discovery_uri, _jwt_signer_guardrail(gateway, discovery_uri):
-        with mcp_peer() as peer, gateway.scenario() as scenario:
+    with _idp_server([okp_key, jwks_key]) as discovery_uri, _jwt_signer_guardrail(signer_gateway, discovery_uri):
+        with mcp_peer() as peer, signer_gateway.scenario() as scenario:
             identity: Final = register_mcp(scenario, peer, "jwksc5" + uuid.uuid4().hex[:8])
             key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
-            name: Final = tool_names(gateway, key, identity)["add"]
+            name: Final = tool_names(signer_gateway, key, identity)["add"]
             peer.drain()
-            response: Final = _call_with_bearer(gateway, key, identity, name, {"a": 4, "b": 5}, token)
+            response: Final = _call_with_bearer(signer_gateway, key, identity, name, {"a": 4, "b": 5}, token)
             assert response.status_code == 200, response.text
             assert response.json()["content"][0]["text"] == "9", response.text
             assert len(tool_calls(peer.drain())) == 1, "accepted call never reached the peer"
@@ -199,7 +206,9 @@ def test_rs256_token_verifies_when_jwks_also_carries_a_non_approved_key(gateway:
     ),
     ids=("jwks-404", "jwks-not-json"),
 )
-def test_unusable_jwks_document_rejects_the_incoming_token(gateway: Gateway, label: str, jwks_reply: Reply) -> None:
+def test_unusable_jwks_document_rejects_the_incoming_token(
+    signer_gateway: Gateway, label: str, jwks_reply: Reply
+) -> None:
     _, token = _rs256_key_and_token()
 
     def respond(request: Request) -> Reply:
@@ -210,17 +219,17 @@ def test_unusable_jwks_document_rejects_the_incoming_token(gateway: Gateway, lab
     holder: Final = {"url": ""}
     with wire_server(respond) as idp:
         holder["url"] = idp.url
-        with _jwt_signer_guardrail(gateway, idp.url + "/.well-known/openid-configuration"):
-            with mcp_peer() as peer, gateway.scenario() as scenario:
+        with _jwt_signer_guardrail(signer_gateway, idp.url + "/.well-known/openid-configuration"):
+            with mcp_peer() as peer, signer_gateway.scenario() as scenario:
                 identity: Final = register_mcp(scenario, peer, "jwks" + uuid.uuid4().hex[:8])
                 key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
-                name: Final = tool_names(gateway, key, identity)["add"]
+                name: Final = tool_names(signer_gateway, key, identity)["add"]
                 peer.drain()
-                status, text = _signer_call(gateway, key, identity, name, token)
+                status, text = _signer_call(signer_gateway, key, identity, name, token)
                 assert status == 401, (status, text)
                 assert "incoming token verification failed" in text, text
                 assert tool_calls(peer.drain()) == (), "rejected call reached the peer"
-                alive: Final = gateway.client.get("/health/liveliness")
+                alive: Final = signer_gateway.client.get("/health/liveliness")
                 assert alive.status_code == 200, alive.text
 
 

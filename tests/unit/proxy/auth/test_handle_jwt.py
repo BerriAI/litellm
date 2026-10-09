@@ -7586,9 +7586,6 @@ async def test_scope_admin_admission_resolves_existing_user_without_provisioning
         assert users.find_unique.await_count == (0 if warm_cache else 1)
 
 
-# --- B5: JWT algorithm allowlists (LIT-8429) ---
-
-
 def _okp_keypair_and_jwk() -> "tuple[object, dict]":
     import json
 
@@ -7610,7 +7607,7 @@ def _eddsa_jwt(private_key: object, kid: str = "ed") -> str:
     current_time = int(time.time())
     return jwt.encode(
         {"sub": "test-subject", "iat": current_time, "exp": current_time + 300},
-        private_key,  # pyright: ignore[reportArgumentType]
+        private_key,  # pyright: ignore[reportArgumentType]  # encode key stub is AllowedPrivateKeyTypes, private_key is object-typed
         algorithm="EdDSA",
         headers={"kid": kid},
     )

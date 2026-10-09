@@ -1294,10 +1294,6 @@ async def test_inject_mcp_jwt_signs_for_tool_call_path():
     assert "mcp:tools/search_web:call" in scopes
 
 
-# ---------------------------------------------------------------------------
-# B5: incoming-JWT JWKS allowlist (LIT-8429)
-# ---------------------------------------------------------------------------
-
 
 def _okp_idp_key_and_token(now: int):
     import json
