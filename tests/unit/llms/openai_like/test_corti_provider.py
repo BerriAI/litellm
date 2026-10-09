@@ -103,9 +103,9 @@ def test_corti_api_base_autodetects_provider(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_corti_is_available_in_add_model_form():
-    fields_path = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
-    providers = json.loads(fields_path.read_text())
-    corti = next(provider for provider in providers if provider["litellm_provider"] == "corti")
+    fields_path: Final = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
+    providers: Final = json.loads(fields_path.read_text())
+    corti: Final = next(provider for provider in providers if provider["litellm_provider"] == "corti")
 
     assert corti["provider"] == "CORTI"
     assert corti["provider_display_name"] == "Corti"
@@ -131,8 +131,8 @@ def test_corti_supported_endpoints():
         "a2a": False,
         "interactions": False,
     }
-    backup_path = Path(litellm.__file__).parent / "provider_endpoints_support_backup.json"
-    root_path = Path(litellm.__file__).parent.parent / "provider_endpoints_support.json"
+    backup_path: Final = Path(litellm.__file__).parent / "provider_endpoints_support_backup.json"
+    root_path: Final = Path(litellm.__file__).parent.parent / "provider_endpoints_support.json"
 
     assert json.loads(backup_path.read_text())["providers"]["corti"]["endpoints"] == expected
     assert json.loads(root_path.read_text())["providers"]["corti"]["endpoints"] == expected
