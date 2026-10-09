@@ -1664,11 +1664,99 @@ class TestAgentCommands:
         assert captured["reattach_terminal"] is None
 
 
+class TestGatewayPrompt:
+    def setup_method(self):
+        self.runner = CliRunner()
+
+    def _launch_claude(self, args, *, interactive, input=None, env=None):
+        from litellm.proxy.client.cli.main import cli
+
+        captured = {}
+        with (
+            patch(f"{AGENTS_MODULE}._is_interactive", return_value=interactive),
+            patch(
+                f"{AGENTS_MODULE}.run_agent",
+                side_effect=lambda base_url, api_key, command, **kw: captured.update(
+                    base_url=base_url, api_key=api_key
+                ),
+            ),
+        ):
+            result = self.runner.invoke(
+                cli, [*args, "claude"], input=input, env={"LITELLM_PROXY_URL": None, **(env or {})}
+            )
+        return result, captured
+
+    def test_terminal_user_without_a_gateway_is_asked_once_and_it_is_saved(self):
+        from litellm.proxy.client.cli.commands.config import get_config_value
+
+        first, first_launch = self._launch_claude(
+            ["--api-key", "sk-key"], interactive=True, input="https://gateway.example.com/\n"
+        )
+        second, second_launch = self._launch_claude(["--api-key", "sk-key"], interactive=True)
+
+        assert first.exit_code == 0, first.output
+        assert "LiteLLM gateway URL [http://localhost:4000]" in first.output
+        assert first_launch == {"base_url": "https://gateway.example.com", "api_key": "sk-key"}
+        assert get_config_value("base_url") == "https://gateway.example.com"
+        assert second.exit_code == 0, second.output
+        assert "LiteLLM gateway URL" not in second.output
+        assert second_launch["base_url"] == "https://gateway.example.com"
+
+    def test_pressing_enter_keeps_localhost(self):
+        result, launched = self._launch_claude(["--api-key", "sk-key"], interactive=True, input="\n")
+
+        assert result.exit_code == 0, result.output
+        assert launched["base_url"] == "http://localhost:4000"
+
+    def test_invalid_url_is_asked_again(self):
+        result, launched = self._launch_claude(
+            ["--api-key", "sk-key"], interactive=True, input="gateway.example.com\nhttps://gateway.example.com\n"
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "must be a full http:// or https:// URL" in result.output
+        assert launched["base_url"] == "https://gateway.example.com"
+
+    def test_stored_login_is_looked_up_for_the_entered_gateway(self):
+        with patch(f"{AGENTS_MODULE}.get_stored_api_key", return_value="sk-stored") as mock_get:
+            result, launched = self._launch_claude([], interactive=True, input="https://gateway.example.com\n")
+
+        assert result.exit_code == 0, result.output
+        assert launched["api_key"] == "sk-stored"
+        assert mock_get.call_args.kwargs["expected_base_url"] == "https://gateway.example.com"
+
+    @pytest.mark.parametrize(
+        "args, env",
+        [
+            (["--base-url", "https://flag.example.com", "--api-key", "sk-key"], None),
+            (["--api-key", "sk-key"], {"LITELLM_PROXY_URL": "https://flag.example.com"}),
+        ],
+    )
+    def test_explicit_gateway_is_not_asked_for(self, args, env):
+        result, launched = self._launch_claude(args, interactive=True, env=env)
+
+        assert result.exit_code == 0, result.output
+        assert "LiteLLM gateway URL" not in result.output
+        assert launched["base_url"] == "https://flag.example.com"
+
+    def test_non_interactive_run_keeps_the_localhost_default(self):
+        from litellm.proxy.client.cli.commands.config import get_config_value
+
+        result, launched = self._launch_claude(["--api-key", "sk-key"], interactive=False)
+
+        assert result.exit_code == 0, result.output
+        assert "LiteLLM gateway URL" not in result.output
+        assert launched["base_url"] == "http://localhost:4000"
+        assert get_config_value("base_url") is None
+
+
 class TestPrepareCodex:
     def test_registers_the_installed_script_as_a_session_scoped_stop_hook(self):
         from litellm.proxy.client.cli.commands.agents import prepare_codex
 
-        args = prepare_codex("http://localhost:4000", "sk-key", {}, install=lambda: "/py /home/me/.litellm/statusline.py")
+        args = prepare_codex(
+            "http://localhost:4000", "sk-key", {}, install=lambda: "/py /home/me/.litellm/statusline.py"
+        )
         assert args == (
             "-c",
             'hooks.Stop=[{hooks=[{type="command",command="/py /home/me/.litellm/statusline.py"}]}]',
@@ -1689,11 +1777,20 @@ class TestPrepareCodex:
 
         warnings = []
         env = {"CODEX_HOME": str(tmp_path)}
-        for body in ('[[hooks.Stop]]\nhooks = [{ type = "command", command = "mine" }]\n', 'hooks.Stop = []\n', "[hooks]\n"):
+        for body in (
+            '[[hooks.Stop]]\nhooks = [{ type = "command", command = "mine" }]\n',
+            "hooks.Stop = []\n",
+            "[hooks]\n",
+        ):
             (tmp_path / "config.toml").write_text(body)
-            assert prepare_codex("http://localhost:4000", "sk", env, install=lambda: "/py /s.py", warn=warnings.append) == ()
+            assert (
+                prepare_codex("http://localhost:4000", "sk", env, install=lambda: "/py /s.py", warn=warnings.append)
+                == ()
+            )
         (tmp_path / "config.toml").write_text('model = "gpt-5.6-sol"\n[projects."/x"]\ntrust_level = "trusted"\n')
-        assert prepare_codex("http://localhost:4000", "sk", env, install=lambda: "/py /s.py", warn=warnings.append) != ()
+        assert (
+            prepare_codex("http://localhost:4000", "sk", env, install=lambda: "/py /s.py", warn=warnings.append) != ()
+        )
         assert len(warnings) == 3 and "already declares hooks" in warnings[0]
 
     def test_a_config_that_cannot_be_read_or_decoded_still_lets_codex_launch(self, tmp_path):
