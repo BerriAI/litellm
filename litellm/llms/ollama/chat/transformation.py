@@ -567,5 +567,3 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
                 status_code=400,
                 headers={"Content-Type": "application/json"},
             )
-        except Exception as e:
-            raise e
