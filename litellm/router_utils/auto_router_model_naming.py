@@ -19,6 +19,8 @@ from litellm.router_strategy.complexity_router.config import (
     COMPLEXITY_ROUTER_CONFIG_KEYS,
     DEFAULT_JEV_INSTRUCTIONS,
     LLM_CLASSIFIER_TYPES,
+    configured_local_heuristic,
+    normalize_classifier_config_aliases,
 )
 
 AUTO_ROUTER_MODEL_PREFIX: Final = "auto_router/"
@@ -151,8 +153,11 @@ def strategy_router_dependencies(
                 )
             )
         )
-    complexity: Final = _mapping(litellm_params.get("complexity_router_config"))
+    complexity: Final = normalize_classifier_config_aliases(_mapping(litellm_params.get("complexity_router_config")))
     classifier: Final = _mapping(complexity.get("classifier_llm_config"))
+    decision_classifier: Final = _mapping(complexity.get("opensource_classifier_config"))
+    decision_provider: Final = decision_classifier.get("provider", "jev")
+    accounting_provider: Final = "typesafe" if decision_provider == "jev" else decision_provider
     return tuple(
         dict.fromkeys(
             tuple(dep for tier in _mapping(complexity.get("tiers")).values() for dep in _pool(tier, "tier"))
@@ -165,10 +170,10 @@ def strategy_router_dependencies(
             )
             + (
                 _named(
-                    f"typesafe/{_mapping(complexity.get('jev_classifier_config')).get('model', 'jev-latest')}",
+                    f"{accounting_provider}/{decision_classifier.get('model', 'jev-latest')}",
                     "evaluation",
                 )
-                if complexity.get("classifier_type") == "jev"
+                if complexity.get("classifier_type") == "oss_classifier"
                 else ()
             )
             + (
@@ -182,7 +187,7 @@ def strategy_router_dependencies(
 
 def uses_heuristic_v2_classifier(complexity_router_config: object) -> bool:
     """Whether this complexity config classifies with the bundled heuristic_v2 model."""
-    return _mapping(complexity_router_config).get("classifier_type") == "heuristic_v2"
+    return configured_local_heuristic(_mapping(complexity_router_config)) == "heuristic_v2"
 
 
 def defines_custom_tiers(complexity_router_config: object) -> bool:
@@ -206,9 +211,9 @@ def defines_custom_classifier_prompt(complexity_router_config: object) -> bool:
     Scoped to the classifier types that actually call an LLM, which is also where the config validator
     accepts these fields: the heuristic scorers never read them.
     """
-    config: Final = _mapping(complexity_router_config)
-    if config.get("classifier_type") == "jev":
-        instructions: Final = _mapping(config.get("jev_classifier_config")).get("instructions")
+    config: Final = normalize_classifier_config_aliases(_mapping(complexity_router_config))
+    if config.get("classifier_type") == "oss_classifier":
+        instructions: Final = _mapping(config.get("opensource_classifier_config")).get("instructions")
         return isinstance(instructions, str) and instructions != DEFAULT_JEV_INSTRUCTIONS
     if config.get("classifier_type") not in LLM_CLASSIFIER_TYPES:
         return False
@@ -233,8 +238,8 @@ class GatedAutoRouterCapability:
     stored ``litellm_params`` (``{config}`` is the caller's expression for the normalized
     ``complexity_router_config`` jsonb, substituted as many times as the predicate needs); they live
     on one record so they cannot drift apart. ``subject`` and ``remedy`` build the shared refusal
-    message. A validated config claims at most one capability: gated classifier types cannot be
-    combined with operator-defined tiers or classifier prompts.
+    message. A router chaining heuristic_v2 with an operator-written judge prompt claims both
+    capabilities.
     """
 
     key: str
@@ -246,10 +251,14 @@ class GatedAutoRouterCapability:
 
 HEURISTIC_V2_CAPABILITY: Final = GatedAutoRouterCapability(
     key="heuristic_v2",
-    subject="with classifier_type 'heuristic_v2'",
-    remedy="Use classifier_type 'heuristic' for this router or remove an existing heuristic_v2 router.",
+    subject="using the heuristic_v2 classifier",
+    remedy="Choose the heuristic v1 classifier for this router or remove an existing heuristic_v2 router.",
     uses=uses_heuristic_v2_classifier,
-    sql_config_predicate="{config} ->> 'classifier_type' = 'heuristic_v2'",
+    sql_config_predicate=(
+        "{config} ->> 'classifier_type' = 'heuristic_v2' OR "
+        "({config} ->> 'classifier_type' IN ('heuristic_first', 'hybrid') AND "
+        "{config} ->> 'local_heuristic' = 'heuristic_v2')"
+    ),
 )
 
 CAPABILITY_CLASSIFIER_CAPABILITY: Final = GatedAutoRouterCapability(
@@ -272,6 +281,9 @@ _OPERATOR_PROMPT_FIELDS_SQL: Final = " OR ".join(
     f"{{config}} ->> '{field}' IS NOT NULL" for field in OPERATOR_CLASSIFIER_PROMPT_FIELDS
 )
 _DEFAULT_JEV_INSTRUCTIONS_SQL: Final = DEFAULT_JEV_INSTRUCTIONS.replace("'", "''")
+_OPENSOURCE_CLASSIFIER_CONFIG_SQL: Final = (
+    "COALESCE({config} -> 'opensource_classifier_config', {config} -> 'jev_classifier_config')"
+)
 
 CUSTOMIZATION_CAPABILITY: Final = GatedAutoRouterCapability(
     key="tier_or_classifier_prompt",
@@ -286,9 +298,9 @@ CUSTOMIZATION_CAPABILITY: Final = GatedAutoRouterCapability(
         f"({{config}} ->> 'classifier_type' IN ({_LLM_CLASSIFIER_TYPES_SQL}) AND ("
         "{config} -> 'classifier_llm_config' ->> 'system_prompt' IS NOT NULL OR "
         f"{_OPERATOR_PROMPT_FIELDS_SQL})) OR "
-        "({config} ->> 'classifier_type' = 'jev' AND "
-        "jsonb_typeof({config} -> 'jev_classifier_config' -> 'instructions') = 'string' AND "
-        f"{{config}} -> 'jev_classifier_config' ->> 'instructions' <> '{_DEFAULT_JEV_INSTRUCTIONS_SQL}')"
+        "({config} ->> 'classifier_type' IN ('oss_classifier', 'jev') AND "
+        f"jsonb_typeof({_OPENSOURCE_CLASSIFIER_CONFIG_SQL} -> 'instructions') = 'string' AND "
+        f"{_OPENSOURCE_CLASSIFIER_CONFIG_SQL} ->> 'instructions' <> '{_DEFAULT_JEV_INSTRUCTIONS_SQL}')"
     ),
 )
 
@@ -300,20 +312,19 @@ GATED_AUTO_ROUTER_CAPABILITIES: Final = (
 )
 
 
-def claimed_capability(complexity_router_config: object) -> GatedAutoRouterCapability | None:
-    """The licensed capability this complexity config claims, or None."""
-    return next(
-        (capability for capability in GATED_AUTO_ROUTER_CAPABILITIES if capability.uses(complexity_router_config)),
-        None,
+def claimed_capabilities(complexity_router_config: object) -> tuple[GatedAutoRouterCapability, ...]:
+    """The licensed capabilities this complexity config claims."""
+    return tuple(
+        capability for capability in GATED_AUTO_ROUTER_CAPABILITIES if capability.uses(complexity_router_config)
     )
 
 
-def gated_capability_of(litellm_params: Mapping[str, object]) -> GatedAutoRouterCapability | None:
-    """The licensed capability this deployment claims, or None unless it is a complexity router."""
+def gated_capabilities_of(litellm_params: Mapping[str, object]) -> tuple[GatedAutoRouterCapability, ...]:
+    """The licensed capabilities this deployment claims, or empty unless it is a complexity router."""
     model: Final = litellm_params.get("model")
     if not is_complexity_router_model(model if isinstance(model, str) else None):
-        return None
-    return claimed_capability(litellm_params.get("complexity_router_config"))
+        return ()
+    return claimed_capabilities(litellm_params.get("complexity_router_config"))
 
 
 def count_capability_routers(
@@ -321,7 +332,9 @@ def count_capability_routers(
 ) -> int:
     """How many of ``deployments`` (router model_list entries or config.yaml rows) claim ``capability``."""
     return sum(
-        1 for deployment in deployments if gated_capability_of(_mapping(deployment.get("litellm_params"))) is capability
+        1
+        for deployment in deployments
+        if capability in gated_capabilities_of(_mapping(deployment.get("litellm_params")))
     )
 
 

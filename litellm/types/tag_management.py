@@ -1,7 +1,7 @@
-from pydantic import BaseModel
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class TagBase(BaseModel):
+class TagBase(LiteLLMBaseModel):
     name: str
     description: str | None = None
     models: list[str] | None = None
@@ -38,9 +38,9 @@ class TagUpdateRequest(TagBase):
     budget_duration: str | None = None
 
 
-class TagDeleteRequest(BaseModel):
+class TagDeleteRequest(LiteLLMBaseModel):
     name: str
 
 
-class TagInfoRequest(BaseModel):
+class TagInfoRequest(LiteLLMBaseModel):
     names: list[str]

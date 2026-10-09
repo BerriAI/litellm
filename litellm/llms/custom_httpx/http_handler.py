@@ -104,7 +104,7 @@ class _TCPConnectorKwargs(TypedDict, total=False):
     socket_factory: Callable[[_AddrInfo], socket.socket]
 
 
-def _build_aiohttp_keepalive_socket_factory() -> Callable[[_AddrInfo], socket.socket] | None:
+def build_aiohttp_keepalive_socket_factory() -> Callable[[_AddrInfo], socket.socket] | None:
     """
     Build a socket_factory that enables SO_KEEPALIVE on aiohttp TCP sockets.
 
@@ -137,6 +137,9 @@ def _build_aiohttp_keepalive_socket_factory() -> Callable[[_AddrInfo], socket.so
         return sock
 
     return factory
+
+
+_build_aiohttp_keepalive_socket_factory = build_aiohttp_keepalive_socket_factory
 
 
 def get_default_headers() -> dict:
@@ -447,6 +450,18 @@ def get_shared_realtime_ssl_context() -> bool | str | ssl.SSLContext:
     return _shared_realtime_ssl_context
 
 
+def realtime_ssl_for_url(url: str) -> bool | str | ssl.SSLContext | None:
+    if url.startswith("ws://"):
+        return None
+    shared: Final = get_shared_realtime_ssl_context()
+    if shared is not False:
+        return shared
+    unverified: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    unverified.check_hostname = False
+    unverified.verify_mode = ssl.CERT_NONE
+    return unverified
+
+
 def mask_sensitive_info(error_message):
     # Find the start of the key parameter
     if isinstance(error_message, str):
@@ -676,7 +691,7 @@ class AsyncHTTPHandler:
             timeout = _DEFAULT_TIMEOUT
         # Create a client with a connection pool
 
-        transport: Final = AsyncHTTPHandler._create_async_transport(
+        transport: Final = AsyncHTTPHandler.create_async_transport(
             ssl_context=ssl_config if isinstance(ssl_config, ssl.SSLContext) else None,
             ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
             shared_session=shared_session,
@@ -687,7 +702,7 @@ class AsyncHTTPHandler:
 
         return httpx.AsyncClient(
             transport=transport,
-            mounts=AsyncHTTPHandler._create_httpx_proxy_mounts(transport, verify=ssl_config, cert=cert),
+            mounts=AsyncHTTPHandler.create_httpx_proxy_mounts(transport, verify=ssl_config, cert=cert),
             event_hooks=event_hooks,
             timeout=timeout,
             verify=ssl_config,
@@ -1175,7 +1190,7 @@ class AsyncHTTPHandler:
             pass
 
     @staticmethod
-    def _create_async_transport(
+    def create_async_transport(
         ssl_context: ssl.SSLContext | None = None,
         ssl_verify: bool | None = None,
         shared_session: Optional["ClientSession"] = None,
@@ -1197,8 +1212,8 @@ class AsyncHTTPHandler:
         #########################################################
         # AIOHTTP TRANSPORT is off by default
         #########################################################
-        if AsyncHTTPHandler._should_use_aiohttp_transport():
-            return AsyncHTTPHandler._create_aiohttp_transport(
+        if AsyncHTTPHandler.should_use_aiohttp_transport():
+            return AsyncHTTPHandler.create_aiohttp_transport(
                 ssl_context=ssl_context,
                 ssl_verify=ssl_verify,
                 shared_session=shared_session,
@@ -1209,8 +1224,10 @@ class AsyncHTTPHandler:
         #########################################################
         return AsyncHTTPHandler._create_httpx_transport()
 
+    _create_async_transport = create_async_transport
+
     @staticmethod
-    def _should_use_aiohttp_transport() -> bool:
+    def should_use_aiohttp_transport() -> bool:
         """
         AiohttpTransport is the default transport for litellm.
 
@@ -1241,6 +1258,8 @@ class AsyncHTTPHandler:
         verbose_logger.debug("Using AiohttpTransport...")
         return True
 
+    _should_use_aiohttp_transport = should_use_aiohttp_transport
+
     @staticmethod
     def _get_ssl_connector_kwargs(
         ssl_verify: bool | None = None,
@@ -1270,7 +1289,7 @@ class AsyncHTTPHandler:
         return connector_kwargs
 
     @staticmethod
-    def _create_aiohttp_transport(
+    def create_aiohttp_transport(
         ssl_verify: bool | None = None,
         ssl_context: ssl.SSLContext | None = None,
         shared_session: Optional["ClientSession"] = None,
@@ -1319,7 +1338,7 @@ class AsyncHTTPHandler:
             transport_connector_kwargs["limit_per_host"] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
         # Returns None when SO_KEEPALIVE is disabled or aiohttp is too old to
         # accept socket_factory — version detection lives inside the builder.
-        socket_factory: Final = _build_aiohttp_keepalive_socket_factory()
+        socket_factory: Final = build_aiohttp_keepalive_socket_factory()
         if socket_factory is not None:
             transport_connector_kwargs["socket_factory"] = socket_factory
 
@@ -1347,6 +1366,8 @@ class AsyncHTTPHandler:
             ssl_verify=ssl_for_transport,
         )
 
+    _create_aiohttp_transport = create_aiohttp_transport
+
     @staticmethod
     def _create_httpx_transport() -> AsyncHTTPTransport | None:
         """
@@ -1361,7 +1382,7 @@ class AsyncHTTPHandler:
             return None
 
     @staticmethod
-    def _create_httpx_proxy_mounts(
+    def create_httpx_proxy_mounts(
         transport: LiteLLMAiohttpTransport | AsyncHTTPTransport | None,
         verify: VerifyTypes,
         cert: CertTypes | None,
@@ -1371,6 +1392,8 @@ class AsyncHTTPHandler:
         return _environment_proxy_mounts(
             lambda proxy_url: AsyncHTTPTransport(proxy=proxy_url, verify=verify, cert=cert, http2=http2_enabled())
         )
+
+    _create_httpx_proxy_mounts = create_httpx_proxy_mounts
 
 
 class HTTPHandler:
@@ -1382,10 +1405,12 @@ class HTTPHandler:
         ssl_verify: bool | str | None = None,
         disable_default_headers: bool
         | None = False,  # arize phoenix returns different API responses when user agent header in request
+        follow_redirects: bool = True,
     ):
         self.timeout = timeout
         self.ssl_verify = ssl_verify
         self.disable_default_headers = disable_default_headers
+        self.follow_redirects = follow_redirects
         self._owns_client = client is None
         self._heal_lock = threading.Lock()
         self._client = self.create_client() if client is None else client
@@ -1410,7 +1435,7 @@ class HTTPHandler:
             cert=cert,
             headers=default_headers,
             cookies=blocked_cookie_jar(),
-            follow_redirects=True,
+            follow_redirects=self.follow_redirects,
             http2=http2_enabled(),
         )
 
@@ -1436,7 +1461,7 @@ class HTTPHandler:
         self,
         url: str,
         params: dict | None = None,
-        headers: dict | None = None,
+        headers: Mapping[str, Any] | None = None,
         follow_redirects: bool | None = None,
         timeout: float | httpx.Timeout | None = None,
     ):
@@ -1764,7 +1789,7 @@ def get_async_httpx_client(
     return _new_client
 
 
-def _get_httpx_client(params: dict | None = None) -> HTTPHandler:
+def get_httpx_client(params: dict | None = None) -> HTTPHandler:
     """
     Retrieves the HTTP client from the cache
     If not present, creates a new client
@@ -1808,3 +1833,6 @@ def _get_httpx_client(params: dict | None = None) -> HTTPHandler:
         litellm_owned_client=True,
     )
     return _new_client
+
+
+_get_httpx_client = get_httpx_client

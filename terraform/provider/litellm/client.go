@@ -121,6 +121,35 @@ func hoistKeyFieldsStoredInMetadata(info map[string]interface{}) {
 	}
 }
 
+// RestoreKeyRoutes re-applies a declared allowed_routes to a freshly
+// generated key, whose key_type preset replaced the declared list.
+// /key/update validates permissions and model_max_budget as non-null and
+// keeps the stored value for every field absent from the body, so this
+// carries exactly the routes plus those two required objects. Their values
+// must be the ones just stored for the key: sending empty objects would
+// clear configured or server-defaulted restrictions, and sending the whole
+// create payload would rewrite fields the config never declared (such as
+// team-inherited model rate limits).
+func (c *Client) RestoreKeyRoutes(keyID string, routes []string, permissions, modelMaxBudget map[string]interface{}) (*Key, error) {
+	if permissions == nil {
+		permissions = map[string]interface{}{}
+	}
+	if modelMaxBudget == nil {
+		modelMaxBudget = map[string]interface{}{}
+	}
+	updateData := map[string]interface{}{
+		"key":              keyID,
+		"allowed_routes":   routes,
+		"permissions":      permissions,
+		"model_max_budget": modelMaxBudget,
+	}
+	resp, err := c.sendRequest("POST", "/key/update", updateData)
+	if err != nil {
+		return nil, err
+	}
+	return c.parseKeyResponse(resp)
+}
+
 func (c *Client) UpdateKey(key *Key) (*Key, error) {
 	// Create a new map with only the fields that can be updated
 	updateData := map[string]interface{}{
@@ -241,6 +270,10 @@ func (c *Client) parseKeyResponse(resp map[string]interface{}) (*Key, error) {
 		case "token_id":
 			if s, ok := v.(string); ok {
 				createdKey.TokenID = s
+			}
+		case "key_type":
+			if s, ok := v.(string); ok {
+				createdKey.KeyType = s
 			}
 		case "models":
 			if models, ok := v.([]interface{}); ok {
