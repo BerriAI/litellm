@@ -11,11 +11,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from prisma import models as prisma_models
 from prisma.builder import QueryBuilder
+from pydantic import ValidationError
 
 from litellm.models.base import DomainModel
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.credentials import CredentialItem
 from litellm.models.team import LiteLLM_TeamTable
+from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
@@ -196,6 +198,19 @@ class TestBaseRepository:
         budgets = await repo.find_many(where={"budget_id": "b1"}, skip=0, take=10, order={"budget_id": "asc"})
         assert len(budgets) == 1
 
+    @pytest.mark.asyncio
+    async def test_find_many_in_returns_models_from_every_chunk(self, prisma_client):
+        budget_ids: Final = tuple(f"b{i}" for i in range(IN_LIST_CHUNK_SIZE + 1))
+
+        async def find_many(where: dict[str, Any]) -> list[MockRecord]:
+            return [MockRecord({"budget_id": budget_id, "max_budget": 1.0}) for budget_id in where["budget_id"]["in"]]
+
+        prisma_client.db.litellm_budgettable.find_many = AsyncMock(side_effect=find_many)
+        budgets = await BudgetRepository(prisma_client).find_many_in("budget_id", budget_ids)
+        assert [budget.budget_id for budget in budgets] == list(budget_ids)
+        assert all(isinstance(budget, LiteLLM_BudgetTable) for budget in budgets)
+        assert prisma_client.db.litellm_budgettable.find_many.await_count == 2
+
     def test_record_to_dict_branches(self):
         from litellm.repositories.base_repository import record_to_dict
 
@@ -295,6 +310,29 @@ class TestBudgetRepository:
         assert budget.budget_id == "budget-1"
 
 
+_ROW_TIMESTAMP: Final = datetime(2026, 1, 1, 12, 0, 0)
+
+
+def _stored_proxy_model_row(*, litellm_params: str, model_info: str) -> prisma_models.LiteLLM_ProxyModelTable:
+    return prisma_models.LiteLLM_ProxyModelTable(
+        model_id="other-model",
+        model_name="gpt-4o",
+        litellm_params=litellm_params,
+        model_info=model_info,
+        blocked=False,
+        created_at=_ROW_TIMESTAMP,
+        created_by="admin",
+        updated_at=_ROW_TIMESTAMP,
+        updated_by="admin",
+    )
+
+
+def _proxy_model_client(rows: list[prisma_models.LiteLLM_ProxyModelTable]) -> SimpleNamespace:
+    return SimpleNamespace(
+        db=SimpleNamespace(litellm_proxymodeltable=SimpleNamespace(find_many=AsyncMock(return_value=rows)))
+    )
+
+
 class TestModelRepository:
     @pytest.fixture
     def repo(self):
@@ -317,6 +355,56 @@ class TestModelRepository:
             arguments=find_many.call_args.kwargs,
         ).build_query()
         assert 'where: { model_id: { not: "current-model" } }' in " ".join(query.split())
+
+    @pytest.mark.parametrize("double_encoded", [False, True])
+    @pytest.mark.asyncio
+    async def test_find_all_except_returns_stored_rows_with_decrypted_params(
+        self, monkeypatch: pytest.MonkeyPatch, double_encoded: bool
+    ) -> None:
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt")
+        stored_params: Final = json.dumps(
+            {"model": "openai/gpt-4o", "api_key": encrypt_value_helper("sk-secret"), "rpm": 5, "tags": ["prod"]}
+        )
+        stored_info: Final = json.dumps({"id": "other-model", "team_id": "team-1"})
+        row: Final = _stored_proxy_model_row(
+            litellm_params=json.dumps(stored_params) if double_encoded else stored_params,
+            model_info=json.dumps(stored_info) if double_encoded else stored_info,
+        )
+
+        models: Final = await ModelRepository(_proxy_model_client([row])).find_all_except("current-model")
+
+        assert [model.model_dump() for model in models] == [
+            {
+                "model_id": "other-model",
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-secret", "rpm": 5, "tags": ["prod"]},
+                "model_info": {"id": "other-model", "team_id": "team-1"},
+                "blocked": False,
+                "created_at": _ROW_TIMESTAMP,
+                "created_by": "admin",
+                "updated_at": _ROW_TIMESTAMP,
+                "updated_by": "admin",
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_find_all_except_keeps_empty_params_and_missing_model_info(self) -> None:
+        row: Final = _stored_proxy_model_row(litellm_params="{}", model_info="null")
+
+        models: Final = await ModelRepository(_proxy_model_client([row])).find_all_except("current-model")
+
+        assert [(model.litellm_params, model.model_info) for model in models] == [({}, None)]
+
+    @pytest.mark.parametrize("stored_params", ['["sk-secret"]', "1", "true", json.dumps('["sk-secret"]'), '"1"'])
+    @pytest.mark.asyncio
+    async def test_find_all_except_rejects_rows_whose_params_are_not_a_json_object(self, stored_params: str) -> None:
+        row: Final = _stored_proxy_model_row(litellm_params=stored_params, model_info="null")
+
+        with pytest.raises(ValidationError) as rejected:
+            await ModelRepository(_proxy_model_client([row])).find_all_except("current-model")
+
+        assert [error["type"] for error in rejected.value.errors()] == ["dict_type"]
+        assert "sk-secret" not in str(rejected.value)
 
     def test_table_is_wrapped_for_config_sync(self, repo):
         from litellm.proxy.common_utils.config_sync_pubsub import (
@@ -1399,11 +1487,13 @@ class TestCredentialsRepository:
         repo._prisma_client.db.litellm_credentialstable._records["my-key"] = {
             "credential_id": "cred-1",
             "credential_name": "my-key",
+            "display_name": "My Key",
             "credential_values": {"api_key": "encrypted_secret"},
             "credential_info": {"provider": "openai"},
         }
         cred = await repo.find_by_name("my-key")
         assert isinstance(cred, CredentialItem)
+        assert cred.display_name == "My Key"
         assert cred.credential_values == {"api_key": "encrypted_secret"}
         assert cred.credential_info == {"provider": "openai"}
 
@@ -2132,6 +2222,37 @@ class TestPrismaTableRepository:
         repo = SpendLogsRepository(None)
         with pytest.raises(RuntimeError, match="No DB Connected"):
             _ = repo.table
+
+    @pytest.mark.asyncio
+    async def test_managed_file_repository_updates_existing_file_object_only(self):
+        from litellm.repositories.managed_file_repository import ManagedFileRepository
+        from litellm.types.llms.openai import OpenAIFileObject
+
+        class UpdateManyMockTable(MockTable):
+            async def update_many(self, where: Dict[str, Any], data: Dict[str, Any]) -> int:
+                return int(await self.update(where, data) is not None)
+
+        file_table = UpdateManyMockTable(pk_field="unified_file_id")
+        await file_table.create({"unified_file_id": "existing-file", "file_object": "{}"})
+        prisma_client = SimpleNamespace(db=SimpleNamespace(litellm_managedfiletable=file_table))
+        repository = ManagedFileRepository(prisma_client)
+        file_object = OpenAIFileObject(
+            id="existing-file",
+            object="file",
+            bytes=836,
+            created_at=456,
+            filename="output.jsonl",
+            purpose="batch_output",
+            status="processed",
+        )
+
+        assert await repository.update_file_object("existing-file", file_object) is True
+        stored_row = await file_table.find_unique(where={"unified_file_id": "existing-file"})
+        assert stored_row is not None
+        assert stored_row.file_object == file_object.model_dump_json()
+
+        assert await repository.update_file_object("missing-file", file_object) is False
+        assert await file_table.find_unique(where={"unified_file_id": "missing-file"}) is None
 
     CONFIG_SYNCED_TABLE_NAMES = frozenset(
         {

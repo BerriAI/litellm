@@ -2,9 +2,11 @@
 ## Helper utilities for token counting
 import base64
 import io
+import math
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
-from typing import Final, Literal, cast
+from itertools import accumulate
+from typing import TYPE_CHECKING, Final, Literal, cast
 
 import anyio
 import anyio.lowlevel
@@ -14,8 +16,11 @@ from typing_extensions import ParamSpec, TypeVar
 
 import litellm
 from litellm import verbose_logger
-from litellm._lazy_imports import _get_default_encoding
+from litellm._lazy_imports import get_default_encoding
 from litellm.constants import (
+    ANTHROPIC_IMAGE_MAX_LONG_EDGE_PX,
+    ANTHROPIC_IMAGE_MAX_PIXELS,
+    ANTHROPIC_IMAGE_PIXELS_PER_TOKEN,
     DEFAULT_IMAGE_HEIGHT,
     DEFAULT_IMAGE_TOKEN_COUNT,
     DEFAULT_IMAGE_WIDTH,
@@ -24,14 +29,18 @@ from litellm.constants import (
     MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES,
     MAX_TILE_HEIGHT,
     MAX_TILE_WIDTH,
+    PDF_DATA_URL_PREFIX,
     TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS,
     TOKEN_COUNTER_MAX_CONCURRENT_COUNTS,
     TOKEN_COUNTER_MAX_EXACT_CHARS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace, HuggingFaceTokenizer, OpenAIEncoding
+from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer, OpenAIEncoding
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace
 from litellm.litellm_core_utils.url_utils import safe_get
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.llms.custom_httpx.http_handler import get_httpx_client
 from litellm.rust_bridge.tokenizer import get_encoding
 from litellm.types.llms.anthropic import (
     AnthropicContentParamSource,
@@ -231,7 +240,7 @@ def get_image_dimensions(
     img_data = None
     if data.startswith(("http://", "https://")):
         try:
-            client: Final = _get_httpx_client()
+            client: Final = get_httpx_client()
             response: Final[httpx.Response] = safe_get(client, data)
             max_bytes: Final = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
             content_length: Final[str | None] = response.headers.get("Content-Length")
@@ -466,6 +475,37 @@ def token_counter(
     return num_tokens
 
 
+def messages_reach_token_count(
+    model: str,
+    messages: Sequence[AllMessageValues | Message],
+    threshold: int,
+    tools: list[ChatCompletionToolParam] | None = None,
+    use_default_image_token_count: bool = False,
+) -> bool:
+    """Whether ``messages`` plus ``tools`` hold at least ``threshold`` prompt tokens for ``model``.
+
+    Same arithmetic as ``token_counter(messages=..., tools=...) >= threshold``, counted one message
+    at a time and stopped at the first message that crosses the threshold, so a prompt far above it
+    costs the tokenizer a few messages rather than the whole conversation.
+    """
+    from litellm.utils import convert_list_message_to_dict
+
+    if litellm.disable_token_counter is True:
+        return threshold <= 0
+    new_messages: Final = cast(  # cast-ok: convert_list_message_to_dict is untyped, same as token_counter
+        list[AllMessageValues], convert_list_message_to_dict(messages)
+    )
+    params: Final = _MessageCountParams(model, None)
+    includes_system_message: Final = any(message.get("role", None) == "system" for message in new_messages)
+    per_message_counts: Final = (
+        _count_messages(params, [message], use_default_image_token_count, None) for message in new_messages
+    )
+    running_totals: Final = accumulate(
+        per_message_counts, initial=_count_extra(params.count_function, tools, None, includes_system_message)
+    )
+    return any(total >= threshold for total in running_totals)
+
+
 def _count_function_call_tokens(
     key: str,
     value: object,
@@ -618,44 +658,43 @@ def _get_exact_count_function(
 ) -> TokenCounterFunction:
     """
     Get the function to count tokens based on the model and custom tokenizer."""
-    from litellm.utils import _select_tokenizer
+    from litellm.utils import select_tokenizer
 
     if model is not None or custom_tokenizer is not None:
-        tokenizer_json: Final = custom_tokenizer or _select_tokenizer(model)
-        if tokenizer_json["type"] == "huggingface_tokenizer":
-            tokenizer: Final[HuggingFace] = tokenizer_json["tokenizer"]
-
-            def count_tokens(text: str) -> int:
-                if isinstance(tokenizer, HuggingFaceTokenizer):
-                    return tokenizer.count(text)
-                return len(tokenizer.encode_batch_fast([text])[0])
-
-            return count_tokens
-        elif tokenizer_json["type"] == "openai_tokenizer":
-            encoding: Final = openai_tokenizer_encoding(model)
-
-            def encode_length(text: str) -> int:
-                return _encoding_count(encoding, text)
-
-            return _get_tiktoken_count_function(encode_length)
-        else:
-            raise ValueError("Unsupported tokenizer type")
+        tokenizer_json: Final = custom_tokenizer or select_tokenizer(model)
     else:
-        default_encoding: Final = _get_default_encoding()
+        default_encoding: Final = get_default_encoding()
 
         def encode_length(text: str) -> int:
             return _encoding_count(default_encoding, text)
 
         return _get_tiktoken_count_function(encode_length)
+    if tokenizer_json["type"] == "huggingface_tokenizer":
+        tokenizer: Final[HuggingFace] = tokenizer_json["tokenizer"]
+
+        def count_tokens(text: str) -> int:
+            if isinstance(tokenizer, HuggingFaceTokenizer):
+                return tokenizer.count(text)
+            return len(tokenizer.encode_batch_fast([text])[0])
+
+        return count_tokens
+    if tokenizer_json["type"] == "openai_tokenizer":
+        encoding: Final = openai_tokenizer_encoding(model)
+
+        def encode_length(text: str) -> int:
+            return _encoding_count(encoding, text)
+
+        return _get_tiktoken_count_function(encode_length)
+    raise ValueError("Unsupported tokenizer type")
 
 
-def _encoding_count(encoding: Encoding, text: str) -> int:
+def _encoding_count(encoding: "Encoding", text: str) -> int:
     if isinstance(encoding, OpenAIEncoding):
         return encoding.count(text)
     return len(encoding.encode(text, disallowed_special=()))
 
 
-def openai_tokenizer_encoding(model: str) -> Encoding:
+def openai_tokenizer_encoding(model: str) -> "Encoding":
     """The encoding `token_counter` uses for a model on the `openai_tokenizer` path."""
     return get_encoding(openai_tokenizer_encoding_name(model))
 
@@ -771,6 +810,49 @@ def _anthropic_image_source_data(
     return ""
 
 
+def _anthropic_rendered_page_image_tokens(width: float, height: float) -> int:
+    """A PDF page is rasterized within Anthropic's image limits, then billed by its pixel area."""
+    if width <= 0 or height <= 0:
+        return 0
+    area_at_max_edge: Final = ANTHROPIC_IMAGE_MAX_LONG_EDGE_PX**2 * min(width, height) / max(width, height)
+    return math.ceil(min(float(ANTHROPIC_IMAGE_MAX_PIXELS), area_at_max_edge) / ANTHROPIC_IMAGE_PIXELS_PER_TOKEN)
+
+
+def _count_inline_pdf_tokens(data_url: str, count_function: TokenCounterFunction) -> int | None:
+    if not data_url.startswith(PDF_DATA_URL_PREFIX):
+        return None
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        verbose_logger.debug("pypdf is not installed, so the PDF document is priced like one image")
+        return None
+    try:
+        reader: Final = PdfReader(io.BytesIO(base64.b64decode(data_url[len(PDF_DATA_URL_PREFIX) :])))
+        return sum(
+            count_function(page.extract_text() or "")
+            + _anthropic_rendered_page_image_tokens(float(page.mediabox.width), float(page.mediabox.height))
+            for page in reader.pages
+        )
+    except Exception as e:
+        verbose_logger.debug("Could not read the PDF document's pages (%s), so it is priced like one image", e)
+        return None
+
+
+def _count_opaque_document_tokens(
+    data_url: str,
+    count_function: TokenCounterFunction,
+    use_default_image_token_count: bool,
+) -> int:
+    pdf_tokens: Final = _count_inline_pdf_tokens(data_url, count_function)
+    if pdf_tokens is not None:
+        return pdf_tokens
+    return calculate_img_tokens(
+        data=data_url,
+        mode="auto",
+        use_default_image_token_count=use_default_image_token_count,
+    )
+
+
 def _count_document_tokens(
     document: ChatCompletionDocumentObject | AnthropicMessagesDocumentParam,
     count_function: TokenCounterFunction,
@@ -790,10 +872,8 @@ def _count_document_tokens(
         return metadata_tokens + _count_content_list(
             count_function, content, use_default_image_token_count, default_token_count
         )
-    return metadata_tokens + calculate_img_tokens(
-        data=_anthropic_image_source_data(source),
-        mode="auto",
-        use_default_image_token_count=use_default_image_token_count,
+    return metadata_tokens + _count_opaque_document_tokens(
+        _anthropic_image_source_data(source), count_function, use_default_image_token_count
     )
 
 
@@ -810,11 +890,7 @@ def _count_file_tokens(
     name_tokens: Final = count_function(filename) if isinstance(filename, str) and filename else 0
     if not isinstance(file_data, str) or not file_data:
         return name_tokens
-    return name_tokens + calculate_img_tokens(
-        data=file_data,
-        mode="auto",
-        use_default_image_token_count=use_default_image_token_count,
-    )
+    return name_tokens + _count_opaque_document_tokens(file_data, count_function, use_default_image_token_count)
 
 
 def _count_anthropic_content(

@@ -1,18 +1,29 @@
-use litellm_core::RouteError;
+use std::sync::Arc;
+
+use litellm_auth::AuthServices;
+use litellm_cache_response::{CachePolicy, CacheScope, ScopedCache};
+use litellm_callbacks_legacy_python::LoggingOperation;
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
-use litellm_host_python::{from_py, lookup, to_py};
+use litellm_host::{call::HostedMachine, protocol::Protocol};
+use litellm_host_python::{PythonBinding, PythonHostCalls, from_py, present};
 use litellm_http::transport::Error as TransportError;
+use litellm_inference::RouteError;
+use litellm_secrets::source::SecretSource;
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
+use super::NativeCall;
 use crate::{
     errors::{RustUpstreamError, route_error_to_pyerr},
-    marshal::{RouteOptions, optional_timeout, python_timeout_seconds},
+    marshal::{
+        RouteOptions, optional_timeout, project_optional_fields, public_response,
+        python_timeout_seconds,
+    },
 };
 
 pub(super) struct InferenceHost {
-    pub request: Py<PyAny>,
+    pub request: Py<PyDict>,
     module: &'static str,
 }
 
@@ -23,7 +34,7 @@ pub(super) struct ProjectedCall {
 }
 
 impl InferenceHost {
-    pub fn new(request: Py<PyAny>, module: &'static str) -> Self {
+    pub fn new(request: Py<PyDict>, module: &'static str) -> Self {
         Self { request, module }
     }
 
@@ -82,18 +93,7 @@ impl InferenceHost {
         arguments: &Bound<'py, PyDict>,
         name: &str,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
-        let request = self.request.bind(py);
-        if let Some(value) = lookup(arguments, request, name)? {
-            return Ok((!value.is_none()).then_some(value));
-        }
-        let parameter = request
-            .getattr("parameters")?
-            .call_method1("get", (name,))?;
-        if !parameter.is_none() {
-            return Ok(Some(parameter));
-        }
-        let extra = request.getattr("kwargs")?.call_method1("get", (name,))?;
-        Ok((!extra.is_none()).then_some(extra))
+        present(arguments, self.request.bind(py), name)
     }
 
     pub fn parameters(
@@ -102,21 +102,13 @@ impl InferenceHost {
         arguments: &Bound<'_, PyDict>,
     ) -> PyResult<Map<String, Value>> {
         let names: Vec<String> = py.import(self.module)?.getattr("PARAMETERS")?.extract()?;
-        names
-            .iter()
-            .filter_map(|name| match self.argument(py, arguments, name) {
-                Ok(Some(value)) => Some(from_py(&value).map(|value| (name.clone(), value))),
-                Ok(None) => None,
-                Err(error) => Some(Err(error)),
-            })
-            .collect()
+        project_optional_fields(names.iter().map(String::as_str), |name| {
+            self.argument(py, arguments, name)
+        })
     }
 
     pub fn response(&self, py: Python<'_>, response: &impl Serialize) -> PyResult<Py<PyAny>> {
-        py.import(self.module)?
-            .getattr("response")?
-            .call1((to_py(py, response)?,))
-            .map(Bound::unbind)
+        public_response(py, self.module, response)
     }
 
     pub fn error(&self, py: Python<'_>, error: RouteError) -> PyResult<PyErr> {
@@ -141,4 +133,63 @@ impl InferenceHost {
             .call1((native.value(py), self.request.bind(py)))?;
         Ok(PyErr::from_value(mapped))
     }
+}
+
+pub(super) trait InferenceRoute: Sized + 'static {
+    type Protocol: Protocol<Error = RouteError>;
+    const OPERATION: LoggingOperation;
+    const SYNC_CALL_TYPE: &'static str;
+    const ASYNC_CALL_TYPE: &'static str;
+
+    fn new(
+        http: litellm_http::Client,
+        auth: Arc<AuthServices>,
+        secrets: Arc<dyn SecretSource>,
+    ) -> Self;
+    fn with_cache(self, cache: ScopedCache) -> Self;
+    fn machine(
+        self,
+        call: <Self::Protocol as Protocol>::Request,
+        policy: CachePolicy,
+    ) -> HostedMachine<Self::Protocol>;
+}
+
+pub(super) fn run_inference<R, H>(
+    py: Python<'_>,
+    call: NativeCall<'_>,
+    asynchronous: bool,
+    host: H,
+) -> PyResult<Py<PyAny>>
+where
+    R: InferenceRoute,
+    H: PythonBinding<Protocol = R::Protocol> + PythonHostCalls<R::Protocol> + 'static,
+{
+    let call_type = if asynchronous {
+        R::ASYNC_CALL_TYPE
+    } else {
+        R::SYNC_CALL_TYPE
+    };
+    crate::cache::admit_native(py, &call.kwargs, call_type)?;
+    let (arguments, hooks) = super::call_hooks(py, R::OPERATION, &call, asynchronous)?;
+    super::run_public_call(
+        py,
+        arguments,
+        move |py, arguments, request| {
+            let route = R::new(
+                crate::http::provider_client(py, arguments, asynchronous)?
+                    .map_err(crate::http::client_error)?,
+                crate::http::resources().auth.clone(),
+                crate::secrets::source(py)?,
+            );
+            let (cache, cache_options) = crate::cache::configured_native(py, arguments, call_type)?;
+            let route = match cache {
+                Some(cache) => route.with_cache(ScopedCache::new(cache, CacheScope::Shared)),
+                None => route,
+            };
+            Ok(route.machine(request, cache_options.policy))
+        },
+        host,
+        hooks,
+        asynchronous,
+    )
 }

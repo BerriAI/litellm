@@ -203,6 +203,11 @@ class BaseTranslation(ABC):
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
         return None
 
+    def released_stream_as_ended(self, responses_so_far: Sequence[object]) -> tuple[object, ...]:
+        """The chunks a client left the stream with, closed the way this endpoint ends a stream, so the
+        end-of-stream scan also inspects tool calls the stream never finished"""
+        return tuple(responses_so_far)
+
     def build_block_sse_chunks(
         self,
         exc: "ModifyResponseException",

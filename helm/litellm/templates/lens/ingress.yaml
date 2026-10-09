@@ -1,0 +1,29 @@
+{{- if and .Values.lensWorker.enabled .Values.lensWorker.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "litellm.fullname" . }}-lens-worker
+  {{- with .Values.lensWorker.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.lensWorker.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.lensWorker.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ required "lensWorker.ingress.host is required" .Values.lensWorker.ingress.host | quote }}
+      http:
+        paths:
+          - path: /v1/
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "litellm.fullname" . }}-lens-worker
+                port:
+                  name: otlp
+{{- end }}

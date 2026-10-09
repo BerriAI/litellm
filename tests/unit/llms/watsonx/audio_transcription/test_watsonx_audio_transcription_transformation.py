@@ -6,6 +6,10 @@ Validates the WatsonX transcription response transformation.
 
 from unittest.mock import MagicMock
 
+import httpx
+import pytest
+from pydantic import ValidationError
+
 from litellm.llms.watsonx.audio_transcription.transformation import (
     IBMWatsonXAudioTranscriptionConfig,
 )
@@ -83,3 +87,57 @@ class TestWatsonXAudioTranscription:
 
         # Verify duration is set via dictionary assignment
         assert result["duration"] == 5.5
+
+
+def _transform_transcription_response(payload: object) -> TranscriptionResponse:
+    return IBMWatsonXAudioTranscriptionConfig().transform_audio_transcription_response(
+        httpx.Response(200, json=payload)
+    )
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_extras"),
+    [
+        ({"text": "hello"}, {}),
+        ({"text": "hello", "model": "whisper-large-v3-turbo"}, {}),
+        (
+            {"text": "hello", "duration": 1.5, "language": "en", "task": "transcribe"},
+            {"duration": 1.5, "language": "en", "task": "transcribe"},
+        ),
+        (
+            {"text": "hello", "segments": [{"id": 0, "text": "hello"}], "words": None},
+            {"segments": [{"id": 0, "text": "hello"}], "words": None},
+        ),
+    ],
+)
+def test_transform_audio_transcription_response_copies_every_field_except_model(
+    payload: dict[str, object], expected_extras: dict[str, object]
+) -> None:
+    response = _transform_transcription_response(payload)
+
+    assert response.text == "hello"
+    assert not hasattr(response, "model")
+    assert {key: response[key] for key in expected_extras} == expected_extras
+
+
+@pytest.mark.parametrize("payload", [{}, {"model": "whisper"}, {"duration": 2.0}, {"text": None, "usage": None}])
+def test_transform_audio_transcription_response_without_text_or_usage_reports_the_body(
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError, match="Invalid response format") as exc_info:
+        _transform_transcription_response(payload)
+
+    assert exc_info.value.args == (
+        "Invalid response format. Received response does not match the expected format. Got: ",
+        payload,
+    )
+
+
+@pytest.mark.parametrize("payload", [["not", "an", "object"], "plain text", 7, True])
+def test_transform_audio_transcription_response_rejects_non_object_bodies_without_echoing_them(
+    payload: object,
+) -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        _transform_transcription_response(payload)
+
+    assert "input_value" not in str(exc_info.value)

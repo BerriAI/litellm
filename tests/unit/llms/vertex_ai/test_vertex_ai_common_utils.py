@@ -3,13 +3,11 @@ from unittest.mock import patch
 import pytest
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-
-
 from litellm.llms.vertex_ai.common_utils import (
-    _get_vertex_url,
     convert_anyof_null_to_nullable,
     get_vertex_location_from_url,
     get_vertex_project_id_from_url,
+    get_vertex_url,
     pop_vertex_request_labels,
     set_schema_property_ordering,
     supports_response_json_schema,
@@ -213,7 +211,7 @@ def test_set_schema_property_ordering_skips_non_dict_property_values():
 
 def test_build_vertex_schema():
     """Test build_vertex_schema with a sample schema"""
-    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+    from litellm.llms.vertex_ai.common_utils import build_vertex_schema
 
     parameters = {
         "properties": {
@@ -295,7 +293,7 @@ def test_build_vertex_schema():
         "type": "object",
     }
 
-    assert _build_vertex_schema(parameters) == expected_output
+    assert build_vertex_schema(parameters) == expected_output
 
 
 def test_process_items_with_excessive_nesting():
@@ -363,7 +361,7 @@ def test_build_vertex_schema_array_branch_missing_items_in_anyof():
     end up with synthesized `items: {"type": "object"}` after the schema
     transform — Vertex returns INVALID_ARGUMENT otherwise.
     """
-    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+    from litellm.llms.vertex_ai.common_utils import build_vertex_schema
 
     parameters = {
         "properties": {
@@ -378,14 +376,12 @@ def test_build_vertex_schema_array_branch_missing_items_in_anyof():
         "type": "object",
     }
 
-    result = _build_vertex_schema(parameters)
+    result = build_vertex_schema(parameters)
     callbacks_anyof = result["properties"]["callbacks"]["anyOf"]
     array_branches = [b for b in callbacks_anyof if b.get("type") == "array"]
     assert array_branches, "expected an array branch to remain after transform"
     for branch in array_branches:
-        assert branch.get("items") == {
-            "type": "object"
-        }, f"array branch must have items synthesized; got {branch}"
+        assert branch.get("items") == {"type": "object"}, f"array branch must have items synthesized; got {branch}"
 
 
 def test_vertex_ai_complex_response_schema():
@@ -622,7 +618,7 @@ def test_vertex_ai_complex_response_schema():
 )
 def test_get_vertex_url_global_region(stream, expected_endpoint_suffix):
     """
-    Test _get_vertex_url when vertex_location is 'global' for chat mode.
+    Test get_vertex_url when vertex_location is 'global' for chat mode.
     """
     mode = "chat"
     model = "gemini-1.5-pro-preview-0409"
@@ -636,7 +632,7 @@ def test_get_vertex_url_global_region(stream, expected_endpoint_suffix):
         "litellm.VertexGeminiConfig.get_model_for_vertex_ai_url",
         side_effect=lambda model: model,
     ):
-        url, endpoint = _get_vertex_url(
+        url, endpoint = get_vertex_url(
             mode=mode,
             model=model,
             stream=stream,
@@ -1149,7 +1145,7 @@ def test_get_token_url():
     vertex_ai_location = "us-central1"
     vertex_credentials = ""
 
-    _, url = vertex_llm._get_token_and_url(
+    _, url = vertex_llm.get_token_and_url(
         auth_header=None,
         vertex_project=vertex_ai_project,
         vertex_location=vertex_ai_location,
@@ -1164,7 +1160,7 @@ def test_get_token_url():
 
     print("url=", url)
 
-    _, url = vertex_llm._get_token_and_url(
+    _, url = vertex_llm.get_token_and_url(
         auth_header=None,
         vertex_project=vertex_ai_project,
         vertex_location=vertex_ai_location,
@@ -1227,6 +1223,149 @@ async def test_vertex_ai_token_counter_routes_partner_models():
         assert isinstance(result, TokenCountResponse)
         assert result.total_tokens == 42
         assert result.tokenizer_type == "vertex_ai_partner_models"
+
+
+@pytest.mark.asyncio
+async def test_vertex_ai_token_counter_forwards_system_and_tools_to_partner_request():
+    from typing import Final
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, int]:
+            return {"input_tokens": 37}
+
+    class FakeHttpClient:
+        posted_bodies: tuple[dict[str, object], ...] = ()
+
+        async def post(
+            self,
+            url: str,
+            headers: dict[str, str],
+            json: dict[str, object],
+            timeout: float,
+        ) -> FakeResponse:
+            self.posted_bodies = (*self.posted_bodies, json)
+            return FakeResponse()
+
+    fake_http_client: Final = FakeHttpClient()
+    counter: Final = VertexAITokenCounter()
+    model: Final = "claude-opus-5-5"
+    messages: Final = [{"role": "user", "content": "Hello"}]
+    system: Final = "Follow the system instructions"
+    tools: Final = [
+        {
+            "name": "lookup",
+            "description": "Look up a value",
+            "input_schema": {"type": "object", "properties": {}},
+        }
+    ]
+    deployment: Final = {
+        "litellm_params": {
+            "vertex_project": "test-project",
+            "vertex_location": "us-east5",
+        }
+    }
+
+    with (
+        patch.object(handler, "get_async_httpx_client", return_value=fake_http_client),
+        patch.object(
+            handler.VertexAIPartnerModelsTokenCounter,
+            "_ensure_access_token_async",
+            new=AsyncMock(return_value=("fake-token", "test-project")),
+        ),
+    ):
+        with_optional_fields: Final = await counter.count_tokens(
+            model_to_use=model,
+            messages=messages,
+            contents=None,
+            deployment=deployment,
+            system=system,
+            tools=tools,
+        )
+        without_optional_fields: Final = await counter.count_tokens(
+            model_to_use=model,
+            messages=messages,
+            contents=None,
+            deployment=deployment,
+        )
+
+    assert fake_http_client.posted_bodies == (
+        {"model": model, "messages": messages, "system": system, "tools": tools},
+        {"model": model, "messages": messages},
+    )
+    assert with_optional_fields is not None
+    assert with_optional_fields.total_tokens == 37
+    assert without_optional_fields is not None
+    assert without_optional_fields.total_tokens == 37
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_failure", "expected_status", "expected_message"),
+    [
+        ("http_400", 400, 'tools.0: Input tag "function" does not match any of the expected tags'),
+        ("credentials", 500, "could not resolve credentials"),
+    ],
+)
+async def test_vertex_ai_token_counter_returns_partner_provider_error_as_value(
+    provider_failure: str, expected_status: int, expected_message: str
+):
+    from typing import Final
+    from unittest.mock import AsyncMock, patch
+
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler
+
+    class RejectingHttpClient:
+        async def post(
+            self,
+            url: str,
+            headers: dict[str, str],
+            json: dict[str, object],
+            timeout: float,
+        ) -> None:
+            request: Final = httpx.Request("POST", url)
+            response: Final = httpx.Response(400, text=expected_message, request=request)
+            raise MaskedHTTPStatusError(
+                httpx.HTTPStatusError("Client error '400 Bad Request'", request=request, response=response),
+                message=expected_message,
+                text=expected_message,
+            )
+
+    access_token: Final = (
+        AsyncMock(side_effect=ValueError(expected_message))
+        if provider_failure == "credentials"
+        else AsyncMock(return_value=("fake-token", "test-project"))
+    )
+    with (
+        patch.object(handler, "get_async_httpx_client", return_value=RejectingHttpClient()),
+        patch.object(handler.VertexAIPartnerModelsTokenCounter, "_ensure_access_token_async", new=access_token),
+    ):
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="claude-opus-5-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={"litellm_params": {"vertex_project": "test-project", "vertex_location": "us-east5"}},
+            request_model="vertex-claude",
+            tools=[{"type": "function", "function": {"name": "lookup", "parameters": {}}}],
+        )
+
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == expected_status
+    assert result.error_message is not None
+    assert expected_message in result.error_message
+    assert result.total_tokens == 0
+    assert result.request_model == "vertex-claude"
+    assert result.tokenizer_type == "vertex_ai_partner_models"
 
 
 @pytest.mark.asyncio
@@ -1540,7 +1679,7 @@ def test_vertex_ai_google_gemini_not_detected_as_gemma_maas():
 
 def test_build_vertex_schema_empty_properties():
     """
-    Test _build_vertex_schema handles empty properties objects correctly.
+    Test build_vertex_schema handles empty properties objects correctly.
 
     This test verifies the fix for the issue where Gemini rejects schemas
     with empty properties objects like {"properties": {}, "type": "object"}.
@@ -1551,7 +1690,7 @@ def test_build_vertex_schema_empty_properties():
 
     The fix removes empty properties objects and their associated type/required fields.
     """
-    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+    from litellm.llms.vertex_ai.common_utils import build_vertex_schema
 
     # Input: Schema with empty properties (the problematic case from real request)
     input_schema = {
@@ -1584,40 +1723,28 @@ def test_build_vertex_schema_empty_properties():
     }
 
     # Apply the transformation
-    result = _build_vertex_schema(input_schema)
+    result = build_vertex_schema(input_schema)
 
     # Verify the transformation removed empty properties
     # Navigate to the go_back schema
-    go_back_schema = result["properties"]["action"]["items"]["anyOf"][0]["properties"][
-        "go_back"
-    ]
+    go_back_schema = result["properties"]["action"]["items"]["anyOf"][0]["properties"]["go_back"]
 
     # Verify empty properties was removed
     assert "properties" not in go_back_schema, "Empty properties should be removed"
 
     # Verify type is kept as object (Gemini requires type: object even without properties)
-    assert (
-        go_back_schema.get("type") == "object"
-    ), "Type should be kept as object when properties is empty"
+    assert go_back_schema.get("type") == "object", "Type should be kept as object when properties is empty"
 
     # Verify required was also removed
-    assert (
-        "required" not in go_back_schema
-    ), "Required should be removed when properties is empty"
+    assert "required" not in go_back_schema, "Required should be removed when properties is empty"
 
     # Verify description is preserved
-    assert (
-        go_back_schema.get("description") == "Go back"
-    ), "Description should be preserved"
+    assert go_back_schema.get("description") == "Go back", "Description should be preserved"
 
     # Verify parent schema still has proper structure
     parent_schema = result["properties"]["action"]["items"]["anyOf"][0]
-    assert (
-        parent_schema["type"] == "object"
-    ), "Parent schema should still have object type"
-    assert (
-        "go_back" in parent_schema["properties"]
-    ), "go_back should still be in parent properties"
+    assert parent_schema["type"] == "object", "Parent schema should still have object type"
+    assert "go_back" in parent_schema["properties"], "go_back should still be in parent properties"
 
 
 def test_add_object_type_schema_with_no_properties_and_no_type():
