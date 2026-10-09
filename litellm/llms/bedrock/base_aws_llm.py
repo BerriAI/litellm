@@ -55,7 +55,9 @@ _STS_REGION_FROM_ENDPOINT_PATTERN: Final = re.compile(
     r"(?:^|\.)sts(?:-fips)?\.([a-z0-9-]+)\.(?:amazonaws\.com(?:\.cn)?|vpce\.amazonaws\.com)"
 )
 
-SIGV4_COMPUTED_HEADERS: Final = frozenset({"authorization", "x-amz-date", "x-amz-security-token", "date"})
+SIGV4_COMPUTED_HEADERS: Final = frozenset(
+    {"authorization", "x-amz-date", "x-amz-security-token", "date", "x-amz-content-sha256"}
+)
 
 _AWS_SESSION_TAGS_ADAPTER: Final[TypeAdapter[tuple[AwsSessionTag, ...]]] = TypeAdapter(tuple[AwsSessionTag, ...])
 
@@ -1675,6 +1677,8 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             if header_value is None:
                 continue
             header_lower = header_name.lower()
+            if header_lower in SIGV4_COMPUTED_HEADERS:
+                continue
             if header_lower in aws_headers or header_lower.startswith("x-amz-") or header_lower.startswith("x-amzn-"):
                 aws_signature_headers[header_name] = header_value
 

@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Final, Literal, Optional
 from unittest.mock import MagicMock, Mock, patch
 
 from botocore.awsrequest import AWSPreparedRequest, AWSRequest
@@ -3073,7 +3073,7 @@ def test_filter_headers_skips_none_values():
     filtered = llm._filter_headers_for_aws_signature(headers)
 
     assert filtered["Content-Type"] == "application/json"
-    assert filtered["x-amz-date"] == "20240101T000000Z"
+    assert "x-amz-date" not in filtered
     assert "x-amz-security-token" not in filtered
     assert "x-amzn-bedrock-kb-session-id" not in filtered
     assert "host" not in filtered
@@ -4215,3 +4215,94 @@ def test_shared_json_signer_preserves_body_and_signs_for_the_requested_service()
     )
     assert request.body == body
     assert "/us-west-2/s3/aws4_request" in request.headers["Authorization"]
+
+
+def _request_with_payload_hash(
+    entrypoint: Literal["invoke", "prepared", "mantle"],
+    headers: dict[str, str],
+    request_data: dict[str, str],
+    url: str,
+) -> tuple[dict[str, str], str | bytes]:
+    from litellm.llms.bedrock_mantle.messages.transformation import BedrockMantleAnthropicMessagesConfig
+
+    optional_params: Final = {
+        "aws_access_key_id": "payload-hash-access",
+        "aws_secret_access_key": "payload-hash-secret",
+        "aws_region_name": "us-east-1",
+    }
+    if entrypoint == "invoke":
+        invoke_headers, invoke_body = BaseAWSLLM()._sign_request(
+            service_name="bedrock",
+            headers=headers,
+            optional_params=optional_params,
+            request_data=request_data,
+            api_base=url,
+        )
+        assert invoke_body is not None
+        return invoke_headers, invoke_body
+    if entrypoint == "mantle":
+        mantle_headers, mantle_body = BedrockMantleAnthropicMessagesConfig().sign_request(
+            headers=headers,
+            optional_params=optional_params,
+            request_data=request_data,
+            api_base=url,
+        )
+        assert mantle_body is not None
+        return mantle_headers, mantle_body
+    prepared: Final = BaseAWSLLM().get_request_headers(
+        credentials=Credentials("payload-hash-access", "payload-hash-secret"),
+        aws_region_name="us-east-1",
+        extra_headers=None,
+        endpoint_url=url,
+        data=json.dumps(request_data),
+        headers=headers,
+        supports_bearer_token=False,
+    )
+    assert isinstance(prepared.body, (str, bytes))
+    return dict(prepared.headers), prepared.body
+
+
+@pytest.mark.parametrize("hash_header", (None, "x-amz-content-sha256", "X-Amz-Content-SHA256"))
+@pytest.mark.parametrize(
+    ("entrypoint", "url"),
+    (
+        ("invoke", "https://bedrock-runtime.us-east-1.amazonaws.com/model/test-model/invoke"),
+        ("prepared", "https://bedrock-runtime.us-east-1.amazonaws.com/model/test-model/converse"),
+        ("mantle", "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages"),
+    ),
+)
+def test_sigv4_resign_uses_current_body_hash_and_preserves_forwarded_headers(
+    entrypoint: Literal["invoke", "prepared", "mantle"], url: str, hash_header: str | None
+) -> None:
+    import hashlib
+
+    original: Final = {"input": "before retry"}
+    original_hash: Final = hashlib.sha256(json.dumps(original).encode()).hexdigest()
+    input_headers: Final = {
+        "Content-Type": "application/json",
+        "anthropic-version": "2023-06-01",
+        **({hash_header: original_hash} if hash_header is not None else {}),
+    }
+    first_headers, first_body = _request_with_payload_hash(entrypoint, input_headers, original, url)
+    assert first_headers["Authorization"].split("Signature=")[1] == _recomputed_sigv4_signature(
+        url=url,
+        secret_key="payload-hash-secret",
+        authorization=first_headers["Authorization"],
+        headers=first_headers,
+        body=first_body,
+    )
+    previous_headers: Final = dict(first_headers)
+    retry_headers, retry_body = _request_with_payload_hash(entrypoint, first_headers, {"input": "after retry: é"}, url)
+    retry_bytes: Final = retry_body if isinstance(retry_body, bytes) else retry_body.encode()
+    expected_hash: Final = hashlib.sha256(retry_bytes).hexdigest()
+    normalized: Final = {name.lower(): value for name, value in retry_headers.items()}
+    assert normalized.get("x-amz-content-sha256", expected_hash) == expected_hash
+    assert retry_headers["Authorization"].split("Signature=")[1] == _recomputed_sigv4_signature(
+        url=url,
+        secret_key="payload-hash-secret",
+        authorization=retry_headers["Authorization"],
+        headers=retry_headers,
+        body=retry_body,
+    )
+    assert retry_headers["anthropic-version"] == "2023-06-01"
+    assert first_headers == previous_headers
