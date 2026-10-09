@@ -3260,7 +3260,7 @@ def is_generalized_model_info(model_info: ModelInfo) -> bool:
     return key not in litellm.model_cost and match_capability_generalizations(key) is not None
 
 
-def _get_builtin_model_info_for_registration(model: str) -> ModelInfo | None:
+def _get_builtin_model_info_for_registration(model: str, custom_llm_provider: str | None) -> ModelInfo | None:
     """Resolve ``model`` to its built-in cost-map entry for registration merging.
 
     Returns ``None`` when the lookup raises or when it resolved via a
@@ -3269,7 +3269,7 @@ def _get_builtin_model_info_for_registration(model: str) -> ModelInfo | None:
     inheritance for prefix-mangled keys.
     """
     try:
-        info: Final = get_model_info(model=model)
+        info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:
         return None
     return None if is_generalized_model_info(info) else info
@@ -3344,6 +3344,7 @@ def register_model(
     *,
     persist_across_reloads: bool = True,
     warning_display_name: str | None = None,
+    custom_llm_provider: str | None = None,
 ):
     """
     Register new / Override existing models (and their pricing) to specific providers.
@@ -3368,6 +3369,10 @@ def register_model(
     ``warning_display_name`` names the model in the missing-cache-pricing
     warning instead of the registered key, for callers that register under an
     opaque key (e.g. the router's hashed deployment ids).
+
+    ``custom_llm_provider`` scopes the built-in cost-map match to entries for
+    that provider, so a deployment id that happens to equal another provider's
+    catalog key stays its own provider-less entry instead of merging into it.
     """
 
     loaded_model_cost = {}
@@ -3394,7 +3399,9 @@ def register_model(
             existing_model = litellm.model_cost.get(key, {})
             model_cost_key = key
         else:
-            builtin_model_info = _get_builtin_model_info_for_registration(model=_key_str)
+            builtin_model_info = _get_builtin_model_info_for_registration(
+                model=_key_str, custom_llm_provider=custom_llm_provider
+            )
             if builtin_model_info is not None:
                 existing_model = cast(dict, builtin_model_info)
                 model_cost_key = existing_model["key"]
