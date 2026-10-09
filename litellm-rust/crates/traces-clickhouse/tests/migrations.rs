@@ -155,7 +155,14 @@ async fn schema_supports_span_rollups_and_spend_joins(
         "completion_start_time": null
     }))?;
     insert_rows(&database, "otel_traces", vec![span]).await?;
-    insert_rows(&database, "spend_logs", vec![spend]).await?;
+    litellm_traces_clickhouse::insert_rows(
+        &database.client,
+        &writer,
+        "trace_test",
+        InsertTable::SpendLogs,
+        vec![spend],
+    )
+    .await?;
     let reader = Connection::reader(&database.url, "trace_test")?;
     let detail =
         litellm_storage_clickhouse::fetch::<litellm_traces_clickhouse::query::named::SpanDetail>(
@@ -1040,6 +1047,7 @@ async fn retention_changes_materialize_existing_rows_and_remain_idempotent(
         tables["data"],
         serde_json::json!([
             {"name": "agent_traces_by_key"},
+            {"name": "lens_call_costs"},
             {"name": "lens_feedback"},
             {"name": "otel_traces"},
             {"name": "spend_logs"}
@@ -1063,9 +1071,17 @@ async fn retention_changes_materialize_existing_rows_and_remain_idempotent(
         "TeamId": "team-1", "ApiKeyHash": "", "TraceId": "expired", "Author": "admin",
         "Score": 4, "Comment": "", "CreatedAt": old_iso, "UpdatedAt": old_iso, "IsDeleted": 0
     }))?;
-    insert_rows(&database, "spend_logs", vec![spend]).await?;
+    litellm_traces_clickhouse::insert_rows(
+        &database.client,
+        &writer,
+        "trace_test",
+        InsertTable::SpendLogs,
+        vec![spend],
+    )
+    .await?;
     insert_rows(&database, "lens_feedback", vec![feedback]).await?;
     assert_eq!(table_rows(&database, "agent_traces_by_key").await?, 1);
+    assert_eq!(table_rows(&database, "lens_call_costs").await?, 2);
     ensure_schema(&database.client, &writer, "trace_test", 14).await?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     loop {
@@ -1094,11 +1110,13 @@ async fn retention_changes_materialize_existing_rows_and_remain_idempotent(
     )
     .await?;
     execute_write(&database, "OPTIMIZE TABLE trace_test.spend_logs FINAL").await?;
+    execute_write(&database, "OPTIMIZE TABLE trace_test.lens_call_costs FINAL").await?;
     execute_write(&database, "OPTIMIZE TABLE trace_test.lens_feedback FINAL").await?;
     assert_eq!(table_rows(&database, "lens_feedback").await?, 0);
     assert_eq!(table_rows(&database, "otel_traces").await?, 0);
     assert_eq!(table_rows(&database, "agent_traces_by_key").await?, 0);
     assert_eq!(table_rows(&database, "spend_logs").await?, 0);
+    assert_eq!(table_rows(&database, "lens_call_costs").await?, 0);
     let mutation_count = mutation_rows(&database).await?;
     ensure_schema(&database.client, &writer, "trace_test", 14).await?;
     assert_eq!(mutation_rows(&database).await?, mutation_count);
@@ -1118,7 +1136,7 @@ async fn retention_reconciliation_updates_each_table_ttl(
         &database,
         "SELECT name, create_table_query FROM system.tables \
          WHERE database = 'trace_test' AND name IN \
-         ('otel_traces', 'agent_traces_by_key', 'spend_logs', 'lens_feedback') ORDER BY name",
+         ('otel_traces', 'agent_traces_by_key', 'spend_logs', 'lens_call_costs', 'lens_feedback') ORDER BY name",
     )
     .await?;
     let ttl_queries = ttl_queries["data"].as_array().expect("retention tables");
@@ -1129,6 +1147,7 @@ async fn retention_reconciliation_updates_each_table_ttl(
             .collect::<Vec<_>>(),
         [
             "agent_traces_by_key",
+            "lens_call_costs",
             "lens_feedback",
             "otel_traces",
             "spend_logs"
@@ -1149,7 +1168,7 @@ async fn retention_reconciliation_updates_each_table_ttl(
         &database,
         "SELECT name, create_table_query FROM system.tables \
          WHERE database = 'trace_test' AND name IN \
-         ('otel_traces', 'agent_traces_by_key', 'spend_logs', 'lens_feedback') ORDER BY name",
+         ('otel_traces', 'agent_traces_by_key', 'spend_logs', 'lens_call_costs', 'lens_feedback') ORDER BY name",
     )
     .await?;
     for row in ttl_queries["data"].as_array().expect("retention tables") {
@@ -2399,7 +2418,14 @@ async fn named_and_sql_readers_share_request_log_visibility(
             "api_key": api_key, "spend": 0.25, "start_time": timestamp / 1_000_000, "end_time": timestamp / 1_000_000,
         })))
         .collect::<Result<Vec<BTreeMap<String, serde_json::Value>>, _>>()?;
-    insert_rows(&database, "spend_logs", rows).await?;
+    litellm_traces_clickhouse::insert_rows(
+        &database.client,
+        &writer,
+        "trace_test",
+        InsertTable::SpendLogs,
+        rows,
+    )
+    .await?;
     let reader = Connection::reader(&database.url, "trace_test")?;
     let params =
         SpendByResponseIdsParams::from(litellm_traces::query::named::SpendByResponseIdsParams {

@@ -113,6 +113,37 @@ Upgrade LiteLLM and Lens from the same source commit and release identity. For a
 
 Keep the same databases, encryption keys, shared service secret, and public ingestion URL. Pause scheduled investigations and finish or cancel active runs, update both images through your usual deployment process, then check ingestion and run an investigation before resuming schedules. Do not run `docker compose down -v`
 
+### Recorded gateway costs
+
+Upgrade every Lens writer and wait for `/health/ready` before backfilling historical costs. New gateway records write their recorded cost and call identifiers into compact Lens storage through the existing background export. Lens acknowledges each upload after both request-log and compact writes succeed. Ordinary trace list and detail requests read the compact records without selecting from `spend_logs`; they do not recalculate prices or accept costs from agent traces
+
+Historical request logs need an explicit backfill. Startup does not scan them, and trace browsing has no fallback to the raw log table. From the matching source checkout, build this operator command:
+
+```bash
+cargo build --manifest-path litellm-rust/Cargo.toml --locked \
+  -p litellm-traces-clickhouse --bin backfill_call_costs --release
+```
+
+Run it from a host with private ClickHouse access. Set `CLICKHOUSE_URL` through your secret manager to a credential allowed to select `spend_logs` and insert compact Lens cost records, and set `CLICKHOUSE_DATABASE` if it is not `litellm`. Pass one exact team ID, inclusive start and exclusive end as UTC Unix milliseconds. An explicit empty team argument, `''`, selects records with no team
+
+```bash
+litellm-rust/target/release/backfill_call_costs \
+  'team-id' 1791504000000 1791590400000
+```
+
+Each invocation permits at most a 24-hour window, 20 pages of 500 records and five minutes. Each page also has a ten-second query limit, a 4 MiB response limit, a million-row or 64 MiB scan limit, and a 128 MiB query memory limit. A rejected page leaves the last successful cursor usable; choose smaller time windows when scan limits prevent progress. Only call identifiers, ownership, timestamps and recorded amounts are read, with no prompts or response bodies
+
+Save the printed JSON lines. A cursor is printed and flushed only after its page is persisted. If `complete` is false, a timeout occurs, or the command fails, repeat the same team and time window with the last printed cursor as the fourth argument:
+
+```bash
+litellm-rust/target/release/backfill_call_costs \
+  'team-id' 1791504000000 1791590400000 '<cursor>'
+```
+
+A cursor is bound to its team and window. Replaying a page or the whole window is safe; costs are replaced by their existing record identity and version, never added again. Repeat bounded windows for the historical period you need, then verify trace costs before treating historical coverage as complete. Records already expired from ClickHouse cannot be recovered by this command. Backfill restores recorded amounts only; existing spans with incomplete call evidence remain unmatched
+
+Accepted compact records survive service restarts. The gateway exporter still uses its existing bounded memory queue, three delivery attempts and limited shutdown drain; callbacks lost before successful ingestion are not recovered by this change. A backfill can recover a raw record retained after an incomplete compact write, but cannot recover a record absent from ClickHouse
+
 ## Development
 
 `make lens-dev` starts LiteLLM, Lens, and the hot-reload dashboard. Set `LENS_DEV_PROXY_PORT` and `LENS_DEV_UI_PORT` to change the local ports. For containers, pass the same release identity to both builds. Unversioned or incompatible workers are refused before claiming work

@@ -230,7 +230,7 @@ async fn large_runs_remain_complete_under_default_reader_limits(
             .send()
             .await?
             .error_for_status()?;
-        for table in ["otel_traces AS o", "spend_logs FINAL"]
+        for table in ["otel_traces AS o", "lens_call_costs FINAL"]
             .into_iter()
             .take(if costed { 2 } else { 1 })
         {

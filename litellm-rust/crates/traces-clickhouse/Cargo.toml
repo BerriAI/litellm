@@ -12,6 +12,7 @@ schema = ["dep:schemars", "litellm-traces/schema"]
 macro_rules_attribute.workspace = true
 schemars = { workspace = true, optional = true }
 askama.workspace = true
+base64.workspace = true
 flate2.workspace = true
 futures-util.workspace = true
 hmac = "0.12.1"

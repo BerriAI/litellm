@@ -4,7 +4,7 @@ use litellm_llms_types::recognized::Recognized;
 use serde::{Deserialize, de::IgnoredAny};
 use serde_json::Value;
 
-use super::{Extraction, Format, Payload, SpanFacts};
+use super::{Extraction, Format, Payload, SpanFacts, genai};
 use crate::{
     Error,
     normalize::{
@@ -56,16 +56,20 @@ fn role(context: &SpanContext<'_>) -> Option<RoleEvidence> {
 
 /// LLM instrumentations record the provider response as `output.value`: a raw response is one
 /// request (`id`); a LangChain `LLMResult` carries one per prompt.
-fn calls(output: &str) -> CallEvidence {
-    let Ok(value) = serde_json::from_str::<Value>(output) else {
-        return CallEvidence::Unknown;
+fn calls(context: &SpanContext<'_>) -> CallEvidence {
+    let Ok(value) = serde_json::from_str::<Value>(attr(context.attributes, "output.value")) else {
+        return genai::calls(context);
     };
     if let Ok(response) = ProviderResponse::deserialize(&value)
         && let Some(id) = response.id()
     {
         return CallEvidence::complete(CallKey::ProviderResponse(id.to_owned()));
     }
-    messages::langchain_result(&value).map_or(CallEvidence::Unknown, |result| result.calls)
+    if value.get("generations").is_some() {
+        return messages::langchain_result(&value)
+            .map_or(CallEvidence::Unknown, |result| result.calls);
+    }
+    genai::calls(context)
 }
 
 /// `llm.<direction>_messages.*` when the instrumentation flattened the messages, else `raw`.
@@ -112,7 +116,7 @@ impl Format for OpenInference {
                 output: output.text,
                 tool_call_id: present(attributes, &["tool.id"]),
                 calls: if role == Some(RoleEvidence::Declared(ObservationType::Llm)) {
-                    calls(attr(attributes, "output.value"))
+                    calls(context)
                 } else {
                     CallEvidence::Unknown
                 },

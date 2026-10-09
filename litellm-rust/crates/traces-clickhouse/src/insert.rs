@@ -66,7 +66,16 @@ pub async fn insert_shared_rows(
         return Ok(());
     }
     let received_ms = (OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as u64;
-    let (token, body) = prepare_insert(&rows, received_ms, max_insert_bytes()?)?;
+    let limit = max_insert_bytes()?;
+    let (token, body) = prepare_insert(&rows, received_ms, limit)?;
+    let projection = match table {
+        InsertTable::SpendLogs => Some(prepare_insert(
+            &crate::cost_rows::project(&rows)?,
+            received_ms,
+            limit,
+        )?),
+        InsertTable::OtelTraces | InsertTable::LensFeedback => None,
+    };
     litellm_storage_clickhouse::insert_compressed_rows(
         client,
         connection,
@@ -76,7 +85,43 @@ pub async fn insert_shared_rows(
         body,
     )
     .await
-    .map_err(Error::from)
+    .map_err(Error::from)?;
+    if let Some((token, body)) = projection {
+        litellm_storage_clickhouse::insert_compressed_rows(
+            client,
+            connection,
+            database,
+            crate::cost_rows::TABLE,
+            &token,
+            body,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+pub async fn project_spend_rows(
+    client: &Client,
+    connection: &Connection,
+    database: &str,
+    rows: Vec<BTreeMap<String, Value>>,
+) -> Result<(), Error> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let received_ms = (OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as u64;
+    let projection = crate::cost_rows::project(&shared_rows(rows))?;
+    let (token, body) = prepare_insert(&projection, received_ms, max_insert_bytes()?)?;
+    litellm_storage_clickhouse::insert_compressed_rows(
+        client,
+        connection,
+        database,
+        crate::cost_rows::TABLE,
+        &token,
+        body,
+    )
+    .await?;
+    Ok(())
 }
 
 fn shared_rows(rows: Vec<BTreeMap<String, Value>>) -> Vec<InsertRow> {
@@ -214,6 +259,9 @@ fn insert_value<'a>(name: &str, value: &'a Value) -> Result<Cow<'a, Value>, Erro
         _ => return Ok(Cow::Borrowed(value)),
     };
     if name == "completion_start_time" && value.is_null() {
+        return Ok(Cow::Borrowed(value));
+    }
+    if value.is_string() {
         return Ok(Cow::Borrowed(value));
     }
     let timestamp = value.as_i64().ok_or(Error::InvalidRow)?;

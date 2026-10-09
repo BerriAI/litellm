@@ -103,6 +103,18 @@ fn payload(context: &SpanContext<'_>, keys: &[&'static str]) -> Payload {
     }
 }
 
+pub(super) fn calls(context: &SpanContext<'_>) -> CallEvidence {
+    match (
+        Operation::from_context(context).map(Operation::role),
+        present(context.attributes, &["gen_ai.response.id"]),
+    ) {
+        (Some(ObservationType::Llm), Some(id)) => {
+            CallEvidence::complete(CallKey::ProviderResponse(id))
+        }
+        _ => CallEvidence::Unknown,
+    }
+}
+
 impl Format for GenAi {
     fn matches(&self, _context: &SpanContext<'_>) -> bool {
         true
@@ -114,16 +126,10 @@ impl Format for GenAi {
         let input = payload(context, &INPUT_KEYS);
         let output = payload(context, &OUTPUT_KEYS);
         let role = Operation::from_context(context).map(Operation::role);
-        let calls = match (role, present(attributes, &["gen_ai.response.id"])) {
-            (Some(ObservationType::Llm), Some(id)) => {
-                CallEvidence::complete(CallKey::ProviderResponse(id))
-            }
-            _ => CallEvidence::Unknown,
-        };
         Ok(Extraction {
             facts: SpanFacts {
                 role: role.map(RoleEvidence::Declared),
-                calls,
+                calls: calls(context),
                 model: present(
                     attributes,
                     &["gen_ai.request.model", "gen_ai.response.model"],

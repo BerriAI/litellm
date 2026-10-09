@@ -45,6 +45,7 @@ from tests.test_litellm_rust.support.recording_server import RecordingServer, Re
 
 pytestmark = pytest.mark.requires_rust_extension
 QUERY_ROWS: Final = TypeAdapter(tuple[dict[str, JsonValue], ...])
+READER_SETUP_REQUESTS: Final = 14
 
 
 class CapturedSpendRow(BaseModel):
@@ -174,10 +175,11 @@ async def test_schema_setup_uses_configured_retention(recording_server: Recordin
         request.raw_body for request in recording_server.requests if b"MODIFY TTL" in request.raw_body
     )
     assert all(b"INTERVAL 7 DAY" in statement for statement in ttl_statements)
-    assert tuple(request.raw_body.strip() for request in recording_server.requests[-4:]) == (
+    assert tuple(request.raw_body.strip() for request in recording_server.requests[-5:]) == (
         b"ALTER TABLE `trace_test`.otel_traces MODIFY TTL toDateTime(Timestamp) + INTERVAL 7 DAY",
         b"ALTER TABLE `trace_test`.agent_traces_by_key MODIFY TTL toDateTime(StartTs) + INTERVAL 7 DAY",
         b"ALTER TABLE `trace_test`.spend_logs MODIFY TTL toDateTime(start_time) + INTERVAL 7 DAY",
+        b"ALTER TABLE `trace_test`.lens_call_costs MODIFY TTL toDateTime(start_time) + INTERVAL 7 DAY",
         b"ALTER TABLE `trace_test`.lens_feedback MODIFY TTL toDateTime(CreatedAt) + INTERVAL 7 DAY",
     )
 
@@ -319,9 +321,9 @@ def test_trace_sql_endpoint_returns_data_only_and_enforces_ownership(
         "statistics": {"elapsed": 0.01, "rows_read": 1, "bytes_read": 1},
         "rows_before_limit_at_least": 1,
     }
-    recording_server.expected_requests = 12 if expected_status == 200 else 0
+    recording_server.expected_requests = READER_SETUP_REQUESTS + 1 if expected_status == 200 else 0
     if expected_status == 200:
-        for _ in range(11):
+        for _ in range(READER_SETUP_REQUESTS):
             recording_server.enqueue(ResponseSpec(body=""))
         recording_server.enqueue(ResponseSpec(body=envelope))
     storage: Final = ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test"))
@@ -358,8 +360,8 @@ def test_trace_help_endpoint_runs_native_schema_and_metadata_discovery(
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.tracing_endpoints import provide_receiver, provide_trace_query_secret, router
 
-    recording_server.expected_requests = 17
-    for _ in range(11):
+    recording_server.expected_requests = READER_SETUP_REQUESTS + 6
+    for _ in range(READER_SETUP_REQUESTS):
         recording_server.enqueue(ResponseSpec(body=""))
     for response in (
         {"data": [{"name": "Model", "type": "String"}]},
@@ -421,8 +423,8 @@ def test_trace_sql_endpoint_distinguishes_query_errors_from_reader_failures(
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.tracing_endpoints import provide_receiver, provide_trace_query_secret, router
 
-    recording_server.expected_requests = 13
-    for _ in range(11):
+    recording_server.expected_requests = READER_SETUP_REQUESTS + 2
+    for _ in range(READER_SETUP_REQUESTS):
         recording_server.enqueue(ResponseSpec(body=""))
     recording_server.enqueue(ResponseSpec(status=clickhouse_status, body=body))
     envelope: Final = {

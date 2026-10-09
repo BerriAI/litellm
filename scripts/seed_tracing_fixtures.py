@@ -410,7 +410,7 @@ def clickhouse_hash(column: str, salt: str, length: int) -> str:
     return f"if({column} = '', '', substring(lower(hex(SHA256(concat({column}, ':', {salt})))), 1, {length}))"
 
 
-def clickhouse_copy_sql(database: str) -> tuple[str, str]:
+def clickhouse_copy_sql(database: str) -> tuple[str, str, str]:
     trace_salt: Final = "if({session:String} = '', toString(c.n), {session:String})"
     roots: Final = (
         f"(SELECT SpanId FROM {database}.otel_traces "
@@ -451,7 +451,23 @@ SELECT s.* REPLACE (
 )
 FROM {database}.spend_logs AS s {numbers}
 WHERE s.request_id IN {{request_ids:Array(String)}}"""
-    return spans, spend
+    costs: Final = f"""INSERT INTO {database}.lens_call_costs
+SELECT s.* REPLACE (
+    if(s.key_kind = 'transport', {clickhouse_hash("s.key_value", trace_salt, 32)},
+        {clickhouse_call_id("s.key_value")}) AS key_value,
+    {clickhouse_call_id("s.request_id")} AS request_id,
+    {clickhouse_call_id("s.response_id")} AS response_id,
+    {clickhouse_call_id("s.upstream_response_id")} AS upstream_response_id,
+    {clickhouse_call_id("s.provider_request_id")} AS provider_request_id,
+    {clickhouse_call_id("s.litellm_call_id")} AS litellm_call_id,
+    {clickhouse_hash("s.trace_id", trace_salt, 32)} AS trace_id,
+    if(s.span_id IN {roots}, s.span_id, {clickhouse_hash("s.span_id", "toString(c.n)", 16)}) AS span_id,
+    s.start_time - toIntervalMillisecond(c.n * {{step_ms:UInt64}}) AS start_time,
+    s.end_time - toIntervalMillisecond(c.n * {{step_ms:UInt64}}) AS end_time
+)
+FROM {database}.lens_call_costs AS s FINAL {numbers}
+WHERE s.request_id IN {{request_ids:Array(String)}}"""
+    return spans, spend, costs
 
 
 def clickhouse_array(values: tuple[str, ...]) -> str:

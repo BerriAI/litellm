@@ -125,8 +125,13 @@ impl QueryReaders {
             format!("ALTER USER {user} IDENTIFIED WITH sha256_hash BY '{password_hash}'"),
         )
         .await?;
-        for table in TraceTable::iter() {
-            let predicate = predicate(scope, table);
+        for (table, predicate) in TraceTable::iter()
+            .map(|table| (table.to_string(), predicate(scope, table)))
+            .chain(std::iter::once((
+                crate::cost_rows::TABLE.to_owned(),
+                predicate(scope, TraceTable::SpendLogs),
+            )))
+        {
             self.execute(
                 client,
                 format!(
@@ -143,8 +148,6 @@ impl QueryReaders {
                 ),
             )
             .await?;
-        }
-        for table in TraceTable::iter() {
             self.execute(
                 client,
                 format!("GRANT SELECT ON `{database}`.{table} TO {user}"),

@@ -233,7 +233,13 @@ struct SpendKeyset {
 
 impl Keyset for SpendKeyset {
     type Row = SpendByResponseIdsRow;
-    const SQL: &'static str = include_str!("../query/spend_batch.sql");
+    const SQL: &'static str = concat!(
+        "SELECT * FROM (",
+        include_str!("../query/spend_by_response_ids.sql"),
+        ") WHERE {has_cursor:UInt8} = 0 \
+         OR (team_id, start_ms, request_id) > ({after_team:String}, {after_ms:Int64}, {after_id:String}) \
+         ORDER BY team_id, start_ms, request_id LIMIT {page_size:UInt32}"
+    );
 
     fn after(self, last: &SpendByResponseIdsRow) -> Self {
         Self {

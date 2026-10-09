@@ -160,7 +160,7 @@ async fn internal_reads_refresh_delayed_gateway_amounts(
         .mount(&store)
         .await;
     let spend_available = available.clone();
-    Mock::given(body_string_contains("FROM spend_logs FINAL"))
+    Mock::given(body_string_contains("FROM lens_call_costs FINAL"))
         .respond_with(move |_: &wiremock::Request| {
             let rows = if spend_available.load(Ordering::Acquire) {
                 json!([{
