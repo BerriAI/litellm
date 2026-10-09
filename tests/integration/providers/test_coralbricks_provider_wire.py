@@ -42,6 +42,8 @@ from integration.providers._coralbricks import (
 )
 from pydantic import JsonValue
 
+DEPLOYMENT_RETRIES: Final = 2
+
 
 @pytest.mark.parametrize("model", MODELS)
 def test_openai_sdk_chat_reaches_coralbricks_and_bills_the_cost_map_row(gateway: Gateway, model: str) -> None:
@@ -338,7 +340,9 @@ def test_provider_client_error_reaches_the_caller_after_one_attempt(gateway: Gat
 def test_provider_server_error_is_retried_then_reaches_the_caller(gateway: Gateway, status: int) -> None:
     message: Final = f"scripted coralbricks {status} {uuid.uuid4().hex}"
     with wire_server(failing_provider(status, message)) as wire, gateway.scenario() as scenario:
-        alias: Final = scenario.model(model=f"{PROVIDER}/{MODEL}", api_base=f"{wire.url}/v1", api_key=API_KEY)
+        alias: Final = scenario.model(
+            model=f"{PROVIDER}/{MODEL}", api_base=f"{wire.url}/v1", api_key=API_KEY, num_retries=DEPLOYMENT_RETRIES
+        )
         eventually(
             lambda: gateway.request("POST", "/v1/chat/completions", {"model": alias, "messages": USER_MESSAGES}),
             lambda response: not not_yet_routable(response),
@@ -351,7 +355,7 @@ def test_provider_server_error_is_retried_then_reaches_the_caller(gateway: Gatew
         assert response.status_code == status, response.text
         assert message in response.text, response.text
         attempts: Final = [(request.method, request.target) for request in wire.drain()]
-        assert attempts == [("POST", "/v1/chat/completions")] * 3, attempts
+        assert attempts == [("POST", "/v1/chat/completions")] * (1 + DEPLOYMENT_RETRIES), attempts
         assert_failed(spend_row(response.headers["x-litellm-call-id"]), alias)
 
 

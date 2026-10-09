@@ -20,7 +20,7 @@ import pytest
 import yaml
 from integration._support.client import JSON_OBJECT, Gateway, eventually, string_value
 from integration._support.database import read_rows
-from integration._support.process import owned_proxy_process
+from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.responses_vendor import same_response
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.providers._coralbricks import (
@@ -295,7 +295,7 @@ def worker_pids(log: Path) -> tuple[int, ...]:
     )
 
 
-@pytest.mark.timeout(420)
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 240)
 async def test_worker_sigkill_mid_burst_leaves_the_sibling_serving_coralbricks(gateway: Gateway, tmp_path: Path) -> None:
     calls: Final = calls_of(20, ("chat", "messages", "responses"), lambda _: False)
     release: Final = threading.Event()
@@ -329,6 +329,11 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_serving_coralbricks(g
             assert_answered_with_its_own_marker(answered)
             assert_no_bleed(wire.drain(), frozenset(call.marker for call in (*calls, follow_up)))
             landed_once(alias, (*served, answered))
+            eventually(
+                lambda: owned.log.read_text().count("Application startup complete."),
+                lambda started: started == 3,
+                seconds=graceful_stop_seconds(),
+            )
 
 
 @pytest.mark.timeout(480)

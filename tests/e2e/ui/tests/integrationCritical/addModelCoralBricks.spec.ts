@@ -14,9 +14,11 @@ const UPSTREAM_COMPLETION_TOKENS = 20;
 
 type DeploymentRow = {
   model_name: string;
-  litellm_params?: { model?: string };
-  model_info?: { id?: string; input_cost_per_token?: number; output_cost_per_token?: number };
+  litellm_params?: { model?: string; custom_llm_provider?: string };
+  model_info?: { id?: string };
 };
+
+type CatalogRow = { input_cost_per_token?: number; output_cost_per_token?: number };
 
 type SpendRow = {
   request_id: string;
@@ -53,7 +55,7 @@ async function deploymentNamed(
   request: APIRequestContext,
   modelName: string,
 ): Promise<DeploymentRow | undefined> {
-  const response = await request.get("/v2/model/info", { headers });
+  const response = await request.get("/v1/model/info", { headers });
   expect(response.ok(), await response.text()).toBe(true);
   const rows = (await response.json()).data as DeploymentRow[];
   return rows.find((row) => row.model_name === modelName);
@@ -90,7 +92,12 @@ test("the Add Model form offers CoralBricks and the deployment it creates serves
   try {
     await loginAsAdmin(page);
     await navigateToPage(page, Page.Models);
+    const catalogLoaded = page.waitForResponse(
+      (response) => response.url().includes("/public/litellm_model_cost_map?catalog_only=true") && response.ok(),
+    );
     await page.getByRole("tab", { name: "Add Model" }).click();
+    const catalog = (await (await catalogLoaded).json()) as Record<string, CatalogRow>;
+    const catalogRow = catalog[`coralbricks/${CORALBRICKS_MODEL}`];
 
     await selectProvider(page, "CoralBricks");
 
@@ -131,13 +138,16 @@ test("the Add Model form offers CoralBricks and the deployment it creates serves
     const requestId = JSON.parse(served.body).id as string;
     expect(requestId, served.body).toBeTruthy();
 
-    const stored = await deploymentNamed(request, alias);
-    const inputRate = stored?.model_info?.input_cost_per_token;
-    const outputRate = stored?.model_info?.output_cost_per_token;
-    expect(inputRate, JSON.stringify(stored)).toBeGreaterThan(0);
-    expect(Number.isFinite(inputRate)).toBe(true);
-    expect(outputRate, JSON.stringify(stored)).toBeGreaterThan(0);
-    expect(Number.isFinite(outputRate)).toBe(true);
+    await expect
+      .poll(async () => (await deploymentNamed(request, alias))?.litellm_params?.custom_llm_provider, {
+        message: `no worker listed ${alias}`,
+        timeout: 60_000,
+      })
+      .toBe("coralbricks");
+    const inputRate = catalogRow?.input_cost_per_token;
+    const outputRate = catalogRow?.output_cost_per_token;
+    expect(inputRate, JSON.stringify(catalogRow)).toBeGreaterThan(0);
+    expect(outputRate, JSON.stringify(catalogRow)).toBeGreaterThan(0);
     const expectedSpend = UPSTREAM_PROMPT_TOKENS * inputRate! + UPSTREAM_COMPLETION_TOKENS * outputRate!;
 
     let row: SpendRow | undefined;
