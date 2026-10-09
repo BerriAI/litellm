@@ -140,7 +140,13 @@ class TestSCXAIProviderConfig:
 
 class TestSCXAIModelMetadata:
     SCX_MODELS = (
+        "scx-ai/DeepSeek-V4.1-flash",
         "scx-ai/GLM-5.2",
+        "scx-ai/GLM-5.2-Fast",
+        "scx-ai/GLM-5.3",
+        "scx-ai/GLM-5.3-Fast",
+        "scx-ai/GLM-5.3-Flash",
+        "scx-ai/Kimi-K3",
         "scx-ai/Qwen3.8-Max",
     )
     VISION_MODELS = ("scx-ai/Qwen3.8-Max",)
@@ -153,7 +159,6 @@ class TestSCXAIModelMetadata:
         json_path = Path(__file__).parents[4].joinpath(*path_parts)
         with open(json_path) as f:
             return json.load(f)
-
 
     def test_scx_ai_models_synced_to_backup(self):
         model_cost = self._load(("model_prices_and_context_window.json",))
