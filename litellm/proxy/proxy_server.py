@@ -752,6 +752,7 @@ from litellm.proxy.spend_tracking.spend_event_producer import (
     SpendEventProducer,
     build_spend_event_producer,
 )
+from litellm.proxy.telemetry.endpoints import router as telemetry_router
 from litellm.proxy.telemetry.middleware import TelemetryMiddleware
 from litellm.proxy.telemetry.runtime import TelemetryRuntime
 from litellm.proxy.telemetry.settings import describe_errors as describe_telemetry_errors
@@ -1741,12 +1742,22 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
             verbose_proxy_logger.warning(
                 "telemetry: invalid settings, leaving it off: %s", describe_telemetry_errors(telemetry_settings)
             )
-        else:
-            await telemetry_runtime.start(
-                litellm_version=version,
-                settings=telemetry_settings,
-                register=litellm.logging_callback_manager.add_litellm_callback,
+        telemetry_start: Final = (
+            None
+            if isinstance(telemetry_settings, ValidationError)
+            else asyncio.create_task(
+                telemetry_runtime.start(
+                    litellm_version=version,
+                    settings=telemetry_settings,
+                    db=lambda: (  # pyright: ignore[reportArgumentType]  # PrismaWrapper forwards raw queries via __getattr__
+                        getattr(prisma_client.db, "writer", prisma_client.db) if prisma_client is not None else None
+                    ),
+                    register=litellm.logging_callback_manager.add_litellm_callback,
+                )
             )
+        )
+        if telemetry_start is not None:
+            telemetry_start.add_done_callback(_log_telemetry_start_failure)
         try:
             async with AsyncExitStack() as admin_mcp_stack:
                 try:
@@ -1804,6 +1815,9 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                     verbose_proxy_logger.error("Error stopping the spend view setup task: %s", e)
 
             await _drain_spend_event_producer_on_shutdown()
+            if telemetry_start is not None:
+                telemetry_start.cancel()
+                await asyncio.gather(telemetry_start, return_exceptions=True)
             await telemetry_runtime.stop()
 
             # Shutdown event - finish or cancel in-flight scheduled jobs before the shutdown flushes and the DB disconnect
@@ -2664,6 +2678,14 @@ app.add_middleware(
     sink_factory=lambda: gateway_request_accumulator if prisma_client is not None else None,
 )
 telemetry_runtime: Final = TelemetryRuntime()
+
+
+def _log_telemetry_start_failure(task: asyncio.Task[None]) -> None:
+    error: Final = None if task.cancelled() else task.exception()
+    if error is not None:
+        verbose_proxy_logger.warning("telemetry: failed to start, leaving it off: %s", error)
+
+
 app.add_middleware(
     TelemetryMiddleware,
     sink_provider=lambda: telemetry_runtime.sink,
@@ -20365,6 +20387,7 @@ app.include_router(cache_settings_router)
 app.include_router(coordination_redis_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(gateway_request_router)
+app.include_router(telemetry_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
 app.include_router(agent_skills_discovery_router)
