@@ -108,6 +108,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
 from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+from litellm.llms.scaledown.chat.handler import complete_scaledown
 from litellm.llms.azure_ai.common_utils import (
     azure_ai_supports_native_responses,
     foundry_chat_rejects_function_tools_while_reasoning,
@@ -1954,59 +1955,12 @@ def _complete_together_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatc
 
 
 def _complete_scaledown(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
-    """ScaleDown: native /extract, /summarization/abstractive and /compress/raw/, decisions on /v1/scaledown.
-
-    Routed through the HTTP handler (not the OpenAI passthrough) because the
-    provider authenticates with x-api-key and the classify/decisions models use
-    a non-chat request body.
-    """
-    acompletion: Final = ctx.acompletion
-    api_base: Final = ctx.api_base
-    api_key: Final = ctx.api_key
-    client: Final = _dispatch_client_http(ctx)
-    custom_llm_provider: Final = ctx.custom_llm_provider
-    headers: Final = ctx.headers
-    litellm_params: Final = ctx.litellm_params
-    logging: Final = ctx.logging
-    messages: Final = ctx.messages
-    model: Final = ctx.model
-    model_response: Final = ctx.model_response
-    optional_params: Final = ctx.optional_params
-    provider_config: Final = ctx.provider_config
-    shared_session: Final = ctx.shared_session
-    stream: Final = ctx.stream
-    timeout: Final = ctx.timeout
-
-    try:
-        response: Final = base_llm_http_handler.completion(
-            model=model,
-            messages=messages,
-            headers=headers,
-            model_response=model_response,
-            api_key=api_key,
-            api_base=api_base,
-            acompletion=acompletion,
-            logging_obj=logging,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            shared_session=shared_session,
-            timeout=timeout,
-            client=client,
-            custom_llm_provider=custom_llm_provider,
-            encoding=_get_encoding(),
-            stream=stream,
-            provider_config=provider_config,
-        )
-    except Exception as e:
-        logging.post_call(
-            input=messages,
-            api_key=api_key,
-            original_response=str(e),
-            additional_args={"headers": headers},
-        )
-        raise e
-
-    return response
+    return complete_scaledown(
+        base_llm_http_handler=base_llm_http_handler,
+        client=_dispatch_client_http(ctx),
+        encoding=_get_encoding(),
+        ctx=ctx,
+    )
 
 
 def _complete_heroku(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:

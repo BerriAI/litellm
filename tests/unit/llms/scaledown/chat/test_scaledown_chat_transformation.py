@@ -44,6 +44,20 @@ def _transform_response(config: ScaleDownChatConfig, model: str, payload: dict) 
     )
 
 
+def _build_decisions(config: ScaleDownChatConfig, messages: list, optional_params: dict) -> dict:
+    body = config.transform_request(
+        model="scaledown/classify", messages=messages, optional_params=optional_params, litellm_params={}, headers={}
+    )
+    config.sign_request(
+        headers={},
+        optional_params=optional_params,
+        request_data=body,
+        api_base=f"{BASE}/v1/scaledown",
+        model="scaledown/classify",
+    )
+    return body
+
+
 def test_auth_uses_x_api_key_not_bearer(config):
     headers = config.validate_environment(
         headers={},
@@ -177,24 +191,123 @@ def test_document_fields_move_into_derived_state(config):
 
 def test_decisions_without_questions_is_rejected(config):
     with pytest.raises(ScaleDownError, match="questions"):
-        config.transform_request(
-            model="scaledown/classify",
-            messages=[{"role": "user", "content": "text"}],
+        _build_decisions(config, [{"role": "user", "content": "text"}], {})
+
+
+def test_decisions_without_text_or_document_is_rejected(config):
+    with pytest.raises(ScaleDownError, match="text to decide on"):
+        _build_decisions(
+            config, [{"role": "system", "content": "no user message"}], {"questions": {"q": {"type": "noul"}}}
+        )
+
+
+def test_state_text_is_rejected_so_guardrails_always_see_the_text(config):
+    with pytest.raises(ScaleDownError, match="may only carry"):
+        _build_decisions(
+            config,
+            [{"role": "user", "content": "innocuous"}],
+            {"state": {"text": "secret"}, "questions": {"q": {"type": "noul"}}},
+        )
+
+
+def test_image_message_becomes_a_document_in_state(config):
+    body = _build_decisions(
+        config,
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Is this an invoice?"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}},
+                ],
+            }
+        ],
+        {"questions": {"q": {"type": "noul"}}},
+    )
+
+    assert body["state"] == {"text": "Is this an invoice?", "document": "aGVsbG8=", "document_mime_type": "image/png"}
+
+
+def test_image_only_message_is_accepted(config):
+    body = _build_decisions(
+        config,
+        [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}}]}],
+        {"questions": {"q": {"type": "noul"}}},
+    )
+
+    assert body["state"] == {"document": "aGVsbG8=", "document_mime_type": "image/png"}
+
+
+def test_remote_image_url_is_rejected(config):
+    with pytest.raises(ScaleDownError, match="base64 data URLs"):
+        _build_decisions(
+            config,
+            [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://x.test/a.png"}}]}],
+            {"questions": {"q": {"type": "noul"}}},
+        )
+
+
+def test_extra_body_cannot_switch_the_model(config):
+    merged = config.transform_extra_body(
+        extra_body={"model": "compress", "threshold": 0.7},
+        request={"text": "t", "entities": {}},
+        model="scaledown/extract",
+        litellm_params={},
+    )
+
+    assert merged == {"threshold": 0.7}
+
+
+def test_extra_body_decisions_cannot_override_the_upstream_model_or_state_text(config):
+    request = {"model": DECISIONS_UPSTREAM_MODEL, "state": {"text": "from messages"}}
+
+    merged = config.transform_extra_body(
+        extra_body={"model": "other", "questions": {"q": {"type": "noul"}}, "state": {"document": "QQ=="}},
+        request=request,
+        model="scaledown/classify",
+        litellm_params={},
+    )
+
+    assert "model" not in merged
+    assert merged["state"] == {"text": "from messages", "document": "QQ=="}
+    with pytest.raises(ScaleDownError, match="may only carry"):
+        config.transform_extra_body(
+            extra_body={"state": {"text": "smuggled"}}, request=request, model="scaledown/classify", litellm_params={}
+        )
+
+
+def test_env_key_is_not_sent_to_an_untrusted_api_base(config):
+    with pytest.raises(ScaleDownError, match="own api_key"):
+        config.validate_environment(
+            headers={},
+            model="scaledown/extract",
+            messages=[],
             optional_params={},
             litellm_params={},
-            headers={},
+            api_base="https://attacker.example",
         )
 
 
-def test_decisions_without_text_or_state_is_rejected(config):
-    with pytest.raises(ScaleDownError, match="text to decide on"):
-        config.transform_request(
-            model="scaledown/classify",
-            messages=[{"role": "system", "content": "no user message"}],
-            optional_params={"questions": {"q": {"type": "noul"}}},
-            litellm_params={},
-            headers={},
-        )
+def test_explicit_key_or_trusted_api_base_is_allowed(config, monkeypatch):
+    kwargs = dict(headers={}, model="scaledown/extract", messages=[], optional_params={}, litellm_params={})
+    config.validate_environment(api_key="own", api_base="https://elsewhere.example", **kwargs)
+    config.validate_environment(api_base=f"{BASE}/v1", **kwargs)
+    monkeypatch.setenv("SCALEDOWN_API_BASE", "https://staging.scaledown.xyz")
+    config.validate_environment(api_base="https://staging.scaledown.xyz/", **kwargs)
+
+
+def test_max_completion_tokens_maps_to_max_tokens(config):
+    assert config.map_openai_params(
+        non_default_params={"max_completion_tokens": 50},
+        optional_params={},
+        model="scaledown/summarize",
+        drop_params=False,
+    ) == {"max_tokens": 50}
+
+
+def test_every_model_fakes_a_stream(config):
+    assert config.should_fake_stream(model="scaledown/compress", stream=True)
+    assert not config.should_fake_stream(model="scaledown/compress", stream=False)
 
 
 def test_unknown_question_type_is_rejected(config):
@@ -430,7 +543,7 @@ def test_non_json_response_reports_the_upstream_status(config):
 
 
 def test_decisions_takes_no_openai_sampling_params(config):
-    assert config.get_supported_openai_params("scaledown/classify") == []
+    assert config.get_supported_openai_params("scaledown/classify") == ["stream"]
 
 
 def test_unsupported_param_is_rejected_unless_dropped(config):
@@ -560,7 +673,7 @@ def test_completion_cost_comes_from_input_tokens_not_upstream_usage_cost():
     )
 
     cost = litellm.completion_cost(completion_response=response, model="scaledown/classify")
-    assert cost == pytest.approx(1000 * 4e-08)
+    assert cost == pytest.approx(1000 * 5e-08)
 
 
 @respx.mock
@@ -611,3 +724,44 @@ def test_malformed_decisions_request_never_reaches_the_network():
         )
 
     assert not route.called
+
+
+@respx.mock
+def test_questions_passed_through_extra_body_reach_scaledown():
+    route = respx.post(f"{BASE}/v1/scaledown").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "model": "classify-1",
+                "answers": {"q": {"type": "noul", "noul": 0.8}},
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            },
+        )
+    )
+    questions = {"q": {"type": "noul", "instructions": "Positive?"}}
+
+    litellm.completion(
+        model="scaledown/classify",
+        messages=[{"role": "user", "content": "text"}],
+        extra_body={"questions": questions, "model": "something-else"},
+    )
+
+    sent = json.loads(route.calls[0].request.content)
+    assert sent == {"model": DECISIONS_UPSTREAM_MODEL, "state": {"text": "text"}, "questions": questions}
+
+
+@respx.mock
+def test_streaming_request_is_served_as_a_single_chunk():
+    respx.post(f"{BASE}/compress/raw/").mock(
+        return_value=httpx.Response(200, json={"compressed_prompt": "c", "original_prompt_tokens": 9})
+    )
+
+    chunks = list(
+        litellm.completion(
+            model="scaledown/compress",
+            messages=[{"role": "user", "content": "the question"}],
+            stream=True,
+        )
+    )
+
+    assert "compressed_prompt" in "".join(chunk.choices[0].delta.content or "" for chunk in chunks)

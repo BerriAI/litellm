@@ -1,6 +1,8 @@
 import json
 import time
 import uuid
+import base64
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -29,6 +31,8 @@ NATIVE_PATHS = {
 }
 
 DECISION_QUESTION_TYPES = frozenset({"choice", "noul", "score"})
+
+STATE_DOCUMENT_KEYS = ("document", "document_mime_type")
 
 SCORE_MIN_LEVELS = 2
 SCORE_MAX_LEVELS = 10
@@ -59,6 +63,14 @@ class ScaleDownChatConfig(BaseConfig):
                 status_code=401,
                 message="Missing ScaleDown API key. Set SCALEDOWN_API_KEY or pass api_key to the call.",
             )
+        if api_key is None and api_base is not None and _root(api_base) != _trusted_root():
+            raise ScaleDownError(
+                status_code=400,
+                message=(
+                    "A custom api_base needs its own api_key: the SCALEDOWN_API_KEY from the environment is only "
+                    "sent to the default host or the host in SCALEDOWN_API_BASE."
+                ),
+            )
         return {**headers, "x-api-key": resolved_key, "content-type": "application/json"}
 
     def get_complete_url(
@@ -70,23 +82,20 @@ class ScaleDownChatConfig(BaseConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        base = (api_base or get_secret_str("SCALEDOWN_API_BASE") or DEFAULT_API_BASE).rstrip("/")
-        if base.endswith("/v1"):
-            base = base[: -len("/v1")]
+        base = _root(api_base or _trusted_root())
         operation = _operation(model)
         if operation in DECISIONS_MODELS:
             return f"{base}/v1/scaledown"
         return f"{base}{NATIVE_PATHS[operation]}"
 
     def get_supported_openai_params(self, model: str) -> list[str]:
+        # "stream" is accepted for every model and served as one chunk; see should_fake_stream.
         operation = _operation(model)
-        if operation in DECISIONS_MODELS:
-            return []
         if operation == "extract":
-            return ["response_format"]
+            return ["response_format", "stream"]
         if operation == "summarize":
-            return ["max_tokens"]
-        return []
+            return ["max_tokens", "max_completion_tokens", "stream"]
+        return ["stream"]
 
     def map_openai_params(
         self,
@@ -105,10 +114,58 @@ class ScaleDownChatConfig(BaseConfig):
                     f"Supported: {sorted(supported)}. Set litellm.drop_params=True to ignore."
                 ),
             )
-        return {
-            **optional_params,
-            **{key: value for key, value in non_default_params.items() if key in supported},
-        }
+        mapped = {key: value for key, value in non_default_params.items() if key in supported}
+        if "max_completion_tokens" in mapped:
+            mapped["max_tokens"] = mapped.pop("max_completion_tokens")
+        return {**optional_params, **mapped}
+
+    def should_fake_stream(
+        self, model: str | None, stream: bool | None, custom_llm_provider: str | None = None
+    ) -> bool:
+        # Every ScaleDown model answers in one shot, so a streaming request is served as a single chunk.
+        return bool(stream)
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        # The model is chosen by the LiteLLM model name, which is what proxy authorization checked; never by the body.
+        merged = {key: value for key, value in extra_body.items() if key != "model"}
+        if _operation(model) not in DECISIONS_MODELS:
+            return merged
+        state = dict(request.get("state") or {})
+        state.update(_checked_state(merged.pop("state", None)))
+        if "questions" in merged:
+            _validate_questions(merged["questions"])
+        return {**merged, "state": state}
+
+    def sign_request(
+        self,
+        headers: dict,
+        optional_params: dict,
+        request_data: dict,
+        api_base: str,
+        api_key: str | None = None,
+        model: str | None = None,
+        stream: bool | None = None,
+        fake_stream: bool | None = None,
+    ) -> tuple[dict, bytes | None]:
+        # Runs after extra_body is merged, so this is where a decisions body is known to be complete.
+        if model is not None and _operation(model) in DECISIONS_MODELS:
+            _require_complete_decisions(request_data)
+        return super().sign_request(
+            headers=headers,
+            optional_params=optional_params,
+            request_data=request_data,
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            stream=stream,
+            fake_stream=fake_stream,
+        )
 
     def transform_request(
         self,
@@ -158,15 +215,17 @@ class ScaleDownChatConfig(BaseConfig):
         return ScaleDownError(status_code=status_code, message=error_message, headers=headers)
 
 
+def _root(api_base: str) -> str:
+    base = api_base.rstrip("/")
+    return base[: -len("/v1")] if base.endswith("/v1") else base
+
+
+def _trusted_root() -> str:
+    return _root(get_secret_str("SCALEDOWN_API_BASE") or DEFAULT_API_BASE)
+
+
 def _operation(model: str) -> str:
     return model.split("/", 1)[1] if "/" in model else model
-
-
-def _last_user_text(messages: list[AllMessageValues]) -> str | None:
-    for message in reversed(messages):
-        if message.get("role") == "user" and isinstance(message.get("content"), str):
-            return str(message["content"])
-    return None
 
 
 def _text_of(message: AllMessageValues) -> str | None:
@@ -228,9 +287,7 @@ def _extract_request(messages: list[AllMessageValues], optional_params: dict) ->
 
 def _summarize_request(messages: list[AllMessageValues], optional_params: dict) -> dict:
     body: dict[str, Any] = {"text": _last_user_text_or_raise("summarize", messages)}
-    instructions = [
-        text for message in messages if message.get("role") == "system" and (text := _text_of(message))
-    ]
+    instructions = [text for message in messages if message.get("role") == "system" and (text := _text_of(message))]
     if instructions:
         body["instructions"] = "\n".join(instructions)
     if "max_tokens" in optional_params:
@@ -249,36 +306,92 @@ def _compress_request(messages: list[AllMessageValues], optional_params: dict) -
     }
 
 
-def _decisions_request(messages: list[AllMessageValues], optional_params: dict) -> dict:
-    params = dict(optional_params)
-    questions = params.pop("questions", None)
-    state = params.pop("state", None)
-
-    if state is None:
-        text = _last_user_text(messages)
-        if not text:
+def _image_document(message: AllMessageValues) -> dict[str, str]:
+    content = message.get("content")
+    if not isinstance(content, list):
+        return {}
+    for part in content:
+        if not isinstance(part, dict) or part.get("type") != "image_url":
+            continue
+        image = part.get("image_url")
+        url = image.get("url") if isinstance(image, dict) else image
+        if not isinstance(url, str) or not url.startswith("data:") or ";base64," not in url:
             raise ScaleDownError(
                 status_code=400,
-                message=(
-                    "ScaleDown decisions requires the text to decide on. Pass it as the last user "
-                    "message, or pass state={...} via extra_body."
-                ),
+                message="ScaleDown decisions takes images as base64 data URLs (data:<mime>;base64,<data>).",
             )
-        document_fields = {key: params[key] for key in ("document", "document_mime_type") if key in params}
-        state = {"text": text, **document_fields}
+        header, data = url.split(";base64,", 1)
+        try:
+            base64.b64decode(data, validate=True)
+        except ValueError as exc:
+            raise ScaleDownError(status_code=400, message="Image data URL is not valid base64.") from exc
+        return {"document": data, "document_mime_type": header[len("data:") :]}
+    return {}
 
-    if not questions:
+
+def _checked_state(state: object) -> dict:
+    """A caller-supplied state may carry a document, never text.
+
+    Text has to come from the messages, because that is what proxy guardrails inspect and mask.
+    """
+    if state is None:
+        return {}
+    if not isinstance(state, dict):
+        raise ScaleDownError(status_code=400, message="'state' must be an object.")
+    unexpected = sorted(set(state) - set(STATE_DOCUMENT_KEYS))
+    if unexpected:
         raise ScaleDownError(
             status_code=400,
             message=(
-                "ScaleDown decisions requires a non-empty 'questions' map, passed via extra_body, "
+                f"'state' may only carry {list(STATE_DOCUMENT_KEYS)}, got {unexpected}. "
+                "Pass the text to decide on as the last user message."
+            ),
+        )
+    return dict(state)
+
+
+def _decisions_request(messages: list[AllMessageValues], optional_params: dict) -> dict:
+    params = dict(optional_params)
+    questions = params.pop("questions", None)
+    state = _checked_state(params.pop("state", None))
+    state.update({key: params[key] for key in STATE_DOCUMENT_KEYS if key in params})
+
+    for message in reversed(messages):
+        if message.get("role") == "user":
+            text = _text_of(message)
+            if text:
+                state = {"text": text, **state}
+            for key, value in _image_document(message).items():
+                state.setdefault(key, value)
+            if text or "document" in state:
+                break
+
+    body: dict[str, Any] = {"model": DECISIONS_UPSTREAM_MODEL, "state": state}
+    if questions is not None:
+        _validate_questions(questions)
+        body["questions"] = questions
+    return body
+
+
+def _require_complete_decisions(body: Mapping[str, Any]) -> None:
+    state = body.get("state") or {}
+    if not state.get("text") and not state.get("document"):
+        raise ScaleDownError(
+            status_code=400,
+            message=(
+                "ScaleDown decisions requires the text to decide on as the last user message, "
+                "or a base64 document (an image message, or state={'document': ..., 'document_mime_type': ...})."
+            ),
+        )
+    if not body.get("questions"):
+        raise ScaleDownError(
+            status_code=400,
+            message=(
+                "ScaleDown decisions requires a non-empty 'questions' map, passed as an extra parameter, "
                 'e.g. {"questions": {"category": {"type": "choice", "criteria": {"billing": "..."}}}}. '
                 "Question types are 'choice', 'noul', and 'score'."
             ),
         )
-
-    _validate_questions(questions)
-    return {"model": DECISIONS_UPSTREAM_MODEL, "state": state, "questions": questions}
 
 
 def _validate_questions(questions: object) -> None:
