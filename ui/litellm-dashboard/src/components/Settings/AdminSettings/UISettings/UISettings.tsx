@@ -11,37 +11,54 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { uiHref } from "@/utils/uiHref";
+import { parseConfigOwnedUISettings } from "./configOwnedSettings";
 import PageVisibilitySettings from "./PageVisibilitySettings";
+import SetInConfigNote from "./SetInConfigNote";
 
 interface SettingRowProps {
   ariaLabel: string;
   checked: boolean;
+  configOwned: ReadonlySet<string>;
   description?: string;
   disabled: boolean;
   indented?: boolean;
   label: string;
   muted?: boolean;
   onCheckedChange: (checked: boolean) => void;
+  settingKey: string;
 }
 
 function SettingRow({
   ariaLabel,
   checked,
+  configOwned,
   description,
   disabled,
   indented = false,
   label,
   muted = false,
   onCheckedChange,
+  settingKey,
 }: SettingRowProps) {
+  const setInConfig = configOwned.has(settingKey);
   return (
     <div className={indented ? "ml-8 flex items-start gap-3" : "flex items-start gap-3"}>
-      <Switch checked={checked} disabled={disabled} onCheckedChange={onCheckedChange} aria-label={ariaLabel} />
+      <Switch
+        checked={checked}
+        disabled={disabled || setInConfig}
+        onCheckedChange={onCheckedChange}
+        aria-label={ariaLabel}
+      />
       <div className="space-y-1">
-        <p className={muted ? "text-sm font-medium text-muted-foreground" : "text-sm font-medium text-foreground"}>
+        <p
+          className={
+            muted || setInConfig ? "text-sm font-medium text-muted-foreground" : "text-sm font-medium text-foreground"
+          }
+        >
           {label}
         </p>
         {description && <p className="text-sm text-muted-foreground">{description}</p>}
+        {setInConfig && <SetInConfigNote settingKey={settingKey} />}
       </div>
     </div>
   );
@@ -68,6 +85,7 @@ export default function UISettings() {
   const scopeUserSearchProperty = schema?.properties?.scope_user_search_to_org;
   const disableCustomApiKeysProperty = schema?.properties?.disable_custom_api_keys;
   const values = data?.values ?? {};
+  const configOwned = parseConfigOwnedUISettings(data);
   const moyaiUrl = (values.moyai_url as string | undefined) ?? null;
   const isDisabledForInternalUsers = Boolean(values.disable_model_add_for_internal_users);
   const isDisabledTeamAdminDeleteTeamUser = Boolean(values.disable_team_admin_delete_team_user);
@@ -316,6 +334,8 @@ export default function UISettings() {
               checked={isDisabledForInternalUsers}
               disabled={isUpdating}
               onCheckedChange={handleToggle}
+              settingKey="disable_model_add_for_internal_users"
+              configOwned={configOwned}
               ariaLabel={property?.description ?? "Disable model add for internal users"}
               label="Disable model add for internal users"
               description={property?.description}
@@ -324,6 +344,8 @@ export default function UISettings() {
               checked={isDisabledTeamAdminDeleteTeamUser}
               disabled={isUpdating}
               onCheckedChange={handleToggleTeamAdminDelete}
+              settingKey="disable_team_admin_delete_team_user"
+              configOwned={configOwned}
               ariaLabel={disableTeamAdminDeleteProperty?.description ?? "Disable team admin delete team user"}
               label="Disable team admin delete team user"
               description={disableTeamAdminDeleteProperty?.description}
@@ -332,6 +354,8 @@ export default function UISettings() {
               checked={Boolean(values.require_auth_for_public_ai_hub)}
               disabled={isUpdating}
               onCheckedChange={handleToggleRequireAuthForPublicAIHub}
+              settingKey="require_auth_for_public_ai_hub"
+              configOwned={configOwned}
               ariaLabel={requireAuthForPublicAIHubProperty?.description ?? "Require authentication for public AI Hub"}
               label="Require authentication for public AI Hub"
               description={requireAuthForPublicAIHubProperty?.description}
@@ -340,6 +364,8 @@ export default function UISettings() {
               checked={Boolean(values.forward_client_headers_to_llm_api)}
               disabled={isUpdating}
               onCheckedChange={handleToggleForwardClientHeaders}
+              settingKey="forward_client_headers_to_llm_api"
+              configOwned={configOwned}
               ariaLabel={forwardClientHeadersProperty?.description ?? "Forward client headers to LLM API"}
               label="Forward client headers to LLM API"
               description={
@@ -351,6 +377,8 @@ export default function UISettings() {
               checked={Boolean(values.forward_llm_provider_auth_headers)}
               disabled={isUpdating}
               onCheckedChange={handleToggleForwardLLMProviderAuthHeaders}
+              settingKey="forward_llm_provider_auth_headers"
+              configOwned={configOwned}
               ariaLabel={forwardLLMProviderAuthHeadersProperty?.description ?? "Forward LLM provider auth headers"}
               label="Forward LLM provider auth headers"
               description={
@@ -363,6 +391,8 @@ export default function UISettings() {
                 checked={Boolean(values.enable_projects_ui)}
                 disabled={isUpdating}
                 onCheckedChange={handleToggleEnableProjectsUI}
+                settingKey="enable_projects_ui"
+                configOwned={configOwned}
                 ariaLabel={enableProjectsUIProperty.description ?? "Enable Projects UI"}
                 label="[BETA] Enable Projects (page will refresh)"
                 description={
@@ -375,6 +405,8 @@ export default function UISettings() {
               checked={Boolean(values.enable_chat_ui)}
               disabled={isUpdating}
               onCheckedChange={handleToggleEnableChatUI}
+              settingKey="enable_chat_ui"
+              configOwned={configOwned}
               ariaLabel={enableChatUIProperty?.description ?? "Enable Chat page"}
               label="[BETA] Enable Chat page (page will refresh)"
               description={
@@ -390,9 +422,15 @@ export default function UISettings() {
                 <p className="text-sm text-muted-foreground">
                   {moyaiUrl ? `Connected to ${moyaiUrl}` : "Not connected"}
                 </p>
+                {configOwned.has("moyai_url") && <SetInConfigNote settingKey="moyai_url" />}
               </div>
               {moyaiUrl ? (
-                <Button variant="outline" size="sm" disabled={isUpdating} onClick={handleDisconnectMoyai}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={isUpdating || configOwned.has("moyai_url")}
+                  onClick={handleDisconnectMoyai}
+                >
                   Disconnect
                 </Button>
               ) : (
@@ -407,6 +445,8 @@ export default function UISettings() {
               checked={isAgentsDisabled}
               disabled={isUpdating}
               onCheckedChange={handleToggleDisableAgents}
+              settingKey="disable_agents_for_internal_users"
+              configOwned={configOwned}
               ariaLabel={disableAgentsProperty?.description ?? "Disable agents for internal users"}
               label="Disable agents for internal users"
               description={disableAgentsProperty?.description}
@@ -415,6 +455,8 @@ export default function UISettings() {
               checked={Boolean(values.allow_agents_for_team_admins)}
               disabled={isUpdating || !isAgentsDisabled}
               onCheckedChange={handleToggleAllowAgentsTeamAdmins}
+              settingKey="allow_agents_for_team_admins"
+              configOwned={configOwned}
               ariaLabel={allowAgentsTeamAdminsProperty?.description ?? "Allow agents for team admins"}
               label="Allow agents for team admins"
               description={allowAgentsTeamAdminsProperty?.description}
@@ -427,6 +469,8 @@ export default function UISettings() {
               checked={isVectorStoresDisabled}
               disabled={isUpdating}
               onCheckedChange={handleToggleDisableVectorStores}
+              settingKey="disable_vector_stores_for_internal_users"
+              configOwned={configOwned}
               ariaLabel={disableVectorStoresProperty?.description ?? "Disable vector stores for internal users"}
               label="Disable vector stores for internal users"
               description={disableVectorStoresProperty?.description}
@@ -435,6 +479,8 @@ export default function UISettings() {
               checked={Boolean(values.allow_vector_stores_for_team_admins)}
               disabled={isUpdating || !isVectorStoresDisabled}
               onCheckedChange={handleToggleAllowVectorStoresTeamAdmins}
+              settingKey="allow_vector_stores_for_team_admins"
+              configOwned={configOwned}
               ariaLabel={allowVectorStoresTeamAdminsProperty?.description ?? "Allow vector stores for team admins"}
               label="Allow vector stores for team admins"
               description={allowVectorStoresTeamAdminsProperty?.description}
@@ -447,6 +493,8 @@ export default function UISettings() {
               checked={Boolean(values.scope_user_search_to_org)}
               disabled={isUpdating}
               onCheckedChange={handleToggleScopeUserSearch}
+              settingKey="scope_user_search_to_org"
+              configOwned={configOwned}
               ariaLabel={scopeUserSearchProperty?.description ?? "Scope user search to organization"}
               label="Scope user search to organization"
               description={
@@ -460,6 +508,8 @@ export default function UISettings() {
               checked={Boolean(values.disable_custom_api_keys)}
               disabled={isUpdating}
               onCheckedChange={handleToggleDisableCustomApiKeys}
+              settingKey="disable_custom_api_keys"
+              configOwned={configOwned}
               ariaLabel={disableCustomApiKeysProperty?.description ?? "Disable custom Virtual key values"}
               label="Disable custom Virtual key values"
               description={
@@ -473,6 +523,7 @@ export default function UISettings() {
               enabledPagesInternalUsers={values.enabled_ui_pages_internal_users}
               enabledPagesPropertyDescription={enabledPagesProperty?.description}
               isUpdating={isUpdating}
+              setInConfig={configOwned.has("enabled_ui_pages_internal_users")}
               onUpdate={handleUpdatePageVisibility}
             />
           </div>
