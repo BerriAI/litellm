@@ -1832,6 +1832,44 @@ class TestOpenTelemetry(unittest.TestCase):
 
         mock_tracer.start_span.assert_not_called()
 
+    @patch.dict(os.environ, {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": ""})
+    @patch("litellm.turn_off_message_logging", False)
+    def test_maybe_log_raw_request_exports_span_only_without_redaction_header(self):
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
+
+        from litellm.integrations.opentelemetry import RAW_REQUEST_SPAN_NAME
+
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer("test")
+        otel = OpenTelemetry()
+        otel.message_logging = True
+        otel.get_tracer_to_use_for_request = MagicMock(return_value=tracer)
+
+        def exported_raw_spans(headers):
+            exporter.clear()
+            kwargs = {"litellm_params": {"metadata": {"headers": headers}}}
+            otel._maybe_log_raw_request(
+                kwargs, {}, datetime.now(), datetime.now(), tracer.start_span("parent")
+            )
+            return [
+                span
+                for span in exporter.get_finished_spans()
+                if span.name == RAW_REQUEST_SPAN_NAME
+            ]
+
+        self.assertEqual(len(exported_raw_spans({})), 1)
+        for header in (
+            "x-litellm-enable-message-redaction",
+            "litellm-enable-message-redaction",
+        ):
+            self.assertEqual(exported_raw_spans({header: "true"}), [])
+
 
 class TestOpenTelemetryToNs(unittest.TestCase):
     """``_to_ns`` converts a span boundary to epoch nanoseconds. Service spans now
