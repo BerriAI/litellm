@@ -2340,6 +2340,8 @@ async def _complete_cli_sso_callback_session(
     )
     if user_info is None:
         raise HTTPException(status_code=500, detail="Failed to retrieve user information from SSO")
+    if not user_info.user_id:
+        raise HTTPException(status_code=500, detail="Failed to retrieve user information from SSO")
     resolved_user_id: Final = _require_sso_user_id(user_info.user_id)
 
     await retain_sso_identity_assertion_for_ema(user_id=resolved_user_id, assertion=sso_assertion)
@@ -2446,7 +2448,6 @@ async def cli_sso_callback(
             result=result_non_none,
             parsed_openid_result=parsed_openid_result,
         )
-        _require_sso_user_id(user_defined_values.get("user_id") if user_defined_values is not None else None)
 
         SSOAuthenticationHandler.verify_user_in_restricted_sso_group(
             general_settings=general_settings,
@@ -3622,14 +3623,15 @@ class SSOAuthenticationHandler:
                 budget_duration=internal_user_budget_duration,
             )
 
-        _require_sso_user_id(user_defined_values.get("user_id") if user_defined_values is not None else None)
-
         # (IF SET) Verify user is in restricted SSO group
         SSOAuthenticationHandler.verify_user_in_restricted_sso_group(
             general_settings=general_settings,
             result=result,
             received_response=received_response,
         )
+
+        if user_defined_values is not None:
+            _require_sso_user_id(user_defined_values.get("user_id"))
 
         user_info = await get_user_info_from_db(
             result=result,

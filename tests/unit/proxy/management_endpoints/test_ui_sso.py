@@ -23,6 +23,7 @@ from litellm.proxy.management_endpoints.ui_sso import (
     SSOAuthenticationHandler,
     _setup_team_mappings,
     _sync_user_role_from_jwt_role_map,
+    cli_sso_callback,
     normalize_email,
     process_sso_jwt_access_token,
 )
@@ -1377,6 +1378,25 @@ async def test_redirect_from_openid_allows_custom_sso_to_resolve_missing_provide
         )
 
     assert user_info_from_db.await_args.kwargs["user_defined_values"]["user_id"] == "mapped-user"
+    generate_key.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_redirect_from_openid_keeps_the_unmapped_custom_sso_failure():
+    async def custom_sso(result):
+        return None
+
+    user_info_from_db = AsyncMock(return_value=LiteLLM_UserTable(user_id="idp-subject"))
+    generate_key = AsyncMock()
+    mock_request, stack = _empty_identity_redirect_patches(custom_sso, user_info_from_db, generate_key)
+
+    with stack, pytest.raises(Exception, match="Unable to map user identity to known values"):
+        await SSOAuthenticationHandler.get_redirect_response_from_openid(
+            result=CustomOpenID(id="idp-subject", provider="generic", team_ids=[]),
+            request=mock_request,
+        )
+
+    user_info_from_db.assert_awaited_once()
     generate_key.assert_not_awaited()
 
 
@@ -9477,6 +9497,44 @@ async def test_cli_completion_fails_the_login_when_team_lookup_fails():
 
     assert exc_info.value.status_code == 500
     assert "session_data" not in flow
+
+
+@pytest.mark.asyncio
+async def test_cli_sso_callback_completes_for_an_existing_user_when_custom_sso_returns_none():
+    async def custom_sso(_result):
+        return None
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.scope = {}
+    mock_request.base_url = "http://internal-proxy.local/"
+    mock_cache = MagicMock(redis_cache=None)
+    mock_cache.get_cache.return_value = {
+        "poll_secret_hash": "poll-secret-hash",
+        "user_code_hash": "user-code-hash",
+        "sso_complete": False,
+        "user_code_verified": False,
+        "session_data": None,
+    }
+    get_user_info_mock = AsyncMock(return_value=LiteLLM_UserTable(user_id="provider-id", user_role="internal_user"))
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+        patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
+        patch("litellm.proxy.proxy_server.user_custom_sso", custom_sso),
+        patch("litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db", get_user_info_mock),
+    ):
+        response = await cli_sso_callback(
+            request=mock_request,
+            key="cli-session-4567890",
+            result=CustomOpenID(id="provider-id", email="u@example.com", team_ids=[]),
+        )
+
+    assert response.status_code == 200
+    assert get_user_info_mock.await_args.kwargs["alternate_user_id"] == "provider-id"
+    assert get_user_info_mock.await_args.kwargs["user_defined_values"] is None
+    stored_flow = mock_cache.set_cache.call_args.kwargs["value"]
+    assert stored_flow["session_data"]["user_id"] == "provider-id"
 
 
 class TestSameOriginReturnPath:
