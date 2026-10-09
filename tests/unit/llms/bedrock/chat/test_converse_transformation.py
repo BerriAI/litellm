@@ -6558,6 +6558,59 @@ def test_bedrock_tool_message_image_url_png_still_becomes_image():
     assert block["image"]["source"]["bytes"] == png_b64
 
 
+def _png_tool_messages(text: str | None = None) -> list[dict]:
+    png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABXvMqOgAAAABJRU5ErkJggg=="
+    content: list[dict] = []
+    if text is not None:
+        content.append({"type": "text", "text": text})
+    content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{png_b64}"}})
+    return [
+        {"role": "user", "content": "Describe the attached image."},
+        {
+            "tool_call_id": "tooluse_png_gpt",
+            "role": "tool",
+            "name": "fetch_image",
+            "content": content,
+        },
+    ]
+
+
+def test_openai_gpt_tool_result_image_sits_beside_the_tool_result():
+    """gpt-6.1-sol rejects an image nested in toolResult.content. The image has to be a sibling block."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
+
+    translated = _bedrock_converse_messages_pt(
+        messages=_png_tool_messages("tool image"),
+        model="bedrock/global.openai.gpt-6.1-sol",
+        llm_provider="bedrock_converse",
+    )
+    turn = translated[-1]["content"]
+    tool_index = next(i for i, block in enumerate(turn) if "toolResult" in block)
+    tool_result = turn[tool_index]["toolResult"]
+    assert tool_result["toolUseId"] == "tooluse_png_gpt"
+    assert tool_result["content"] == [{"text": "tool image"}]
+    assert turn[tool_index + 1]["image"]["format"] == "png"
+    assert "image" not in tool_result["content"][0]
+
+
+def test_openai_gpt_image_only_tool_result_keeps_a_text_block():
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
+
+    translated = _bedrock_converse_messages_pt(
+        messages=_png_tool_messages(),
+        model="bedrock/global.openai.gpt-6.1-sol",
+        llm_provider="bedrock_converse",
+    )
+    turn = translated[-1]["content"]
+    tool_index = next(i for i, block in enumerate(turn) if "toolResult" in block)
+    assert turn[tool_index]["toolResult"]["content"] == [{"text": "Image attached."}]
+    assert turn[tool_index + 1]["image"]["format"] == "png"
+
+
 def test_transform_response_does_not_leak_body_on_parse_failure():
     from litellm.llms.bedrock.common_utils import BedrockError
 

@@ -4039,6 +4039,44 @@ def _deduplicate_bedrock_tool_content(
     return _deduplicate_bedrock_content_blocks(tool_content, "toolResult")
 
 
+def _hoist_openai_gpt_tool_result_images(
+    tool_content: list[BedrockContentBlock],
+    model: str,
+) -> list[BedrockContentBlock]:
+    """Move images out of ``toolResult.content`` for OpenAI GPT on Bedrock.
+
+    Those models reject an ``image`` block nested in a tool result
+    ("This model doesn't support the image field for user messages") and accept
+    the same image as a sibling on the user turn. Other Converse models keep
+    the image inside the tool result.
+    """
+    from litellm.llms.bedrock.common_utils import bedrock_model_is_openai_gpt
+
+    if not bedrock_model_is_openai_gpt(model):
+        return tool_content
+    hoisted: list[BedrockContentBlock] = []
+    for block in tool_content:
+        tool_result = block.get("toolResult")
+        if tool_result is None:
+            hoisted.append(block)
+            continue
+        images: list[BedrockContentBlock] = []
+        remaining: list[BedrockToolResultContentBlock] = []
+        for part in tool_result.get("content") or []:
+            image = part.get("image")
+            if image is not None:
+                images.append(BedrockContentBlock(image=image))
+            else:
+                remaining.append(part)
+        if images and not remaining:
+            remaining.append(BedrockToolResultContentBlock(text="Image attached."))
+        if images:
+            tool_result["content"] = remaining
+        hoisted.append(block)
+        hoisted.extend(images)
+    return hoisted
+
+
 def _rename_duplicate_bedrock_document_names(
     contents: list[BedrockMessageBlock],
 ) -> list[BedrockMessageBlock]:
@@ -4570,7 +4608,9 @@ class BedrockConverseMessagesProcessor:
 
                 msg_i += 1
             # Deduplicate toolResult blocks with the same toolUseId
-            tool_content = _deduplicate_bedrock_tool_content(tool_content)
+            tool_content = _hoist_openai_gpt_tool_result_images(
+                _deduplicate_bedrock_tool_content(tool_content), model
+            )
             if tool_content:
                 # if last message was a 'user' message, then add a blank assistant message (bedrock requires alternating roles)
                 if len(contents) > 0 and contents[-1]["role"] == "user":
@@ -4946,7 +4986,9 @@ def _bedrock_converse_messages_pt(
 
             msg_i += 1
         # Deduplicate toolResult blocks with the same toolUseId
-        tool_content = _deduplicate_bedrock_tool_content(tool_content)
+        tool_content = _hoist_openai_gpt_tool_result_images(
+            _deduplicate_bedrock_tool_content(tool_content), model
+        )
         if tool_content:
             # if last message was a 'user' message, then add a blank assistant message (bedrock requires alternating roles)
             if len(contents) > 0 and contents[-1]["role"] == "user":
