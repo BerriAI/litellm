@@ -90,7 +90,7 @@ async fn the_same_route_entrypoint_reports_facts_with_or_without_caching(
             15
         );
     }
-    let facts = hooks.facts.lock().unwrap();
+    let facts = hooks.facts.lock().unwrap().clone();
     assert_eq!(facts.len(), 2);
     assert_eq!(
         facts[0].provider,

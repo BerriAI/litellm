@@ -52,7 +52,10 @@ async fn calls_defer_execution_until_polled(call: MessagesCall, #[case] with_hoo
         (false, [])
             | (
                 true,
-                [CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { .. })]
+                [
+                    CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { .. }),
+                    CallEvent::Execution(ExecutionEvent::ResultReady { .. }),
+                ]
             )
     ));
 }
@@ -410,8 +413,10 @@ async fn cache_overrides_preserve_the_routes_isolated_scope(call: MessagesCall) 
             ttl: Some(Duration::from_secs(30)),
             ..CachePolicy::default()
         };
-        let MessagesCallResponse::Complete(response) =
-            route.execute(request, &(), Some(override_options)).await.unwrap()
+        let MessagesCallResponse::Complete(response) = route
+            .execute(request, &(), Some(override_options))
+            .await
+            .unwrap()
         else {
             panic!("expected a completed message");
         };

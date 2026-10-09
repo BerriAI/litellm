@@ -1364,7 +1364,11 @@ mod tests {
                     pending_reply: None,
                 },
                 HookScript::ReplaceResponse,
-                move |hooks| HookChain::new().with(hooks).with_all([Hooks::native(observer)]),
+                move |hooks| {
+                    HookChain::new()
+                        .with(hooks)
+                        .with_all([Hooks::native(observer)])
+                },
                 call_options(asynchronous),
             );
             assert_eq!(
@@ -1430,7 +1434,11 @@ mod tests {
                     pending_reply: None,
                 },
                 script,
-                move |hooks| HookChain::new().with(hooks).with_all([Hooks::native(observer)]),
+                move |hooks| {
+                    HookChain::new()
+                        .with(hooks)
+                        .with_all([Hooks::native(observer)])
+                },
                 call_options(asynchronous),
             );
             assert_eq!(result.is_err(), fails);

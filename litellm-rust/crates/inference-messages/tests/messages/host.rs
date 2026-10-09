@@ -12,7 +12,8 @@ use rstest::rstest;
 
 use super::*;
 
-type Rewrite = Box<dyn Fn(WireRequest) -> Result<WireRequest, Error> + Send + Sync>;
+type Rewrite =
+    Box<dyn Fn(WireRequest) -> Result<WireRequest, litellm_host::error::HookError> + Send + Sync>;
 
 /// Projects like `LocalMessagesHost`, answers `before_provider_request` through `rewrite`, and keeps
 /// every event the driver emits.
@@ -79,11 +80,7 @@ impl litellm_host::hooks::NativeHooks for RecordingHost {
             .lock()
             .unwrap()
             .push(context.optional_params.clone());
-        (self.rewrite)(*wire)
-            .map(Box::new)
-            .map_err(|error| litellm_host::error::HookError::Rejected {
-                reason: error.to_string(),
-            })
+        (self.rewrite)(*wire).map(Box::new)
     }
 
     fn result_ready(&self, facts: &ExecutionFacts) -> Result<(), litellm_host::error::HookError> {
@@ -122,7 +119,7 @@ impl litellm_host::interceptors::Interceptors<<Messages as litellm_host::protoco
             .lock()
             .unwrap()
             .push(context.optional_params.clone());
-        (self.rewrite)(wire)
+        (self.rewrite)(wire).map_err(Error::from)
     }
     async fn after_provider_response(
         &self,
@@ -348,14 +345,23 @@ async fn a_before_send_failure_never_sends(call: MessagesCall) {
     let upstream = upstream([message_response()]).await;
     let host = RecordingHost::new(
         authenticated(call, upstream.uri()),
-        Box::new(|_| Err(Error::InvalidRequest("vetoed by the host".into()))),
+        Box::new(|_| {
+            Err(litellm_host::error::HookError::Rejected {
+                reason: "vetoed by the host".into(),
+            })
+        }),
     );
 
     let error = run_through(&host)
         .await
         .expect_err("the host failure fails the call");
 
-    assert_eq!(error, Error::InvalidRequest("vetoed by the host".into()));
+    assert_eq!(
+        error,
+        Error::Hook(litellm_host::error::HookError::Rejected {
+            reason: "vetoed by the host".into(),
+        })
+    );
     assert!(received(&upstream).await.is_empty());
     assert!(host.raw_responses().is_empty());
 }

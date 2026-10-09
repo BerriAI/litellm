@@ -766,7 +766,7 @@ async fn unary_custom_operations_and_conversion_finish_before_terminal_observati
     let result = serve_unary(
         machine,
         Credentials(reject_op),
-        (),
+        observer.clone(),
         CustomUnaryAdapter {
             reject_response,
             converted: converted.clone(),

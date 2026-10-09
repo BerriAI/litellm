@@ -212,6 +212,19 @@ impl<P: litellm_host::protocol::Protocol> litellm_host::interceptors::Intercepto
             ));
         Ok(())
     }
+
+    async fn result_ready(
+        &self,
+        facts: litellm_host::interceptors::ExecutionFacts,
+    ) -> Result<(), P::Error> {
+        self.events
+            .0
+            .sender
+            .emit(litellm_host::lifecycle::CallEvent::Execution(
+                litellm_host::lifecycle::ExecutionEvent::ResultReady { facts },
+            ));
+        Ok(())
+    }
 }
 
 impl<P> RecordingCall<P>

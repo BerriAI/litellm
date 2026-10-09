@@ -309,20 +309,31 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
         Some("called")
     );
     let events = host.events.0.lock().unwrap();
-    assert!(matches!(
-        &events[..],
-        [
-            CallEvent::Started { .. },
-            CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { .. }),
-            CallEvent::Execution(ExecutionEvent::ResultReady {
-                facts: ExecutionFacts {
-                    source: ResultSource::Provider,
-                    ..
-                }
-            }),
-            CallEvent::Succeeded { .. }
-        ]
-    ));
+    let execution = [
+        CallEvent::Execution(ExecutionEvent::ProviderResponseReceived {
+            raw: RawResponse {
+                body: ANTHROPIC_MESSAGE.into(),
+            },
+        }),
+        CallEvent::Execution(ExecutionEvent::ResultReady {
+            facts: ExecutionFacts {
+                provider: litellm_host::interceptors::ProviderIdentity {
+                    model: "claude-sonnet-4-5".into(),
+                    provider: "anthropic".into(),
+                },
+                source: ResultSource::Provider,
+            },
+        }),
+    ];
+    if hosted {
+        assert!(matches!(
+            &events[..],
+            [CallEvent::Started { .. }, provider_response, result_ready, CallEvent::Succeeded { .. }]
+                if [provider_response.clone(), result_ready.clone()] == execution
+        ));
+    } else {
+        assert_eq!(&events[..], &execution);
+    }
 }
 
 #[rstest]
