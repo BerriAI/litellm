@@ -1624,6 +1624,16 @@ def test_guardrail_block_raised_inside_an_llm_call_is_returned_unmapped(block: E
     assert returned is block
 
 
+@pytest.mark.parametrize("provider", ["bedrock", "bedrock_mantle"])
+@pytest.mark.parametrize(
+    "failure", [ImportError("Run 'pip install boto3'."), ModuleNotFoundError(name="unrelated_dependency")]
+)
+def test_bedrock_import_errors_preserve_the_original_exception(provider, failure):
+    assert exception_type(
+        model="test-model", original_exception=failure, custom_llm_provider=provider
+    ) is failure
+
+
 def test_guardrail_provider_failure_status_is_still_mapped():
     upstream_failure = HTTPException(status_code=401, detail={"error": "guardrail provider rejected the key"})
 
@@ -2374,3 +2384,18 @@ def _pre_call_utils_httpx(
             original_function = litellm.atext_completion
 
     return data, original_function, mapped_target
+
+
+@pytest.mark.parametrize("provider", ["sagemaker", "sagemaker_chat", "aws_polly", "openai"])
+@pytest.mark.parametrize("dependency", ["boto3", "botocore"])
+def test_missing_aws_dependency_is_not_mapped_to_provider_failure(provider, dependency):
+    failure = ModuleNotFoundError(f"No module named '{dependency}'", name=dependency)
+    assert exception_type(
+        model="test-model", original_exception=failure, custom_llm_provider=provider
+    ) is failure
+
+
+@pytest.mark.parametrize("failure", [ImportError("broken import"), ModuleNotFoundError(name="unrelated_dependency")])
+def test_non_aws_import_failure_keeps_provider_mapping(failure):
+    with pytest.raises(litellm.APIConnectionError):
+        exception_type(model="test-model", original_exception=failure, custom_llm_provider="openai")

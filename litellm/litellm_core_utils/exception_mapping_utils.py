@@ -2376,6 +2376,10 @@ def exception_type(
         return original_exception
     if _is_guardrail_block(original_exception):
         return original_exception
+    if isinstance(original_exception, ImportError) and (
+        original_exception.name in ("boto3", "botocore") or custom_llm_provider in ("bedrock", "bedrock_mantle")
+    ):
+        return original_exception
     exception_mapping_worked = False
     exception_provider = custom_llm_provider
     mappable_exception: Final[_ProviderHTTPException] = cast("_ProviderHTTPException", original_exception)
@@ -2398,9 +2402,9 @@ def exception_type(
         if model or custom_llm_provider:
             if hasattr(original_exception, "message"):
                 error_str = (
-                    redact_secret_string(str(original_exception.message))
+                    redact_secret_string(str(mappable_exception.message))
                     if _ENABLE_SECRET_REDACTION
-                    else str(original_exception.message)
+                    else str(mappable_exception.message)
                 )
             if isinstance(original_exception, BaseException):
                 exception_type = type(original_exception).__name__

@@ -89,6 +89,7 @@ jobs:
             uv pip check --python ".venv-$extra"
             if [ "$extra" = core ]; then
               checker=("$GITHUB_WORKSPACE/tests/base_sdk_tests/check_base_sdk_install.py")
+              (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-$extra/bin/python" -I "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_sdk_http.py")
             else
               checker=("$GITHUB_WORKSPACE/scripts/check_mcp_sdk_install.py" --extra "$extra")
             fi
@@ -162,10 +163,14 @@ jobs:
             uv venv --python ${{ matrix.python-version }} ".venv-core-$resolution"
             uv pip install --python ".venv-core-$resolution" --resolution "$resolution" "$wheel"
             uv pip check --python ".venv-core-$resolution"
-            (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-core-$resolution/bin/python" -I "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_base_sdk_install.py")
+            (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-core-$resolution/bin/python" -I "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_base_sdk_install.py" --profile core)
+            (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-core-$resolution/bin/python" -I "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_sdk_http.py")
           done
           uv pip install --python .venv-core-highest coverage==7.14.0
-          .venv-core-highest/bin/python -I -m coverage run --rcfile=/dev/null --append --branch --include="*/tests/base_sdk_tests/check_base_sdk_install.py" tests/base_sdk_tests/check_base_sdk_install.py
+          .venv-core-highest/bin/python -I -m coverage run --rcfile=/dev/null --append --branch --include="*/tests/base_sdk_tests/check_base_sdk_install.py" tests/base_sdk_tests/check_base_sdk_install.py --profile core
+          uv pip install --python .venv-core-highest boto3 tokenizers huggingface-hub
+          (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-core-highest/bin/python" -I "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_base_sdk_install.py" --profile dependencies)
+          (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-core-highest/bin/python" -I "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_sdk_http.py")
           uv run --no-project --with coverage==7.14.0 python -m coverage xml --rcfile=/dev/null -o coverage-core.xml
       - name: Upload core packaging coverage
         uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5

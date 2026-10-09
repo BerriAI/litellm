@@ -59,7 +59,18 @@ def test_core_manifest_preserves_runtime_dependencies_without_extras() -> None:
     core: Final = tomllib.loads(manifest.read_text())
     legacy: Final = tomllib.loads((ROOT / "pyproject.toml").read_text())
     assert core["project"]["name"] == "litellm-core"
-    assert core["project"]["dependencies"] == legacy["project"]["dependencies"]
+    removed: Final = {"boto3", "tokenizers", "huggingface-hub"}
+    core_dependencies: Final = {Requirement(value).name for value in core["project"]["dependencies"]}
+    legacy_dependencies: Final = {Requirement(value).name for value in legacy["project"]["dependencies"]}
+    assert not core_dependencies & removed
+    assert removed <= legacy_dependencies
+    assert "jsonschema" in core_dependencies
+    assert legacy_dependencies - removed <= core_dependencies
+    core_requirements: Final = {Requirement(value) for value in core["project"]["dependencies"]}
+    retained_requirements: Final = {
+        Requirement(value) for value in legacy["project"]["dependencies"] if Requirement(value).name not in removed
+    }
+    assert retained_requirements <= core_requirements
     assert not core["project"].get("optional-dependencies")
     assert not core["project"].get("scripts")
 
@@ -110,7 +121,7 @@ def test_core_wheel_metadata_and_resources(distributions: tuple[Path, Path]) -> 
         assert metadata["Version"] == tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
         assert not metadata.get_all("Provides-Extra")
         assert not any(n.endswith(".dist-info/entry_points.txt") for n in names)
-        requirements: Final = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["dependencies"]
+        requirements: Final = tomllib.loads((ROOT / "packaging/litellm-core/pyproject.toml").read_text())["project"]["dependencies"]
         for python_version in ("3.10", "3.11", "3.12", "3.13", "3.14"):
             environment: Final = {"python_version": python_version, "python_full_version": python_version + ".0"}
             assert {

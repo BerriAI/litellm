@@ -5,7 +5,7 @@ import io
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from itertools import accumulate
-from typing import Final, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal, cast
 
 import anyio
 import anyio.lowlevel
@@ -30,7 +30,10 @@ from litellm.constants import (
     TOKEN_COUNTER_MAX_EXACT_CHARS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace, HuggingFaceTokenizer, OpenAIEncoding
+from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer, OpenAIEncoding
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace
 from litellm.litellm_core_utils.url_utils import safe_get
 from litellm.llms.custom_httpx.http_handler import get_httpx_client
 from litellm.rust_bridge.tokenizer import get_encoding
@@ -680,13 +683,13 @@ def _get_exact_count_function(
     raise ValueError("Unsupported tokenizer type")
 
 
-def _encoding_count(encoding: Encoding, text: str) -> int:
+def _encoding_count(encoding: "Encoding", text: str) -> int:
     if isinstance(encoding, OpenAIEncoding):
         return encoding.count(text)
     return len(encoding.encode(text, disallowed_special=()))
 
 
-def openai_tokenizer_encoding(model: str) -> Encoding:
+def openai_tokenizer_encoding(model: str) -> "Encoding":
     """The encoding `token_counter` uses for a model on the `openai_tokenizer` path."""
     return get_encoding(openai_tokenizer_encoding_name(model))
 
