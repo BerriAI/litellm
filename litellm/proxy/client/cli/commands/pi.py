@@ -196,7 +196,7 @@ def provider_block(
     return {
         "baseUrl": base_url.rstrip("/") + "/v1",
         "api": "openai-completions",
-        "compat": {  # mutable-ok: JSON serialization requires a nested mutable object
+        "compat": {
             "supportsStore": False,
             "supportsLongCacheRetention": False,
         },
