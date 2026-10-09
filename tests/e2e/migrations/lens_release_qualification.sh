@@ -82,7 +82,7 @@ qualification_setup() {
     jq -n --arg user "$user" --arg team "$team" '{team_id:$team,team_alias:$team,members_with_roles:[{user_id:$user,role:"admin"}]}' > "$qa_dir/request.json"
     qualification_request "$master_key" POST /team/new 200 "create-team-$tenant" "$qa_dir/request.json"
     jq -e --arg team "$team" '.team_id == $team' "$qa_dir/release-response.json" > /dev/null
-    jq -n --arg user "$user" --arg team "$team" '{user_id:$user,team_id:$team,key_alias:"Lens release isolation"}' > "$qa_dir/request.json"
+    jq -n --arg user "$user" --arg team "$team" '{user_id:$user,team_id:$team,key_alias:($team+"-isolation")}' > "$qa_dir/request.json"
     qualification_request "$master_key" POST /key/generate 200 "create-key-$tenant" "$qa_dir/request.json"
     credential=$(jq -er '.key | select(type == "string" and length > 0)' "$qa_dir/release-response.json")
     jq -n --arg user "$user" --arg team "$team" --arg key "$credential" '{user:$user,team:$team,key:$key}' > "$qa_dir/tenant-$tenant.json"
