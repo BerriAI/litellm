@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentDailyData, isUserAgentTag, topAgents, userAgentProduct, type TagSummaryRow } from "./agentCatalog";
+import { agentDailyData, agentRowFor, isUserAgentTag, topAgents, userAgentProduct, type TagSummaryRow } from "./agentCatalog";
 import type { DailyData } from "@/components/UsagePage/types";
 
 const metric = (spend: number, tokens: number) => ({
@@ -38,6 +38,21 @@ describe("userAgentProduct", () => {
     expect(userAgentProduct("User-Agent: claude-cli/2.1.263 (external, cli)")).toBe("claude-cli");
     expect(userAgentProduct("User-Agent: Codex Desktop/0.160.1 (Mac OS 26.6.0; arm64)")).toBe("Codex Desktop");
     expect(userAgentProduct("User-Agent: python")).toBe("python");
+  });
+});
+
+describe("agentRowFor", () => {
+  it("resolves builder agent ids to catalog metadata with empty usage metrics", () => {
+    expect(agentRowFor("codex")).toMatchObject({
+      id: "codex",
+      label: "Codex",
+      kind: "agent",
+      spend: 0,
+      requests: 0,
+      tokens: 0,
+    });
+    expect(agentRowFor("browser")).toMatchObject({ id: "browser", label: "Browser", kind: "sdk", logo: null });
+    expect(agentRowFor("unlabeled")).toMatchObject({ id: "unlabeled", label: "Unlabeled", kind: "sdk", logo: null });
   });
 });
 

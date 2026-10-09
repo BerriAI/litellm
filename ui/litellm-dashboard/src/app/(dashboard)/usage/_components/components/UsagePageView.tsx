@@ -65,6 +65,7 @@ import SpendByProvider from "./EntityUsage/SpendByProvider";
 import { useTagSummary } from "@/app/(dashboard)/hooks/tags/useTagSummary";
 import { Panel } from "./overview/Primitives";
 import UsageOverview from "./overview/UsageOverview";
+import BuilderInsights from "./builders/BuilderInsights";
 
 interface UsagePageProps {
   teams: Team[];
@@ -604,6 +605,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               dateValue={dateValue}
             />
           )}
+          {usageView === "builders" && isAdmin && <BuilderInsights />}
           {/* User Agent Activity Panel */}
           {usageView === "user-agent-activity" && (
             <UserAgentActivity
