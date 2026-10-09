@@ -406,6 +406,35 @@ class TestInteractionsAcreateOffline:
 
     @pytest.mark.usefixtures("fake_provider_credentials")
     @pytest.mark.asyncio
+    async def test_acreate_gemini_forwards_continuation_token_to_resume_a_long_decode(
+        self, respx_mock: MockRouter
+    ) -> None:
+        route: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "interaction-resumed",
+                    "object": "interaction",
+                    "model": "gemini-2.5-flash",
+                    "status": "completed",
+                    "steps": [{"type": "model_output", "content": [{"type": "text", "text": " world"}]}],
+                    "usage": {"input_tokens": 6, "output_tokens": 3},
+                },
+            )
+        )
+        await interactions.acreate(
+            model="gemini/gemini-2.5-flash",
+            input="Prove it",
+            store=False,
+            continuation_token="dG9rLTE=",
+            api_key="gemini-offline",
+        )
+        body: Final = json.loads(route.calls.last.request.content)
+        assert body["continuation_token"] == "dG9rLTE="
+        assert body["store"] is False
+
+    @pytest.mark.usefixtures("fake_provider_credentials")
+    @pytest.mark.asyncio
     async def test_acreate_simple_litellm_responses_bridge(self, respx_mock: MockRouter) -> None:
         route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
             return_value=httpx.Response(

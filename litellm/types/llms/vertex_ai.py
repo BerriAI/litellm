@@ -357,6 +357,7 @@ class RequestBody(TypedDict, total=False):
     cachedContent: str
     labels: dict[str, str]
     serviceTier: str
+    continuationToken: str  # writable-ok: transform_request_body fills the body field by field
 
 
 class CachedContentRequestBody(TypedDict, total=False):
@@ -471,6 +472,7 @@ class Candidates(TypedDict, total=False):
     finishMessage: str
     logprobsResult: LogprobsResult
     urlContextMetadata: UrlContextMetadata
+    continuationToken: ReadOnly[str]
 
 
 class PromptFeedback(TypedDict):

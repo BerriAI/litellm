@@ -63,6 +63,7 @@ NATIVE_TOP_LEVEL_FIELD_CASES = [
     ("toolConfig", {"functionCallingConfig": {"mode": "AUTO"}}),
     ("cachedContent", "cachedContents/abc123"),
     ("labels", {"team": "search"}),
+    ("continuationToken", "dG9rLTE="),
 ]
 
 

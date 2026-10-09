@@ -71,7 +71,7 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         ``systemInstruction`` (dedicated extraction) and ``generationConfig`` (mapped
         to ``config``).
         """
-        return ("safetySettings", "toolConfig", "cachedContent", "labels")
+        return ("safetySettings", "toolConfig", "cachedContent", "labels", "continuationToken")
 
     @abstractmethod
     def map_generate_content_optional_params(
