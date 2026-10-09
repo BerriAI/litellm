@@ -90,6 +90,7 @@ fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
 /// public response, chunks and exceptions.
 pub(super) struct MessagesPythonHost {
     request: Py<PyDict>,
+    provider: Option<String>,
     cache: PythonCache,
 }
 
@@ -97,12 +98,13 @@ impl MessagesPythonHost {
     pub(super) fn new(request: Py<PyDict>, asynchronous: bool) -> Self {
         Self {
             request,
+            provider: None,
             cache: PythonCache::new(asynchronous),
         }
     }
 
     fn projection(
-        &self,
+        &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> PyResult<Result<MessagesCall, Error>> {
@@ -112,11 +114,23 @@ impl MessagesPythonHost {
             argument(name)?.map(|value| value.extract()).transpose()
         };
         let model = string("model")?.ok_or_else(|| PyValueError::new_err("model is required"))?;
+        let supplied_provider = string("custom_llm_provider")?;
+        let api_base = string("api_base")?;
+        let Some(target) = crate::provider::resolve(
+            py,
+            &model,
+            supplied_provider.as_deref(),
+            api_base.as_deref(),
+        )?
+        else {
+            return Ok(Err(Error::InvalidProvider(model)));
+        };
+        self.provider = Some(target.custom_llm_provider.clone());
         let messages =
             argument("messages")?.ok_or_else(|| PyValueError::new_err("messages is required"))?;
         let fields = project_optional_fields(BODY_FIELDS, argument)?;
         let body = [
-            ("model".to_string(), Value::String(model.clone())),
+            ("model".to_string(), Value::String(target.model.clone())),
             ("messages".to_string(), from_py(&messages)?),
         ]
         .into_iter()
@@ -126,10 +140,9 @@ impl MessagesPythonHost {
             .map(|value| python_timeout_seconds(py, value.unbind()))
             .transpose()?
             .flatten();
-        let custom_llm_provider = string("custom_llm_provider")?;
-        let shaping = self.shaping(py, &model, custom_llm_provider.as_deref(), arguments)?;
+        let shaping = self.shaping(py, &target.model, &target.custom_llm_provider, arguments)?;
+        let custom_llm_provider = Some(target.custom_llm_provider);
         let api_key = string("api_key")?;
-        let api_base = string("api_base")?;
         let extra_headers = self.merged_headers(py, arguments)?;
         let provider_specific_header = self.provider_specific_header(py, arguments)?;
         Ok(messages_body(body).map(|body| MessagesCall {
@@ -175,7 +188,7 @@ impl MessagesPythonHost {
         &self,
         py: Python<'_>,
         model: &str,
-        custom_llm_provider: Option<&str>,
+        custom_llm_provider: &str,
         arguments: &Bound<'_, PyDict>,
     ) -> PyResult<MessagesShaping> {
         let module = py.import(ROUTE_HOST_MODULE)?;
@@ -193,13 +206,16 @@ impl MessagesPythonHost {
     }
 
     fn provider(&self, py: Python<'_>) -> String {
+        if let Some(provider) = &self.provider {
+            return provider.clone();
+        }
         self.request
             .bind(py)
             .get_item("custom_llm_provider")
             .ok()
             .flatten()
             .and_then(|value| value.extract::<Option<String>>().ok().flatten())
-            .unwrap_or_else(|| "anthropic".into())
+            .unwrap_or_default()
     }
 
     fn map_failure(&self, py: Python<'_>, error: PyErr) -> PyErr {

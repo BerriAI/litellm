@@ -33,7 +33,7 @@ def test_capabilities_come_from_the_model_map_under_the_callers_provider(monkeyp
         supports_sampling_params=False,
     )
 
-    capabilities: Final = anthropic_model_capabilities("anthropic/claude-test-adaptive", None)
+    capabilities: Final = anthropic_model_capabilities("claude-test-adaptive", "anthropic")
 
     assert capabilities["supports_adaptive_thinking"]
     assert capabilities["supports_output_config"]
@@ -50,7 +50,7 @@ def test_capabilities_come_from_the_model_map_under_the_callers_provider(monkeyp
 
 
 def test_unmapped_model_keeps_sampling_params_and_no_reasoning_features() -> None:
-    capabilities: Final = anthropic_model_capabilities("anthropic/not-a-real-model", None)
+    capabilities: Final = anthropic_model_capabilities("not-a-real-model", "anthropic")
 
     assert capabilities["supports_sampling_params"]
     assert not capabilities["supports_reasoning"]

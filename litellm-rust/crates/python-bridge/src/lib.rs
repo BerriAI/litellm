@@ -10,6 +10,7 @@ mod lifecycle;
 mod logger;
 mod marshal;
 mod preflight;
+mod provider;
 mod python_settings;
 mod routes;
 mod secrets;
