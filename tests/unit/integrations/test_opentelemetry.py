@@ -3,6 +3,7 @@ import concurrent.futures
 import contextlib
 import gc
 import json
+import logging
 import os
 import sys
 import threading
@@ -19,6 +20,7 @@ import pytest
 
 # Adds the grandparent directory to sys.path to allow importing project modules
 from opentelemetry import trace
+from opentelemetry.trace import Span
 from opentelemetry._logs.severity import SeverityNumber
 from opentelemetry.sdk._logs import LogData, LogRecord
 from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
@@ -38,6 +40,7 @@ import litellm
 from litellm.integrations import opentelemetry as otel_module
 from litellm.integrations.arize.arize_phoenix import ArizePhoenixLogger
 from litellm.integrations.opentelemetry import (
+    LITELLM_PROXY_REQUEST_SPAN_NAME,
     LITELLM_REQUEST_SPAN_NAME,
     OpenTelemetry,
     OpenTelemetryConfig,
@@ -7328,3 +7331,55 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
 
         # Assert: error.message should be set from error_str using ErrorAttributes constant
         mock_span.set_attribute.assert_called_with(ErrorAttributes.ERROR_MESSAGE, "Fallback error message")
+
+
+@pytest.mark.parametrize("parent_container", ("metadata", "litellm_metadata"))
+def test_success_stamps_team_attributes_before_proxy_span_end(
+    caplog: pytest.LogCaptureFixture, parent_container: str
+) -> None:
+    exporter: Final[InMemorySpanExporter] = InMemorySpanExporter()
+    provider: Final[TracerProvider] = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    otel: Final[OpenTelemetry] = OpenTelemetry(
+        tracer_provider=provider, message_logging=False
+    )
+    server_span: Final[Span] = otel.create_litellm_proxy_request_started_span(
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc), headers={}
+    )
+    parent_metadata: Final[dict[str, object]] = {
+        "litellm_parent_otel_span": server_span,
+        "user_api_key_team_id": "test-team-id",
+        "user_api_key_team_alias": "test-team",
+    }
+    litellm_params: Final[dict[str, object]] = {parent_container: parent_metadata}
+    kwargs: Final[dict[str, object]] = {
+        "model": "test-model",
+        "litellm_call_id": "test-call",
+        "call_type": "completion",
+        "litellm_params": litellm_params,
+        "standard_logging_object": {
+            "metadata": {
+                "user_api_key_team_id": "test-team-id",
+                "user_api_key_team_alias": "test-team",
+            },
+            "call_type": "completion",
+        },
+    }
+
+    with caplog.at_level(logging.WARNING, logger="opentelemetry.sdk.trace"):
+        end_time: Final[datetime] = datetime(2026, 1, 1, 0, 1, tzinfo=timezone.utc)
+        otel.log_success_event(kwargs, {"id": "test-response"}, end_time, end_time)
+
+    warnings: Final[list[logging.LogRecord]] = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "Setting attribute on ended span."
+    ]
+    assert warnings == []
+
+    spans: Final[dict[str, ReadableSpan]] = {
+        span.name: span for span in exporter.get_finished_spans()
+    }
+    root: Final[ReadableSpan] = spans[LITELLM_PROXY_REQUEST_SPAN_NAME]
+    assert root.attributes["metadata.user_api_key_team_id"] == "test-team-id"
+    assert root.attributes["metadata.user_api_key_team_alias"] == "test-team"
