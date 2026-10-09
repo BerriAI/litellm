@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -26,9 +27,7 @@ _COUNT_RESPONSE: Final = TypeAdapter(dict[str, JsonValue])
 
 
 class BedrockMantleCountTokensHandler(BaseAWSLLM):
-    """Counts tokens through Anthropic's count_tokens on the bedrock-mantle endpoint.
-
-    Claude models that Bedrock offers only through cross-region inference answer 400 on
+    """Claude models that Bedrock offers only through cross-region inference answer 400 on
     bedrock-runtime's CountTokens; AWS documents Mantle's /anthropic/v1/messages/count_tokens
     as the way to count them, with the base model id and the deployment's AWS credentials
     """
@@ -37,9 +36,9 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
         super().__init__()
         self._anthropic_config: Final = anthropic_config or AnthropicCountTokensConfig()
 
-    def get_mantle_count_tokens_endpoint(self, aws_region_name: str) -> str:
+    def get_mantle_count_tokens_endpoint(self, aws_region_name: str, api_base: str | None = None) -> str:
         messages_url: Final = build_mantle_messages_url(
-            api_base=None, aws_bedrock_runtime_endpoint=None, region=aws_region_name
+            api_base=api_base, aws_bedrock_runtime_endpoint=None, region=aws_region_name
         )
         return f"{messages_url}{MANTLE_COUNT_TOKENS_SUFFIX}"
 
@@ -55,7 +54,14 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
             aws_region_name: Final = self._get_aws_region_name(
                 optional_params=litellm_params, model=resolved_model, model_id=None
             )
-            endpoint_url: Final = self.get_mantle_count_tokens_endpoint(aws_region_name)
+            count_tokens_params: Final = litellm_params.get("count_tokens_params")
+            configured_api_base: Final = (
+                count_tokens_params.get("api_base")
+                if isinstance(count_tokens_params, Mapping)
+                and isinstance(count_tokens_params.get("api_base"), str)
+                else None
+            )
+            endpoint_url: Final = self.get_mantle_count_tokens_endpoint(aws_region_name, configured_api_base)
             body: Final = self._anthropic_config.transform_request_to_count_tokens(
                 model=resolved_model,
                 messages=request["messages"],

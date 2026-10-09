@@ -42,18 +42,7 @@ class CountTokensFailure:
 CountTokensOutcome = CountedTokens | CountTokensFailure
 
 
-def _runtime_rejected_claude_model(outcome: CountTokensOutcome, resolved_model: str) -> bool:
-    return (
-        isinstance(outcome, CountTokensFailure)
-        and outcome.status_code == 400
-        and "claude" in resolved_model.lower()
-    )
-
-
 class BedrockTokenCounter(BaseTokenCounter):
-    """Token counter for AWS Bedrock: bedrock-runtime CountTokens first, and Anthropic's count_tokens
-    on bedrock-mantle for the Claude models bedrock-runtime answers 400 for"""
-
     def __init__(
         self,
         runtime_handler: BedrockCountTokensHandler | None = None,
@@ -117,17 +106,26 @@ class BedrockTokenCounter(BaseTokenCounter):
             **({"system": system} if system else {}),
         }
         resolved_model: Final = get_bedrock_base_model(model_to_use)
-
-        runtime: Final = await self._count_with(
-            self._runtime_handler, RUNTIME_TOKENIZER_TYPE, request_data, litellm_params, resolved_model
-        )
-        outcome: Final = (
-            await self._count_with(
+        count_tokens_params: Final = litellm_params.get("count_tokens_params")
+        if count_tokens_params is None:
+            outcome: CountTokensOutcome = await self._count_with(
+                self._runtime_handler, RUNTIME_TOKENIZER_TYPE, request_data, litellm_params, resolved_model
+            )
+        elif isinstance(count_tokens_params, Mapping) and count_tokens_params.get("provider") == "bedrock_mantle":
+            outcome = await self._count_with(
                 self._mantle_handler, MANTLE_TOKENIZER_TYPE, request_data, litellm_params, resolved_model
             )
-            if _runtime_rejected_claude_model(runtime, resolved_model)
-            else runtime
-        )
+        else:
+            provider: Final = (
+                count_tokens_params.get("provider")
+                if isinstance(count_tokens_params, Mapping)
+                else count_tokens_params
+            )
+            outcome = CountTokensFailure(
+                status_code=400,
+                message=f"Unsupported count_tokens_params provider: {provider}",
+                tokenizer_type=str(provider),
+            )
         match outcome:
             case CountedTokens():
                 return TokenCountResponse(

@@ -1,12 +1,10 @@
-"""Live e2e: `/v1/messages/count_tokens` on a Bedrock Claude model that bedrock-runtime
-cannot count.
+"""Live e2e: `/v1/messages/count_tokens` using an explicitly configured Mantle counter.
 
 Claude Opus 4.8 is offered only through cross-region inference, and bedrock-runtime's
-CountTokens answers 400 for it. The proxy then has to count through bedrock-mantle's
-Anthropic count_tokens, and the answer must sit within a few percent of what `/v1/messages`
-bills as `usage.input_tokens`. The local tokenizer fallback undercounts these models by
-about 40%, so this is the line that proves the real count is served. Both calls go through
-the real Anthropic SDK, the client customers count with
+CountTokens cannot count it. This deployment explicitly sends count-token calls through
+bedrock-mantle's Anthropic count_tokens API, and the answer must sit within a few percent
+of what `/v1/messages` bills as `usage.input_tokens`. Both calls go through the real
+Anthropic SDK that clients use.
 """
 
 from __future__ import annotations
@@ -37,6 +35,7 @@ def _register(proxy: ProxyClient, resources: ResourceManager, backend: str) -> t
             aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
             aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
             aws_region_name="os.environ/AWS_REGION",
+            count_tokens_params={"provider": "bedrock_mantle"},
         ),
     )
     resources.defer(lambda: proxy.delete_model(model_id))
@@ -52,7 +51,7 @@ class TestBedrockMessagesCountTokens:
             models=(CROSS_REGION_ONLY_CLAUDE_BACKEND,),
         )
     )
-    def test_count_matches_billed_input_tokens_for_a_model_bedrock_runtime_cannot_count(
+    def test_configured_mantle_count_matches_billed_input_tokens(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
         model, key = _register(proxy, resources, CROSS_REGION_ONLY_CLAUDE_BACKEND)

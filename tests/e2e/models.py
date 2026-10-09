@@ -1239,6 +1239,7 @@ class LiteLLMParamsBody(BaseModel):
     aws_secret_access_key: str | None = Field(default=None, repr=False)
     aws_region_name: str | None = None
     aws_bedrock_runtime_endpoint: str | None = None
+    count_tokens_params: dict[str, str] | None = None
     vertex_project: str | None = None
     vertex_location: str | None = None
     vertex_credentials: str | None = Field(default=None, repr=False)

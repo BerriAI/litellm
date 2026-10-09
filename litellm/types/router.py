@@ -360,6 +360,7 @@ class CredentialLiteLLMParams(BaseModel):
     aws_external_id: str | None = None
     aws_session_tags: Sequence[AwsSessionTag] | None = None
     aws_bedrock_runtime_endpoint: str | None = None
+    count_tokens_params: dict[str, str] | None = None
     aws_bedrock_project_id: str | None = None
     s3_bucket_name: str | None = None
     s3_endpoint_url: str | None = None

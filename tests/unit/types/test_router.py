@@ -30,6 +30,22 @@ def test_special_model_info_params_cannot_drift_from_the_mirror():
     assert set(SPECIAL_MODEL_INFO_PARAMS) <= set(LiteLLM_Params.model_fields)
 
 
+def test_count_tokens_params_is_declared_and_preserved() -> None:
+    params = LiteLLM_Params(
+        model="bedrock/global.anthropic.claude-opus-4-8-v1:0",
+        count_tokens_params={
+            "provider": "bedrock_mantle",
+            "api_base": "https://bedrock-mantle.us-east-1.api.aws",
+        },
+    )
+
+    assert "count_tokens_params" in LiteLLM_Params.model_fields
+    assert params.model_dump(exclude_none=True)["count_tokens_params"] == {
+        "provider": "bedrock_mantle",
+        "api_base": "https://bedrock-mantle.us-east-1.api.aws",
+    }
+
+
 def test_custom_pricing_params_keeps_every_field_it_had():
     """The mirrored fields moved to a base class; none of them may go missing from
     CustomPricingLiteLLMParams, whose model_fields drive custom-pricing detection."""
