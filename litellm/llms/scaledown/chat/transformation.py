@@ -480,7 +480,9 @@ def _native_response(operation: str, raw: dict, model_response: ModelResponse) -
             finish_reason="stop",
         )
     ]
-    input_tokens = raw.get("original_prompt_tokens") if operation == "compress" else raw.get("input_tokens")
+    input_tokens = raw.get("input_tokens")
+    if input_tokens is None and operation == "compress":
+        input_tokens = (raw.get("results") or {}).get("original_prompt_tokens") or raw.get("original_prompt_tokens")
     _set_usage(model_response, {"prompt_tokens": input_tokens or 0})
     model_response._hidden_params["scaledown_response"] = raw
     return model_response

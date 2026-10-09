@@ -427,13 +427,22 @@ def test_summarize_response_is_the_native_payload(config):
     assert response.usage.prompt_tokens == 78
 
 
-def test_compress_response_bills_original_prompt_tokens(config):
-    payload = {"compressed_prompt": "short", "original_prompt_tokens": 900, "compressed_prompt_tokens": 300}
+def test_compress_response_reports_top_level_input_tokens(config):
+    payload = {
+        "results": {"success": True, "compressed_prompt": "short", "original_prompt_tokens": 52},
+        "input_tokens": 52,
+    }
 
     response = _transform_response(config, "scaledown/compress", payload)
 
     assert json.loads(response.choices[0].message.content) == payload
-    assert response.usage.prompt_tokens == 900
+    assert response.usage.prompt_tokens == 52
+
+
+def test_compress_response_falls_back_to_original_prompt_tokens(config):
+    payload = {"results": {"compressed_prompt": "short", "original_prompt_tokens": 900}}
+
+    assert _transform_response(config, "scaledown/compress", payload).usage.prompt_tokens == 900
 
 
 def test_extract_request_maps_schema_to_entities_including_nesting(config):
