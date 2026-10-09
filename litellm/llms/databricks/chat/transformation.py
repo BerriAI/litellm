@@ -387,7 +387,15 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             )  # unsupported for claude models - if json_schema -> convert to tool call
 
         if "reasoning_effort" in non_default_params and self._uses_anthropic_thinking_param(model):
-            reasoning_effort_value: Final = non_default_params.get("reasoning_effort")
+            reasoning_effort_value = non_default_params.get("reasoning_effort")
+            # Accept both the string form ("low") and the dict form
+            # ({"effort": "low", "summary": "concise"}). The Responses->Chat
+            # parser keeps the full dict whenever `summary` is set (#28196),
+            # so a dict is the standard shape Responses-bridge callers send.
+            # Same coercion the direct Anthropic and Bedrock Converse
+            # adapters already do.
+            if isinstance(reasoning_effort_value, dict):
+                reasoning_effort_value = reasoning_effort_value.get("effort")
             mapped_thinking: Final = AnthropicConfig._map_reasoning_effort(
                 reasoning_effort=reasoning_effort_value,
                 model=model,
