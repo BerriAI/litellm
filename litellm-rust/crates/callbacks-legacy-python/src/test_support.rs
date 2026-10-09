@@ -6,7 +6,7 @@ use pyo3::types::{PyDict, PyTuple};
 use crate::{LegacyLogging, PublicCall};
 
 /// The parameters of every `callbacks_legacy_python` function, as the real module declares them.
-/// `tests/unit/rust_bridge/test_callbacks_legacy_python.py` pins this file to the Python
+/// `tests/unit/rust_bridge/host/test_callbacks_legacy_python.py` pins this file to the Python
 /// signatures, and [`namespace`] binds every fake call against it.
 pub(crate) const PYTHON_CONTRACT: &str = include_str!("../python_contract.json");
 
