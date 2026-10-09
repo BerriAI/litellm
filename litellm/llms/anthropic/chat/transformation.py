@@ -6,6 +6,9 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, cast
 
 import httpx
+from pydantic import BaseModel, ValidationError
+from typing_extensions import ReadOnly, TypedDict
+
 import litellm
 from litellm.constants import (
     ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
@@ -92,8 +95,6 @@ from litellm.utils import (
     supports_reasoning,
     token_counter,
 )
-from pydantic import BaseModel, ValidationError
-from typing_extensions import ReadOnly, TypedDict
 
 from ..common_utils import (
     AnthropicError,
@@ -2739,26 +2740,24 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             map_finish_reason(completion_response["stop_reason"]),
         )
 
-        usage_object: Final = completion_response.get("usage")
-        if usage_object is None:
+        usage: Final = (
+            None
+            if "usage" not in completion_response or completion_response["usage"] is None
+            else self.calculate_usage(
+                usage_object=completion_response["usage"],
+                reasoning_content=reasoning_content,
+                completion_response=completion_response,
+                speed=speed,
+            )
+        )
+        if usage is None:
             # #44535: keep usage absent (None) instead of fabricating a 0/0
             # usage object. Spend tracking and budgets must be able to tell
             # "no usage reported" apart from a genuine zero, otherwise a
             # response that omits usage would be recorded as free even though
             # the upstream consumed tokens.
-            setattr(model_response, "usage", None)
             _hidden_params["usage_missing"] = True
-        else:
-            setattr(
-                model_response,
-                "usage",
-                self.calculate_usage(
-                    usage_object=usage_object,
-                    reasoning_content=reasoning_content,
-                    completion_response=completion_response,
-                    speed=speed,
-                ),
-            )
+        setattr(model_response, "usage", usage)
 
         model_response.created = int(time.time())
         model_response.model = completion_response["model"]
