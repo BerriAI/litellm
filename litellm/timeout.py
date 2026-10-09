@@ -65,13 +65,15 @@ def timeout(timeout_duration: float = 0.0, exception_to_raise=Timeout):
 
         @wraps(func)
         async def async_wrapper(*args, **kwargs):
-            local_timeout_duration = timeout_duration
-            if "force_timeout" in kwargs:
-                local_timeout_duration = kwargs["force_timeout"]
-            elif "request_timeout" in kwargs and kwargs["request_timeout"] is not None:
-                local_timeout_duration = kwargs["request_timeout"]
+            local_timeout_duration: Final = (
+                kwargs["force_timeout"]
+                if kwargs.get("force_timeout") is not None
+                else kwargs["request_timeout"]
+                if kwargs.get("request_timeout") is not None
+                else timeout_duration
+            )
             try:
-                value: Final = await asyncio.wait_for(func(*args, **kwargs), timeout=timeout_duration)
+                value: Final = await asyncio.wait_for(func(*args, **kwargs), timeout=local_timeout_duration)
                 return value
             except asyncio.TimeoutError:
                 model: Final = args[0] if len(args) > 0 else kwargs["model"]
