@@ -19282,23 +19282,23 @@ async def test_repeated_stale_discovery_uses_current_callers_endpoint(endpoint: 
 
 
 @pytest.mark.asyncio
-async def test_legacy_upstream_elicitation_rejects_modern_downstream_without_consent():
+async def test_legacy_upstream_elicitation_rejects_modern_downstream_without_consent() -> None:
     from types import SimpleNamespace
     from mcp.types import ElicitRequestFormParams, ErrorData
     from litellm.proxy._experimental.mcp_server import server as legacy_server
     from litellm.proxy._experimental.mcp_server.legacy_callbacks import create_elicitation_callback
     from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
 
-    session = SimpleNamespace(client_params=None)
-    session_token = legacy_server.active_mcp_session_var.set(session)
-    request_token = active_mcp_request_ctx_var.set(
+    session: Final = SimpleNamespace(client_params=None)
+    session_token: Final = legacy_server.active_mcp_session_var.set(session)
+    request_token: Final = active_mcp_request_ctx_var.set(
         SimpleNamespace(session=session, request_id="modern-call", protocol_version="2026-07-28")
     )
-    relay = AsyncMock()
+    relay: Final = AsyncMock()
     try:
-        callback = create_elicitation_callback()
+        callback: Final = create_elicitation_callback()
         with patch("litellm.proxy._experimental.mcp_server.elicitation_handler.handle_elicitation_request", relay):
-            result = await callback(
+            result: Final = await callback(
                 None, ElicitRequestFormParams(message="Confirm", requested_schema={"type": "object"})
             )
         assert isinstance(result, ErrorData)

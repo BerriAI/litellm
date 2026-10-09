@@ -82,8 +82,8 @@ def test_discovery_results_do_not_share_mutable_capabilities():
     assert capabilities.tools.list_changed is not True
 
 
-def test_modern_support_excludes_legacy_sse():
-    modern = REVISION_SUPPORT["2026-07-28"]
+def test_modern_support_excludes_legacy_sse() -> None:
+    modern: Final = REVISION_SUPPORT["2026-07-28"]
     assert modern.completed is True
     assert "input_required" in modern.results
     assert MCPTransport.sse not in modern.transports
@@ -130,7 +130,7 @@ def test_modern_discovery_requires_opt_in_and_keeps_unsupported_features_disable
 
 
 @pytest.mark.parametrize("path", ["/mcp/sse", "/mcp/example/sse/"])
-def test_modern_protocol_is_rejected_on_legacy_sse_paths(path, monkeypatch):
+def test_modern_protocol_is_rejected_on_legacy_sse_paths(path: str, monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy import proxy_server
     from litellm.proxy._experimental.mcp_server.server import unsupported_protocol_version
 

@@ -3841,23 +3841,24 @@ def test_prompt_continuation_polling_respects_the_original_deadline() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ("form", "url"))
 @pytest.mark.parametrize("enabled", (False, True))
-async def test_modern_elicitation_honors_server_permission(mode, enabled):
+async def test_modern_elicitation_honors_server_permission(mode: str, enabled: bool) -> None:
     import anyio
     from mcp import ClientSession, MCPError
     from mcp.shared.message import SessionMessage
     from mcp.types import (
         ElicitRequest,
         ElicitRequestFormParams,
+        ElicitRequestParams,
         ElicitRequestURLParams,
         ElicitResult,
         InputRequiredResult,
     )
 
-    async def elicit(context, params):
+    async def elicit(context: object, params: ElicitRequestParams) -> ElicitResult:
         return ElicitResult(action="accept")
 
-    client = MCPClient(server_url="https://example.com/mcp", elicitation_callback=elicit if enabled else None)
-    request = AsyncMock(
+    client: Final = MCPClient(server_url="https://example.com/mcp", elicitation_callback=elicit if enabled else None)
+    request: Final = AsyncMock(
         return_value=InputRequiredResult(
             request_state="pending",
             input_requests={
@@ -3871,9 +3872,9 @@ async def test_modern_elicitation_honors_server_permission(mode, enabled):
     )
     send, receive = anyio.create_memory_object_stream[SessionMessage](1)
     async with send, receive:
-        session = ClientSession(receive, send)
+        session: Final = ClientSession(receive, send)
         if enabled:
-            result = await client._request_with_interaction(session, request, None, None, True)
+            result: Final = await client._request_with_interaction(session, request, None, None, True)
             assert isinstance(result, InputRequiredResult)
             assert result.input_requests["consent"].params.mode == mode
         else:

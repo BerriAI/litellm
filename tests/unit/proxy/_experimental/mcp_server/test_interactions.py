@@ -1,4 +1,4 @@
-from typing import Final
+from typing import Final, Literal
 
 import pytest
 from mcp import MCPError
@@ -53,7 +53,9 @@ def test_continuation_missing_salt_does_not_reject_initial_request(monkeypatch: 
 
 
 @pytest.mark.parametrize("identity", [None, UserAPIKeyAuth(), UserAPIKeyAuth(team_id="team")])
-def test_continuation_requires_stable_authenticated_principal(identity, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_continuation_requires_stable_authenticated_principal(
+    identity: UserAPIKeyAuth | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt")
     operation: Final = CallToolRequest(params=CallToolRequestParams(name="confirm", arguments={}))
     server: Final = MCPServer(server_id="server", name="server", url="https://example.com/mcp", transport="http")
@@ -169,7 +171,7 @@ async def test_modern_sampling_errors_abort_without_relaying_form_input() -> Non
     )
     from litellm.proxy._experimental.mcp_server.interactions import ModernClientInteraction
 
-    async def sampling(context, params):
+    async def sampling(context: object, params: CreateMessageRequestParams) -> ErrorData:
         return ErrorData(code=-32603, message="Sampling refused by gateway policy")
 
     send, receive = anyio.create_memory_object_stream[SessionMessage](1)
@@ -198,7 +200,9 @@ async def test_modern_sampling_errors_abort_without_relaying_form_input() -> Non
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("invalid_response", ["legacy_state", "gateway_override", "unbound_result"])
-async def test_gateway_rejects_invalid_interaction_boundaries(invalid_response, monkeypatch):
+async def test_gateway_rejects_invalid_interaction_boundaries(
+    invalid_response: Literal["legacy_state", "gateway_override", "unbound_result"], monkeypatch: pytest.MonkeyPatch
+) -> None:
     from unittest.mock import AsyncMock, patch
     from mcp.types import CreateMessageResult, ElicitResult, TextContent
     from litellm.proxy._experimental.mcp_server import operations
@@ -206,15 +210,16 @@ async def test_gateway_rejects_invalid_interaction_boundaries(invalid_response, 
     from litellm.proxy._experimental.mcp_server.interactions import BoundInputRequiredResult
 
     monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt")
-    context = OperationContext(_caller=UserAPIKeyAuth(user_id="alice"), wire_compat=WireCompat.MODERN)
-    operation = CallToolRequest(params=CallToolRequestParams(name="confirm", arguments={}))
-    server = MCPServer(server_id="server", name="server", url="https://example.com/mcp", transport="http")
+    context: Final = OperationContext(
+        _caller=UserAPIKeyAuth(user_id="alice"),
+        wire_compat=WireCompat.LEGACY if invalid_response == "legacy_state" else WireCompat.MODERN,
+    )
+    operation: Final = CallToolRequest(params=CallToolRequestParams(name="confirm", arguments={}))
+    server: Final = MCPServer(server_id="server", name="server", url="https://example.com/mcp", transport="http")
     if invalid_response == "legacy_state":
-        context = OperationContext(_caller=UserAPIKeyAuth(user_id="alice"))
         operation.params.request_state = "untrusted-state"
-        message = "Continuations require the modern MCP protocol"
     elif invalid_response == "gateway_override":
-        bound = bind_target(
+        bound: Final = bind_target(
             BoundInputRequiredResult(
                 request_state="opaque",
                 gateway_responses={
@@ -225,13 +230,15 @@ async def test_gateway_rejects_invalid_interaction_boundaries(invalid_response, 
             ),
             server,
         )
-        sealed = seal_continuation(bound, operation, context, now=100)
+        sealed: Final = seal_continuation(bound, operation, context, now=100)
         operation.params.request_state = sealed.request_state
         operation.params.input_responses = {"sample": ElicitResult(action="accept")}
-        message = "Cannot replace gateway input responses"
-    else:
-        message = "MCP continuation target is unavailable"
-    dispatch = AsyncMock(return_value=InputRequiredResult(request_state="unbound-upstream-state"))
+    message: Final = {
+        "legacy_state": "Continuations require the modern MCP protocol",
+        "gateway_override": "Cannot replace gateway input responses",
+        "unbound_result": "MCP continuation target is unavailable",
+    }[invalid_response]
+    dispatch: Final = AsyncMock(return_value=InputRequiredResult(request_state="unbound-upstream-state"))
     with (
         patch.object(operations, "_execute_mcp_server_tool_call", dispatch),
         patch.object(operations.global_mcp_server_manager, "get_mcp_server_by_id", return_value=server),
