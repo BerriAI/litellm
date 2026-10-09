@@ -156,7 +156,7 @@ pub(super) async fn execute(
 ///
 /// A config reports the same variants on either side of the call: a missing
 /// field or an unsupported block can mean "this request cannot be translated"
-/// during prepare and "this response cannot be normalized" here. Only the
+/// before the request is sent and "this response cannot be normalized" here. Only the
 /// second kind has already been billed, and a host that keeps a reference
 /// implementation must not retry those, so collapse them to one variant that
 /// can only mean the provider was already called.

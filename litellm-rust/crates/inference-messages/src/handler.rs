@@ -57,7 +57,7 @@ pub(super) async fn execute(
     secrets: Secrets,
     context: &CallContext<'_, impl Interceptors<Error>>,
 ) -> Result<MessagesCallResponse, Error> {
-    let request = prepare_outbound(
+    let request = provider_call(
         &route.auth,
         config,
         provider,
@@ -90,7 +90,7 @@ pub(super) async fn execute(
     Ok(cache.finish(output, &source).await)
 }
 
-pub(super) async fn prepare_outbound(
+pub(super) async fn provider_call(
     auth: &AuthServices,
     config: MessagesProvider,
     provider: ResolvedProvider<'_>,
@@ -406,11 +406,11 @@ mod tests {
         serde_json::from_value(value).unwrap()
     }
 
-    async fn prepare(call: MessagesCall) -> Result<ProviderCall, Error> {
-        prepare_with_secrets(call, &|_: &str| None).await
+    async fn provider_call_for(call: MessagesCall) -> Result<ProviderCall, Error> {
+        provider_call_with_secrets(call, &|_: &str| None).await
     }
 
-    async fn prepare_with_secrets(
+    async fn provider_call_with_secrets(
         call: MessagesCall,
         secrets: &(dyn Lookup + Sync),
     ) -> Result<ProviderCall, Error> {
@@ -423,11 +423,11 @@ mod tests {
         let interceptors = ();
         let context = CallContext::new(&interceptors, litellm_inference::CallOptions::default());
         let auth = AuthServices::default();
-        prepare_outbound(&auth, config, provider, call, secrets, &context).await
+        provider_call(&auth, config, provider, call, secrets, &context).await
     }
 
-    async fn prepared_body(fields: Value, shaping: MessagesShaping) -> Result<Value, Error> {
-        prepare(MessagesCall {
+    async fn wire_body(fields: Value, shaping: MessagesShaping) -> Result<Value, Error> {
+        provider_call_for(MessagesCall {
             body: body(fields),
             api_key: Some("sk-test".into()),
             api_base: Some("https://anthropic.test".into()),
@@ -439,7 +439,7 @@ mod tests {
             shaping,
         })
         .await
-        .map(|prepared| prepared.wire.body)
+        .map(|call| call.wire.body)
     }
 
     #[rstest]
@@ -476,7 +476,7 @@ mod tests {
                 .find(|(key, _)| *key == name)
                 .map(|(_, value)| value.to_string())
         };
-        let prepared = prepare_with_secrets(
+        let call = provider_call_with_secrets(
             MessagesCall {
                 body: body(
                     json!({"model": "claude-test", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
@@ -494,7 +494,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let auth: Vec<(&str, &str)> = prepared
+        let auth: Vec<(&str, &str)> = call
             .wire
             .headers
             .iter()
@@ -502,7 +502,7 @@ mod tests {
             .map(|(name, value)| (name.as_str(), value.as_str()))
             .collect();
         assert_eq!(
-            (auth.as_slice(), prepared.wire.url.as_str()),
+            (auth.as_slice(), call.wire.url.as_str()),
             (expected_auth, expected_url)
         );
     }
@@ -568,7 +568,7 @@ mod tests {
             ..shaping
         };
         assert_eq!(
-            prepared_body(with_messages(fields), shaping).await,
+            wire_body(with_messages(fields), shaping).await,
             Ok(with_messages(expected_fields))
         );
     }
@@ -601,7 +601,7 @@ mod tests {
             {"custom_llm_provider": "anthropic", "extra_headers": {"x-scoped": "anthropic", "x-priority": "scoped"}}
         ]))
         .unwrap();
-        let prepared = prepare(MessagesCall {
+        let call = provider_call_for(MessagesCall {
             body: body(
                 json!({"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
             ),
@@ -616,7 +616,7 @@ mod tests {
         })
         .await
         .unwrap();
-        let caller_headers: Vec<(&str, &str)> = prepared
+        let caller_headers: Vec<(&str, &str)> = call
             .wire
             .headers
             .iter()
@@ -630,7 +630,7 @@ mod tests {
     #[tokio::test]
     async fn prepared_body_carries_the_provider_stripped_model(shaping: MessagesShaping) {
         assert_eq!(
-            prepared_body(
+            wire_body(
                 json!({
                     "model": "anthropic/claude-test",
                     "messages": [{"role": "user", "content": "hi"}],
@@ -659,7 +659,7 @@ mod tests {
             ..shaping
         };
         assert_eq!(
-            prepared_body(
+            wire_body(
                 json!({
                     "model": "claude-test",
                     "messages": [{"role": "user", "content": "hi"}],
@@ -691,7 +691,7 @@ mod tests {
             ..shaping
         };
         assert!(matches!(
-            prepared_body(
+            wire_body(
                 json!({
                     "model": "claude-test",
                     "messages": [{"role": "user", "content": "hi"}],
@@ -709,7 +709,7 @@ mod tests {
     #[tokio::test]
     async fn prepared_body_rejects_invalid_metadata_before_the_call(shaping: MessagesShaping) {
         assert_eq!(
-            prepared_body(
+            wire_body(
                 json!({
                     "model": "claude-test",
                     "messages": [{"role": "user", "content": "hi"}],
