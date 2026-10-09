@@ -253,6 +253,12 @@ def _decide(gateway: Gateway, model: str, *, route: str = "/v1/decisions", **ext
     return gateway.request("POST", route, {"model": model, "input": _INPUT, "questions": _QUESTIONS, **extra})
 
 
+def _decide_in_system_one_format(gateway: Gateway, model: str, **extra: JsonValue) -> httpx.Response:
+    return gateway.request(
+        "POST", "/v1/systemone", {"model": model, "state": _INPUT, "questions": _SYSTEM_ONE_QUESTIONS, **extra}
+    )
+
+
 def _observed_requests(gateway: Gateway) -> tuple[dict[str, JsonValue], ...]:
     with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream:
         observations: Final = _JSON_OBJECT.validate_json(upstream.get("/__observations").content)["requests"]
@@ -506,6 +512,45 @@ def test_openai_keeps_the_safety_identifier_on_the_wire_without_drop_params(gate
         assert response.json() == _OPENAI.litellm_response()
         (call,) = _upstream_calls(gateway, handle)
         assert call["body"] == {**_OPENAI.upstream_body(), "safety_identifier": _SAFETY_IDENTIFIER}
+
+
+def test_a_system_one_format_safety_identifier_is_refused_unless_the_deployment_drops_params(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, _PERPLEXITY.upstream_reply())
+        strict: Final = _deployment(scenario, handle, _PERPLEXITY)
+        refused: Final = _decide_in_system_one_format(gateway, strict, safety_identifier=_SAFETY_IDENTIFIER)
+        _assert_refused_for_safety_identifier(refused)
+        assert _upstream_calls(gateway, handle) == []
+
+        dropping: Final = _deployment(scenario, handle, _PERPLEXITY, drop_params=True)
+        accepted: Final = _decide_in_system_one_format(gateway, dropping, safety_identifier=_SAFETY_IDENTIFIER)
+        assert accepted.status_code == 200, accepted.text
+        assert accepted.json()["answers"] == _SYSTEM_ONE_ANSWERS
+        (call,) = _upstream_calls(gateway, handle)
+        assert call["body"] == _PERPLEXITY.upstream_body()
+
+
+def test_openai_keeps_a_system_one_format_safety_identifier_on_the_wire(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, _OPENAI.upstream_reply())
+        model: Final = _deployment(scenario, handle, _OPENAI)
+        response: Final = _decide_in_system_one_format(gateway, model, safety_identifier=_SAFETY_IDENTIFIER)
+        assert response.status_code == 200, response.text
+        (call,) = _upstream_calls(gateway, handle)
+        assert call["body"] == {**_OPENAI.upstream_body(), "safety_identifier": _SAFETY_IDENTIFIER}
+
+
+@pytest.mark.parametrize("value", (7, [_SAFETY_IDENTIFIER]), ids=("numeric", "list"))
+def test_a_non_string_system_one_format_safety_identifier_is_refused_as_invalid(
+    gateway: Gateway, value: JsonValue
+) -> None:
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, _OPENAI.upstream_reply())
+        model: Final = _deployment(scenario, handle, _OPENAI)
+        response: Final = _decide_in_system_one_format(gateway, model, safety_identifier=value)
+        assert response.status_code == 400, response.text
+        assert "Invalid Decisions request" in response.text, response.text
+        assert _upstream_calls(gateway, handle) == []
 
 
 def test_litellm_settings_drop_params_drops_the_safety_identifier_for_a_strict_deployment(

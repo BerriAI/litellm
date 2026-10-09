@@ -3,7 +3,7 @@ from dataclasses import dataclass, field, replace
 from typing import Final, TypeAlias
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 import litellm
@@ -40,6 +40,9 @@ DecisionsRequestFormat: TypeAlias = DecisionsRequestBody | OpenAIDecisionRequest
 
 _SYSTEMONE_REQUEST_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
 _OPENAI_REQUEST_ADAPTER: Final[TypeAdapter[OpenAIDecisionRequestBody]] = TypeAdapter(OpenAIDecisionRequestBody)
+_SAFETY_IDENTIFIER_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(
+    str | None, config=ConfigDict(title="safety_identifier")
+)
 _HANDLER: Final = BaseLLMHTTPHandler()
 
 
@@ -96,10 +99,10 @@ def _validate_request(
     )
 
 
-def _ir_request(request: DecisionsRequestFormat) -> DecisionsIRRequest:
+def _ir_request(request: DecisionsRequestFormat, safety_identifier: str | None) -> DecisionsIRRequest:
     match request:
         case DecisionsRequestBody():
-            return systemone_request_to_ir(request)
+            return replace(systemone_request_to_ir(request), safety_identifier=safety_identifier)
         case OpenAIDecisionRequestBody():
             return openai_request_to_ir(request)
         case _:
@@ -113,12 +116,13 @@ def _drops_params(kwargs: Mapping[str, object]) -> bool:
 def _provider_ir_request(
     request: DecisionsRequestFormat,
     *,
+    safety_identifier: str | None,
     model: str,
     provider: str,
     provider_config: BaseDecisionsConfig,
     kwargs: Mapping[str, object],
 ) -> DecisionsIRRequest:
-    ir_request: Final = _ir_request(request)
+    ir_request: Final = _ir_request(request, safety_identifier)
     if ir_request.safety_identifier is None or provider_config.supports_safety_identifier:
         return ir_request
     if _drops_params(kwargs):
@@ -171,6 +175,7 @@ def _prepare_call(
         request: Final = _validate_request(
             state=state, questions=questions, decision_input=decision_input, safety_identifier=safety_identifier
         )
+        validated_safety_identifier: Final = _SAFETY_IDENTIFIER_ADAPTER.validate_python(safety_identifier)
     except ValidationError as error:
         raise litellm.BadRequestError(
             message=f"Invalid Decisions request: {error}",
@@ -194,7 +199,12 @@ def _prepare_call(
         )
 
     ir_request: Final = _provider_ir_request(
-        request, model=model, provider=provider, provider_config=provider_config, kwargs=kwargs
+        request,
+        safety_identifier=validated_safety_identifier,
+        model=model,
+        provider=provider,
+        provider_config=provider_config,
+        kwargs=kwargs,
     )
     body: Final = provider_config.transform_decisions_request(
         model=canonical_model, request=ir_request, custom_llm_provider=provider
