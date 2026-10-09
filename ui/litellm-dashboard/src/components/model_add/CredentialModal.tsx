@@ -21,6 +21,7 @@ import { Logo } from "@/components/molecules/logo/Logo";
 import { resetCredentialFormOnProviderChange, withoutRestrictedFields } from "./credential_form_helpers";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import FederationFields from "./FederationFields";
+import InternalIssuerJwks from "./InternalIssuerJwks";
 import { DEFAULT_IDENTITY_SOURCE, inferIdentitySource, type IdentitySourceId } from "./anthropic_federation";
 import {
   buildCreateCredentialValues,
@@ -29,6 +30,7 @@ import {
   federatedProviderOf,
   inferAuthMethod,
   isFederatedCredential,
+  jwksPanelFor,
   providerFieldValidators,
   selectionFor,
   type AuthMethod,
@@ -301,6 +303,8 @@ export default function CredentialModal({
                   storedValues={storedValues}
                 />
               )}
+
+              <InternalIssuerJwks panel={jwksPanelFor(existingCredential, selection)} />
 
               <div className="flex justify-between items-center">
                 <SimpleTooltip content="Get help on our github">
