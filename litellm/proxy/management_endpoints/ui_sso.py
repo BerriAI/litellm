@@ -2323,11 +2323,11 @@ async def _complete_cli_sso_callback_session(
 ):
     from fastapi.responses import HTMLResponse
 
-    effective_user_id: Final = (
-        user_defined_values.get("user_id") if user_defined_values is not None else parsed_openid_result.get("user_id")
-    )
-    _require_sso_user_id(effective_user_id)
+    from litellm.proxy.proxy_server import user_custom_sso
+
     user_id: Final = parsed_openid_result.get("user_id")
+    if user_custom_sso is None:
+        _require_sso_user_id(user_id)
     user_email: Final = parsed_openid_result.get("user_email")
     user_info: Final = await get_user_info_from_db(
         result=result,
@@ -2633,6 +2633,8 @@ async def insert_sso_user(
 
     if user_defined_values is None:
         raise ValueError("user_defined_values is None")
+    if _is_blank_sso_user_id(user_defined_values.get("user_id")):
+        raise ValueError("SSO user id is blank")
 
     # Apply default_internal_user_params
     if litellm.default_internal_user_params:
@@ -2907,9 +2909,13 @@ def _persist_return_to_cookie(response: Response, return_to: str | None, request
         )
 
 
-def _require_sso_user_id(user_id: str | None) -> str:
+def _is_blank_sso_user_id(user_id: object) -> bool:
+    return isinstance(user_id, str) and not user_id.strip()
+
+
+def _require_sso_user_id(user_id: object) -> str:
     """Return a nonblank SSO user id or reject the login with a 401"""
-    if user_id is None or not user_id.strip():
+    if not isinstance(user_id, str) or not user_id.strip():
         verbose_proxy_logger.warning("SSO login rejected: the provider response resolved no user id or email")
         raise HTTPException(
             status_code=401,
@@ -3630,8 +3636,8 @@ class SSOAuthenticationHandler:
             received_response=received_response,
         )
 
-        if user_defined_values is not None:
-            _require_sso_user_id(user_defined_values.get("user_id"))
+        if custom_sso_handler is None:
+            _require_sso_user_id(user_id)
 
         user_info = await get_user_info_from_db(
             result=result,

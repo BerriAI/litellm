@@ -21,6 +21,7 @@ from litellm.proxy.management_endpoints.ui_sso import (
     GoogleSSOHandler,
     MicrosoftSSOHandler,
     SSOAuthenticationHandler,
+    _complete_cli_sso_callback_session,
     _setup_team_mappings,
     _sync_user_role_from_jwt_role_map,
     cli_sso_callback,
@@ -1379,6 +1380,39 @@ async def test_redirect_from_openid_allows_custom_sso_to_resolve_missing_provide
 
     assert user_info_from_db.await_args.kwargs["user_defined_values"]["user_id"] == "mapped-user"
     generate_key.assert_not_awaited()
+
+
+def _custom_sso_returning_user_id(custom_user_id):
+    async def custom_sso(result):
+        return {
+            "models": [],
+            "user_id": custom_user_id,
+            "user_email": None,
+            "user_role": None,
+            "max_budget": None,
+            "budget_duration": None,
+        }
+
+    return custom_sso
+
+
+@pytest.mark.parametrize("custom_user_id", [None, "", "   ", 424242])
+@pytest.mark.asyncio
+async def test_redirect_from_openid_signs_a_custom_sso_user_in_as_the_matched_account(custom_user_id):
+    user_info_from_db = AsyncMock(return_value=LiteLLM_UserTable(user_id="existing-user"))
+    generate_key = AsyncMock(side_effect=RuntimeError("stop at key mint"))
+    mock_request, stack = _empty_identity_redirect_patches(
+        _custom_sso_returning_user_id(custom_user_id), user_info_from_db, generate_key
+    )
+
+    with stack, pytest.raises(RuntimeError, match="stop at key mint"):
+        await SSOAuthenticationHandler.get_redirect_response_from_openid(
+            result=CustomOpenID(id="idp-subject", email="u@example.com", provider="generic", team_ids=[]),
+            request=mock_request,
+        )
+
+    user_info_from_db.assert_awaited_once()
+    assert generate_key.await_args.kwargs["user_id"] == "existing-user"
 
 
 @pytest.mark.asyncio
@@ -9497,6 +9531,36 @@ async def test_cli_completion_fails_the_login_when_team_lookup_fails():
 
     assert exc_info.value.status_code == 500
     assert "session_data" not in flow
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("custom_user_id", [None, "", "   ", 424242])
+async def test_cli_completion_signs_a_custom_sso_user_in_as_the_matched_account(custom_user_id):
+    flow = {}
+    kwargs = _cli_callback_kwargs(flow)
+    kwargs["parsed_openid_result"] = {**kwargs["parsed_openid_result"], "user_id": ""}
+    kwargs["user_defined_values"] = {
+        "models": [],
+        "user_id": custom_user_id,
+        "user_email": "u@example.com",
+        "max_budget": None,
+        "user_role": None,
+        "budget_duration": None,
+    }
+    get_user_info_mock = AsyncMock(return_value=_cli_callback_user_info([]))
+
+    with (
+        patch("litellm.proxy.proxy_server.user_custom_sso", _custom_sso_returning_user_id(custom_user_id)),
+        patch("litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db", get_user_info_mock),
+        patch("litellm.proxy.management_endpoints.ui_sso.fetch_cli_sso_team_details", AsyncMock(return_value=())),
+        patch("litellm.proxy.management_endpoints.ui_sso.build_cli_sso_attribution_metadata", return_value={}),
+        patch("litellm.proxy.management_endpoints.ui_sso.retain_sso_identity_assertion_for_ema", AsyncMock()),
+    ):
+        response = await _complete_cli_sso_callback_session(**kwargs)
+
+    assert response.status_code == 200
+    get_user_info_mock.assert_awaited_once()
+    assert flow["session_data"]["user_id"] == "cli-user-id"
 
 
 @pytest.mark.asyncio
