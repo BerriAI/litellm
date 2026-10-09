@@ -152,6 +152,8 @@ class TestDashScopeRerankRequest:
         }
 
     def test_map_params_drops_unsupported(self):
+        # qwen3-rerank accepts query/documents/top_n/return_documents.
+        # rank_fields and max_*_per_doc are silently dropped.
         params = self.config.map_cohere_rerank_params(
             non_default_params={},
             model="qwen3-rerank",
