@@ -163,9 +163,9 @@ describe("AddGuardrailForm create payload characterization", () => {
     await user.click((await screen.findAllByText("logging_only")).at(-1) as HTMLElement);
     await user.click(await screen.findByLabelText("Logging only scope"));
 
+    expect(await screen.findByRole("option", { name: "Both (request and response)" })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "Input only (request)" })).not.toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "Output only (response)" })).not.toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "Both (request and response)" })).toBeInTheDocument();
   });
 
   it("hides logging-only scope and omits it from a pre-call payload", async () => {

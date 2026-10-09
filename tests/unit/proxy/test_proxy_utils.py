@@ -2589,7 +2589,7 @@ async def test_handle_logging_proxy_only_error_syncs_normalized_call_type(
 async def test_during_call_hook_parallel_execution():
     """
     Test that multiple guardrails in during_call_hook are executed in parallel.
-    Verifies parallel execution by checking timing and execution order.
+    Each guardrail blocks until all of them have started, so sequential execution times out.
     """
     from litellm.caching.caching import DualCache
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -2599,6 +2599,8 @@ async def test_during_call_hook_parallel_execution():
     cache = DualCache()
     proxy_logging = ProxyLogging(user_api_key_cache=cache)
     execution_order = []
+    guardrail_count: Final = 3
+    all_started: Final = asyncio.Event()
 
     class TestGuardrail(CustomGuardrail):
         def __init__(self, name):
@@ -2611,24 +2613,23 @@ async def test_during_call_hook_parallel_execution():
 
         async def async_moderation_hook(self, data, user_api_key_dict, call_type):
             execution_order.append(f"{self.name}_start")
-            await asyncio.sleep(0.1)
+            if sum(1 for item in execution_order if item.endswith("_start")) == guardrail_count:
+                all_started.set()
+            await asyncio.wait_for(all_started.wait(), timeout=5)
             execution_order.append(f"{self.name}_end")
             return data
 
     original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
 
     try:
-        litellm.callbacks = [TestGuardrail(f"g{i}") for i in range(3)]
+        litellm.callbacks = [TestGuardrail(f"g{i}") for i in range(guardrail_count)]
 
-        start_time = asyncio.get_event_loop().time()
         result = await proxy_logging.during_call_hook(
             data={"model": "gpt-4", "messages": [{"role": "user", "content": "test"}]},
             user_api_key_dict=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
             call_type="completion",
         )
-        execution_time = asyncio.get_event_loop().time() - start_time
 
-        # Verify parallel execution: all start before any end
         first_end_idx = next(
             i for i, item in enumerate(execution_order) if "end" in item
         )
@@ -2636,13 +2637,8 @@ async def test_during_call_hook_parallel_execution():
             1 for item in execution_order[:first_end_idx] if "start" in item
         )
         assert (
-            starts_before_end == 3
-        ), f"Expected 3 starts before first end, got {starts_before_end}"
-
-        # Verify timing: parallel ~0.1s vs sequential ~0.3s
-        assert (
-            execution_time < 0.2
-        ), f"Parallel execution took {execution_time}s, expected < 0.2s"
+            starts_before_end == guardrail_count
+        ), f"Expected {guardrail_count} starts before first end, got {starts_before_end}"
         assert result["model"] == "gpt-4"
     finally:
         litellm.callbacks = original_callbacks
