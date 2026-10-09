@@ -2621,6 +2621,112 @@ async fn agent_final_answer_preserves_visibility_and_trace_ownership(
 }
 
 #[rstest]
+#[case::agent_answered_by_latest_llm_child("alpha", "root", Some(("root prompt", "final answer")))]
+#[case::agent_without_children("alpha", "quiet", Some(("quiet prompt", "")))]
+#[case::agent_with_own_output("alpha", "spoken", Some(("spoken prompt", "own words")))]
+#[case::llm_span_keeps_own_output("alpha", "late-llm", Some(("late-llm prompt", "final answer")))]
+#[case::llm_span_without_output_stays_empty("alpha", "empty-llm", Some(("empty-llm prompt", "")))]
+#[case::duplicate_rows_use_earliest_copy("alpha", "dup", Some(("early copy", "early out")))]
+#[case::span_known_only_as_a_parent("alpha", "ghost", None)]
+#[case::other_owner_of_reused_trace_id("beta", "root", Some(("other prompt", "other answer")))]
+#[tokio::test]
+async fn span_detail_reads_one_owner_and_matches_the_span_tree(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+    #[case] owner: &str,
+    #[case] span_id: &str,
+    #[case] expected: Option<(&str, &str)>,
+) -> TestResult {
+    use litellm_traces_clickhouse::query::named::{
+        ReadAccessParams, SpanDetail, SpanDetailParams, TraceSpans, TraceSpansParams,
+    };
+    use sha2::{Digest, Sha256};
+
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+    let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
+    let rows = [
+        ("alpha", "dup", "tool", "llm", 60, 1, "late copy", "late out"),
+        ("alpha", "dup", "tool", "llm", 55, 2, "tied later", "tied later"),
+        ("alpha", "dup", "tool", "llm", 55, 3, "a received later", "a received later"),
+        ("alpha", "dup", "tool", "llm", 55, 2, "early copy", "early out"),
+        ("alpha", "root", "", "agent", 10, 0, "root prompt", ""),
+        ("alpha", "early-llm", "root", "llm", 20, 0, "early-llm prompt", "early answer"),
+        ("alpha", "late-llm", "root", "llm", 30, 0, "late-llm prompt", "final answer"),
+        ("alpha", "tool", "root", "tool", 40, 0, "tool prompt", "tool result"),
+        ("alpha", "empty-llm", "root", "llm", 50, 0, "empty-llm prompt", ""),
+        ("alpha", "quiet", "root", "agent", 15, 0, "quiet prompt", ""),
+        ("alpha", "spoken", "root", "agent", 16, 0, "spoken prompt", "own words"),
+        ("alpha", "grandchild", "spoken", "llm", 80, 0, "grandchild prompt", "grandchild words"),
+        ("alpha", "nested", "empty-llm", "llm", 90, 0, "nested prompt", "nested words"),
+        ("alpha", "orphan", "ghost", "llm", 95, 0, "orphan prompt", "orphan words"),
+        ("beta", "root", "", "agent", 5, 0, "other prompt", ""),
+        ("beta", "other-llm", "root", "llm", 6, 0, "other-llm prompt", "other answer"),
+    ]
+    .into_iter()
+    .map(|(team, span, parent, kind, offset, received, input, output)| {
+        serde_json::from_value(serde_json::json!({
+            "Timestamp": timestamp + offset, "EngineReceivedMs": received, "TraceId": "reused",
+            "SpanId": span, "ParentSpanId": parent, "TeamId": team, "ApiKeyHash": format!("{team}-key"),
+            "ObservationType": kind, "Input": input, "Output": output, "StatusMessage": input,
+        }))
+    })
+    .collect::<Result<Vec<_>, _>>()?;
+    insert_rows(&database, "otel_traces", rows).await?;
+    let reader = Connection::reader(&database.url, "trace_test")?;
+    let access = ReadAccessParams {
+        all_teams: true,
+        user_id: String::new(),
+        team_ids: Vec::new(),
+    };
+    let trace_ref = format!(
+        "{:X}",
+        Sha256::digest(format!("{owner}\0{owner}-key\0reused"))
+    );
+    let details = litellm_storage_clickhouse::fetch::<SpanDetail>(
+        &database.client,
+        &reader,
+        &SpanDetailParams {
+            access: access.clone(),
+            trace_id: "reused".into(),
+            trace_ref: trace_ref.clone(),
+            span_id: span_id.into(),
+        },
+    )
+    .await?;
+    let tree = litellm_storage_clickhouse::fetch::<TraceSpans>(
+        &database.client,
+        &reader,
+        &TraceSpansParams {
+            access,
+            trace_id: "reused".into(),
+            trace_ref,
+        },
+    )
+    .await?;
+    let node = tree.iter().find(|row| row.0.span_id == span_id);
+    assert_eq!(
+        details
+            .iter()
+            .map(|row| (
+                row.span_id.as_str(),
+                row.input.as_str(),
+                row.output.as_str()
+            ))
+            .collect::<Vec<_>>(),
+        expected
+            .map(|(input, output)| (span_id, input, output))
+            .into_iter()
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        node.map(|row| (row.0.input_preview.as_str(), row.0.team_id.as_str())),
+        expected.map(|(input, _)| (input, owner))
+    );
+    Ok(())
+}
+
+#[rstest]
 #[tokio::test]
 async fn nullable_spend_upgrade_preserves_existing_costs_and_unknown_new_costs(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
