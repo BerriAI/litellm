@@ -5,6 +5,7 @@ import { modelAvailableCall, modelHubCall } from "@/components/networking";
 
 export interface ModelGroup {
   model_group: string;
+  providers?: string[];
   mode?: string;
   supports_reasoning?: boolean;
   supports_fast_mode?: boolean;
@@ -13,6 +14,7 @@ export interface ModelGroup {
 
 interface AvailableModel {
   model_group?: string | null;
+  providers?: string[] | null;
   model_name?: string | null;
   id?: string | null;
   mode?: string | null;
@@ -25,6 +27,9 @@ const toModelGroup = (item: AvailableModel): ModelGroup => {
   const groupName = (item.model_group || item.id || item.model_name) ?? "";
   return {
     model_group: groupName,
+    ...(Array.isArray(item.providers) && {
+      providers: item.providers.filter((provider) => typeof provider === "string"),
+    }),
     ...(item.mode && { mode: item.mode }),
     ...(item.supports_reasoning === true && { supports_reasoning: true }),
     ...(item.supports_fast_mode === true && { supports_fast_mode: true }),

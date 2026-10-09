@@ -1,13 +1,17 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useChatHistory } from "@/components/chat/useChatHistory";
 import ChatConversationPage from "./page";
 import { renderWithProviders } from "@/../tests/test-utils";
 import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 
 const { mockMakeOpenAIResponsesRequest, shellState } = vi.hoisted(() => ({
   mockMakeOpenAIResponsesRequest: vi.fn(),
-  shellState: { storageUnavailable: false },
+  shellState: {
+    activeConversationIdOverride: null as string | null,
+    storageUnavailable: false,
+  },
 }));
 
 vi.mock("next/navigation", () => ({
@@ -41,6 +45,16 @@ vi.mock("react-syntax-highlighter/dist/esm/styles/prism", () => ({ coy: {}, oneD
 vi.mock("@/contexts/ChatShellContext", () => ({
   useChatShell: () => {
     const history = useChatHistory(null, "metrics-test-user");
+    const activeConversationId = shellState.activeConversationIdOverride ?? history.currentActiveId;
+    const activeConversation = shellState.activeConversationIdOverride
+      ? {
+          id: shellState.activeConversationIdOverride,
+          title: "Second conversation",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          messages: [],
+        }
+      : history.activeConversation;
     return {
       accessToken: "sk-test",
       userId: "metrics-test-user",
@@ -50,8 +64,8 @@ vi.mock("@/contexts/ChatShellContext", () => ({
       selectedMCPServers: [],
       setSelectedMCPServers: vi.fn(),
       conversations: history.conversations,
-      activeConversation: history.activeConversation,
-      activeConversationId: history.currentActiveId,
+      activeConversation,
+      activeConversationId,
       storageUnavailable: shellState.storageUnavailable,
       staleId: false,
       createConversation: history.createConversation,
@@ -69,21 +83,152 @@ const ON_TIMING_DATA_INDEX = 7;
 const ON_USAGE_DATA_INDEX = 8;
 const ON_TOTAL_LATENCY_INDEX = 24;
 
-async function sendOneMessage(onUrlUpdate?: OnUrlUpdateFunction): Promise<void> {
-  renderWithProviders(<ChatConversationPage />, { onUrlUpdate });
+async function sendOneMessage(onUrlUpdate?: OnUrlUpdateFunction) {
+  const result = renderWithProviders(<ChatConversationPage />, { onUrlUpdate });
   expect(await screen.findByRole("button", { name: /gpt-5\.4-mini/ })).toBeInTheDocument();
   fireEvent.change(screen.getByPlaceholderText("How can I help you today?"), {
     target: { value: "How much did this cost?" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
   await waitFor(() => expect(mockMakeOpenAIResponsesRequest).toHaveBeenCalledTimes(1));
+  return result;
 }
 
 describe("/ui/chat request metrics", () => {
   beforeEach(() => {
     localStorage.clear();
     mockMakeOpenAIResponsesRequest.mockReset();
+    shellState.activeConversationIdOverride = null;
     shellState.storageUnavailable = false;
+    vi.mocked(fetchAvailableModels).mockResolvedValue([{ model_group: "gpt-5.4-mini" }]);
+  });
+
+  it.each([
+    { providers: ["openrouter"], stateless: true },
+    { providers: ["openai", "openrouter"], stateless: true },
+    { providers: ["openai"], stateless: false },
+    { providers: undefined, stateless: false },
+  ])("continues a conversation correctly with providers=$providers", async ({ providers, stateless }) => {
+    vi.mocked(fetchAvailableModels).mockResolvedValue([{ model_group: "gpt-5.4-mini", providers }]);
+    mockMakeOpenAIResponsesRequest.mockImplementation(async (...args: unknown[]) => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      (args[1] as (role: string, delta: string) => void)("assistant", "First answer");
+      (args[15] as (id: string) => void)("response-first");
+    });
+
+    await sendOneMessage();
+    expect(await screen.findByText("First answer")).toBeVisible();
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "Follow up" },
+    });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(mockMakeOpenAIResponsesRequest).toHaveBeenCalledTimes(2));
+
+    const [first, second] = mockMakeOpenAIResponsesRequest.mock.calls;
+    expect(first[14]).toBeNull();
+    expect(second[14]).toBe(stateless ? null : "response-first");
+    expect(second[0]).toEqual(
+      stateless
+        ? [
+            { role: "user", content: "How much did this cost?" },
+            { role: "assistant", content: "First answer" },
+            { role: "user", content: "Follow up" },
+          ]
+        : [{ role: "user", content: "Follow up" }],
+    );
+  });
+
+  it("resends history instead of reusing another model's response ID after changing models", async () => {
+    vi.mocked(fetchAvailableModels).mockResolvedValue([
+      { model_group: "gpt-5.4-mini", providers: ["openai"] },
+      { model_group: "second-model", providers: ["openai"] },
+    ]);
+    mockMakeOpenAIResponsesRequest.mockImplementation(async (...args: unknown[]) => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      (args[1] as (role: string, delta: string) => void)("assistant", "First answer");
+      (args[15] as (id: string) => void)("response-first");
+    });
+
+    await sendOneMessage();
+    expect(await screen.findByText("First answer")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: /gpt-5\.4-mini/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "second-model" }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Follow up" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(mockMakeOpenAIResponsesRequest).toHaveBeenCalledTimes(2));
+
+    const second = mockMakeOpenAIResponsesRequest.mock.calls[1];
+    expect(second[2]).toBe("second-model");
+    expect(second[14]).toBeNull();
+    expect(second[0]).toEqual([
+      { role: "user", content: "How much did this cost?" },
+      { role: "assistant", content: "First answer" },
+      { role: "user", content: "Follow up" },
+    ]);
+  });
+
+  it.each([false, true])("ignores late response IDs after model changes ($0)", async (switchBack) => {
+    vi.mocked(fetchAvailableModels).mockResolvedValue([
+      { model_group: "gpt-5.4-mini", providers: ["openai"] },
+      { model_group: "second-model", providers: ["openai"] },
+    ]);
+    const firstCompletion = Promise.withResolvers<void>();
+    mockMakeOpenAIResponsesRequest.mockImplementationOnce(async (...args: unknown[]) => {
+      await firstCompletion.promise;
+      (args[1] as (role: string, delta: string) => void)("assistant", "First answer");
+      (args[15] as (id: string) => void)("response-first");
+    });
+    mockMakeOpenAIResponsesRequest.mockResolvedValue(undefined);
+
+    await sendOneMessage();
+    fireEvent.click(screen.getByRole("button", { name: /gpt-5\.4-mini/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "second-model" }));
+    if (switchBack) {
+      fireEvent.click(screen.getByRole("button", { name: "second-model" }));
+      fireEvent.click(await screen.findByRole("button", { name: "gpt-5.4-mini" }));
+    }
+
+    await act(async () => firstCompletion.resolve());
+    expect(await screen.findByText("First answer")).toBeVisible();
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Follow up" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(mockMakeOpenAIResponsesRequest).toHaveBeenCalledTimes(2));
+
+    const second = mockMakeOpenAIResponsesRequest.mock.calls[1];
+    expect(second[2]).toBe(switchBack ? "gpt-5.4-mini" : "second-model");
+    expect(second[14]).toBeNull();
+    expect(second[0]).toEqual([
+      { role: "user", content: "How much did this cost?" },
+      { role: "assistant", content: "First answer" },
+      { role: "user", content: "Follow up" },
+    ]);
+  });
+
+  it("ignores late response IDs after changing conversations", async () => {
+    const firstCompletion = Promise.withResolvers<void>();
+    mockMakeOpenAIResponsesRequest.mockImplementationOnce(async (...args: unknown[]) => {
+      await firstCompletion.promise;
+      (args[1] as (role: string, delta: string) => void)("assistant", "First answer");
+      (args[15] as (id: string) => void)("response-first");
+    });
+    mockMakeOpenAIResponsesRequest.mockResolvedValue(undefined);
+
+    const { rerender } = await sendOneMessage();
+    shellState.activeConversationIdOverride = "conversation-b";
+    rerender(<ChatConversationPage />);
+
+    await act(async () => firstCompletion.resolve());
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Follow up" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(mockMakeOpenAIResponsesRequest).toHaveBeenCalledTimes(2));
+
+    const second = mockMakeOpenAIResponsesRequest.mock.calls[1];
+    expect(second[14]).toBeNull();
+    expect(second[0]).toEqual([{ role: "user", content: "Follow up" }]);
   });
 
   it("renders latency, TTFT, token counts and cost reported for the assistant turn", async () => {
