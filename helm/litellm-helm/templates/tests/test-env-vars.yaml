@@ -1,3 +1,5 @@
+{{- $envVars := .Values.envVars | default dict }}
+{{- if and $envVars.DD_ENV $envVars.DD_SERVICE $envVars.USE_DDTRACE }}
 apiVersion: v1
 kind: Pod
 metadata:
@@ -41,3 +43,4 @@ spec:
         - name: USE_DDTRACE
           value: {{ .Values.envVars.USE_DDTRACE | quote }}
   restartPolicy: Never
+{{- end -}}
