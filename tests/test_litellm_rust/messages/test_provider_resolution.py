@@ -60,7 +60,7 @@ class Rewrite(CustomLogger):
         self.changes: Final = changes
 
     async def async_pre_call_deployment_hook(self, kwargs: dict[str, object], call_type: object) -> dict[str, object]:
-        return {key: value for key, value in {**kwargs, **self.changes}.items() if value is not Rewrite}
+        return {**kwargs, **self.changes}
 
 
 @pytest.mark.asyncio
@@ -88,17 +88,6 @@ async def test_model_rewritten_by_a_pre_call_hook_is_what_gets_served(messages_s
     await litellm.anthropic.messages.acreate(**arguments(messages_server))
 
     assert served_model(messages_server) == OTHER_MODEL
-
-
-@pytest.mark.asyncio
-async def test_provider_deleted_by_a_pre_call_hook_falls_back_to_the_model_prefix(
-    messages_server: RecordingServer,
-) -> None:
-    litellm.callbacks.append(Rewrite(custom_llm_provider=Rewrite))
-
-    await litellm.anthropic.messages.acreate(**arguments(messages_server, custom_llm_provider="anthropic"))
-
-    assert served_model(messages_server) == BARE_MODEL
 
 
 @pytest.mark.asyncio

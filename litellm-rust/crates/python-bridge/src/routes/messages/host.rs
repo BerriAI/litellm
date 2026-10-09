@@ -2,7 +2,7 @@ use crate::cache::{CacheCall, Cached, PythonCache, Selection};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
-use litellm_host_python::{InvokeError, PythonBinding, effective_py_args, from_py, present, to_py};
+use litellm_host_python::{InvokeError, PythonBinding, from_py, present, to_py};
 use litellm_http::transport::Error as TransportError;
 use litellm_inference_messages::{
     Error, MessagesCall, MessagesSettings, MessagesShaping, messages_body,
@@ -89,17 +89,15 @@ fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
 /// The Python side of the Messages route: projects the prepared arguments and builds the
 /// public response, chunks and exceptions.
 pub(super) struct MessagesPythonHost {
-    base: Py<PyDict>,
     request: Py<PyDict>,
     provider: Option<String>,
     cache: PythonCache,
 }
 
 impl MessagesPythonHost {
-    pub(super) fn new(base: Py<PyDict>, asynchronous: bool) -> Self {
+    pub(super) fn new(request: Py<PyDict>, asynchronous: bool) -> Self {
         Self {
-            request: Python::attach(|py| base.clone_ref(py)),
-            base,
+            request,
             provider: None,
             cache: PythonCache::new(asynchronous),
         }
@@ -118,8 +116,12 @@ impl MessagesPythonHost {
         let model = string("model")?.ok_or_else(|| PyValueError::new_err("model is required"))?;
         let supplied_provider = string("custom_llm_provider")?;
         let api_base = string("api_base")?;
-        let Some(target) =
-            crate::provider::resolve(py, &model, supplied_provider.as_deref(), api_base.as_deref())?
+        let Some(target) = crate::provider::resolve(
+            py,
+            &model,
+            supplied_provider.as_deref(),
+            api_base.as_deref(),
+        )?
         else {
             return Ok(Err(Error::InvalidProvider(model)));
         };
@@ -245,9 +247,6 @@ impl PythonBinding for MessagesPythonHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> Result<(MessagesCall, Selection), InvokeError<Error>> {
-        self.request = effective_py_args(self.base.bind(py), arguments)
-            .map_err(InvokeError::Python)?
-            .unbind();
         let selection =
             crate::cache::configure(&mut self.cache, py, arguments, "anthropic_messages")
                 .map_err(InvokeError::Python)?;
@@ -328,7 +327,6 @@ impl PythonOwned for MessagesPythonHost {
         self.cache.close();
     }
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-        visit.call(&self.base)?;
         visit.call(&self.request)?;
         self.cache.traverse(visit)
     }

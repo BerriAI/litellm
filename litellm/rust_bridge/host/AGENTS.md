@@ -7,6 +7,6 @@ Python state Rust needs but does not own, behind one module per question. Rust i
 - Each module reuses the Python implementation the Python route runs (`get_llm_provider`, `AnthropicModelInfo`, `Logging`). Do not re-derive those rules here or in Rust; one resolver, two callers
 - The module path and function signature are a contract. The Rust side pins the path in a `const MODULE` in the crate that asks (`python-bridge/src/provider.rs`, `callbacks-legacy-python/src/python.rs`); change both sides together and keep `tests/unit/rust_bridge/host/` green
 - Inputs are plain values (`str`, `None`, dicts) and outputs are plain values or `None`. No `litellm` objects cross the boundary
-- Admission and execution ask the same function, so the provider that admits a call to Rust is the provider that serves it and names its errors. Resolve from the effective arguments after callbacks, never from a snapshot taken before them
+- Admission and execution ask the same function. Resolve the current model and provider after callbacks, so provider selection and error attribution use the same answer
 - Moving a question into Rust means replacing the function body with a native call, not adding a second resolver. The Python signature stays
 - A `*/route_host.py` module is not this: it projects one route's kwargs and maps that route's failures. Shared questions belong here

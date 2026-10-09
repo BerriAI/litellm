@@ -22,8 +22,10 @@ pub(crate) fn resolve(
         .getattr("resolve_provider")?
         .call1((model, custom_llm_provider, api_base))?
         .extract()?;
-    Ok(resolved.map(|(model, custom_llm_provider)| ResolvedProvider {
-        model,
-        custom_llm_provider,
-    }))
+    Ok(
+        resolved.map(|(model, custom_llm_provider)| ResolvedProvider {
+            model,
+            custom_llm_provider,
+        }),
+    )
 }
