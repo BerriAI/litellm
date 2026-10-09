@@ -2,7 +2,6 @@ import os
 
 import pytest
 
-
 from base_llm_unit_tests import BaseLLMChatTest
 from litellm.llms.vertex_ai.context_caching.transformation import (
     separate_cached_messages,
@@ -12,18 +11,9 @@ import litellm
 from litellm import completion
 import json
 
-
-
-
 class TestGoogleAIStudioGemini(BaseLLMChatTest):
     test_async_pdf_handling_with_file_id = None
-    test_content_list_handling = None
-    test_developer_role_translation = None
     test_function_calling_with_tool_response = None
-    test_image_url = None
-    test_json_response_nested_json_schema = None
-    test_json_response_nested_pydantic_obj = None
-    test_json_response_pydantic_obj = None
     test_web_search = None
 
     def get_base_completion_call_args(self) -> dict:
@@ -31,7 +21,6 @@ class TestGoogleAIStudioGemini(BaseLLMChatTest):
 
     def get_base_completion_call_args_with_reasoning_model(self) -> dict:
         return {"model": "gemini/gemini-2.5-flash"}
-
 
     @pytest.mark.flaky(retries=3, delay=2)
     def test_url_context(self):
@@ -64,11 +53,6 @@ class TestGoogleAIStudioGemini(BaseLLMChatTest):
         ), "URL context metadata should be present"
         print(f"response={response}")
 
-
-
-
-
-
 def test_gemini_image_generation():
     # litellm.turn_on_debug()
     response = completion(
@@ -89,23 +73,6 @@ def test_gemini_image_generation():
         .message.images[0]["image_url"]["url"]
         .startswith("data:image/png;base64,")
     )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 def test_gemini_thinking():
     litellm.turn_on_debug()
@@ -146,9 +113,6 @@ def test_gemini_thinking():
     print(response.choices[0].message)
     assert response.choices[0].message.content is not None
 
-
-
-
 def test_gemini_finish_reason():
     import os
     from litellm import completion
@@ -162,7 +126,6 @@ def test_gemini_finish_reason():
     print(response)
     assert response.choices[0].finish_reason is not None
     assert response.choices[0].finish_reason == "length"
-
 
 @pytest.mark.flaky(retries=3, delay=2)
 def test_gemini_url_context():
@@ -188,7 +151,6 @@ def test_gemini_url_context():
     urlMetadata = url_context_metadata[0]["urlMetadata"][0]
     assert urlMetadata["retrievedUrl"] == URL1
     assert urlMetadata["urlRetrievalStatus"] == "URL_RETRIEVAL_STATUS_SUCCESS"
-
 
 @pytest.mark.flaky(retries=3, delay=2)
 def test_gemini_with_grounding():
@@ -226,7 +188,6 @@ def test_gemini_with_grounding():
     assert usage.prompt_tokens_details.web_search_requests is not None
     assert usage.prompt_tokens_details.web_search_requests > 0
 
-
 def test_gemini_with_empty_function_call_arguments():
     from litellm import completion
 
@@ -247,9 +208,6 @@ def test_gemini_with_empty_function_call_arguments():
     )
     print(response)
     assert response.choices[0].message.content is not None
-
-
-
 
 def test_gemini_tool_use():
     data = {
@@ -299,7 +257,6 @@ def test_gemini_tool_use():
     assert stop_reason is not None
     assert stop_reason == "tool_calls"
 
-
 @pytest.mark.asyncio
 async def test_gemini_image_generation_async():
     litellm.turn_on_debug()
@@ -331,7 +288,6 @@ async def test_gemini_image_generation_async():
     assert IMAGE_URL is not None, "IMAGE_URL is not None"
     assert IMAGE_URL["url"] is not None, "IMAGE_URL['url'] is not None"
     assert IMAGE_URL["url"].startswith("data:image/png;base64,")
-
 
 @pytest.mark.asyncio
 async def test_gemini_image_generation_async_stream():
@@ -367,7 +323,6 @@ async def test_gemini_image_generation_async_stream():
     assert model_response_image is not None
     assert model_response_image["url"].startswith("data:image/png;base64,")
 
-
 def test_system_message_with_no_user_message():
     """
     Test that the system message is translated correctly for non-OpenAI providers.
@@ -387,7 +342,6 @@ def test_system_message_with_no_user_message():
 
     assert response.choices[0].message.content is not None
 
-
 def get_current_weather(location, unit="fahrenheit"):
     """Get the current weather in a given location"""
     if "tokyo" in location.lower():
@@ -400,7 +354,6 @@ def get_current_weather(location, unit="fahrenheit"):
         return json.dumps({"location": "Paris", "temperature": "22", "unit": "celsius"})
     else:
         return json.dumps({"location": location, "temperature": "unknown"})
-
 
 def test_gemini_with_thinking():
     from litellm import completion
@@ -493,11 +446,6 @@ def test_gemini_with_thinking():
         )  # get a new response from the model where it can see the function response
         print("second response\n", second_response)
 
-
-
-
-
-
 @pytest.mark.parametrize(
     "status_code,expected_exception",
     [
@@ -582,7 +530,6 @@ def l(status_code, expected_exception):
         "VertexAIException" not in error_message
     ), f"Should not contain 'VertexAIException' for status {status_code}, got: {error_message}"
 
-
 def test_gemini_embedding():
     litellm.turn_on_debug()
     response = litellm.embedding(
@@ -591,23 +538,6 @@ def test_gemini_embedding():
     )
     print("response: ", response)
     assert response is not None
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 @pytest.mark.asyncio
 async def test_gemini_openai_web_search_tool_to_google_search():
