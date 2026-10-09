@@ -23,6 +23,7 @@ from litellm.proxy.credential_endpoints.user_provider_credentials import (
 def _prisma(table=None):
     prisma_client = MagicMock()
     prisma_client.db.litellm_userprovidercredentials = table or MagicMock()
+    prisma_client.writer_db = prisma_client.db
     return prisma_client
 
 
@@ -374,3 +375,22 @@ async def test_set_reports_failure_when_a_stale_entry_survives_both_attempts():
     cache = DualCache(redis_cache=silent_redis)
     payload = GithubCopilotUserConnectionPayload(access_token="gho_secret", github_login="octo")
     assert not await set_user_provider_credential_cache(cache, "user-a", "copilot-cred", payload)
+
+
+@pytest.mark.asyncio
+async def test_reads_hit_the_writer_engine_not_a_stale_replica():
+    """With DATABASE_URL_READ_REPLICA set, prisma_client.db is the reader. A row
+    saved by connect exists only on the writer, so every lookup must route to
+    writer_db or a fresh connection 401s as not-connected."""
+    reader_table = MagicMock()
+    reader_table.find_many = AsyncMock(return_value=[])
+    writer_table = MagicMock()
+    writer_table.find_many = AsyncMock(return_value=[])
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_userprovidercredentials = reader_table
+    prisma_client.writer_db.litellm_userprovidercredentials = writer_table
+
+    await aget_user_provider_tokens(prisma_client, DualCache(), "user-a", ["copilot-cred"])
+
+    writer_table.find_many.assert_awaited_once()
+    reader_table.find_many.assert_not_awaited()

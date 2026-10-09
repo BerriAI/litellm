@@ -54,7 +54,7 @@ class _UserProviderCredentialsRepository(PrismaTableRepository["prisma_models.Li
 def _table(
     prisma_client: "PrismaClient",
 ) -> TableActions["prisma_models.LiteLLM_UserProviderCredentials"]:
-    return _UserProviderCredentialsRepository(prisma_client).table
+    return _UserProviderCredentialsRepository(prisma_client, use_writer=True).table
 
 
 def _cache_key(user_id: str, credential_name: str) -> str:

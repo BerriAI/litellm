@@ -9074,6 +9074,7 @@ class TestResolveUserProviderCredentials:
         table = MagicMock()
         table.find_many = AsyncMock(return_value=[])
         prisma_client.db.litellm_userprovidercredentials = table
+        prisma_client.writer_db = prisma_client.db
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
         monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", DualCache())
         return table
@@ -9904,6 +9905,7 @@ def _per_user_env(monkeypatch, credential_names=("copilot-cred",)):
     table = MagicMock()
     table.find_many = AsyncMock(return_value=[])
     prisma_client.db.litellm_userprovidercredentials = table
+    prisma_client.writer_db = prisma_client.db
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", DualCache())
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-master")
