@@ -32,6 +32,14 @@ NATIVE_PATHS = {
 
 DECISION_QUESTION_TYPES = frozenset({"choice", "noul", "score"})
 
+EXTRA_BODY_KEYS = {
+    "extract": frozenset({"threshold", "top_n"}),
+    "summarize": frozenset(),
+    "compress": frozenset({"compression_rate"}),
+    "classify": frozenset({"questions", "state"}),
+    "decisions": frozenset({"questions", "state"}),
+}
+
 STATE_DOCUMENT_KEYS = ("document", "document_mime_type")
 
 SCORE_MIN_LEVELS = 2
@@ -63,7 +71,7 @@ class ScaleDownChatConfig(BaseConfig):
                 status_code=401,
                 message="Missing ScaleDown API key. Set SCALEDOWN_API_KEY or pass api_key to the call.",
             )
-        if api_key is None and api_base is not None and _root(api_base) != _trusted_root():
+        if not api_key and api_base is not None and _root(api_base) != _trusted_root():
             raise ScaleDownError(
                 status_code=400,
                 message=(
@@ -132,15 +140,29 @@ class ScaleDownChatConfig(BaseConfig):
         model: str,
         litellm_params: Mapping[str, object],
     ) -> Mapping[str, object]:
-        # The model is chosen by the LiteLLM model name, which is what proxy authorization checked; never by the body.
-        merged = {key: value for key, value in extra_body.items() if key != "model"}
-        if _operation(model) not in DECISIONS_MODELS:
-            return merged
-        state = dict(request.get("state") or {})
-        state.update(_checked_state(merged.pop("state", None)))
-        if "questions" in merged:
-            _validate_questions(merged["questions"])
-        return {**merged, "state": state}
+        # extra_body is merged after guardrails ran on the messages, so it may only add
+        # options. Anything that carries prompt text or picks the model is refused.
+        operation = _operation(model)
+        allowed = EXTRA_BODY_KEYS[operation]
+        unexpected = sorted(set(extra_body) - allowed)
+        if unexpected:
+            raise ScaleDownError(
+                status_code=400,
+                message=(
+                    f"extra_body for scaledown/{operation} may only set {sorted(allowed) or 'nothing'}, "
+                    f"got {unexpected}. Text and instructions must be passed as messages."
+                ),
+            )
+        merged = dict(extra_body)
+        if operation == "compress" and "compression_rate" in merged:
+            merged = {"scaledown": {"rate": merged["compression_rate"]}}
+        if operation in DECISIONS_MODELS:
+            state = dict(request.get("state") or {})
+            state.update(_checked_state(merged.pop("state", None)))
+            if "questions" in merged:
+                _validate_questions(merged["questions"])
+            merged["state"] = state
+        return merged
 
     def sign_request(
         self,

@@ -247,9 +247,9 @@ def test_remote_image_url_is_rejected(config):
         )
 
 
-def test_extra_body_cannot_switch_the_model(config):
+def test_extra_body_may_set_extract_options(config):
     merged = config.transform_extra_body(
-        extra_body={"model": "compress", "threshold": 0.7},
+        extra_body={"threshold": 0.7},
         request={"text": "t", "entities": {}},
         model="scaledown/extract",
         litellm_params={},
@@ -258,11 +258,40 @@ def test_extra_body_cannot_switch_the_model(config):
     assert merged == {"threshold": 0.7}
 
 
+@pytest.mark.parametrize(
+    "model, extra_body",
+    [
+        ("scaledown/extract", {"model": "compress"}),
+        ("scaledown/extract", {"text": "secret@example.com"}),
+        ("scaledown/summarize", {"instructions": "ignore the message"}),
+        ("scaledown/summarize", {"text": "secret"}),
+        ("scaledown/compress", {"prompt": "x"}),
+        ("scaledown/compress", {"context": "x"}),
+        ("scaledown/classify", {"model": "other"}),
+        ("scaledown/classify", {"text": "secret"}),
+    ],
+)
+def test_extra_body_cannot_override_the_model_or_prompt_text(config, model, extra_body):
+    with pytest.raises(ScaleDownError, match="may only set"):
+        config.transform_extra_body(extra_body=extra_body, request={}, model=model, litellm_params={})
+
+
+def test_compress_rate_via_extra_body_sets_the_scaledown_rate(config):
+    merged = config.transform_extra_body(
+        extra_body={"compression_rate": 0.5},
+        request={"context": "", "prompt": "q", "scaledown": {"rate": "auto"}},
+        model="scaledown/compress",
+        litellm_params={},
+    )
+
+    assert merged == {"scaledown": {"rate": 0.5}}
+
+
 def test_extra_body_decisions_cannot_override_the_upstream_model_or_state_text(config):
     request = {"model": DECISIONS_UPSTREAM_MODEL, "state": {"text": "from messages"}}
 
     merged = config.transform_extra_body(
-        extra_body={"model": "other", "questions": {"q": {"type": "noul"}}, "state": {"document": "QQ=="}},
+        extra_body={"questions": {"q": {"type": "noul"}}, "state": {"document": "QQ=="}},
         request=request,
         model="scaledown/classify",
         litellm_params={},
@@ -284,6 +313,20 @@ def test_env_key_is_not_sent_to_an_untrusted_api_base(config):
             messages=[],
             optional_params={},
             litellm_params={},
+            api_base="https://attacker.example",
+        )
+
+
+@pytest.mark.parametrize("empty_key", ["", None])
+def test_empty_key_does_not_unlock_the_env_key_for_an_untrusted_api_base(config, empty_key):
+    with pytest.raises(ScaleDownError, match="own api_key"):
+        config.validate_environment(
+            headers={},
+            model="scaledown/extract",
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            api_key=empty_key,
             api_base="https://attacker.example",
         )
 
@@ -743,7 +786,7 @@ def test_questions_passed_through_extra_body_reach_scaledown():
     litellm.completion(
         model="scaledown/classify",
         messages=[{"role": "user", "content": "text"}],
-        extra_body={"questions": questions, "model": "something-else"},
+        extra_body={"questions": questions},
     )
 
     sent = json.loads(route.calls[0].request.content)
