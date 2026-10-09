@@ -4,8 +4,10 @@ Every string bound for a span attribute is capped before export, mirroring the
 agent-runtime capture discipline: 32 KiB per field, cut on a code-point boundary,
 marked with ``...(truncated)``. The budget is the ``ensure_ascii``-escaped width,
 which is what ``safe_dumps`` actually emits, so CJK and emoji content cannot
-inflate a capped field past the limit. The 413 backstop in ``langfuse_sdk`` stays
-as the last resort; this makes it rare.
+inflate a capped field past the limit. Cycles and over-deep nesting resolve to
+the same markers ``safe_dumps`` would have produced, so a hostile payload loses
+its content but not its event. The 413 backstop in ``langfuse_sdk`` stays as the
+last resort; this makes it rare.
 """
 
 import json
@@ -18,11 +20,15 @@ from typing import (
 )
 
 from litellm._logging import verbose_logger
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
 DEFAULT_MAX_FIELD_BYTES: Final = 32 * 1024
 MAX_FIELD_BYTES_METADATA_KEY: Final = "langfuse_max_field_bytes"
 _MAX_FIELD_BYTES_ENV: Final = "LANGFUSE_MAX_FIELD_BYTES"
 _TRUNCATION_SUFFIX: Final = "...(truncated)"
+_MARKER_SERIALIZED_WIDTH: Final = len(_TRUNCATION_SUFFIX) + 2
+_CYCLE_MARKER: Final = "CircularReference Detected"
+_DEPTH_MARKER: Final = "MaxDepthExceeded"
 
 
 def resolve_max_field_bytes(override: object = None) -> int:
@@ -31,15 +37,12 @@ def resolve_max_field_bytes(override: object = None) -> int:
     Precedence: the per-request ``langfuse_max_field_bytes`` metadata value, then
     ``LANGFUSE_MAX_FIELD_BYTES``, then the default.
     """
-    if override is None:
-        override = os.environ.get(_MAX_FIELD_BYTES_ENV)
-    parsed: Final = _parse_byte_count(override)
+    raw: Final = override if override is not None else os.environ.get(_MAX_FIELD_BYTES_ENV)
+    parsed: Final = _parse_byte_count(raw)
     if parsed is not None:
         return parsed
-    if override is not None:
-        verbose_logger.warning(
-            "Invalid langfuse max field bytes %r; falling back to %d", override, DEFAULT_MAX_FIELD_BYTES
-        )
+    if raw is not None:
+        verbose_logger.warning("Invalid langfuse max field bytes %r; falling back to %d", raw, DEFAULT_MAX_FIELD_BYTES)
     return DEFAULT_MAX_FIELD_BYTES
 
 
@@ -59,25 +62,46 @@ def _parse_byte_count(raw: object) -> int | None:
 
 
 def cap_payload(value: object, max_field_bytes: int) -> object:
-    """Return ``value`` with every string capped at ``max_field_bytes`` UTF-8 bytes.
+    """Return ``value`` with every string capped at ``max_field_bytes`` serialized bytes.
 
     Plain containers are rebuilt capped; anything else passes through untouched. A
     disabled limit (``max_field_bytes <= 0``) returns ``value`` itself.
     """
     if max_field_bytes <= 0:
         return value
-    return _cap(value, max_field_bytes)
+    return _cap(value, max_field_bytes, frozenset(), 0)
 
 
-def _cap(value: object, limit: int) -> object:
+def _cap(value: object, limit: int, seen: frozenset[int], depth: int) -> object:
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        return _DEPTH_MARKER
     if isinstance(value, str):
         if _serialized_width(value) <= limit:
             return value
-        budget: Final = limit - len(_TRUNCATION_SUFFIX) - 2
-        kept: Final = "" if budget <= 0 else _serialized_prefix(value, budget)
-        return kept + _TRUNCATION_SUFFIX
-    rebuilt: Final = _capped_container(value, limit)
+        if limit < _MARKER_SERIALIZED_WIDTH:
+            return ""
+        return _serialized_prefix(value, limit - _MARKER_SERIALIZED_WIDTH) + _TRUNCATION_SUFFIX
+    if id(value) in seen:
+        return _CYCLE_MARKER
+    rebuilt: Final = _capped_container(value, limit, seen, depth)
     return value if rebuilt is None else rebuilt
+
+
+def _capped_container(value: object, limit: int, seen: frozenset[int], depth: int) -> object | None:
+    """``value`` rebuilt with every string capped, or None when it is not a plain container."""
+    identity: Final = id(value)
+    descended: Final = seen | {identity}
+    child_depth: Final = depth + 1
+    mapping: Final = _as_mapping(value)
+    if mapping is not None:
+        return {key: _cap(item, limit, descended, child_depth) for key, item in mapping.items()}
+    items: Final = _as_object_list(value)
+    if items is not None:
+        return [_cap(item, limit, descended, child_depth) for item in items]
+    members: Final = _as_object_tuple(value)
+    if members is not None:
+        return tuple(_cap(item, limit, descended, child_depth) for item in members)
+    return None
 
 
 def _serialized_width(value: str) -> int:
@@ -109,20 +133,6 @@ def _escaped_width(char: str) -> int:
     if point <= 0xFFFF:
         return 6
     return 12
-
-
-def _capped_container(value: object, limit: int) -> object | None:
-    """``value`` rebuilt with every string capped, or None when it is not a plain container."""
-    mapping: Final = _as_mapping(value)
-    if mapping is not None:
-        return {key: _cap(item, limit) for key, item in mapping.items()}
-    items: Final = _as_object_list(value)
-    if items is not None:
-        return [_cap(item, limit) for item in items]
-    members: Final = _as_object_tuple(value)
-    if members is not None:
-        return tuple(_cap(item, limit) for item in members)
-    return None
 
 
 def _as_mapping(value: object) -> Mapping[object, object] | None:
