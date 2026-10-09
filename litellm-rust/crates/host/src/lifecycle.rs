@@ -1,4 +1,3 @@
-use crate::observation::ObservationSender;
 use std::{
     future::Future,
     time::{SystemTime, UNIX_EPOCH},
@@ -6,7 +5,7 @@ use std::{
 
 use futures_util::TryStreamExt;
 
-use crate::{call::CallOutput, interceptors::RawResponse};
+use crate::{call::CallOutput, hooks::NativeHooks, interceptors::RawResponse};
 
 /// Seconds since the Unix epoch, on one clock for every host.
 pub fn epoch_seconds() -> f64 {
@@ -90,23 +89,19 @@ impl<Response, Error, Raw: std::borrow::Borrow<RawResponse>> CallEvent<Response,
     }
 }
 
-pub trait CallObserver: Send + Sync {
-    fn observe(&self, event: CallEvent);
-}
-
-struct CallGuard {
-    observers: Option<ObservationSender>,
+struct CallGuard<H: NativeHooks> {
+    hooks: Option<H>,
     started_at: f64,
 }
 
-impl CallGuard {
-    fn new(observers: ObservationSender) -> Self {
+impl<H: NativeHooks> CallGuard<H> {
+    fn new(hooks: H) -> Self {
         let started_at = epoch_seconds();
-        observers.emit(CallEvent::Started {
+        hooks.on_event(&CallEvent::Started {
             start_time: started_at,
         });
         Self {
-            observers: Some(observers),
+            hooks: Some(hooks),
             started_at,
         }
     }
@@ -119,8 +114,8 @@ impl CallGuard {
     }
 
     fn finish(mut self, failed: bool) {
-        if let Some(observers) = self.observers.take() {
-            observers.emit(if failed {
+        if let Some(hooks) = self.hooks.take() {
+            hooks.on_event(&if failed {
                 CallEvent::Failed {
                     timing: self.timing(),
                     origin: FailureOrigin::Call,
@@ -136,28 +131,27 @@ impl CallGuard {
     }
 }
 
-impl Drop for CallGuard {
+impl<H: NativeHooks> Drop for CallGuard<H> {
     fn drop(&mut self) {
-        if let Some(observers) = self.observers.take() {
-            observers.emit(CallEvent::Cancelled {
+        if let Some(hooks) = self.hooks.take() {
+            hooks.on_event(&CallEvent::Cancelled {
                 timing: self.timing(),
             });
         }
     }
 }
 
+/// Reports `Started` and one terminal event around a call whose stream, if any, the caller
+/// consumes later: a stream succeeds when it is exhausted and is cancelled when dropped.
 pub async fn observe_call<R, H, C, E>(
-    observers: Option<ObservationSender>,
+    hooks: impl NativeHooks + 'static,
     execute: impl Future<Output = Result<CallOutput<R, H, C, E>, E>>,
 ) -> Result<CallOutput<R, H, C, E>, E>
 where
     C: Send + 'static,
     E: Send + 'static,
 {
-    let Some(observers) = observers else {
-        return execute.await;
-    };
-    let guard = CallGuard::new(observers);
+    let guard = CallGuard::new(hooks);
     match execute.await {
         Err(error) => {
             guard.finish(true);
@@ -193,13 +187,10 @@ where
 }
 
 pub async fn observe_unary<R, E>(
-    observers: Option<ObservationSender>,
+    hooks: impl NativeHooks,
     execute: impl Future<Output = Result<R, E>>,
 ) -> Result<R, E> {
-    let Some(observers) = observers else {
-        return execute.await;
-    };
-    let guard = CallGuard::new(observers);
+    let guard = CallGuard::new(hooks);
     let result = execute.await;
     guard.finish(result.is_err());
     result

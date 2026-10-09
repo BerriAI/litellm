@@ -96,6 +96,7 @@ pub(super) trait ChainHooks: PythonOwned {
     fn arguments_prepared(&mut self, py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<()>;
     fn on_stream_open(&mut self, py: Python<'_>, head: &Py<PyAny>) -> PyResult<()>;
     fn on_stream_chunk(&mut self, py: Python<'_>, chunk: &Py<PyAny>) -> PyResult<()>;
+    fn on_cancelled(&mut self, py: Python<'_>, timing: Timing);
 }
 
 impl<H: PythonCallHooks> ChainHooks for HookAdapter<H> {
@@ -201,6 +202,10 @@ impl<H: PythonCallHooks> ChainHooks for HookAdapter<H> {
 
     fn on_stream_chunk(&mut self, py: Python<'_>, chunk: &Py<PyAny>) -> PyResult<()> {
         self.hooks.on_stream_chunk(py, chunk)
+    }
+
+    fn on_cancelled(&mut self, py: Python<'_>, timing: Timing) {
+        self.hooks.on_cancelled(py, timing)
     }
 }
 

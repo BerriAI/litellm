@@ -48,6 +48,8 @@ pub struct ExecutionFacts {
     pub source: ResultSource,
 }
 
+/// What a route asks its host for while it runs, awaited in place. The host answers each
+/// request through whichever hooks it holds; a route never learns what they are.
 pub trait Interceptors<E>: Send + Sync {
     fn result_ready(&self, _facts: ExecutionFacts) -> impl Future<Output = Result<(), E>> + Send {
         async { Ok(()) }
@@ -154,7 +156,7 @@ mod tests {
     #[rstest::rstest]
     #[tokio::test]
     async fn the_channel_yields_each_hook_as_its_op_and_returns_the_answer() {
-        let mut machine = CallMachine::<Unit>::new(None, |channel| {
+        let mut machine = CallMachine::<Unit>::new(|channel| {
             Box::pin(async move {
                 let sent = Interceptors::before_provider_request(
                     &channel.interceptors,

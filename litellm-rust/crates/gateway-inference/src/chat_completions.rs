@@ -40,6 +40,7 @@ async fn handle(
     identity: &AuthenticatedRequest,
     body: Map<String, Value>,
 ) -> Result<Response, Error> {
+    let body = crate::hooks::pre_call(gateway, identity, body).await?;
     let deployment = request::resolve_deployment(gateway, &body)?;
     request::authorize_model(identity, deployment, &body).await?;
     let (body, cache_options) = crate::caching::prepare(identity, body)?;
@@ -69,12 +70,11 @@ async fn handle(
                 extra_headers: None,
                 timeout: deployment.timeout,
             },
-            cache_options.policy,
+            Some(cache_options.policy),
         ),
         (),
-        headers.clone(),
+        crate::hooks::call_chain(gateway, headers.clone()),
         litellm_host_http::Unary::new(Json),
-        None,
     )
     .await?;
     Ok(headers.apply(response))

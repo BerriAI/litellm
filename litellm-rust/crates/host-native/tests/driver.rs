@@ -10,8 +10,10 @@ use std::{
 use futures_util::{StreamExt, stream};
 use litellm_host::{
     call::{CallOutput, HostedCompletion, hosted_call},
+    error::HookError,
+    hooks::NativeHooks,
     interceptors::{Interceptors, RawResponse, RequestContext, WireRequest},
-    lifecycle::{CallEvent, CallObserver},
+    lifecycle::CallEvent,
     machine::{CallMachine, HostFailure, Interrupted, Machine, MachineFault, Step},
     protocol::{Protocol, Reply},
 };
@@ -35,6 +37,12 @@ enum TestError {
 impl From<MachineFault> for TestError {
     fn from(_: MachineFault) -> Self {
         Self::Machine
+    }
+}
+
+impl From<HookError> for TestError {
+    fn from(_: HookError) -> Self {
+        Self::Hook
     }
 }
 
@@ -97,9 +105,9 @@ impl Observations {
     }
 }
 
-impl CallObserver for Observer {
-    fn observe(&self, event: CallEvent) {
-        self.0.sender.emit(event);
+impl NativeHooks for Observer {
+    fn on_event(&self, event: &CallEvent) {
+        self.0.sender.emit(event.clone());
     }
 }
 
@@ -108,29 +116,25 @@ struct Hooks {
     reject: bool,
 }
 
-impl Interceptors<TestError> for Hooks {
-    async fn before_provider_request(
+impl NativeHooks for Hooks {
+    fn before_provider_request(
         &self,
-        wire: WireRequest,
-        context: RequestContext,
-    ) -> Result<WireRequest, TestError> {
+        wire: Box<WireRequest>,
+        context: &RequestContext,
+    ) -> Result<Box<WireRequest>, HookError> {
         if self.reject {
-            return Err(TestError::Hook);
+            return Err(HookError::Rejected {
+                reason: "wire refused".into(),
+            });
         }
-        Ok(WireRequest {
+        Ok(Box::new(WireRequest {
             url: format!("{}/{}", wire.url, context.model),
-            ..wire
-        })
+            ..*wire
+        }))
     }
 
-    async fn after_provider_response(&self, raw: RawResponse) -> Result<(), TestError> {
-        if self.reject {
-            return Err(TestError::Hook);
-        }
-        self.observer.observe(CallEvent::Execution(
-            litellm_host::lifecycle::ExecutionEvent::ProviderResponseReceived { raw },
-        ));
-        Ok(())
+    fn on_event(&self, event: &CallEvent) {
+        self.observer.on_event(event);
     }
 }
 
@@ -148,35 +152,31 @@ fn interceptors(observer: Arc<Observer>) -> Hooks {
 }
 
 fn dispatching_call() -> TestMachine {
-    hosted_call::<TestProtocol, _, _>(
-        "projected",
-        None,
-        |request, services, route_hooks, _observations| async move {
-            let custom = services.call(|reply| reply).await?;
-            let wire = route_hooks
-                .before_provider_request(
-                    WireRequest {
-                        url: request.into(),
-                        headers: Vec::new(),
-                        body: json!({}),
-                    },
-                    RequestContext {
-                        model: custom.into(),
-                        custom_llm_provider: "test".into(),
-                        optional_params: json!({}),
-                        secret_fields: Vec::new(),
-                        api_key: None,
-                    },
-                )
-                .await?;
-            route_hooks
-                .after_provider_response(RawResponse {
-                    body: wire.url.clone(),
-                })
-                .await?;
-            Ok(CallOutput::Complete(wire.url))
-        },
-    )
+    hosted_call::<TestProtocol, _, _>("projected", |request, services, route_hooks| async move {
+        let custom = services.call(|reply| reply).await?;
+        let wire = route_hooks
+            .before_provider_request(
+                WireRequest {
+                    url: request.into(),
+                    headers: Vec::new(),
+                    body: json!({}),
+                },
+                RequestContext {
+                    model: custom.into(),
+                    custom_llm_provider: "test".into(),
+                    optional_params: json!({}),
+                    secret_fields: Vec::new(),
+                    api_key: None,
+                },
+            )
+            .await?;
+        route_hooks
+            .after_provider_response(RawResponse {
+                body: wire.url.clone(),
+            })
+            .await?;
+        Ok(CallOutput::Complete(wire.url))
+    })
 }
 
 struct Release(Arc<AtomicBool>);
@@ -198,22 +198,18 @@ fn streaming_call(chunks: Vec<Result<usize, TestError>>) -> Streaming {
     let released = Arc::new(AtomicBool::new(false));
     let provider_polls = polls.clone();
     let release = Release(released.clone());
-    let machine = hosted_call::<TestProtocol, _, _>(
-        "input",
-        None,
-        move |_, _, _, _observations| async move {
-            let chunks = stream::iter(chunks)
-                .inspect(move |_| {
-                    let _held = &release;
-                    provider_polls.fetch_add(1, Ordering::SeqCst);
-                })
-                .boxed();
-            Ok(CallOutput::Stream {
-                head: "headers",
-                chunks,
+    let machine = hosted_call::<TestProtocol, _, _>("input", move |_, _, _| async move {
+        let chunks = stream::iter(chunks)
+            .inspect(move |_| {
+                let _held = &release;
+                provider_polls.fetch_add(1, Ordering::SeqCst);
             })
-        },
-    );
+            .boxed();
+        Ok(CallOutput::Stream {
+            head: "headers",
+            chunks,
+        })
+    });
     Streaming {
         polls,
         released,
@@ -408,9 +404,8 @@ async fn in_process_runner_follows_consumer_demand(
         machine,
         Host {
             services: &Services { reject: false },
-            interceptors: &(),
+            hooks: &observer.0.sender,
             stream: &consumer,
-            observers: Some(&observer.0.sender),
         },
     )
     .await;
@@ -452,9 +447,8 @@ async fn consumer_failures_interrupt_the_machine(#[case] fail_after: usize) {
         },
         Host {
             services: &Services { reject: false },
-            interceptors: &(),
+            hooks: &(),
             stream: &consumer,
-            observers: None,
         },
     )
     .await;
@@ -475,12 +469,11 @@ struct Recording {
 }
 
 impl Recording {
-    fn runtime(&self) -> Host<'_, Self, (), ()> {
+    fn runtime(&self) -> Host<'_, Self, litellm_host::observation::ObservationSender, ()> {
         Host {
             services: self,
-            interceptors: &(),
+            hooks: &self.events.sender,
             stream: &(),
-            observers: Some(&self.events.sender),
         }
     }
 }
@@ -497,8 +490,8 @@ impl HostCallHandler<TestProtocol> for Recording {
     }
 }
 
-impl CallObserver for Recording {
-    fn observe(&self, event: CallEvent) {
+impl NativeHooks for Recording {
+    fn on_event(&self, event: &CallEvent) {
         self.seen.lock().unwrap().push(match event {
             CallEvent::Started { .. } => "started".into(),
             CallEvent::Succeeded { .. } => "succeeded".into(),
@@ -512,7 +505,7 @@ fn scripted(
     ops: &'static [&'static str],
     outcome: Result<(), TestError>,
 ) -> CallMachine<TestProtocol, ()> {
-    CallMachine::new(None, move |host| {
+    CallMachine::new(move |host| {
         Box::pin(async move {
             for op in ops {
                 let answered = host.services.call(|reply| reply).await?;
@@ -577,9 +570,8 @@ async fn generic_runner_success_keeps_the_start_time(observer: Arc<Observer>) {
         scripted(&["send"], Ok(())),
         Host {
             services: &services,
-            interceptors: &(),
+            hooks: &observer.0.sender,
             stream: &(),
-            observers: Some(&observer.0.sender),
         },
     )
     .await;
@@ -603,9 +595,8 @@ async fn in_process_runner_dispatches_services_and_hooks(interceptors: Hooks) {
         dispatching_call(),
         Host {
             services: &Services { reject: false },
-            interceptors: &interceptors,
+            hooks: &interceptors,
             stream: &(),
-            observers: Some(&observer.0.sender),
         },
     )
     .await
@@ -622,74 +613,4 @@ async fn in_process_runner_dispatches_services_and_hooks(interceptors: Hooks) {
             CallEvent::Succeeded { .. },
         ]
     ));
-}
-
-struct ResponseGate {
-    ready: tokio::sync::Notify,
-    reject: bool,
-}
-
-impl Interceptors<TestError> for ResponseGate {
-    async fn before_provider_request(
-        &self,
-        wire: WireRequest,
-        _: RequestContext,
-    ) -> Result<WireRequest, TestError> {
-        Ok(wire)
-    }
-
-    async fn after_provider_response(&self, raw: RawResponse) -> Result<(), TestError> {
-        assert_eq!(raw.body, "provider response");
-        self.ready.notified().await;
-        if self.reject {
-            Err(TestError::Hook)
-        } else {
-            Ok(())
-        }
-    }
-}
-
-#[rstest]
-#[case::accept(false)]
-#[case::reject(true)]
-#[tokio::test]
-async fn response_interception_waits_and_can_reject_after_observation(#[case] reject: bool) {
-    let (sender, mut receiver) =
-        litellm_host::observation::observation_channel(std::num::NonZeroUsize::new(1).unwrap());
-    let machine = hosted_call::<TestProtocol, _, _>(
-        "input",
-        Some(sender),
-        |_, _, interceptors, observers| async move {
-            let raw = RawResponse {
-                body: "provider response".into(),
-            };
-            observers.unwrap().emit(CallEvent::Execution(
-                ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
-            ));
-            interceptors.after_provider_response(raw).await?;
-            Ok(CallOutput::Complete("accepted".into()))
-        },
-    );
-    let interceptor = ResponseGate {
-        ready: tokio::sync::Notify::new(),
-        reject,
-    };
-    let mut driver = Driver::new(machine, Services { reject: false }, &interceptor);
-    let mut advance = Box::pin(driver.advance());
-    assert!(futures_util::poll!(&mut advance).is_pending());
-    assert!(
-        matches!(receiver.try_recv(), Ok(CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw })) if raw.body == "provider response")
-    );
-    interceptor.ready.notify_one();
-    match advance.await {
-        Err(error) => {
-            assert!(reject);
-            assert_eq!(error, TestError::Hook);
-        }
-        Ok(Boundary::Complete(HostedCompletion::Complete(value))) => {
-            assert!(!reject);
-            assert_eq!(value, "accepted");
-        }
-        _ => panic!("expected completion or rejection"),
-    }
 }

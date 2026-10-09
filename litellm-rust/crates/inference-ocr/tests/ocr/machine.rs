@@ -7,7 +7,9 @@ use std::{
 };
 
 use litellm_host::{
-    interceptors::{Interceptors, WireRequest},
+    hooks::NativeHooks,
+    interceptors::WireRequest,
+    lifecycle::{CallEvent, ExecutionEvent},
     machine::{HostFailure, Machine, MachineStep},
     protocol::{HostRequest, InterceptRequest},
 };
@@ -32,7 +34,7 @@ async fn drive_until(
     Vec<&'static str>,
     OcrMachine,
 ) {
-    let mut machine = ocr_route().machine(host.request().unwrap(), None);
+    let mut machine = ocr_route().machine(host.request().unwrap());
     let mut ops = Vec::new();
     let outcome = loop {
         let op = match machine.resume().await {
@@ -41,11 +43,14 @@ async fn drive_until(
             Err(error) => break Err(error),
         };
         let answer = match op {
-            HostRequest::Intercept(InterceptRequest::ResultReady { facts, reply }) => host
-                .result_ready(facts)
-                .await
-                .map(|()| reply.send(()))
-                .map_err(HostFailure::Error),
+            HostRequest::Intercept(InterceptRequest::ResultReady { facts, reply }) => {
+                host.on_event(&CallEvent::Execution(ExecutionEvent::ResultReady {
+                    facts: facts.clone(),
+                }));
+                host.result_ready(&facts)
+                    .map(|()| reply.send(()))
+                    .map_err(|error| HostFailure::Error(Error::from(error)))
+            }
             HostRequest::Stream(stream) => match stream {
                 litellm_host::protocol::StreamDelivery::Open(head, _) => match head {},
                 litellm_host::protocol::StreamDelivery::Chunk(chunk, _) => match chunk {},
@@ -64,10 +69,11 @@ async fn drive_until(
             }
             HostRequest::Intercept(InterceptRequest::AfterProviderResponse { raw, reply }) => {
                 ops.push("response");
-                host.after_provider_response(raw)
-                    .await
-                    .map(|()| reply.send(()))
-                    .map_err(HostFailure::Error)
+                host.on_event(&CallEvent::Execution(
+                    ExecutionEvent::ProviderResponseReceived { raw },
+                ));
+                reply.send(());
+                Ok(())
             }
         };
         if let Err(failure) = answer {
@@ -187,13 +193,10 @@ async fn a_before_send_failure_ends_the_call_without_reaching_transport(
 async fn resuming_before_answering_keeps_the_pending_operation() {
     let upstream = upstream([pages_response()]).await;
     let request = ocr_request("mistral/model", &upstream.uri(), json!({}));
-    let mut machine = ocr_route().machine(
-        OcrCall {
-            request,
-            caller_token: false,
-        },
-        None,
-    );
+    let mut machine = ocr_route().machine(OcrCall {
+        request,
+        caller_token: false,
+    });
     let Ok(MachineStep::Suspended(HostRequest::Intercept(
         InterceptRequest::BeforeProviderRequest { wire, reply, .. },
     ))) = machine.resume().await
@@ -251,7 +254,7 @@ async fn interrupt_drops_provider_captures_before_returning() {
         },
     )));
     let host = LocalOcrHost::new(request);
-    let mut machine = ocr_route().machine(host.request().unwrap(), None);
+    let mut machine = ocr_route().machine(host.request().unwrap());
 
     drive_until_notified(&mut machine, &host, &entered).await;
     assert!(!dropped.load(Ordering::SeqCst));
@@ -287,7 +290,7 @@ async fn interrupting_an_in_flight_provider_request_closes_its_connection() {
         while socket.read(&mut buffer).await.unwrap() != 0 {}
     });
     let host = LocalOcrHost::new(ocr_request("mistral/model", &base, json!({})));
-    let mut machine = ocr_route().machine(host.request().unwrap(), None);
+    let mut machine = ocr_route().machine(host.request().unwrap());
 
     drive_until_notified(&mut machine, &host, &received).await;
     let cancelled = Error::InvalidRequest("cancelled".into());

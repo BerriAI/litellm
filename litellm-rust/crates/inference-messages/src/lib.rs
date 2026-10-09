@@ -52,10 +52,9 @@ impl MessagesRoute {
         &self,
         call: MessagesCall,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
-        options: impl Into<litellm_inference::CallOptions>,
+        cache_options: Option<litellm_cache_response::CachePolicy>,
     ) -> Result<MessagesCallResponse, Error> {
-        let context = CallContext::new(interceptors, options.into());
-        litellm_host::lifecycle::observe_call(context.observers.clone(), self.run(call, context))
+        self.run(call, CallContext::new(interceptors, cache_options))
             .await
     }
 

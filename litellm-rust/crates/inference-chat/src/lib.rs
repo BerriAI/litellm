@@ -1,4 +1,3 @@
-use litellm_host::observation::ObservationSender;
 pub mod route;
 pub mod types;
 pub use litellm_inference::RouteError as Error;
@@ -47,22 +46,10 @@ impl ChatCompletionsRoute {
         &self,
         request: ChatCompletionsRequest<'_>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
-        options: impl Into<litellm_inference::CallOptions>,
+        cache_options: Option<litellm_cache_response::CachePolicy>,
     ) -> Result<ChatCompletionsResponse, Error> {
-        let litellm_inference::CallOptions {
-            cache: cache_options,
-            observers,
-        } = options.into();
-        litellm_host::lifecycle::observe_unary(
-            observers.clone(),
-            self.run_call(
-                request.into(),
-                cache_options,
-                interceptors,
-                observers.as_ref(),
-            ),
-        )
-        .await
+        self.run_call(request.into(), cache_options, interceptors)
+            .await
     }
 
     async fn run(
@@ -70,7 +57,6 @@ impl ChatCompletionsRoute {
         request: ChatCompletionsRequest<'_>,
         cache_options: Option<litellm_cache_response::CachePolicy>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
-        observers: Option<&ObservationSender>,
     ) -> Result<ChatCompletionsResponse, Error> {
         let resolved = resolve_request(request)?;
         let snapshot = self
@@ -87,7 +73,6 @@ impl ChatCompletionsRoute {
                 self.cache.clone(),
                 cache_options,
                 interceptors,
-                observers,
             ));
         execute.await
     }

@@ -14,8 +14,6 @@ use litellm_cache_response::{
 use litellm_host::{
     call::{CallOutput, OutputOf},
     interceptors::{ExecutionFacts, Interceptors, ProviderIdentity, ResultSource, WireRequest},
-    lifecycle::{CallEvent, ExecutionEvent},
-    observation::ObservationSender,
     protocol::Protocol,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -144,7 +142,6 @@ pub async fn execute_unary<P, F, Fut>(
     cache: Option<Arc<dyn ResponseCacheService>>,
     options: Option<CacheOptions>,
     interceptors: &impl Interceptors<RouteError>,
-    observers: Option<&ObservationSender>,
     provider: F,
 ) -> Result<P::Response, RouteError>
 where
@@ -168,15 +165,12 @@ where
         None => (provider().await?, ResultSource::Provider),
     };
     let from_provider = source == ResultSource::Provider;
-    publish(
-        ExecutionFacts {
+    interceptors
+        .result_ready(ExecutionFacts {
             provider: identity,
             source,
-        },
-        interceptors,
-        observers,
-    )
-    .await?;
+        })
+        .await?;
     if from_provider && let Some(session) = session {
         session.store_response::<P>(&response).await;
     }
@@ -188,7 +182,6 @@ pub async fn execute_streaming<P, F, Fut>(
     cache: Option<Arc<dyn ResponseCacheService>>,
     options: Option<CacheOptions>,
     interceptors: &impl Interceptors<RouteError>,
-    observers: Option<&ObservationSender>,
     provider: F,
 ) -> Result<OutputOf<P>, RouteError>
 where
@@ -209,15 +202,12 @@ where
         Some(hit) => hit,
         None => (provider().await?, ResultSource::Provider),
     };
-    publish(
-        ExecutionFacts {
+    interceptors
+        .result_ready(ExecutionFacts {
             provider: identity,
             source: source.clone(),
-        },
-        interceptors,
-        observers,
-    )
-    .await?;
+        })
+        .await?;
     Ok(cache.finish(output, &source).await)
 }
 
@@ -360,17 +350,4 @@ fn successful_stream(text: &str, terminal: &str) -> bool {
         }
         complete |= kind == terminal;
     }
-}
-
-async fn publish(
-    facts: ExecutionFacts,
-    interceptors: &impl Interceptors<RouteError>,
-    observers: Option<&ObservationSender>,
-) -> Result<(), RouteError> {
-    if let Some(observers) = observers {
-        observers.emit(CallEvent::Execution(ExecutionEvent::ResultReady {
-            facts: facts.clone(),
-        }));
-    }
-    interceptors.result_ready(facts).await
 }

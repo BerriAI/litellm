@@ -1,4 +1,3 @@
-use litellm_host::observation::ObservationSender;
 use std::sync::Arc;
 
 use litellm_host::interceptors::Interceptors;
@@ -24,13 +23,8 @@ impl OcrRoute {
         &self,
         request: LiteLLMOcrRequest,
         interceptors: &impl Interceptors<Error>,
-        observers: Option<ObservationSender>,
     ) -> Result<LiteLLMOcrResponse, Error> {
-        litellm_host::lifecycle::observe_unary(
-            observers.clone(),
-            self.run(request, interceptors, observers.as_ref()),
-        )
-        .await
+        self.run(request, interceptors).await
     }
 
     #[tracing::instrument(name = "litellm.route", skip_all, fields(
@@ -45,7 +39,6 @@ impl OcrRoute {
         &self,
         request: LiteLLMOcrRequest,
         interceptors: &impl Interceptors<Error>,
-        observers: Option<&ObservationSender>,
     ) -> Result<LiteLLMOcrResponse, Error> {
         litellm_inference::diagnostic::unary(async {
             let caller_document = matches!(&request.document, OcrDocumentInput::Document(_));
@@ -56,7 +49,6 @@ impl OcrRoute {
                     prepared,
                     interceptors,
                     caller_document,
-                    observers,
                 ));
             execute.await
         })

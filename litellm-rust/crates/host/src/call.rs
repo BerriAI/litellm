@@ -1,4 +1,3 @@
-use crate::observation::ObservationSender;
 use std::future::Future;
 
 use futures_util::{TryStreamExt, stream::BoxStream};
@@ -46,27 +45,16 @@ pub type OutputOf<P> = CallOutput<
 
 pub type HostedMachine<P> = CallMachine<P, HostedCompletion<<P as Protocol>::Response>>;
 
-pub fn hosted_call<P, F, Fut>(
-    request: P::Request,
-    observers: Option<ObservationSender>,
-    execute: F,
-) -> HostedMachine<P>
+pub fn hosted_call<P, F, Fut>(request: P::Request, execute: F) -> HostedMachine<P>
 where
     P: Protocol,
     P::Error: From<MachineFault>,
-    F: FnOnce(
-            P::Request,
-            HostServices<P>,
-            ChannelInterceptors<P>,
-            Option<ObservationSender>,
-        ) -> Fut
-        + Send
-        + 'static,
+    F: FnOnce(P::Request, HostServices<P>, ChannelInterceptors<P>) -> Fut + Send + 'static,
     Fut: Future<Output = Result<OutputOf<P>, P::Error>> + Send + 'static,
 {
-    CallMachine::new(observers, move |host| {
+    CallMachine::new(move |host| {
         Box::pin(async move {
-            match execute(request, host.services, host.interceptors, host.observers).await? {
+            match execute(request, host.services, host.interceptors).await? {
                 CallOutput::Complete(response) => Ok(HostedCompletion::Complete(response)),
                 CallOutput::Stream { head, mut chunks } => {
                     if host.stream.open_stream(head).await?.is_break() {

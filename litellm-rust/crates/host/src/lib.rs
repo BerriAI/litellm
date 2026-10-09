@@ -12,5 +12,6 @@ pub mod hooks;
 pub mod interceptors;
 pub mod lifecycle;
 pub mod machine;
+pub mod native_chain;
 pub mod observation;
 pub mod protocol;

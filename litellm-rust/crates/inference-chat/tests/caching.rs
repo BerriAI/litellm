@@ -1,7 +1,6 @@
 mod support;
 
 use std::{
-    num::NonZeroUsize,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -13,13 +12,9 @@ use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
     CacheScope, ResponseCache, ResponseCacheConfig, ResponseCacheService,
 };
-use litellm_host::{
-    interceptors::{
-        ExecutionFacts, Interceptors, ProviderIdentity, RawResponse, RequestContext, ResultSource,
-        WireRequest,
-    },
-    lifecycle::{CallEvent, ExecutionEvent},
-    observation::observation_channel,
+use litellm_host::interceptors::{
+    ExecutionFacts, Interceptors, ProviderIdentity, RawResponse, RequestContext, ResultSource,
+    WireRequest,
 };
 use litellm_inference::RouteError;
 use rstest::{fixture, rstest};
@@ -69,7 +64,7 @@ async fn the_same_route_entrypoint_reports_facts_with_or_without_caching(
     } else {
         route
     };
-    let (observer, mut events) = observation_channel(NonZeroUsize::new(16).unwrap());
+    let hooks = ChangingHooks::default();
     let base = upstream.uri();
     for _ in 0..2 {
         let response = traces
@@ -85,8 +80,8 @@ async fn the_same_route_entrypoint_reports_facts_with_or_without_caching(
                     extra_headers: None,
                     timeout: None,
                 },
-                &(),
-                Some(observer.clone()),
+                &hooks,
+                None,
             ))
             .await
             .unwrap();
@@ -95,12 +90,7 @@ async fn the_same_route_entrypoint_reports_facts_with_or_without_caching(
             15
         );
     }
-    let facts: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
-        .filter_map(|event| match event {
-            CallEvent::Execution(ExecutionEvent::ResultReady { facts }) => Some(facts),
-            _ => None,
-        })
-        .collect();
+    let facts = hooks.facts.lock().unwrap().clone();
     assert_eq!(facts.len(), 2);
     assert_eq!(
         facts[0].provider,

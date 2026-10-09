@@ -1,7 +1,4 @@
-use litellm_host::{
-    interceptors::{ExecutionFacts, ResultSource},
-    lifecycle::ExecutionEvent,
-};
+use litellm_host::lifecycle::ExecutionEvent;
 use litellm_http::transport::Error as TransportError;
 use litellm_inference_messages::{MessagesCallResponse, messages_body};
 use litellm_inference_testing::{
@@ -12,16 +9,10 @@ use rstest::rstest;
 use super::*;
 
 #[rstest]
-#[case::neither(false, false)]
-#[case::hooks_only(true, false)]
-#[case::observer_only(false, true)]
-#[case::both(true, true)]
+#[case::without_hooks(false)]
+#[case::with_hooks(true)]
 #[tokio::test]
-async fn calls_defer_execution_until_polled(
-    call: MessagesCall,
-    #[case] with_hooks: bool,
-    #[case] with_observer: bool,
-) {
+async fn calls_defer_execution_until_polled(call: MessagesCall, #[case] with_hooks: bool) {
     use futures_util::future::BoxFuture;
 
     use litellm_host::lifecycle::CallEvent;
@@ -34,12 +25,10 @@ async fn calls_defer_execution_until_polled(
         ..call
     });
     let request = host.request().unwrap();
-    let observer: Option<litellm_host::observation::ObservationSender> =
-        with_observer.then(|| host.events.0.sender.clone());
     let future: BoxFuture<'_, Result<MessagesCallResponse, Error>> = if with_hooks {
-        Box::pin(route.execute(request, &host, observer))
+        Box::pin(route.execute(request, &host, None))
     } else {
-        Box::pin(route.execute(request, &(), observer))
+        Box::pin(route.execute(request, &(), None))
     };
 
     assert!(secrets.requested().is_empty());
@@ -59,37 +48,13 @@ async fn calls_defer_execution_until_polled(
     assert_eq!(sent.header("x-hook"), with_hooks.then_some("called"));
     let events = host.events.0.lock().unwrap();
     assert!(matches!(
-        (with_hooks, with_observer, events.as_slice()),
-        (false, false, [])
-            | (true, false, [])
-            | (
-                false,
-                true,
-                [
-                    CallEvent::Started { .. },
-                    CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { .. }),
-                    CallEvent::Execution(ExecutionEvent::ResultReady {
-                        facts: ExecutionFacts {
-                            source: ResultSource::Provider,
-                            ..
-                        }
-                    }),
-                    CallEvent::Succeeded { .. }
-                ]
-            )
+        (with_hooks, events.as_slice()),
+        (false, [])
             | (
                 true,
-                true,
                 [
-                    CallEvent::Started { .. },
                     CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { .. }),
-                    CallEvent::Execution(ExecutionEvent::ResultReady {
-                        facts: ExecutionFacts {
-                            source: ResultSource::Provider,
-                            ..
-                        }
-                    }),
-                    CallEvent::Succeeded { .. }
+                    CallEvent::Execution(ExecutionEvent::ResultReady { .. }),
                 ]
             )
     ));
@@ -448,8 +413,10 @@ async fn cache_overrides_preserve_the_routes_isolated_scope(call: MessagesCall) 
             ttl: Some(Duration::from_secs(30)),
             ..CachePolicy::default()
         };
-        let MessagesCallResponse::Complete(response) =
-            route.execute(request, &(), override_options).await.unwrap()
+        let MessagesCallResponse::Complete(response) = route
+            .execute(request, &(), Some(override_options))
+            .await
+            .unwrap()
         else {
             panic!("expected a completed message");
         };

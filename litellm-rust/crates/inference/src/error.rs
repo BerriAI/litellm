@@ -37,6 +37,8 @@ pub enum RouteError {
     Http(#[from] litellm_http::Error),
     #[error(transparent)]
     Secret(#[from] SecretError),
+    #[error(transparent)]
+    Hook(#[from] litellm_host::error::HookError),
     #[error("post-call hook failed: {0}")]
     PostCallHook(#[source] Arc<RouteError>),
 }
@@ -65,7 +67,8 @@ impl RouteError {
             | Self::InvalidProvider(_)
             | Self::InvalidRequest(_)
             | Self::Unsupported(_)
-            | Self::Headers(_) => true,
+            | Self::Headers(_)
+            | Self::Hook(_) => true,
             Self::Auth(error) => !matches!(error, litellm_auth::Error::MissingApiKey { .. }),
             Self::InvalidResponse(_)
             | Self::Transport(_)

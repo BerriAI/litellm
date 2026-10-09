@@ -27,20 +27,11 @@ impl ResponsesRoute {
     pub fn machine(
         self,
         call: ResponsesCall,
-        options: impl Into<litellm_inference::CallOptions>,
+        cache_options: Option<litellm_cache_response::CachePolicy>,
     ) -> HostedMachine<Responses> {
-        let litellm_inference::CallOptions {
-            cache: cache_options,
-            observers,
-        } = options.into();
-        hosted_call(
-            call,
-            observers,
-            move |call, _, interceptors, observers| async move {
-                self.run(call, cache_options, &interceptors, observers.as_ref())
-                    .await
-            },
-        )
+        hosted_call(call, move |call, _, interceptors| async move {
+            self.run(call, cache_options, &interceptors).await
+        })
     }
 }
 

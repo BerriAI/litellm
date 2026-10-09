@@ -1,4 +1,3 @@
-use litellm_host::observation::ObservationSender;
 pub use litellm_inference::RouteError as Error;
 
 pub mod route;
@@ -48,17 +47,9 @@ impl ResponsesRoute {
         &self,
         call: ResponsesCall,
         interceptors: &impl Interceptors<Error>,
-        options: impl Into<litellm_inference::CallOptions>,
+        cache_options: Option<litellm_cache_response::CachePolicy>,
     ) -> Result<ResponsesOutput, Error> {
-        let litellm_inference::CallOptions {
-            cache: cache_options,
-            observers,
-        } = options.into();
-        litellm_host::lifecycle::observe_call(
-            observers.clone(),
-            self.run(call, cache_options, interceptors, observers.as_ref()),
-        )
-        .await
+        self.run(call, cache_options, interceptors).await
     }
 
     #[tracing::instrument(name = "litellm.route", skip_all, fields(
@@ -74,11 +65,9 @@ impl ResponsesRoute {
         call: ResponsesCall,
         cache_options: Option<litellm_cache_response::CachePolicy>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
-        observers: Option<&ObservationSender>,
     ) -> Result<ResponsesOutput, Error> {
         litellm_inference::diagnostic::call(async {
-            self.run_provider(call, cache_options, interceptors, observers)
-                .await
+            self.run_provider(call, cache_options, interceptors).await
         })
         .await
     }
@@ -88,7 +77,6 @@ impl ResponsesRoute {
         call: ResponsesCall,
         cache_options: Option<litellm_cache_response::CachePolicy>,
         interceptors: &impl Interceptors<Error>,
-        observers: Option<&ObservationSender>,
     ) -> Result<ResponsesOutput, Error> {
         let request = prepare::prepare(call, self.secrets.as_ref()).await?;
         litellm_inference::diagnostic::provider(
@@ -103,7 +91,6 @@ impl ResponsesRoute {
                 self.cache.clone(),
                 cache_options,
                 interceptors,
-                observers,
             ));
         execute.await
     }

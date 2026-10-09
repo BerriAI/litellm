@@ -192,7 +192,7 @@ async fn client_settings_choose_the_api_version_and_the_inch_to_pixel_dpi() {
     });
 
     let result = route
-        .execute(read_request(&upstream.uri(), json!({})), &(), None)
+        .execute(read_request(&upstream.uri(), json!({})), &())
         .await
         .unwrap();
 
@@ -356,7 +356,7 @@ async fn the_polling_deadline_bounds_the_retry_delay() {
 
     let error = tokio::time::timeout(
         Duration::from_secs(1),
-        route.execute(read_request(&upstream.uri(), json!({})), &(), None),
+        route.execute(read_request(&upstream.uri(), json!({})), &()),
     )
     .await
     .expect("the deadline cuts the retry delay short")

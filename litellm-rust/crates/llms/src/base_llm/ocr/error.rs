@@ -110,6 +110,8 @@ pub enum Error {
     Headers(#[from] litellm_http::request::HeaderError),
     #[error(transparent)]
     Http(#[from] litellm_http::Error),
+    #[error(transparent)]
+    Hook(#[from] litellm_host::error::HookError),
 }
 
 impl From<litellm_host::machine::MachineFault> for Error {
@@ -163,6 +165,7 @@ impl Error {
                 | Self::InvalidRequest(_)
                 | Self::InvalidProvider(_)
                 | Self::InvalidModel { .. }
+                | Self::Hook(_)
                 | Self::Params(_)
                 | Self::Headers(_)
                 | Self::Http(_)

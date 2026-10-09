@@ -1,6 +1,5 @@
 use std::{
     convert::Infallible,
-    num::NonZeroUsize,
     sync::{
         Arc, OnceLock,
         atomic::{AtomicUsize, Ordering},
@@ -20,8 +19,6 @@ use litellm_host::{
         ExecutionFacts, Interceptors, ProviderIdentity, RawResponse, RequestContext, ResultSource,
         WireRequest,
     },
-    lifecycle::{CallEvent, ExecutionEvent},
-    observation::observation_channel,
     protocol::Protocol,
 };
 use litellm_inference::{
@@ -99,7 +96,6 @@ async fn call(
         Some(cache.clone()),
         options,
         &(),
-        None,
         || async {
             Ok(CallOutput::Complete(
                 json!({"call": calls.fetch_add(1, Ordering::SeqCst)}),
@@ -196,7 +192,6 @@ async fn streamed(
         Some(cache.clone()),
         Some(CacheOptions::new(CacheScope::Shared)),
         &(),
-        None,
         || async {
             calls.fetch_add(1, Ordering::SeqCst);
             let chunks = text
@@ -312,7 +307,6 @@ async fn a_provider_failure_never_populates_the_cache(cache: Arc<dyn ResponseCac
         Some(cache.clone()),
         Some(CacheOptions::new(CacheScope::Shared)),
         &(),
-        None,
         || async {
             calls.fetch_add(1, Ordering::SeqCst);
             Err(RouteError::Unsupported("test provider failure"))
@@ -514,7 +508,6 @@ async fn cache_hits_notify_accounting_once_and_propagate_its_failure(
         reject,
         ..Default::default()
     };
-    let (observer, mut events) = observation_channel(NonZeroUsize::new(4).unwrap());
     let request = if streaming_route {
         json!({"stream":true})
     } else {
@@ -549,7 +542,6 @@ async fn cache_hits_notify_accounting_once_and_propagate_its_failure(
             Some(cache),
             Some(CacheOptions::new(CacheScope::Shared)),
             &accounting,
-            Some(&observer),
             || async { panic!("a cache hit must not call the provider") },
         )
         .await
@@ -563,7 +555,6 @@ async fn cache_hits_notify_accounting_once_and_propagate_its_failure(
             Some(cache),
             Some(CacheOptions::new(CacheScope::Shared)),
             &accounting,
-            Some(&observer),
             || async { panic!("a cache hit must not call the provider") },
         )
         .await
@@ -580,11 +571,6 @@ async fn cache_hits_notify_accounting_once_and_propagate_its_failure(
     assert_eq!(accounting.calls.load(Ordering::SeqCst), 1);
     let key = accounting.key.get().unwrap();
     assert!(!key.is_empty());
-    assert!(matches!(
-        events.try_recv().unwrap(),
-        CallEvent::Execution(ExecutionEvent::ResultReady { facts }) if facts.source == ResultSource::Cache { key: key.clone() }
-    ));
-    assert!(events.try_recv().is_err());
 }
 
 impl Protocol for UnaryTestRoute {
@@ -611,7 +597,6 @@ async fn unary_call(
         Some(cache.clone()),
         options,
         &(),
-        None,
         || async { Ok(json!({"call":calls.fetch_add(1, Ordering::SeqCst)})) },
     )
     .await

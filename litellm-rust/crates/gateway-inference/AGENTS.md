@@ -4,3 +4,4 @@
 - Let the `inference-<fmt>` crates validate inference fields and supported features, then map their errors to HTTP responses; do not add gateway checks for temporary inference limitations
 - Use injected deployments, HTTP pools, settings, and secret sources; do not load process configuration or construct independent clients in handlers
 - Test HTTP contracts here, including status codes, forwarded headers, error envelopes, and streaming behavior; keep inference and provider tests in their owning crates
+- For chat completions, inject hook layers as `GatewayLayer`s on `Gateway`: a layer's `pre_call` rewrites or rejects the body before model resolution, and its `call_hooks` join the route's interceptors; the first layer is outermost. Keep policy inside the layers, not in handlers
