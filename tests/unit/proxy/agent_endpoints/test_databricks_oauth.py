@@ -17,6 +17,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy.agent_endpoints.databricks_oauth import (
     DatabricksAppOAuthConfig,
     DatabricksAppOAuthTokenCache,
+    has_databricks_oauth,
     parse_databricks_oauth_config,
     resolve_databricks_app_auth_header,
     without_databricks_oauth_params,
@@ -125,6 +126,17 @@ def test_parse_raises_on_missing_field(missing_field):
 def test_parse_raises_on_non_mapping_block():
     with pytest.raises(ValueError, match="mapping"):
         parse_databricks_oauth_config({"databricks_oauth": "not-a-dict"})
+
+
+@pytest.mark.parametrize(
+    ("block", "error"),
+    [({}, "missing required field"), ("", "mapping")],
+)
+def test_parse_raises_on_an_empty_nested_block(block, error):
+    params = {"custom_llm_provider": "databricks_agent", "databricks_oauth": block}
+    assert has_databricks_oauth(params)
+    with pytest.raises(ValueError, match=error):
+        parse_databricks_oauth_config(params)
 
 
 def test_parse_resolves_os_environ_references(monkeypatch):

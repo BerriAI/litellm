@@ -254,6 +254,59 @@ async def test_route_a2a_bridge_agent_calls_the_endpoint_with_the_agent_params(h
 
 
 @respx.mock
+async def test_route_a2a_bridge_agent_merges_client_and_agent_extra_headers(httpx_transport: None) -> None:
+    agent = AgentResponse(
+        agent_id="dbx-agent-id",
+        agent_name="dbx-agent",
+        agent_card_params={"url": WORKSPACE},
+        litellm_params={
+            "custom_llm_provider": "databricks_agent",
+            "model": "my-agent",
+            "api_base": WORKSPACE,
+            "api_key": "pat-1",
+            "extra_headers": {"X-Agent": "agent", "X-Shared": "from-agent"},
+        },
+    )
+    endpoint = respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(200, json=AGENT_REPLY)
+    )
+    data = {
+        "model": "a2a/dbx-agent",
+        "messages": [{"role": "user", "content": "ping"}],
+        "extra_headers": {"X-Trace": "trace-1", "x-shared": "from-client"},
+    }
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(agent)):
+        await (await route_a2a_agent_request(data=data, route_type="acompletion"))
+
+    sent = endpoint.calls.last.request
+    assert sent.headers["X-Trace"] == "trace-1"
+    assert sent.headers["X-Agent"] == "agent"
+    assert sent.headers.get_list("X-Shared") == ["from-agent"]
+    assert sent.headers["Authorization"] == "Bearer pat-1"
+
+
+@respx.mock
+async def test_route_a2a_bridge_agent_with_an_empty_oauth_block_fails_before_calling_the_app(
+    httpx_transport: None,
+) -> None:
+    agent = AgentResponse(
+        agent_id="dbx-app-id",
+        agent_name="dbx-app",
+        agent_card_params={"url": APP_URL},
+        litellm_params={"custom_llm_provider": "databricks_agent", "databricks_oauth": {}},
+    )
+    app = respx.post(APP_URL).mock(return_value=httpx.Response(200, json=AGENT_REPLY))
+    data = {"model": "a2a/dbx-app", "messages": [{"role": "user", "content": "ping"}]}
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(agent)):
+        with pytest.raises(ValueError, match="missing required field"):
+            await route_a2a_agent_request(data=data, route_type="acompletion")
+
+    assert not app.called
+
+
+@respx.mock
 @pytest.mark.parametrize(
     "oauth_params",
     [

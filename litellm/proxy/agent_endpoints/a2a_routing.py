@@ -28,8 +28,8 @@ from litellm.types.agents import AgentResponse
 _HEADERS: Final = TypeAdapter(Mapping[str, str])
 
 
-def _client_extra_headers(data: Mapping[str, object]) -> Mapping[str, str] | None:
-    extra_headers: Final = data.get("extra_headers")
+def _extra_headers(source: Mapping[str, object]) -> Mapping[str, str] | None:
+    extra_headers: Final = source.get("extra_headers")
     return None if extra_headers is None else _HEADERS.validate_python(extra_headers)
 
 
@@ -38,15 +38,20 @@ def _with_backend_auth(data: Mapping[str, object], backend_auth: Mapping[str, st
         return data
     return {
         **data,
-        "extra_headers": merge_agent_headers(dynamic_headers=_client_extra_headers(data), static_headers=backend_auth),
+        "extra_headers": merge_agent_headers(dynamic_headers=_extra_headers(data), static_headers=backend_auth),
     }
 
 
 def _bridge_request_data(data: Mapping[str, object], litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    agent_kwargs: Final = agent_completion_kwargs(without_databricks_oauth_params(litellm_params))
+    extra_headers: Final = merge_agent_headers(
+        dynamic_headers=_extra_headers(data), static_headers=_extra_headers(agent_kwargs)
+    )
     return {
         **data,
-        **agent_completion_kwargs(without_databricks_oauth_params(litellm_params)),
+        **agent_kwargs,
         "model": bridge_model_name(litellm_params),
+        **({"extra_headers": extra_headers} if extra_headers else {}),
     }
 
 
