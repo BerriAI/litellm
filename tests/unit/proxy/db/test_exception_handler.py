@@ -195,6 +195,7 @@ def test_is_database_service_unavailable_error_prisma_engine_malformed_payload()
 
     assert "no attribute 'get'" in str(exc_info.value)
     assert PrismaDBExceptionHandler.is_database_service_unavailable_error(exc_info.value) is True
+    assert PrismaDBExceptionHandler.is_database_transport_error(exc_info.value) is True
 
 
 def test_is_prisma_engine_internal_error_excludes_application_attributeerror():
