@@ -9,7 +9,7 @@ import os
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
-from typing import Any, Final, TypedDict
+from typing import Any, Final, TypedDict, cast
 from urllib.parse import quote
 
 import httpx
@@ -158,7 +158,7 @@ def _sanitize_path_parameter_value(param_value: object, param_name: str) -> str:
     return quote(value_str, safe="")
 
 
-def load_openapi_spec(filepath: str) -> Mapping[str, Any]:
+def load_openapi_spec(filepath: str) -> dict[str, Any]:
     """
     Sync wrapper. For URL specs, use the shared/custom MCP httpx client.
     """
@@ -176,27 +176,31 @@ def load_openapi_spec(filepath: str) -> Mapping[str, Any]:
     return asyncio.run(load_openapi_spec_async(filepath))
 
 
-def _parse_openapi_spec(text: str) -> Mapping[str, Any]:
+def _parse_openapi_spec(text: str) -> dict[str, Any]:
     """Parse JSON or YAML OpenAPI documents into a mapping."""
     try:
         parsed_json: Final[Any] = json.loads(text)
     except json.JSONDecodeError:
         import yaml
-        from yaml.nodes import ScalarNode
+        from yaml.nodes import MappingNode, Node, ScalarNode
 
         class _NoMergeSafeLoader(yaml.SafeLoader):
-            def compose_node(self, parent: object, index: object) -> object:
-                if self.check_event(yaml.events.AliasEvent):
+            def compose_node(self, parent: Node | None, index: int) -> Node | None:
+                if self.check_event(  # pyright: ignore[reportUnknownMemberType]  # PyYAML lacks typed loader stubs
+                    yaml.events.AliasEvent
+                ):
                     raise yaml.YAMLError("YAML aliases are not supported")
                 return super().compose_node(parent, index)
 
-            def flatten_mapping(self, node: object) -> None:
-                if any(key_node.tag == "tag:yaml.org,2002:merge" for key_node, _ in getattr(node, "value", ())):
+            def flatten_mapping(self, node: MappingNode) -> None:
+                node_values: Final = cast(tuple[tuple[Node, Node], ...], node.value)
+                if any(key_node.tag == "tag:yaml.org,2002:merge" for key_node, _ in node_values):
                     raise yaml.YAMLError("YAML merge keys are not supported")
                 super().flatten_mapping(node)
 
             def construct_yaml_int(self, node: ScalarNode) -> int:
-                if len(node.value) > _MAX_YAML_INT_LENGTH:
+                node_value: Final = cast(str, node.value)
+                if len(node_value) > _MAX_YAML_INT_LENGTH:
                     raise yaml.YAMLError("YAML integer is too long")
                 return super().construct_yaml_int(node)
 
@@ -205,14 +209,14 @@ def _parse_openapi_spec(text: str) -> Mapping[str, Any]:
             _NoMergeSafeLoader.construct_yaml_int,
         )
 
-        parsed_yaml: Final[Any] = yaml.load(text, Loader=_NoMergeSafeLoader)
-        if not isinstance(parsed_yaml, dict):
+        parsed_yaml_raw: Final = yaml.load(text, Loader=_NoMergeSafeLoader)
+        if not isinstance(parsed_yaml_raw, dict):
             raise TypeError("OpenAPI spec must be a JSON or YAML object")
-        return parsed_yaml
+        return cast(dict[str, Any], parsed_yaml_raw)
 
     if not isinstance(parsed_json, dict):
         raise TypeError("OpenAPI spec must be a JSON or YAML object")
-    return parsed_json
+    return cast(dict[str, Any], parsed_json)
 
 
 async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None) -> dict[str, Any]:
