@@ -201,15 +201,20 @@ def build_chat_request(
     messages: Sequence[AllMessageValues],
     optional_params: Mapping[str, object],
 ) -> GraphChatRequest:
-    if not messages or messages[-1]["role"] != "user":
-        raise Microsoft365CopilotError(status_code=400, message="the final message must have role 'user'")
-    last_message: Final = messages[-1]
+    last_user_index: Final = next(
+        (index for index in reversed(range(len(messages))) if messages[index]["role"] == "user"),
+        None,
+    )
+    if last_user_index is None:
+        raise Microsoft365CopilotError(status_code=400, message="at least one message must have role 'user'")
+    last_user_message: Final = messages[last_user_index]
     history: Final = tuple(
         {
             "text": _content_to_text(_message_content(message)),
             "description": f"{message['role']} message",
         }
-        for message in messages[:-1]
+        for index, message in enumerate(messages)
+        if index != last_user_index
     )
     requested_time_zone: Final = optional_params.get("time_zone")
     time_zone: Final = (
@@ -218,7 +223,7 @@ def build_chat_request(
         else MICROSOFT_365_COPILOT_DEFAULT_TIME_ZONE
     )
     request_data: Final = {
-        "message": {"text": _content_to_text(_message_content(last_message))},
+        "message": {"text": _content_to_text(_message_content(last_user_message))},
         "locationHint": {"timeZone": time_zone},
         **({"additionalContext": list(history)} if history else {}),
     }
