@@ -1369,7 +1369,8 @@
         "rerank": true,
         "a2a": true,
         "interactions": true,
-        "video_generations": true
+        "video_generations": true,
+        "systemone": true
       }
     },
     "huggingface": {
