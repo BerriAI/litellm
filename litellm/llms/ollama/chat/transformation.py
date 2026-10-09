@@ -336,6 +336,7 @@ class OllamaChatConfig(BaseConfig):
         )
 
         response_json: Final = raw_response.json()
+        _raise_on_error_payload(response_json)
 
         ## RESPONSE OBJECT
         _done_reason: Final = map_finish_reason(response_json.get("done_reason") or "stop")
@@ -388,9 +389,10 @@ class OllamaChatConfig(BaseConfig):
         model_response.created = int(time.time())
         model_response.model = "ollama_chat/" + model
         prompt_tokens = response_json.get("prompt_eval_count", litellm.token_counter(messages=messages))
-        completion_tokens: Final = response_json.get(
-            "eval_count",
-            litellm.token_counter(text=response_json["message"]["content"]),
+        completion_tokens: Final = (
+            response_json["eval_count"]
+            if "eval_count" in response_json
+            else litellm.token_counter(text=response_json["message"]["content"])
         )
         setattr(
             model_response,
@@ -417,6 +419,17 @@ class OllamaChatConfig(BaseConfig):
             sync_stream=sync_stream,
             json_mode=json_mode,
         )
+
+
+def _raise_on_error_payload(payload: Mapping[str, object]) -> None:
+    error: Final = payload.get("error")
+    if error is None:
+        return
+    raise OllamaError(
+        message=str(error),
+        status_code=400,
+        headers={"Content-Type": "application/json"},
+    )
 
 
 def _done_chunk_usage(chunk: Mapping[str, object]) -> ChatCompletionUsageBlock | None:
@@ -476,6 +489,8 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
 
             """
             from litellm.types.utils import Delta, StreamingChoices
+
+            _raise_on_error_payload(chunk)
 
             # process tool calls - if complete function arg - add id to tool call
             tool_calls: Final = chunk["message"].get("tool_calls")
