@@ -195,9 +195,9 @@ def test_main_reads_both_revisions_from_git(
     tmp_path: Path, head_ref: str, expected_code: int, expected_line: str
 ) -> None:
     subprocess.run(("git", "init", "-q", str(tmp_path)), check=True)
-    base = _commit(tmp_path, BASE_MAP, "base")
-    head = _commit(tmp_path, {key: value for key, value in BASE_MAP.items() if key != "openrouter/b"}, "head")
-    result = _run_guard(tmp_path, base, head, head_ref)
+    base: Final = _commit(tmp_path, BASE_MAP, "base")
+    head: Final = _commit(tmp_path, {key: value for key, value in BASE_MAP.items() if key != "openrouter/b"}, "head")
+    result: Final = _run_guard(tmp_path, base, head, head_ref)
     assert result.returncode == expected_code, result.stdout + result.stderr
     assert expected_line in result.stdout.splitlines()
 
@@ -219,10 +219,10 @@ def test_main_skips_the_file_checks_on_a_stale_base_the_pr_never_touched(tmp_pat
 
 def test_main_keeps_the_file_checks_when_a_cost_map_file_is_renamed(tmp_path: Path) -> None:
     subprocess.run(("git", "init", "-q", str(tmp_path)), check=True)
-    base = _commit(tmp_path, BASE_MAP, "base")
+    base: Final = _commit(tmp_path, BASE_MAP, "base")
     subprocess.run(("git", "mv", guard.COST_MAP_PATH, "renamed.json"), cwd=tmp_path, check=True)
-    head = _git_commit(tmp_path, "rename the cost map")
-    result = _run_guard(tmp_path, base, head, "litellm_fix_pricing")
+    head: Final = _git_commit(tmp_path, "rename the cost map")
+    result: Final = _run_guard(tmp_path, base, head, "litellm_fix_pricing")
     assert result.returncode == 1, result.stdout + result.stderr
     assert "cost map guard failed (human PR, file checks only):" in result.stdout.splitlines()
 
@@ -230,15 +230,15 @@ def test_main_keeps_the_file_checks_when_a_cost_map_file_is_renamed(tmp_path: Pa
 def test_main_fails_when_the_changed_files_cannot_be_read(tmp_path: Path) -> None:
     subprocess.run(("git", "init", "-q", str(tmp_path)), check=True)
     head: Final = _commit(tmp_path, BASE_MAP, "head")
-    result = _run_guard(tmp_path, "0" * 40, head, "litellm_fix_pricing")
+    result: Final = _run_guard(tmp_path, "0" * 40, head, "litellm_fix_pricing")
     assert result.returncode == 1, result.stdout + result.stderr
     assert result.stdout.startswith("cost map guard failed: git diff ")
 
 
 def test_main_rejects_a_bot_pr_that_edits_code(tmp_path: Path) -> None:
     subprocess.run(("git", "init", "-q", str(tmp_path)), check=True)
-    base = _commit(tmp_path, BASE_MAP, "base")
+    base: Final = _commit(tmp_path, BASE_MAP, "base")
     (tmp_path / "litellm" / "utils.py").write_text("print('hi')\n")
-    head = _commit(tmp_path, {**BASE_MAP, "openrouter/c": _entry()}, "head")
+    head: Final = _commit(tmp_path, {**BASE_MAP, "openrouter/c": _entry()}, "head")
     assert _run_guard(tmp_path, base, head, BOT_REF).returncode == 1
     assert _run_guard(tmp_path, base, head, "litellm_fix_pricing").returncode == 0
