@@ -28,9 +28,7 @@ pub fn to_py<T>(py: Python<'_>, value: &T) -> PyResult<Py<PyAny>>
 where
     T: Serialize + ?Sized,
 {
-    pythonize::pythonize(py, value)
-        .map(Bound::unbind)
-        .map_err(PyErr::from)
+    Pythonized(value).into_pyobject(py).map(Bound::unbind)
 }
 
 pub fn json_object_field(py: Python<'_>, document: &str, name: &str) -> PyResult<Py<PyAny>> {
@@ -114,13 +112,19 @@ mod tests {
         });
     }
 
-    #[test]
-    fn pythonized_maps_serializer_panics_to_a_base_exception() {
+    #[rstest::rstest]
+    #[case::wrapped(false)]
+    #[case::direct(true)]
+    fn output_conversion_maps_serializer_panics_to_a_base_exception(#[case] direct: bool) {
         crate::initialize_python();
         Python::attach(|py| {
-            let error = Pythonized(PanickingSerializer)
-                .into_pyobject(py)
-                .expect_err("serializer panic should become a Python exception");
+            let error = if direct {
+                to_py(py, &PanickingSerializer).unwrap_err()
+            } else {
+                Pythonized(PanickingSerializer)
+                    .into_pyobject(py)
+                    .unwrap_err()
+            };
             assert!(error.is_instance_of::<PanicException>(py));
             assert_eq!(error.to_string(), "PanicException: serializer panicked");
         });

@@ -27,6 +27,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -313,7 +314,7 @@ def strip_unsupported_bedrock_invoke_output_config_keys(
         return
     if all(key == "format" for key in output_config):
         return
-    if _bedrock_model_supports(model, "supports_output_config") or AnthropicConfig._model_supports_effort_param(
+    if _bedrock_model_supports(model, "supports_output_config") or AnthropicConfig.model_supports_effort_param(
         model, "bedrock"
     ):
         return
@@ -773,12 +774,15 @@ def get_bedrock_tool_name(response_tool_name: str) -> str:
 _BEDROCK_GLOBAL_REGIONS: list[str] | None = None
 
 
-def _get_all_bedrock_regions() -> list[str]:
+def get_all_bedrock_regions() -> list[str]:
     """Get all Bedrock regions, cached at module level."""
     global _BEDROCK_GLOBAL_REGIONS
     if _BEDROCK_GLOBAL_REGIONS is None:
         _BEDROCK_GLOBAL_REGIONS = AmazonBedrockGlobalConfig().get_all_regions()
     return _BEDROCK_GLOBAL_REGIONS
+
+
+_get_all_bedrock_regions = get_all_bedrock_regions
 
 
 def get_bedrock_cross_region_inference_regions() -> list[str]:
@@ -829,7 +833,7 @@ def split_bedrock_region_path(model: str) -> tuple[str | None, str]:
     """
     stripped: Final = strip_bedrock_routing_prefix(model)
     region, separator, model_id = stripped.partition("/")
-    if separator and region in _get_all_bedrock_regions():
+    if separator and region in get_all_bedrock_regions():
         return region, model_id
     return None, stripped
 
@@ -904,6 +908,17 @@ def bedrock_runtime_chat_completions_enforces_response_format(model: str) -> boo
 def bedrock_model_is_openai_gpt(model: str) -> bool:
     """A GPT-5.x or GPT-6.x id, never GPT-OSS: the families whose sampling params AWS ties to reasoning being off."""
     return _openai_gpt_version(model) is not None
+
+
+def bedrock_runtime_chat_completions_serves_reasoning_inline(model: str) -> bool:
+    """Whether AWS's native Chat Completions writes this model's reasoning inline in the answer text.
+
+    Data-driven from the price-map ``supports_bedrock_runtime_chat_completions_inline_reasoning`` flag (gpt-oss).
+    A flagged model opens its answer with a ``<reasoning>...</reasoning>`` block instead of a
+    ``reasoning_content`` field, so litellm splits that block out for it and keeps every other model's
+    text as sent.
+    """
+    return _bedrock_price_map_flag(model, "supports_bedrock_runtime_chat_completions_inline_reasoning")
 
 
 BEDROCK_CONVERSE_ONLY_REQUEST_KEYS: Final = frozenset(
@@ -1104,7 +1119,7 @@ def get_bedrock_base_model(model: str) -> str:
 
     if potential_region in get_bedrock_cross_region_inference_regions():
         return model.split(".", 1)[1]
-    elif alt_potential_region in _get_all_bedrock_regions() and len(model.split("/", 1)) > 1:
+    elif alt_potential_region in get_all_bedrock_regions() and len(model.split("/", 1)) > 1:
         return model.split("/", 1)[1]
 
     return model
@@ -1174,7 +1189,7 @@ def bedrock_supports_tool_search(model: str) -> bool:
     """
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-    return AnthropicModelInfo._supports_model_capability(model, "supports_tool_search", "bedrock")
+    return AnthropicModelInfo.supports_model_capability(model, "supports_tool_search", "bedrock")
 
 
 def is_claude_4_5_on_bedrock(model: str) -> bool:
@@ -1829,6 +1844,7 @@ class BedrockEventStreamDecoderBase:
     """
 
     def __init__(self):
+        ensure_optional_import("botocore")
         from botocore.parsers import EventStreamJSONParser
 
         self.parser = EventStreamJSONParser()
@@ -2049,13 +2065,11 @@ class CommonBatchFilesUtils:
         Returns:
             Tuple of (signed_headers, signed_data)
         """
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        ensure_optional_import("botocore")
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
 
-        aws_region_name: Final = self._base_aws._get_aws_region_name(optional_params=optional_params, model="")
+        aws_region_name: Final = self._base_aws.get_aws_region_name(optional_params=optional_params, model="")
         credentials: Final = self._base_aws.resolve_credentials(
             AwsAuthParams.model_validate(optional_params), aws_region_name
         )

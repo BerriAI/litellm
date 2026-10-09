@@ -91,6 +91,13 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
     declared_authenticating_provider,
     is_registered_custom_provider,
 )
+from litellm.litellm_core_utils.hidden_params import (
+    HIDDEN_PARAMS_ATTR as _HIDDEN_PARAMS_ATTR,
+)
+from litellm.litellm_core_utils.hidden_params import (
+    get_hidden_params,
+    set_hidden_params,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
 from litellm.litellm_core_utils.ptu_pricing import (
@@ -149,7 +156,6 @@ from litellm.router_strategy.tag_based_routing import (
 )
 from litellm.router_utils.access_windows import access_windows_config_error, filter_reserved_deployments
 from litellm.router_utils.add_retry_fallback_headers import (
-    HiddenParamsHost,
     add_fallback_headers_to_response,
     add_retry_headers_to_response,
     apply_quality_router_decision_headers,
@@ -193,6 +199,7 @@ from litellm.router_utils.common_utils import (
     resolve_model_group_alias,
     truncate_fallback_error_detail,
     warn_on_provider_credential_mismatch,
+    without_router_only_kwargs,
 )
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.cooldown_handlers import (
@@ -221,6 +228,7 @@ from litellm.router_utils.fallback_event_handlers import (
     get_pre_routing_selection,
     has_unattempted_fallback_target,
     mid_stream_fallback_hop_kwargs,
+    mid_stream_fallback_snapshot_kwargs,
     mid_stream_retry_kwargs,
     per_request_fallback_controls,
     record_disable_fallbacks,
@@ -492,7 +500,24 @@ _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_FALLBACK_HOP_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _DEPLOYMENT_SELECTED_EVENT: Final = "litellm.request.deployment_selected"
+
+
+def _is_fallback_hop(request_kwargs: Mapping[str, object]) -> bool:
+    fallback_depth: Final = request_kwargs.get("fallback_depth")
+    return isinstance(fallback_depth, int) and fallback_depth > 0
+
+
+def _deployment_that_just_failed(request_metadata: object) -> str | None:
+    try:
+        model_info: Final = _FALLBACK_HOP_ADAPTER.validate_python(
+            _FALLBACK_HOP_ADAPTER.validate_python(request_metadata).get("model_info")
+        )
+    except ValidationError:
+        return None
+    model_id: Final = model_info.get("id")
+    return model_id if isinstance(model_id, str) else None
 
 
 def _deployment_pick_attributes(model: str, request_kwargs: Mapping[str, object] | None) -> Mapping[str, str | int]:
@@ -501,10 +526,7 @@ def _deployment_pick_attributes(model: str, request_kwargs: Mapping[str, object]
     metadata: Final = kwargs.get("litellm_metadata", kwargs.get("metadata"))
     attempted_retries: Final = metadata.get("attempted_retries") if isinstance(metadata, Mapping) else None
     retries: Final = attempted_retries if isinstance(attempted_retries, int) else 0
-    fallback_depth: Final = kwargs.get("fallback_depth")
-    reason: Final = (
-        "retry" if retries > 0 else "fallback" if isinstance(fallback_depth, int) and fallback_depth > 0 else "initial"
-    )
+    reason: Final = "retry" if retries > 0 else "fallback" if _is_fallback_hop(kwargs) else "initial"
     return MappingProxyType(
         {
             "litellm.deployment.attempt": retries + 1,
@@ -2654,6 +2676,8 @@ class Router:
             kwargs["model"] = model
             kwargs["messages"] = messages
             kwargs["original_function"] = self._completion
+            controls: Final = per_request_fallback_controls(kwargs)
+            kwargs[MID_STREAM_FALLBACK_CONTROLS_KEY] = controls  # rebind-ok: forwarded to every hop
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
 
             response: Final = self.function_with_fallbacks(**kwargs)
@@ -2665,10 +2689,10 @@ class Router:
         model_name = None
         deployment = None
         try:
-            # Capture kwargs before deployment selection so the streaming
-            # fallback iterator can re-dispatch with the original model group.
-            input_kwargs_for_streaming_fallback: Final = kwargs.copy()
-            input_kwargs_for_streaming_fallback["model"] = model
+            controls: Final = kwargs.pop(MID_STREAM_FALLBACK_CONTROLS_KEY, None)
+            input_kwargs_for_streaming_fallback: Final = mid_stream_fallback_snapshot_kwargs(
+                model=model, controls=controls, kwargs=kwargs
+            )
 
             # pick the one that is available (lowest TPM/RPM)
             deployment = self.get_available_deployment(
@@ -2722,13 +2746,15 @@ class Router:
             if model in self.model_names or not self.has_model_id(model):
                 self.routing_strategy_pre_call_checks(deployment=deployment)
 
-            input_kwargs: Final = {
-                **litellm_params,
-                "messages": messages,
-                "caching": self.cache_responses,
-                "client": model_client,
-                **kwargs,
-            }
+            input_kwargs: Final = without_router_only_kwargs(
+                {
+                    **litellm_params,
+                    "messages": messages,
+                    "caching": self.cache_responses,
+                    "client": model_client,
+                    **kwargs,
+                }
+            )
             response: Final = litellm.completion(**input_kwargs)
             verbose_router_logger.info("litellm.completion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
 
@@ -2914,6 +2940,8 @@ class Router:
                     messages=messages,
                     kwargs=kwargs,
                 )
+            controls: Final = per_request_fallback_controls(kwargs)
+            kwargs[MID_STREAM_FALLBACK_CONTROLS_KEY] = controls  # rebind-ok: forwarded to every hop
             if request_priority is not None and isinstance(request_priority, int):
                 response = await self.schedule_acompletion(**kwargs)
             else:
@@ -2989,7 +3017,7 @@ class Router:
         fallback_item: object,
         prepared_fallback_hidden_params: tuple[dict[str, object], dict[str, object]],
     ) -> None:
-        if fallback_item is None or not hasattr(fallback_item, "_hidden_params"):
+        if fallback_item is None or not hasattr(fallback_item, _HIDDEN_PARAMS_ATTR):
             return
 
         fallback_hidden_params, fallback_headers = prepared_fallback_hidden_params
@@ -2998,11 +3026,14 @@ class Router:
         if not isinstance(item_headers, dict):
             item_headers = {}
 
-        cast(HiddenParamsHost, fallback_item)._hidden_params = {
-            **item_hidden_params,
-            **fallback_hidden_params,
-            "additional_headers": {**item_headers, **fallback_headers},
-        }
+        set_hidden_params(
+            fallback_item,
+            {
+                **item_hidden_params,
+                **fallback_hidden_params,
+                "additional_headers": {**item_headers, **fallback_headers},
+            },
+        )
 
     async def _acompletion_streaming_iterator(
         self,
@@ -3038,8 +3069,9 @@ class Router:
                 if isinstance(inner_chunks, list):
                     self.chunks = inner_chunks
                 # Preserve hidden params (including litellm_overhead_time_ms) from original response
-                if hasattr(model_response, "_hidden_params"):
-                    self._hidden_params = model_response._hidden_params.copy()
+                model_response_hidden_params: Final = get_hidden_params(model_response)
+                if model_response_hidden_params is not None:
+                    self._hidden_params = dict(model_response_hidden_params)
 
             def __aiter__(self):
                 return self
@@ -3656,8 +3688,9 @@ class Router:
                     _response_headers=getattr(model_response, "_response_headers", None),
                 )
                 self._sync_generator = sync_generator
-                if hasattr(model_response, "_hidden_params"):
-                    self._hidden_params = model_response._hidden_params.copy()
+                model_response_hidden_params: Final = get_hidden_params(model_response)
+                if model_response_hidden_params is not None:
+                    self._hidden_params = dict(model_response_hidden_params)
 
             def __iter__(self):
                 return self
@@ -3702,11 +3735,17 @@ class Router:
                     initial_kwargs["original_function"] = router_self._completion
                     initial_kwargs["messages"] = messages
                     router_self._update_kwargs_before_fallbacks(model=model_group, kwargs=initial_kwargs)
-                    fallback_response = router_self.function_with_fallbacks(
-                        **initial_kwargs,
+                    fallback_response = run_async_function(
+                        router_self.async_function_with_fallbacks_common_utils,
+                        e=e,
+                        disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
                         fallbacks=fallbacks,
                         context_window_fallbacks=context_window_fallbacks,
                         content_policy_fallbacks=content_policy_fallbacks,
+                        model_group=model_group,
+                        args=(),
+                        kwargs=initial_kwargs,
+                        include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
                     )
 
                     if hasattr(fallback_response, "__iter__"):
@@ -3798,8 +3837,10 @@ class Router:
         deployment = None
         _timeout_debug_deployment_dict = {}  # this is a temporary dict to debug timeout issues
         try:
-            input_kwargs_for_streaming_fallback: Final = kwargs.copy()
-            input_kwargs_for_streaming_fallback["model"] = model
+            controls: Final = kwargs.pop(MID_STREAM_FALLBACK_CONTROLS_KEY, None)
+            input_kwargs_for_streaming_fallback: Final = mid_stream_fallback_snapshot_kwargs(
+                model=model, controls=controls, kwargs=kwargs
+            )
 
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
             start_time: Final = time.time()
@@ -3863,15 +3904,15 @@ class Router:
             )
             self.total_calls[model_name] += 1
 
-            input_kwargs: Final = {
-                **litellm_params,
-                "messages": messages,
-                "caching": self.cache_responses,
-                "client": model_client,
-                **kwargs,
-            }
-            input_kwargs.pop("silent_model", None)
-            input_kwargs.pop("include_fallback_errors", None)
+            input_kwargs: Final = without_router_only_kwargs(
+                {
+                    **litellm_params,
+                    "messages": messages,
+                    "caching": self.cache_responses,
+                    "client": model_client,
+                    **kwargs,
+                }
+            )
 
             logging_obj: Final[LiteLLMLogging | None] = kwargs.get("litellm_logging_obj", None)
 
@@ -4112,10 +4153,11 @@ class Router:
         function_name: str | None = None,
     ) -> None:
         """
-        3 jobs:
+        4 jobs:
         - Adds selected deployment, model_info and api_base to kwargs["metadata"] (used for logging)
         - Adds default litellm params to kwargs, if set.
         - Merges tools from deployment with request (proxy-configured tools + request tools).
+        - On a fallback hop, drops the encrypted reasoning this deployment cannot decrypt, keeping its summary.
         """
         for key in self._forwarded_alias_marker_keys_the_deployment_sets(
             deployment=deployment, forwarded_keys=kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ())
@@ -4137,6 +4179,9 @@ class Router:
 
         metadata_variable_name: Final = get_router_metadata_variable_name(
             function_name=function_name,
+        )
+        deployment_that_just_failed: Final = _deployment_that_just_failed(
+            _FALLBACK_HOP_ADAPTER.validate_python(kwargs).get(metadata_variable_name)
         )
 
         kwargs.setdefault(metadata_variable_name, {}).update(
@@ -4210,6 +4255,15 @@ class Router:
             kwargs["timeout"] = self._get_timeout(kwargs=kwargs, data=deployment["litellm_params"])
 
         self._update_kwargs_with_default_litellm_params(kwargs=kwargs, metadata_variable_name=metadata_variable_name)
+        hop_kwargs: Final = _FALLBACK_HOP_ADAPTER.validate_python(kwargs)
+        if _is_fallback_hop(hop_kwargs):
+            EncryptedContentAffinityCheck.strip_reasoning_the_targets_cannot_decrypt(
+                self,
+                hop_kwargs.get("input"),
+                hop_kwargs.get("messages"),
+                (_FALLBACK_HOP_ADAPTER.validate_python(deployment),),
+                unmarked_origin=deployment_that_just_failed,
+            )
 
     def _get_async_openai_model_client(self, deployment: dict, kwargs: dict):
         """
@@ -4484,7 +4538,8 @@ class Router:
 
                 if result is not None:
                     # Return the first successful result
-                    result._hidden_params["fastest_response_batch_completion"] = True
+                    if (result_hidden_params := get_hidden_params(result)) is not None:
+                        result_hidden_params["fastest_response_batch_completion"] = True
                     return result
 
         # If we exit the loop without returning, all tasks failed
@@ -4516,57 +4571,21 @@ class Router:
         stream=False,
         **kwargs,
     ):
-        parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-        ### FLOW ITEM ###
-        _request_id: Final = str(uuid.uuid4())
-        item: Final = FlowItem(
-            priority=priority,  # 👈 SET PRIORITY FOR REQUEST
-            request_id=_request_id,  # 👈 SET REQUEST ID
-            model_name=model,  # 👈 SAME as 'Router'
+        await self._wait_for_scheduler_turn(
+            model=model, priority=priority, parent_otel_span=get_parent_otel_span_from_kwargs(kwargs)
         )
-        ### [fin] ###
-
-        ## ADDS REQUEST TO QUEUE ##
-        await self.scheduler.add_request(request=item)
-
-        ## POLL QUEUE
-        end_time: Final = time.monotonic() + self.timeout
-        curr_time = time.monotonic()
-        poll_interval: Final = self.scheduler.polling_interval  # poll every 3ms
-        make_request = False
-
-        while curr_time < end_time:
-            _healthy_deployments, _ = await self._async_get_healthy_deployments(
-                model=model, parent_otel_span=parent_otel_span
-            )
-            make_request = await self.scheduler.poll(  ## POLL QUEUE ## - returns 'True' if there's healthy deployments OR if request is at top of queue
-                id=item.request_id,
-                model_name=item.model_name,
-                health_deployments=_healthy_deployments,
-            )
-            if make_request:  ## IF TRUE -> MAKE REQUEST
-                break
-            else:  ## ELSE -> loop till default_timeout
-                await asyncio.sleep(poll_interval)
-                curr_time = time.monotonic()
-
-        if make_request:
-            try:
-                _response: Final = await self.acompletion(model=model, messages=messages, stream=stream, **kwargs)
-                _response._hidden_params.setdefault("additional_headers", {})
-                _response._hidden_params["additional_headers"].update({"x-litellm-request-prioritization-used": True})
-                return _response
-            except Exception as e:
-                setattr(e, "priority", priority)
-                raise e
-        else:
-            # Clean up the request from the scheduler queue also before raising the timeout exception
-            await self.scheduler.remove_request(request_id=item.request_id, model_name=item.model_name)
-            raise litellm.Timeout(
-                message="Request timed out while polling queue",
-                model=model,
-                llm_provider="openai",
-            )
+        try:
+            _response: Final = await self.acompletion(model=model, messages=messages, stream=stream, **kwargs)
+            response_hidden_params: Final = get_hidden_params(_response)
+            if response_hidden_params is not None:
+                additional_headers: Final = cast(  # cast-ok: router headers are stored as a mutable mapping
+                    dict[str, object], response_hidden_params.setdefault("additional_headers", {})
+                )
+                additional_headers.update({"x-litellm-request-prioritization-used": True})
+            return _response
+        except Exception as e:
+            setattr(e, "priority", priority)
+            raise e
 
     async def _schedule_factory(
         self,
@@ -4576,60 +4595,32 @@ class Router:
         args: tuple[object, ...],
         kwargs: dict[str, object],
     ):
-        parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
-        ### FLOW ITEM ###
-        _request_id: Final = str(uuid.uuid4())
-        item: Final = FlowItem(
-            priority=priority,  # 👈 SET PRIORITY FOR REQUEST
-            request_id=_request_id,  # 👈 SET REQUEST ID
-            model_name=model,  # 👈 SAME as 'Router'
+        await self._wait_for_scheduler_turn(
+            model=model, priority=priority, parent_otel_span=get_parent_otel_span_from_kwargs(kwargs)
         )
-        ### [fin] ###
+        try:
+            _response: Final = await original_function(*args, **kwargs)
+            response_hidden_params: Final = get_hidden_params(_response)
+            if response_hidden_params is not None:
+                additional_headers: Final = cast(  # cast-ok: router headers are stored as a mutable mapping
+                    dict[str, object], response_hidden_params.setdefault("additional_headers", {})
+                )
+                additional_headers.update({"x-litellm-request-prioritization-used": True})
+            return _response
+        except Exception as e:
+            setattr(e, "priority", priority)
+            raise e
 
-        ## ADDS REQUEST TO QUEUE ##
-        await self.scheduler.add_request(request=item)
+    async def _wait_for_scheduler_turn(self, model: str, priority: int, parent_otel_span: Span | None) -> None:
+        async def healthy_deployments() -> Sequence[object]:
+            deployments, _ = await self._async_get_healthy_deployments(model=model, parent_otel_span=parent_otel_span)
+            return deployments
 
-        ## POLL QUEUE
-        end_time: Final = time.monotonic() + self.timeout
-        curr_time = time.monotonic()
-        poll_interval: Final = self.scheduler.polling_interval  # poll every 3ms
-        make_request = False
-
-        while curr_time < end_time:
-            _healthy_deployments, _ = await self._async_get_healthy_deployments(
-                model=model, parent_otel_span=parent_otel_span
-            )
-            make_request = await self.scheduler.poll(  ## POLL QUEUE ## - returns 'True' if there's healthy deployments OR if request is at top of queue
-                id=item.request_id,
-                model_name=item.model_name,
-                health_deployments=_healthy_deployments,
-            )
-            if make_request:  ## IF TRUE -> MAKE REQUEST
-                break
-            else:  ## ELSE -> loop till default_timeout
-                await asyncio.sleep(poll_interval)
-                curr_time = time.monotonic()
-
-        if make_request:
-            try:
-                _response: Final = await original_function(*args, **kwargs)
-                if isinstance(_response._hidden_params, dict):
-                    _response._hidden_params.setdefault("additional_headers", {})
-                    _response._hidden_params["additional_headers"].update(
-                        {"x-litellm-request-prioritization-used": True}
-                    )
-                return _response
-            except Exception as e:
-                setattr(e, "priority", priority)
-                raise e
-        else:
-            # Clean up the request from the scheduler queue also before raising the timeout exception
-            await self.scheduler.remove_request(request_id=item.request_id, model_name=item.model_name)
-            raise litellm.Timeout(
-                message="Request timed out while polling queue",
-                model=model,
-                llm_provider="openai",
-            )
+        await self.scheduler.wait_for_turn(
+            request=FlowItem(priority=priority, request_id=str(uuid.uuid4()), model_name=model),
+            timeout=self.timeout,
+            get_healthy_deployments=healthy_deployments,
+        )
 
     def _is_prompt_management_model(self, model: str) -> bool:
         model_list: Final = self.get_model_list(model_name=model)
@@ -5568,6 +5559,7 @@ class Router:
             model=model, original_generic_function=original_generic_function, **kwargs
         )
         carry_over_pre_routing_selection(live_kwargs=kwargs, snapshot=hop_kwargs)
+        carry_over_routed_deployment(live_kwargs=kwargs, snapshot=hop_kwargs)
         if kwargs.get("stream") and isinstance(response, BaseResponsesAPIStreamingIterator):
             return await self._aresponses_streaming_iterator(response=response, initial_kwargs=hop_kwargs)
         return response
@@ -6453,7 +6445,9 @@ class Router:
                 healthy_deployments=healthy_deployments, responses=responses
             )
             returned_response: Final = cast(OpenAIFileObject, responses[0])
-            returned_response._hidden_params["model_file_id_mapping"] = model_file_id_mapping
+            returned_response_hidden_params: Final = get_hidden_params(returned_response)
+            if returned_response_hidden_params is not None:
+                returned_response_hidden_params["model_file_id_mapping"] = model_file_id_mapping
             return returned_response
         except Exception as e:
             verbose_router_logger.exception(
@@ -9316,10 +9310,10 @@ class Router:
             if access_windows_error is not None:
                 raise ValueError(access_windows_error)
             zeroed_pricing: Final = zeroed_ptu_pricing(_model_info, _litellm_params) if config_sourced else None
-            merged_params: Final[Mapping[str, Any]] = (
+            merged_params: Final[Mapping[str, object]] = (
                 _litellm_params if zeroed_pricing is None else MappingProxyType({**_litellm_params, **zeroed_pricing})
             )
-            litellm_params: Final[LiteLLM_Params] = LiteLLM_Params(**merged_params)
+            litellm_params: Final[LiteLLM_Params] = LiteLLM_Params.model_validate(dict(**merged_params))
             warn_on_provider_credential_mismatch(model_name=_model_name, litellm_params=_litellm_params)
             deployment = Deployment(
                 **deployment_info,
@@ -10457,6 +10451,7 @@ class Router:
                 model_cost={model_id: model_info},
                 persist_across_reloads=False,
                 warning_display_name=model,
+                custom_llm_provider=custom_llm_provider,
             )
 
         ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
@@ -14563,17 +14558,21 @@ class Router:
         to the deployment that actually served the request. Every attempt therefore
         writes or clears, never just writes.
         """
+        from litellm.router_utils.baseline_request import capture_baseline_parameters
         from litellm.types.router import BaselineRouteStamp
 
         phase_attributes(routing_decision_attributes(routing_decision))
         baseline_model: Final = routing_decision.get("savings_baseline_model") if routing_decision else None
         baseline_id: Final = routing_decision.get("savings_baseline_deployment_id") if routing_decision else None
         router_name: Final = routing_decision.get("router_model_name") if routing_decision else None
+        caller_parameters: Final = (
+            capture_baseline_parameters(request_kwargs) if router_name and baseline_model else None
+        )
         Router._stamp_or_clear_metadata_key(
             request_kwargs=request_kwargs,
             key="_autorouter_baseline_route",
             value=(
-                BaselineRouteStamp(router_name, baseline_model, baseline_id)
+                BaselineRouteStamp(router_name, baseline_model, baseline_id, caller_parameters)
                 if router_name and baseline_model and baseline_id
                 else None
             ),

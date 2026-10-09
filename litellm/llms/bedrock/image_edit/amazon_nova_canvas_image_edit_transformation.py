@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import base64
 import os
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 
@@ -228,6 +228,13 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         drops keys not on ModelInfoBase).
         """
         return _supports_nova_canvas_image_edit_from_model_cost(model or "")
+
+    @classmethod
+    def is_nova_canvas_image_edit_model(
+        cls,
+        model: str | None = None,
+    ) -> bool:
+        return cls._is_nova_canvas_image_edit_model(model)
 
     def get_error_class(
         self,
@@ -449,17 +456,18 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
             )
 
         if not hasattr(model_response, "_hidden_params"):
-            model_response._hidden_params = {}
-        if "additional_headers" not in model_response._hidden_params:
-            model_response._hidden_params["additional_headers"] = {}
+            model_response.hidden_params = {}
+        additional_headers: Final = cast(  # cast-ok: provider headers are stored as a mutable mapping
+            dict[str, object], model_response.hidden_params.setdefault("additional_headers", {})
+        )
 
         try:
             model_info: Final = get_model_info(model, custom_llm_provider="bedrock")
             cost_per_image: Final = model_info.get("output_cost_per_image", 0)
             if cost_per_image is not None and model_response.data:
-                model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
-                    cost_per_image
-                ) * len(model_response.data)
+                additional_headers["llm_provider-x-litellm-response-cost"] = float(cost_per_image) * len(
+                    model_response.data
+                )
         except Exception:
             pass
 
@@ -508,9 +516,9 @@ def get_bedrock_image_edit_config_for_model(
         BedrockStabilityImageEditConfig,
     )
 
-    if BedrockStabilityImageEditConfig._is_stability_edit_model(model):
+    if BedrockStabilityImageEditConfig.is_stability_edit_model(model):
         return BedrockStabilityImageEditConfig()
-    if BedrockAmazonNovaCanvasImageEditConfig._is_nova_canvas_image_edit_model(model):
+    if BedrockAmazonNovaCanvasImageEditConfig.is_nova_canvas_image_edit_model(model):
         return BedrockAmazonNovaCanvasImageEditConfig()
     raise ValueError(
         f"Unsupported Bedrock image-edit model: {model!r}. "

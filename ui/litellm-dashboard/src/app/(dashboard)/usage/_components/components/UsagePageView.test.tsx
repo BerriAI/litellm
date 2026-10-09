@@ -12,7 +12,20 @@ import { processActivityData } from "@/components/activity_metrics";
 import type { Organization } from "@/components/networking";
 import type { ModelActivityData } from "@/components/UsagePage/types";
 import * as networking from "@/components/networking";
+import { STACKED_USAGE_PALETTE } from "@/components/shared/charts";
+import { OTHER_COLOR } from "./overview/overviewData";
 import UsagePage from "./UsagePageView";
+
+// The Overview tab. The Key Activity tab stays mounted and carries its own spend-derived totals,
+// so assertions about the overview's request tiles are scoped here rather than to the whole page.
+const overview = () => within(screen.getByRole("tabpanel", { name: "Overview" }));
+
+// The Total Requests stat cell: its label, the count, and the "N ok / N failed" line beneath it.
+const totalRequestsCell = (): HTMLElement => {
+  const cell = overview().getByText("Total Requests").parentElement?.parentElement;
+  expect(cell).toBeTruthy();
+  return cell as HTMLElement;
+};
 
 const modelActivity = (label: string): ModelActivityData => ({
   label,
@@ -470,17 +483,19 @@ describe("UsagePage", () => {
     });
 
     // Check that key metrics are displayed
-    const totalRequestElements = screen.getAllByText("Total Requests");
+    const totalRequestElements = overview().getAllByText("Total Requests");
     expect(totalRequestElements.length).toBeGreaterThan(0);
-    const successfulRequestLabelElements = screen.getAllByText("Successful Requests");
-    expect(successfulRequestLabelElements.length).toBeGreaterThan(0);
     await waitFor(() => {
-      expect(screen.getAllByText("424,242").length).toBeGreaterThan(0);
+      expect(overview().getAllByText("424,242").length).toBeGreaterThan(0);
     });
-    expect(screen.getAllByText("909").length).toBeGreaterThan(0);
-    expect(screen.getByText("425,151")).toBeInTheDocument();
-    expect(screen.queryByText("1,500")).not.toBeInTheDocument();
-    expect(screen.queryByText("1,450")).not.toBeInTheDocument();
+    expect(overview().getAllByText("909").length).toBeGreaterThan(0);
+    expect(overview().getByText("425,151")).toBeInTheDocument();
+    // Successful and failed counts now sit under Total Requests rather than in their own tiles.
+    expect(totalRequestsCell()).toHaveTextContent("425,151");
+    expect(totalRequestsCell()).toHaveTextContent("424,242 ok");
+    expect(totalRequestsCell()).toHaveTextContent("909 failed");
+    expect(overview().queryByText("1,500")).not.toBeInTheDocument();
+    expect(overview().queryByText("1,450")).not.toBeInTheDocument();
   });
 
   it("should stop showing the previous range's totals while a new range is in flight", async () => {
@@ -498,9 +513,11 @@ describe("UsagePage", () => {
     );
 
     renderWithProviders(<UsagePage {...defaultProps} />);
+    // Total Tokens reads compact (75K); the exact count stays on hover.
     await waitFor(() => {
-      expect(screen.getAllByText("75,000").length).toBeGreaterThan(0);
+      expect(overview().getAllByText("75K").length).toBeGreaterThan(0);
     });
+    expect(overview().getByTitle("75,000 tokens")).toHaveTextContent("75K");
 
     await act(async () => {
       fireEvent.click(screen.getByTestId("pick-a-different-range"));
@@ -509,21 +526,22 @@ describe("UsagePage", () => {
     await waitFor(() => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(2);
     });
-    expect(screen.queryByText("75,000")).not.toBeInTheDocument();
-    expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
-    expect(screen.getByText("Total Tokens")).toBeInTheDocument();
-    expect(await screen.findByText("425,151")).toBeInTheDocument();
-    expect(screen.getByText("Total Tokens").closest('[data-slot="card"]')).not.toHaveTextContent(/\d/);
-    expect(screen.queryByText("$0.0000")).not.toBeInTheDocument();
+    expect(overview().queryByText("75K")).not.toBeInTheDocument();
+    expect(overview().queryByText("$0.00")).not.toBeInTheDocument();
+    expect(overview().getByText("Total Tokens")).toBeInTheDocument();
+    expect(await overview().findByText("425,151")).toBeInTheDocument();
+    // The Total Tokens stat (label, value and hint) must hold no number while its range is in flight.
+    expect(overview().getByText("Total Tokens").parentElement).not.toHaveTextContent(/\d/);
+    expect(overview().queryByText("$0.0000")).not.toBeInTheDocument();
 
     await act(async () => {
       releaseSecondFetch();
     });
     await waitFor(() => {
-      expect(screen.getAllByText("75,000").length).toBeGreaterThan(0);
+      expect(overview().getAllByText("75K").length).toBeGreaterThan(0);
     });
-    expect(screen.getByText("Total Tokens")).toBeInTheDocument();
-    expect(screen.getByText("$0.0838")).toBeInTheDocument();
+    expect(overview().getByText("Total Tokens")).toBeInTheDocument();
+    expect(overview().getByText("$0.0838")).toBeInTheDocument();
   });
 
   it("loads key pages separately from the aggregate and refreshes them when the range changes", async () => {
@@ -555,9 +573,12 @@ describe("UsagePage", () => {
       expect(mockGatewayDailyActivityCall).toHaveBeenCalled();
     });
     await waitFor(() => {
-      expect(screen.getAllByText("1,450").length).toBeGreaterThan(0);
+      expect(overview().getAllByText("1,450").length).toBeGreaterThan(0);
     });
-    expect(screen.getByText("1,500")).toBeInTheDocument();
+    expect(overview().getByText("1,500")).toBeInTheDocument();
+    expect(totalRequestsCell()).toHaveTextContent("1,500");
+    expect(totalRequestsCell()).toHaveTextContent("1,450 ok");
+    expect(totalRequestsCell()).toHaveTextContent("50 failed");
     expect(screen.queryByText("424,242")).not.toBeInTheDocument();
     expect(screen.queryByText("909")).not.toBeInTheDocument();
     expect(screen.queryByText("425,151")).not.toBeInTheDocument();
@@ -573,7 +594,9 @@ describe("UsagePage", () => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
     });
     expect(mockGatewayDailyActivityCall).not.toHaveBeenCalled();
-    expect(screen.getByText("1,500")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(totalRequestsCell()).toHaveTextContent("1,500");
+    });
     expect(screen.queryByText("424,242")).not.toBeInTheDocument();
     expect(screen.queryByTestId("gateway-requests-by-endpoint")).not.toBeInTheDocument();
   });
@@ -588,19 +611,39 @@ describe("UsagePage", () => {
     // Check for usage metrics cards
     const totalRequestElements = screen.getAllByText("Total Requests");
     expect(totalRequestElements.length).toBeGreaterThan(0);
-    const successfulRequestElements = screen.getAllByText("Successful Requests");
-    expect(successfulRequestElements.length).toBeGreaterThan(0);
-    const failedRequestElements = screen.getAllByText("Failed Requests");
-    expect(failedRequestElements.length).toBeGreaterThan(0);
+    // Successful and failed counts now sit under Total Requests rather than in their own tiles.
+    await waitFor(() => {
+      expect(totalRequestsCell()).toHaveTextContent(/\d+ ok/);
+    });
+    expect(totalRequestsCell()).toHaveTextContent(/\d+ failed/);
     const totalTokensElements = screen.getAllByText("Total Tokens");
     expect(totalTokensElements.length).toBeGreaterThan(0);
 
-    // Check for chart titles (these are in the Cost tab)
-    expect(screen.getByText("Daily Spend")).toBeInTheDocument();
+    // Check for chart titles (these are in the Overview tab)
+    expect(screen.getByText("Daily usage")).toBeInTheDocument();
+    expect(screen.getByText("Daily spend by model (top 8, rest grouped as Other)")).toBeInTheDocument();
+    expect(screen.getByText("Top models")).toBeInTheDocument();
     expect(screen.getByText("Top Virtual Keys")).toBeInTheDocument();
   });
 
-  it("should render the daily spend and top models charts with cyan bars", async () => {
+  it("should rename the usage chart when the weekly bucket is selected", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+
+    expect(screen.getByText("Daily usage")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: "Weekly" }));
+
+    expect(screen.getByText("Weekly usage")).toBeInTheDocument();
+    expect(screen.getByText("Weekly spend by model (top 8, rest grouped as Other)")).toBeInTheDocument();
+    expect(screen.queryByText("Daily usage")).not.toBeInTheDocument();
+  });
+
+  it("should render the top models chart stacked in the shared usage palette", async () => {
     const { container } = renderWithProviders(<UsagePage {...defaultProps} />);
 
     await waitFor(() => {
@@ -616,14 +659,15 @@ describe("UsagePage", () => {
       );
     };
 
+    // One day stacked as the top model (gpt-4) over the "Other" remainder of that day's spend.
     await waitFor(() => {
       expect(spendBars()).toHaveLength(2);
     });
 
     const fills = new Set(spendBars().map((rect) => rect.getAttribute("fill")));
-    expect(fills).toEqual(new Set(["var(--color-cyan-500, #06b6d4)"]));
+    expect(fills).toEqual(new Set([STACKED_USAGE_PALETTE[0], OTHER_COLOR]));
 
-    expect(screen.getAllByText("2025-01-01").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Jan 1").length).toBeGreaterThan(0);
     expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
   });
 
@@ -635,7 +679,7 @@ describe("UsagePage", () => {
     });
 
     // Default view should show Global Usage (for admin)
-    expect(screen.getByText("Daily Spend")).toBeInTheDocument();
+    expect(screen.getByText("Daily usage")).toBeInTheDocument();
 
     // Switch to Team Usage view
     const usageSelect = screen.getByTestId("usage-view-select");
@@ -888,13 +932,10 @@ describe("UsagePage", () => {
   });
 
   describe("admin user selector", () => {
-    // Anchored on the field's own label, so it does not depend on which library draws the control.
+    // Anchored on the header dropdown's own test id, so it does not depend on which library draws
+    // the control.
     const userSelectCombobox = (): HTMLElement => {
-      let node: HTMLElement | null = screen.getByText("Filter by user");
-      while (node && !node.querySelector('[role="combobox"]')) {
-        node = node.parentElement;
-      }
-      const combobox = node?.querySelector('[role="combobox"]') ?? null;
+      const combobox = screen.getByTestId("user-dropdown").querySelector('[role="combobox"]');
       expect(combobox).not.toBeNull();
       return combobox as HTMLElement;
     };
@@ -1065,9 +1106,9 @@ describe("UsagePage", () => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
 
-      // The admin case above proves this label is rendered when the selector exists, so its
+      // The admin case above proves this test id is rendered when the selector exists, so its
       // absence here is a live assertion rather than a query that can never match.
-      expect(screen.queryByText("Filter by user")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("user-dropdown")).not.toBeInTheDocument();
     });
 
     it("should always pass own userId for non-admin users", async () => {
@@ -1184,8 +1225,8 @@ describe("UsagePage", () => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
 
-      // Default should be "groups" view showing "Top Public Model Names"
-      expect(screen.getByText("Top Public Model Names")).toBeInTheDocument();
+      // Default should be the "groups" view, which feeds Model Activity from model_groups
+      expect(screen.getByText("activity-source:model_groups")).toBeInTheDocument();
       expect(screen.getAllByText("Public Model Name").length).toBeGreaterThan(0);
       expect(screen.getAllByText("Litellm Model Name").length).toBeGreaterThan(0);
     });
@@ -1203,9 +1244,9 @@ describe("UsagePage", () => {
         fireEvent.click(litellmToggle);
       });
 
-      // Title should change to "Top Litellm Models"
+      // Model Activity should switch to the litellm models breakdown
       await waitFor(() => {
-        expect(screen.getByText("Top Litellm Models")).toBeInTheDocument();
+        expect(screen.getByText("activity-source:models")).toBeInTheDocument();
       });
     });
 
@@ -1223,7 +1264,7 @@ describe("UsagePage", () => {
       });
 
       await waitFor(() => {
-        expect(screen.getByText("Top Litellm Models")).toBeInTheDocument();
+        expect(screen.getByText("activity-source:models")).toBeInTheDocument();
       });
 
       // Switch back to groups
@@ -1233,8 +1274,9 @@ describe("UsagePage", () => {
       });
 
       await waitFor(() => {
-        expect(screen.getByText("Top Public Model Names")).toBeInTheDocument();
+        expect(screen.getByText("activity-source:model_groups")).toBeInTheDocument();
       });
+      expect(screen.queryByText("activity-source:models")).not.toBeInTheDocument();
     });
 
     it("should feed the Model Activity tab from the model_groups breakdown by default", async () => {
@@ -1370,7 +1412,7 @@ describe("UsagePage", () => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
 
-      expect(screen.getByText("Cost")).toBeInTheDocument();
+      expect(screen.getByText("Overview")).toBeInTheDocument();
       expect(screen.getByText("Model Activity")).toBeInTheDocument();
       expect(screen.getByText("Key Activity")).toBeInTheDocument();
       expect(screen.getByText("MCP Server Activity")).toBeInTheDocument();

@@ -40,12 +40,12 @@ struct MetadataRow {
     metadata: String,
 }
 
-#[macro_rules_attribute::apply(request_type)]
+#[macro_rules_attribute::apply(crate::request_type)]
 struct AttributeRow {
     key: String,
 }
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::response_type)]
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 #[serde(untagged)]
 enum PathPart {
@@ -53,18 +53,24 @@ enum PathPart {
     Index(usize),
 }
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::response_type)]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, strum::Display)]
 #[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
 #[cfg_attr(feature = "schema", schemars(rename = "MetadataValueType"))]
 enum JsonKind {
+    #[strum(serialize = "array")]
     Array,
+    #[strum(serialize = "boolean")]
     Boolean,
+    #[strum(serialize = "integer")]
     Integer,
+    #[strum(serialize = "null")]
     Null,
+    #[strum(serialize = "number")]
     Number,
+    #[strum(serialize = "object")]
     Object,
+    #[strum(serialize = "string")]
     String,
 }
 
@@ -82,13 +88,13 @@ impl JsonKind {
     }
 }
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::response_type)]
 #[derive(Clone, Copy, Debug, strum::Display)]
 enum MapValueType {
     String,
 }
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::response_type)]
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 #[cfg_attr(feature = "schema", schemars(rename = "TraceQueryMetadataField"))]
 struct MetadataField {
@@ -97,7 +103,7 @@ struct MetadataField {
     expression: String,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[cfg_attr(feature = "schema", schemars(rename = "TraceQueryColumn"))]
 struct ColumnSchema {
     name: String,
@@ -107,7 +113,7 @@ struct ColumnSchema {
     details: BTreeMap<String, Value>,
 }
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::response_type)]
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 #[cfg_attr(feature = "schema", schemars(rename = "TraceQueryTable"))]
 struct TableSchema {
@@ -175,7 +181,7 @@ impl<T: Serialize + Unobserved> Serialize for Discovery<T> {
     }
 }
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::response_type)]
 struct MetadataSample {
     fields: Vec<MetadataField>,
     sampled_rows: usize,
@@ -194,7 +200,7 @@ impl Unobserved for MetadataSample {
     }
 }
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::response_type)]
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 #[cfg_attr(feature = "schema", schemars(rename = "TraceQueryMetadata"))]
 struct MetadataCatalog {
@@ -206,7 +212,7 @@ struct MetadataCatalog {
     scope: &'static str,
 }
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::response_type)]
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 #[cfg_attr(feature = "schema", schemars(rename = "TraceQueryAttributeField"))]
 struct AttributeField {
@@ -216,7 +222,7 @@ struct AttributeField {
     expression: String,
 }
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::response_type)]
 struct AttributeSample {
     fields: Vec<AttributeField>,
     truncated: bool,
@@ -231,7 +237,7 @@ impl Unobserved for AttributeSample {
     }
 }
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::response_type)]
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 #[cfg_attr(feature = "schema", schemars(rename = "TraceQueryAttributes"))]
 struct AttributeCatalog {
@@ -243,7 +249,7 @@ struct AttributeCatalog {
     scope: &'static str,
 }
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::response_type)]
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 #[cfg_attr(feature = "schema", schemars(rename = "TraceQueryNormalizedField"))]
 struct NormalizedField {
@@ -267,7 +273,7 @@ impl From<&NormalizedFieldDefinition> for NormalizedField {
     }
 }
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::response_type)]
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 #[cfg_attr(feature = "schema", schemars(rename = "TraceQueryRelationship"))]
 struct Relationship {
@@ -284,7 +290,7 @@ const RELATIONSHIPS: [Relationship; 1] = [Relationship {
     meaning: "LiteLLMRequestId contains the first normalized request or provider response ID. This relationship matches response IDs only; CallKeys retains all typed identifiers. Cached requests can share response_id; joins may return multiple spend rows",
 }];
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::response_type)]
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 #[cfg_attr(feature = "schema", schemars(rename = "TraceQueryHelp"))]
 pub struct QueryHelp {

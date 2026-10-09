@@ -1845,7 +1845,7 @@ Model Info:
 
         try:
             from litellm.proxy.spend_tracking.spend_management_endpoints import (
-                _get_spend_report_for_time_range,
+                get_spend_report_for_time_range,
             )
 
             # Parse the time range
@@ -1862,7 +1862,7 @@ Model Info:
             if await self.internal_usage_cache.async_get_cache(key=_event_cache_key):
                 return
 
-            _resp: Final = await _get_spend_report_for_time_range(
+            _resp: Final = await get_spend_report_for_time_range(
                 start_date=start_date.strftime("%Y-%m-%d"),
                 end_date=todays_date.strftime("%Y-%m-%d"),
             )
@@ -1909,7 +1909,7 @@ Model Info:
             from calendar import monthrange
 
             from litellm.proxy.spend_tracking.spend_management_endpoints import (
-                _get_spend_report_for_time_range,
+                get_spend_report_for_time_range,
             )
 
             todays_date: Final = datetime.datetime.now().date()
@@ -1921,7 +1921,7 @@ Model Info:
             if await self.internal_usage_cache.async_get_cache(key=_event_cache_key):
                 return
 
-            _resp: Final = await _get_spend_report_for_time_range(
+            _resp: Final = await get_spend_report_for_time_range(
                 start_date=first_day_of_month.strftime("%Y-%m-%d"),
                 end_date=last_day_of_month.strftime("%Y-%m-%d"),
             )

@@ -16,7 +16,7 @@ import re
 from collections.abc import Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Any, Dict, Final
@@ -71,49 +71,44 @@ async def test_proxy_config_loads_tracing_url_and_retention_from_yaml(tmp_path, 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("shutdown_error", [False, True])
-async def test_tracing_config_automatically_logs_spend_without_callback_setting(shutdown_error: bool) -> None:
-    from litellm.integrations.clickhouse.clickhouse_spend_logger import ClickHouseSpendLogger
-    from litellm.proxy.tracing_runtime import manage_tracing
-    from litellm.tracing import TraceReceiver
+async def test_tracing_config_automatically_exports_spend_without_a_storage_dependency(
+    shutdown_error: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
 
-    storage: Final = MagicMock()
-    storage.ensure_schema = AsyncMock()
-    storage.insert_rows = AsyncMock()
-    receiver: Final = TraceReceiver(storage)
+    from litellm.proxy.tracing_runtime import manage_tracing
+    from litellm.tracing.exporter import LensExporter
+    from litellm.tracing.remote import LensConnection
+
+    monkeypatch.setenv("LITELLM_LENS_URL", "http://lens.test")
+    monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "test-service-token-with-32-characters")
+    received: Final = asyncio.Future[httpx.Request]()
+
+    def accept(request: httpx.Request) -> httpx.Response:
+        received.set_result(request)
+        return httpx.Response(204)
+
+    def client(connection: LensConnection) -> httpx.AsyncClient:
+        return httpx.AsyncClient(base_url=connection.url, transport=httpx.MockTransport(accept))
 
     outcome: Final = pytest.raises(RuntimeError, match="shutdown failure") if shutdown_error else nullcontext()
     with outcome:
-        async with manage_tracing(enabled=True, receiver_factory=lambda: receiver):
-            storage.ensure_schema.assert_awaited_once()
-            logger: Final = next(
-                callback
-                for callback in litellm._async_success_callback
-                if isinstance(callback, ClickHouseSpendLogger) and callback.storage is storage
-            )
-            now: Final = datetime.now()
+        async with manage_tracing(enabled=True, client_factory=client):
+            logger: Final = next(callback for callback in litellm._async_success_callback if isinstance(callback, LensExporter))
             await logger.async_log_success_event(
-                {
-                    "standard_logging_object": {
-                        "id": "response-1",
-                        "startTime": now.timestamp(),
-                        "endTime": now.timestamp(),
-                        "response_cost": 0.25,
-                    }
-                },
-                None,
-                now,
-                now,
+                {"standard_logging_object": {"id": "response-1", "response_cost": 0.25}}, None, None, None
             )
-            storage.insert_rows.assert_not_awaited()
-
             if shutdown_error:
                 raise RuntimeError("shutdown failure")
 
-    assert storage.insert_rows.await_args.args[0] == "spend_logs"
-    assert storage.insert_rows.await_args.args[1][0]["spend"] == 0.25
+    request: Final = received.result()
+    rows: Final = json.loads(request.content)
+    assert request.url.path == "/internal/spend"
+    assert rows[0]["spend"] == 0.25
+    assert rows[0]["response_id"] == "response-1"
     assert logger not in litellm._async_success_callback
-    assert logger._flush_task is not None and logger._flush_task.done()
-    assert not logger._flush_task.cancelled()
+    assert logger.task is not None and logger.task.done() and not logger.task.cancelled()
+
 
 
 # ---------------------------------------------------------------------------
@@ -1856,9 +1851,44 @@ def test_ProxyConfig_load_credential_list_returns_items():
     dumped = creds[0].model_dump()
     assert dumped == {
         "credential_name": "openai-key",
+        "display_name": None,
         "credential_info": {"provider": "openai"},
         "credential_values": {"api_key": "sk-x"},
     }
+
+
+def test_ProxyConfig_load_credential_list_tags_every_entry_as_config_defined():
+    creds = ProxyConfig().load_credential_list(
+        {
+            "credential_list": [
+                {"credential_name": "plain", "credential_info": {}, "credential_values": {"api_key": "sk-x"}},
+                {
+                    "credential_name": "claims-db",
+                    "source": "db",
+                    "credential_info": {},
+                    "credential_values": {"api_key": "sk-y"},
+                },
+            ]
+        }
+    )
+    assert [(cred.credential_name, cred.source) for cred in creds] == [("plain", "config"), ("claims-db", "config")]
+
+
+@pytest.mark.parametrize("display_name", [2024, True, "Azure Prod"])
+def test_ProxyConfig_load_credential_list_ignores_a_display_name_set_in_config(display_name):
+    creds = ProxyConfig().load_credential_list(
+        {
+            "credential_list": [
+                {
+                    "credential_name": "azure_cred",
+                    "display_name": display_name,
+                    "credential_info": {},
+                    "credential_values": {"api_key": "sk-x"},
+                }
+            ]
+        }
+    )
+    assert [(cred.credential_name, cred.display_name) for cred in creds] == [("azure_cred", None)]
 
 
 def test_ProxyConfig_load_credential_list_invalid_entry_raises():
@@ -3888,7 +3918,7 @@ async def test_ProxyConfig_add_deployment_applies_db_router_settings(monkeypatch
         return {}
 
     monkeypatch.setattr(pc, "get_config", fake_get_config)
-    monkeypatch.setattr(pc, "_get_models_from_db", AsyncMock(return_value=[]))
+    monkeypatch.setattr(pc, "get_models_from_db", AsyncMock(return_value=[]))
     monkeypatch.setattr(pc, "_init_non_llm_objects_in_db", AsyncMock())
     monkeypatch.setattr(proxy_server, "prefetch_config_params", AsyncMock())
     monkeypatch.setattr(proxy_server, "get_config_param", AsyncMock(return_value=None))
@@ -3968,7 +3998,7 @@ async def test_ProxyConfig_add_deployment_loads_db_credentials_before_reconcilin
     async def install_models(new_models: object, proxy_logging_obj: object) -> None:
         installed(credential=CredentialAccessor.get_credential_values("openai-cred"))
 
-    monkeypatch.setattr(pc, "_get_models_from_db", read_models_while_a_credential_lands)
+    monkeypatch.setattr(pc, "get_models_from_db", read_models_while_a_credential_lands)
     monkeypatch.setattr(pc, "_update_llm_router", install_models)
 
     await pc.add_deployment(prisma_client=fake_prisma, proxy_logging_obj=MagicMock())
@@ -3992,7 +4022,7 @@ async def test_ProxyConfig_add_deployment_loads_db_credentials_even_when_models_
     _stub_add_deployment_collaborators(monkeypatch, pc, fake_prisma)
     monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": ["mcp"]})
     models_fetch = AsyncMock(return_value=[])
-    monkeypatch.setattr(pc, "_get_models_from_db", models_fetch)
+    monkeypatch.setattr(pc, "get_models_from_db", models_fetch)
 
     await pc.add_deployment(prisma_client=fake_prisma, proxy_logging_obj=MagicMock())
 
@@ -4024,6 +4054,30 @@ async def test_ProxyConfig_get_credentials_reads_from_writer_not_replica(monkeyp
 
     assert CredentialAccessor.get_credential_values("openai-cred") == {"api_key": "sk-from-writer"}
     reader_inner.litellm_credentialstable.find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_get_credentials_carries_the_stored_display_name_and_marks_rows_as_db(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+
+    pc = ProxyConfig()
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_credentialstable.find_many = AsyncMock(
+        return_value=[{**_encrypted_credential_row("labeled-cred", "sk-labeled"), "display_name": "Prod OpenAI"}]
+    )
+    _stub_add_deployment_collaborators(monkeypatch, pc, fake_prisma)
+
+    await pc.get_credentials(prisma_client=fake_prisma)
+
+    loaded = CredentialAccessor.find_credential("labeled-cred")
+    assert loaded is not None
+    assert (loaded.display_name, loaded.source, loaded.credential_values) == (
+        "Prod OpenAI",
+        "db",
+        {"api_key": "sk-labeled"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -4278,6 +4332,7 @@ async def test_ProxyConfig__update_general_settings_leaves_first_registration_to
 async def test_ProxyConfig__update_general_settings_runtime_interval_job_carries_the_stagger_offset(monkeypatch):
     """Once the scheduler is running the sync owns registration and the job it adds is staggered."""
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.triggers.interval import IntervalTrigger
 
     from litellm.proxy.common_utils.scheduled_job_stagger import _OffsetTrigger
 
@@ -4286,12 +4341,17 @@ async def test_ProxyConfig__update_general_settings_runtime_interval_job_carries
     monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", real_scheduler)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     pc = ProxyConfig()
+    pc.settings.load_yaml({"scheduled_job_stagger": {"offsets": {"spend_log_cleanup_job": 120}}})
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", pc.settings)
     try:
         await pc._update_general_settings({"maximum_daily_tag_spend_retention_period": "90d"})
         jobs = real_scheduler.get_jobs()
         assert [job.id for job in jobs] == ["spend_log_cleanup_job"]
-        assert isinstance(jobs[0].trigger, _OffsetTrigger), repr(jobs[0].trigger)
+        trigger: Final = jobs[0].trigger
+        assert isinstance(trigger, _OffsetTrigger), repr(trigger)
+        assert trigger.offset == timedelta(seconds=120)
+        assert isinstance(trigger.base, IntervalTrigger)
+        assert trigger.base.interval == timedelta(days=1)
     finally:
         real_scheduler.shutdown(wait=False)
 
@@ -5448,14 +5508,24 @@ async def test_model_refresh_updates_availability_catalog_and_retains_it_on_db_f
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("versions", [None, ["2024-11-05"], [], ["2026-07-28"], ["unknown"]])
-async def test_proxy_config_validates_advertised_mcp_versions_at_load(tmp_path, monkeypatch, versions):
+@pytest.mark.parametrize(
+    ("versions", "valid"),
+    [
+        (None, True),
+        (["2024-11-05"], True),
+        (["2026-07-28"], True),
+        (["2025-11-25", "2026-07-28"], True),
+        ([], False),
+        (["unknown"], False),
+    ],
+)
+async def test_proxy_config_validates_advertised_mcp_versions_at_load(tmp_path, monkeypatch, versions, valid):
     config = tmp_path / "mcp-versions.yaml"
     config.write_text(json.dumps({"model_list": [], "general_settings": {"mcp_advertised_versions": versions}}))
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
-    if versions is None or versions == ["2024-11-05"]:
+    if valid:
         _, _, settings = await ProxyConfig().load_config(router=None, config_file_path=str(config))
         assert settings["mcp_advertised_versions"] == versions
         return

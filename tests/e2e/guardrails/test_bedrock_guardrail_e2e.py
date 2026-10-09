@@ -22,6 +22,7 @@ from typing import Final
 import pytest
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse, UnknownApiError
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from guardrails_client import (
     BedrockGuardrailParamsBody,
     GuardrailsClient,
@@ -59,6 +60,15 @@ class TestBedrockGuardrail:
         "guardrail.bedrock.pre_call.blocks",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_bedrock_pre_call_blocks_harmful_prompt(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -95,6 +105,14 @@ class TestBedrockGuardrail:
     @pytest.mark.covers(
         "guardrail.bedrock.post_call.blocks",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_bedrock_post_call_blocks_denied_model_output(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
@@ -138,6 +156,15 @@ class TestBedrockGuardrail:
                 pytest.fail(f"bedrock post_call guardrail did not block denied model output; got {result}")
 
     @pytest.mark.covers("guardrail.bedrock.pre_call.blocks", exercised_on=["messages"])
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.MESSAGES,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_bedrock_pre_call_blocks_on_messages(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -149,6 +176,15 @@ class TestBedrockGuardrail:
         _assert_policy_block(result, "/v1/messages")
 
     @pytest.mark.covers("guardrail.bedrock.pre_call.blocks", exercised_on=["responses"])
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.RESPONSES,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_bedrock_pre_call_blocks_on_responses(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -160,6 +196,14 @@ class TestBedrockGuardrail:
         _assert_policy_block(result, "/v1/responses")
 
     @pytest.mark.covers("guardrail.bedrock.post_call.blocks", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_bedrock_post_call_blocks_denied_streamed_output_and_passes_clean_streams(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:

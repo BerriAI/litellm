@@ -1,3 +1,4 @@
+from typing import Final
 import asyncio
 import collections
 import datetime
@@ -273,7 +274,7 @@ from litellm.proxy._types import (
     SpendLogsPayload,
     UserAPIKeyAuth,
 )
-from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
 from litellm.proxy.management.teams import authz as team_access
 from litellm.proxy.proxy_server import app
 from litellm.proxy.spend_tracking import spend_management_endpoints
@@ -3684,7 +3685,7 @@ class TestSpendLogsPayload:
 
     @pytest.mark.asyncio
     async def test_spend_logs_payload_e2e(self):
-        litellm.callbacks = [_ProxyDBLogger(message_logging=False)]
+        litellm.callbacks = [ProxyDBLogger(message_logging=False)]
         # litellm.turn_on_debug()
 
         with (
@@ -7634,6 +7635,115 @@ async def test_calculate_spend_unpriced_model_returns_400():
     assert exc_info.value.type == "invalid_request_error"
     assert exc_info.value.param == "model"
     assert model in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_spend_calc_model_messages():
+    cost_obj: Final = await spend_management_endpoints.calculate_spend(
+        request=SpendCalculateRequest(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "user", "content": "What is the capital of France?"},
+            ],
+        )
+    )
+
+    cost: Final = cost_obj["cost"]
+    assert cost > 0.0
+
+
+@pytest.mark.asyncio
+async def test_spend_calc_model_on_router_messages(monkeypatch):
+    temp_llm_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "special-llama-model",
+                "litellm_params": {
+                    "model": "groq/openai/gpt-oss-20b",
+                },
+            }
+        ]
+    )
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", temp_llm_router)
+
+    cost_obj: Final = await spend_management_endpoints.calculate_spend(
+        request=SpendCalculateRequest(
+            model="special-llama-model",
+            messages=[
+                {"role": "user", "content": "What is the capital of France?"},
+            ],
+        )
+    )
+
+    _cost: Final = cost_obj["cost"]
+
+    assert _cost > 0.0
+
+
+@pytest.mark.asyncio
+async def test_spend_calc_using_response():
+    cost_obj: Final = await spend_management_endpoints.calculate_spend(
+        request=SpendCalculateRequest(
+            completion_response={
+                "id": "chatcmpl-3bc7abcd-f70b-48ab-a16c-dfba0b286c86",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "index": 0,
+                        "message": {
+                            "content": "Yooo! What's good?",
+                            "role": "assistant",
+                        },
+                    }
+                ],
+                "created": "1677652288",
+                "model": "groq/openai/gpt-oss-20b",
+                "object": "chat.completion",
+                "system_fingerprint": "fp_873a560973",
+                "usage": {
+                    "completion_tokens": 8,
+                    "prompt_tokens": 12,
+                    "total_tokens": 20,
+                },
+            }
+        )
+    )
+
+    cost: Final = cost_obj["cost"]
+    assert cost > 0.0
+
+
+@pytest.mark.asyncio
+async def test_spend_calc_model_alias_on_router_messages(monkeypatch):
+    temp_llm_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                },
+            }
+        ],
+        model_group_alias={
+            "gpt4o": "gpt-4o",
+        },
+    )
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", temp_llm_router)
+
+    cost_obj: Final = await spend_management_endpoints.calculate_spend(
+        request=SpendCalculateRequest(
+            model="gpt4o",
+            messages=[
+                {"role": "user", "content": "What is the capital of France?"},
+            ],
+        )
+    )
+
+    _cost: Final = cost_obj["cost"]
+
+    assert _cost > 0.0
 
 
 def _admin_auth() -> UserAPIKeyAuth:

@@ -13,25 +13,22 @@ from typing import Final
 import httpx
 from pydantic import BaseModel
 
-from litellm.proxy.lens.analysis import analyze_sample
 from litellm.proxy.lens.inference import _SYSTEM
 from litellm.proxy.lens.models import (
-    Activity,
     Check,
     Claim,
-    Coverage,
     Execution,
     ExecutionContent,
     Finding,
-    InFlight,
     Job,
     LensSettings,
     ModelRequest,
     ModelResult,
-    Review,
+    Progress,
     Sample,
     TracePart,
 )
+from tests.proxy_behavior.lens.rust_worker import run_worker
 
 logger: Final = logging.getLogger(__name__)
 
@@ -93,6 +90,7 @@ async def evaluate(
     model_name: str,
     concurrency: int,
     feedback: tuple[Finding, ...] = (),
+    worker_binary: Path = Path("litellm-rust/target/debug/examples/worker_once"),
 ) -> dict[str, object]:
     records: Final = MappingProxyType({case.name: fixtures(case) for case in cases})
     settings: Final = LensSettings(
@@ -139,7 +137,12 @@ async def evaluate(
             "/v1/chat/completions",
             json={
                 "model": model_name,
-                "messages": [{"role": "system", "content": _SYSTEM}, {"role": "user", "content": request.prompt}],
+                "messages": [
+                    {"role": "system", "content": _SYSTEM},
+                    *(message.model_dump(mode="json") for message in request.messages),
+                ]
+                if request.messages
+                else [{"role": "system", "content": _SYSTEM}, {"role": "user", "content": request.prompt}],
                 "max_tokens": 4096,
                 "response_format": {"type": "json_object"},
             },
@@ -150,24 +153,14 @@ async def evaluate(
         costs.put(cost)
         answer: Final = response.json()["choices"][0]["message"]["content"]
         if request.purpose == "investigate":
-            payload, _ = json.JSONDecoder().raw_decode(request.prompt)
-            decisions.put((payload["candidate"]["title"], answer))
+            decisions.put((request.purpose, answer))
         return ModelResult(content=answer, cost=cost or 0)
 
-    async def progress(
-        stage: str | None,
-        coverage: Coverage | None,
-        _review: Review | None = None,
-        _reading: tuple[InFlight, ...] | None = None,
-        activity: Activity | None = None,
-        /,
-    ) -> None:
-        if activity is not None:
-            logger.info("%s", activity.model_dump_json())
-        elif coverage is not None:
-            logger.info("%s", json.dumps({"stage": stage, **coverage.model_dump()}))
+    async def progress(body: Progress) -> None:
+        logger.info("%s", body.model_dump_json(exclude_none=True))
 
-    result: Final = await analyze_sample(
+    result: Final = await run_worker(
+        worker_binary,
         claim,
         Sample(executions=tuple(r[0] for r in records.values()), eligible=len(records), selected=len(records)),
         read,
@@ -223,6 +216,7 @@ async def main() -> None:
     parser.add_argument("--split", choices=("dev", "holdout", "all"), default="all")
     parser.add_argument("--background", type=int, default=0, help="Additional clean runs for rare-problem batch tests")
     parser.add_argument("--concurrency", type=int, default=8)
+    parser.add_argument("--worker-binary", type=Path, default=Path("litellm-rust/target/debug/examples/worker_once"))
     args: Final = parser.parse_args()
     dataset: Final = Dataset.model_validate_json(args.dataset.read_text())
     selected: Final = tuple(c for c in dataset.cases if args.split == "all" or c.split == args.split)
@@ -244,7 +238,13 @@ async def main() -> None:
         timeout=180,
     ) as client:
         report: Final = await evaluate(
-            (*selected, *background), dataset.checks, client, args.model, args.concurrency, dataset.feedback
+            (*selected, *background),
+            dataset.checks,
+            client,
+            args.model,
+            args.concurrency,
+            dataset.feedback,
+            args.worker_binary,
         )
     args.output.write_text(
         json.dumps({"model": args.model, "background_runs": args.background, **report}, indent=2) + "\n"

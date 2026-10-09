@@ -12,8 +12,8 @@ from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.types.secret_managers.main import KeyManagementSystem
@@ -95,7 +95,7 @@ class CyberArkSecretManager(BaseSecretManager):
                 resp = http_client.post(auth_url, content=self.conjur_api_key)
             else:
                 # API key authentication
-                http_handler: Final = _get_httpx_client(params={"ssl_verify": self.ssl_verify})
+                http_handler: Final = get_httpx_client(params={"ssl_verify": self.ssl_verify})
                 resp = http_handler.client.post(auth_url, content=self.conjur_api_key)
 
             resp.raise_for_status()
@@ -248,7 +248,7 @@ class CyberArkSecretManager(BaseSecretManager):
         if self.cache.get_cache(secret_name) is not None:
             return self.cache.get_cache(secret_name)
 
-        sync_client: Final = _get_httpx_client(params={"ssl_verify": self.ssl_verify})
+        sync_client: Final = get_httpx_client(params={"ssl_verify": self.ssl_verify})
 
         try:
             url: Final = self.get_url(secret_name)

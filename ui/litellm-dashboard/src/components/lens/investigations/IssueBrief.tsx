@@ -15,9 +15,9 @@ const AGENTS = [
 const COPIED_RESET_MS = 1500;
 
 const markdown: Components = {
-  h1: ({ children }) => <h1 className="mb-4 border-b border-border pb-2 text-base font-semibold">{children}</h1>,
+  h1: ({ children }) => <p className="mb-4 border-b border-border pb-2 text-base font-semibold">{children}</p>,
   h2: ({ children }) => (
-    <h2 className="mt-5 mb-1.5 text-xs font-semibold tracking-wide text-muted-foreground uppercase">{children}</h2>
+    <h3 className="mt-5 mb-1.5 text-xs font-semibold tracking-wide text-muted-foreground uppercase">{children}</h3>
   ),
   p: ({ children }) => <p className="text-sm leading-6">{children}</p>,
   ol: ({ children }) => (

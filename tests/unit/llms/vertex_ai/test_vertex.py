@@ -104,7 +104,7 @@ def test_completion_pydantic_obj_2():
 def test_build_vertex_schema():
     import json
 
-    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+    from litellm.llms.vertex_ai.common_utils import build_vertex_schema
 
     schema = {
         "type": "object",
@@ -122,7 +122,7 @@ def test_build_vertex_schema():
         "required": ["recipes"],
     }
 
-    new_schema = _build_vertex_schema(schema)
+    new_schema = build_vertex_schema(schema)
     print(f"new_schema: {new_schema}")
     assert new_schema["type"] == schema["type"]
     assert new_schema["properties"] == schema["properties"]
@@ -1223,12 +1223,10 @@ def test_process_gemini_media():
         }
     ]
     from litellm.llms.vertex_ai.gemini.transformation import (
-        _gemini_convert_messages_with_history,
+        gemini_convert_messages_with_history,
     )
 
-    converted = _gemini_convert_messages_with_history(
-        messages=image_message, model="gemini-2.5-flash"
-    )
+    converted = gemini_convert_messages_with_history(messages=image_message, model="gemini-2.5-flash")
     assert converted[0]["parts"][0]["file_data"] == FileDataType(
         mime_type="image/png", file_uri="gs://bucket/image-without-extension"
     )
@@ -1329,9 +1327,9 @@ def test_vertex_embedding_url(model, expected_url):
 
     When a fine-tuned embedding model is used, the URL is different from the standard one.
     """
-    from litellm.llms.vertex_ai.common_utils import _get_vertex_url
+    from litellm.llms.vertex_ai.common_utils import get_vertex_url
 
-    url, endpoint = _get_vertex_url(
+    url, endpoint = get_vertex_url(
         mode="embedding",
         model=model,
         stream=False,
@@ -1506,7 +1504,7 @@ def test_vertex_parallel_tool_calls_false_single_tool():
     assert "tools" in optional_params
 
 
-from litellm.llms.vertex_ai.gemini.transformation import _transform_request_body
+from litellm.llms.vertex_ai.gemini.transformation import transform_request_body
 
 
 def test_system_prompt_only_adds_blank_user_message():
@@ -1516,7 +1514,7 @@ def test_system_prompt_only_adds_blank_user_message():
     Relevant Issue - https://github.com/BerriAI/litellm/issues/13769
     """
     SYSTEM_INSTRUCTION = "System instructions for the model"
-    data = _transform_request_body(
+    data = transform_request_body(
         messages=[{"role": "system", "content": SYSTEM_INSTRUCTION}],
         model="gemini-2.5-flash",
         optional_params={},

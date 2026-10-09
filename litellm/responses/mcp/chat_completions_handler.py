@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Final, cast
 
 from typing_extensions import TypedDict, Unpack
 
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
@@ -42,8 +43,8 @@ def _add_mcp_metadata_to_response(
         # For streaming, store MCP metadata in _hidden_params
         # CustomStreamWrapper._add_mcp_metadata_to_final_chunk() will automatically
         # add it to the final chunk's delta.provider_specific_fields
-        if not hasattr(response, "_hidden_params"):
-            response._hidden_params = {}
+        if not hasattr(response, HIDDEN_PARAMS_ATTR):
+            set_hidden_params(response, {})
 
         mcp_metadata: Final = {}
         if openai_tools:
@@ -54,7 +55,10 @@ def _add_mcp_metadata_to_response(
             mcp_metadata["mcp_call_results"] = tool_results
 
         if mcp_metadata:
-            response._hidden_params["mcp_metadata"] = mcp_metadata
+            hidden_params: Final = cast(  # cast-ok: preserve mapping operations on dynamic response metadata
+                dict[str, object], getattr(response, HIDDEN_PARAMS_ATTR)
+            )
+            hidden_params["mcp_metadata"] = mcp_metadata
         return
 
     if not isinstance(response, ModelResponse):

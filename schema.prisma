@@ -42,6 +42,7 @@ model LiteLLM_BudgetTable {
 model LiteLLM_CredentialsTable {
   credential_id String @id @default(uuid())
   credential_name String @unique
+  display_name String?
   credential_values Json
   credential_info Json? 
   created_at    DateTime               @default(now()) @map("created_at")
@@ -417,6 +418,7 @@ model LiteLLM_MCPServerTable {
   source_url            String?
   timeout               Float?
   max_concurrent_requests Int?
+  rpm                   Int?
   // BYOM submission lifecycle
   approval_status  String?   @default("active")
   submitted_by     String?
@@ -1756,6 +1758,8 @@ model LiteLLM_AutoRouterDailySpend {
   router_name                    String
   router_type                    String
   turns                          Int      @default(0)
+  total_tokens                   BigInt   @default(0)
+  token_recorded_turns            Int      @default(0)
   spend                          Float    @default(0)
   saved_spend                    Float    @default(0)
   savings_estimated_turns        Int      @default(0)
@@ -1939,6 +1943,9 @@ model LiteLLM_Lens {
   id      String @id
   version Int @default(0)
   data    Json
+  due_at  DateTime? @default(dbgenerated("'1970-01-01 00:00:00'::timestamp without time zone"))
+
+  @@index([due_at], map: "LiteLLM_Lens_due_at_idx")
 }
 
 model LiteLLM_LensRun {
@@ -1966,6 +1973,11 @@ model LiteLLM_LensWorker {
   data       Json
 }
 
+model LiteLLM_LensIngestionKey {
+  id   String @id
+  data Json
+}
+
 model LiteLLM_LensDataset {
   id         String
   revision   Int
@@ -1973,4 +1985,21 @@ model LiteLLM_LensDataset {
   data       Json
 
   @@id([id, revision])
+}
+
+model LiteLLM_LensSignalConfig {
+  id   String @id
+  data Json
+}
+
+model LiteLLM_LensTraceSignal {
+  trace_id      String
+  trace_ref     String @default("")
+  config_key    String
+  span_count    Int
+  claimed_until DateTime?
+  classified_at DateTime?
+  data          Json
+
+  @@id([trace_id, trace_ref])
 }

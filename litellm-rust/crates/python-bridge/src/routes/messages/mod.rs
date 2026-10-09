@@ -2,26 +2,13 @@ mod host;
 
 use host::MessagesPythonHost;
 use litellm_callbacks_legacy_python::LoggingOperation;
-use pyo3::{
-    prelude::*,
-    types::{PyDict, PyTuple},
-};
+use pyo3::prelude::*;
 
-fn run_messages(
-    py: Python<'_>,
-    request: Bound<'_, PyAny>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Bound<'_, PyDict>,
-    asynchronous: bool,
-) -> PyResult<Py<PyAny>> {
-    let (arguments, hooks) = crate::routes::call_hooks(
-        py,
-        LoggingOperation::Messages,
-        &request,
-        &args,
-        &kwargs,
-        asynchronous,
-    )?;
+use super::NativeCall;
+
+fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyResult<Py<PyAny>> {
+    let (arguments, hooks) =
+        crate::routes::call_hooks(py, LoggingOperation::Messages, &call, asynchronous)?;
     crate::routes::run_public_call(
         py,
         arguments,
@@ -57,28 +44,18 @@ fn run_messages(
                 },
             ))
         },
-        MessagesPythonHost::new(request.unbind(), asynchronous),
+        MessagesPythonHost::new(call.resolved()?.unbind(), asynchronous),
         hooks,
         asynchronous,
     )
 }
 
 #[pyfunction]
-pub(crate) fn messages(
-    py: Python<'_>,
-    request: Bound<'_, PyAny>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Bound<'_, PyDict>,
-) -> PyResult<Py<PyAny>> {
-    run_messages(py, request, args, kwargs, false)
+pub(crate) fn messages(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
+    run_messages(py, call, false)
 }
 
 #[pyfunction]
-pub(crate) fn amessages(
-    py: Python<'_>,
-    request: Bound<'_, PyAny>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Bound<'_, PyDict>,
-) -> PyResult<Py<PyAny>> {
-    run_messages(py, request, args, kwargs, true)
+pub(crate) fn amessages(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
+    run_messages(py, call, true)
 }

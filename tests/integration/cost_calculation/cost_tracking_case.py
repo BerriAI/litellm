@@ -171,6 +171,9 @@ class RealtimeResponse(BaseModel):
     content_type: Literal["application/x-realtime"]
     events: tuple[dict[str, JsonValue], ...]
     session_model: str | None = None
+    session_type: str | None = None
+    created_event: Literal["session.created", "transcription_session.created"] = "session.created"
+    created_repeats: int = 1
 
 
 StoredResponse: TypeAlias = Annotated[
@@ -247,7 +250,7 @@ class CostTrackingTestCase(BaseModel):
             "/v1/audio/speech",
             "/v1/images/generations",
             "/v1/images/edits",
-            "/v1/decisions",
+            "/v1/systemone",
         ]
         | Annotated[str, Field(pattern=r"^/(gemini|anthropic|bedrock)/")]
     ) = "/v1/chat/completions"

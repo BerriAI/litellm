@@ -538,6 +538,54 @@ async def test_update_daily_spend_retries_connect_errors(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_update_daily_spend_retries_lock_timeout_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _lock_timeout_error() -> PrismaDataError:
+        return PrismaDataError(
+            data={
+                "user_facing_error": {
+                    "is_panic": False,
+                    "message": "Error querying the database: canceling statement due to lock timeout",
+                    "meta": {"code": "55P03", "message": "canceling statement due to lock timeout"},
+                }
+            }
+        )
+
+    outcomes: Final = iter([_lock_timeout_error(), None])
+
+    def first_attempt_locks_out() -> int:
+        outcome: Final = next(outcomes)
+        if outcome is not None:
+            raise outcome
+        return 1
+
+    prisma_client: Final = _RecordingPrisma(execute_raw=first_attempt_locks_out)
+    proxy_logging: Final = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+
+    async def fake_sleep(seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr("litellm.proxy.db.db_spend_update_writer.asyncio.sleep", fake_sleep)
+    daily_spend_transactions: Final = {"k1": _daily_txn()}
+    await DBSpendUpdateWriter._update_daily_spend(
+        n_retry_times=3,
+        prisma_client=prisma_client,
+        proxy_logging_obj=proxy_logging,
+        daily_spend_transactions=daily_spend_transactions,
+        entity_type="user",
+        entity_id_field="user_id",
+    )
+
+    assert len(prisma_client.db.statements) == 2, (
+        "a 55P03 lock_timeout cancels the upsert before it applies, so the writer must "
+        "resend it in place instead of only requeueing it for a next tick a shutdown "
+        "flush never gets"
+    )
+    assert daily_spend_transactions == {}, "the retried batch must drain the transactions dict"
+    proxy_logging.failure_handler.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_update_daily_spend_sorting():
     """
     Test that table.upsert is called with events sorted
@@ -997,7 +1045,7 @@ async def test_commit_spend_updates_to_db_increments_agent_spend():
         "agent_list_transactions": {agent_id: response_cost},
     }
 
-    with patch("litellm.proxy.utils._raise_failed_update_spend_exception"):
+    with patch("litellm.proxy.utils.raise_failed_update_spend_exception"):
         await db_writer._commit_spend_updates_to_db(
             prisma_client=mock_prisma_client,
             n_retry_times=0,
@@ -2029,7 +2077,7 @@ async def test_commit_key_spend_updates_includes_last_active():
 
     before_call = datetime.now(timezone.utc)
 
-    with patch("litellm.proxy.utils._raise_failed_update_spend_exception"):
+    with patch("litellm.proxy.utils.raise_failed_update_spend_exception"):
         await db_writer._commit_spend_updates_to_db(
             prisma_client=mock_prisma_client,
             n_retry_times=0,
@@ -3608,7 +3656,7 @@ async def test_commit_spend_updates_to_db_does_not_stamp_key_settings_updated_at
         "agent_list_transactions": {},
     }
 
-    with patch("litellm.proxy.utils._raise_failed_update_spend_exception"):
+    with patch("litellm.proxy.utils.raise_failed_update_spend_exception"):
         await db_writer._commit_spend_updates_to_db(
             prisma_client=mock_prisma_client,
             n_retry_times=0,

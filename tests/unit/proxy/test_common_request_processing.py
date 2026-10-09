@@ -44,14 +44,14 @@ from litellm.proxy.common_request_processing import (
     CostBreakdownHeaderValues,
     _has_attribute_error_in_chain,
     include_guardrail_response_requested,
-    _is_azure_model_router_request,
+    is_azure_model_router_request,
     open_sse_before_first_byte,
     resolve_litellm_call_id,
     ttft_keepalive_interval,
     _override_openai_response_model,
     _parse_event_data_for_error,
     _resolve_per_request_model_group_alias,
-    _should_return_raw_model_name,
+    should_return_raw_model_name,
     _sse_error_frames,
     _UpstreamClosingStreamingResponse,
     create_response,
@@ -3020,7 +3020,7 @@ class TestOverrideOpenAIResponseModel:
         ],
     )
     def test_raw_model_name_toggle_metadata(self, request_data, expected):
-        assert _should_return_raw_model_name(request_data) is expected
+        assert should_return_raw_model_name(request_data) is expected
 
     def test_override_model_preserves_fallback_model_when_fallback_occurred_object(
         self,
@@ -3471,17 +3471,17 @@ class TestIsAzureModelRouterRequest:
     """Tests for _is_azure_model_router_request helper"""
 
     def test_detects_model_router_with_underscore(self):
-        assert _is_azure_model_router_request("azure_ai/model_router") is True
-        assert _is_azure_model_router_request("azure_ai/model_router/my-deployment") is True
+        assert is_azure_model_router_request("azure_ai/model_router") is True
+        assert is_azure_model_router_request("azure_ai/model_router/my-deployment") is True
 
     def test_detects_model_router_with_hyphen(self):
-        assert _is_azure_model_router_request("azure_ai/model-router") is True
-        assert _is_azure_model_router_request("model-router") is True
+        assert is_azure_model_router_request("azure_ai/model-router") is True
+        assert is_azure_model_router_request("model-router") is True
 
     def test_rejects_regular_models(self):
-        assert _is_azure_model_router_request("azure_ai/gpt-4") is False
-        assert _is_azure_model_router_request("gpt-4") is False
-        assert _is_azure_model_router_request("openai/gpt-3.5-turbo") is False
+        assert is_azure_model_router_request("azure_ai/gpt-4") is False
+        assert is_azure_model_router_request("gpt-4") is False
+        assert is_azure_model_router_request("openai/gpt-3.5-turbo") is False
 
 
 class TestStreamingOverheadHeader:
@@ -5263,7 +5263,7 @@ class TestStreamingClientDisconnectLogging:
 
         fire_spy = MagicMock()
         monkeypatch.setattr(
-            "litellm.proxy.utils.ProxyLogging._fire_deferred_stream_logging",
+            "litellm.proxy.utils.ProxyLogging.fire_deferred_stream_logging",
             fire_spy,
         )
 
@@ -5297,7 +5297,7 @@ class TestStreamingClientDisconnectLogging:
 
         fire_spy = MagicMock()
         monkeypatch.setattr(
-            "litellm.proxy.utils.ProxyLogging._fire_deferred_stream_logging",
+            "litellm.proxy.utils.ProxyLogging.fire_deferred_stream_logging",
             fire_spy,
         )
 
@@ -5328,7 +5328,7 @@ class TestStreamingClientDisconnectLogging:
         )
 
         monkeypatch.setattr(
-            "litellm.proxy.utils.ProxyLogging._fire_deferred_stream_logging",
+            "litellm.proxy.utils.ProxyLogging.fire_deferred_stream_logging",
             MagicMock(),
         )
 
@@ -6944,26 +6944,20 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
             ProxyRateLimitError,
         )
         from litellm.proxy.hooks.parallel_request_limiter import (
-            _PROXY_MaxParallelRequestsHandler,
+            PROXY_MaxParallelRequestsHandler,
         )
         from litellm.proxy.utils import InternalUsageCache
 
         primary_model = "gpt-4"
         fallback_model = "gpt-3.5-turbo"
 
-        # Freeze the limiter's clock so the per-minute counter key is stable and
-        # the pre-seeded counter is guaranteed to be the one it reads.
-        class _FrozenClock(datetime.datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return cls(2026, 1, 1, 12, 30, 0)
-
         precise_minute = "2026-01-01-12-30"
 
         # Real per-key per-model TPM limiter + a key carrying the customer's
         # `model_tpm_limit` metadata (only the primary is capped).
-        limiter = _PROXY_MaxParallelRequestsHandler(
-            internal_usage_cache=InternalUsageCache(DualCache())
+        limiter = PROXY_MaxParallelRequestsHandler(
+            internal_usage_cache=InternalUsageCache(DualCache()),
+            clock=lambda: datetime.datetime(2026, 1, 1, 12, 30, 0),
         )
         user_api_key_dict = UserAPIKeyAuth(
             api_key="sk-lit3890",
@@ -7006,30 +7000,27 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         mock_router = MagicMock()
         mock_router.fallbacks = [{primary_model: [fallback_model]}]
 
-        with patch(
-            "litellm.proxy.hooks.parallel_request_limiter.datetime", _FrozenClock
+        with patch.object(
+            processor,
+            "common_processing_pre_call_logic",
+            side_effect=real_limiter_pre_call,
         ):
-            with patch.object(
-                processor,
-                "common_processing_pre_call_logic",
-                side_effect=real_limiter_pre_call,
-            ):
-                data, logging_obj = await processor._pre_call_with_fallbacks(
-                    request=MagicMock(),
-                    general_settings={},
-                    proxy_logging_obj=MagicMock(),
-                    user_api_key_dict=user_api_key_dict,
-                    version=None,
-                    proxy_config=MagicMock(),
-                    user_model=None,
-                    user_temperature=None,
-                    user_request_timeout=None,
-                    user_max_tokens=None,
-                    user_api_base=None,
-                    model=primary_model,
-                    route_type="acompletion",
-                    llm_router=mock_router,
-                )
+            data, logging_obj = await processor._pre_call_with_fallbacks(
+                request=MagicMock(),
+                general_settings={},
+                proxy_logging_obj=MagicMock(),
+                user_api_key_dict=user_api_key_dict,
+                version=None,
+                proxy_config=MagicMock(),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model=primary_model,
+                route_type="acompletion",
+                llm_router=mock_router,
+            )
 
         # The capped primary tripped the real limiter, and the fallback (which
         # has no per-model cap) served the request — no 429 to the client.
@@ -7038,19 +7029,16 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
         # Sanity-check the premise: the limiter genuinely raises a
         # ProxyRateLimitError for the capped primary under the frozen clock.
-        with patch(
-            "litellm.proxy.hooks.parallel_request_limiter.datetime", _FrozenClock
-        ):
-            with pytest.raises(ProxyRateLimitError):
-                await limiter.async_pre_call_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    cache=DualCache(),
-                    data={
-                        "model": primary_model,
-                        "messages": [{"role": "user", "content": "hi"}],
-                    },
-                    call_type="acompletion",
-                )
+        with pytest.raises(ProxyRateLimitError):
+            await limiter.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=DualCache(),
+                data={
+                    "model": primary_model,
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+                call_type="acompletion",
+            )
 
     @staticmethod
     def _v3_limiter_rig(
@@ -7064,11 +7052,11 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         ``add_litellm_data_to_request`` with a live OTel span, ``function_setup``, then the limiter."""
         from litellm.caching.caching import DualCache
         from litellm.proxy import proxy_server
-        from litellm.proxy.hooks.parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
         from litellm.proxy.utils import InternalUsageCache
 
         monkeypatch.setattr(proxy_server, "prisma_client", None)
-        limiter = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+        limiter = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
         limiter_models: list[str] = []
 
         async def run_limiter(
@@ -7561,7 +7549,7 @@ class TestStreamingClientDisconnectBilling:
         try:
             response = await self._start_partial_stream()
             proxy_logging_obj = types.SimpleNamespace(
-                _arelease_max_parallel_requests_on_disconnect=AsyncMock(),
+                arelease_max_parallel_requests_on_disconnect=AsyncMock(),
             )
 
             billed = await _bill_partial_streamed_spend_on_disconnect(
@@ -7581,7 +7569,7 @@ class TestStreamingClientDisconnectBilling:
         finally:
             litellm.callbacks = original_callbacks
 
-        proxy_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_not_called()
+        proxy_logging_obj.arelease_max_parallel_requests_on_disconnect.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_disconnect_without_billable_chunks_releases_slot(self):
@@ -7596,7 +7584,7 @@ class TestStreamingClientDisconnectBilling:
         # No chunks to assemble -> billing dispatches no success event.
         empty_response = types.SimpleNamespace(chunks=[], messages=None)
         proxy_logging_obj = types.SimpleNamespace(
-            _arelease_max_parallel_requests_on_disconnect=AsyncMock(),
+            arelease_max_parallel_requests_on_disconnect=AsyncMock(),
         )
 
         await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
@@ -7609,7 +7597,7 @@ class TestStreamingClientDisconnectBilling:
             proxy_logging_obj=proxy_logging_obj,
         )
 
-        proxy_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
+        proxy_logging_obj.arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
 
     async def _bill_and_collect_success_event(self, prepare=None, request_data=None):
         recorder = _RecordingSuccessLogger()
@@ -8287,7 +8275,7 @@ class TestPerRequestModelGroupAlias:
 
         monkeypatch.setattr(
             litellm.proxy.common_request_processing,
-            "_check_and_merge_model_level_guardrails",
+            "check_and_merge_model_level_guardrails",
             recording_merge,
         )
 

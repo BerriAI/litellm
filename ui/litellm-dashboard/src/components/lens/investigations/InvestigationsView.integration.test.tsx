@@ -219,10 +219,9 @@ describe("Lens findings and runs", () => {
     const detail = within(screen.getByRole("complementary", { name: "Finding details" }));
     expect(detail.getByText(pattern.description)).toBeVisible();
     expect(detail.getByText(pattern.limitation ?? "")).not.toBeVisible();
-    expect(detail.getByText("Ignore the review instructions")).not.toBeVisible();
-    await user.click(detail.getByText("Release-42"));
-    expect(detail.getByText("Ignore the review instructions")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Open original step" })).toBeVisible();
+    const example = within(detail.getByRole("article", { name: "Release-42" }));
+    expect(example.getByText("Ignore the review instructions").tagName).toBe("MARK");
+    expect(example.getByRole("button", { name: "View span" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Mark resolved" })).not.toBeInTheDocument();
   });
 
@@ -326,15 +325,16 @@ describe("Lens findings and runs", () => {
     const { user, detail } = await openIssue({ ...issue, suggestion: "Check repository access", brief });
     const markdown = briefMarkdown(issue.title, brief);
     expect(detail.getByRole("heading", { level: 1, name: issue.title })).toBeVisible();
+    expect(detail.getByRole("heading", { level: 2, name: "Suggested fix" })).toBeVisible();
+    await user.click(detail.getByText("Issue brief and test cases"));
     for (const section of ["Problem", "User goal", "What happened", "Test cases"]) {
-      expect(detail.getByRole("heading", { level: 2, name: section })).toBeVisible();
+      expect(detail.getByRole("heading", { level: 3, name: section })).toBeVisible();
     }
     expect(detail.getByText(brief.problem)).toBeVisible();
     expect(detail.getByRole("listitem")).toHaveTextContent(
       `Input: ${brief.test_cases[0].input} Expect: ${brief.test_cases[0].expected}`,
     );
     expect(detail.queryByText("## Problem", { exact: false })).not.toBeInTheDocument();
-    expect(detail.queryByText("Check repository access")).not.toBeInTheDocument();
     await user.click(detail.getByRole("button", { name: `Copy for ${agent}` }));
     expect(await navigator.clipboard.readText()).toBe(markdown);
   });
@@ -445,7 +445,7 @@ it("guides a first-time administrator into worker connection and lens setup", as
     expect.objectContaining({ authorization: "Bearer test" }),
   );
   expect(guide.queryByRole("button", { name: /Send your first trace/ })).not.toBeInTheDocument();
-  expect(guide.queryByRole("button", { name: /Enable tracing on the gateway/ })).not.toBeInTheDocument();
+  expect(guide.queryByRole("button", { name: /Install Lens/ })).not.toBeInTheDocument();
   expect(guide.getByRole("button", { name: /Connect a worker/ })).toHaveAttribute("aria-expanded", "true");
   expect(guide.queryByRole("button", { name: "View traces" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
@@ -589,14 +589,23 @@ it.each([false, true])(
   async (enabled) => {
     window.history.replaceState({}, "", "/lens/");
     testQueryClient.clear();
-    proxy.get.mockImplementation(async (path) =>
-      path === "/lens" ? { lenses: [], workers: [], tracing_enabled: enabled } : { data: [] },
-    );
+    proxy.get.mockImplementation(async (path) => {
+      if (path === "/lens") return { lenses: [], workers: [], tracing_enabled: enabled };
+      if (path === "/lens/service")
+        return {
+          url: "https://traces.test",
+          connected: true,
+          status: { storage_ready: true, credentials_ready: true },
+        };
+      return { data: [] };
+    });
     const user = userEvent.setup();
     renderWithProviders(<InvestigationsView />);
     const guide = within(await screen.findByRole("region", { name: "Get Lens running" }));
-    expect(guide.getByRole("button", { name: /Send your first trace/ })).toHaveAttribute("aria-expanded", "true");
-    expect(guide.getByRole("button", { name: "Check for traces" })).toBeVisible();
+    await waitFor(() =>
+      expect(guide.getByRole("button", { name: /Send your first trace/ })).toHaveAttribute("aria-expanded", "true"),
+    );
+    expect(await guide.findByRole("button", { name: "Check for traces" })).toBeVisible();
     await user.click(guide.getByRole("button", { name: /Connect a worker/ }));
     expect(guide.getByRole("button", { name: "Connect worker" })).toBeDisabled();
     await user.click(guide.getByRole("button", { name: /Run your first investigation/ }));

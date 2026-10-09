@@ -13,6 +13,7 @@ pub const DATABASE: &str = "trace_test";
 
 pub struct SeededDatabase {
     pub database: ClickHouseDatabase,
+    #[allow(dead_code)] // dead_code: also shared with reads.rs, which uses a direct storage reader
     pub readers: QueryReaders,
 }
 

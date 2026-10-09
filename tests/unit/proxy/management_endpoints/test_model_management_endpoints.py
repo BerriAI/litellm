@@ -176,7 +176,7 @@ class MockProxyConfig:
         self.success = success
         self.deployment_called = False
 
-    async def _add_deployment_locked(self, prisma_client, proxy_logging_obj):
+    async def add_deployment_locked(self, prisma_client, proxy_logging_obj):
         self.deployment_called = True
         if not self.success:
             raise Exception("Failed to add deployment")
@@ -830,7 +830,7 @@ class TestClearCache:
         mock_router.model_list = ["openai/gpt-4o", "openai/gpt-4o-mini"]
 
         mock_config = MagicMock()
-        mock_config._add_deployment_locked = AsyncMock(
+        mock_config.add_deployment_locked = AsyncMock(
             return_value=ReconcileOutcome(still_desired=frozenset(), live_after=frozenset())
         )
 
@@ -888,7 +888,7 @@ class TestClearCache:
         mock_router.complexity_routers = {"db-complexity-router": MagicMock(), "config-router": MagicMock()}
 
         mock_config = MagicMock()
-        mock_config._add_deployment_locked = AsyncMock(
+        mock_config.add_deployment_locked = AsyncMock(
             return_value=ReconcileOutcome(still_desired=frozenset(), live_after=frozenset())
         )
 
@@ -922,7 +922,7 @@ class TestClearCache:
             assert "config-router" in mock_router.complexity_routers
 
             # Should have called the already-locked reload to restore DB models
-            mock_config._add_deployment_locked.assert_called_once_with(
+            mock_config.add_deployment_locked.assert_called_once_with(
                 prisma_client=mock_prisma, proxy_logging_obj=mock_logging
             )
 
@@ -967,7 +967,7 @@ class TestClearCache:
         mock_router.quality_routers = {}
 
         mock_config = MagicMock()
-        mock_config._add_deployment_locked = AsyncMock(
+        mock_config.add_deployment_locked = AsyncMock(
             return_value=ReconcileOutcome(still_desired=frozenset(), live_after=frozenset())
         )
 
@@ -1023,7 +1023,7 @@ class TestClearCachePreservesConfigRouters:
         }
 
         mock_config = MagicMock()
-        mock_config._add_deployment_locked = AsyncMock(
+        mock_config.add_deployment_locked = AsyncMock(
             return_value=ReconcileOutcome(still_desired=frozenset(), live_after=frozenset())
         )
 
@@ -1065,7 +1065,7 @@ class TestClearCachePreservesConfigRouters:
         mock_router.complexity_routers = {"shared-name": MagicMock()}
 
         mock_config = MagicMock()
-        mock_config._add_deployment_locked = AsyncMock(
+        mock_config.add_deployment_locked = AsyncMock(
             return_value=ReconcileOutcome(still_desired=frozenset(), live_after=frozenset())
         )
 
@@ -1109,7 +1109,7 @@ class TestClearCachePreservesConfigRouters:
         mock_router.adaptive_routers = {"a1": MagicMock()}
 
         mock_config = MagicMock()
-        mock_config._add_deployment_locked = AsyncMock(
+        mock_config.add_deployment_locked = AsyncMock(
             return_value=ReconcileOutcome(still_desired=frozenset(), live_after=frozenset())
         )
 
@@ -1632,7 +1632,7 @@ class TestTeamModelSiblingRouting:
         team_model_add to register the public name on the team's models list.
         """
         from litellm.proxy.management_endpoints.model_management_endpoints import (
-            _add_team_model_to_db,
+            add_team_model_to_db,
         )
         from litellm.types.router import ModelInfo
 
@@ -1659,7 +1659,7 @@ class TestTeamModelSiblingRouting:
             )
             with (
                 patch(
-                    "litellm.proxy.management_endpoints.model_management_endpoints._add_model_to_db",
+                    "litellm.proxy.management_endpoints.model_management_endpoints.add_model_to_db",
                     side_effect=mock_add_model_to_db,
                 ),
                 patch(
@@ -1667,7 +1667,7 @@ class TestTeamModelSiblingRouting:
                     mock_team_model_add,
                 ),
             ):
-                await _add_team_model_to_db(
+                await add_team_model_to_db(
                     model_params=dep,
                     user_api_key_dict=user,
                     prisma_client=prisma_client,
@@ -2521,7 +2521,7 @@ class TestAddAndDeleteModelLifecycle:
         mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
 
         mock_proxy_config = MagicMock()
-        mock_proxy_config._add_deployment_locked = AsyncMock(
+        mock_proxy_config.add_deployment_locked = AsyncMock(
             return_value=ReconcileOutcome(still_desired=frozenset(), live_after=frozenset())
         )
 
@@ -2644,7 +2644,7 @@ class TestDeleteTeamBYOKModelGhost:
             patch(f"{_PS}.llm_router", MagicMock()),
             patch(f"{_PS}.proxy_logging_obj", MagicMock()),
             patch(f"{_PS}.user_api_key_cache", MagicMock()),
-            patch(f"{_MOD}._refresh_cached_team", new=AsyncMock()) as mock_refresh,
+            patch(f"{_MOD}.refresh_cached_team", new=AsyncMock()) as mock_refresh,
         ):
             result = await delete_model_endpoint(
                 model_info=ModelInfoDelete(id=model_id),
@@ -2720,7 +2720,7 @@ class TestDeleteTeamBYOKModelGhost:
             patch(f"{_PS}.llm_router", MagicMock()),
             patch(f"{_PS}.proxy_logging_obj", MagicMock()),
             patch(f"{_PS}.user_api_key_cache", MagicMock()),
-            patch(f"{_MOD}._refresh_cached_team", new=AsyncMock()),
+            patch(f"{_MOD}.refresh_cached_team", new=AsyncMock()),
         ):
             result = await delete_model_endpoint(
                 model_info=ModelInfoDelete(id=model_id),
@@ -2793,7 +2793,7 @@ class TestDeleteTeamBYOKModelGhost:
             patch(f"{_PS}.llm_router", MagicMock()),
             patch(f"{_PS}.proxy_logging_obj", MagicMock()),
             patch(f"{_PS}.user_api_key_cache", MagicMock()),
-            patch(f"{_MOD}._refresh_cached_team", new=AsyncMock()) as mock_refresh,
+            patch(f"{_MOD}.refresh_cached_team", new=AsyncMock()) as mock_refresh,
         ):
             result = await delete_model_endpoint(
                 model_info=ModelInfoDelete(id=deleted_id),
@@ -2872,7 +2872,7 @@ class TestDeleteTeamBYOKModelGhost:
             patch(f"{_PS}.llm_router", mock_router),
             patch(f"{_PS}.proxy_logging_obj", MagicMock()),
             patch(f"{_PS}.user_api_key_cache", MagicMock()),
-            patch(f"{_MOD}._refresh_cached_team", new=AsyncMock()) as mock_refresh,
+            patch(f"{_MOD}.refresh_cached_team", new=AsyncMock()) as mock_refresh,
         ):
             result = await delete_model_endpoint(
                 model_info=ModelInfoDelete(id=model_id),
@@ -2948,7 +2948,7 @@ class TestDeleteTeamBYOKModelGhost:
             patch(f"{_PS}.llm_router", mock_router),
             patch(f"{_PS}.proxy_logging_obj", MagicMock()),
             patch(f"{_PS}.user_api_key_cache", MagicMock()),
-            patch(f"{_MOD}._refresh_cached_team", new=AsyncMock()),
+            patch(f"{_MOD}.refresh_cached_team", new=AsyncMock()),
         ):
             result = await delete_model_endpoint(
                 model_info=ModelInfoDelete(id=model_id),
@@ -3023,7 +3023,7 @@ class TestDeleteModelTeamAuth:
             patch(f"{_PS}.llm_router", MagicMock()),
             patch(f"{_PS}.proxy_logging_obj", MagicMock()),
             patch(f"{_PS}.user_api_key_cache", MagicMock()),
-            patch(f"{_MOD}._refresh_cached_team", new=AsyncMock()),
+            patch(f"{_MOD}.refresh_cached_team", new=AsyncMock()),
         ):
             result = await delete_model_endpoint(
                 model_info=ModelInfoDelete(id=model_id),
@@ -3059,7 +3059,7 @@ class TestDeleteModelTeamAuth:
             patch(f"{_PS}.llm_router", MagicMock()),
             patch(f"{_PS}.proxy_logging_obj", MagicMock()),
             patch(f"{_PS}.user_api_key_cache", MagicMock()),
-            patch(f"{_MOD}._refresh_cached_team", new=AsyncMock()),
+            patch(f"{_MOD}.refresh_cached_team", new=AsyncMock()),
         ):
             with pytest.raises(ProxyException) as exc_info:
                 await delete_model_endpoint(
@@ -3124,7 +3124,7 @@ class TestDeleteModelTeamAuth:
             patch(f"{_PS}.llm_router", MagicMock()),
             patch(f"{_PS}.proxy_logging_obj", MagicMock()),
             patch(f"{_PS}.user_api_key_cache", MagicMock()),
-            patch(f"{_MOD}._refresh_cached_team", new=AsyncMock()),
+            patch(f"{_MOD}.refresh_cached_team", new=AsyncMock()),
         ):
             with pytest.raises(ProxyException) as exc_info:
                 await delete_model_endpoint(
@@ -5201,7 +5201,7 @@ class TestConcurrentModelWritesDoNotEvictEachOther:
             depth -= 1
             return ReconcileOutcome(still_desired=frozenset(), live_after=frozenset())
 
-        monkeypatch.setattr(ProxyConfig, "_add_deployment_locked", fake_locked)
+        monkeypatch.setattr(ProxyConfig, "add_deployment_locked", fake_locked)
         config = ProxyConfig()
 
         await asyncio.gather(
@@ -5244,7 +5244,7 @@ class TestConcurrentModelWritesDoNotEvictEachOther:
         async def fake_locked(self, **kwargs):
             return ReconcileOutcome(still_desired=frozenset({"m-db"}), live_after=frozenset({"m-db"}))
 
-        monkeypatch.setattr(ProxyConfig, "_add_deployment_locked", fake_locked)
+        monkeypatch.setattr(ProxyConfig, "add_deployment_locked", fake_locked)
 
         outcome = await asyncio.wait_for(clear_cache(), timeout=5)
 
@@ -6408,7 +6408,7 @@ class TestStrategyRouterWriteValidation:
         lock holder waiting for a connection the waiters are occupying."""
         from contextlib import asynccontextmanager
 
-        from litellm.proxy.management_endpoints.model_management_endpoints import _add_team_model_to_db
+        from litellm.proxy.management_endpoints.model_management_endpoints import add_team_model_to_db
         from litellm.types.router import ModelInfo
 
         events: list[str] = []
@@ -6438,7 +6438,7 @@ class TestStrategyRouterWriteValidation:
                 side_effect=team_model_add,
             ),
         ):
-            result = await _add_team_model_to_db(
+            result = await add_team_model_to_db(
                 model_params=deployment,
                 user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
                 prisma_client=MagicMock(),
@@ -8341,7 +8341,7 @@ class TestAddModelToDbBlocked:
     @pytest.mark.asyncio
     async def test_add_model_to_db_writes_blocked_true(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
-            _add_model_to_db,
+            add_model_to_db,
         )
 
         mock_prisma = MagicMock()
@@ -8351,7 +8351,7 @@ class TestAddModelToDbBlocked:
         with patch(  # test-quality-ok: the proxy wiring under test is what this patches
             "litellm.proxy.proxy_server.master_key", "sk-test-master"
         ):  # test-quality-ok: the proxy wiring under test is what this patches
-            await _add_model_to_db(
+            await add_model_to_db(
                 model_params=self._deployment(True), user_api_key_dict=admin, prisma_client=mock_prisma
             )
 
@@ -8361,7 +8361,7 @@ class TestAddModelToDbBlocked:
     @pytest.mark.asyncio
     async def test_add_model_to_db_writes_blocked_false(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
-            _add_model_to_db,
+            add_model_to_db,
         )
 
         mock_prisma = MagicMock()
@@ -8371,7 +8371,7 @@ class TestAddModelToDbBlocked:
         with patch(  # test-quality-ok: the proxy wiring under test is what this patches
             "litellm.proxy.proxy_server.master_key", "sk-test-master"
         ):  # test-quality-ok: the proxy wiring under test is what this patches
-            await _add_model_to_db(
+            await add_model_to_db(
                 model_params=self._deployment(False), user_api_key_dict=admin, prisma_client=mock_prisma
             )
 
@@ -8383,7 +8383,7 @@ class TestAddModelToDbBlocked:
         """None means "don't set it" -- the Prisma column defaults to False -- not "explicitly
         unblocked", so the key must be absent from the write entirely."""
         from litellm.proxy.management_endpoints.model_management_endpoints import (
-            _add_model_to_db,
+            add_model_to_db,
         )
 
         mock_prisma = MagicMock()
@@ -8393,7 +8393,7 @@ class TestAddModelToDbBlocked:
         with patch(  # test-quality-ok: the proxy wiring under test is what this patches
             "litellm.proxy.proxy_server.master_key", "sk-test-master"
         ):  # test-quality-ok: the proxy wiring under test is what this patches
-            await _add_model_to_db(
+            await add_model_to_db(
                 model_params=self._deployment(None), user_api_key_dict=admin, prisma_client=mock_prisma
             )
 
@@ -8944,7 +8944,7 @@ class TestOneCredentialFeedsManyModelsNoWifCopy:
     async def test_two_discovered_models_share_the_credential_reference_only(self):
         from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
         from litellm.proxy.management_endpoints.model_management_endpoints import (
-            _add_model_to_db,
+            add_model_to_db,
         )
         from litellm.types.router import ModelInfo
 
@@ -8957,7 +8957,7 @@ class TestOneCredentialFeedsManyModelsNoWifCopy:
                 "litellm.proxy.proxy_server.master_key", "sk-test-master"
             ),
             patch(  # test-quality-ok: the proxy wiring under test is what this patches
-                "litellm.proxy.common_utils.encrypt_decrypt_utils._get_salt_key", return_value="sk-test-master"
+                "litellm.proxy.common_utils.encrypt_decrypt_utils.get_salt_key", return_value="sk-test-master"
             ),
         ):
             for i, discovered_id in enumerate(["claude-a", "claude-b"]):
@@ -8969,7 +8969,7 @@ class TestOneCredentialFeedsManyModelsNoWifCopy:
                     model_info=ModelInfo(id=f"dep-shared-{i}"),
                     blocked=False,
                 )
-                await _add_model_to_db(model_params=model_params, user_api_key_dict=admin, prisma_client=mock_prisma)
+                await add_model_to_db(model_params=model_params, user_api_key_dict=admin, prisma_client=mock_prisma)
 
             assert mock_prisma.db.litellm_proxymodeltable.create.await_count == 2
             for call in mock_prisma.db.litellm_proxymodeltable.create.await_args_list:
@@ -9335,7 +9335,7 @@ class TestFederationGateScopesToWhatTheWriteTouches:
             patch(f"{_PS}.llm_router", MagicMock()),  # test-quality-ok: proxy wiring under test
             patch(f"{_PS}.proxy_logging_obj", MagicMock()),  # test-quality-ok: proxy wiring under test
             patch(f"{_PS}.user_api_key_cache", MagicMock()),  # test-quality-ok: proxy wiring under test
-            patch(f"{_MOD}._refresh_cached_team", new=AsyncMock()),  # test-quality-ok: proxy wiring under test
+            patch(f"{_MOD}.refresh_cached_team", new=AsyncMock()),  # test-quality-ok: proxy wiring under test
         ):
             result = await delete_model_endpoint(
                 model_info=ModelInfoDelete(id="m1"),

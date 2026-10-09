@@ -198,7 +198,7 @@ def test_evicting_a_client_built_on_the_callers_session_leaves_that_session_open
         LLMClientCache(evicted_client_closer=closer),
     )
 
-    wrapper = OpenAIChatCompletion()._get_openai_client(
+    wrapper = OpenAIChatCompletion().get_openai_client(
         is_async=True,
         api_key="sk-not-a-real-key",
         api_base="https://api.openai.com/v1",
@@ -230,7 +230,7 @@ def test_a_client_litellm_built_its_own_http_client_for_is_still_closed(monkeypa
         LLMClientCache(evicted_client_closer=closer),
     )
 
-    wrapper = OpenAIChatCompletion()._get_openai_client(
+    wrapper = OpenAIChatCompletion().get_openai_client(
         is_async=False,
         api_key="sk-not-a-real-key",
         api_base="https://api.openai.com/v1",
@@ -446,7 +446,6 @@ def _sdk_api_client(
             "api_key": "transport-only",
             "base_url": kwargs["api_base"],
             "timeout": timeout,
-            "http_client": None,
         }
         return (
             variation_factory.get_async_client(client=client, init_client_params=params)

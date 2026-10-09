@@ -911,7 +911,7 @@ def _stream_chunk(delta, finish_reason=None, index=0):
     }
 
 
-def test_streaming_handler_splits_reasoning_deltas_per_choice():
+def test_streaming_handler_splits_reasoning_deltas_per_choice(local_cost_map):
     handler = BedrockRuntimeChatCompletionsStreamingHandler(streaming_response=iter(()), sync_stream=True)
 
     first = handler.chunk_parser(_stream_chunk({"role": "assistant", "content": "<reasoning>I think"}))
@@ -934,7 +934,7 @@ def _reasoning_of(parsed):
     return getattr(parsed.choices[0].delta, "reasoning_content", None)
 
 
-def test_streaming_handler_keeps_split_state_per_choice_index():
+def test_streaming_handler_keeps_split_state_per_choice_index(local_cost_map):
     handler = BedrockRuntimeChatCompletionsStreamingHandler(streaming_response=iter(()), sync_stream=True)
 
     opened = handler.chunk_parser(_stream_chunk({"content": "<reasoning>first"}, index=0))
@@ -949,7 +949,7 @@ def test_streaming_handler_keeps_split_state_per_choice_index():
     assert not still_reasoning.choices[0].delta.content
 
 
-def test_streaming_handler_flushes_held_text_on_an_empty_final_delta():
+def test_streaming_handler_flushes_held_text_on_an_empty_final_delta(local_cost_map):
     handler = BedrockRuntimeChatCompletionsStreamingHandler(streaming_response=iter(()), sync_stream=True)
 
     held = handler.chunk_parser(_stream_chunk({"content": "<reas"}))
@@ -1278,7 +1278,7 @@ def test_gpt_oss_streaming_completion_splits_reasoning(local_cost_map, fake_aws_
     assert "".join(delta.content or "" for delta in deltas) == "Hi"
 
 
-def test_streaming_handler_keeps_native_reasoning_next_to_the_tagged_split():
+def test_streaming_handler_keeps_native_reasoning_next_to_the_tagged_split(local_cost_map):
     handler = BedrockRuntimeChatCompletionsStreamingHandler(streaming_response=iter(()), sync_stream=True)
     parsed = handler.chunk_parser(
         _stream_chunk({"reasoning": "native ", "content": "<reasoning>tagged</reasoning>Hi"}, finish_reason="stop")
@@ -1467,3 +1467,76 @@ def test_gpt56_json_object_with_response_schema_goes_to_converse_as_a_json_tool(
     assert body["toolConfig"]["tools"][0]["toolSpec"]["name"] == "json_tool_call"
     assert body["toolConfig"]["toolChoice"] == {"tool": {"name": "json_tool_call"}}
     assert "response_format" not in body
+
+
+LITERAL_TAGGED_ANSWER = "<reasoning>not thinking</reasoning> Hello"
+
+
+@pytest.mark.parametrize("model", ["openai.gpt-5.6-sol", "us.xai.grok-4.6"])
+def test_streaming_handler_keeps_a_literal_reasoning_tag_outside_gpt_oss(local_cost_map, model):
+    handler = BedrockRuntimeChatCompletionsStreamingHandler(streaming_response=iter(()), sync_stream=True)
+
+    opened = handler.chunk_parser({**_stream_chunk({"content": "<reasoning>not thinking"}), "model": model})
+    assert opened.choices[0].delta.content == "<reasoning>not thinking"
+    assert _reasoning_of(opened) is None
+
+    closed = handler.chunk_parser({**_stream_chunk({"content": "</reasoning> Hello"}, finish_reason="stop"), "model": model})
+    assert closed.choices[0].delta.content == "</reasoning> Hello"
+    assert _reasoning_of(closed) is None
+
+
+@pytest.mark.parametrize(
+    "model, expected_content, expected_reasoning",
+    [
+        ("bedrock/global.openai.gpt-5.6-sol", LITERAL_TAGGED_ANSWER, None),
+        ("bedrock/chat_completions/us.xai.grok-4.6", LITERAL_TAGGED_ANSWER, None),
+        ("bedrock/chat_completions/openai.gpt-oss-20b-1:0", "Hello", "not thinking"),
+        ("bedrock/chat_completions/openai.gpt-oss-safeguard-20b", "Hello", "not thinking"),
+    ],
+)
+def test_reasoning_tag_split_applies_to_gpt_oss_answers_only(
+    local_cost_map, fake_aws_env, model, expected_content, expected_reasoning
+):
+    model_id = model.removeprefix("bedrock/").removeprefix("chat_completions/")
+    requests, client = _recording_client(json=_chat_completion_json(LITERAL_TAGGED_ANSWER, model_id))
+
+    response = litellm.completion(
+        model=model, messages=[{"role": "user", "content": "hello"}], client=client, max_tokens=64
+    )
+
+    assert str(requests[0].url).endswith("/openai/v1/chat/completions")
+    assert response.choices[0].message.content == expected_content
+    assert getattr(response.choices[0].message, "reasoning_content", None) == expected_reasoning
+
+
+@pytest.mark.parametrize(
+    "capability_flags, expected_content, expected_reasoning",
+    [
+        ({"supports_bedrock_runtime_chat_completions_inline_reasoning": True}, "Hello", "not thinking"),
+        ({}, LITERAL_TAGGED_ANSWER, None),
+    ],
+)
+def test_reasoning_tag_split_is_read_from_the_cost_map(
+    monkeypatch, fake_aws_env, capability_flags, expected_content, expected_reasoning
+):
+    model_id = SYNTHETIC_NATIVE_MODEL.removeprefix("chat_completions/")
+    monkeypatch.setattr(litellm, "model_cost", {model_id: {"litellm_provider": "bedrock_converse", **capability_flags}})
+    requests, client = _recording_client(json=_chat_completion_json(LITERAL_TAGGED_ANSWER, model_id))
+
+    response = litellm.completion(
+        model=f"bedrock/{SYNTHETIC_NATIVE_MODEL}",
+        messages=[{"role": "user", "content": "hello"}],
+        client=client,
+        max_tokens=64,
+    )
+
+    assert str(requests[0].url).endswith("/openai/v1/chat/completions")
+    assert response.choices[0].message.content == expected_content
+    assert getattr(response.choices[0].message, "reasoning_content", None) == expected_reasoning
+
+    handler = BedrockRuntimeChatCompletionsStreamingHandler(streaming_response=iter(()), sync_stream=True)
+    chunk = handler.chunk_parser(
+        {**_stream_chunk({"content": LITERAL_TAGGED_ANSWER}, finish_reason="stop"), "model": model_id}
+    )
+    assert chunk.choices[0].delta.content == expected_content
+    assert _reasoning_of(chunk) == expected_reasoning

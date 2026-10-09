@@ -173,7 +173,7 @@ class AnthropicPassthroughLoggingHandler:
         all_chunks: Sequence[str | bytes], model: str, speed: str | None
     ) -> ModelResponse | None:
         try:
-            return AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+            return AnthropicPassthroughLoggingHandler.build_usage_only_response_from_chunks(
                 all_chunks=all_chunks, model=model, speed=speed
             )
         except Exception as e:  # noqa: BLE001  # the usage-only fallback must never raise out of failure logging
@@ -188,7 +188,7 @@ class AnthropicPassthroughLoggingHandler:
         speed: str | None,
     ) -> ModelResponse | TextCompletionResponse | None:
         try:
-            assembled: Final = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+            assembled: Final = AnthropicPassthroughLoggingHandler.build_complete_streaming_response(
                 all_chunks=all_chunks,
                 litellm_logging_obj=litellm_logging_obj,
                 model=model,
@@ -467,7 +467,7 @@ class AnthropicPassthroughLoggingHandler:
             return kwargs
 
     @staticmethod
-    def _handle_logging_anthropic_collected_chunks(
+    def handle_logging_anthropic_collected_chunks(
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
@@ -514,6 +514,8 @@ class AnthropicPassthroughLoggingHandler:
             "kwargs": kwargs,
         }
 
+    _handle_logging_anthropic_collected_chunks = handle_logging_anthropic_collected_chunks
+
     @staticmethod
     def _split_sse_chunk_into_events(chunk: str | bytes) -> list[str]:
         """
@@ -539,7 +541,7 @@ class AnthropicPassthroughLoggingHandler:
         return events
 
     @staticmethod
-    def _build_complete_streaming_response(
+    def build_complete_streaming_response(
         all_chunks: Sequence[str | bytes],
         litellm_logging_obj: LiteLLMLoggingObj,
         model: str,
@@ -576,6 +578,8 @@ class AnthropicPassthroughLoggingHandler:
             model=model,
             speed=speed,
         )
+
+    _build_complete_streaming_response = build_complete_streaming_response
 
     # Anthropic SSE block/delta types that the fast path is NOT allowed to
     # collapse -- their presence forces the unchanged legacy path so tool
@@ -775,7 +779,7 @@ class AnthropicPassthroughLoggingHandler:
         return None
 
     @staticmethod
-    def _build_usage_only_response_from_chunks(
+    def build_usage_only_response_from_chunks(
         all_chunks: Sequence[str | bytes],
         model: str,
         speed: str | None = None,
@@ -893,6 +897,8 @@ class AnthropicPassthroughLoggingHandler:
             ],
             usage=usage_obj,
         )
+
+    _build_usage_only_response_from_chunks = build_usage_only_response_from_chunks
 
     @staticmethod
     def batch_creation_handler(

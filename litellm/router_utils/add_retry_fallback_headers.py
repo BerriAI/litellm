@@ -6,6 +6,13 @@ from typing import Final, Protocol, TypedDict, cast
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
+from litellm.litellm_core_utils.hidden_params import (
+    HIDDEN_PARAMS_ATTR as _HIDDEN_PARAMS_ATTR,
+)
+from litellm.litellm_core_utils.hidden_params import (
+    set_hidden_params,
+)
+
 
 class FallbackErrorInfo(TypedDict):
     message: str
@@ -227,10 +234,8 @@ def get_hidden_params_dict(
 
 
 def _write_hidden_params(response: object, hidden_params: dict[str, object]) -> None:
-    if isinstance(response, dict):
-        response["_hidden_params"] = hidden_params
-    elif hasattr(response, "_hidden_params"):
-        setattr(response, "_hidden_params", hidden_params)
+    if isinstance(response, dict) or hasattr(response, _HIDDEN_PARAMS_ATTR):
+        set_hidden_params(response, hidden_params)
 
 
 def _ensure_additional_headers_dict(

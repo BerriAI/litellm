@@ -771,7 +771,7 @@ async def test_closed_shared_session_rebuild_uses_injected_session_factory():
         session_factory=session_factory,  # type: ignore
     )
 
-    assert transport._get_valid_client_session() in rebuilt
+    assert transport.get_valid_client_session() in rebuilt
 
 
 def test_rebuild_without_running_loop_uses_injected_session_factory():
@@ -792,7 +792,7 @@ def test_rebuild_without_running_loop_uses_injected_session_factory():
         session_factory=session_factory,  # type: ignore
     )
 
-    assert transport._get_valid_client_session() in rebuilt
+    assert transport.get_valid_client_session() in rebuilt
 
 
 @pytest.mark.asyncio
@@ -811,7 +811,7 @@ async def test_rebuilt_session_becomes_transport_owned():
         session_factory=lambda: replacement,
     )
 
-    assert transport._get_valid_client_session() is replacement
+    assert transport.get_valid_client_session() is replacement
 
     await transport.aclose()
 
@@ -837,7 +837,7 @@ async def test_stale_loop_rebuild_does_not_close_unowned_session():
 
     try:
         shared_session._loop = other_loop
-        assert transport._get_valid_client_session() is replacement
+        assert transport.get_valid_client_session() is replacement
         shared_session._loop = running_loop
         await asyncio.sleep(0.05)
         assert not shared_session.closed
@@ -883,7 +883,7 @@ def _flaky_get_running_loop_factory():
     """get_running_loop stand-in that fails once, then delegates.
 
     Reproduces #24230: a transient loop-inspection failure sends
-    _get_valid_client_session into its (RuntimeError, AttributeError)
+    get_valid_client_session into its (RuntimeError, AttributeError)
     fallback branch.
     """
     real_get_running_loop = asyncio.get_running_loop
@@ -915,7 +915,7 @@ async def test_fallback_recreate_closes_previous_session():
         "litellm.llms.custom_httpx.aiohttp_transport.asyncio.get_running_loop",
         side_effect=_flaky_get_running_loop_factory(),
     ):
-        new_session = transport._get_valid_client_session()
+        new_session = transport.get_valid_client_session()
 
     try:
         assert new_session is not old_session
@@ -947,7 +947,7 @@ async def test_replaced_session_emits_no_unclosed_warnings():
         "litellm.llms.custom_httpx.aiohttp_transport.asyncio.get_running_loop",
         side_effect=_flaky_get_running_loop_factory(),
     ):
-        new_session = transport._get_valid_client_session()
+        new_session = transport.get_valid_client_session()
 
     try:
         for _ in range(3):
@@ -980,7 +980,7 @@ async def test_dead_loop_session_closed_synchronously_on_recycle():
     transport = LiteLLMAiohttpTransport(client=lambda: aiohttp.ClientSession())
     transport.client = old_session
 
-    new_session = transport._get_valid_client_session()
+    new_session = transport.get_valid_client_session()
 
     try:
         assert new_session is not old_session
@@ -1040,7 +1040,7 @@ async def test_session_from_other_running_loop_closed_threadsafe():
     transport = LiteLLMAiohttpTransport(client=lambda: aiohttp.ClientSession())
     transport.client = holder["session"]
 
-    new_session = transport._get_valid_client_session()
+    new_session = transport.get_valid_client_session()
 
     try:
         deadline = time.monotonic() + 5
@@ -1139,7 +1139,7 @@ async def test_stopped_loop_session_disposed_synchronously_on_recycle():
     transport = LiteLLMAiohttpTransport(client=lambda: aiohttp.ClientSession())
     transport.client = old_session
 
-    new_session = transport._get_valid_client_session()
+    new_session = transport.get_valid_client_session()
 
     try:
         assert new_session is not old_session
@@ -1226,28 +1226,28 @@ def _closed_local_port() -> int:
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 async def test_client_session_helper() -> None:
-    transport: Final = AsyncHTTPHandler._create_aiohttp_transport()
+    transport: Final = AsyncHTTPHandler.create_aiohttp_transport()
     assert isinstance(transport, LiteLLMAiohttpTransport)
-    session1: Final = transport._get_valid_client_session()
+    session1: Final = transport.get_valid_client_session()
     assert isinstance(session1, ClientSession)
     assert session1.closed is False
     assert getattr(session1, "_loop") is asyncio.get_running_loop()
-    session2: Final = transport._get_valid_client_session()
+    session2: Final = transport.get_valid_client_session()
     assert session2 is session1
     await session1.close()
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 async def test_event_loop_robustness() -> None:
-    transport: Final = AsyncHTTPHandler._create_aiohttp_transport()
-    session: Final = transport._get_valid_client_session()
+    transport: Final = AsyncHTTPHandler.create_aiohttp_transport()
+    session: Final = transport.get_valid_client_session()
     assert isinstance(session, ClientSession)
     await session.close()
-    session_after_close: Final = transport._get_valid_client_session()
+    session_after_close: Final = transport.get_valid_client_session()
     assert isinstance(session_after_close, ClientSession)
     assert session_after_close is not session
     assert session_after_close.closed is False
     transport.client = lambda: ClientSession()
-    session_after_factory: Final = transport._get_valid_client_session()
+    session_after_factory: Final = transport.get_valid_client_session()
     assert isinstance(session_after_factory, ClientSession)
     assert session_after_factory is not session_after_close
     assert session_after_factory.closed is False
@@ -1261,14 +1261,14 @@ async def test_refused_connection_maps_to_httpx_connect_error(
     ssl_verify: bool | None, expected_ssl: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("NO_PROXY", "127.0.0.1")
-    transport: Final = AsyncHTTPHandler._create_aiohttp_transport(ssl_verify=ssl_verify)
+    transport: Final = AsyncHTTPHandler.create_aiohttp_transport(ssl_verify=ssl_verify)
     port: Final = _closed_local_port()
     request: Final = httpx.Request("GET", f"https://127.0.0.1:{port}/")
     try:
         with pytest.raises(httpx.ConnectError) as raised:
             await transport.handle_async_request(request)
     finally:
-        await transport._get_valid_client_session().close()
+        await transport.get_valid_client_session().close()
     cause: Final = raised.value.__cause__
     assert isinstance(cause, aiohttp_aiohttp_handler.ClientConnectorError)
     assert cause.ssl is expected_ssl

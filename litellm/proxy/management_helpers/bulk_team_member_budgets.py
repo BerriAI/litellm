@@ -25,9 +25,10 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN
 from litellm.proxy.management.teams.dependencies import get_team_access
-from litellm.proxy.management_endpoints.common_utils import (
-    _upsert_budget_and_membership,  # pyright: ignore[reportPrivateUsage]  # the single-member write, shared so the two surfaces cannot drift
+from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
+    _upsert_budget_and_membership,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     member_budget_patch,
+    upsert_budget_and_membership,  # pyright: ignore[reportPrivateUsage]  # the single-member write, shared so the two surfaces cannot drift
 )
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
 from litellm.proxy.management_helpers.bulk_user_deletion import (
@@ -213,7 +214,7 @@ async def bulk_update_team_member_budgets(
             tx, frozenset(budget_id for budget_id in budget_id_of.values() if budget_id is not None)
         )
         for index, user_id in applied:
-            await _upsert_budget_and_membership(
+            await upsert_budget_and_membership(
                 tx=tx,
                 team_id=team_id,
                 user_id=user_id,

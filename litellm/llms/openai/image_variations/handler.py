@@ -25,22 +25,12 @@ class OpenAIImageVariationsHandler:
     ):
         if client is not None:
             return client
-        return OpenAI(
-            **{
-                **init_client_params,
-                "http_client": init_client_params.get("http_client") or OpenAIHTTPClient(),
-            },
-        )
+        return OpenAI(**init_client_params, http_client=litellm.client_session or OpenAIHTTPClient())
 
     def get_async_client(self, client: AsyncOpenAI | None, init_client_params: dict) -> AsyncOpenAI:
         if client is not None:
             return client
-        return AsyncOpenAI(
-            **{
-                **init_client_params,
-                "http_client": init_client_params.get("http_client") or OpenAIAsyncHTTPClient(),
-            },
-        )
+        return AsyncOpenAI(**init_client_params, http_client=litellm.aclient_session or OpenAIAsyncHTTPClient())
 
     async def async_image_variations(
         self,
@@ -64,7 +54,6 @@ class OpenAIImageVariationsHandler:
             init_client_params: Final = {
                 "api_key": api_key,
                 "base_url": api_base,
-                "http_client": litellm.aclient_session,
                 "timeout": timeout,
                 "max_retries": max_retries,
                 "organization": organization,
@@ -181,7 +170,6 @@ class OpenAIImageVariationsHandler:
             init_client_params: Final = {
                 "api_key": api_key,
                 "base_url": api_base,
-                "http_client": litellm.client_session,
                 "timeout": timeout,
                 "max_retries": max_retries,
                 "organization": organization,

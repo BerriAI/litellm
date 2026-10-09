@@ -45,9 +45,10 @@ from litellm.proxy.spend_tracking.spend_log_error_logger import (
     should_suppress_spend_log_tracebacks,
     spend_log_error,
 )
-from litellm.proxy.spend_tracking.spend_tracking_utils import (
-    _sanitize_error_information_for_spend_logs,
+from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  # legacy module exports
+    _sanitize_error_information_for_spend_logs,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     get_request_model_access_groups,
+    sanitize_error_information_for_spend_logs,
     should_store_prompts_and_responses_in_spend_logs,
 )
 from litellm.proxy.utils import ProxyUpdateSpend
@@ -152,7 +153,7 @@ class _ProxyDBLogger(CustomLogger):
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: str | None = None,
-    ):
+    ) -> None:
         try:
             await _release_budget_reservation(budget_reservation=user_api_key_dict.budget_reservation)
         except Exception:
@@ -168,7 +169,7 @@ class _ProxyDBLogger(CustomLogger):
 
         request_route: Final = user_api_key_dict.request_route
         if (
-            _ProxyDBLogger._should_track_errors_in_db() is False
+            ProxyDBLogger._should_track_errors_in_db() is False
             or request_route is not None
             and not (
                 RouteChecks.is_llm_api_route(route=request_route) or RouteChecks.is_info_route(route=request_route)
@@ -197,11 +198,11 @@ class _ProxyDBLogger(CustomLogger):
         # here because the input above is constructed non-None.
         _error_information = cast(
             StandardLoggingPayloadErrorInformation,
-            _sanitize_error_information_for_spend_logs(_error_information, original_exception=original_exception),
+            sanitize_error_information_for_spend_logs(_error_information, original_exception=original_exception),
         )
         _metadata["error_information"] = _error_information
 
-        _metadata = await _ProxyDBLogger._enrich_failure_metadata_unless_db_stalled(
+        _metadata = await ProxyDBLogger._enrich_failure_metadata_unless_db_stalled(  # rebind-ok: pre-existing rebinding on a rename-only line
             metadata=_metadata, original_exception=original_exception
         )
 
@@ -316,7 +317,7 @@ class _ProxyDBLogger(CustomLogger):
             # Only fetch key details when user_id wasn't already populated (e.g. direct MCP REST calls).
             # Avoids a cache/DB lookup on every normal LLM request.
             if metadata.get("user_api_key") and not metadata.get("user_api_key_user_id"):
-                metadata = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(  # rebind-ok: enriched metadata replaces the original
+                metadata = await ProxyDBLogger._enrich_failure_metadata_with_key_info(  # rebind-ok: enriched metadata replaces the original
                     metadata=metadata,
                     resolve_missing_key_identity=str(kwargs.get("call_type")) not in _CAPTURED_IDENTITY_CALL_TYPES,
                 )
@@ -503,7 +504,7 @@ class _ProxyDBLogger(CustomLogger):
     ) -> dict[str, object]:
         if isinstance(original_exception, DBLookupDeadlineExceeded):
             return metadata
-        return await _ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata=metadata)
+        return await ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata=metadata)
 
     @staticmethod
     async def _enrich_failure_metadata_with_key_info(metadata: dict, resolve_missing_key_identity: bool = True) -> dict:
@@ -594,6 +595,9 @@ class _ProxyDBLogger(CustomLogger):
         return
 
 
+ProxyDBLogger: Final = _ProxyDBLogger
+
+
 def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:
     patch = {k: v for k, v in metadata.items() if (k.startswith("user_api_key") or k == "tags") and v is not None}
     if not patch:
@@ -609,7 +613,7 @@ def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:
 
 
 async def run_spend_event(line: bytes) -> None:
-    await _ProxyDBLogger().run_spend_event(line)
+    await ProxyDBLogger().run_spend_event(line)
 
 
 def _is_unbilled_interaction_response(completion_response: object) -> bool:

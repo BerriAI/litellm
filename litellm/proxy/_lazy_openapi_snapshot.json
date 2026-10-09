@@ -9521,6 +9521,30 @@
           ]
         }
       },
+      "/systemone": {
+        "post": {
+          "operationId": "systemone_systemone_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Systemone",
+          "tags": [
+            "decisions"
+          ]
+        }
+      },
       "/v1/decisions": {
         "post": {
           "operationId": "decisions_v1_decisions_post",
@@ -9540,6 +9564,30 @@
             }
           ],
           "summary": "Decisions",
+          "tags": [
+            "decisions"
+          ]
+        }
+      },
+      "/v1/systemone": {
+        "post": {
+          "operationId": "systemone_v1_systemone_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Systemone",
           "tags": [
             "decisions"
           ]
@@ -11572,6 +11620,23 @@
               "description": "Google Cloud location/region (e.g., us-central1)",
               "title": "Location"
             },
+            "logging_only_scope": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "input",
+                    "output",
+                    "both"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
+              "title": "Logging Only Scope"
+            },
             "mask_request_content": {
               "anyOf": [
                 {
@@ -11840,6 +11905,34 @@
               "default": true,
               "description": "When True (default), after sensitive data is detected and routed, all subsequent requests in the same session will continue routing to the same model.",
               "title": "Sticky Session Routing"
+            },
+            "stream_scope": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "streaming",
+                    "non_streaming",
+                    "both"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "additionalProperties": {
+                    "enum": [
+                      "streaming",
+                      "non_streaming",
+                      "both"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Whether this guardrail runs on streaming requests, non-streaming requests, or both. A string applies to every configured mode. A map overrides named modes (pre_call, during_call, post_call, ...); omitted keys default to both. Unset means both, matching historical behavior.",
+              "title": "Stream Scope"
             },
             "template_id": {
               "anyOf": [
@@ -12727,6 +12820,77 @@
           "title": "GuardrailSubmissionSummary",
           "type": "object"
         },
+        "GuardrailUIAddGuardrailSettings": {
+          "properties": {
+            "content_filter_settings": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Content Filter Settings"
+            },
+            "pii_entity_categories": {
+              "items": {
+                "$ref": "#/components/schemas/PiiEntityCategoryMap"
+              },
+              "title": "Pii Entity Categories",
+              "type": "array"
+            },
+            "providers_without_directional_logging_only_scope": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Providers Without Directional Logging Only Scope",
+              "type": "array"
+            },
+            "supported_actions": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Supported Actions",
+              "type": "array"
+            },
+            "supported_entities": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Supported Entities",
+              "type": "array"
+            },
+            "supported_modes": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Supported Modes",
+              "type": "array"
+            },
+            "supported_modes_by_provider": {
+              "additionalProperties": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "title": "Supported Modes By Provider",
+              "type": "object"
+            }
+          },
+          "required": [
+            "supported_entities",
+            "supported_actions",
+            "supported_modes",
+            "supported_modes_by_provider",
+            "providers_without_directional_logging_only_scope",
+            "pii_entity_categories"
+          ],
+          "title": "GuardrailUIAddGuardrailSettings",
+          "type": "object"
+        },
         "HTTPValidationError": {
           "properties": {
             "detail": {
@@ -12868,6 +13032,19 @@
                 "https://akto-ingestion.example.com"
               ],
               "title": "Akto Base Url"
+            },
+            "akto_metadata": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "JSON object sent to Akto. 'policy_name': comma-separated Akto policies to enforce (empty enforces all). Example: {\"policy_name\": \"PII Strict, Secrets\"}.",
+              "title": "Akto Metadata"
             },
             "akto_vxlan_id": {
               "anyOf": [
@@ -13407,6 +13584,22 @@
               "description": "Enable content moderation to check for harmful content (harassment, hate speech, etc.).",
               "title": "Content Moderation Check"
             },
+            "context_source": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "ENDPOINT",
+                    "AGENTIC"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Akto context the traffic belongs to: 'ENDPOINT' (Atlas) or 'AGENTIC' (Argus). Default: AGENTIC.",
+              "title": "Context Source"
+            },
             "contextual_grounding_from_messages": {
               "default": false,
               "description": "ApplyGuardrail: when True, post-call scans of a request with no grounding_source / query content parts send the system and developer messages as the grounding source and the latest user message as the query, so the guardrail's contextual grounding policy can score the response. Bedrock bills contextual grounding units for these scans and rejects queries, sources and responses over its contextual grounding length limits, so leave this off for guardrails without a contextual grounding policy. Default False: plain messages are never sent as grounding context.",
@@ -13618,6 +13811,18 @@
               "description": "Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.",
               "title": "Fail On Error"
             },
+            "file_guardrail_timeout": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "HTTP timeout in seconds for checking attached files. Default: 10.",
+              "title": "File Guardrail Timeout"
+            },
             "gateway_name": {
               "anyOf": [
                 {
@@ -13821,6 +14026,23 @@
               ],
               "description": "Google Cloud location/region (e.g., us-central1)",
               "title": "Location"
+            },
+            "logging_only_scope": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "input",
+                    "output",
+                    "both"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
+              "title": "Logging Only Scope"
             },
             "mask": {
               "anyOf": [
@@ -14637,6 +14859,34 @@
               "description": "When True (default), after sensitive data is detected and routed, all subsequent requests in the same session will continue routing to the same model.",
               "title": "Sticky Session Routing"
             },
+            "stream_scope": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "streaming",
+                    "non_streaming",
+                    "both"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "additionalProperties": {
+                    "enum": [
+                      "streaming",
+                      "non_streaming",
+                      "both"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Whether this guardrail runs on streaming requests, non-streaming requests, or both. A string applies to every configured mode. A map overrides named modes (pre_call, during_call, post_call, ...); omitted keys default to both. Unset means both, matching historical behavior.",
+              "title": "Stream Scope"
+            },
             "template_id": {
               "anyOf": [
                 {
@@ -14881,6 +15131,27 @@
           ],
           "title": "PiiAction",
           "type": "string"
+        },
+        "PiiEntityCategoryMap": {
+          "properties": {
+            "category": {
+              "title": "Category",
+              "type": "string"
+            },
+            "entities": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Entities",
+              "type": "array"
+            }
+          },
+          "required": [
+            "category",
+            "entities"
+          ],
+          "title": "PiiEntityCategoryMap",
+          "type": "object"
         },
         "PiiEntityType": {
           "enum": [
@@ -16323,7 +16594,9 @@
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "$ref": "#/components/schemas/GuardrailUIAddGuardrailSettings"
+                  }
                 }
               },
               "description": "Successful Response"
@@ -31793,6 +32066,18 @@
               ],
               "title": "Registration Url"
             },
+            "rpm": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
+            },
             "server_id": {
               "anyOf": [
                 {
@@ -33645,6 +33930,17 @@
               ],
               "title": "Reviewed At"
             },
+            "rpm": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
+            },
             "server_id": {
               "title": "Server Id",
               "type": "string"
@@ -34531,6 +34827,18 @@
               ],
               "title": "Registration Url"
             },
+            "rpm": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
+            },
             "server_id": {
               "anyOf": [
                 {
@@ -34933,6 +35241,11 @@
               "title": "Image",
               "type": "string"
             },
+            "managed": {
+              "default": false,
+              "title": "Managed",
+              "type": "boolean"
+            },
             "token": {
               "title": "Token",
               "type": "string"
@@ -34955,6 +35268,11 @@
               "pattern": "^[a-f0-9]{64}$",
               "title": "Analysis Key Id",
               "type": "string"
+            },
+            "managed": {
+              "default": false,
+              "title": "Managed",
+              "type": "boolean"
             },
             "name": {
               "default": "Lens worker",
@@ -36929,6 +37247,17 @@
               ],
               "title": "Reviewed At"
             },
+            "rpm": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
+            },
             "server_id": {
               "title": "Server Id",
               "type": "string"
@@ -38659,6 +38988,18 @@
               ],
               "title": "Registration Url"
             },
+            "rpm": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
+            },
             "server_id": {
               "anyOf": [
                 {
@@ -39201,6 +39542,18 @@
                 }
               ],
               "title": "Registration Url"
+            },
+            "rpm": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
             },
             "server_id": {
               "title": "Server Id",
@@ -42047,6 +42400,18 @@
                 }
               ],
               "title": "Registration Url"
+            },
+            "rpm": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
             },
             "server_id": {
               "anyOf": [

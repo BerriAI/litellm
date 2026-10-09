@@ -1,6 +1,6 @@
 use serde_json::{Map, Value};
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct MessagesStreamUsage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -17,7 +17,7 @@ pub struct MessagesStreamUsage {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct MessagesStreamMessage {
     pub id: String,
     #[serde(rename = "type")]
@@ -32,7 +32,7 @@ pub struct MessagesStreamMessage {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessagesContentBlockDelta {
     TextDelta {
@@ -56,7 +56,7 @@ pub enum MessagesContentBlockDelta {
     },
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct MessagesContentBlock {
     #[serde(rename = "type")]
     pub block_type: String,
@@ -82,7 +82,7 @@ pub struct MessagesContentBlock {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct MessagesDelta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -97,7 +97,7 @@ pub struct MessagesDelta {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct MessagesStreamError {
     #[serde(rename = "type")]
     pub error_type: String,
@@ -108,7 +108,7 @@ pub struct MessagesStreamError {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessagesStreamEvent {
     MessageStart {

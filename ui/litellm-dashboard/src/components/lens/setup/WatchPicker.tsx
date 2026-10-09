@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { watches } from "../model/watches";
+import { watches as defaultWatches } from "../model/watches";
 import { cn } from "@/lib/cva.config";
 
 const dotColors = ["#8b5cf6", "#22b3e8", "#e3a32b", "#eb6b93", "#22b3e8", "#8b5cf6", "#e3a32b", "#eb6b93"];
@@ -75,14 +75,26 @@ function DotFlow({ active }: { active: readonly string[] }) {
   );
 }
 
+export interface PickerOption {
+  readonly id: string;
+  readonly name: string;
+  readonly summary: string;
+}
+
 export function WatchPicker({
   selected,
   onChange,
   onAddCustom,
+  options: watches = defaultWatches,
+  label = "Watch for",
+  addDisabled = false,
 }: {
   selected: ReadonlySet<string>;
   onChange: (next: ReadonlySet<string>) => void;
   onAddCustom: () => void;
+  options?: readonly PickerOption[];
+  label?: string;
+  addDisabled?: boolean;
 }) {
   const [cursor, setCursor] = useState(0);
   const items = useRef<(HTMLButtonElement | null)[]>([]);
@@ -105,18 +117,20 @@ export function WatchPicker({
     } else return;
     event.preventDefault();
   };
-  const activeColors = watches.flatMap((watch, index) => (selected.has(watch.id) ? [dotColors[index]] : []));
+  const activeColors = watches.flatMap((watch, index) =>
+    selected.has(watch.id) ? [dotColors[index % dotColors.length]] : [],
+  );
 
   return (
     <fieldset className="space-y-2.5">
       <div className="flex items-end justify-between gap-3">
-        <legend className="text-sm font-medium">Watch for</legend>
+        <legend className="text-sm font-medium">{label}</legend>
         <span className="text-xs tabular-nums text-muted-foreground">
-          {selected.size} of {watches.length} selected
+          {watches.filter((watch) => selected.has(watch.id)).length} of {watches.length} selected
         </span>
       </div>
       <DotFlow active={activeColors} />
-      <div role="group" aria-label="Watch for" onKeyDown={onKey} className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+      <div role="group" aria-label={label} onKeyDown={onKey} className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
         {watches.map((watch, index) => {
           const on = selected.has(watch.id);
           return (
@@ -164,7 +178,8 @@ export function WatchPicker({
       <button
         type="button"
         onClick={onAddCustom}
-        className="flex h-11 w-full items-center gap-2.5 rounded-xl bg-muted/60 px-3.5 text-left text-sm outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        disabled={addDisabled}
+        className="flex h-11 w-full items-center gap-2.5 rounded-xl bg-muted/60 px-3.5 text-left text-sm outline-none transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       >
         <span
           aria-hidden="true"

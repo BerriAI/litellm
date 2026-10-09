@@ -41,7 +41,7 @@ _MODEL_BY_ACCESSOR: Final[Mapping[str, str]] = {relation.lower(): relation for r
 _GENERIC_CRUD_HELPERS: Final = frozenset({"get_data", "get_generic_data", "insert_data", "update_data", "delete_data"})
 _TRANSACTION_BODIES: Final[Mapping[str, str]] = {"litellm/proxy/db/baseline_accounting.py": "baseline_accounting"}
 _RENDERED_NAME: Final = re.compile(
-    r"postgres\.(select|insert|update|delete|upsert|ddl|set|transaction) .+|postgres\.ping"
+    r"postgres\.(select|insert|update|delete|upsert|ddl|set|transaction|lock) .+|postgres\.ping"
 )
 
 
@@ -115,6 +115,7 @@ def test_a_payload_the_parser_does_not_know_stays_the_legacy_function_named_span
             'WITH team_rows AS (UPDATE "LiteLLM_TeamTable" SET models = $1 RETURNING team_id) SELECT team_id FROM team_rows',
             ("update", "LiteLLM_TeamTable"),
         ),
+        ('LOCK TABLE "LiteLLM_LensIngestionKey" IN EXCLUSIVE MODE', ("lock", "LiteLLM_LensIngestionKey")),
         ("BEGIN", (None, None)),
     ],
 )

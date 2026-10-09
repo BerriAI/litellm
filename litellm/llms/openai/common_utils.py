@@ -356,7 +356,7 @@ class BaseOpenAILLM:
 
         # Get unified SSL configuration
         ssl_config: Final = get_ssl_configuration()
-        transport: Final = AsyncHTTPHandler._create_async_transport(
+        transport: Final = AsyncHTTPHandler.create_async_transport(
             ssl_context=(ssl_config if isinstance(ssl_config, ssl.SSLContext) else None),
             ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
             shared_session=shared_session,
@@ -365,10 +365,17 @@ class BaseOpenAILLM:
         return httpx.AsyncClient(
             verify=ssl_config,
             transport=transport,
-            mounts=AsyncHTTPHandler._create_httpx_proxy_mounts(transport, verify=ssl_config, cert=None),
+            mounts=AsyncHTTPHandler.create_httpx_proxy_mounts(transport, verify=ssl_config, cert=None),
             follow_redirects=True,
             http2=http2_enabled(),
         )
+
+    @classmethod
+    def get_async_http_client(
+        cls,
+        shared_session: Optional["ClientSession"] = None,
+    ) -> httpx.AsyncClient | None:
+        return cls._get_async_http_client(shared_session)
 
     @staticmethod
     def _get_sync_http_client() -> httpx.Client | DefaultHttpxClient | None:

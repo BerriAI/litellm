@@ -9,9 +9,9 @@ import { OnboardingSetup } from "./OnboardingSetup";
 
 const PREREQUISITES = [
   { title: "LiteLLM gateway", detail: "Access to its configuration" },
-  { title: "ClickHouse", detail: "Self-hosted or managed trace storage" },
-  { title: "A server with Docker", detail: "To run the analysis worker" },
-  { title: "An analysis model", detail: "Available through your gateway" },
+  { title: "Trace storage", detail: "Included, or use your own ClickHouse" },
+  { title: "Docker or Kubernetes", detail: "Use your existing deployment" },
+  { title: "An analysis model", detail: "For investigations, after tracing is connected" },
 ] as const;
 
 export interface LensGettingStartedProps {

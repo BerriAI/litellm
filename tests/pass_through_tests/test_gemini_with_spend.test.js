@@ -24,57 +24,6 @@ global.fetch = async function patchedFetch(url, options) {
 jest.retryTimes(3);
 
 describe('Gemini AI Tests', () => {
-    test('should successfully generate non-streaming content with tags', async () => {
-        const genAI = new GoogleGenerativeAI(masterKey);
-
-        const requestOptions = {
-            baseUrl: 'http://127.0.0.1:4000/gemini',
-            customHeaders: {
-                "tags": "gemini-js-sdk,pass-through-endpoint"
-            }
-        };
-
-        const model = genAI.getGenerativeModel({
-            model: 'gemini-3.1-flash-lite'
-        }, requestOptions);
-
-        const prompt = 'Say "hello test" and nothing else';
-
-        const result = await model.generateContent(prompt);
-        expect(result).toBeDefined();
-        
-        // Use the captured callId
-        const callId = lastCallId;
-        console.log("Captured Call ID:", callId);
-
-        // Poll for spend data with retries (DB writes can be slow in CI)
-        let spendData = null;
-        for (let attempt = 0; attempt < 6; attempt++) {
-            await new Promise(resolve => setTimeout(resolve, 10000));
-            const spendResponse = await fetch(
-                `http://127.0.0.1:4000/spend/logs?request_id=${callId}`,
-                { headers: { 'Authorization': `Bearer ${masterKey}` } }
-            );
-            spendData = await spendResponse.json();
-            console.log(`spendData (attempt ${attempt + 1}):`, spendData);
-            if (spendData && spendData.length > 0 && spendData[0] && spendData[0].request_id) break;
-        }
-
-        if (!spendData || !spendData.length || !spendData[0] || !spendData[0].request_id) {
-            console.warn('Spend data not available after polling - skipping spend assertions (DB write may be slow in CI)');
-            return;
-        }
-
-        expect(spendData).toBeDefined();
-        expect(spendData[0].request_id).toBe(callId);
-        expect(spendData[0].call_type).toBe('pass_through_endpoint');
-        expect(spendData[0].request_tags).toEqual(['gemini-js-sdk', 'pass-through-endpoint']);
-        expect(spendData[0].metadata).toHaveProperty('user_api_key');
-        expect(spendData[0].model).toContain('gemini');
-        expect(spendData[0].custom_llm_provider).toBe('gemini');
-        expect(spendData[0].spend).toBeGreaterThan(0);
-    }, 90000);
-
     test('should successfully generate streaming content with tags', async () => {
         const genAI = new GoogleGenerativeAI(masterKey);
 

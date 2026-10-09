@@ -175,8 +175,8 @@ class VertexPassthroughLoggingHandler:
 
             # Set response_cost in _hidden_params to prevent recalculation
             if not hasattr(litellm_video_response, "_hidden_params"):
-                litellm_video_response._hidden_params = {}
-            litellm_video_response._hidden_params["response_cost"] = response_cost
+                litellm_video_response.hidden_params = {}
+            litellm_video_response.hidden_params["response_cost"] = response_cost
 
             kwargs["response_cost"] = response_cost
             kwargs["model"] = model
@@ -561,7 +561,7 @@ class VertexPassthroughLoggingHandler:
         }
 
     @staticmethod
-    def _handle_logging_vertex_collected_chunks(
+    def handle_logging_vertex_collected_chunks(
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
@@ -616,6 +616,8 @@ class VertexPassthroughLoggingHandler:
             "kwargs": kwargs,
         }
 
+    _handle_logging_vertex_collected_chunks = handle_logging_vertex_collected_chunks
+
     @staticmethod
     def _build_complete_streaming_response(
         all_chunks: list[str],
@@ -644,7 +646,7 @@ class VertexPassthroughLoggingHandler:
             )
             chunk_parsing_logic = vertex_iterator.chunk_parser
             for chunk in all_chunks:
-                dict_chunk = BaseModelResponseIterator._string_to_dict_parser(chunk)
+                dict_chunk = BaseModelResponseIterator.string_to_dict_parser(chunk)
                 if dict_chunk is None:
                     continue
                 parsed_chunks.append(chunk_parsing_logic(dict_chunk))
@@ -824,7 +826,7 @@ class VertexPassthroughLoggingHandler:
                 )
 
                 # Extract batch ID and model from the response
-                batch_id = VertexAIBatchTransformation._get_batch_id_from_vertex_ai_batch_response(_json_response)
+                batch_id = VertexAIBatchTransformation.get_batch_id_from_vertex_ai_batch_response(_json_response)
                 model_name: Final = _json_response.get("model", "unknown")
 
                 # Create unified object ID for tracking

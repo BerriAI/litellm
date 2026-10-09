@@ -352,7 +352,10 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_LensDataset",
         "LiteLLM_LensRun",
         "LiteLLM_LensReview",
+        "LiteLLM_LensIngestionKey",
         "LiteLLM_LensWorker",
+        "LiteLLM_LensSignalConfig",
+        "LiteLLM_LensTraceSignal",
     )
 )
 PRISMA_RELATIONS: Final[frozenset[str]] = _PRISMA_MODELS | _PRISMA_VIEWS
@@ -472,7 +475,7 @@ _POSTGRES_OPERATION_BY_CALL_TYPE: Final[Mapping[str, PostgresOperation]] = Mappi
 _RAW_PRISMA_CALL_TYPES: Final[frozenset[str]] = frozenset(("query_raw", "execute_raw"))
 _DB_OPERATION_METADATA_KEY: Final = "db_operation"
 _POSTGRES_VERBS: Final[frozenset[str]] = frozenset(
-    ("select", "insert", "update", "delete", "upsert", "ddl", "set", "ping")
+    ("select", "insert", "update", "delete", "upsert", "ddl", "set", "ping", "lock")
 )
 _TARGETLESS_VERBS: Final[frozenset[str]] = frozenset(("ping",))
 _SETTING_NAME: Final = re.compile(r"[a-z_][a-z0-9_.]*")

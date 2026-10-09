@@ -78,8 +78,8 @@ describe("RunView", () => {
       "title",
       research.summary.trace_id,
     );
-    expect(header).toHaveTextContent("Duration 40.20s");
-    expect(header).toHaveTextContent(`Steps ${research.summary.span_count}`);
+    expect(header).toHaveTextContent("40.20s");
+    expect(header).toHaveTextContent(`${research.summary.span_count} steps`);
     expect(header).toHaveTextContent("Recorded");
     expect(header).not.toHaveTextContent("Completed");
   });
@@ -97,6 +97,37 @@ describe("RunView", () => {
     expect(within(header).queryByTestId("span-icon")).not.toBeInTheDocument();
   });
 
+  it("puts who started the run and its Slack thread next to the agent name", async () => {
+    const thread = "https://acme.slack.com/archives/C1/p1";
+    renderRun({
+      ...research,
+      summary: {
+        ...research.summary,
+        spend: null,
+        source: { type: "slack", url: thread, title: "why is the deploy failing?", user: "tin@berri.ai" },
+      },
+    });
+
+    const header = await screen.findByRole("banner");
+    expect(within(header).getByTestId("run-user")).toHaveTextContent("tin@berri.ai");
+    expect(within(header).getByRole("link", { name: "Open Slack thread" })).toHaveAttribute("href", thread);
+    expect(header).not.toHaveTextContent("Not reported");
+  });
+
+  it("leaves the user out when the source does not say who started it", async () => {
+    renderRun({
+      ...research,
+      summary: {
+        ...research.summary,
+        source: { type: "slack", url: "https://acme.slack.com/archives/C1/p1", title: "" },
+      },
+    });
+
+    const header = await screen.findByRole("banner");
+    expect(within(header).queryByTestId("run-user")).not.toBeInTheDocument();
+    expect(within(header).getByRole("link", { name: "Open Slack thread" })).toBeInTheDocument();
+  });
+
   it("keeps the generic agent icon when the trace has no known SDK", async () => {
     renderRun({ ...research, summary: { ...research.summary, frameworks: ["some-other-sdk"] } });
 
@@ -110,22 +141,15 @@ describe("RunView", () => {
 
     const tree = await screen.findByRole("tree", { name: "Spans in time order" });
     expect(tree).toHaveTextContent("researcher×12");
-    expect(screen.getByRole("banner")).toHaveTextContent(`Step errors ${swarm.summary.error_count}`);
+    expect(screen.getByRole("banner")).toHaveTextContent(`${swarm.summary.error_count} step errors`);
   });
 
-  it("opens a failed run on its first failed span", async () => {
-    renderRun(swarm);
-
-    const pane = await screen.findByTestId("detail-pane");
-    const { selectedId } = initialRunSelection(swarm);
-    expect(selectedId).not.toBe(rootSpanId(swarm));
-    expect(pane).toHaveAttribute("data-row-id", selectedId);
-    expect(swarm.spans.find((s) => s.span_id === selectedId)?.status).toBe("error");
-  });
-
-  it("opens a healthy run on the root span", async () => {
-    renderRun(research);
-    expect(await screen.findByTestId("detail-pane")).toHaveAttribute("data-row-id", rootSpanId(research));
+  it.each([
+    ["failed", swarm],
+    ["healthy", research],
+  ])("opens a %s run on the root span", async (_label, trace) => {
+    renderRun(trace);
+    expect(await screen.findByTestId("detail-pane")).toHaveAttribute("data-row-id", rootSpanId(trace));
   });
 
   it("inside the drawer moves spans with the arrow keys and leaves J / K to switch runs", async () => {
@@ -191,7 +215,7 @@ describe("RunView", () => {
       expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(traceDisplayName(swarm.summary)),
     );
     expect(screen.getByTestId("run-view")).toHaveAttribute("aria-busy", "false");
-    expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", initialRunSelection(swarm).selectedId);
+    expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", rootSpanId(swarm));
   });
 
   it("moves the selection with J / K and closes the detail pane with Esc", async () => {
@@ -402,7 +426,7 @@ describe("RunView", () => {
     expect(await screen.findByTestId("detail-pane")).toHaveAttribute("data-row-id", rootSpanId(research));
     fireEvent.click(screen.getByRole("button", { name: "Refresh run" }));
     expect(await screen.findByText("newly received step")).toBeVisible();
-    expect(screen.getByRole("banner")).toHaveTextContent(`Steps ${research.summary.span_count + 1}`);
+    expect(screen.getByRole("banner")).toHaveTextContent(`${research.summary.span_count + 1} steps`);
     expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", rootSpanId(research));
   });
 
@@ -420,11 +444,11 @@ describe("RunView", () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(100);
       });
-      expect(screen.getByRole("banner")).toHaveTextContent(`Steps ${research.summary.span_count}`);
+      expect(screen.getByRole("banner")).toHaveTextContent(`${research.summary.span_count} steps`);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(30_100);
       });
-      expect(screen.getByRole("banner")).toHaveTextContent(`Steps ${research.summary.span_count + 7}`);
+      expect(screen.getByRole("banner")).toHaveTextContent(`${research.summary.span_count + 7} steps`);
       expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", rootSpanId(research));
     } finally {
       vi.useRealTimers();
@@ -483,7 +507,7 @@ describe("RunView", () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(60_100);
       });
-      expect(screen.getByRole("banner")).toHaveTextContent(`Steps ${research.summary.span_count}`);
+      expect(screen.getByRole("banner")).toHaveTextContent(`${research.summary.span_count} steps`);
       expect(vi.mocked(agentTraceCall)).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
@@ -524,7 +548,7 @@ describe("RunView", () => {
         expect(screen.queryByRole("button", { name: "Load more steps" })).not.toBeInTheDocument();
         expect(vi.mocked(agentTraceCall)).toHaveBeenCalledTimes(2);
         if (action === "Refresh run") {
-          expect(screen.getByRole("banner")).toHaveTextContent(`Steps ${updated.summary.span_count}`);
+          expect(screen.getByRole("banner")).toHaveTextContent(`${updated.summary.span_count} steps`);
         }
       } finally {
         vi.useRealTimers();
@@ -649,7 +673,7 @@ describe("RunView", () => {
     renderRun({ ...research, summary: { ...research.summary, status: "ok", error_count: 2 } });
     const header = await screen.findByRole("banner");
     expect(header).toHaveTextContent("Recorded");
-    expect(header).toHaveTextContent("Step errors 2");
+    expect(header).toHaveTextContent("Recorded · 2 step errors");
     expect(header).not.toHaveTextContent("Failed");
   });
 
@@ -691,7 +715,8 @@ describe("RunView", () => {
     const user = userEvent.setup();
     renderRun(research);
 
-    await user.click(await screen.findByRole("button", { name: /copy link/i }));
+    fireEvent.click(await screen.findByRole("button", { name: "More run actions" }));
+    await user.click(await screen.findByRole("menuitem", { name: /copy link/i }));
     const url = new URL(vi.mocked(copyToClipboard).mock.calls[0][0] as string);
     expect(url.pathname).toBe(window.location.pathname);
     expect(url.searchParams.get("trace")).toBe(research.summary.trace_id);
@@ -712,36 +737,19 @@ describe("initialRunSelection", () => {
     return { ...base, ...defaults, ...over };
   };
 
-  it("lands on a visible failure, never on a framework span the tree hides", () => {
-    const hiddenFields: Partial<Span> = { span_id: "mw", type: "framework", status: "error", start_offset_ms: 1 };
-    const toolFields: Partial<Span> = { span_id: "tool", type: "tool", status: "error", start_offset_ms: 5 };
-    const hiddenFailure = child(hiddenFields);
-    const toolFailure = child(toolFields);
-    const trace = { ...research, spans: [base, hiddenFailure, toolFailure] };
-    expect(initialRunSelection(trace).selectedId).toBe("tool");
-  });
-
-  it("folds other agent branches while revealing the failed step", () => {
-    const first = child({ span_id: "first", type: "agent" });
-    const second = child({ span_id: "second", type: "agent" });
-    const failureFields: Partial<Span> = { span_id: "failed", parent_span_id: "second", type: "tool", status: "error" };
-    const failure = child(failureFields);
-    const { selectedId, state } = initialRunSelection({ ...research, spans: [base, first, second, failure] });
-    expect(selectedId).toBe("failed");
-    expect(state.collapsedSpanIds.has("first")).toBe(true);
-    expect(state.collapsedSpanIds.has("second")).toBe(false);
-  });
-
-  it("falls back to the nearest visible ancestor when only a hidden span failed", () => {
-    const agent = child({ span_id: "agent", type: "agent", name: "researcher" });
-    const hiddenFields: Partial<Span> = { span_id: "mw", parent_span_id: "agent", type: "framework", status: "error" };
-    const hiddenFailure = child(hiddenFields);
-    const trace = { ...research, spans: [base, agent, hiddenFailure] };
-    expect(initialRunSelection(trace).selectedId).toBe("agent");
+  it("opens on the root and folds nested agent branches even when a step failed", () => {
+    const agentFields: Partial<Span> = { span_id: "agent", type: "agent" };
+    const failureFields: Partial<Span> = { span_id: "failed", parent_span_id: "agent", type: "tool", status: "error" };
+    const { selectedId, state } = initialRunSelection({
+      ...research,
+      spans: [base, child(agentFields), child(failureFields)],
+    });
+    expect(selectedId).toBe(base.span_id);
+    expect(state.collapsedSpanIds.has("agent")).toBe(true);
   });
 });
 
-it("opens a cited span instead of the default failed span", () => {
+it("opens a cited span instead of the root", () => {
   const cited = research.spans.find((span) => span.parent_span_id !== null)!;
   expect(initialRunSelection(research, cited.span_id).selectedId).toBe(cited.span_id);
   expect(initialRunSelection(research, "missing")).toEqual(initialRunSelection(research));

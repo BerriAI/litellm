@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use litellm_config::Config;
-use litellm_inference_messages::MessagesShaping;
+use litellm_inference_messages::{MessagesSettings, MessagesShaping};
 use litellm_router::{Deployment, Router};
 use rstest::rstest;
 
@@ -74,8 +74,11 @@ fn programmatic_deployments_preserve_overrides_and_last_entry_wins() {
         custom_llm_provider: Some("test-provider".into()),
         timeout: Some(Duration::from_secs(7)),
         shaping: MessagesShaping {
-            drop_params: true,
-            additional_drop_params: vec!["metadata.test".into()],
+            settings: MessagesSettings {
+                drop_params: true,
+                additional_drop_params: vec!["metadata.test".into()],
+                ..MessagesSettings::default()
+            },
             ..Default::default()
         },
     };

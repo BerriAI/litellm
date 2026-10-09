@@ -10,6 +10,15 @@ from litellm.rust_bridge.trace.storage import TraceStorageConfig
 STORE_SETTINGS: Final = TypeAdapter(dict[str, object])
 
 
+def is_lens_tracing_enabled(settings: object, environ: Mapping[str, str] = os.environ) -> bool:
+    if environ.get("LITELLM_LENS_URL"):
+        return True
+    if not isinstance(settings, Mapping):
+        return False
+    store: Final = STORE_SETTINGS.validate_python(settings).get("store")
+    return isinstance(store, Mapping) and STORE_SETTINGS.validate_python(store).get("type") == "lens"
+
+
 def is_clickhouse_tracing_enabled(settings: object) -> bool:
     if not isinstance(settings, Mapping):
         return False

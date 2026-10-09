@@ -80,12 +80,13 @@ fn prepare_provider_request(
 
     let sanitized = config.shape_request(
         MessagesRequest { model, ..body },
-        shaping.reasoning_auto_summary,
+        shaping.settings.reasoning_auto_summary,
     )?;
-    let trimmed = without_additional_drop_params(sanitized, &shaping.additional_drop_params)?;
+    let trimmed =
+        without_additional_drop_params(sanitized, &shaping.settings.additional_drop_params)?;
     let transformed = config.transform_anthropic_messages_request(
         trimmed,
-        &MessagesTransformContext::new(shaping.capabilities, shaping.drop_params),
+        &MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params),
     )?;
 
     let scoped =
@@ -148,7 +149,7 @@ mod tests {
     use serde_json::{Map, Value, json};
 
     use super::*;
-    use crate::MessagesShaping;
+    use crate::{MessagesSettings, MessagesShaping};
 
     #[fixture]
     fn shaping() -> MessagesShaping {
@@ -310,10 +311,13 @@ mod tests {
             )
         };
         let shaping = MessagesShaping {
-            additional_drop_params: additional_drop_params
-                .iter()
-                .map(ToString::to_string)
-                .collect(),
+            settings: MessagesSettings {
+                additional_drop_params: additional_drop_params
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
+                ..shaping.settings
+            },
             ..shaping
         };
         assert_eq!(
@@ -394,8 +398,11 @@ mod tests {
     #[rstest]
     fn dropped_thinking_display_is_not_restored_by_auto_summary(shaping: MessagesShaping) {
         let shaping = MessagesShaping {
-            reasoning_auto_summary: true,
-            additional_drop_params: vec!["thinking.display".to_string()],
+            settings: MessagesSettings {
+                reasoning_auto_summary: true,
+                additional_drop_params: vec!["thinking.display".to_string()],
+                ..shaping.settings
+            },
             ..shaping
         };
         assert_eq!(
@@ -420,7 +427,10 @@ mod tests {
     #[rstest]
     fn dropping_an_invalid_metadata_user_id_does_not_skip_its_validation(shaping: MessagesShaping) {
         let shaping = MessagesShaping {
-            additional_drop_params: vec!["metadata.user_id".to_string()],
+            settings: MessagesSettings {
+                additional_drop_params: vec!["metadata.user_id".to_string()],
+                ..shaping.settings
+            },
             ..shaping
         };
         assert!(matches!(

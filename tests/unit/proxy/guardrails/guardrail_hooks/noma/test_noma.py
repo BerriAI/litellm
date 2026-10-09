@@ -11,7 +11,7 @@ import litellm
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails.guardrail_hooks.presidio import _OPTIONAL_PresidioPIIMasking
+from litellm.proxy.guardrails.guardrail_hooks.presidio import OPTIONAL_PresidioPIIMasking
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import StandardLoggingPayload
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
@@ -34,7 +34,7 @@ async def test_standard_logging_payload_includes_guardrail_information():
     """
     test_custom_logger = CustomLoggerForTesting()
     litellm.callbacks = [test_custom_logger]
-    presidio_guard = _OPTIONAL_PresidioPIIMasking(
+    presidio_guard = OPTIONAL_PresidioPIIMasking(
         guardrail_name="presidio_guard",
         event_hook=GuardrailEventHooks.pre_call,
         presidio_analyzer_api_base="https://mock-presidio-analyzer.com/",

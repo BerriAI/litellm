@@ -776,3 +776,28 @@ async def test_failed_budget_cleanup_preserves_the_original_request_error(cancel
     assert error.value is failure
     assert db.stored.reservations == (() if cleanup == "success" else (hold,))
     assert db.stored.spent == 0
+
+
+@pytest.mark.parametrize("reclaimed", (False, True))
+def test_budget_admission_rechecks_the_attempt_after_a_replica_reclaims_the_job(reclaimed: bool) -> None:
+    from datetime import timedelta
+
+    from litellm.proxy.lens.inference import reserve_attempt
+    from litellm.proxy.lens.models import BudgetReservation
+    from tests.unit.proxy.lens.test_state import NOW, lens_with_job
+
+    original: Final = lens_with_job("running", NOW + timedelta(minutes=5))
+    assigned: Final = original.jobs[0].model_copy(update={"worker_id": "shared-worker", "attempts": 1})
+    active: Final = assigned.model_copy(update={"attempts": 2}) if reclaimed else assigned
+    current: Final = original.model_copy(update={"jobs": (active,)})
+    reservation: Final = BudgetReservation(id="request", job_id=assigned.id, amount=1, month=current.budget_month)
+    if reclaimed:
+        with pytest.raises(HTTPException) as denied:
+            reserve_attempt(current, assigned, "shared-worker", reservation, NOW)
+        assert denied.value.status_code == 409
+        assert current.reservations == ()
+        assert current.spent == 0
+    else:
+        admitted: Final = reserve_attempt(current, assigned, "shared-worker", reservation, NOW)
+        assert admitted.reservations == (reservation,)
+        assert admitted.spent == 0

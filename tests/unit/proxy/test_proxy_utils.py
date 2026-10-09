@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Final, List, Optional, Union
 from unittest.mock import Mock
 
 import pytest
@@ -10,7 +10,7 @@ from fastapi import HTTPException, Request
 from starlette.datastructures import State
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.proxy.utils import _get_docs_url, _get_openapi_url, _get_redoc_url
+from litellm.proxy.utils import get_docs_url, get_openapi_url, get_redoc_url
 from litellm.types.guardrails import GuardrailEventHooks
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -22,7 +22,7 @@ from litellm.proxy.auth.auth_utils import (
     is_request_body_safe,
 )
 from litellm.proxy.litellm_pre_call_utils import (
-    _get_dynamic_logging_metadata,
+    get_dynamic_logging_metadata,
     add_litellm_data_to_request,
 )
 from pydantic import ValidationError
@@ -294,7 +294,7 @@ def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
         rpm_limit_per_model=None,
         tpm_limit_per_model=None,
     )
-    callbacks = _get_dynamic_logging_metadata(
+    callbacks = get_dynamic_logging_metadata(
         user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
     )
 
@@ -332,7 +332,7 @@ def test_dynamic_logging_metadata_ignores_env_references_from_key_metadata(
         team_metadata={},
     )
 
-    callbacks = _get_dynamic_logging_metadata(
+    callbacks = get_dynamic_logging_metadata(
         user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
     )
 
@@ -410,7 +410,7 @@ def test_dynamic_turn_off_message_logging(callback_vars):
         rpm_limit_per_model=None,
         tpm_limit_per_model=None,
     )
-    callbacks = _get_dynamic_logging_metadata(
+    callbacks = get_dynamic_logging_metadata(
         user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
     )
 
@@ -774,7 +774,7 @@ def test_get_redoc_url(env_vars, expected_url):
     for key, value in env_vars.items():
         os.environ[key] = value
 
-    result = _get_redoc_url()
+    result = get_redoc_url()
     assert result == expected_url
 
 
@@ -799,7 +799,7 @@ def test_get_docs_url(env_vars, expected_url):
     for key, value in env_vars.items():
         os.environ[key] = value
 
-    result = _get_docs_url()
+    result = get_docs_url()
     assert result == expected_url
 
 
@@ -824,7 +824,7 @@ def test_get_openapi_url(env_vars, expected_url):
     for key, value in env_vars.items():
         os.environ[key] = value
 
-    result = _get_openapi_url()
+    result = get_openapi_url()
     assert result == expected_url
 
 
@@ -1569,7 +1569,7 @@ def test_is_allowed_to_make_key_request():
 
 def test_get_model_group_info():
     from litellm import Router
-    from litellm.proxy.proxy_server import _get_model_group_info
+    from litellm.proxy.proxy_server import get_model_group_info
 
     router = Router(
         model_list=[
@@ -1589,7 +1589,7 @@ def test_get_model_group_info():
             },
         ]
     )
-    model_list = _get_model_group_info(
+    model_list = get_model_group_info(
         llm_router=router,
         all_models_str=["openai/tts-1", "openai/gpt-3.5-turbo"],
         model_group="openai/tts-1",
@@ -2589,7 +2589,7 @@ async def test_handle_logging_proxy_only_error_syncs_normalized_call_type(
 async def test_during_call_hook_parallel_execution():
     """
     Test that multiple guardrails in during_call_hook are executed in parallel.
-    Verifies parallel execution by checking timing and execution order.
+    Each guardrail blocks until all of them have started, so sequential execution times out.
     """
     from litellm.caching.caching import DualCache
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -2599,6 +2599,8 @@ async def test_during_call_hook_parallel_execution():
     cache = DualCache()
     proxy_logging = ProxyLogging(user_api_key_cache=cache)
     execution_order = []
+    guardrail_count: Final = 3
+    all_started: Final = asyncio.Event()
 
     class TestGuardrail(CustomGuardrail):
         def __init__(self, name):
@@ -2611,24 +2613,23 @@ async def test_during_call_hook_parallel_execution():
 
         async def async_moderation_hook(self, data, user_api_key_dict, call_type):
             execution_order.append(f"{self.name}_start")
-            await asyncio.sleep(0.1)
+            if sum(1 for item in execution_order if item.endswith("_start")) == guardrail_count:
+                all_started.set()
+            await asyncio.wait_for(all_started.wait(), timeout=5)
             execution_order.append(f"{self.name}_end")
             return data
 
     original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
 
     try:
-        litellm.callbacks = [TestGuardrail(f"g{i}") for i in range(3)]
+        litellm.callbacks = [TestGuardrail(f"g{i}") for i in range(guardrail_count)]
 
-        start_time = asyncio.get_event_loop().time()
         result = await proxy_logging.during_call_hook(
             data={"model": "gpt-4", "messages": [{"role": "user", "content": "test"}]},
             user_api_key_dict=UserAPIKeyAuth(api_key="test_key", user_id="test_user"),
             call_type="completion",
         )
-        execution_time = asyncio.get_event_loop().time() - start_time
 
-        # Verify parallel execution: all start before any end
         first_end_idx = next(
             i for i, item in enumerate(execution_order) if "end" in item
         )
@@ -2636,13 +2637,8 @@ async def test_during_call_hook_parallel_execution():
             1 for item in execution_order[:first_end_idx] if "start" in item
         )
         assert (
-            starts_before_end == 3
-        ), f"Expected 3 starts before first end, got {starts_before_end}"
-
-        # Verify timing: parallel ~0.1s vs sequential ~0.3s
-        assert (
-            execution_time < 0.2
-        ), f"Parallel execution took {execution_time}s, expected < 0.2s"
+            starts_before_end == guardrail_count
+        ), f"Expected {guardrail_count} starts before first end, got {starts_before_end}"
         assert result["model"] == "gpt-4"
     finally:
         litellm.callbacks = original_callbacks
@@ -3329,3 +3325,22 @@ def test_handle_exception_on_proxy_preserves_auth_error_status_code():
     result = handle_exception_on_proxy(auth_error)
 
     assert int(result.code) == 401, f"Expected 401, got {result.code}"
+
+
+class _RedisDown:
+    async def async_delete_cache(self, key: str) -> None:
+        raise ConnectionError("redis is down")
+
+
+async def test_evict_config_param_clears_the_local_layer_and_survives_a_redis_outage() -> None:
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.utils import _config_cache_key, evict_config_param
+
+    cache: Final = DualCache(redis_cache=_RedisDown())
+    await cache.in_memory_cache.async_set_cache(
+        _config_cache_key("router_settings"), {"param_name": "router_settings", "param_value": {"fallbacks": []}}
+    )
+
+    await evict_config_param("router_settings", cache=cache)
+
+    assert await cache.in_memory_cache.async_get_cache(_config_cache_key("router_settings")) is None

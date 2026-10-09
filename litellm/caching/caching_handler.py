@@ -21,7 +21,7 @@ import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Generator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional, TypeVar
 
-from pydantic import ConfigDict, ValidationError
+from pydantic import ConfigDict, SkipValidation, ValidationError
 
 import litellm
 from litellm._internal_context import post_response_phase
@@ -29,6 +29,7 @@ from litellm._logging import print_verbose, verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.caching.caching import S3Cache, response_cache_phase
 from litellm.constants import CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS
+from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     update_response_metadata,
 )
@@ -38,7 +39,7 @@ from litellm.litellm_core_utils.logging_utils import (
 from litellm.types.caching import CACHED_STREAM_EVENTS_KEY, EMBEDDING_CACHE_FORMAT_VERSION, CachedEmbedding
 from litellm.types.integrations.custom_logger import converted_stream_requested
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import ChatCompletionFileObject, ResponsesAPIResponse
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
     CachingDetails,
@@ -70,6 +71,8 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
+EmbeddingCacheInputElement = str | list[int] | ChatCompletionFileObject
+
 
 class CachingHandlerResponse(LiteLLMBaseModel):
     """
@@ -81,7 +84,7 @@ class CachingHandlerResponse(LiteLLMBaseModel):
     cached_result: object | None = None
     final_embedding_cached_response: EmbeddingResponse | None = None
     embedding_all_elements_cache_hit: bool = False  # this is set to True when all elements in the list have a cache hit in the embedding cache, if true return the final_embedding_cached_response no need to make an API call
-    embedding_uncached_input: list[str | list[int]] | None = None
+    embedding_uncached_input: SkipValidation[list[EmbeddingCacheInputElement]] | None = None
 
 
 in_memory_cache_obj: Final = InMemoryCache()
@@ -212,6 +215,15 @@ def _request_cache_key(request_kwargs: Mapping[str, Any]) -> str | None:
     return request_kwargs.get("cache_key", None)
 
 
+def _set_cached_hidden_param(response: object, key: str, value: object) -> None:
+    if isinstance(response, TextCompletionResponse):
+        setattr(response.hidden_params, key, value)
+        return
+    hidden_params: Final = get_hidden_params(response)
+    if hidden_params is not None:
+        hidden_params[key] = value
+
+
 class _CachedEmbeddingRecord(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -305,7 +317,7 @@ class LLMCachingHandler:
             args = args or ()
             final_embedding_cached_response: EmbeddingResponse | None = None
             embedding_all_elements_cache_hit: bool = False
-            cached_result: Any | None = None
+            cached_result: object | None = None
             kwargs = kwargs.copy()
             #########################################################
             # Init cache timing metrics
@@ -371,8 +383,7 @@ class LLMCachingHandler:
                         or self.request_kwargs.get("cache_key")
                         or litellm.cache.get_cache_key(**self.request_kwargs)
                     )
-                    if hasattr(cached_result, "_hidden_params"):
-                        cached_result._hidden_params["cache_key"] = cache_key
+                    _set_cached_hidden_param(cached_result, "cache_key", cache_key)
                     return CachingHandlerResponse(cached_result=cached_result)
                 elif (
                     call_type == CallTypes.aembedding.value
@@ -493,14 +504,13 @@ class LLMCachingHandler:
                         or self.request_kwargs.get("cache_key")
                         or litellm.cache.get_cache_key(**self.request_kwargs)
                     )
-                    if hasattr(cached_result, "_hidden_params"):
-                        cached_result._hidden_params["cache_key"] = cache_key
+                    _set_cached_hidden_param(cached_result, "cache_key", cache_key)
                     return CachingHandlerResponse(cached_result=cached_result)
         return CachingHandlerResponse(cached_result=cached_result)
 
     _sync_get_cache = sync_get_cache
 
-    def handle_kwargs_input_list_or_str(self, kwargs: dict[str, object]) -> list[str]:
+    def handle_kwargs_input_list_or_str(self, kwargs: dict[str, object]) -> list[EmbeddingCacheInputElement]:
         """
         Handles the input of kwargs['input'] being a list or a string
         """
@@ -509,7 +519,11 @@ class LLMCachingHandler:
         elif isinstance(kwargs["input"], list):
             return kwargs["input"]
         else:
-            raise ValueError("input must be a string or a list")
+            raise litellm.BadRequestError(
+                message="input must be a string or a list of strings and content blocks",
+                model=str(kwargs.get("model")),
+                llm_provider=str(kwargs.get("custom_llm_provider")),
+            )
 
     def _extract_model_from_cached_results(self, non_null_list: list[tuple[int, CachedEmbedding]]) -> str | None:
         """
@@ -574,7 +588,7 @@ class LLMCachingHandler:
                 model=model_name,
                 data=[None] * len(kwargs_input_as_list),
             )
-            final_embedding_cached_response._hidden_params["cache_hit"] = True
+            final_embedding_cached_response.hidden_params["cache_hit"] = True
 
             prompt_tokens = 0
             aggregated_details: dict | None = None
@@ -749,6 +763,7 @@ class LLMCachingHandler:
             if cached.usage is not None and embedding_response.usage is not None
             else cached.usage
         )
+        cached_hidden_params: Final = cached.hidden_params
         merged: Final = EmbeddingResponse(
             model=cached.model,
             data=[
@@ -759,7 +774,7 @@ class LLMCachingHandler:
             ],
             usage=merged_usage,
             hidden_params={
-                **cached._hidden_params,
+                **cached_hidden_params,
                 "cache_hit": True,
             },
             _response_headers=cached._response_headers,
@@ -840,12 +855,9 @@ class LLMCachingHandler:
         if new_kwargs.get("stream") is True and "cache_key" not in new_kwargs:
             new_kwargs["cache_key"] = litellm.cache.get_cache_key(**new_kwargs)
         self.request_kwargs = _drop_logging_obj_from_kwargs(new_kwargs)
-        cached_result: Any | None = None
+        cached_result: object | None = None
         if call_type == CallTypes.aembedding.value:
-            if isinstance(new_kwargs["input"], str):
-                new_kwargs["input"] = [new_kwargs["input"]]
-            elif not isinstance(new_kwargs["input"], list):
-                raise ValueError("input must be a string or a list")
+            new_kwargs["input"] = self.handle_kwargs_input_list_or_str(new_kwargs)
             tasks: Final[list[Awaitable[object]]] = []
             for idx, i in enumerate(new_kwargs["input"]):
                 preset_cache_key = litellm.cache.get_cache_key(**{**new_kwargs, "input": i})
@@ -1029,12 +1041,7 @@ class LLMCachingHandler:
                 )
 
                 response_obj: Final = ResponsesAPIResponse(**cached_result)
-                if (
-                    hasattr(response_obj, "_hidden_params")
-                    and response_obj._hidden_params is not None
-                    and isinstance(response_obj._hidden_params, dict)
-                ):
-                    response_obj._hidden_params["cache_hit"] = True
+                _set_cached_hidden_param(response_obj, "cache_hit", True)
 
                 if _stream_replay_requested(kwargs):
                     cached_result = CachedResponsesAPIStreamingIterator(
@@ -1046,12 +1053,7 @@ class LLMCachingHandler:
                 else:
                     cached_result = response_obj
 
-        if (
-            hasattr(cached_result, "_hidden_params")
-            and cached_result._hidden_params is not None
-            and isinstance(cached_result._hidden_params, dict)
-        ):
-            cached_result._hidden_params["cache_hit"] = True
+        _set_cached_hidden_param(cached_result, "cache_hit", True)
 
         #########################################################
         # Add final timing metrics to the cached result

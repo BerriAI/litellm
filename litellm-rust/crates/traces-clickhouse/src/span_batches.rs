@@ -4,7 +4,7 @@
 use std::{future::Future, marker::PhantomData};
 
 use litellm_http::Client;
-use litellm_storage_clickhouse::{Query, fetch};
+use litellm_storage_clickhouse::{Query, ReadLimits, fetch};
 use litellm_traces::query::named as contracts;
 use litellm_traces_cache::{MAX_GRAPH_BYTES, MAX_GRAPH_SPANS, StoreError};
 use serde::{Serialize, de::DeserializeOwned};
@@ -14,7 +14,12 @@ use crate::{
     query::named::{SpendByResponseIdsParams, SpendByResponseIdsRow, TraceSpansRow},
 };
 
-const PAGE_SIZE: u32 = 256;
+const PAGE_SIZE: u32 = 8192;
+const SPAN_BATCH_READ_LIMITS: ReadLimits = ReadLimits {
+    result_rows: PAGE_SIZE as u64,
+    response_bytes: 16 * 1024 * 1024,
+    ..litellm_storage_clickhouse::READ_LIMITS
+};
 
 #[derive(Default)]
 struct ReadBudget {
@@ -67,6 +72,7 @@ struct Paged<K>(PhantomData<K>);
 impl<K: Keyset> Query for Paged<K> {
     type Params = Batch<K>;
     type Row = K::Row;
+    const READ_LIMITS: ReadLimits = SPAN_BATCH_READ_LIMITS;
     const SQL: &'static str = K::SQL;
 }
 
@@ -316,8 +322,8 @@ mod tests {
     }
 
     #[rstest]
-    #[case::fits(1000, PAGE_SIZE, &[256, 256, 256, 256])]
-    #[case::uniform_large_rows(1000, 100, &[256, 128, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64])]
+    #[case::fits(1000, PAGE_SIZE, &[8192])]
+    #[case::uniform_large_rows(200, 100, &[8192, 4096, 2048, 1024, 512, 256, 128, 64, 64, 64, 64])]
     #[tokio::test]
     async fn a_rejected_page_size_is_not_retried(
         #[case] total: u32,
@@ -334,6 +340,13 @@ mod tests {
         assert_eq!(table.requests.lock().unwrap().as_slice(), requests);
     }
 
+    #[test]
+    fn span_batches_use_larger_read_limits() {
+        let limits = <Paged<Numbers> as Query>::READ_LIMITS;
+        assert_eq!(limits.result_rows, 8192);
+        assert_eq!(limits.response_bytes, 16 * 1024 * 1024);
+    }
+
     #[rstest]
     #[tokio::test]
     async fn a_single_oversized_row_fails_the_read() {
@@ -346,7 +359,9 @@ mod tests {
         assert!(matches!(result, Err(StoreError::TooLarge)), "{result:?}");
         assert_eq!(
             table.requests.lock().unwrap().as_slice(),
-            &[256, 128, 64, 32, 16, 8, 4, 2, 1]
+            &[
+                8192, 4096, 2048, 1024, 512, 256, 128, 64, 32, 16, 8, 4, 2, 1
+            ]
         );
     }
 }

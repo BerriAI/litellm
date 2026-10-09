@@ -75,7 +75,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         from litellm.responses.utils import ResponseAPILoggingUtils
 
         chat_usage = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(raw_usage)
-        return LiteLLMAnthropicMessagesAdapter._translate_openai_usage_to_anthropic_usage(chat_usage)
+        return LiteLLMAnthropicMessagesAdapter.translate_openai_usage_to_anthropic_usage(chat_usage)
 
     # ------------------------------------------------------------------ #
     # Request translation: Anthropic -> Responses API                     #

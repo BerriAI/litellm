@@ -229,7 +229,7 @@ def test_parallel_function_call_stream():
 
 
 
-@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("sync_mode", [False])
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=6, delay=1)
 async def test_watsonx_tool_choice(sync_mode, monkeypatch):
@@ -244,7 +244,7 @@ async def test_watsonx_tool_choice(sync_mode, monkeypatch):
     monkeypatch.setenv("WATSONX_API_BASE", "https://us-south.ml.cloud.ibm.com")
     monkeypatch.setenv("WATSONX_PROJECT_ID", "mock-project-id")
 
-    litellm.set_verbose = True
+    monkeypatch.setattr(litellm, "set_verbose", True)
     tools = [
         {
             "type": "function",

@@ -216,6 +216,13 @@ class OpenAIConfig(BaseConfig):
     def _transform_messages(self, messages: list[AllMessageValues], model: str) -> list[AllMessageValues]:
         return messages
 
+    def transform_messages(
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: mirrors override contract
+        model: str,
+    ) -> list[AllMessageValues]:  # mutable-ok: mirrors override contract
+        return self._transform_messages(messages, model)
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -465,6 +472,32 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 max_retries=max_retries,
             )
             return client
+
+    def get_openai_client(
+        self,
+        is_async: bool,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        api_version: str | None = None,
+        timeout: float | httpx.Timeout = (_get_openai_client.__defaults__ or ())[3],
+        max_retries: int | None = DEFAULT_MAX_RETRIES,
+        organization: str | None = None,
+        client: OpenAI | AsyncOpenAI | None = None,
+        shared_session: Optional["ClientSession"] = None,
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> OpenAI | AsyncOpenAI | None:
+        return self._get_openai_client(
+            is_async,
+            api_key,
+            api_base,
+            api_version,
+            timeout,
+            max_retries,
+            organization,
+            client,
+            shared_session,
+            litellm_params,
+        )
 
     @track_llm_api_timing()
     async def make_openai_chat_completion_request(
@@ -801,7 +834,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                             api_key=openai_client.api_key,
                             additional_args={
                                 "headers": headers,
-                                "api_base": openai_client._base_url._uri_reference,
+                                "api_base": openai_client._base_url._uri_reference,  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
                                 "acompletion": acompletion,
                                 "complete_input_dict": data,
                                 "openai_sdk": True,
@@ -944,7 +977,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     api_key=openai_aclient.api_key,
                     additional_args={
                         "headers": {"Authorization": f"Bearer {openai_aclient.api_key}"},
-                        "api_base": openai_aclient._base_url._uri_reference,
+                        "api_base": openai_aclient._base_url._uri_reference,  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
                         "acompletion": True,
                         "complete_input_dict": data,
                         "openai_sdk": True,
@@ -1054,7 +1087,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             api_key=api_key,
             additional_args={
                 "headers": {"Authorization": f"Bearer {openai_client.api_key}"},
-                "api_base": openai_client._base_url._uri_reference,
+                "api_base": openai_client._base_url._uri_reference,  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
                 "acompletion": False,
                 "complete_input_dict": data,
             },
@@ -1522,7 +1555,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 api_key=openai_client.api_key,
                 additional_args={
                     "headers": {"Authorization": f"Bearer {openai_client.api_key}"},
-                    "api_base": openai_client._base_url._uri_reference,
+                    "api_base": openai_client._base_url._uri_reference,  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
                     "acompletion": True,
                     "complete_input_dict": data,
                 },

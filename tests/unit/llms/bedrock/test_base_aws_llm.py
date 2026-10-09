@@ -450,7 +450,7 @@ def test_get_aws_region_name_boto3_fallback():
             mock_boto3_session.return_value = mock_session
 
             optional_params = {}
-            result = base_aws_llm._get_aws_region_name(optional_params)
+            result = base_aws_llm.get_aws_region_name(optional_params)
 
             assert result == "us-east-1"
             mock_boto3_session.assert_called_once()
@@ -465,7 +465,7 @@ def test_get_aws_region_name_boto3_fallback():
             mock_boto3_session.return_value = mock_session
 
             optional_params = {}
-            result = base_aws_llm._get_aws_region_name(optional_params)
+            result = base_aws_llm.get_aws_region_name(optional_params)
 
             assert result == "us-west-2"
             mock_boto3_session.assert_called_once()
@@ -478,7 +478,7 @@ def test_get_aws_region_name_boto3_fallback():
             mock_boto3_session.side_effect = Exception("boto3 not available")
 
             optional_params = {}
-            result = base_aws_llm._get_aws_region_name(optional_params)
+            result = base_aws_llm.get_aws_region_name(optional_params)
 
             assert result == "us-west-2"
             mock_boto3_session.assert_called_once()
@@ -486,7 +486,7 @@ def test_get_aws_region_name_boto3_fallback():
     # Test case 4: aws_region_name is provided in optional_params (should not use boto3)
     with patch("boto3.Session") as mock_boto3_session:
         optional_params = {"aws_region_name": "eu-west-1"}
-        result = base_aws_llm._get_aws_region_name(optional_params)
+        result = base_aws_llm.get_aws_region_name(optional_params)
 
         assert result == "eu-west-1"
         mock_boto3_session.assert_not_called()
@@ -503,7 +503,7 @@ def test_get_aws_region_name_boto3_fallback():
 
         with patch("boto3.Session") as mock_boto3_session:
             optional_params = {}
-            result = base_aws_llm._get_aws_region_name(optional_params)
+            result = base_aws_llm.get_aws_region_name(optional_params)
 
             assert result == "ap-southeast-1"
             mock_boto3_session.assert_not_called()
@@ -534,9 +534,7 @@ def test_get_aws_region_name_rejects_malformed_region(bad_region):
     base_aws_llm = BaseAWSLLM()
 
     with pytest.raises(ValueError, match="Invalid AWS region format"):
-        base_aws_llm._get_aws_region_name(
-            optional_params={"aws_region_name": bad_region}
-        )
+        base_aws_llm.get_aws_region_name(optional_params={"aws_region_name": bad_region})
 
 
 @pytest.mark.parametrize(
@@ -553,9 +551,7 @@ def test_get_aws_region_name_rejects_malformed_region(bad_region):
 def test_get_aws_region_name_accepts_valid_regions(valid_region):
     """Real AWS region formats must continue to work after the format guard."""
     base_aws_llm = BaseAWSLLM()
-    result = base_aws_llm._get_aws_region_name(
-        optional_params={"aws_region_name": valid_region}
-    )
+    result = base_aws_llm.get_aws_region_name(optional_params={"aws_region_name": valid_region})
     assert result == valid_region
 
 
@@ -576,7 +572,7 @@ def test_get_aws_region_name_rejects_malformed_region_from_env():
         mock_get_secret.side_effect = side_effect
 
         with pytest.raises(ValueError, match="Invalid AWS region format"):
-            base_aws_llm._get_aws_region_name(optional_params={})
+            base_aws_llm.get_aws_region_name(optional_params={})
 
 
 def test_get_aws_region_name_for_non_llm_api_calls_rejects_malformed_param():
@@ -749,40 +745,23 @@ def test_sign_request_with_api_key_bearer_token():
     assert result_body == json.dumps(request_data).encode()
 
 
-def test_get_request_headers_with_env_var_bearer_token():
-    # Setup
-    llm = BaseAWSLLM()
-    credentials = Credentials("test_key", "test_secret", "test_token")
-    headers = {"Content-Type": "application/json"}
-    headers_dict = headers.copy()
-
-    # Create mock request
-    mock_prepared_request = MagicMock(spec=AWSPreparedRequest)
-    mock_request = MagicMock(spec=AWSRequest)
-    mock_request.headers = headers_dict
-    mock_request.prepare.return_value = mock_prepared_request
-
-    def mock_aws_request_init(method, url, data, headers):
-        mock_request.headers.update(headers)
-        return mock_request
-
-    # Test with bearer token
-    with (
-        patch.dict(os.environ, {"AWS_BEARER_TOKEN_BEDROCK": "test_token"}),
-        patch("botocore.awsrequest.AWSRequest", side_effect=mock_aws_request_init),
-    ):
-        result = llm.get_request_headers(
-            credentials=credentials,
+@pytest.mark.parametrize("from_environment", [True, False])
+def test_get_request_headers_preserves_bearer_payload(from_environment):
+    with patch.dict(os.environ, {"AWS_BEARER_TOKEN_BEDROCK": "test_token"} if from_environment else {}, clear=True):
+        result = BaseAWSLLM().get_request_headers(
+            credentials=None,
             aws_region_name="us-west-2",
             extra_headers=None,
             endpoint_url="https://api.example.com",
             data='{"prompt": "test"}',
-            headers=headers_dict,
+            headers={"Content-Type": "application/json"},
+            api_key=None if from_environment else "test_token",
         )
-
-        # Assert
-        assert mock_request.headers["Authorization"] == "Bearer test_token"
-        assert result == mock_prepared_request
+    assert result.headers["Authorization"] == "Bearer test_token"
+    assert result.headers["Content-Type"] == "application/json"
+    assert result.body == b'{"prompt": "test"}'
+    assert result.url == "https://api.example.com"
+    assert result.method == "POST"
 
 
 def test_get_request_headers_with_sigv4():
@@ -859,46 +838,6 @@ def test_sigv4_matches_rust_golden_vector():
         "Signature=55c027ef47527d3ad63f1735f9d099efdbc99f296ff914bd94e727e24ec0e464"
     )
 
-
-def test_get_request_headers_with_api_key_bearer_token():
-    """
-    Test that get_request_headers uses the api_key parameter as a bearer token when provided
-    """
-    # Setup
-    llm = BaseAWSLLM()
-    credentials = Credentials("test_key", "test_secret", "test_token")
-    headers = {"Content-Type": "application/json"}
-    headers_dict = headers.copy()
-    api_key = "test_api_key"
-
-    # Create mock request
-    mock_prepared_request = MagicMock(spec=AWSPreparedRequest)
-    mock_request = MagicMock(spec=AWSRequest)
-    mock_request.headers = headers_dict
-    mock_request.prepare.return_value = mock_prepared_request
-
-    def mock_aws_request_init(method, url, data, headers):
-        mock_request.headers.update(headers)
-        return mock_request
-
-    # Test with api_key parameter
-    with (
-        patch.dict(os.environ, {}, clear=True),
-        patch("botocore.awsrequest.AWSRequest", side_effect=mock_aws_request_init),
-    ):
-        result = llm.get_request_headers(
-            credentials=credentials,
-            aws_region_name="us-west-2",
-            extra_headers=None,
-            endpoint_url="https://api.example.com",
-            data='{"prompt": "test"}',
-            headers=headers_dict,
-            api_key=api_key,
-        )
-
-        # Assert
-        assert mock_request.headers["Authorization"] == f"Bearer {api_key}"
-        assert result == mock_prepared_request
 
 
 def test_role_assumption_without_session_name():
@@ -2704,29 +2643,19 @@ def test_converse_handler_external_id_extraction():
         mock_credentials.token = "test-session-token"
         return mock_credentials
 
-    with patch.object(
-        converse_llm, "get_credentials", side_effect=mock_get_credentials
-    ):
-        with patch.object(
-            converse_llm, "_get_aws_region_name", return_value="us-west-2"
-        ):
+    with patch.object(converse_llm, "get_credentials", side_effect=mock_get_credentials):
+        with patch.object(converse_llm, "_get_aws_region_name", return_value="us-west-2"):
             with patch.object(
                 converse_llm,
                 "get_runtime_endpoint",
                 return_value=("https://test", "https://test"),
             ):
                 with patch("litellm.AmazonConverseConfig") as mock_config:
-                    mock_config.return_value._transform_request.return_value = {
-                        "test": "data"
-                    }
-                    with patch.object(
-                        converse_llm, "get_request_headers"
-                    ) as mock_headers:
+                    mock_config.return_value._transform_request.return_value = {"test": "data"}
+                    with patch.object(converse_llm, "get_request_headers") as mock_headers:
                         mock_headers.return_value = MagicMock()
                         mock_headers.return_value.headers = {"Authorization": "test"}
-                        with patch(
-                            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
-                        ) as mock_client:
+                        with patch("litellm.llms.custom_httpx.http_handler.get_httpx_client") as mock_client:
                             mock_http_client = MagicMock()
                             mock_response = MagicMock()
                             mock_response.raise_for_status.return_value = None
@@ -2734,9 +2663,7 @@ def test_converse_handler_external_id_extraction():
                             mock_client.return_value = mock_http_client
 
                             # Mock the transform_response method
-                            mock_config.return_value._transform_response.return_value = (
-                                MagicMock()
-                            )
+                            mock_config.return_value._transform_response.return_value = MagicMock()
 
                             # Call completion with aws_external_id in optional_params
                             optional_params = {
@@ -4187,3 +4114,104 @@ def test_dynamic_aws_params_propagation(model, param_name, param_value, expected
 
                 # We now assert that get_credentials() was called with the dynamic param.
                 assert dummy_get_credentials.called_kwargs.get(param_name) == expected_credentials_value
+
+
+def test_bearer_request_preparation_does_not_require_botocore():
+    import httpx
+
+    with patch.dict("sys.modules", {"botocore.credentials": None, "botocore.awsrequest": None}):
+        target = BaseAWSLLM()._get_boto_credentials_from_optional_params(
+            {"aws_region_name": "us-west-2"}, bearer_token="test-token"
+        )
+        request = BaseAWSLLM().get_request_headers(
+            credentials=None,
+            aws_region_name=target.aws_region_name,
+            extra_headers=None,
+            endpoint_url="https://bedrock-runtime.us-west-2.amazonaws.com/model/test/invoke",
+            data='{"text":"café"}',
+            headers={"Content-Type": "application/json"},
+            api_key="test-token",
+        )
+    assert dict(request.headers)["Authorization"] == "Bearer test-token"
+    assert request.body == '{"text":"café"}'.encode()
+    assert int(httpx.Headers(request.headers)["Content-Length"]) == len(request.body)
+
+
+@pytest.mark.parametrize("missing", ["botocore", "unrelated_dependency"])
+def test_signing_preserves_unrelated_import_failure(missing):
+    llm = BaseAWSLLM()
+    failure = ModuleNotFoundError("missing dependency", name=missing)
+    with patch("builtins.__import__", side_effect=failure):
+        with pytest.raises(ImportError) as error:
+            llm.get_request_headers(
+                credentials=Credentials("key", "secret"), aws_region_name="us-east-1",
+                extra_headers=None, endpoint_url="https://bedrock-runtime.us-east-1.amazonaws.com",
+                data="{}", headers={}, supports_bearer_token=False,
+            )
+    if missing == "botocore":
+        assert "pip install boto3" in str(error.value)
+        assert error.value.__cause__ is failure
+    else:
+        assert error.value is failure
+
+
+@pytest.mark.parametrize("missing", ["botocore", "unrelated_dependency"])
+@pytest.mark.parametrize("shared_signer", [False, True])
+def test_json_signers_report_only_missing_aws_dependency(missing, shared_signer):
+    from litellm.llms.bedrock.base_aws_llm import sign_aws_json_post
+
+    llm = BaseAWSLLM()
+    failure = ModuleNotFoundError("missing dependency", name=missing)
+    from functools import partial
+
+    sign = (
+        partial(sign_aws_json_post, lambda: Credentials("key", "secret"), "bedrock", "us-east-1",
+                "https://bedrock-runtime.us-east-1.amazonaws.com", "{}", {})
+        if shared_signer else
+        partial(llm._sign_request, service_name="bedrock", headers={}, optional_params={}, request_data={},
+                api_base="https://bedrock-runtime.us-east-1.amazonaws.com", api_key="")
+    )
+    with patch.dict(os.environ, {}, clear=True), patch("builtins.__import__", side_effect=failure):
+        with pytest.raises(ImportError) as error:
+            sign()
+    if missing == "botocore":
+        assert "pip install boto3" in str(error.value)
+        assert error.value.__cause__ is failure
+    else:
+        assert error.value is failure
+
+
+@pytest.mark.parametrize("missing", ["botocore", "unrelated_dependency"])
+def test_direct_credentials_report_missing_aws_without_masking_other_imports(missing):
+    import builtins
+
+    original_import = builtins.__import__
+    failure = ModuleNotFoundError("dependency unavailable", name=missing)
+
+    def import_dependency(name, *args, **kwargs):
+        if name.startswith("botocore"):
+            raise failure
+        return original_import(name, *args, **kwargs)
+
+    with patch("builtins.__import__", side_effect=import_dependency):
+        with pytest.raises(ImportError) as error:
+            BaseAWSLLM().get_credentials(
+                aws_access_key_id="test-key", aws_secret_access_key="test-secret", aws_session_token="test-session"
+            )
+    if missing == "botocore":
+        assert "pip install boto3" in str(error.value)
+        assert error.value.__cause__ is failure
+    else:
+        assert error.value is failure
+
+
+def test_shared_json_signer_preserves_body_and_signs_for_the_requested_service():
+    from litellm.llms.bedrock.base_aws_llm import sign_aws_json_post
+
+    body = '{"message":"ping"}'
+    request = sign_aws_json_post(
+        lambda: Credentials("test-key", "test-secret"), "s3", "us-west-2",
+        "https://s3.us-west-2.amazonaws.com", body, {"Content-Type": "application/json"},
+    )
+    assert request.body == body
+    assert "/us-west-2/s3/aws4_request" in request.headers["Authorization"]

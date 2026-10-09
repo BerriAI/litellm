@@ -71,6 +71,27 @@ class CacheMode(str, Enum):
 
 
 #### LiteLLM.Completion / Embedding Cache ####
+def _is_conversation_item(item: object) -> bool:
+    if isinstance(item, BaseModel):
+        return True
+    if not isinstance(item, Mapping):
+        return False
+    block: Final = cast(Mapping[str, object], item)  # cast-ok: isinstance leaves the key and value types unknown
+    return block.get("type") != "file"
+
+
+def _request_message_count(kwargs: Mapping[str, object]) -> int:
+    """Chat and Messages API `messages`, else Responses API `input` items; embedding strings and file blocks count as none"""
+    messages: Final = kwargs.get("messages")
+    if isinstance(messages, list):
+        return len(messages)
+    input_items: Final = kwargs.get("input")
+    if not isinstance(input_items, list):
+        return 0
+    items: Final = cast(list[object], input_items)  # cast-ok: isinstance leaves the element type unknown
+    return sum(1 for item in items if _is_conversation_item(item))
+
+
 class Cache:
     def __init__(
         self,
@@ -119,6 +140,7 @@ class Cache:
         semantic_cache_embedding_max_input_tokens: int | None = None,
         semantic_cache_embedding_timeout: float | None = None,
         semantic_cache_scope: str = SemanticCacheScope.KEY.value,
+        max_messages: int | None = 4,
         # GCP IAM authentication parameters
         gcp_service_account: str | None = None,
         gcp_ssl_ca_certs: str | None = None,
@@ -148,6 +170,7 @@ class Cache:
             semantic_cache_embedding_max_input_tokens (int, optional): Truncate prompts to this many tokens before embedding them for semantic caching. Defaults to the embedding deployment's configured max_input_tokens.
             semantic_cache_embedding_timeout (float, optional): Seconds a semantic-cache lookup may spend embedding the prompt before it gives up and lets the request continue to the LLM. Defaults to SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS.
             semantic_cache_scope (str, optional): "key" isolates semantic-cache buckets per key/team/org. "end_user" additionally isolates per end user (falls back to the key scope when the request carries no end-user id). Defaults to "key".
+            max_messages (int, optional): Requests with more `messages` (or Responses API `input` items) than this are neither looked up nor stored, so long agent conversations never serve or create a cache entry. None disables the limit. Defaults to 4.
 
             # Disk Cache Args
             disk_cache_dir (str, optional): The directory for the disk cache. Defaults to None.
@@ -298,6 +321,7 @@ class Cache:
         self.ttl = ttl
         self.mode: CacheMode = mode or CacheMode.default_on
         self.semantic_cache_scope: str = SemanticCacheScope(semantic_cache_scope).value
+        self.max_messages: int | None = max_messages
 
         if self.type == LiteLLMCacheType.LOCAL and default_in_memory_ttl is not None:
             self.ttl = default_in_memory_ttl
@@ -933,7 +957,10 @@ class Cache:
 
         If cache is default_on then this is True
         If cache is default_off then this is only true when user has opted in to use cache
+        Always False once the request carries more than `max_messages` messages
         """
+        if self.max_messages is not None and _request_message_count(kwargs) > self.max_messages:
+            return False
         if self.mode == CacheMode.default_on:
             return True
 

@@ -99,7 +99,7 @@ mod tests {
     fn content_rejects_unsupported_sources(#[case] source: &str, #[case] valid: bool) {
         let parameters = serde_json::json!({
             "all_teams": 0, "team": "team", "key_hash": "", "source": source, "id": "id",
-            "record_team": "team", "trace_ref": "", "cursor": "", "offset": 0
+            "record_team": "team", "start_time": "", "trace_ref": "", "cursor": "", "offset": 0
         });
         assert_eq!(
             serde_json::from_value::<crate::query::lens::LensContentParams>(parameters).is_ok(),

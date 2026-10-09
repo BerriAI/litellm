@@ -16,9 +16,12 @@ import {
 import { ProviderCredentialFieldMetadata } from "../networking";
 import { Providers } from "../provider_info_helpers";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
+import type { ProviderFieldValidators } from "../model_add/credential_federation";
 
 interface ProviderSpecificFieldsProps {
   selectedProvider: string | null;
+  hiddenFieldKeys?: readonly string[];
+  fieldValidators?: ProviderFieldValidators;
 }
 
 const readTextFile = (file: File, onLoaded: (contents: string) => void) => {
@@ -80,7 +83,11 @@ const mapFieldMetadataToUiField = (field: ProviderCredentialFieldMetadata): Prov
 
 const providerFieldsByDisplayName: Record<string, ProviderCredentialField[]> = {};
 
-const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selectedProvider }) => {
+const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
+  selectedProvider,
+  hiddenFieldKeys,
+  fieldValidators,
+}) => {
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
   const form = useFormContext<MountedFormValues>();
   const credentialsFileRef = React.useRef<HTMLInputElement>(null);
@@ -130,7 +137,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
     Object.assign(providerFieldsByDisplayName, cacheEntries);
   }, [cacheEntries]);
 
-  const allFields = React.useMemo(() => {
+  const providerFields = React.useMemo(() => {
     if (selectedProvider === null) return [];
     // First try to resolve from the in-memory cache. We support both the
     // enum/display-name form and the raw provider slug (e.g. "petals").
@@ -164,6 +171,11 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
     }
     return mapped;
   }, [selectedProviderEnum, selectedProvider, providerMetadata]);
+
+  const allFields = React.useMemo(
+    () => (hiddenFieldKeys ? providerFields.filter((field) => !hiddenFieldKeys.includes(field.key)) : providerFields),
+    [providerFields, hiddenFieldKeys],
+  );
 
   const hasApiVersionField = React.useMemo(() => allFields.some((field) => field.key === "api_version"), [allFields]);
   const lastInferredApiVersionRef = React.useRef<string | null>(null);
@@ -286,12 +298,17 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
         </p>
       )}
       {allFields.map((field) => (
-        <React.Fragment key={field.key}>
+        <React.Fragment key={`${selectedProvider}:${field.key}`}>
           <MountedFormField
             label={field.tooltip ? labelWithHint(field.label, field.tooltip) : field.label}
             name={field.key}
             required={field.required}
-            rules={field.required ? { validate: { required: requiredRule("Required") } } : undefined}
+            rules={{
+              validate: {
+                ...(field.required ? { required: requiredRule("Required") } : {}),
+                ...(fieldValidators?.[field.key] ? { provider: fieldValidators[field.key] } : {}),
+              },
+            }}
             className={field.key === "vertex_credentials" ? "mb-0" : "mb-4"}
           >
             {(control) => renderFieldControl(field, control)}

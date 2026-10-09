@@ -3,17 +3,8 @@
 import type { TraceSummary } from "../../types";
 import type { TimeWindow } from "@/components/shared/timeRange/timeRange";
 
-import {
-  Combobox,
-  ComboboxContent,
-  ComboboxEmpty,
-  ComboboxInput,
-  ComboboxItem,
-  ComboboxList,
-} from "@/components/ui/combobox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useRunFilterRouting } from "../../routing";
-import { traceAgentNames } from "../../utils";
 import { RunSearch } from "./RunSearch";
 
 interface RunsToolbarProps {
@@ -29,8 +20,7 @@ interface RunsToolbarProps {
 }
 
 export function RunsToolbar({ query, onQueryChange, runs, range, busy, children }: RunsToolbarProps) {
-  const { agent, status, setAgent, setStatus } = useRunFilterRouting();
-  const agents = [...new Set([...runs.flatMap(traceAgentNames), ...(agent ? [agent] : [])])].sort();
+  const { status, setStatus } = useRunFilterRouting();
   const statuses = [
     { value: "all", label: "All status" },
     { value: "ok", label: "No errors" },
@@ -43,24 +33,6 @@ export function RunsToolbar({ query, onQueryChange, runs, range, busy, children 
         {children && <div className="ml-auto flex h-10 max-w-full items-stretch">{children}</div>}
       </div>
       <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
-        <Combobox items={agents} value={agent || null} onValueChange={(name) => setAgent(name ?? "")} autoHighlight>
-          <ComboboxInput
-            aria-label="Filter traces by agent"
-            placeholder="All agents"
-            showClear={!!agent}
-            className="h-8 w-48 max-w-full text-xs"
-          />
-          <ComboboxContent>
-            <ComboboxEmpty>No matching agents</ComboboxEmpty>
-            <ComboboxList>
-              {(name: string) => (
-                <ComboboxItem key={name} value={name} className="text-xs">
-                  {name}
-                </ComboboxItem>
-              )}
-            </ComboboxList>
-          </ComboboxContent>
-        </Combobox>
         <Select
           items={statuses}
           value={status}

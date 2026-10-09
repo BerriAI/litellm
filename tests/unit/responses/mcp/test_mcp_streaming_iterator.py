@@ -81,7 +81,7 @@ def _mock_mcp_environment(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
         catalog=types.SimpleNamespace(operation=nullcontext),
         get_registry=MagicMock(return_value={}),
         call_tool=call_tool,
-        _get_mcp_server_from_tool_name=MagicMock(return_value=None),
+        get_mcp_server_from_tool_name=MagicMock(return_value=None),
         get_mcp_server_by_name=MagicMock(return_value=None),
     )
     monkeypatch.setattr(

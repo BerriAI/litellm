@@ -18,7 +18,11 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     LiteLLMResponsesTransformationHandler,
 )
 from litellm.constants import DEFAULT_CHAT_COMPLETION_PARAM_VALUES, request_timeout
-from litellm.integrations.anthropic_cache_control_hook import CARRY_UNMATCHED_MESSAGE_POINTS
+from litellm.integrations.anthropic_cache_control_hook import (
+    CARRY_UNMATCHED_MESSAGE_POINTS,
+    AnthropicCacheControlHook,
+    configured_injection_points,
+)
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -526,6 +530,13 @@ def _api_base_kwarg(kwargs: Mapping[str, object]) -> str | None:
     return api_base if isinstance(api_base, str) else None
 
 
+def _dispatched_model_name(model: str, custom_llm_provider: str, api_base: str | None) -> str:
+    provider_model, _, _, _ = litellm.get_llm_provider(
+        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
+    )
+    return _strip_responses_routing_prefix(provider_model)
+
+
 def _will_bridge_to_chat_completions(
     model: str,
     custom_llm_provider: str | None,
@@ -536,17 +547,47 @@ def _will_bridge_to_chat_completions(
     """``_bridges_to_chat_completions`` for callers running before the provider config is resolved.
 
     Resolving the config is a pure lookup, so this asks the same question the dispatch
-    asks rather than restating its condition. Both callers resolve the provider before
-    this runs, so the only way to be wrong is a prompt manager that moves the model
-    across the bridge boundary, which would leave the deferred points to a pass that
-    never comes.
+    asks rather than restating its condition, with the model name the dispatch hands the
+    lookup: a provider whose config is keyed by model name (Bedrock Mantle reads the
+    price map) answers nothing for ``bedrock_mantle/openai.gpt-5.6-sol`` and would read
+    as bridged. Both callers resolve the provider before this runs, so the only way to be
+    wrong is a prompt manager that moves the model across the bridge boundary, which
+    would leave the deferred points to a pass that never comes.
     """
     normalized_model: Final = _normalize_openai_chat_completions_responses_model(model)
     if custom_llm_provider is None:
         return True
     return _bridges_to_chat_completions(
-        _resolve_responses_api_provider_config(normalized_model[0], custom_llm_provider, model_info, api_base),
+        _resolve_responses_api_provider_config(
+            _dispatched_model_name(normalized_model[0], custom_llm_provider, api_base),
+            custom_llm_provider,
+            model_info,
+            api_base,
+        ),
         use_chat_completions_api or normalized_model[1],
+    )
+
+
+def _stamp_injection_points_with_dialect(
+    kwargs: dict[str, object],  # mutable-ok: the points are rewritten in the caller's own kwargs for the hook to read
+    model: str,
+    custom_llm_provider: str | None,
+) -> None:
+    """Carry the provider this layer resolved onto the points.
+
+    The hook reads ``custom_llm_provider`` from the request kwargs, which never hold the one
+    resolved here, and resolving the model name alone reads a Foundry deployment of an OpenAI
+    model (``azure_ai/gpt-6-astra``) as Azure OpenAI, which left it on the Anthropic dialect.
+    """
+    points: Final = configured_injection_points(kwargs.get("cache_control_injection_points"))
+    if not points:
+        return
+    kwargs["cache_control_injection_points"] = AnthropicCacheControlHook._stamped_with_dialect(
+        points,
+        model,
+        custom_llm_provider,
+        kwargs.get("api_base") or kwargs.get("base_url"),
+        kwargs.get("prompt_cache_options"),
     )
 
 
@@ -659,6 +700,7 @@ async def aresponses(
                     _api_base_kwarg(kwargs),
                 ),
             ):
+                _stamp_injection_points_with_dialect(kwargs, model, custom_llm_provider)
                 (
                     model,
                     merged_input,
@@ -748,7 +790,7 @@ async def aresponses(
             )
             # Stamp custom_llm_provider so callbacks can identify the provider
             # (mirrors litellm/main.py:1371 for chat completions)
-            response._hidden_params["custom_llm_provider"] = custom_llm_provider
+            response.hidden_params["custom_llm_provider"] = custom_llm_provider
 
         if response is None:
             raise ValueError(f"Got an unexpected None response from the Responses API: {response}")
@@ -829,6 +871,7 @@ def _apply_prompt_management_to_responses_call(
                 _api_base_kwarg(kwargs),
             ),
         ):
+            _stamp_injection_points_with_dialect(kwargs, model, custom_llm_provider)
             (
                 model,
                 merged_input,
@@ -1453,7 +1496,7 @@ def responses(
             )
             # Stamp custom_llm_provider so callbacks can identify the provider
             # (mirrors litellm/main.py:1371 for chat completions)
-            response._hidden_params["custom_llm_provider"] = custom_llm_provider
+            response.hidden_params["custom_llm_provider"] = custom_llm_provider
 
         return response
     except Exception as e:

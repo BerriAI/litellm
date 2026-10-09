@@ -17,6 +17,8 @@ import type { Trace } from "../../types";
 import { PagingBanner } from "./PagingBanner";
 import { RunBody } from "./RunBody";
 import { RunHeader } from "./RunHeader";
+import { FeedbackPanel } from "../feedback/FeedbackPanel";
+import { useTraceSignalFlags } from "../../list/useTraceSignals";
 
 interface RunViewProps {
   traceId: string;
@@ -26,6 +28,7 @@ interface RunViewProps {
   onBack: () => void;
   /** Rendered inside the side drawer: the drawer owns closing and sizing. */
   embedded?: boolean;
+  showSignals?: boolean;
 }
 
 function selectedSpanMissing(trace: Trace, spanId: string | null): boolean {
@@ -87,6 +90,7 @@ function LoadedRun({
   accessToken,
   onBack,
   embedded = false,
+  showSignals = false,
   switching,
 }: RunViewProps & { switching: boolean }) {
   const traces = useTracesApi(accessToken);
@@ -108,6 +112,7 @@ function LoadedRun({
     retryDelay: traceReadRetryDelay,
   };
   const traceQuery = useSuspenseInfiniteQuery(traceQueryOptions);
+  const signals = useTraceSignalFlags(accessToken, { trace_id: traceId, trace_ref: traceRef }, showSignals);
   const refreshTrace = () => queryClient.resetQueries({ queryKey, exact: true });
   const failure = traceQuery.isFetchNextPageError ? classifyTraceReadFailure(traceQuery.error) : null;
   const readManually = (read: () => Promise<unknown>) => {
@@ -169,7 +174,9 @@ function LoadedRun({
         live={live}
         canLive={traces.live}
         onLiveChange={toggleLive}
+        signals={signals}
       />
+      <FeedbackPanel summary={trace.summary} accessToken={accessToken} />
       {traceQuery.isRefetchError && (
         <div role="alert" className="flex items-center gap-3 border-b p-3 text-xs text-muted-foreground">
           Could not refresh this run. Previously received steps are still shown.

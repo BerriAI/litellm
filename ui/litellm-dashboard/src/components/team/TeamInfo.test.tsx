@@ -81,6 +81,7 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
   useAllProxyModels: vi.fn(),
+  useModelAccessGroupNames: vi.fn(() => new Set<string>()),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", async (importOriginal) => ({
@@ -231,7 +232,7 @@ vi.mock("../key_team_helpers/filter_helpers", () => ({
   fetchAllOrganizations: vi.fn().mockResolvedValue([]),
 }));
 
-import { useAllProxyModels } from "@/app/(dashboard)/hooks/models/useModels";
+import { useAllProxyModels, useModelAccessGroupNames } from "@/app/(dashboard)/hooks/models/useModels";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { teamKeys, teamsTableKeys, useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
@@ -242,6 +243,7 @@ import { useAccessGroups } from "@/app/(dashboard)/hooks/accessGroups/useAccessG
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 
 const mockUseAllProxyModels = vi.mocked(useAllProxyModels);
+const mockUseModelAccessGroupNames = vi.mocked(useModelAccessGroupNames);
 const mockUseKeys = vi.mocked(useKeys);
 const mockUseTeam = vi.mocked(useTeam);
 const mockUseOrganization = vi.mocked(useOrganization);
@@ -292,6 +294,7 @@ const createMockTeamData = (overrides = {}) => ({
 });
 
 const seedDefaultMocks = () => {
+  mockUseModelAccessGroupNames.mockReturnValue(new Set());
   mockUseAllProxyModels.mockReturnValue({
     data: { data: [] },
     isLoading: false,
@@ -361,6 +364,35 @@ describe("TeamInfoView", () => {
   });
 
   describe("display and rendering", () => {
+    it("links direct model chips to their matching access-group or model filter", async () => {
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({ models: ["repro-access-group", "gpt-4.1"] }),
+      );
+      mockUseModelAccessGroupNames.mockReturnValue(new Set(["repro-access-group"]));
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      expect(await screen.findByRole("link", { name: "repro-access-group" })).toHaveAttribute(
+        "href",
+        expect.stringMatching(/\?access_group=repro-access-group$/),
+      );
+      expect(screen.getByRole("link", { name: "gpt-4.1" })).toHaveAttribute(
+        "href",
+        expect.stringMatching(/\?model_group=gpt-4\.1$/),
+      );
+
+      await userEvent.setup({ delay: null }).click(screen.getByRole("tab", { name: "Settings" }));
+      const settings = await screen.findByRole("tabpanel", { name: "Settings" });
+      expect(within(settings).getByRole("link", { name: "repro-access-group" })).toHaveAttribute(
+        "href",
+        expect.stringMatching(/\?access_group=repro-access-group$/),
+      );
+      expect(within(settings).getByRole("link", { name: "gpt-4.1" })).toHaveAttribute(
+        "href",
+        expect.stringMatching(/\?model_group=gpt-4\.1$/),
+      );
+    });
+
     it("should render", async () => {
       vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
 
@@ -1407,7 +1439,7 @@ describe("TeamInfoView", () => {
       expect(screen.getByLabelText("Estimated Output Tokens Per Model")).toBeEnabled();
     });
 
-    it("should keep declared keys as ordinary prefilled rows and submit the edited value", async () => {
+    it("should show declared keys as fixed labels and submit the edited value", async () => {
       const user = userEvent.setup({ delay: null });
       vi.mocked(useTeamMetadataSchema).mockReturnValue({
         data: [
@@ -1428,16 +1460,18 @@ describe("TeamInfoView", () => {
       await openSettingsEditor(user);
 
       await waitFor(() => {
-        expect(screen.getAllByPlaceholderText("Key").map((input) => (input as HTMLInputElement).value)).toEqual([
-          "cost_center",
-          "department",
-          "app_name",
+        expect(screen.getAllByTestId("metadata-schema-label").map((label) => label.textContent)).toEqual([
+          "Cost Center",
+          "Application Name",
         ]);
       });
-      expect(screen.getAllByPlaceholderText("Value")[0]).toHaveValue("CC-OLD");
+      expect(screen.getAllByPlaceholderText("Key").map((input) => (input as HTMLInputElement).value)).toEqual([
+        "department",
+      ]);
+      expect(screen.getByLabelText("Cost Center")).toHaveValue("CC-OLD");
 
-      await user.clear(screen.getAllByPlaceholderText("Value")[0]);
-      fireEvent.change(screen.getAllByPlaceholderText("Value")[0], { target: { value: "CC-NEW" } });
+      await user.clear(screen.getByLabelText("Cost Center"));
+      fireEvent.change(screen.getByLabelText("Cost Center"), { target: { value: "CC-NEW" } });
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {

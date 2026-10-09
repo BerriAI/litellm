@@ -1,0 +1,21 @@
+{
+  "executions": [
+    {
+      "id": "run-test",
+      "source": "traces",
+      "trace_id": "trace-test",
+      "trace_ref": "",
+      "team_id": "team-test",
+      "name": "Refund agent",
+      "start_time": "2026-01-01T00:00:00+00:00",
+      "span_count": 1,
+      "root_seen": true,
+      "service": "",
+      "metadata": []
+    }
+  ],
+  "eligible": 1,
+  "selected": 1,
+  "next_offset": null,
+  "next_cursor": null
+}
