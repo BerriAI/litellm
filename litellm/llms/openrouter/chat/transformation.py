@@ -41,18 +41,10 @@ class CacheControlSupportedModels(str, Enum):
 class OpenrouterConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> list:
         """
-        Allow reasoning parameters for models flagged as reasoning-capable.
+        Include reasoning parameters regardless of model-map capabilities.
         """
         supported_params: Final = super().get_supported_openai_params(model=model)
-        try:
-            if litellm.supports_reasoning(model=model, custom_llm_provider="openrouter") or litellm.supports_reasoning(
-                model=model
-            ):
-                supported_params.append("reasoning_effort")
-                supported_params.append("thinking")
-        except Exception:
-            pass
-        return list(dict.fromkeys(supported_params))
+        return list(dict.fromkeys([*supported_params, "reasoning_effort", "thinking"]))
 
     def map_openai_params(
         self,

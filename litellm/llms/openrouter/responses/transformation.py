@@ -8,12 +8,23 @@ encrypted_content for multi-turn stateless workflows.
 Docs: https://openrouter.ai/docs/api/reference/responses/overview
 """
 
-from typing import Final
+from collections.abc import Mapping
+from typing import Final, cast
 
+import httpx
 import litellm
+from litellm.litellm_core_utils.core_helpers import RESPONSE_COST_HEADER
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.llms.openai import (
+    ResponseCompletedEvent,
+    ResponseFailedEvent,
+    ResponseIncompleteEvent,
+    ResponsesAPIResponse,
+    ResponsesAPIStreamingResponse,
+)
 from litellm.types.utils import LlmProviders
 
 
@@ -32,6 +43,61 @@ class OpenRouterResponsesAPIConfig(OpenAIResponsesAPIConfig):
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.OPENROUTER
+
+    def transform_response_api_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIResponse:
+        response: Final = super().transform_response_api_response(
+            model=model,
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+        )
+        self._set_provider_reported_cost(response)
+        return response
+
+    def transform_streaming_response(
+        self,
+        model: str,
+        parsed_chunk: dict,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIStreamingResponse:
+        response_event: Final = super().transform_streaming_response(
+            model=model,
+            parsed_chunk=parsed_chunk,
+            logging_obj=logging_obj,
+        )
+        terminal_response: Final = (
+            response_event.response
+            if isinstance(
+                response_event,
+                (ResponseCompletedEvent, ResponseFailedEvent, ResponseIncompleteEvent),
+            )
+            else None
+        )
+        if terminal_response is not None:
+            self._set_provider_reported_cost(terminal_response)
+        return response_event
+
+    @staticmethod
+    def _set_provider_reported_cost(response: ResponsesAPIResponse) -> None:
+        cost: Final = response.usage.cost if response.usage is not None else None
+        if cost is None:
+            return
+        current_headers: Final = response.hidden_params.get("additional_headers")
+        additional_headers: Final = cast(
+            Mapping[str, object],
+            current_headers if isinstance(current_headers, Mapping) else {},
+        )
+        response.hidden_params = {
+            **response.hidden_params,
+            "additional_headers": {
+                **additional_headers,
+                RESPONSE_COST_HEADER: float(cost),
+            },
+        }
 
     def validate_environment(
         self,
