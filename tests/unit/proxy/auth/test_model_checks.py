@@ -1055,3 +1055,89 @@ def test_transcribe_is_a_known_provider_for_wildcard_expansion():
     assert get_known_models_from_wildcard("transcribe/*") == [
         "transcribe/StartTranscriptionJob"
     ]
+
+def test_get_provider_models_custom_api_base_discoveres_endpoint(monkeypatch):
+    """#45504: a wildcard backed by a custom OpenAI-compatible api_base must
+    discover the live endpoint catalog instead of the local OpenAI catalog."""
+    from litellm.proxy.auth import model_checks
+    from litellm.proxy.auth.model_checks import get_provider_models
+    from litellm.types.router import LiteLLM_Params
+
+    captured = {}
+
+    def fake_discover(provider_config, provider, litellm_params):
+        captured["provider"] = provider
+        captured["api_base"] = litellm_params.api_base
+        return ["openai/gpt-oss-120b"]
+
+    monkeypatch.setattr(model_checks, "_get_valid_models_from_provider_api", fake_discover)
+
+    result = get_provider_models(
+        "openai",
+        LiteLLM_Params(
+            model="openai/*",
+            custom_llm_provider="openai",
+            api_base="https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1",
+        ),
+    )
+    assert result == ["openai/gpt-oss-120b"]
+    assert captured == {
+        "provider": "openai",
+        "api_base": "https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1",
+    }
+
+
+def test_get_provider_models_custom_api_base_failure_advertises_nothing(monkeypatch):
+    """#45504: when the custom endpoint cannot be reached, the wildcard must
+    advertise nothing rather than fall back to the unrelated local catalog."""
+    from litellm.proxy.auth import model_checks
+    from litellm.proxy.auth.model_checks import get_provider_models
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(model_checks, "_get_valid_models_from_provider_api", lambda *a, **k: [])
+
+    result = get_provider_models(
+        "openai",
+        LiteLLM_Params(
+            model="openai/*",
+            custom_llm_provider="openai",
+            api_base="https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1",
+        ),
+    )
+    assert result is None
+
+
+def test_get_provider_models_no_api_base_keeps_local_catalog(monkeypatch):
+    """Without an api_base the local catalog path must be unchanged."""
+    from litellm.proxy.auth import model_checks
+    from litellm.proxy.auth.model_checks import get_provider_models
+
+    monkeypatch.setattr(
+        model_checks,
+        "get_valid_models",
+        lambda **kwargs: ["openai/gpt-4o", "openai/gpt-4o-mini"],
+    )
+    result = get_provider_models("openai", None)
+    assert result == ["openai/gpt-4o", "openai/gpt-4o-mini"]
+
+
+def test_get_known_models_from_wildcard_custom_api_base_does_not_advertise_local_catalog(
+    monkeypatch,
+):
+    """#45504 end-to-end: tinker/* backed by openai/* + a custom api_base must not
+    expand into local OpenAI catalog ids such as tinker/gpt-4o."""
+    from litellm.proxy.auth import model_checks
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(model_checks, "_get_valid_models_from_provider_api", lambda *a, **k: [])
+
+    result = get_known_models_from_wildcard(
+        "tinker/*",
+        LiteLLM_Params(
+            model="openai/*",
+            custom_llm_provider="openai",
+            api_base="https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1",
+        ),
+    )
+    assert result == []
