@@ -12,6 +12,18 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import SystemOneUI from "./SystemOneUI";
 import type { SystemOneResponse } from "./lib/schemas";
+import type { ModelGroup } from "@/components/llm_calls/fetch_models";
+
+const mockFetchAvailableModels = vi.hoisted(() => vi.fn<(accessToken: string) => Promise<ModelGroup[]>>());
+vi.mock("@/components/llm_calls/fetch_models", () => ({
+  fetchAvailableModels: (accessToken: string) => mockFetchAvailableModels(accessToken),
+}));
+
+const DECISION_AND_CHAT_MODELS: ModelGroup[] = [
+  { model_group: "gpt-5.5", mode: "chat" },
+  { model_group: "jev-latest", mode: "evaluation" },
+  { model_group: "pplx-decider", mode: "evaluation" },
+];
 
 const responseBody: SystemOneResponse = {
   model: "jev-1.13.0",
@@ -47,6 +59,8 @@ describe("SystemOneUI integration", () => {
     mockFetch.mockReset();
     vi.stubGlobal("fetch", mockFetch);
     mockFetch.mockResolvedValue(createResponse(responseBody));
+    mockFetchAvailableModels.mockReset();
+    mockFetchAvailableModels.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -80,11 +94,89 @@ describe("SystemOneUI integration", () => {
     expect(screen.getByRole("note", { name: "Decision endpoint notice" })).toHaveTextContent(
       "omit model to use the proxy's configured default.",
     );
+    expect(screen.getByRole("link", { name: "How to call /v1/decisions and /v1/systemone" })).toHaveAttribute(
+      "href",
+      "https://docs.litellm.ai/docs/decisions",
+    );
     expect(screen.getByRole("link", { name: "Give us feedback on what you want for decision models" })).toHaveAttribute(
       "href",
       "https://github.com/BerriAI/litellm/discussions/44231",
     );
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("opens on /v1/systemone with the first decision model the key can call", async () => {
+    const user = userEvent.setup();
+    mockFetchAvailableModels.mockResolvedValue(DECISION_AND_CHAT_MODELS);
+    render(<SystemOneUI accessToken="session-key" />);
+
+    expect(await screen.findByRole("combobox", { name: "Decision model" })).toHaveValue("jev-latest");
+    expect(mockFetchAvailableModels).toHaveBeenCalledWith("session-key");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText("Selected choice")).toBeInTheDocument();
+    expect(mockFetch.mock.calls[0]?.[0]).toMatch(/\/v1\/systemone$/);
+    expect(mockFetch.mock.calls[0]?.[0]).not.toMatch(/typesafe/);
+    expect(JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string)).toMatchObject({
+      model: "jev-latest",
+      questions: { has_repro_steps: { type: "noul" } },
+    });
+  });
+
+  it("offers only decision models and writes the picked one into the request", async () => {
+    const user = userEvent.setup();
+    mockFetchAvailableModels.mockResolvedValue(DECISION_AND_CHAT_MODELS);
+    render(<SystemOneUI accessToken="session-key" />);
+    const picker = await screen.findByRole("combobox", { name: "Decision model" });
+
+    await user.clear(picker);
+    await user.type(picker, "p");
+    expect(await screen.findByRole("option", { name: "pplx-decider" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "gpt-5.5" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("option", { name: "pplx-decider" }));
+
+    const editor = screen.getByRole("textbox", { name: "System One JSON payload" });
+    expect(JSON.parse((editor as HTMLTextAreaElement).value)).toMatchObject({
+      model: "pplx-decider",
+      questions: { has_repro_steps: { type: "noul" } },
+    });
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByText("Selected choice")).toBeInTheDocument();
+    expect(JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string).model).toBe("pplx-decider");
+  });
+
+  it("links to Add Model when the key cannot call any decision model", async () => {
+    const user = userEvent.setup();
+    render(<SystemOneUI accessToken="session-key" />);
+    screen.getByRole("combobox", { name: "Decision endpoint" }).focus();
+    await user.keyboard("{ArrowDown}");
+    await user.click(await screen.findByRole("option", { name: "System One · /v1/systemone" }));
+
+    expect(await screen.findByRole("link", { name: "Add a decision model" })).toHaveAttribute(
+      "href",
+      "/ui/models-and-endpoints",
+    );
+    expect(screen.getByRole("combobox", { name: "Decision model" })).toHaveAttribute(
+      "placeholder",
+      "No decision models yet",
+    );
+  });
+
+  it("keeps an edited TypeSafe request in place when decision models load afterwards", async () => {
+    const models = Promise.withResolvers<ModelGroup[]>();
+    mockFetchAvailableModels.mockReturnValue(models.promise);
+    render(<SystemOneUI accessToken="session-key" />);
+    const editor = screen.getByRole("textbox", { name: "System One JSON payload" });
+    const draft = JSON.stringify({ state: "edited", questions: { q: { type: "noul", instructions: "Yes?" } } });
+    fireEvent.change(editor, { target: { value: draft } });
+
+    await act(async () => {
+      models.resolve(DECISION_AND_CHAT_MODELS);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(editor).toHaveValue(draft);
+    expect(screen.queryByRole("combobox", { name: "Decision model" })).not.toBeInTheDocument();
   });
 
   it("shows invalid JSON and disables Send", async () => {

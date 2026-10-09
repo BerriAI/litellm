@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import DecisionModelsBanner from "./DecisionModelsBanner";
 
 const STORAGE_KEY = "hideDecisionModelsBanner";
@@ -14,6 +14,25 @@ describe("DecisionModelsBanner", () => {
     render(<DecisionModelsBanner />);
     const link = screen.getByRole("link", { name: "Try decision models" });
     expect(link).toHaveAttribute("href", "/ui/playground?tab=system-one");
+  });
+
+  it("links to the docs on how to call decision models", () => {
+    render(<DecisionModelsBanner />);
+    expect(screen.getByRole("link", { name: "How to call them" })).toHaveAttribute(
+      "href",
+      "https://docs.litellm.ai/docs/decisions",
+    );
+  });
+
+  it("offers Add a decision model only when the page can add models, and calls back on click", () => {
+    const onAddModel = vi.fn();
+    const { rerender } = render(<DecisionModelsBanner />);
+    expect(screen.queryByRole("button", { name: "Add a decision model" })).not.toBeInTheDocument();
+
+    rerender(<DecisionModelsBanner onAddModel={onAddModel} />);
+    fireEvent.click(screen.getByRole("button", { name: "Add a decision model" }));
+
+    expect(onAddModel).toHaveBeenCalledTimes(1);
   });
 
   it("shows the announcement even if the old feedback banner was dismissed", () => {

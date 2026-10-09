@@ -177,7 +177,7 @@ export default function ModelsAndEndpointsPage() {
           </div>
         </div>
 
-        <DecisionModelsBanner />
+        <DecisionModelsBanner onAddModel={canCreate && !modelId ? () => setActiveKey("add") : undefined} />
 
         {modelId ? (
           <ModelInfoView
