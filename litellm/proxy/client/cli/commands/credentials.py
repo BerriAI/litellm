@@ -18,6 +18,8 @@ class _CredentialInfo(TypedDict):
 
 class _CredentialItem(TypedDict):
     credential_name: ReadOnly[NotRequired[str]]
+    display_name: ReadOnly[NotRequired[str | None]]
+    source: ReadOnly[NotRequired[str]]
     credential_info: ReadOnly[NotRequired[_CredentialInfo]]
 
 
@@ -61,6 +63,8 @@ def list(ctx: click.Context, output_format: Literal["table", "json"]):
 
         # Add columns
         table.add_column("Credential Name", style="cyan")
+        table.add_column("Display Name")
+        table.add_column("Source")
         table.add_column("Custom LLM Provider", style="green")
 
         # Add rows
@@ -69,6 +73,8 @@ def list(ctx: click.Context, output_format: Literal["table", "json"]):
             info = cred.get("credential_info", {})
             table.add_row(
                 str(cred.get("credential_name", "")),
+                cred.get("display_name") or "",
+                str(cred.get("source", "")),
                 str(info.get("custom_llm_provider", "")),
             )
 
@@ -89,8 +95,9 @@ def list(ctx: click.Context, output_format: Literal["table", "json"]):
     help="JSON string containing credential values",
     required=True,
 )
+@click.option("--display-name", type=str, default=None, help="Optional label shown in the UI")
 @click.pass_context
-def create(ctx: click.Context, credential_name: str, info: str, values: str):
+def create(ctx: click.Context, credential_name: str, info: str, values: str, display_name: str | None):
     """Create a new credential"""
     context: Final = cli_context_values(ctx)
     client: Final = CredentialsManagementClient(context["base_url"], context["api_key"])
@@ -101,7 +108,33 @@ def create(ctx: click.Context, credential_name: str, info: str, values: str):
         raise click.BadParameter(f"Invalid JSON: {e}")
 
     try:
-        response: Final = client.create(credential_name, credential_info["value"], credential_values["value"])
+        response: Final = client.create(
+            credential_name, credential_info["value"], credential_values["value"], display_name=display_name
+        )
+        rich.print_json(data=response)
+    except requests.exceptions.HTTPError as e:
+        click.echo(f"Error: HTTP {e.response.status_code}", err=True)
+        try:
+            error_body: Final[_JsonBodyView] = {"body": e.response.json()}
+            rich.print_json(data=error_body["body"])
+        except json.JSONDecodeError:
+            click.echo(e.response.text, err=True)
+        raise click.Abort()
+
+
+@credentials.command()
+@click.argument("credential_name")
+@click.option("--display-name", type=str, default=None, help="New label shown in the UI")
+@click.option("--clear-display-name", is_flag=True, help="Remove the label so the UI shows the credential name")
+@click.pass_context
+def update(ctx: click.Context, credential_name: str, display_name: str | None, clear_display_name: bool):
+    """Change a credential's display name. The credential name itself cannot change"""
+    if (display_name is None) == (not clear_display_name):
+        raise click.UsageError("Pass exactly one of --display-name or --clear-display-name")
+    context: Final = cli_context_values(ctx)
+    client: Final = CredentialsManagementClient(context["base_url"], context["api_key"])
+    try:
+        response: Final = client.update_display_name(credential_name, None if clear_display_name else display_name)
         rich.print_json(data=response)
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
