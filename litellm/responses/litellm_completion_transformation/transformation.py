@@ -161,6 +161,17 @@ def _echoable_request_params(request: Mapping[str, object]) -> _EchoedResponsesR
     return _ECHOED_PARAMS_ADAPTER.validate_python(echoable)
 
 
+def normalized_reasoning_echo(reasoning: object) -> Mapping[str, object] | None:
+    """The response echoes the request's ``reasoning`` object with both spec
+    keys present: ``effort`` and ``summary``, ``None`` for either when the
+    request did not set it. A request without ``reasoning`` echoes ``None``.
+    """
+    if not isinstance(reasoning, Mapping):
+        return None
+    typed: Final = cast("Mapping[str, object]", reasoning)  # cast-ok: request payloads are untyped JSON
+    return {"effort": typed.get("effort"), "summary": typed.get("summary")}
+
+
 @dataclass(frozen=True, slots=True)
 class ResponsesToolChatForm:
     chat_tools: tuple[ChatToolParam, ...]
@@ -2492,7 +2503,7 @@ class LiteLLMCompletionResponsesConfig:
             top_p=echoed.get("top_p"),
             max_output_tokens=echoed.get("max_output_tokens"),
             previous_response_id=echoed.get("previous_response_id"),
-            reasoning=echoed.get("reasoning"),
+            reasoning=normalized_reasoning_echo(echoed.get("reasoning")),
             status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
                 finish_reason
             ),

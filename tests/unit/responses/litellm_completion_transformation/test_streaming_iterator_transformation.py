@@ -1326,3 +1326,35 @@ async def test_plain_text_stream_announces_exactly_one_message_item(sync_mode: b
             ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
         ):
             assert event.item_id == message_item_adds[0].item.id
+
+
+def test_response_created_echoes_requested_reasoning_effort():
+    """issue #45563: response.created used to hardcode {effort: None, summary: None},
+    ignoring the requested reasoning effort."""
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="claude-haiku-4-5",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper([]),
+        request_input="hi",
+        responses_api_request={"reasoning": {"effort": "high"}},
+        custom_llm_provider="anthropic",
+        litellm_metadata={},
+    )
+
+    data = iterator._default_response_created_event_data()
+
+    assert data["reasoning"] == {"effort": "high", "summary": None}
+
+
+def test_response_created_reasoning_without_request_param():
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="claude-haiku-4-5",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper([]),
+        request_input="hi",
+        responses_api_request={},
+        custom_llm_provider="anthropic",
+        litellm_metadata={},
+    )
+
+    data = iterator._default_response_created_event_data()
+
+    assert data["reasoning"] == {"effort": None, "summary": None}

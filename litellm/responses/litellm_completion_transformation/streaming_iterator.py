@@ -1,6 +1,6 @@
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from itertools import filterfalse
 from typing import Any, Final, cast
 
@@ -16,6 +16,7 @@ from litellm.responses.litellm_completion_transformation.custom_tools import (
 from litellm.responses.litellm_completion_transformation.reasoning_items import mint_reasoning_item_id
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
+    normalized_reasoning_echo,
 )
 from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -537,6 +538,14 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             litellm_metadata=self.litellm_metadata,
         )
 
+    def _created_event_reasoning(self) -> Mapping[str, object]:
+        """``response.created`` echoes the requested reasoning with both spec
+        keys present (issue #45563)."""
+        requested: Final = normalized_reasoning_echo(
+            self.responses_api_request.get("reasoning")  # pyright: ignore[reportUnknownMemberType]  # request params are a loose TypedDict
+        )
+        return requested or {"effort": None, "summary": None}
+
     def _default_response_created_event_data(self) -> dict:
         # Use cached response ID if available, otherwise generate a new one
         if self._cached_response_id is None:
@@ -555,7 +564,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             "output": [],
             "parallel_tool_calls": True,
             "previous_response_id": None,
-            "reasoning": {"effort": None, "summary": None},
+            "reasoning": self._created_event_reasoning(),
             "store": True,
         }
         if "temperature" in self.responses_api_request:

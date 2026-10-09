@@ -5352,3 +5352,41 @@ async def test_bridge_rejects_untranslatable_tool_choice_with_a_400(stream: bool
         )
     assert exc_info.value.status_code == 400
     assert "tool_choice={'type': 'file_search'}" in str(exc_info.value)
+
+
+class TestReasoningEcho:
+    """The response echoes the request ``reasoning`` with both spec keys
+    present (issue #45563): ``effort`` and ``summary``, ``None`` for either
+    the request did not set."""
+
+    @staticmethod
+    def _chat_response() -> ModelResponse:
+        return ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[Choices(finish_reason="stop", index=0, message=Message(content="ok", role="assistant"))],
+        )
+
+    def test_requested_effort_is_echoed_with_summary_key_present(self):
+        responses_api_response = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="hi",
+                responses_api_request={"reasoning": {"effort": "high"}},
+                chat_completion_response=self._chat_response(),
+            )
+        )
+
+        assert responses_api_response.reasoning == {"effort": "high", "summary": None}
+
+    def test_missing_reasoning_param_echoes_none(self):
+        responses_api_response = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="hi",
+                responses_api_request={},
+                chat_completion_response=self._chat_response(),
+            )
+        )
+
+        assert responses_api_response.reasoning is None
