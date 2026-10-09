@@ -1,9 +1,12 @@
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
+from pydantic import ValidationError
 
 
 from litellm.llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
+from litellm.types.utils import EmbeddingResponse
 
 JINA_KEY_ENV_NAMES = ("JINA_AI_API_KEY", "JINA_API_KEY", "JINA_AI_TOKEN")
 
@@ -78,7 +81,7 @@ class TestJinaAIEmbeddingTransform:
         sentinel = f"resolved-via-{env_name.lower()}"
         monkeypatch.setenv(env_name, sentinel)
 
-        _, _, dynamic_api_key = self.config._get_openai_compatible_provider_info(api_base=None, api_key=None)
+        _, _, dynamic_api_key = self.config.get_openai_compatible_provider_info(api_base=None, api_key=None)
 
         assert dynamic_api_key == sentinel
 
@@ -92,7 +95,7 @@ class TestJinaAIEmbeddingTransform:
             monkeypatch.setenv(name, f"resolved-via-{name.lower()}")
 
         for expected_name in JINA_KEY_ENV_NAMES:
-            _, _, dynamic_api_key = self.config._get_openai_compatible_provider_info(api_base=None, api_key=None)
+            _, _, dynamic_api_key = self.config.get_openai_compatible_provider_info(api_base=None, api_key=None)
             assert dynamic_api_key == f"resolved-via-{expected_name.lower()}"
             monkeypatch.delenv(expected_name)
 
@@ -105,7 +108,7 @@ class TestJinaAIEmbeddingTransform:
         for name in JINA_KEY_ENV_NAMES:
             monkeypatch.setenv(name, f"resolved-via-{name.lower()}")
 
-        _, _, dynamic_api_key = self.config._get_openai_compatible_provider_info(
+        _, _, dynamic_api_key = self.config.get_openai_compatible_provider_info(
             api_base=None, api_key="passed-in-by-caller"
         )
 
@@ -131,3 +134,61 @@ class TestJinaAIEmbeddingTransform:
             "input": expected_input,
         }
         assert result == expected_result
+
+
+def _transform(raw_response: httpx.Response) -> EmbeddingResponse:
+    return JinaAIEmbeddingConfig().transform_embedding_response(
+        model="jina-embeddings-v3",
+        raw_response=raw_response,
+        model_response=EmbeddingResponse(),
+        logging_obj=MagicMock(),
+        api_key="test-key",
+        request_data={},
+        optional_params={},
+        litellm_params={},
+    )
+
+
+def test_transform_embedding_response_builds_the_response_from_the_body():
+    response = _transform(
+        httpx.Response(
+            200,
+            json={
+                "model": "jina-embeddings-v3",
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 2]}],
+                "usage": {"prompt_tokens": 3, "total_tokens": 5},
+                "unknown": "ignored",
+            },
+        )
+    )
+
+    assert response.model_dump() == {
+        "model": "jina-embeddings-v3",
+        "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 2]}],
+        "object": "list",
+        "usage": {
+            "completion_tokens": 0,
+            "prompt_tokens": 3,
+            "total_tokens": 5,
+            "completion_tokens_details": None,
+            "prompt_tokens_details": None,
+        },
+    }
+
+
+@pytest.mark.parametrize("body", [b"null", b"7", b'["leaked payload text"]', b'"leaked payload text"'])
+def test_transform_embedding_response_rejects_a_body_that_is_not_an_object(body: bytes):
+    with pytest.raises(ValidationError) as exc_info:
+        _transform(httpx.Response(200, content=body))
+
+    assert "leaked payload text" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("field", ["model", "data", "usage"])
+def test_transform_embedding_response_invalid_field_is_reported_by_name(field: str):
+    with pytest.raises(ValidationError) as exc_info:
+        _transform(httpx.Response(200, json={field: 5}))
+
+    assert exc_info.value.title == "EmbeddingResponse"
+    assert [error["loc"] for error in exc_info.value.errors()] == [(field,)]

@@ -20,7 +20,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ConfigDict, ValidationError
 
 from litellm.litellm_core_utils.cli_keyring import (
     SYSTEM_KEYRING,
@@ -44,6 +44,7 @@ from litellm.litellm_core_utils.private_json import (
     stage_private_json,
     write_private_json,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,7 +84,7 @@ SecretSave: TypeAlias = SecretWrite | CredentialNotSaved | CredentialNotRecorded
 SecretClear: TypeAlias = SecretErase | CredentialNotCleared
 
 
-class CliTokenRecord(BaseModel):
+class CliTokenRecord(LiteLLMBaseModel):
     """A stored CLI credential.
 
     `key is None` means the metadata was found but the secret could not be
@@ -104,7 +105,7 @@ class CliTokenRecord(BaseModel):
     refresh_token: str | None = None
 
 
-class CliTokenSecret(BaseModel):
+class CliTokenSecret(LiteLLMBaseModel):
     """The secret material as stored in the OS keychain.
 
     `base_url` is duplicated from the metadata file purely as a pairing tag: a

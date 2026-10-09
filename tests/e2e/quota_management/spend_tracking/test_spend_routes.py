@@ -17,11 +17,13 @@ fast: no batch-write wait, no provider calls.
 """
 
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import Final
 
 import pytest
 
 from e2e_http import ProbeResult
+from e2e_metadata import Domain, Route, Subject, meta
 from models import DateRangeParams
 from spend_e2e_client import SpendClient
 
@@ -103,13 +105,38 @@ def _probe(client: SpendClient, route: str) -> ProbeResult:
     return client.probe(route, params=_date_range())
 
 
-@pytest.mark.parametrize("route", SPEND_ROUTES)
+_LIST_ROUTES: Final = MappingProxyType(
+    {
+        "/key/list": Route.KEY_MANAGEMENT,
+        "/user/list": Route.USER_MANAGEMENT,
+        "/team/list": Route.TEAM_MANAGEMENT,
+        "/organization/list": Route.ORGANIZATION_MANAGEMENT,
+        "/customer/list": Route.CUSTOMER_MANAGEMENT,
+    }
+)
+
+_ROUTE_CASES: Final = tuple(
+    pytest.param(
+        path,
+        marks=meta(Subject(domain=Domain.SPEND_BUDGETS, route=_LIST_ROUTES.get(path, Route.SPEND_REPORTING))),
+    )
+    for path in SPEND_ROUTES
+)
+
+
+@pytest.mark.parametrize("route", _ROUTE_CASES)
 def test_spend_route_responsive(client: SpendClient, route: str) -> None:
     result = _probe(client, route)
     print(f"{route} -> {result.status_code}\n{result.body[:600]}")
     assert result.healthy, f"{route} -> {result.status_code}\n{result.body[:600]}"
 
 
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.SPEND_REPORTING,
+    )
+)
 def test_schema_listed_spend_routes_are_responsive(client: SpendClient) -> None:
     """Probe any spend GET route the schema lists that isn't in SPEND_ROUTES."""
     schema = client.openapi()
@@ -136,6 +163,12 @@ def test_schema_listed_spend_routes_are_responsive(client: SpendClient) -> None:
     assert not offenders, "non-responsive schema spend routes:\n" + "\n".join(offenders)
 
 
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.SPEND_REPORTING,
+    )
+)
 def test_capture_rate_reports_or_names_the_missing_billing_key(client: SpendClient) -> None:
     result: Final = client.probe(_CAPTURE_RATE_ROUTE, params=_date_range())
     print(f"{_CAPTURE_RATE_ROUTE} -> {result.status_code}\n{result.body[:600]}")

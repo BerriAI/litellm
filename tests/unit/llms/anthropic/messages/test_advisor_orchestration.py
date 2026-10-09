@@ -101,9 +101,7 @@ async def test_anthropic_native_interceptor_skipped():
     )
 
     h = AdvisorOrchestrationHandler()
-    assert not h.can_handle(
-        [ADVISOR_TOOL], "anthropic"
-    ), "Interceptor must NOT trigger for anthropic provider"
+    assert not h.can_handle([ADVISOR_TOOL], "anthropic"), "Interceptor must NOT trigger for anthropic provider"
 
 
 # ---------------------------------------------------------------------------
@@ -204,9 +202,7 @@ async def test_loop_one_advisor_call():
     assert "is_prime" in texts[0]["text"]
 
     # No advisor tool_use blocks in final response
-    advisor_uses = [
-        b for b in content if b.get("type") == "tool_use" and b.get("name") == "advisor"
-    ]
+    advisor_uses = [b for b in content if b.get("type") == "tool_use" and b.get("name") == "advisor"]
     assert len(advisor_uses) == 0
 
 
@@ -366,9 +362,7 @@ async def test_prior_advisor_blocks_replaced_in_history():
 
     # Text block with advisor feedback must be present
     text_blocks = [b for b in content if b.get("type") == "text"]
-    feedback_blocks = [
-        b for b in text_blocks if "advisor_feedback" in b.get("text", "")
-    ]
+    feedback_blocks = [b for b in text_blocks if "advisor_feedback" in b.get("text", "")]
     assert len(feedback_blocks) >= 1
     assert "trial division" in feedback_blocks[0]["text"]
 
@@ -707,11 +701,7 @@ async def test_advisor_ignores_tool_credentials_when_clientside_disabled():
 
     with patch.dict(
         sys.modules,
-        {
-            "litellm.proxy.proxy_server": _fake_proxy_server(
-                {"allow_client_side_credentials": False}
-            )
-        },
+        {"litellm.proxy.proxy_server": _fake_proxy_server({"allow_client_side_credentials": False})},
     ):
         captured = await _run_advisor_and_capture_subcall_kwargs()
     assert captured["api_key"] is None
@@ -726,11 +716,7 @@ async def test_advisor_uses_tool_credentials_when_clientside_enabled():
 
     with patch.dict(
         sys.modules,
-        {
-            "litellm.proxy.proxy_server": _fake_proxy_server(
-                {"allow_client_side_credentials": True}
-            )
-        },
+        {"litellm.proxy.proxy_server": _fake_proxy_server({"allow_client_side_credentials": True})},
     ):
         captured = await _run_advisor_and_capture_subcall_kwargs()
     assert captured["api_key"] == "sk-other"

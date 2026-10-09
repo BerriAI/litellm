@@ -33,6 +33,8 @@ from anthropic.types import (
     ToolUseBlockParam,
 )
 from e2e_config import provider_edge_base, unique_marker
+from e2e_metadata import Capability as MetaCapability
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta, step
 from lifecycle import ResourceManager
 from llm_translation.sdk_clients import NO_PROXY_CACHE, SdkClients, response_header
 from models import CredentialCreateBody, LiteLLMParamsBody
@@ -64,6 +66,10 @@ Capability = Literal["basic", "tool_use", "multi_turn"]
 Streaming = Literal["stream", "nonstream"]
 Assertion = Literal["works", "cost_logged"]
 ToolMode = Literal["none", "forced", "offered"]
+
+GPT_4O_MINI_BACKEND: Final = "openai/gpt-4o-mini"
+GPT_5_4_MINI_BACKEND: Final = "openai/gpt-5.4-mini"
+CLAUDE_HAIKU_BACKEND: Final = "anthropic/claude-haiku-4-5"
 
 SURFACES: Final[tuple[SurfaceName, ...]] = ("chat_completions", "messages", "responses")
 AUTH_METHODS: Final[tuple[AuthMethod, ...]] = ("env_ref", "stored_credential")
@@ -104,12 +110,19 @@ class Deployment:
         assert key, f"{self.api_key_env} is not set in the test process environment"
         return key
 
+    def provider(self) -> Provider:
+        match self.route:
+            case "openai":
+                return Provider.OPENAI
+            case "anthropic":
+                return Provider.ANTHROPIC
+
 
 DEPLOYMENTS: Final[tuple[Deployment, ...]] = (
     Deployment(
         route="openai",
         label="gpt-4o-mini",
-        backend="openai/gpt-4o-mini",
+        backend=GPT_4O_MINI_BACKEND,
         api_key_env="OPENAI_API_KEY",
         edge_mount="openai",
         edge_suffix="/v1",
@@ -117,7 +130,7 @@ DEPLOYMENTS: Final[tuple[Deployment, ...]] = (
     Deployment(
         route="openai",
         label="gpt-5.4-mini",
-        backend="openai/gpt-5.4-mini",
+        backend=GPT_5_4_MINI_BACKEND,
         api_key_env="OPENAI_API_KEY",
         edge_mount="openai",
         edge_suffix="/v1",
@@ -125,7 +138,7 @@ DEPLOYMENTS: Final[tuple[Deployment, ...]] = (
     Deployment(
         route="anthropic",
         label="claude-haiku-4-5",
-        backend="anthropic/claude-haiku-4-5",
+        backend=CLAUDE_HAIKU_BACKEND,
         api_key_env="ANTHROPIC_API_KEY",
         edge_mount="anthropic",
         edge_suffix="",
@@ -146,6 +159,26 @@ class Cell:
     def registry_id(self, capability: Capability, streaming: Streaming, assertion: Assertion) -> str:
         return f"llm.{self.surface}.{self.deployment.route}.{capability}.{streaming}.{assertion}"
 
+    def subject(self, capability: Capability, streaming: Streaming, assertion: Assertion) -> Subject:
+        return Subject(
+            domain=Domain.SPEND_BUDGETS if assertion == "cost_logged" else Domain.LLM_TRANSLATION,
+            route=_surface_route(self.surface),
+            providers=(self.deployment.provider(),),
+            models=(self.deployment.backend,),
+            capabilities=() if capability == "basic" else (MetaCapability.FUNCTION_CALLING,),
+            mode=Mode.STREAM if streaming == "stream" else Mode.NONSTREAM,
+        )
+
+
+def _surface_route(surface: SurfaceName) -> Route:
+    match surface:
+        case "chat_completions":
+            return Route.CHAT_COMPLETIONS
+        case "messages":
+            return Route.MESSAGES
+        case "responses":
+            return Route.RESPONSES
+
 
 CELLS: Final[tuple[Cell, ...]] = tuple(
     Cell(surface=surface, deployment=deployment, auth=auth)
@@ -158,7 +191,14 @@ CELLS: Final[tuple[Cell, ...]] = tuple(
 def cells_covering(capability: Capability, streaming: Streaming, assertion: Assertion) -> tuple[ParameterSet, ...]:
     """Every cell as a pytest param carrying the registry id its test proves."""
     return tuple(
-        pytest.param(cell, id=cell.id, marks=pytest.mark.covers(cell.registry_id(capability, streaming, assertion)))
+        pytest.param(
+            cell,
+            id=cell.id,
+            marks=(
+                pytest.mark.covers(cell.registry_id(capability, streaming, assertion)),
+                meta(cell.subject(capability, streaming, assertion)),
+            ),
+        )
         for cell in CELLS
     )
 
@@ -352,9 +392,14 @@ class ChatCompletionsSurface:
             cost_header=response_header(raw.headers, "x-litellm-response-cost"),
         )
 
+    @step(
+        'Send a /chat/completions request to {model} with the prompt "{prompt}"'
+        " and forced weather tool use set to {with_tool}"
+    )
     def reply(self, key: str, model: str, prompt: str, *, with_tool: bool = False) -> Reply:
         return self._turn(key, model, _chat_history(prompt), "forced" if with_tool else "none")
 
+    @step('Send a streaming /chat/completions request to {model} with the prompt "{prompt}"')
     def stream(self, key: str, model: str, prompt: str) -> StreamedReply:
         chunks: Final[tuple[ChatCompletionChunk, ...]] = tuple(
             self.sdk.openai(key).chat.completions.create(
@@ -373,6 +418,7 @@ class ChatCompletionsSurface:
             event_count=len(chunks),
         )
 
+    @step("Send the {call.name} tool result back to {model} over /chat/completions")
     def reply_to_tool_result(self, key: str, model: str, prompt: str, call: ToolCall, result: str) -> Reply:
         tool_call: Final[ChatCompletionMessageFunctionToolCallParam] = {
             "id": call.call_id,
@@ -421,9 +467,14 @@ class MessagesSurface:
             cost_header=response_header(raw.headers, "x-litellm-response-cost"),
         )
 
+    @step(
+        'Send a /v1/messages request to {model} with the prompt "{prompt}"'
+        " and forced weather tool use set to {with_tool}"
+    )
     def reply(self, key: str, model: str, prompt: str, *, with_tool: bool = False) -> Reply:
         return self._turn(key, model, ({"role": "user", "content": prompt},), "forced" if with_tool else "none")
 
+    @step('Send a streaming /v1/messages request to {model} with the prompt "{prompt}"')
     def stream(self, key: str, model: str, prompt: str) -> StreamedReply:
         events: Final[tuple[RawMessageStreamEvent, ...]] = tuple(
             self.sdk.anthropic(key).messages.create(
@@ -446,6 +497,7 @@ class MessagesSurface:
             event_count=len(events),
         )
 
+    @step("Send the {call.name} tool result back to {model} over /v1/messages")
     def reply_to_tool_result(self, key: str, model: str, prompt: str, call: ToolCall, result: str) -> Reply:
         tool_use: Final[ToolUseBlockParam] = {
             "type": "tool_use",
@@ -496,9 +548,14 @@ class ResponsesSurface:
             cost_header=response_header(raw.headers, "x-litellm-response-cost"),
         )
 
+    @step(
+        'Send a /v1/responses request to {model} with the prompt "{prompt}"'
+        " and forced weather tool use set to {with_tool}"
+    )
     def reply(self, key: str, model: str, prompt: str, *, with_tool: bool = False) -> Reply:
         return self._turn(key, model, [{"role": "user", "content": prompt}], "forced" if with_tool else "none")
 
+    @step('Send a streaming /v1/responses request to {model} with the prompt "{prompt}"')
     def stream(self, key: str, model: str, prompt: str) -> StreamedReply:
         events: Final[tuple[ResponseStreamEvent, ...]] = tuple(
             self.sdk.openai(key).responses.create(
@@ -519,6 +576,7 @@ class ResponsesSurface:
             event_count=len(events),
         )
 
+    @step("Send the {call.name} tool result back to {model} over /v1/responses")
     def reply_to_tool_result(self, key: str, model: str, prompt: str, call: ToolCall, result: str) -> Reply:
         function_call: Final[ResponseFunctionToolCallParam] = {
             "type": "function_call",

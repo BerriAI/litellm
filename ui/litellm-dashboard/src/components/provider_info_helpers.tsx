@@ -55,8 +55,11 @@ import sapLogo from "../../public/assets/logos/sap.png";
 import scxAiLogo from "../../public/assets/logos/scx_ai.svg";
 import snowflakeLogo from "../../public/assets/logos/snowflake.svg";
 import sonioxLogo from "../../public/assets/logos/soniox.svg";
+import strandsLogo from "../../public/assets/logos/strands.svg";
+import tencentLogo from "../../public/assets/logos/tencent.svg";
 import togetheraiLogo from "../../public/assets/logos/togetherai.svg";
 import topazLogo from "../../public/assets/logos/topaz.svg";
+import typesafeLogo from "../../public/assets/logos/typesafe.png";
 import v0Logo from "../../public/assets/logos/v0.svg";
 import vercelLogo from "../../public/assets/logos/vercel.svg";
 import vllmLogo from "../../public/assets/logos/vllm.png";
@@ -166,17 +169,20 @@ export enum Providers {
   SCX_AI = "SCX.ai",
   Snowflake = "Snowflake",
   Soniox = "Soniox",
+  StrandsDecider = "Strands Decider",
   TEXT_COMPLETION_CODESTRAL = "Text-Completion-Codestral",
+  Tencent = "Tencent",
   TogetherAI = "TogetherAI",
   TOPAZ = "Topaz",
   Triton = "Triton",
+  TypeSafe = "TypeSafe",
   V0 = "V0",
   VERCEL_AI_GATEWAY = "Vercel Ai Gateway",
   Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
   VERTEX_AI_BETA = "Vertex Ai Beta",
   VLLM = "Local vLLM",
   VolcEngine = "VolcEngine",
-  Voyage = "Voyage AI",
+  Voyage = "VoyageAI by MongoDB",
   WANDB = "Wandb",
   WATSONX = "Watsonx",
   WATSONX_TEXT = "Watsonx Text",
@@ -285,10 +291,13 @@ export const provider_map: Record<string, string> = {
   SCX_AI: "scx-ai",
   Snowflake: "snowflake",
   Soniox: "soniox",
+  StrandsDecider: "strands_decider",
   TEXT_COMPLETION_CODESTRAL: "text-completion-codestral",
+  Tencent: "tencent",
   TogetherAI: "together_ai",
   TOPAZ: "topaz",
   Triton: "triton",
+  TypeSafe: "typesafe",
   V0: "v0",
   VERCEL_AI_GATEWAY: "vercel_ai_gateway",
   Vertex_AI: "vertex_ai",
@@ -384,10 +393,13 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.SCX_AI]: scxAiLogo.src,
   [Providers.Snowflake]: snowflakeLogo.src,
   [Providers.Soniox]: sonioxLogo.src,
+  [Providers.StrandsDecider]: strandsLogo.src,
+  [Providers.Tencent]: tencentLogo.src,
   [Providers.TEXT_COMPLETION_CODESTRAL]: mistralLogo.src,
   [Providers.TogetherAI]: togetheraiLogo.src,
   [Providers.TOPAZ]: topazLogo.src,
   [Providers.Triton]: nvidiaTritonLogo.src,
+  [Providers.TypeSafe]: typesafeLogo.src,
   [Providers.V0]: v0Logo.src,
   [Providers.VERCEL_AI_GATEWAY]: vercelLogo.src,
   [Providers.Vertex_AI]: googleLogo.src,
@@ -453,6 +465,9 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.Sail]: "sail/openai/gpt-oss-120b",
   [Providers.SCX_AI]: "scx-ai/GLM-5.2",
   [Providers.Snowflake]: "snowflake/mistral-7b",
+  [Providers.StrandsDecider]: "strands_decider/strands-decider-2B-hobson-v19",
+  [Providers.Tencent]: "tencent/deepseek-v4-pro",
+  [Providers.TypeSafe]: "typesafe/jev-latest",
   [Providers.Vertex_AI]: "gemini-pro",
   [Providers.VolcEngine]: "volcengine/<any-model-on-volcengine>",
   [Providers.Voyage]: "voyage/",

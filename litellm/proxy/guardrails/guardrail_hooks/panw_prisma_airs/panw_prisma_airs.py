@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, field_validator
+from pydantic import ConfigDict, TypeAdapter, ValidationError, field_validator
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -28,18 +28,22 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
+    effective_skip_system_message_for_guardrail,
+    role_out_of_guardrail_scope,
 )
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.llms.openai.responses.guardrail_translation.handler import scannable_instructions
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_scan_id,
     add_guardrail_to_applied_guardrails_header,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     CallTypes,
@@ -64,7 +68,7 @@ ToolCallLike: TypeAlias = (
 )
 
 
-class _ToolCallFunctionSlice(BaseModel):
+class _ToolCallFunctionSlice(LiteLLMBaseModel):
     model_config = ConfigDict(from_attributes=True, extra="ignore")
 
     name: str | None = None
@@ -87,27 +91,32 @@ class _ToolCallFunctionSlice(BaseModel):
         return json.dumps(value) if isinstance(value, (dict, list)) else str(value)
 
 
-class _ToolCallSlice(BaseModel):
+class _ToolCallSlice(LiteLLMBaseModel):
     model_config = ConfigDict(from_attributes=True, extra="ignore")
 
     function: _ToolCallFunctionSlice | None = None
 
 
-class _ResponsesContentPart(BaseModel):
+class _ResponsesContentPart(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     text: str | None = None
 
 
-class _ResponsesInputItem(BaseModel):
+class _ResponsesInputItem(LiteLLMBaseModel):
     """The slice of a raw Responses ``input`` item that decides which ``texts`` it flattens to."""
 
     model_config = ConfigDict(extra="ignore")
 
     type: str | None = None
+    role: str | None = None
     content: str | tuple[_ResponsesContentPart, ...] | None = None
 
-    def text_count(self) -> int:
+    def text_count(self, *, skip_system: bool) -> int:
+        if role_out_of_guardrail_scope(
+            (self.role or "").lower(), skip_system_message=skip_system, skip_tool_message=False
+        ):
+            return 0
         if isinstance(self.content, str):
             return 1
         if self.content is None:
@@ -1636,10 +1645,10 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         A message's texts are consumed only when they sit at the running position of
         ``texts``; messages the translation handler added without a counterpart in
-        ``texts`` (Responses ``instructions``, ``function_call_output``, ``reasoning``)
-        are skipped. The walk runs front-to-back and back-to-front and both must agree,
-        so an added message whose text happens to equal a neighbouring real message's
-        text cannot steal that text's attribution. Returns None otherwise.
+        ``texts`` (Responses ``function_call_output``, ``reasoning``) are skipped. The walk
+        runs front-to-back and back-to-front and both must agree, so an added message whose
+        text happens to equal a neighbouring real message's text cannot steal that text's
+        attribution. Returns None otherwise.
         """
         runs: Final = tuple(cls._message_texts(message) for message in messages)
 
@@ -1660,17 +1669,19 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         )
         return forward if len(forward) == len(texts) and forward == backward else None
 
-    @classmethod
+    @staticmethod
     def _reasoning_item_text_indices(
-        cls,
         texts: Sequence[str],
         request_data: Mapping[str, object],
+        *,
+        skip_system: bool,
     ) -> frozenset[int] | None:
         """Return the ``texts`` indices flattened from Responses ``reasoning`` input items.
 
         The Responses translation handler gives those model-authored items the default
         ``user`` role, so the latest-turn selection must not mistake one for a human turn.
         Empty for requests without a Responses ``input`` item list; None when the raw items
+        (after the leading ``instructions`` text, both minus whatever ``skip_system`` drops)
         do not account for every entry of ``texts``.
         """
         try:
@@ -1679,10 +1690,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             return None
         if not isinstance(raw_input, tuple):
             return frozenset()
-        counts: Final = tuple(item.text_count() for item in raw_input)
-        if sum(counts) != len(texts):
+        offset: Final = 0 if scannable_instructions(request_data, skip_system=skip_system) is None else 1
+        counts: Final = tuple(item.text_count(skip_system=skip_system) for item in raw_input)
+        if offset + sum(counts) != len(texts):
             return None
-        starts: Final = itertools.accumulate(counts, initial=0)
+        starts: Final = itertools.accumulate(counts, initial=offset)
         return frozenset(
             text_idx
             for item, count, start in zip(raw_input, counts, starts)
@@ -1690,9 +1702,8 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             for text_idx in range(start, start + count)
         )
 
-    @classmethod
     def _get_latest_user_text_indices(
-        cls,
+        self,
         texts: Sequence[str],
         messages: Sequence[AllMessageValues],
         request_data: Mapping[str, object],
@@ -1706,10 +1717,12 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         user/developer message exists, or the latest one carries text that never reached
         ``texts`` (safety fallback to the role-filter scan).
         """
-        sources: Final = cls._text_source_message_indices(texts, messages)
+        sources: Final = self._text_source_message_indices(texts, messages)
         if sources is None:
             return None
-        reasoning: Final = cls._reasoning_item_text_indices(texts, request_data)
+        reasoning: Final = self._reasoning_item_text_indices(
+            texts, request_data, skip_system=effective_skip_system_message_for_guardrail(self)
+        )
         if reasoning is None:
             return None
         reasoning_messages: Final = frozenset(sources[text_idx] for text_idx in reasoning)
@@ -1723,7 +1736,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         )
         if latest_human is None:
             return None
-        if latest_human not in sources and cls._message_texts(messages[latest_human]):
+        if latest_human not in sources and self._message_texts(messages[latest_human]):
             return None
         return frozenset(text_idx for text_idx, source in enumerate(sources) if source == latest_human)
 

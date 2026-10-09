@@ -7,6 +7,7 @@ from litellm.router_strategy.adaptive_router import adaptive_router as ar_module
 import pytest
 
 from litellm.router_strategy.adaptive_router.adaptive_router import AdaptiveRouter
+from litellm.router_strategy.adaptive_router.bandit import initial_cell
 from litellm.router_strategy.adaptive_router.signals import Turn
 from litellm.types.router import (
     AdaptiveRouterConfig,
@@ -416,3 +417,11 @@ def test_session_state_expiry_is_refreshed_on_access():
     second_exp = r._session_states_expiry[("sess-A", "fast")]
 
     assert second_exp > first_exp
+
+
+@pytest.mark.parametrize("model", ["fast", "smart"])
+def test_cell_returns_the_cold_start_prior_for_an_available_model(model):
+    r = _make_router()
+    cell = r.cell(RequestType.CODE_GENERATION, model)
+    assert cell == initial_cell(r.model_to_prefs[model], RequestType.CODE_GENERATION)
+    assert cell.total_samples == 0

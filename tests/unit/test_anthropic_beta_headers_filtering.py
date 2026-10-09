@@ -10,7 +10,7 @@ This test validates:
 
 import json
 import os
-from typing import Dict, List
+from typing import Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -444,7 +444,7 @@ class TestAnthropicBetaHeadersFiltering:
 
         assert filtered == ["thinking-binding-controls-2026-08-01"]
 
-    @pytest.mark.parametrize("provider", ["anthropic", "bedrock", "bedrock_mantle", "vertex_ai"])
+    @pytest.mark.parametrize("provider", ["anthropic", "azure_ai", "bedrock", "bedrock_mantle", "vertex_ai"])
     def test_dangerous_tool_use_forwarded(self, provider):
         """Claude Code's server-side auto-mode classifier sends `safeguards` together with
         dangerous-tool-use-2026-09-03. Bedrock Invoke, Bedrock Mantle, and Vertex rawPredict
@@ -457,6 +457,20 @@ class TestAnthropicBetaHeadersFiltering:
         )
 
         assert filtered == ["dangerous-tool-use-2026-09-03"]
+
+    @pytest.mark.parametrize("provider", ["anthropic", "vertex_ai"])
+    def test_inline_tools_forwarded(self, provider: str) -> None:
+        """inline-tools-2026-09-15 lets a `tool_addition` system message carry a new tool mid-conversation.
+        Anthropic documents it for the Claude API
+        (https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages, fetched 2026-10-07),
+        and a live Vertex rawPredict call on claude-opus-5-5 honored it on 2026-10-07 while answering 400 on the
+        `tool_addition` block without it."""
+        filtered: Final = filter_and_transform_beta_headers(
+            beta_headers=["inline-tools-2026-09-15"],
+            provider=provider,
+        )
+
+        assert filtered == ["inline-tools-2026-09-15"]
 
     def test_null_value_headers_filtered(self):
         """Test that headers with null values are always filtered out."""
