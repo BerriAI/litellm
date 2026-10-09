@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 
 
 import pytest
+import responses
 from click.testing import CliRunner
 
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
@@ -2044,3 +2045,33 @@ class TestGetStoredApiKeyRefresh:
         assert captured.out == ""
         assert captured.err == "Could not renew the key: token request failed with 503: temporarily_unavailable\n"
         save.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "body, expected_detail",
+    [
+        ('{"detail": "Too many CLI login attempts.", "retry": {"after": [30, null]}}', ": Too many CLI login attempts."),
+        ('{"detail": 5}', ""),
+        ('{"detail": ""}', ""),
+        ('{"detail": {"message": "nested"}}', ""),
+        ("{}", ""),
+        ('["detail"]', ""),
+        ('"detail"', ""),
+        ("7", ""),
+        ("true", ""),
+        ("null", ""),
+        ("<html>gateway</html>", ""),
+        ("", ""),
+    ],
+)
+@responses.activate
+def test_login_shows_the_error_detail_only_when_the_proxy_answers_with_a_json_object(body, expected_detail):
+    responses.post("https://test.example.com/sso/cli/start", body=body, status=429)
+
+    result = CliRunner().invoke(login, obj={"base_url": "https://test.example.com"})
+
+    assert result.exit_code == 0
+    assert result.output == (
+        "Authentication failed: Starting CLI login failed: HTTP 429 from https://test.example.com/sso/cli/start"
+        f"{expected_detail}\n"
+    )

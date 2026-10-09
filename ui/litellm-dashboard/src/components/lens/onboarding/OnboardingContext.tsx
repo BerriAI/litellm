@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext } from "react";
-import type { TraceSummary } from "@/components/view_logs/TraceView/traceTypes";
+import type { TraceSummary } from "@/components/lens/traces/types";
 
 export interface Onboarding {
   readonly readOnly: boolean;
@@ -22,3 +22,5 @@ export function useOnboarding(): Onboarding {
   if (!onboarding) throw new Error("useOnboarding needs an OnboardingProvider above it");
   return onboarding;
 }
+
+export const useOptionalOnboarding = (): Onboarding | null => useContext(OnboardingContext);

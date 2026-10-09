@@ -46,6 +46,8 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     WebhookEvent,
 )
+from litellm.repositories.table_repositories import InvitationLinkRepository
+from litellm.repositories.user_repository import UserRepository
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.integrations.slack_alerting import LITELLM_LOGO_URL
 
@@ -844,7 +846,7 @@ class BaseEmailLogger(CustomLogger):
             )
             return None
 
-        user_row = await prisma_client.db.litellm_usertable.find_unique(
+        user_row = await UserRepository(prisma_client).table.find_unique(
             where={"user_id": user_id}
         )
 
@@ -929,7 +931,7 @@ class BaseEmailLogger(CustomLogger):
         try:
             # Try to get existing invitation
             existing_invitations = (
-                await prisma_client.db.litellm_invitationlink.find_many(
+                await InvitationLinkRepository(prisma_client).table.find_many(
                     where={"user_id": user_id},
                     order={"created_at": "desc"},
                 )

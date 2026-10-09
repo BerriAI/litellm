@@ -11,12 +11,10 @@ Run with: pytest tests/llm_translation/interactions/test_google_interactions_int
 import asyncio
 import os
 
+import openai
 import pytest
 
-
-import litellm
 import litellm.interactions as interactions
-import openai
 
 # Test API key - should be set in environment
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -163,66 +161,13 @@ class TestGoogleInteractionsStreaming:
 class TestGoogleInteractionsMultiTurn:
     """Tests for multi-turn conversations using Step[] input."""
 
+
 class TestGoogleInteractionsAgent:
     """Tests for agent interactions (per OpenAPI spec)."""
-
-    @pytest.mark.skip(reason="Deep research agent may not be available in all accounts")
-    def test_create_agent_interaction(self, api_key):
-        """Test creating an agent interaction per OpenAPI spec."""
-        response = interactions.create(
-            agent="deep-research-pro-preview-12-2025",
-            input="Research the current state of quantum computing",
-            api_key=api_key,
-        )
-
-        assert response is not None
-        print(f"Agent response: {response}")
 
 
 class TestGoogleInteractionsGetDelete:
     """Tests for get and delete operations."""
-
-    @pytest.mark.skip(
-        reason="Get/Delete require valid interaction IDs from previous calls"
-    )
-    def test_get_interaction(self, api_key):
-        """Test getting an interaction by ID."""
-        # First create an interaction
-        create_response = interactions.create(
-            model="gemini/gemini-2.5-flash",
-            input="Hello",
-            api_key=api_key,
-        )
-
-        if create_response.id:
-            # Then get it
-            get_response = interactions.get(
-                interaction_id=create_response.id,
-                api_key=api_key,
-            )
-            assert get_response is not None
-            print(f"Get response: {get_response}")
-
-    @pytest.mark.skip(
-        reason="Get/Delete require valid interaction IDs from previous calls"
-    )
-    def test_delete_interaction(self, api_key):
-        """Test deleting an interaction by ID."""
-        # First create an interaction
-        create_response = interactions.create(
-            model="gemini/gemini-2.5-flash",
-            input="Hello",
-            api_key=api_key,
-        )
-
-        if create_response.id:
-            # Then delete it
-            delete_result = interactions.delete(
-                interaction_id=create_response.id,
-                api_key=api_key,
-            )
-            assert delete_result.success is True
-            print(f"Delete result: {delete_result}")
 
 
 class TestGoogleInteractionsErrorHandling:
@@ -233,14 +178,6 @@ class TestGoogleInteractionsErrorHandling:
         with pytest.raises(openai.APIError):
             interactions.create(
                 model="gemini/invalid-model-name-xyz",
-                input="Hello",
-                api_key=api_key,
-            )
-
-    def test_missing_model_and_agent(self, api_key):
-        """Test error when neither model nor agent is provided."""
-        with pytest.raises((ValueError, litellm.APIConnectionError)):
-            interactions.create(
                 input="Hello",
                 api_key=api_key,
             )

@@ -602,14 +602,23 @@ def test_two_different_after_values_forward_the_last_one(gateway: Gateway) -> No
         assert _ids(page) == (managed_b,), page
 
 
-@pytest.mark.parametrize("status", (401, 404, 500))
-def test_provider_errors_reach_the_caller_and_other_models_keep_mapping(gateway: Gateway, status: int) -> None:
+@pytest.mark.parametrize(
+    ("status", "expected_error_type"),
+    ((401, "authentication_error"), (404, "invalid_request_error"), (500, "internal_server_error")),
+)
+def test_provider_errors_reach_the_caller_and_other_models_keep_mapping(
+    gateway: Gateway, status: int, expected_error_type: str
+) -> None:
     message: Final = f"provider refused listing {uuid.uuid4().hex[:8]}"
     with _rig(gateway, listing=_error_listing(status, message)) as failing, _rig(gateway, "a.txt") as healthy:
         member: Final = _member(failing.scenario, failing.model, healthy.model)
         managed_a: Final = healthy.upload(member.key, "a.txt")
         failed: Final = failing.list(member.key, {"model": failing.model})
-        assert _json(failed) == _provider_error(status, message), failed.text
+        assert failed.status_code == status, failed.text
+        error: Final = object_value(_json(failed)["error"])
+        assert message in string_value(error["message"]), failed.text
+        assert error["code"] == str(status), failed.text
+        assert error["type"] == expected_error_type, failed.text
         assert len(failing.list_requests()) == 1
         assert _ids(healthy.listed(member.key)) == (managed_a,)
         liveliness: Final = gateway.request("GET", "/health/liveliness")

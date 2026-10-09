@@ -5,8 +5,10 @@ import { ApiError } from "@/lib/http/client";
 
 const MAX_RETRIES = 3;
 
+const isRetryable = (error: unknown): boolean => !(error instanceof ApiError) || error.status >= 500;
+
 export const shouldRetry = (failureCount: number, error: unknown): boolean =>
-  !(error instanceof ApiError && error.status >= 400 && error.status < 500) && failureCount < MAX_RETRIES;
+  isRetryable(error) && failureCount < MAX_RETRIES;
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: shouldRetry } } });
 

@@ -83,7 +83,7 @@ async def anthropic_messages_with_mcp(
         LiteLLM_Proxy_MCP_Handler,
     )
 
-    mcp_references, other_tools = await LiteLLM_Proxy_MCP_Handler._split_mcp_tools(tools)
+    mcp_references, other_tools = await LiteLLM_Proxy_MCP_Handler.split_mcp_tools(tools)
 
     if not mcp_references:
         return await _AnthropicMessagesCall(fn=litellm.anthropic_messages).fn(
@@ -100,7 +100,7 @@ async def anthropic_messages_with_mcp(
     (
         deduplicated_mcp_tools,
         tool_server_map,
-    ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
+    ) = await LiteLLM_Proxy_MCP_Handler.process_mcp_tools_without_openai_transform(
         context.user_api_key_auth,
         mcp_references,
         litellm_trace_id=context.litellm_trace_id,
@@ -114,7 +114,7 @@ async def anthropic_messages_with_mcp(
     )
     all_tools: Final = [*anthropic_tools, *(other_tools or ())]
 
-    should_auto_execute: Final = LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(
+    should_auto_execute: Final = LiteLLM_Proxy_MCP_Handler.should_auto_execute_tools(
         mcp_tools_with_litellm_proxy=mcp_references
     )
     stream: Final = bool(kwargs.pop("stream", False))
@@ -145,7 +145,7 @@ async def anthropic_messages_with_mcp(
         if not tool_use_blocks:
             break
 
-        tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_results = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
             tool_server_map=tool_server_map,
             served_tools=deduplicated_mcp_tools,
             tool_calls=list(tool_use_blocks),
