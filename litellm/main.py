@@ -146,7 +146,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     RawRequestTypedDict,
     StreamingChoices,
-    canonical_model_mode,
+    is_decisions_model_mode,
 )
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 from litellm.utils import (
@@ -8820,11 +8820,8 @@ async def ahealth_check(
         )
 
         model_params["cache"] = {"no-cache": True}  # don't used cached responses for making health check calls
-        mode = canonical_model_mode(
-            mode
-            or default_health_check_mode(
-                requested_model=requested_model, model=model, custom_llm_provider=custom_llm_provider
-            )
+        mode = mode or default_health_check_mode(
+            requested_model=requested_model, model=model, custom_llm_provider=custom_llm_provider
         )
         if "*" in model:
             return await HealthCheckHelpers.ahealth_check_wildcard_models(
@@ -8842,8 +8839,9 @@ async def ahealth_check(
             input=input,
         )
 
-        if mode in mode_handlers:
-            _response: Final = await mode_handlers[mode]()
+        handler_mode: Final = "decisions" if is_decisions_model_mode(mode) else mode
+        if handler_mode in mode_handlers:
+            _response: Final = await mode_handlers[handler_mode]()
             _response_headers: Final = cast(  # cast-ok: provider headers are stored as a string-keyed mapping
                 Mapping[str, object], (get_hidden_params(_response) or {}).get("headers", {}) or {}
             )

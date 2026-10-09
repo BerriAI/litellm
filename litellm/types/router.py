@@ -47,9 +47,6 @@ from .utils import (
     StandardLoggingRoutingDecision,
 )
 from .utils import (
-    canonical_model_mode as _canonical_model_mode,
-)
-from .utils import (
     # private alias: `from .types.router import *` would rebind a public Final in litellm/__init__.py
     server_owned_wif_litellm_params as _server_owned_wif_litellm_params,
 )
@@ -297,14 +294,12 @@ class ModelInfo(MirroredPricingParams):
     # in the spend log row's metadata. Set it on every deployment of the group.
     internal_router_model: bool | None = None
 
-    def __init__(self, id: str | int | None = None, **params: object) -> None:
+    def __init__(self, id: str | int | None = None, **params) -> None:
         if id is None:
             id = str(uuid.uuid4())  # Generate a UUID if id is None or not provided
         elif isinstance(id, int):
             id = str(id)
-        mode: Final = params.get("mode")
-        model_params: Final = {**params, "mode": _canonical_model_mode(mode)} if isinstance(mode, str) else params
-        super().__init__(id=id, **model_params)
+        super().__init__(id=id, **params)
 
     @model_validator(mode="after")
     def _validate_ptu_bounds(self) -> "ModelInfo":
@@ -902,11 +897,6 @@ class ModelGroupInfo(LiteLLMBaseModel):
     supported_reasoning_efforts: tuple[str, ...] | None = Field(default=None)
     supported_openai_params: list[str] | None = Field(default=[])
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
-
-    @field_validator("mode", mode="before")
-    @classmethod
-    def _canonicalize_mode(cls, mode: object) -> object:
-        return _canonical_model_mode(mode) if isinstance(mode, str) else mode
 
     def __init__(self, **data) -> None:
         for field_name, field_type in _resolved_annotations(self.__class__).items():

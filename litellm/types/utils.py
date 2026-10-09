@@ -160,11 +160,8 @@ class LiteLLMCommonStrings(Enum):
     llm_provider_not_provided = "Unmapped LLM provider for this endpoint. You passed model={model}, custom_llm_provider={custom_llm_provider}. Check supported provider and route: https://docs.litellm.ai/docs/providers"
 
 
-LEGACY_DECISIONS_MODE: Final = "evaluation"
-
-
-def canonical_model_mode(mode: str) -> str:
-    return "decisions" if mode == LEGACY_DECISIONS_MODE else mode
+def is_decisions_model_mode(mode: str | None) -> bool:
+    return mode in ("decisions", "evaluation")
 
 
 SupportedCacheControls: Final = ["ttl", "s-maxage", "no-cache", "no-store"]

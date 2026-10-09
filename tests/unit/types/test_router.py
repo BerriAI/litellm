@@ -1,5 +1,4 @@
 import logging
-from typing import Final
 
 import pytest
 from pydantic import ValidationError
@@ -10,7 +9,6 @@ from litellm.types.router import (
     Deployment,
     GenericLiteLLMParams,
     LiteLLM_Params,
-    ModelGroupInfo,
     ModelInfo,
     holds_secret_pointer,
     reject_server_owned_wif_params,
@@ -35,21 +33,6 @@ def test_model_info_declares_mirrored_pricing_fields():
     info = ModelInfo(id="x", input_cost_per_token=1e-06)
     assert info.__pydantic_extra__ == {}
     assert info.input_cost_per_token == 1e-06
-
-
-def test_model_info_canonicalizes_legacy_decisions_mode_without_mutating_input() -> None:
-    params: Final = {"mode": "evaluation"}
-    info: Final = ModelInfo(id="x", **params)
-
-    assert info.mode == "decisions"
-    assert params["mode"] == "evaluation"
-    assert ModelInfo(id="x", mode="chat").mode == "chat"
-
-
-def test_model_group_info_canonicalizes_legacy_decisions_mode() -> None:
-    info: Final = ModelGroupInfo(model_group="m", providers=["typesafe"], mode="evaluation")
-
-    assert info.mode == "decisions"
 
 
 def test_special_model_info_params_cannot_drift_from_the_mirror():

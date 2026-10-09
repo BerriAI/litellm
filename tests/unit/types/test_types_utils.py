@@ -29,6 +29,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     TextCompletionResponse,
     all_litellm_params,
+    is_decisions_model_mode,
     text_tokens_without_nested_reasoning,
 )
 
@@ -39,6 +40,14 @@ class _DictHiddenParamsAccessor(Protocol):
 
     @hidden_params.setter
     def hidden_params(self, hidden_params: dict[str, object]) -> None: ...
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    (("decisions", True), ("evaluation", True), ("chat", False), (None, False)),
+)
+def test_is_decisions_model_mode(mode: str | None, expected: bool) -> None:
+    assert is_decisions_model_mode(mode) is expected
 
 
 def test_rust_is_a_known_litellm_param():

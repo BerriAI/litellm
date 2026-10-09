@@ -85,6 +85,7 @@ from litellm.proxy.tracing_runtime import provide_storage
 from litellm.router import Router
 from litellm.tracing.remote import LensConnection, bounded_response
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.utils import is_decisions_model_mode
 
 router: Final = APIRouter(prefix="/lens", tags=["Lens"])
 CLAIM_CANDIDATES: Final = 20
@@ -151,7 +152,7 @@ def validate_signal_model(config: SignalConfig, llm_router: Router | None) -> No
         model_group: Final = llm_router.get_model_group_info(model_group=config.model)
     except Exception as error:
         raise HTTPException(400, message) from error
-    if model_group is None or model_group.mode != "decisions":
+    if model_group is None or not is_decisions_model_mode(model_group.mode):
         raise HTTPException(400, message)
 
 
