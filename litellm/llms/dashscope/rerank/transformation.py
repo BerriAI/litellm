@@ -169,9 +169,7 @@ class DashScopeRerankConfig(BaseRerankConfig):
             request["return_documents"] = optional_rerank_params["return_documents"]
         if optional_rerank_params.get("instruction") is None:
             return request
-        return dict(
-            request, instruct=optional_rerank_params["instruction"]
-        )
+        return dict(request, instruct=optional_rerank_params["instruction"])
 
     def transform_rerank_response(
         self,
