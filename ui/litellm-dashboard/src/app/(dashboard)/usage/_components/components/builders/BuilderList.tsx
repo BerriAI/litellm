@@ -12,7 +12,6 @@ import {
   type BuilderInsightBuilder,
   type BuilderSort,
 } from "./builderInsightsData";
-import { InlineCodeText } from "./InlineCodeText";
 
 const SORT_OPTIONS = [
   { value: "spend", label: "Spend" },
@@ -57,6 +56,7 @@ export function BuilderList({
               key={builder.id}
               type="button"
               onClick={() => onSelect(builder.id)}
+              title={builder.tagline.replace(/`/g, "")}
               className={`grid w-full grid-cols-[1.5rem_minmax(0,1fr)_auto] items-center gap-3 rounded-lg py-2.5 text-left transition-colors sm:grid-cols-[1.5rem_minmax(0,1fr)_6rem_6rem_auto] ${
                 selected ? "bg-muted/60" : "hover:bg-muted/40"
               }`}
@@ -67,13 +67,8 @@ export function BuilderList({
                   {builderInitials(builder.name)}
                 </span>
                 <span className="min-w-0">
-                  <span className="flex min-w-0 items-center gap-2">
-                    <span className="truncate text-sm font-medium text-foreground">{builder.name}</span>
-                    <span className="shrink-0 text-[11px] text-muted-foreground">{builder.archetype}</span>
-                  </span>
-                  <span className="block truncate text-xs text-muted-foreground">
-                    <InlineCodeText text={builder.tagline} />
-                  </span>
+                  <span className="block truncate text-sm font-medium text-foreground">{builder.name}</span>
+                  <span className="block text-xs text-muted-foreground">{builder.archetype}</span>
                 </span>
               </span>
               <span className="hidden items-center justify-start -space-x-1.5 sm:flex">
