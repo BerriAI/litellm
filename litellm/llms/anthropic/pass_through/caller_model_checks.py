@@ -8,7 +8,7 @@ before the sub-call runs.
 """
 
 from collections.abc import Awaitable, Mapping, Sequence
-from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeVar
 
 import litellm
 from litellm._logging import verbose_logger
@@ -21,6 +21,8 @@ if TYPE_CHECKING:
         RateLimitResponse,
     )
     from litellm.router import Router
+
+_ScopeObject: Final = TypeVar("_ScopeObject")
 
 
 class _CreateRateLimitDescriptors(Protocol):
@@ -158,21 +160,17 @@ async def caller_can_call_model(
             return False
 
     if user_id is not None and prisma_client is not None:
-        try:
-            user_obj = await get_user_object(
+        user_obj: Final = await _scope_object_or_none(
+            get_user_object(
                 user_id=user_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 user_id_upsert=False,
                 proxy_logging_obj=proxy_logging_obj,
-            )
-        except Exception as e:
-            verbose_logger.debug(
-                "proxy sub-call: user object lookup failed for model=%s access check; skipping user-level scope: %s",
-                model,
-                e,
-            )
-            user_obj = None
+            ),
+            scope="user",
+            model=model,
+        )
         if user_obj is not None:
             try:
                 await can_user_call_model(
@@ -191,21 +189,16 @@ async def caller_can_call_model(
                 return False
 
     if project_id is not None and prisma_client is not None:
-        try:
-            project_obj = await get_project_object(
+        project_obj: Final = await _scope_object_or_none(
+            get_project_object(
                 project_id=project_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
-            )
-        except Exception as e:
-            verbose_logger.debug(
-                "proxy sub-call: project object lookup failed for model=%s access check; "
-                "skipping project-level scope: %s",
-                model,
-                e,
-            )
-            project_obj = None
+            ),
+            scope="project",
+            model=model,
+        )
         if project_obj is not None and project_obj.models:
             try:
                 can_project_access_model(
@@ -226,7 +219,7 @@ async def caller_can_call_model(
 
     if user_id is not None and team_id is not None and prisma_client is not None:
         try:
-            team_membership = await get_team_membership(
+            team_membership: Final = await get_team_membership(
                 user_id=user_id,
                 team_id=team_id,
                 prisma_client=prisma_client,
@@ -267,6 +260,20 @@ async def caller_can_call_model(
                 return False
 
     return True
+
+
+async def _scope_object_or_none(lookup: Awaitable[_ScopeObject], *, scope: str, model: str) -> _ScopeObject | None:
+    try:
+        return await lookup
+    except Exception as e:
+        verbose_logger.debug(
+            "proxy sub-call: %s object lookup failed for model=%s access check; skipping %s-level scope: %s",
+            scope,
+            model,
+            scope,
+            e,
+        )
+        return None
 
 
 async def caller_within_model_budget(

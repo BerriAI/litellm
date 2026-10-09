@@ -49,6 +49,7 @@ def prompt_cache_key_from_user_id(user_id: object) -> str | None:
 
 PROXY_SPEND_ATTRIBUTION_METADATA_KEYS: Final = (
     "user_api_key",
+    "user_api_key_hash",
     "user_api_key_alias",
     "user_api_key_team_id",
     "user_api_key_team_alias",

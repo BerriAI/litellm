@@ -1,6 +1,8 @@
 import asyncio
+import hashlib
 import json
 from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import patch
 
@@ -25,6 +27,7 @@ from litellm.llms.anthropic.pass_through.safeguards import (
     with_safeguard_results,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.llms.anthropic import AnthropicResponseContentBlockToolUse
 from litellm.types.utils import Choices, Message, ModelResponse
 
@@ -103,6 +106,27 @@ async def test_evaluate_maps_classifier_verdicts_onto_each_tool_use_id():
     verdicts: Final = _verdicts(await _evaluator(classifier).evaluate((LS, CURL_SH)))
     assert verdicts == {
         "call_ls": {"type": "evaluated", "outcome": "not_flagged"},
+        "call_curl": {"type": "evaluated", "outcome": "flagged", "explanation": "runs fetched code"},
+    }
+
+
+class _TextPartsClassifier:
+    def __init__(self, parts: Sequence[str]) -> None:
+        self._parts = parts
+
+    async def __call__(self, *, messages: Sequence[Mapping[str, object]], **kwargs: object) -> ModelResponse:
+        response: Final = _classifier_response("")
+        response.choices[0].message.content = [{"type": "text", "text": part} for part in self._parts]
+        return response
+
+
+@pytest.mark.asyncio
+async def test_evaluate_reads_verdicts_from_a_reply_split_into_text_parts():
+    classifier: Final = _TextPartsClassifier(
+        ['{"verdicts": {"call_curl": ', '{"flagged": true, "explanation": "runs fetched code"}}}']
+    )
+    verdicts: Final = _verdicts(await _evaluator(classifier).evaluate((CURL_SH,)))
+    assert verdicts == {
         "call_curl": {"type": "evaluated", "outcome": "flagged", "explanation": "runs fetched code"},
     }
 
@@ -304,6 +328,30 @@ async def test_build_evaluator_prefers_the_router_and_keeps_only_the_attribution
     assert router.calls[0]["allowed_model_region"] == "us"
     assert evaluator.classifier_context == '{"permission_mode": "auto"}'
     assert evaluator.transcript == '{"user": "hi"}'
+
+
+@pytest.mark.asyncio
+async def test_classifier_spend_row_logs_under_the_callers_key_hash():
+    key_hash: Final = hashlib.sha256(b"sk-caller").hexdigest()
+    router: Final = _Router()
+    with patch("litellm.proxy.proxy_server.general_settings", {"safeguards_classifier_model": "classifier"}):
+        evaluator: Final = build_safeguards_evaluator(
+            safeguards=DANGEROUS_TOOL_USE_REQUEST,
+            messages=[{"role": "user", "content": "hi"}],
+            litellm_metadata={"user_api_key": key_hash, "user_api_key_hash": key_hash, "user_api_key_alias": "dev"},
+            user_api_key_auth=UserAPIKeyAuth(),
+            llm_router=router,
+        )
+    assert evaluator is not None
+    await evaluator.evaluate((LS,))
+    logged_at: Final = datetime.now(timezone.utc)
+    spend_row: Final = get_logging_payload(
+        kwargs={"litellm_params": {"metadata": router.calls[0]["litellm_metadata"]}, "call_type": "acompletion"},
+        response_obj=None,
+        start_time=logged_at,
+        end_time=logged_at,
+    )
+    assert spend_row["api_key"] == key_hash
 
 
 @pytest.mark.asyncio

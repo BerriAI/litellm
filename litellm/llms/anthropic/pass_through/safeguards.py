@@ -349,8 +349,11 @@ def _clipped(text: str, limit: int) -> str:
 
 
 def _tool_result_excerpt(content: object) -> str:
-    text: Final = content if isinstance(content, str) else "".join(_text_of(part) for part in _objects(content))
-    return _clipped(text, TOOL_RESULT_CHAR_LIMIT)
+    return _clipped(_content_text(content), TOOL_RESULT_CHAR_LIMIT)
+
+
+def _content_text(content: object) -> str:
+    return content if isinstance(content, str) else "".join(_text_of(part) for part in _objects(content))
 
 
 def _text_of(part: object) -> str:
@@ -363,8 +366,7 @@ def _response_text(response: object) -> str:
     choices: Final[object] = getattr(response, "choices", None)
     first: Final = next(iter(_objects(choices)), None)
     message: Final[object] = getattr(first, "message", None)
-    content: Final[object] = getattr(message, "content", None)
-    return content if isinstance(content, str) else ""
+    return _content_text(getattr(message, "content", None))
 
 
 def _parse_classifier_output(text: str) -> _ClassifierOutput | None:
