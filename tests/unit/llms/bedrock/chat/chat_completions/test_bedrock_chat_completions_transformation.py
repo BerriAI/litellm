@@ -64,7 +64,6 @@ def test_claude_stays_on_converse(local_cost_map):
 @pytest.mark.parametrize(
     "model",
     [
-        "us.xai.grok-4.6",
         "bedrock/openai.gpt-oss-20b-1:0",
         "openai.gpt-oss-120b-1:0",
         "global.openai.gpt-5.5",
@@ -104,10 +103,14 @@ def test_cost_map_row_listing_chat_completions_leaves_the_default_route_alone(mo
         ("us.openai.gpt-6.1-sol", ["/v1/chat/completions"], "chat_completions"),
         ("global.openai.gpt-10-sol", ["/v1/chat/completions"], "chat_completions"),
         ("openai.gpt-oss-120b-1:0", ["/v1/chat/completions"], "converse"),
-        ("us.xai.grok-4.6", ["/v1/chat/completions"], "converse"),
+        ("us.xai.grok-4.6", ["/v1/chat/completions"], "chat_completions"),
+        ("global.xai.grok-4.7", ["/v1/chat/completions"], "chat_completions"),
+        ("global.xai.grok-4.7", ["/v1/responses"], "converse"),
+        ("global.xai.grok-4.7", [], "converse"),
+        ("us-gov.xai.grok-4.6", ["/v1/chat/completions"], "chat_completions"),
     ],
 )
-def test_default_route_needs_gpt_56_or_newer_and_a_row_listing_chat_completions(
+def test_default_route_needs_grok_or_gpt_56_or_newer_and_a_row_listing_chat_completions(
     monkeypatch, model, supported_endpoints, expected_route
 ):
     entry = {"litellm_provider": "bedrock_converse", "supported_endpoints": supported_endpoints}
@@ -258,7 +261,7 @@ def _recording_client(**response_kwargs):
 @pytest.mark.parametrize(
     "model, model_path",
     [
-        ("bedrock/us.xai.grok-4.6", b"/model/us.xai.grok-4.6/converse"),
+        ("bedrock/converse/us.xai.grok-4.6", b"/model/us.xai.grok-4.6/converse"),
         ("bedrock/openai.gpt-oss-20b-1:0", b"/model/openai.gpt-oss-20b-1%3A0/converse"),
         ("bedrock/global.openai.gpt-5.5", b"/model/global.openai.gpt-5.5/converse"),
     ],
@@ -385,6 +388,10 @@ GPT_56_AND_NEWER_MODELS = (
     "global.openai.gpt-6-luna",
     "bedrock/global.openai.gpt-6.1-sol",
     "us.openai.gpt-6.1-sol",
+    "global.xai.grok-4.6",
+    "bedrock/us.xai.grok-4.6",
+    "global.xai.grok-4.7",
+    "bedrock/us.xai.grok-4.7",
 )
 
 

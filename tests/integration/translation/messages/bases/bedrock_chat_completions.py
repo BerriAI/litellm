@@ -6,7 +6,7 @@ GROK_4_7_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
     litellm_endpoint="/v1/messages",
     litellm_request={
-        "model": "bedrock/chat_completions/global.xai.grok-4.7",
+        "model": "bedrock/global.xai.grok-4.7",
         "max_tokens": 1024,
         "system": "You are a terse assistant.",
         "messages": [{"role": "user", "content": "Say hello."}],
@@ -53,7 +53,7 @@ GROK_4_7_TEST_CASE: Final = TranslationTestCase(
         "id": "chatcmpl-3xfhgmhrhhwplbepas3pjzbgjcccj4hx5tzplx7fw35giw3efznq",
         "type": "message",
         "role": "assistant",
-        "model": "bedrock/chat_completions/global.xai.grok-4.7",
+        "model": "bedrock/global.xai.grok-4.7",
         "stop_sequence": None,
         "usage": {"input_tokens": 30, "output_tokens": 37},
         "content": [{"type": "text", "text": "Hello."}],

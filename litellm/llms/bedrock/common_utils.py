@@ -44,6 +44,7 @@ _ERROR_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
 _OPENAI_FAMILY_MODEL_RE: Final = re.compile(r"(^|[./])openai\.")
 _OPENAI_GPT_VERSION_RE: Final = re.compile(r"(^|[./])openai\.gpt-(\d{1,3})(?!\d)(?:\.(\d{1,3})(?!\d))?")
 _BEDROCK_RUNTIME_CHAT_COMPLETIONS_DEFAULT_SINCE: Final = (5, 6)
+_XAI_GROK_MODEL_RE: Final = re.compile(r"(^|[./])xai\.grok-")
 _BEDROCK_RUNTIME_CHAT_COMPLETIONS_ENDPOINT: Final = "/v1/chat/completions"
 BedrockRoute = Literal[
     "converse",
@@ -868,15 +869,21 @@ def _openai_gpt_version(model: str) -> tuple[int, int] | None:
     return int(match.group(2)), int(match.group(3) or 0)
 
 
+def _bedrock_runtime_chat_completions_default_family(model: str) -> bool:
+    if _XAI_GROK_MODEL_RE.search(model) is not None:
+        return True
+    gpt_version: Final = _openai_gpt_version(model)
+    return gpt_version is not None and gpt_version >= _BEDROCK_RUNTIME_CHAT_COMPLETIONS_DEFAULT_SINCE
+
+
 def bedrock_runtime_chat_completions_is_default(model: str) -> bool:
     """Whether a model with no route prefix goes to bedrock-runtime's native Chat Completions by default.
 
-    GPT 5.6 and newer (``openai.gpt-<major>[.<minor>]`` at or above 5.6, which gpt-oss never matches) whose
-    price-map row lists ``/v1/chat/completions`` in ``supported_endpoints``. Older GPT rows, gpt-oss and Grok
-    stay on Converse unless the ``chat_completions/`` prefix opts them in.
+    Grok (``xai.grok-*``) and GPT 5.6 and newer (``openai.gpt-<major>[.<minor>]`` at or above 5.6, which
+    gpt-oss never matches) whose price-map row lists ``/v1/chat/completions`` in ``supported_endpoints``.
+    Older GPT rows and gpt-oss stay on Converse unless the ``chat_completions/`` prefix opts them in.
     """
-    version: Final = _openai_gpt_version(model)
-    if version is None or version < _BEDROCK_RUNTIME_CHAT_COMPLETIONS_DEFAULT_SINCE:
+    if not _bedrock_runtime_chat_completions_default_family(model):
         return False
     return any(
         _price_map_entry_lists_endpoint(entry, _BEDROCK_RUNTIME_CHAT_COMPLETIONS_ENDPOINT)
@@ -1420,8 +1427,8 @@ class BedrockModelInfo(BaseLLMModelInfo):
         """
         Get the bedrock route for the given model.
 
-        GPT 5.6 and newer go to bedrock-runtime's native OpenAI Chat Completions by default
-        (``bedrock_runtime_chat_completions_is_default``) and ``chat_completions/`` opts any other model in;
+        Grok and GPT 5.6 and newer go to bedrock-runtime's native OpenAI Chat Completions by
+        default (``bedrock_runtime_chat_completions_is_default``) and ``chat_completions/`` opts any other model in;
         ``request_params`` (the caller's chat params) sends such a request to Converse when it needs a
         feature only Converse serves, and ``converse/`` pins a model to Converse. Every other OpenAI-family
         model stays on Converse without the prefix.

@@ -3,7 +3,7 @@ Native OpenAI Chat Completions on Amazon Bedrock Runtime.
 
 AWS serves this surface at
 ``https://bedrock-runtime.{region}.amazonaws.com/openai/v1/chat/completions``
-for Grok 4.6, gpt-oss and GPT 5.6 and newer. GPT 5.6 and newer take it by default
+for Grok, gpt-oss and GPT 5.6 and newer. Grok and GPT 5.6 and newer take it by default
 (``bedrock_runtime_chat_completions_is_default`` in ``common_utils``), so their chat
 completions stay chat completions instead of being rewritten to Converse; the
 ``chat_completions/`` route prefix opts any other model in, and ``converse/`` pins a

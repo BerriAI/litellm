@@ -16,7 +16,7 @@ GROK_4_7_TOOL_USE_TEST_CASE: Final = replace(
     GROK_4_7_TEST_CASE,
     scenario="tool_use",
     litellm_request={
-        "model": "bedrock/chat_completions/global.xai.grok-4.7",
+        "model": "bedrock/global.xai.grok-4.7",
         "max_tokens": 1024,
         "tools": [
             {
