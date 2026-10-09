@@ -162,6 +162,8 @@ LLM_CONFIG_NAMES: Final = (
     "OpenRouterDecisionsConfig",
     "CloudflareDecisionsConfig",
     "StrandsDeciderDecisionsConfig",
+    "DatabricksDecisionsConfig",
+    "HostedVLLMDecisionsConfig",
     "OpenAIDecisionsConfig",
     "NvidiaNimRerankConfig",
     "NvidiaNimRankingConfig",
@@ -722,6 +724,11 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "StrandsDeciderDecisionsConfig": (
         ".llms.strands_decider.decisions.transformation",
         "StrandsDeciderDecisionsConfig",
+    ),
+    "DatabricksDecisionsConfig": (".llms.databricks.decisions.transformation", "DatabricksDecisionsConfig"),
+    "HostedVLLMDecisionsConfig": (
+        ".llms.hosted_vllm.decisions.transformation",
+        "HostedVLLMDecisionsConfig",
     ),
     "OpenAIDecisionsConfig": (".llms.openai.decisions.transformation", "OpenAIDecisionsConfig"),
     "NvidiaNimRerankConfig": (

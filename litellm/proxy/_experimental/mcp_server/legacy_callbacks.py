@@ -24,7 +24,7 @@ class SamplingCallback(Protocol):
 
 
 class ElicitationCallback(Protocol):
-    async def __call__(self, context: object, params: ElicitRequestParams, /) -> ElicitResult | ErrorData: ...
+    async def __call__(self, context: object, params: ElicitRequestParams) -> ElicitResult | ErrorData: ...
 
 
 def create_sampling_callback(
@@ -79,6 +79,11 @@ def create_elicitation_callback(timeout: float | None = None) -> ElicitationCall
     relay_timeout: Final = timeout if timeout is not None else MCP_CLIENT_TIMEOUT
 
     async def callback(context: object, params: ElicitRequestParams) -> ElicitResult | ErrorData:
+        if request is not None and request.protocol_version == "2026-07-28":
+            return ErrorData(
+                code=-32602,
+                message="A legacy upstream cannot resume input for a modern client; the operation may have partially completed",
+            )
         from litellm.proxy._experimental.mcp_server.elicitation_handler import handle_elicitation_request
 
         return await handle_elicitation_request(

@@ -1096,10 +1096,12 @@ def _enable_debugging():
     verbose_proxy_stdout_logger.disabled = False
 
 
-def print_verbose(print_statement):
+def print_verbose(print_statement: object, *args: object) -> None:
     try:
-        if set_verbose:
-            print(redact_secrets(str(print_statement)))  # noqa: T201
+        if not set_verbose:
+            return
+        message: Final = str(print_statement) % args if args else str(print_statement)
+        print(redact_secrets(message))  # noqa: T201
     except Exception:
         pass
 

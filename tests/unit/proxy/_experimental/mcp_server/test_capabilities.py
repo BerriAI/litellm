@@ -33,7 +33,7 @@ def test_discovery_only_exposes_authorized_completed_support(revision, transport
         client_extensions=frozenset({"io.modelcontextprotocol/ui"}),
         upstream_extensions=frozenset({"io.modelcontextprotocol/ui"}),
     )
-    assert result.supported_versions == [revision]
+    assert result.supported_versions == ([revision] if transport is MCPTransport.sse else [revision, "2026-07-28"])
     assert result.capabilities.tools is not None
     assert result.capabilities.prompts is None
     assert result.capabilities.resources is None
@@ -43,7 +43,7 @@ def test_discovery_only_exposes_authorized_completed_support(revision, transport
     assert result.ttl_ms == 0
 
 
-@pytest.mark.parametrize("upstream", [frozenset(), frozenset({"unknown"}), frozenset({"2026-07-28"})])
+@pytest.mark.parametrize("upstream", [frozenset(), frozenset({"unknown"})])
 def test_unproven_translation_never_advertises_operations(upstream):
     result = build_discovery(
         configured=HANDSHAKE_PROTOCOL_VERSIONS,
@@ -82,12 +82,12 @@ def test_discovery_results_do_not_share_mutable_capabilities():
     assert capabilities.tools.list_changed is not True
 
 
-def test_modern_candidates_do_not_enable_public_serving():
-    modern = REVISION_SUPPORT["2026-07-28"]
-    assert modern.completed is False
+def test_modern_support_excludes_legacy_sse() -> None:
+    modern: Final = REVISION_SUPPORT["2026-07-28"]
+    assert modern.completed is True
     assert "input_required" in modern.results
     assert MCPTransport.sse not in modern.transports
-    assert not any("2026-07-28" in pair for pair in TRANSLATION_PAIRS)
+    assert ("2026-07-28", "2026-07-28") in TRANSLATION_PAIRS
 
 
 @pytest.mark.asyncio
@@ -104,3 +104,39 @@ async def test_version_policy_gates_the_actual_sdk_handshake(versions, accepted)
         with pytest.RaisesGroup(pytest.RaisesExc(MCPError, match="Unsupported MCP protocol version"), flatten_subgroups=True):
             async with Client(server, mode="legacy"):
                 pytest.fail("The excluded revision must not initialize")
+
+
+def test_modern_discovery_requires_opt_in_and_keeps_unsupported_features_disabled() -> None:
+    from pydantic import TypeAdapter
+    from litellm.types.mcp import MCPAdvertisedVersions
+
+    configured: Final = TypeAdapter(MCPAdvertisedVersions).validate_python(["2026-07-28"])
+    result: Final = build_discovery(
+        configured=configured,
+        revision="2026-07-28",
+        transport=MCPTransport.http,
+        authorized_operations=GATEWAY_OPERATIONS,
+        upstream_versions=frozenset({"2026-07-28"}),
+        capabilities=ServerCapabilities(
+            tools=ToolsCapability(), prompts=PromptsCapability(), resources=ResourcesCapability()
+        ),
+    )
+    assert result.supported_versions == ["2026-07-28"]
+    assert result.capabilities.tools is not None
+    assert result.capabilities.prompts is not None
+    assert result.capabilities.resources is not None
+    assert result.capabilities.tasks is None
+    assert result.capabilities.extensions is None
+
+
+@pytest.mark.parametrize("path", ["/mcp/sse", "/mcp/example/sse/"])
+def test_modern_protocol_is_rejected_on_legacy_sse_paths(path: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.server import unsupported_protocol_version
+
+    monkeypatch.setitem(proxy_server.general_settings, "mcp_advertised_versions", ["2025-11-25", "2026-07-28"])
+    assert unsupported_protocol_version({"path": "/mcp", "headers": [(b"mcp-protocol-version", b"2026-07-28")]}) is None
+    assert (
+        unsupported_protocol_version({"path": path, "headers": [(b"mcp-protocol-version", b"2026-07-28")]})
+        == "2026-07-28"
+    )

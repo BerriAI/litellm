@@ -503,7 +503,7 @@ async def test_native_count_finishing_after_quarter_worker_budget_keeps_plan_and
 
     async def count(model: str, api_key: str, body: Mapping[str, JsonValue]) -> int:
         if not release.is_set():
-            asyncio.get_running_loop().call_later(2.3, release.set)
+            asyncio.get_running_loop().call_later(2.05, release.set)
             await release.wait()
         return await _count(model, api_key, body)
 
