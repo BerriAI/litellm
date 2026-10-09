@@ -63,6 +63,16 @@ def _register(proxy: ProxyClient, resources: ResourceManager, backend: str) -> s
 
 
 class TestBedrockMessages:
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.BEDROCK,),
+            models=(GPT_6_1_SOL_BACKEND,),
+            capabilities=(Capability.TOOL_SEARCH,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_converse_tool_result_of_only_tool_references_is_accepted(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
