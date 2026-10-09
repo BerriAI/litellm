@@ -84,8 +84,8 @@ class VideoCreateOptionalRequestParams(TypedDict, total=False):
     """
 
     input_reference: FileTypes | None  # File reference for input image (first frame)
-    last_frame: FileTypes | None  # File reference for last frame image
-    reference_images: list[str] | None  # List of reference image URLs (up to 9)
+    last_frame: ReadOnly[FileTypes | None]  # File reference for last frame image
+    reference_images: ReadOnly[tuple[str, ...] | None]  # Reference image URLs (up to 9)
     image: object | None  # Image for image-to-video; dict with gcsUri/bytesBase64Encoded, or file-like object
     parameters: dict[str, object] | None  # Provider-specific parameters block passed directly to the API
     model: str | None
