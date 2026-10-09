@@ -623,11 +623,20 @@ def test_partial_wildcard_matching_no_invocable_id_lists_nothing_instead_of_alia
         assert listed == catalog.invocable_ids(), listed
 
 
-def test_custom_prefix_wildcard_lists_the_discovered_models_under_that_prefix(rig: Rig) -> None:
+@pytest.mark.parametrize(
+    "prefix_of",
+    (
+        pytest.param(lambda marker: f"team-{marker}", id="distinct"),
+        pytest.param(lambda marker: marker, id="starts-a-discovered-id"),
+    ),
+)
+def test_custom_prefix_wildcard_lists_the_discovered_models_under_that_prefix(
+    rig: Rig, prefix_of: Callable[[str], str]
+) -> None:
     key, secret = credential()
     marker: Final = stem()
     catalog: Final = catalog_for(marker)
-    prefix: Final = f"team-{marker}"
+    prefix: Final = prefix_of(marker)
     expected: Final = frozenset(name.replace("bedrock/", f"{prefix}/", 1) for name in catalog.invocable_ids())
     with rig.gateway.scenario() as scenario, rig.plane.answering(key, catalog.respond):
         sigv4_deployment(scenario, key, secret, "us-east-1", model_name=f"{prefix}/*")
@@ -734,15 +743,15 @@ def _burst(gateway: Gateway, count: int) -> tuple[tuple[str, int, str], ...]:
 
     def one(index: int) -> tuple[str, int, str]:
         if index % 2 == 0:
-            response = gateway.request("GET", "/v1/models", headers=CLOSE)
-            return "models", response.status_code, response.text
-        body: Mapping[str, JsonValue] = {
+            listing: Final = gateway.request("GET", "/v1/models", headers=CLOSE)
+            return "models", listing.status_code, listing.text
+        body: Final[Mapping[str, JsonValue]] = {
             "model": CONTROL_MODEL,
             "messages": [{"role": "user", "content": f"burst {index}"}],
             "stream": index % 3 == 0,
         }
-        response = gateway.request("POST", "/v1/chat/completions", body, headers=CLOSE)
-        return "chat", response.status_code, response.text
+        chat: Final = gateway.request("POST", "/v1/chat/completions", body, headers=CLOSE)
+        return "chat", chat.status_code, chat.text
 
     with ThreadPoolExecutor(max_workers=count) as pool:
         return tuple(pool.map(one, range(count)))

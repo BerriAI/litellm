@@ -1126,3 +1126,53 @@ def test_partial_bedrock_wildcard_lists_nothing_when_no_discovered_id_carries_it
     )
 
     assert get_known_models_from_wildcard("bedrock/anthropic.*", deployment) == []
+
+
+@respx.mock
+def test_custom_prefix_that_starts_a_discovered_id_still_prefixes_every_listed_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    region: Final = "ca-central-1"
+    respx.get(
+        f"https://bedrock.{region}.amazonaws.com/foundation-models", params={"byInferenceType": "ON_DEMAND"}
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "modelSummaries": [
+                    {"modelId": "anthropic.claude-haiku-4-5-20251001-v1:0"},
+                    {"modelId": "amazon.nova-micro-v1:0"},
+                ]
+            },
+        )
+    )
+    respx.get(
+        f"https://bedrock.{region}.amazonaws.com/inference-profiles", params={"typeEquals": "SYSTEM_DEFINED"}
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "inferenceProfileSummaries": [
+                    {"inferenceProfileId": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "status": "ACTIVE"}
+                ]
+            },
+        )
+    )
+    deployment: Final = LiteLLM_Params(
+        model="bedrock/*",
+        aws_access_key_id="AKIACUSTOMPREFIXACCOUNT",
+        aws_secret_access_key="custom-prefix-secret",
+        aws_region_name=region,
+    )
+
+    assert get_known_models_from_wildcard("anthropic/*", deployment) == [
+        "anthropic/amazon.nova-micro-v1:0",
+        "anthropic/anthropic.claude-haiku-4-5-20251001-v1:0",
+        "anthropic/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    ]
