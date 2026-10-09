@@ -12,7 +12,7 @@ from __future__ import annotations
 import contextlib
 import json
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Final, cast
@@ -1031,6 +1031,7 @@ class TestResponses:
 REASONING_BACKEND: Final = "openai/gpt-5.4-mini"
 SHELL_BACKEND: Final = "openai/gpt-5.5"
 TOOL_DATE: Final = "2025-01-15"
+REASONING_ATTEMPTS: Final = 3
 
 GET_TODAY_TOOL: FunctionToolParam = {
     "type": "function",
@@ -1062,6 +1063,15 @@ class TodayReport(BaseModel):
     number_of_r: str
 
 
+def _has_reasoning_item(response: Response) -> bool:
+    return any(isinstance(item, ResponseReasoningItem) for item in response.output)
+
+
+def _until_reasoning_emitted(create: Callable[[], Response]) -> Response:
+    attempts: Final = (create() for _ in range(REASONING_ATTEMPTS - 1))
+    return next(filter(_has_reasoning_item, attempts), None) or create()
+
+
 class TestResponsesOpenAIHostedFeatures:
     @meta(
         Subject(
@@ -1091,14 +1101,16 @@ class TestResponsesOpenAIHostedFeatures:
             ),
         }
 
-        first = client.responses.create(
-            model=model,
-            input=[question],
-            tools=[GET_TODAY_TOOL],
-            tool_choice={"type": "function", "name": "get_today"},
-            reasoning={"effort": "medium", "summary": "auto"},
-            text={"format": TODAY_REPORT_FORMAT},
-            extra_body=NO_PROXY_CACHE,
+        first: Final = _until_reasoning_emitted(
+            lambda: client.responses.create(
+                model=model,
+                input=[question],
+                tools=[GET_TODAY_TOOL],
+                tool_choice={"type": "function", "name": "get_today"},
+                reasoning={"effort": "medium", "summary": "auto"},
+                text={"format": TODAY_REPORT_FORMAT},
+                extra_body=NO_PROXY_CACHE,
+            )
         )
         assert any(isinstance(item, ResponseReasoningItem) for item in first.output), (
             f"reasoning model returned no reasoning item: {first.output!r}"

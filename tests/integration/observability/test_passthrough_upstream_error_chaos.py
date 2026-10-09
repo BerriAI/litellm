@@ -12,7 +12,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
-from integration._support.process import owned_proxy_process
+from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
@@ -129,6 +129,7 @@ async def test_passthrough_upstream_outage_mid_burst_still_logs_errors_once(gate
                 ), response.text
 
 
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 async def test_passthrough_worker_sigkill_leaves_sibling_serving_and_logging(gateway: Gateway, tmp_path: Path) -> None:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     path: Final = tmp_path / "chaos-kill.yaml"

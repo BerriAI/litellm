@@ -15,7 +15,7 @@ The (feature, provider) for this cell is inferred from the file path by
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional
+from typing import Any, Dict, Final, Mapping, Optional, Sequence
 
 import pytest
 
@@ -23,6 +23,7 @@ from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, met
 from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
+    ModelResult,
     failure_diagnostic,
     run_claude_models_parallel,
 )
@@ -62,12 +63,21 @@ def test_prompt_caching_5m_bedrock_converse(compat_result):
     upstream usage block surfaces a non-zero cache token count."""
     base_url, api_key = require_proxy(compat_result)
 
-    outcomes = run_claude_models_parallel(
-        models=BEDROCK_CONVERSE_MODELS,
-        prompt="Reply with the single word 'pong' and nothing else.",
-        base_url=base_url,
-        api_key=api_key,
+    def run(models: Sequence[str]) -> Dict[str, ModelResult]:
+        return run_claude_models_parallel(
+            models=models,
+            prompt="Reply with the single word 'pong' and nothing else.",
+            base_url=base_url,
+            api_key=api_key,
+        )
+
+    first: Final = run(BEDROCK_CONVERSE_MODELS)
+    uncached: Final = tuple(
+        model
+        for model, outcome in first.items()
+        if not isinstance(outcome, ClaudeCLIError) and outcome.exit_code == 0 and _cache_tokens(outcome.usage) <= 0
     )
+    outcomes: Final = {**first, **run(uncached)} if uncached else first
 
     failures = []
     for model in BEDROCK_CONVERSE_MODELS:

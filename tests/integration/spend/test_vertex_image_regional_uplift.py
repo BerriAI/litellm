@@ -341,6 +341,10 @@ def test_invalid_multiplier_is_refused_at_registration(gateway: Gateway) -> None
         assert wire.drain() == ()
 
 
+def _body_without_created(response: httpx.Response) -> dict[str, object]:
+    return {key: value for key, value in response.json().items() if key != "created"}
+
+
 def test_identical_regional_generations_each_bill_the_uplift_once(gateway: Gateway) -> None:
     with wire_server(_scripted()) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(gateway, scenario, wire, location={"vertex_location": _REGION})
@@ -348,7 +352,7 @@ def test_identical_regional_generations_each_bill_the_uplift_once(gateway: Gatew
         second_id, second = _generate(gateway, model)
         assert first.status_code == 200, first.text
         assert second.status_code == 200, second.text
-        assert first.content == second.content, (first.text, second.text)
+        assert _body_without_created(first) == _body_without_created(second), (first.text, second.text)
         rows: Final = _spend_rows((first_id, second_id))
         assert rows == {first_id: pytest.approx(_REGIONAL_TOKEN_COST), second_id: pytest.approx(_REGIONAL_TOKEN_COST)}
         assert len(wire.drain()) == 2
