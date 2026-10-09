@@ -11,8 +11,8 @@ from pydantic import JsonValue, TypeAdapter
 from typing_extensions import assert_never
 
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.rust_bridge.trace.errors import TraceChanged
-from litellm.rust_bridge.trace.generated.types import QueryScope, ReadQueryName, TraceScope
+from litellm.tracing.errors import TraceChanged
+from litellm.tracing.generated.types import QueryScope, ReadQueryName, TraceScope
 
 MAX_RESPONSE_BYTES: Final = 64 * 1024 * 1024
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
@@ -95,9 +95,6 @@ class RemoteTraceStore:
     def __init__(self, client: httpx.AsyncClient) -> None:
         self.client: Final = client
 
-    async def ensure_schema(self) -> None:
-        return
-
     async def _read(self, request: Mapping[str, object]) -> JsonValue:
         result: Final = await self._read_result(request)
         if isinstance(result, _ReadFailure):
@@ -131,11 +128,6 @@ class RemoteTraceStore:
             raise ValueError("Lens only accepts gateway request records and feedback on this endpoint")
         response: Final = await self.client.post(path, json=tuple(dict(row) for row in rows))
         response.raise_for_status()
-
-    async def ingest(
-        self, payload: bytes, content_type: str | None, tenant: Mapping[str, str], logs: bool = False
-    ) -> int:
-        raise RuntimeError("Send OTLP directly to the Lens service")
 
     async def list_traces(
         self, scope: TraceScope, start_ms: int, end_ms: int, cursor: str | None, limit: int

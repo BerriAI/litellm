@@ -1,8 +1,0 @@
-- Decode OTLP JSON and protobuf exports into validated `DecodedSpan` values through `decode_otlp`
-- Keep media-type dispatch and wire decoding in `wire.rs`, structural and allocation budgets in `limits.rs`, attribute conversion in `attributes.rs`, and span flattening in `span.rs`
-- Validate span and link IDs, timestamp ranges and ordering, and collection limits before producing decoded spans
-- Preserve preflight depth and node limits for both encodings and account for decoded allocations, including normalized payloads
-- Share resource attributes and scope identity across sibling spans through `Shared`; account for copies when a build cannot share storage
-- Delegate semantic interpretation to `../normalize/`; retain raw attributes and carry consumed-attribute tracking alongside normalized output
-- Keep HTTP routing, decompression, storage writes, and trace-wide resolution outside this module; return the crate's typed decoding errors
-- Extend `tests/otlp.rs` with public decoding regressions for both encodings, malformed input, budget enforcement, and shared resource identity
