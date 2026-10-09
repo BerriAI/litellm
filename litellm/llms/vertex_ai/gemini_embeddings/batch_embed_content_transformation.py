@@ -338,7 +338,6 @@ def _is_multimodal_input(input: GeminiEmbeddingInput) -> bool:
 
 
 def _is_multimodal_element(element: GeminiEmbeddingElement) -> bool:
-    """Check if a single element is multimodal."""
     if not isinstance(element, str):
         return True
     if _is_data_url(element):

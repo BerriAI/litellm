@@ -195,9 +195,9 @@ def _is_transient_file_retrieve_error(error: Exception) -> bool:
 
 
 def _proxy_llm_router() -> Router | None:
-    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy.proxy_server import llm_router
 
-    return cast(Router | None, getattr(proxy_server_module, "llm_router", None))
+    return llm_router
 
 
 def _provider_file_retrieve_credentials(

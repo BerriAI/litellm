@@ -157,7 +157,7 @@ def _can_use_cimd(server: "MCPServer") -> bool:
 def needs_cimd_discovery(server: "MCPServer") -> bool:
     """Resolve unknown client metadata support even when OAuth endpoints are configured."""
     return (
-        getattr(server, "client_id_metadata_document_supported", False) is None
+        server.client_id_metadata_document_supported is None
         and _can_use_cimd(server)
         and get_cimd_document_url() is not None
     )
@@ -174,7 +174,7 @@ def _dynamic_registration_takes_precedence(server: "MCPServer") -> bool:
 
 
 def get_cimd_client_id(server: "MCPServer") -> str | None:
-    if getattr(server, "client_id_metadata_document_supported", False) is not True or not _can_use_cimd(server):
+    if server.client_id_metadata_document_supported is not True or not _can_use_cimd(server):
         return None
     if _dynamic_registration_takes_precedence(server):
         return None
