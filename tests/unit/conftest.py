@@ -5,6 +5,7 @@ import os
 from collections.abc import Coroutine, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import boto3
@@ -44,6 +45,7 @@ import litellm  # noqa: E402  # litellm reads LITELLM_LOCAL_MODEL_COST_MAP at im
 import litellm.router as litellm_router_module  # noqa: E402  # same import-time dependency
 import litellm.utils as litellm_utils_module  # noqa: E402  # same import-time dependency
 from litellm._logging import ALL_LOGGERS  # noqa: E402  # same import-time dependency
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER  # noqa: E402  # same import-time dependency
 from litellm.anthropic_beta_headers_manager import reload_beta_headers_config  # noqa: E402  # same import-time dependency
 from litellm.litellm_core_utils.prompt_templates import factory as prompt_factory_module  # noqa: E402  # same import-time dependency
 from litellm.litellm_core_utils.prompt_templates import (  # noqa: E402  # same import-time dependency
@@ -323,6 +325,35 @@ def async_only_image_fetch(monkeypatch: pytest.MonkeyPatch) -> AsyncOnlyImageFet
 def no_ambient_azure_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in AMBIENT_AZURE_CREDENTIAL_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
+
+
+FAKE_PROVIDER_CREDENTIALS: Final = MappingProxyType(
+    {
+        "OPENAI_API_KEY": "sk-unit-test",
+        "ANTHROPIC_API_KEY": "sk-ant-unit-test",
+        "GEMINI_API_KEY": "unit-test",
+        "AZURE_API_KEY": "unit-test",
+        "AZURE_API_BASE": "https://unit-test.openai.azure.com",
+        "AZURE_API_VERSION": "2024-02-01",
+        "AWS_ACCESS_KEY_ID": "unit-test",
+        "AWS_SECRET_ACCESS_KEY": "unit-test",
+        "AWS_REGION_NAME": "us-east-1",
+        "COHERE_API_KEY": "unit-test",
+        "DD_API_KEY": "unit-test",
+        "DD_SITE": "us5.datadoghq.com",
+    }
+)
+
+
+@pytest.fixture
+def fake_provider_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name, value in FAKE_PROVIDER_CREDENTIALS.items():
+        monkeypatch.setenv(name, value)
+
+
+@pytest.fixture
+async def drained_logging_worker() -> None:
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.clear_queue(), timeout=10)
 
 
 def pytest_sessionfinish() -> None:

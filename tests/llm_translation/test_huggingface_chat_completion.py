@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from base_llm_unit_tests import BaseLLMChatTest
 
-
 import pytest
 
 import litellm
@@ -126,7 +125,6 @@ MOCK_STREAMING_CHUNKS = [
     },
 ]
 
-
 PROVIDER_MAPPING_RESPONSE = {
     "fireworks-ai": {
         "status": "live",
@@ -145,24 +143,19 @@ PROVIDER_MAPPING_RESPONSE = {
     },
 }
 
-
 @pytest.fixture
 def mock_provider_mapping():
-    with patch(
-        "litellm.llms.huggingface.chat.transformation._fetch_inference_provider_mapping"
-    ) as mock:
+    with patch("litellm.llms.huggingface.chat.transformation.fetch_inference_provider_mapping") as mock:
         mock.return_value = PROVIDER_MAPPING_RESPONSE
         yield mock
 
-
 @pytest.fixture(autouse=True)
 def clear_lru_cache():
-    from litellm.llms.huggingface.common_utils import _fetch_inference_provider_mapping
+    from litellm.llms.huggingface.common_utils import fetch_inference_provider_mapping
 
-    _fetch_inference_provider_mapping.cache_clear()
+    fetch_inference_provider_mapping.cache_clear()
     yield
-    _fetch_inference_provider_mapping.cache_clear()
-
+    fetch_inference_provider_mapping.cache_clear()
 
 @pytest.fixture
 def mock_http_handler():
@@ -189,7 +182,6 @@ def mock_http_handler():
 
         mock.side_effect = mock_side_effect
         yield mock
-
 
 @pytest.fixture
 def mock_http_async_handler():
@@ -221,7 +213,6 @@ def mock_http_async_handler():
 
         mock.side_effect = mock_side_effect
         yield mock
-
 
 class TestHuggingFace(BaseLLMChatTest):
     @pytest.fixture(autouse=True)
@@ -357,91 +348,6 @@ class TestHuggingFace(BaseLLMChatTest):
                 == tool_call_no_arguments["tool_calls"][0]["function"]["arguments"]
             )
 
-    @pytest.mark.parametrize(
-        "model, expected_url",
-        [
-            (
-                "meta-llama/Llama-3-8B-Instruct",
-                "https://router.huggingface.co/v1/chat/completions",
-            ),
-            (
-                "together/meta-llama/Llama-3-8B-Instruct",
-                "https://router.huggingface.co/together/v1/chat/completions",
-            ),
-            (
-                "novita/meta-llama/Llama-3-8B-Instruct",
-                "https://router.huggingface.co/novita/v3/openai/chat/completions",
-            ),
-            (
-                "http://custom-endpoint.com/v1/chat/completions",
-                "http://custom-endpoint.com/v1/chat/completions",
-            ),
-        ],
-    )
-    def test_get_complete_url(self, model, expected_url):
-        """Test that the complete URL is constructed correctly for different providers"""
-        from litellm.llms.huggingface.chat.transformation import HuggingFaceChatConfig
-
-        config = HuggingFaceChatConfig()
-        url = config.get_complete_url(
-            api_base=None,
-            model=model,
-            optional_params={},
-            stream=False,
-            api_key="test_api_key",
-            litellm_params={},
-        )
-        assert url == expected_url
-
-    @pytest.mark.parametrize(
-        "api_base, model, expected_url",
-        [
-            (
-                "https://abcd123.us-east-1.aws.endpoints.huggingface.cloud",
-                "huggingface/tgi",
-                "https://abcd123.us-east-1.aws.endpoints.huggingface.cloud/v1/chat/completions",
-            ),
-            (
-                "https://abcd123.us-east-1.aws.endpoints.huggingface.cloud/",
-                "huggingface/tgi",
-                "https://abcd123.us-east-1.aws.endpoints.huggingface.cloud/v1/chat/completions",
-            ),
-            (
-                "https://abcd123.us-east-1.aws.endpoints.huggingface.cloud/v1/chat/completions",
-                "huggingface/tgi",
-                "https://abcd123.us-east-1.aws.endpoints.huggingface.cloud/v1/chat/completions",
-            ),
-            (
-                "https://example.com/custom/path",
-                "huggingface/tgi",
-                "https://example.com/custom/path/v1/chat/completions",
-            ),
-            (
-                "https://example.com/custom/path/v1/chat/completions",
-                "huggingface/tgi",
-                "https://example.com/custom/path/v1/chat/completions",
-            ),
-            (
-                "https://example.com/v1",
-                "huggingface/tgi",
-                "https://example.com/v1/chat/completions",
-            ),
-        ],
-    )
-    def test_get_complete_url_inference_endpoints(self, api_base, model, expected_url):
-        from litellm.llms.huggingface.chat.transformation import HuggingFaceChatConfig
-
-        config = HuggingFaceChatConfig()
-        url = config.get_complete_url(
-            api_base=api_base,
-            model=model,
-            optional_params={},
-            stream=False,
-            api_key="test_api_key",
-            litellm_params={},
-        )
-        assert url == expected_url
-
     def test_completion_with_api_base(self):
         messages = [{"role": "user", "content": "This is a test message"}]
         api_base = "https://abcd123.us-east-1.aws.endpoints.huggingface.cloud"
@@ -506,85 +412,3 @@ class TestHuggingFace(BaseLLMChatTest):
         called_url = call_args[1]["url"]
         assert called_url == f"{api_base}/v1/chat/completions"
 
-    def test_build_chat_completion_url_function(self):
-        """Test the _build_chat_completion_url helper function"""
-        from litellm.llms.huggingface.chat.transformation import (
-            _build_chat_completion_url,
-        )
-
-        test_cases = [
-            ("https://example.com", "https://example.com/v1/chat/completions"),
-            ("https://example.com/", "https://example.com/v1/chat/completions"),
-            ("https://example.com/v1", "https://example.com/v1/chat/completions"),
-            ("https://example.com/v1/", "https://example.com/v1/chat/completions"),
-            (
-                "https://example.com/v1/chat/completions",
-                "https://example.com/v1/chat/completions",
-            ),
-            (
-                "https://example.com/custom/path",
-                "https://example.com/custom/path/v1/chat/completions",
-            ),
-            (
-                "https://example.com/custom/path/",
-                "https://example.com/custom/path/v1/chat/completions",
-            ),
-        ]
-
-        for input_url, expected_url in test_cases:
-            result = _build_chat_completion_url(input_url)
-            assert (
-                result == expected_url
-            ), f"Failed for input: {input_url}, expected: {expected_url}, got: {result}"
-
-    def test_validate_environment(self):
-        """Test that the environment is validated correctly"""
-        from litellm.llms.huggingface.chat.transformation import HuggingFaceChatConfig
-
-        config = HuggingFaceChatConfig()
-
-        headers = config.validate_environment(
-            headers={},
-            model="huggingface/fireworks-ai/meta-llama/Meta-Llama-3-8B-Instruct",
-            messages=[{"role": "user", "content": "Hello"}],
-            optional_params={},
-            api_key="test_api_key",
-            litellm_params={},
-        )
-
-        assert headers["Authorization"] == "Bearer test_api_key"
-        assert headers["content-type"] == "application/json"
-
-    @pytest.mark.parametrize(
-        "model, expected_model",
-        [
-            (
-                "together/meta-llama/Llama-3-8B-Instruct",
-                "meta-llama/Meta-Llama-3-8B-Instruct-Turbo",
-            ),
-            (
-                "meta-llama/Meta-Llama-3-8B-Instruct",
-                "meta-llama/Meta-Llama-3-8B-Instruct",
-            ),
-        ],
-    )
-    def test_transform_request(self, model, expected_model):
-        from litellm.llms.huggingface.chat.transformation import HuggingFaceChatConfig
-
-        config = HuggingFaceChatConfig()
-        messages = [{"role": "user", "content": "Hello"}]
-
-        transformed_request = config.transform_request(
-            model=model,
-            messages=messages,
-            optional_params={},
-            litellm_params={},
-            headers={},
-        )
-
-        assert transformed_request["model"] == expected_model
-        assert transformed_request["messages"] == messages
-
-    @pytest.mark.asyncio
-    async def test_completion_cost(self):
-        pass

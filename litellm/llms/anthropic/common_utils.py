@@ -664,6 +664,18 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 status_code=400,
             )
 
+    @classmethod
+    def apply_sampling_param(
+        cls,
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        model: str,
+        param: str,
+        value: object,
+        drop_params: bool,
+        output_key: str,
+    ) -> None:
+        return cls._apply_sampling_param(optional_params, model, param, value, drop_params, output_key)
+
     @staticmethod
     def forced_tool_use_unsupported(model: str) -> bool:
         return AnthropicModelInfo._get_model_capability(model, "supports_forced_tool_use") is False
@@ -754,11 +766,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     def _get_model_capability(model: str, key: str) -> bool | None:
         """Read boolean capability ``key`` from the model map, or None when
         no entry declares it."""
-        from litellm.utils import _get_bundled_model_cost_map
+        from litellm.utils import get_bundled_model_cost_map
 
         try:
             candidates: Final = AnthropicModelInfo._model_map_lookup_candidates(model)
-            for model_cost in (litellm.model_cost, _get_bundled_model_cost_map()):
+            for model_cost in (litellm.model_cost, get_bundled_model_cost_map()):
                 for cand in candidates:
                     value = model_cost.get(cand, {}).get(key)
                     if isinstance(value, bool):
@@ -793,13 +805,13 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         model does not resolve under that provider or the resolved entry has no
         opinion on ``key``.
         """
-        from litellm.utils import _get_model_info_helper
+        from litellm.utils import get_model_info_helper
 
         try:
             resolved_model, resolved_provider, _, _ = litellm.get_llm_provider(
                 model=model, custom_llm_provider=custom_llm_provider
             )
-            value: Final = _get_model_info_helper(model=resolved_model, custom_llm_provider=resolved_provider).get(key)
+            value: Final = get_model_info_helper(model=resolved_model, custom_llm_provider=resolved_provider).get(key)
         except Exception:  # noqa: BLE001  # _get_model_info_helper raises bare Exception for unmapped models
             return None
         return value if isinstance(value, bool) else None
@@ -813,13 +825,13 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         Otherwise ``_supports_factory``'s provider-level fallbacks and the raw
         model-map walk remain as backstops for alias forms the lookup misses.
         """
-        from litellm.utils import _supports_factory
+        from litellm.utils import supports_factory
 
         resolved: Final = AnthropicModelInfo._get_provider_resolved_capability(model, key, custom_llm_provider)
         if resolved is not None:
             return resolved
         try:
-            if _supports_factory(
+            if supports_factory(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 key=key,
@@ -828,6 +840,15 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         except Exception:
             pass
         return AnthropicModelInfo._get_model_capability(model, key) is True
+
+    @classmethod
+    def supports_model_capability(
+        cls,
+        model: str,
+        key: str,
+        custom_llm_provider: str,
+    ) -> bool:
+        return cls._supports_model_capability(model, key, custom_llm_provider)
 
     @staticmethod
     def _is_adaptive_thinking_model(model: str, custom_llm_provider: str) -> bool:
@@ -840,6 +861,14 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         in that declarative rule, not here.
         """
         return AnthropicModelInfo._supports_model_capability(model, "supports_adaptive_thinking", custom_llm_provider)
+
+    @classmethod
+    def is_adaptive_thinking_model(
+        cls,
+        model: str,
+        custom_llm_provider: str,
+    ) -> bool:
+        return cls._is_adaptive_thinking_model(model, custom_llm_provider)
 
     @staticmethod
     def _is_always_on_thinking_model(model: str, custom_llm_provider: str) -> bool:
@@ -1645,7 +1674,7 @@ def strip_thinking_blocks_from_anthropic_messages_request_dict(
 
 
 def strip_empty_content_blocks_from_anthropic_messages(
-    messages: list[Any],
+    messages: Sequence[object],
 ) -> list[Any]:
     """
     Return a new message list with empty or whitespace-only ``{"type": "text"}``
@@ -1760,7 +1789,7 @@ def _sanitize_tool_use_id_content_block(block: object) -> object:
     return block
 
 
-def sanitize_tool_use_ids_in_anthropic_messages(messages: list[Any]) -> list[Any]:
+def sanitize_tool_use_ids_in_anthropic_messages(messages: Sequence[object]) -> list[Any]:
     """
     Return a new message list with ``tool_use`` / ``server_tool_use`` ``id`` and
     ``tool_result`` ``tool_use_id`` values rewritten to satisfy Anthropic's
@@ -1934,7 +1963,7 @@ def _flatten_web_search_results_in_message(message: object) -> object:
 
 
 def flatten_unencrypted_web_search_results_in_anthropic_messages(
-    messages: list[Any],
+    messages: Sequence[object],
 ) -> list[Any]:
     """
     Return a new message list with replayed ``web_search_tool_result`` blocks that

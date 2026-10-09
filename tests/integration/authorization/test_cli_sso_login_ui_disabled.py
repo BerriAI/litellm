@@ -10,18 +10,27 @@ import threading
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
+import jwt
 import psutil
 import pytest
 import yaml
 from pydantic import JsonValue
 
-from tests.integration._support.client import JSON_OBJECT, Gateway, eventually, gateway_from_environment, string_value
+from tests.integration._support.client import (
+    JSON_OBJECT,
+    Gateway,
+    eventually,
+    gateway_from_environment,
+    object_value,
+    string_value,
+)
 from tests.integration._support.database import read_rows
 from tests.integration._support.process import OwnedProxy, group_members, owned_proxy_process
 from tests.integration._support.provider import SharedProvider
@@ -52,6 +61,7 @@ COMPLETE_FORM_ACTION: Final = re.compile(r'action="([^"]+/sso/cli/complete/[^"]+
 class Idp:
     wire: Wire
     token_outage: threading.Event
+    subject: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,13 +78,22 @@ class DeviceGrant:
     verification_uri: str
 
 
-def _idp_reply(request: Request, token_outage: threading.Event) -> Reply:
+@dataclass(frozen=True, slots=True)
+class OneWorkerProxy:
+    idp: Idp
+    owned: OwnedProxy
+
+
+def _subject_inside(value: str, prefix: str) -> str:
+    return value.removeprefix(prefix).rsplit("-", 1)[0]
+
+
+def _idp_reply(request: Request, token_outage: threading.Event, subject: str) -> Reply:
     target: Final = urlparse(request.target)
     if target.path == "/authorize":
         query: Final = parse_qs(target.query)
-        location: Final = (
-            f"{query['redirect_uri'][0]}?{urlencode({'code': f'code-{uuid.uuid4().hex}', 'state': query['state'][0]})}"
-        )
+        issued: Final = f"code-{query.get('login_hint', [subject])[0]}-{uuid.uuid4().hex}"
+        location: Final = f"{query['redirect_uri'][0]}?{urlencode({'code': issued, 'state': query['state'][0]})}"
         return Reply(status=302, body=b"", headers={"location": location})
     if target.path == "/token":
         if token_outage.is_set():
@@ -83,14 +102,23 @@ def _idp_reply(request: Request, token_outage: threading.Event) -> Reply:
         if request.headers.get("authorization") != f"Basic {expected}":
             return Reply(status=401, body=b'{"error": "invalid_client"}')
         form: Final = parse_qs(request.body.decode())
-        if form.get("grant_type") != ["authorization_code"] or not form.get("code", [""])[0].startswith("code-"):
+        code: Final = form.get("code", [""])[0]
+        if form.get("grant_type") != ["authorization_code"] or not code.startswith("code-"):
             return Reply(status=400, body=b'{"error": "invalid_grant"}')
-        token: Final = {"access_token": f"idp-access-{uuid.uuid4().hex}", "token_type": "Bearer", "expires_in": 3600}
-        return Reply(body=json.dumps(token).encode())
+        access_token: Final = f"idp-access-{_subject_inside(code, 'code-')}-{uuid.uuid4().hex}"
+        return Reply(
+            body=json.dumps({"access_token": access_token, "token_type": "Bearer", "expires_in": 3600}).encode()
+        )
     if target.path == "/userinfo":
-        if not request.headers.get("authorization", "").startswith("Bearer idp-access-"):
+        bearer: Final = request.headers.get("authorization", "")
+        if not bearer.startswith("Bearer idp-access-"):
             return Reply(status=401, body=b'{"error": "invalid_token"}')
-        return Reply(body=json.dumps({"sub": SUBJECT, "preferred_username": SUBJECT, "email": SUBJECT_EMAIL}).encode())
+        signed_in: Final = _subject_inside(bearer, "Bearer idp-access-")
+        return Reply(
+            body=json.dumps(
+                {"sub": signed_in, "preferred_username": signed_in, "email": f"{signed_in}@example.com"}
+            ).encode()
+        )
     return Reply(status=404, body=b'{"error": "not_found"}')
 
 
@@ -114,11 +142,17 @@ def _gateway_enabled_config(directory: Path) -> Path:
     return config
 
 
+@contextmanager
+def _fake_idp(subject: str) -> Iterator[Idp]:
+    outage: Final = threading.Event()
+    with wire_server(lambda request: _idp_reply(request, outage, subject)) as wire:
+        yield Idp(wire, outage, subject)
+
+
 @pytest.fixture(scope="module")
 def idp() -> Iterator[Idp]:
-    outage: Final = threading.Event()
-    with wire_server(lambda request: _idp_reply(request, outage)) as wire:
-        yield Idp(wire, outage)
+    with _fake_idp(SUBJECT) as fake:
+        yield fake
 
 
 @pytest.fixture(scope="module")
@@ -136,6 +170,23 @@ def ui_disabled(idp: Idp, tmp_path_factory: pytest.TempPathFactory) -> Iterator[
         ) as owned,
     ):
         yield owned
+
+
+@pytest.fixture(scope="module")
+def one_worker(tmp_path_factory: pytest.TempPathFactory) -> Iterator[OneWorkerProxy]:
+    directory: Final = tmp_path_factory.mktemp("cli-sso-one-worker")
+    with (
+        _fake_idp(f"cli-sso-first-sign-in-{uuid.uuid4().hex[:12]}") as idp,
+        gateway_from_environment() as rig,
+        owned_proxy_process(
+            rig,
+            directory,
+            {"DISABLE_ADMIN_UI": "true", **_sso_environment(idp.wire.url)},
+            remove_environment=("PROXY_BASE_URL",),
+            workers=1,
+        ) as owned,
+    ):
+        yield OneWorkerProxy(idp, owned)
 
 
 def _proxy_url(proxy: Gateway) -> str:
@@ -194,18 +245,22 @@ def _poll(proxy: Gateway, session: CliSession, *, poll_secret: str | None = None
     )
 
 
-def _sign_in(proxy: Gateway, idp: Idp, browser: httpx.Client, session: CliSession) -> None:
+def _sign_in(
+    proxy: Gateway, idp: Idp, browser: httpx.Client, session: CliSession, *, subject: str | None = None
+) -> None:
     link: Final = browser.get(_cli_link(proxy, session.login_id))
-    callback: Final = _walk_idp(browser, _assert_idp_redirect(proxy, idp, link, session.login_id))
+    authorize: Final = _assert_idp_redirect(proxy, idp, link, session.login_id)
+    hinted: Final = authorize if subject is None else f"{authorize}&{urlencode({'login_hint': subject})}"
+    callback: Final = _walk_idp(browser, hinted)
     done: Final = _complete_in_browser(browser, callback, session.user_code)
     assert done.status_code == 200 and CLI_SUCCESS_PAGE_TITLE in done.text, f"{done.status_code} {done.text}"
 
 
-def _ready_key(proxy: Gateway, session: CliSession) -> str:
+def _ready_key(proxy: Gateway, session: CliSession, *, subject: str = SUBJECT) -> str:
     ready: Final = _poll(proxy, session)
     assert ready.status_code == 200, f"{ready.status_code} {ready.text}"
     body: Final = JSON_OBJECT.validate_json(ready.content)
-    assert body["status"] == "ready" and body["user_id"] == SUBJECT, ready.text
+    assert body["status"] == "ready" and body["user_id"] == subject, ready.text
     return string_value(body["key"])
 
 
@@ -489,6 +544,95 @@ def test_login_survives_a_worker_kill(idp: Idp, tmp_path: Path) -> None:
         assert victim not in respawned, respawned
 
 
+def test_first_sign_in_user_serves_messages_and_signs_in_again_on_one_worker(
+    one_worker: OneWorkerProxy, provider: SharedProvider
+) -> None:
+    proxy: Final = one_worker.owned.gateway
+    idp: Final = one_worker.idp
+    first: Final = _start_lite_login(proxy)
+    with _browser() as browser:
+        _sign_in(proxy, idp, browser, first)
+    _send_message(proxy, provider, _ready_key(proxy, first, subject=idp.subject))
+    again: Final = _start_lite_login(proxy)
+    with _browser() as browser:
+        _sign_in(proxy, idp, browser, again)
+    _ready_key(proxy, again, subject=idp.subject)
+
+
+def test_a_user_created_after_a_missed_lookup_is_budgeted_at_once_on_that_worker(
+    one_worker: OneWorkerProxy, provider: SharedProvider
+) -> None:
+    proxy: Final = one_worker.owned.gateway
+    user_id: Final = f"cli-sso-late-user-{uuid.uuid4().hex[:12]}"
+    with proxy.scenario() as scenario:
+        key: Final = scenario.key(user_id=user_id, models=[MESSAGE_MODEL])
+        _send_message(proxy, provider, key)
+        created: Final = proxy.request("POST", "/user/new", {"user_id": user_id, "max_budget": 0})
+        assert created.status_code == 200, created.text
+        refused: Final = proxy.request(
+            "POST",
+            "/v1/messages",
+            {"model": MESSAGE_MODEL, "max_tokens": 16, "messages": [{"role": "user", "content": "over budget"}]},
+            key=key,
+        )
+        assert refused.status_code == 422 and f"ExceededBudget: User={user_id}" in refused.text, (
+            f"{refused.status_code} {refused.text}"
+        )
+        assert provider.received() == ()
+
+
+def test_a_user_an_admin_created_after_a_missed_lookup_signs_in_at_once_on_that_worker(
+    one_worker: OneWorkerProxy, provider: SharedProvider
+) -> None:
+    proxy: Final = one_worker.owned.gateway
+    subject: Final = f"cli-sso-admin-created-{uuid.uuid4().hex[:12]}"
+    with proxy.scenario() as scenario:
+        _send_message(proxy, provider, scenario.key(user_id=subject, models=[MESSAGE_MODEL]))
+        created: Final = proxy.request(
+            "POST",
+            "/user/new",
+            {"user_id": subject, "user_email": f"{subject}@example.com", "user_role": "internal_user"},
+        )
+        assert created.status_code == 200, created.text
+        session: Final = _start_lite_login(proxy)
+        with _browser() as browser:
+            _sign_in(proxy, one_worker.idp, browser, session, subject=subject)
+        _send_message(proxy, provider, _ready_key(proxy, session, subject=subject))
+        rows: Final = read_rows('SELECT user_email FROM "LiteLLM_UserTable" WHERE user_id = %s', (subject,))
+        assert [row["user_email"] for row in rows] == [f"{subject}@example.com"], rows
+
+
+def test_dashboard_sign_in_creates_the_user_and_hands_the_browser_a_session(tmp_path: Path) -> None:
+    subject: Final = f"ui-sso-first-sign-in-{uuid.uuid4().hex[:12]}"
+    with (
+        _fake_idp(subject) as idp,
+        gateway_from_environment() as rig,
+        owned_proxy_process(
+            rig,
+            tmp_path,
+            _sso_environment(idp.wire.url),
+            remove_environment=("PROXY_BASE_URL", "DISABLE_ADMIN_UI"),
+            workers=1,
+        ) as owned,
+    ):
+        proxy: Final = owned.gateway
+        with _browser() as browser:
+            entry: Final = browser.get(f"{_proxy_url(proxy)}/sso/key/generate")
+            assert entry.is_redirect, f"{entry.status_code} {entry.text}"
+            signed_in: Final = _walk_idp(browser, entry.headers["location"])
+        assert signed_in.status_code == 303, f"{signed_in.status_code} {signed_in.text}"
+        assert urlparse(signed_in.headers["location"]).query == "login=success", signed_in.headers["location"]
+        session: Final = JSON_OBJECT.validate_python(
+            jwt.decode(signed_in.cookies["token"], rig.key, algorithms=["HS256"])
+        )
+        assert session["user_id"] == subject and session["login_method"] == "sso", session
+        me: Final = proxy.request("GET", "/user/info", key=string_value(session["key"]))
+        assert me.status_code == 200, f"{me.status_code} {me.text}"
+        assert JSON_OBJECT.validate_json(me.content)["user_id"] == subject, me.text
+        rows: Final = read_rows('SELECT user_email FROM "LiteLLM_UserTable" WHERE user_id = %s', (subject,))
+        assert [row["user_email"] for row in rows] == [f"{subject}@example.com"], rows
+
+
 @pytest.mark.parametrize("flag", ("false", ""), ids=("false", "empty"))
 def test_flag_values_that_do_not_disable_keep_the_gates_open(idp: Idp, tmp_path: Path, flag: str) -> None:
     with (
@@ -511,3 +655,52 @@ def test_flag_values_that_do_not_disable_keep_the_gates_open(idp: Idp, tmp_path:
         for method, path in (("GET", "/sso/saml/login"), ("POST", "/sso/saml/callback")):
             saml: Final = proxy.client.request(method, path)
             assert DISABLED_PAGE_TITLE not in saml.text and saml.status_code != 200, f"{path}: {saml.status_code}"
+
+
+def test_cli_session_token_is_denied_once_its_team_budget_is_exhausted(
+    one_worker: OneWorkerProxy, provider: SharedProvider
+) -> None:
+    proxy: Final = one_worker.owned.gateway
+    subject: Final = f"cli-sso-team-budget-{uuid.uuid4().hex[:12]}"
+    budget: Final = 0.0000000005
+    with proxy.scenario() as scenario:
+        team: Final = scenario.team(max_budget=budget, models=[MESSAGE_MODEL])
+        scenario.user(user_id=subject, user_email=f"{subject}@example.com", user_role="internal_user")
+        added: Final = proxy.request(
+            "POST", "/team/member_add", {"team_id": team, "member": {"user_id": subject, "role": "user"}}
+        )
+        assert added.status_code == 200, added.text
+        session: Final = _start_lite_login(proxy)
+        with _browser() as browser:
+            _sign_in(proxy, one_worker.idp, browser, session, subject=subject)
+        ready: Final = proxy.client.get(
+            f"/sso/cli/poll/{session.login_id}",
+            params={"team_id": team},
+            headers={POLL_SECRET_HEADER: session.poll_secret},
+        )
+        assert ready.status_code == 200, f"{ready.status_code} {ready.text}"
+        body: Final = JSON_OBJECT.validate_json(ready.content)
+        assert body["status"] == "ready" and body["user_id"] == subject, ready.text
+        key: Final = string_value(body["key"])
+        assert not key.startswith("sk-"), key
+        _send_message(proxy, provider, key)
+        eventually(
+            lambda: read_rows('SELECT spend FROM "LiteLLM_TeamTable" WHERE team_id = %s', (team,)),
+            lambda rows: len(rows) == 1 and float(str(rows[0]["spend"])) > budget,
+            seconds=70,
+        )
+        refused: Final = proxy.request(
+            "POST",
+            "/v1/messages",
+            {"model": MESSAGE_MODEL, "max_tokens": 16, "messages": [{"role": "user", "content": "over team budget"}]},
+            key=key,
+        )
+        assert refused.status_code == 422, f"{refused.status_code} {refused.text}"
+        error: Final = object_value(JSON_OBJECT.validate_json(refused.content)["error"])
+        assert error["type"] == "budget_exceeded", refused.text
+        assert error["code"] == "422", refused.text
+        message: Final = string_value(error["message"])
+        assert "Budget has been exceeded!" in message, refused.text
+        assert f"Team={team}" in message, refused.text
+        assert "Current cost:" in message and f"Max budget: {budget}" in message, refused.text
+        assert provider.received() == ()

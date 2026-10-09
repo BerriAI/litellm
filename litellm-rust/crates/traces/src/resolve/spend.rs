@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use indexmap::IndexMap;
 
 use crate::{
-    CallEvidence, CallEvidenceKind, CallKey,
+    CallEvidence, CallEvidenceKind, CallKey, SpendMatch,
     query::named::{SpendByResponseIdsRow as SpendRow, TraceSpansRow},
 };
 
@@ -12,6 +12,7 @@ use crate::{
 pub struct SpendLookup {
     pub response_ids: Vec<String>,
     pub request_ids: Vec<String>,
+    pub provider_request_ids: Vec<String>,
     /// Traces whose transport spans LiteLLM logged by `traceparent`.
     pub trace_ids: Vec<String>,
 }
@@ -45,13 +46,21 @@ impl SpendLookup {
                     })
                     .collect(),
             ),
+            provider_request_ids: sorted(
+                keys()
+                    .filter_map(|(_, key)| match key {
+                        CallKey::ProviderRequest(id) => Some(id.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+            ),
             trace_ids: sorted(
                 keys()
                     .filter_map(|(row, key)| match key {
                         CallKey::Transport | CallKey::GatewayAttempt
-                            if !row.trace_id.is_empty() =>
+                            if !row.transport_trace_id().is_empty() =>
                         {
-                            Some(row.trace_id.clone())
+                            Some(row.transport_trace_id().to_owned())
                         }
                         _ => None,
                     })
@@ -61,7 +70,10 @@ impl SpendLookup {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.response_ids.is_empty() && self.request_ids.is_empty() && self.trace_ids.is_empty()
+        self.response_ids.is_empty()
+            && self.request_ids.is_empty()
+            && self.provider_request_ids.is_empty()
+            && self.trace_ids.is_empty()
     }
 }
 
@@ -86,6 +98,7 @@ pub(super) type Requests<'a> = Vec<&'a SpendRow>;
 enum KeyFamily {
     GatewayCall,
     ProviderResponse,
+    ProviderRequest,
     Transport,
 }
 
@@ -93,12 +106,14 @@ fn key_family(key: &CallKey) -> KeyFamily {
     match key {
         CallKey::LiteLlmRequest(_) => KeyFamily::GatewayCall,
         CallKey::ProviderResponse(_) => KeyFamily::ProviderResponse,
+        CallKey::ProviderRequest(_) => KeyFamily::ProviderRequest,
         CallKey::Transport | CallKey::GatewayAttempt => KeyFamily::Transport,
     }
 }
 
 pub(super) enum KeyMatch<'a> {
     Missing,
+    Conflicting,
     Unique(&'a SpendRow),
     Ambiguous(Requests<'a>),
 }
@@ -115,13 +130,13 @@ impl<'a> KeyMatch<'a> {
     fn unique(&self) -> Option<&'a SpendRow> {
         match self {
             Self::Unique(request) => Some(request),
-            Self::Missing | Self::Ambiguous(_) => None,
+            Self::Missing | Self::Conflicting | Self::Ambiguous(_) => None,
         }
     }
 
     fn agrees_with(&self, selected: &[&SpendRow]) -> bool {
         match self {
-            Self::Missing => false,
+            Self::Missing | Self::Conflicting => false,
             Self::Unique(request) => selected
                 .iter()
                 .any(|row| row.identity() == request.identity()),
@@ -147,6 +162,33 @@ pub(super) enum SpendEvidence<'a> {
 }
 
 impl<'a> SpendEvidence<'a> {
+    pub(super) fn has_complete_keys(&self) -> bool {
+        matches!(self, Self::Complete(keys) if !keys.is_empty())
+    }
+
+    pub(super) fn unmatched_reason(&self) -> SpendMatch {
+        match self {
+            Self::Unknown => SpendMatch::NoCallId,
+            Self::Partial(_) => SpendMatch::IncompleteEvidence,
+            Self::Complete(matches) if matches.is_empty() => SpendMatch::NoCallId,
+            Self::Complete(matches)
+                if matches.iter().any(|evidence| {
+                    matches!(evidence, KeyMatch::Conflicting | KeyMatch::Ambiguous(_))
+                }) =>
+            {
+                SpendMatch::Ambiguous
+            }
+            Self::Complete(matches)
+                if matches
+                    .iter()
+                    .any(|evidence| matches!(evidence, KeyMatch::Missing)) =>
+            {
+                SpendMatch::NoSpendLog
+            }
+            Self::Complete(_) => SpendMatch::Ambiguous,
+        }
+    }
+
     pub(super) fn complete_requests(&self) -> Option<Requests<'a>> {
         match self {
             Self::Complete(matches) if !matches.is_empty() => {
@@ -186,15 +228,16 @@ fn matches<'a>(
         CallKey::ProviderResponse(id) => {
             !id.is_empty() && (spend.response_id == *id || spend.upstream_response_id == *id)
         }
+        CallKey::ProviderRequest(id) => !id.is_empty() && spend.provider_request_id == *id,
         CallKey::LiteLlmRequest(id) => {
             !id.is_empty()
                 && (spend.litellm_call_id == *id
                     || (spend.litellm_call_id.is_empty() && spend.request_id == *id))
         }
         CallKey::Transport | CallKey::GatewayAttempt => {
-            !row.trace_id.is_empty()
+            !row.transport_trace_id().is_empty()
                 && !row.span_id.is_empty()
-                && spend.trace_id == row.trace_id
+                && spend.trace_id == row.transport_trace_id()
                 && spend.span_id == row.span_id
         }
     };
@@ -253,7 +296,8 @@ pub(super) fn requests<'a>(
     let matches = aliases
         .into_iter()
         .map(|(_, requests)| {
-            KeyMatch::new(
+            let had_candidates = !requests.is_empty();
+            let matched = KeyMatch::new(
                 requests
                     .into_iter()
                     .filter(|request| {
@@ -262,7 +306,12 @@ pub(super) fn requests<'a>(
                             .all(|family| family.contains(&request.identity()))
                     })
                     .collect(),
-            )
+            );
+            if had_candidates && matches!(matched, KeyMatch::Missing) {
+                KeyMatch::Conflicting
+            } else {
+                matched
+            }
         })
         .collect();
     match evidence.kind() {
@@ -280,18 +329,35 @@ pub(super) fn request_cost(requests: &[&SpendRow]) -> Option<f64> {
     })
 }
 
-pub(super) fn total(calls: &[Option<Requests<'_>>]) -> Option<f64> {
-    if calls.is_empty() {
-        return None;
-    }
-    let requests: Option<Vec<&SpendRow>> = calls
-        .iter()
-        .map(|requests| requests.as_ref())
-        .collect::<Option<Vec<_>>>()
-        .map(|calls| calls.into_iter().flatten().copied().collect());
-    let unique: IndexMap<(&str, i64, &str), &SpendRow> = requests?
+pub(super) fn unique<'a>(requests: impl IntoIterator<Item = &'a SpendRow>) -> Requests<'a> {
+    requests
         .into_iter()
         .map(|request| (request.identity(), request))
+        .collect::<IndexMap<_, _>>()
+        .into_values()
+        .collect()
+}
+
+pub(super) struct Priced {
+    pub(super) spend: Option<f64>,
+    pub(super) priced_calls: u64,
+}
+
+pub(super) fn total(calls: &[Option<Requests<'_>>]) -> Priced {
+    let priced: Vec<&Requests<'_>> = calls
+        .iter()
+        .flatten()
+        .filter(|requests| request_cost(requests).is_some())
         .collect();
-    request_cost(&unique.into_values().collect::<Vec<_>>())
+    let spend = if priced.is_empty() {
+        None
+    } else {
+        request_cost(&unique(
+            priced.iter().flat_map(|requests| requests.iter().copied()),
+        ))
+    };
+    Priced {
+        spend,
+        priced_calls: priced.len() as u64,
+    }
 }

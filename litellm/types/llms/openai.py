@@ -1,3 +1,4 @@
+import builtins
 from collections.abc import Iterable, Mapping
 from enum import Enum
 from os import PathLike
@@ -119,6 +120,14 @@ class BinaryResponseSummary(TypedDict):
 
 class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
     _hidden_params: dict
+
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
     def __init__(self, response: httpx.Response) -> None:
         super().__init__(response)
@@ -356,6 +365,7 @@ _JsonValue: TypeAlias = object
 
 
 BATCH_GUARDRAIL_RESPONSE_FIELD: Final = "litellm_batch_guardrail"
+LITELLM_DETAILS_FALLBACK_RESPONSE_FIELD: Final = "litellm_details_fallback"
 
 
 class OpenAIFileObject(LiteLLMBaseModel):
@@ -404,16 +414,33 @@ class OpenAIFileObject(LiteLLMBaseModel):
     Absent on every other upload, so OpenAI-shaped clients see an unchanged response.
     """
 
+    litellm_details_fallback: bool | None = None
+    """Set by the LiteLLM proxy on a saved batch output file entry built without provider metadata; stripped from API responses."""
+
     _hidden_params: dict = PrivateAttr(default={"response_cost": 0.0})  # no cost for writing a file
 
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
     @model_serializer(mode="wrap")
-    def _omit_absent_batch_guardrail(  # noqa: ANN202  # annotating it replaces the model's serialization schema
+    def _omit_absent_proxy_only_fields(  # noqa: ANN202  # annotating it replaces the model's serialization schema
         self, handler: SerializerFunctionWrapHandler
     ):
         serialized: Final[Mapping[str, object]] = handler(self)
-        if self.litellm_batch_guardrail is not None:
-            return serialized
-        return {key: value for key, value in serialized.items() if key != BATCH_GUARDRAIL_RESPONSE_FIELD}
+        fields_to_omit: Final = tuple(
+            field_name
+            for field_name, value in (
+                (BATCH_GUARDRAIL_RESPONSE_FIELD, self.litellm_batch_guardrail),
+                (LITELLM_DETAILS_FALLBACK_RESPONSE_FIELD, self.litellm_details_fallback),
+            )
+            if value is None
+        )
+        return {key: value for key, value in serialized.items() if key not in fields_to_omit}
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
@@ -635,6 +662,7 @@ class ChatCompletionCachedContent(TypedDict):
 
 class PromptCacheBreakpoint(TypedDict):
     mode: ReadOnly[Literal["explicit"]]
+    ttl: NotRequired[ReadOnly[Literal["30m"]]]
 
 
 class PromptCacheOptions(TypedDict, total=False):
@@ -1422,6 +1450,14 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
     @field_validator("reasoning", mode="before")
     @classmethod
     def validate_reasoning_to_dict(cls, value: Any) -> dict[str, Any] | None:
@@ -1596,6 +1632,14 @@ class ResponseCompletedEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.RESPONSE_COMPLETED]
     response: ResponsesAPIResponse
     _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
 
 class ResponseFailedEvent(BaseLiteLLMOpenAIResponseObject):
@@ -2397,6 +2441,14 @@ class OpenAIModerationResponse(BaseLiteLLMOpenAIResponseObject):
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
 
 class OpenAIChatCompletionLogprobs(TypedDict, total=False):
     content: list[OpenAIChatCompletionLogprobsContent]
@@ -2558,6 +2610,14 @@ class OpenAIVideoObject(LiteLLMBaseModel):
     """The video generation model that produced the job."""
 
     _hidden_params: dict[str, _JsonValue] = PrivateAttr(default={})
+
+    @property
+    def hidden_params(self) -> dict[str, _JsonValue]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, _JsonValue]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
     def __contains__(self, key) -> bool:
         return hasattr(self, key)

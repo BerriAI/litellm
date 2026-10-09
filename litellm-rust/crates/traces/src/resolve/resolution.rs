@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use indexmap::IndexMap;
 
 use crate::{
+    SpendMatch,
     normalize::{CallKey, ObservationType},
     query::named::{SpendByResponseIdsRow as SpendRow, TraceSpansRow},
 };
@@ -27,6 +28,13 @@ pub(super) struct Resolution<'a> {
     types: HashMap<&'a str, ObservationType>,
     tool_failures: HashMap<&'a str, &'a TraceSpansRow>,
     pub(super) model_calls: Vec<usize>,
+    call_matches: HashMap<usize, CallMatch<'a>>,
+}
+
+pub(super) struct CallMatch<'a> {
+    pub(super) requests: Option<Requests<'a>>,
+    pub(super) state: SpendMatch,
+    pub(super) spend_pending: bool,
 }
 
 impl<'a> Resolution<'a> {
@@ -36,7 +44,7 @@ impl<'a> Resolution<'a> {
         let types: HashMap<&str, ObservationType> = (0..rows.len())
             .map(|index| (graph.id(index), resolved_type(&graph, index, named_agents)))
             .collect();
-        let model_calls = (0..rows.len())
+        let model_calls: Vec<usize> = (0..rows.len())
             .filter(|index| {
                 types[graph.id(*index)] == ObservationType::Llm
                     && !graph
@@ -45,7 +53,7 @@ impl<'a> Resolution<'a> {
                         .any(|descendant| types[graph.id(descendant)] == ObservationType::Llm)
             })
             .collect();
-        Self {
+        let resolution = Self {
             ownership: Ownership {
                 team_id: &rows[0].team_id,
                 api_key_hash: &rows[0].api_key_hash,
@@ -65,6 +73,16 @@ impl<'a> Resolution<'a> {
                 .map(|row| (row.tool_call_id.as_str(), row))
                 .collect(),
             model_calls,
+            call_matches: HashMap::new(),
+        };
+        let call_matches = resolution
+            .model_calls
+            .iter()
+            .map(|call| (*call, resolution.resolve_call_match(*call)))
+            .collect();
+        Self {
+            call_matches,
+            ..resolution
         }
     }
 
@@ -118,7 +136,22 @@ impl<'a> Resolution<'a> {
         spend::requests(self.row(index), &self.ownership, self.spend)
     }
 
+    pub(super) fn call_match(&self, call: usize) -> Option<&CallMatch<'a>> {
+        self.call_matches.get(&call)
+    }
+
     pub(super) fn call_requests(&self, call: usize) -> Option<Requests<'a>> {
+        self.call_match(call)
+            .and_then(|matched| matched.requests.clone())
+    }
+
+    pub(super) fn gateway_spend_pending(&self) -> bool {
+        self.call_matches
+            .values()
+            .any(|matched| matched.spend_pending)
+    }
+
+    fn resolve_call_match(&self, call: usize) -> CallMatch<'a> {
         let wrappers = self.graph.ancestors(call).into_iter().filter(|ancestor| {
             self.kind(*ancestor) == ObservationType::Llm
                 && self
@@ -147,7 +180,7 @@ impl<'a> Resolution<'a> {
                     .collect()
             })
             .flatten();
-        let selected: Requests<'a> = transport_requests
+        let selected = transport_requests
             .map(|requests| requests.into_iter().flatten().collect())
             .into_iter()
             .chain(sources.iter().filter_map(SpendEvidence::complete_requests))
@@ -156,15 +189,24 @@ impl<'a> Resolution<'a> {
                     .iter()
                     .chain(&transports)
                     .all(|source| source.agrees_with(selected))
-            })?;
-        Some(
-            selected
-                .into_iter()
-                .map(|request| (request.identity(), request))
-                .collect::<IndexMap<_, _>>()
-                .into_values()
-                .collect(),
-        )
+            });
+        if let Some(selected) = selected {
+            let requests = spend::unique(selected);
+            return CallMatch {
+                spend_pending: spend::request_cost(&requests).is_none(),
+                requests: Some(requests),
+                state: SpendMatch::Matched,
+            };
+        }
+        // A leaf without complete identifiers may still be priced from a wrapper or transport
+        // once its spend arrives. Only the absence of every complete source is terminal.
+        let spend_pending = sources.iter().any(SpendEvidence::has_complete_keys)
+            || (!transports.is_empty() && transports.iter().all(SpendEvidence::has_complete_keys));
+        CallMatch {
+            requests: None,
+            state: sources[0].unmatched_reason(),
+            spend_pending,
+        }
     }
 
     fn transports(&self, call: usize) -> Vec<usize> {

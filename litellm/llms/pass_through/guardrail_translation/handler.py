@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm._logging import verbose_proxy_logger
+from litellm.integrations.custom_guardrail import without_server_streaming_classification
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.proxy._types import PassThroughGuardrailSettings
 from litellm.types.utils import GenericGuardrailAPIInputs
@@ -80,7 +81,9 @@ class PassThroughEndpointHandler(BaseTranslation):
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
         payload_to_check: Final = {
-            k: v for k, v in data.items() if not k.startswith("_") and k not in ("metadata", "litellm_logging_obj")
+            k: v
+            for k, v in without_server_streaming_classification(data).items()
+            if not k.startswith("_") and k not in ("metadata", "litellm_logging_obj")
         }
         verbose_proxy_logger.debug("PassThroughEndpointHandler: Using full payload for guardrail")
         return safe_dumps(payload_to_check)

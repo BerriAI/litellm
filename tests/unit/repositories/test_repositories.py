@@ -1487,11 +1487,13 @@ class TestCredentialsRepository:
         repo._prisma_client.db.litellm_credentialstable._records["my-key"] = {
             "credential_id": "cred-1",
             "credential_name": "my-key",
+            "display_name": "My Key",
             "credential_values": {"api_key": "encrypted_secret"},
             "credential_info": {"provider": "openai"},
         }
         cred = await repo.find_by_name("my-key")
         assert isinstance(cred, CredentialItem)
+        assert cred.display_name == "My Key"
         assert cred.credential_values == {"api_key": "encrypted_secret"}
         assert cred.credential_info == {"provider": "openai"}
 
@@ -2220,6 +2222,37 @@ class TestPrismaTableRepository:
         repo = SpendLogsRepository(None)
         with pytest.raises(RuntimeError, match="No DB Connected"):
             _ = repo.table
+
+    @pytest.mark.asyncio
+    async def test_managed_file_repository_updates_existing_file_object_only(self):
+        from litellm.repositories.managed_file_repository import ManagedFileRepository
+        from litellm.types.llms.openai import OpenAIFileObject
+
+        class UpdateManyMockTable(MockTable):
+            async def update_many(self, where: Dict[str, Any], data: Dict[str, Any]) -> int:
+                return int(await self.update(where, data) is not None)
+
+        file_table = UpdateManyMockTable(pk_field="unified_file_id")
+        await file_table.create({"unified_file_id": "existing-file", "file_object": "{}"})
+        prisma_client = SimpleNamespace(db=SimpleNamespace(litellm_managedfiletable=file_table))
+        repository = ManagedFileRepository(prisma_client)
+        file_object = OpenAIFileObject(
+            id="existing-file",
+            object="file",
+            bytes=836,
+            created_at=456,
+            filename="output.jsonl",
+            purpose="batch_output",
+            status="processed",
+        )
+
+        assert await repository.update_file_object("existing-file", file_object) is True
+        stored_row = await file_table.find_unique(where={"unified_file_id": "existing-file"})
+        assert stored_row is not None
+        assert stored_row.file_object == file_object.model_dump_json()
+
+        assert await repository.update_file_object("missing-file", file_object) is False
+        assert await file_table.find_unique(where={"unified_file_id": "missing-file"}) is None
 
     CONFIG_SYNCED_TABLE_NAMES = frozenset(
         {

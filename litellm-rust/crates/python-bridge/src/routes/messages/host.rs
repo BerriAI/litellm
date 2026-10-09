@@ -2,12 +2,13 @@ use crate::cache::{CacheCall, Cached, PythonCache, Selection};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
-use litellm_core::messages::{
-    Error, MessagesCall, MessagesShaping, messages_body,
+use litellm_host_python::{InvokeError, PythonBinding, from_py, present, to_py};
+use litellm_http::transport::Error as TransportError;
+use litellm_inference_messages::{
+    Error, MessagesCall, MessagesSettings, MessagesShaping, messages_body,
     route::{Messages, MessagesStreamHead},
 };
-use litellm_host_python::{InvokeError, PythonBinding, from_py, lookup, to_py};
-use litellm_http::transport::Error as TransportError;
+use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
 use litellm_llms_types::headers::ProviderSpecificHeaders;
 use pyo3::{
     exceptions::{PyException, PyValueError},
@@ -19,7 +20,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     errors::{RustUpstreamError, route_error_to_pyerr},
-    marshal::{optional_timeout, python_timeout_seconds},
+    marshal::{optional_timeout, project_optional_fields, public_response, python_timeout_seconds},
 };
 
 const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.messages.route_host";
@@ -88,12 +89,12 @@ fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
 /// The Python side of the Messages route: projects the prepared arguments and builds the
 /// public response, chunks and exceptions.
 pub(super) struct MessagesPythonHost {
-    request: Py<PyAny>,
+    request: Py<PyDict>,
     cache: PythonCache,
 }
 
 impl MessagesPythonHost {
-    pub(super) fn new(request: Py<PyAny>, asynchronous: bool) -> Self {
+    pub(super) fn new(request: Py<PyDict>, asynchronous: bool) -> Self {
         Self {
             request,
             cache: PythonCache::new(asynchronous),
@@ -106,23 +107,14 @@ impl MessagesPythonHost {
         arguments: &Bound<'_, PyDict>,
     ) -> PyResult<Result<MessagesCall, Error>> {
         let request = self.request.bind(py);
-        let argument = |name: &str| -> PyResult<Option<Bound<'_, PyAny>>> {
-            Ok(lookup(arguments, request, name)?.filter(|value| !value.is_none()))
-        };
+        let argument = |name: &str| present(arguments, request, name);
         let string = |name: &str| -> PyResult<Option<String>> {
             argument(name)?.map(|value| value.extract()).transpose()
         };
         let model = string("model")?.ok_or_else(|| PyValueError::new_err("model is required"))?;
         let messages =
             argument("messages")?.ok_or_else(|| PyValueError::new_err("messages is required"))?;
-        let fields = BODY_FIELDS
-            .iter()
-            .filter_map(|name| match argument(name) {
-                Ok(Some(value)) => Some(from_py(&value).map(|value| ((*name).to_string(), value))),
-                Ok(None) => None,
-                Err(error) => Some(Err(error)),
-            })
-            .collect::<PyResult<Vec<(String, Value)>>>()?;
+        let fields = project_optional_fields(BODY_FIELDS, argument)?;
         let body = [
             ("model".to_string(), Value::String(model.clone())),
             ("messages".to_string(), from_py(&messages)?),
@@ -159,8 +151,7 @@ impl MessagesPythonHost {
     ) -> PyResult<Option<Map<String, Value>>> {
         let request = self.request.bind(py);
         let mapping = |name: &str| -> PyResult<Option<Map<String, Value>>> {
-            lookup(arguments, request, name)?
-                .filter(|value| !value.is_none())
+            present(arguments, request, name)?
                 .map(|value| from_py(&value))
                 .transpose()
         };
@@ -175,8 +166,7 @@ impl MessagesPythonHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> PyResult<Option<ProviderSpecificHeaders>> {
-        lookup(arguments, self.request.bind(py), "provider_specific_header")?
-            .filter(|value| !value.is_none())
+        present(arguments, self.request.bind(py), "provider_specific_header")?
             .map(|value| from_py(&value))
             .transpose()
     }
@@ -188,21 +178,27 @@ impl MessagesPythonHost {
         custom_llm_provider: Option<&str>,
         arguments: &Bound<'_, PyDict>,
     ) -> PyResult<MessagesShaping> {
-        let projected = py.import(ROUTE_HOST_MODULE)?.getattr("shaping")?.call1((
-            model,
-            custom_llm_provider,
-            arguments,
-        ))?;
-        from_py(&projected)
+        let module = py.import(ROUTE_HOST_MODULE)?;
+        let capabilities: MessagesModelCapabilities = from_py(
+            &py.import("litellm.rust_bridge.model_capabilities")?
+                .getattr("anthropic_model_capabilities")?
+                .call1((model, custom_llm_provider))?,
+        )?;
+        let settings: MessagesSettings =
+            from_py(&module.getattr("settings")?.call1((arguments,))?)?;
+        Ok(MessagesShaping {
+            capabilities,
+            settings,
+        })
     }
 
     fn provider(&self, py: Python<'_>) -> String {
         self.request
             .bind(py)
-            .getattr("custom_llm_provider")
-            .and_then(|value| value.extract::<Option<String>>())
+            .get_item("custom_llm_provider")
             .ok()
             .flatten()
+            .and_then(|value| value.extract::<Option<String>>().ok().flatten())
             .unwrap_or_else(|| "anthropic".into())
     }
 
@@ -249,10 +245,7 @@ impl PythonBinding for MessagesPythonHost {
         py: Python<'_>,
         response: Box<litellm_llms_types::formats::messages::MessagesResponse>,
     ) -> PyResult<Py<PyAny>> {
-        py.import(ROUTE_HOST_MODULE)?
-            .getattr("response")?
-            .call1((to_py(py, response.as_ref())?,))
-            .map(Bound::unbind)
+        public_response(py, ROUTE_HOST_MODULE, response.as_ref())
     }
 
     fn encode_stream_head(
