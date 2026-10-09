@@ -4,16 +4,26 @@ from typing import Final, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
+from litellm.types.llms.base import LiteLLMBaseModel
+
 from .generated.models import (
     ActivityAvailability,
     AgentRow,
     CountRow,
     ExecutionRow,
+    FeedbackRow,
+    FeedbackSummaryRow,
+    FeedbackTargetRow,
     LensAccessParams,
     LensContentParams,
     LensEvidenceParams,
+    LensFeedbackParams,
+    LensFeedbackSummaryParams,
+    LensFeedbackTargetParams,
     LensSampleParams,
     PartRow,
+    TraceAgentRow,
+    TraceAgentsParams,
     TraceQueryColumn,
 )
 from .generated.types import ReadQueryName
@@ -21,14 +31,14 @@ from .generated.types import ReadQueryName
 _RESPONSE_CONFIG: Final = ConfigDict(frozen=True, extra="allow")
 
 
-class TraceQueryStatistics(BaseModel):
+class TraceQueryStatistics(LiteLLMBaseModel):
     model_config = _RESPONSE_CONFIG
     elapsed: float
     rows_read: int | str
     bytes_read: int | str
 
 
-class TraceSQLResponse(BaseModel):
+class ClickHouseSQLEnvelope(LiteLLMBaseModel):
     model_config = _RESPONSE_CONFIG
     meta: tuple[TraceQueryColumn, ...]
     data: tuple[Mapping[str, JsonValue], ...]
@@ -40,7 +50,7 @@ ParamsT: Final = TypeVar("ParamsT", bound=BaseModel)
 RowT: Final = TypeVar("RowT")
 
 
-class QueryResponse(BaseModel, Generic[RowT]):
+class QueryResponse(LiteLLMBaseModel, Generic[RowT]):
     model_config = ConfigDict(frozen=True)
     data: tuple[RowT, ...]
 
@@ -52,6 +62,9 @@ class ReadQuery(Generic[ParamsT, RowT]):
     response: TypeAdapter[QueryResponse[RowT]]
 
 
+TRACE_AGENTS: Final[ReadQuery[TraceAgentsParams, TraceAgentRow]] = ReadQuery(
+    "trace_agents", TraceAgentsParams, TypeAdapter(QueryResponse[TraceAgentRow])
+)
 LENS_AVAILABILITY: Final[ReadQuery[LensAccessParams, ActivityAvailability]] = ReadQuery(
     "availability", LensAccessParams, TypeAdapter(QueryResponse[ActivityAvailability])
 )
@@ -66,4 +79,13 @@ LENS_CONTENT: Final[ReadQuery[LensContentParams, PartRow]] = ReadQuery(
 )
 LENS_EVIDENCE: Final[ReadQuery[LensEvidenceParams, CountRow]] = ReadQuery(
     "evidence", LensEvidenceParams, TypeAdapter(QueryResponse[CountRow])
+)
+LENS_FEEDBACK_TARGET: Final[ReadQuery[LensFeedbackTargetParams, FeedbackTargetRow]] = ReadQuery(
+    "feedback_target", LensFeedbackTargetParams, TypeAdapter(QueryResponse[FeedbackTargetRow])
+)
+LENS_FEEDBACK: Final[ReadQuery[LensFeedbackParams, FeedbackRow]] = ReadQuery(
+    "feedback", LensFeedbackParams, TypeAdapter(QueryResponse[FeedbackRow])
+)
+LENS_FEEDBACK_SUMMARY: Final[ReadQuery[LensFeedbackSummaryParams, FeedbackSummaryRow]] = ReadQuery(
+    "feedback_summary", LensFeedbackSummaryParams, TypeAdapter(QueryResponse[FeedbackSummaryRow])
 )

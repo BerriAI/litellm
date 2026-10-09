@@ -17,10 +17,12 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_release_tag="sha-$(git -C "$repo_root" rev-parse HEAD)"
 proxy_port="${LENS_DEV_PROXY_PORT:-4000}"
 ui_port="${LENS_DEV_UI_PORT:-3000}"
+lens_port="${LENS_DEV_SERVICE_PORT:-4318}"
 state_dir="${LENS_DEV_STATE_DIR:-$repo_root/.lens-dev}"
 log_dir="$state_dir/logs"
 token_file="$state_dir/worker_token"
 key_file="$state_dir/master_key"
+service_key_file="$state_dir/service_key"
 proxy_url="http://localhost:$proxy_port"
 py="${LENS_DEV_PYTHON:-$repo_root/.venv/bin/python}"
 database_url="${LENS_DEV_DATABASE_URL:-postgresql://litellm:litellm@127.0.0.1:15432/litellm}"
@@ -64,7 +66,9 @@ ensure_services() {
     services+=(clickhouse)
   fi
   if [ "${#services[@]}" -gt 0 ]; then
-    docker compose -f docker/docker-compose.tracing.yml up -d --wait "${services[@]}"
+    LITELLM_MASTER_KEY="$master_key" LITELLM_LENS_SERVICE_TOKEN="${service_key:-}" \
+      LITELLM_RELEASE_TAG="$source_release_tag" \
+      docker compose -f docker/docker-compose.tracing.yml up -d --wait "${services[@]}"
   else
     echo "lens-dev: reusing running Postgres and ClickHouse"
   fi
@@ -73,18 +77,16 @@ ensure_services() {
 write_default_config() {
   cat > "$1" <<'EOF'
 model_list:
-  - model_name: gpt-4.1-mini
+  - model_name: gpt-6.1-sol
     litellm_params:
-      model: openai/gpt-4.1-mini
+      model: openai/gpt-6.1-sol
       api_key: os.environ/OPENAI_API_KEY
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   store_prompts_in_spend_logs: true
   tracing:
     store:
-      type: clickhouse
-      url: os.environ/CLICKHOUSE_URL
-      retention_days: 14
+      type: lens
 EOF
 }
 
@@ -116,12 +118,13 @@ proxy_env() {
   export LENS_WORKER_IMAGE=litellm-lens-worker:local
   export LITELLM_MODE=PRODUCTION
   export LITELLM_MASTER_KEY="$master_key"
-  if [ "$master_key" = sk-1234 ]; then export LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true; fi
   export LITELLM_SALT_KEY=sk-local-tracing-salt-key
   export DATABASE_URL="$database_url"
   export STORE_MODEL_IN_DB=True
-  export CLICKHOUSE_URL="$clickhouse_url"
-  export CLICKHOUSE_DATABASE=litellm
+  unset CLICKHOUSE_URL CLICKHOUSE_DATABASE
+  export LITELLM_LENS_URL="http://127.0.0.1:$lens_port"
+  export LITELLM_LENS_PUBLIC_URL="http://localhost:$lens_port"
+  export LITELLM_LENS_SERVICE_TOKEN="${service_key:-}"
   export LITELLM_LOCAL_MODEL_COST_MAP=True
   export PROXY_BASE_URL="$proxy_url"
   export LITELLM_UI_PATH="$repo_root/ui/litellm-dashboard/out"
@@ -173,6 +176,16 @@ wait_for_proxy() {
   die "proxy not ready after ${startup_timeout}s; see $log_dir/proxy.log"
 }
 
+wait_for_lens() {
+  local lens_pid="$1"
+  for _ in $(seq 1 "$startup_timeout"); do
+    kill -0 "$lens_pid" 2>/dev/null || die "Lens exited; see $log_dir/worker.log"
+    curl -fsS --max-time "$readiness_request_timeout" "http://127.0.0.1:$lens_port/health/ready" >/dev/null 2>&1 && return
+    sleep 1
+  done
+  die "Lens not ready after ${startup_timeout}s; see $log_dir/worker.log"
+}
+
 wait_for_ui() {
   local ui_pid="$1"
   echo "lens-dev: waiting for the UI (log: $log_dir/ui.log)"
@@ -222,6 +235,8 @@ build_dashboard() {
 seed_data() {
   (
     proxy_env ""
+    export CLICKHOUSE_URL="$clickhouse_url"
+    export CLICKHOUSE_DATABASE=litellm
     export LENS_DEV_UI_URL="http://localhost:$ui_port"
     if [ -n "$seed_profile" ]; then
       "$py" -m scripts.seed_tracing_fixtures --profile "$seed_profile" ${seed_options[@]+"${seed_options[@]}"}
@@ -270,7 +285,7 @@ parse_args() {
 }
 
 main() {
-  local config_file exports proxy_pid ui_pid pid key_hint
+  local config_file exports proxy_pid ui_pid lens_pid pid key_hint
   parse_args "$@"
   if [ -n "${LENS_DEV_CONFIG:-}" ]; then
     [ -f "$LENS_DEV_CONFIG" ] || die "LENS_DEV_CONFIG not found: $LENS_DEV_CONFIG"
@@ -289,9 +304,15 @@ main() {
   [[ "$readiness_request_timeout" =~ ^[1-9][0-9]*$ ]] || die "LENS_DEV_READINESS_REQUEST_TIMEOUT_SECONDS must be a positive integer"
   listening "$proxy_port" && die "port $proxy_port is in use; set LENS_DEV_PROXY_PORT"
   listening "$ui_port" && die "port $ui_port is in use; set LENS_DEV_UI_PORT"
+  listening "$lens_port" && die "port $lens_port is in use; set LENS_DEV_SERVICE_PORT"
   [ "$proxy_port" != "$ui_port" ] || die "proxy and UI ports must differ"
+  [ "$lens_port" != "$proxy_port" ] && [ "$lens_port" != "$ui_port" ] || die "Lens service port must differ from proxy and UI ports"
   mkdir -p "$log_dir"
   load_master_key
+  if [ ! -s "$service_key_file" ]; then
+    (umask 077 && openssl rand -hex 32 > "$service_key_file")
+  fi
+  service_key="$(cat "$service_key_file")"
 
   uv sync --inexact --frozen --extra proxy --group proxy-dev --no-install-project
   ensure_services
@@ -305,6 +326,7 @@ main() {
   echo "lens-dev: checking the Rust bridge (litellm.rust_bridge._native) is current; the ClickHouse trace store uses it"
   PYO3_PYTHON="$py" VIRTUAL_ENV="$repo_root/.venv" uvx --from maturin==1.15.0 maturin develop \
     --release --manifest-path litellm-rust/crates/python-bridge/Cargo.toml --features extension-module
+  cargo build --locked --manifest-path litellm-rust/Cargo.toml -p litellm-lens
 
   if [ ! -x ui/litellm-dashboard/node_modules/.bin/next ]; then
     (cd ui/litellm-dashboard && "$repo_root/scripts/with_dashboard_node.sh" npm ci)
@@ -332,7 +354,8 @@ main() {
 
   (
     cd ui/litellm-dashboard
-    NEXT_PUBLIC_BASE_URL="" LENS_DEV_PROXY_URL="$proxy_url" exec "$repo_root/scripts/with_dashboard_node.sh" npx next dev -p "$ui_port"
+    NEXT_PUBLIC_BASE_URL="" NEXT_PUBLIC_USE_REWRITES=true LENS_DEV_PROXY_URL="$proxy_url" \
+      exec "$repo_root/scripts/with_dashboard_node.sh" npx next dev -p "$ui_port"
   ) < /dev/null > "$log_dir/ui.log" 2>&1 &
   ui_pid=$!
   pids+=("$ui_pid")
@@ -340,13 +363,16 @@ main() {
   wait_for_ui "$ui_pid"
   wait_for_proxy "$proxy_pid"
   ensure_worker_token
-  if [ -n "$seed_profile" ] || [ -n "$seed_logs_profile" ]; then seed_data; fi
-
   LITELLM_RELEASE_TAG="$source_release_tag" \
     LITELLM_MODE=PRODUCTION LITELLM_URL="$proxy_url" LENS_WORKER_TOKEN="$(cat "$token_file")" \
-    "$py" -c "import asyncio, logging; from litellm.proxy.lens.worker import main; logging.basicConfig(level=logging.INFO); asyncio.run(main())" \
+    LITELLM_LENS_SERVICE_TOKEN="$service_key" LITELLM_LENS_LISTEN="127.0.0.1:$lens_port" \
+    CLICKHOUSE_URL="$clickhouse_url" CLICKHOUSE_DATABASE=litellm \
+    "$repo_root/litellm-rust/target/debug/litellm-lens" \
     < /dev/null > "$log_dir/worker.log" 2>&1 &
-  pids+=("$!")
+  lens_pid=$!
+  pids+=("$lens_pid")
+  wait_for_lens "$lens_pid"
+  if [ -n "$seed_profile" ] || [ -n "$seed_logs_profile" ]; then seed_data; fi
 
   key_hint="password in $key_file"
   [ -z "${LENS_DEV_MASTER_KEY:-}" ] || key_hint="password from LENS_DEV_MASTER_KEY"
@@ -357,6 +383,7 @@ Lens dev is up. Ctrl-C stops everything.
   Lens:     http://localhost:$ui_port/ui/lens/  (hot-reloads)
   Logs:     http://localhost:$ui_port/ui/?page=logs
   API:      $proxy_url
+  Traces:   http://localhost:$lens_port/v1/traces
   Logs:     $log_dir/proxy.log
             $log_dir/worker.log
             $log_dir/ui.log

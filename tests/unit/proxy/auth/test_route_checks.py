@@ -13,8 +13,10 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks_organization import _user_is_org_admin
+from litellm.proxy.auth.auth_checks import _is_api_route_allowed
+from litellm.proxy.auth.auth_checks_organization import user_is_org_admin
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import router as llm_passthrough_router
 
 DAILY_ACTIVITY_ROUTE_PAIRS: Final[tuple[tuple[str, str], ...]] = (
     ("/user/daily/activity", "/user/daily/activity/aggregated"),
@@ -99,9 +101,7 @@ def _daily_activity_route_outcome(route: str, user_role: LitellmUserRoles) -> st
 def test_daily_activity_routes_preserve_route_access_outcomes(
     existing_path: str, new_path: str, user_role: LitellmUserRoles
 ) -> None:
-    assert _daily_activity_route_outcome(new_path, user_role) == _daily_activity_route_outcome(
-        existing_path, user_role
-    )
+    assert _daily_activity_route_outcome(new_path, user_role) == _daily_activity_route_outcome(existing_path, user_role)
 
 
 def test_non_admin_config_update_route_rejected():
@@ -1026,9 +1026,7 @@ _CLAUDE_CODE_GATEWAY_ROUTES: Final = (
 
 
 @pytest.mark.parametrize("route", _CLAUDE_CODE_GATEWAY_ROUTES)
-@pytest.mark.parametrize(
-    "role", [LitellmUserRoles.INTERNAL_USER.value, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value]
-)
+@pytest.mark.parametrize("role", [LitellmUserRoles.INTERNAL_USER.value, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value])
 def test_claude_code_gateway_routes_open_to_signed_in_cli_users(role: str, route: str):
     user_obj: Final = LiteLLM_UserTable(user_id="test_user", user_email="test@example.com", user_role=role)
     valid_token: Final = UserAPIKeyAuth(user_id="test_user", user_role=role)
@@ -1356,8 +1354,7 @@ def test_non_proxy_admin_allows_auth_pass_through_with_team_allowlist():
 )
 def test_jwt_team_routes_grant_pass_through_only_for_explicit_paths(route, team_allowed_routes, expected):
     assert (
-        RouteChecks.jwt_team_routes_grant_pass_through(route=route, team_allowed_routes=team_allowed_routes)
-        is expected
+        RouteChecks.jwt_team_routes_grant_pass_through(route=route, team_allowed_routes=team_allowed_routes) is expected
     )
 
 
@@ -2329,9 +2326,7 @@ def test_logs_drawer_detail_route_in_every_route_group(route_group_name):
     from litellm.proxy._types import LiteLLMRoutes
 
     allowed_routes = getattr(LiteLLMRoutes, route_group_name).value
-    assert RouteChecks.check_route_access(
-        route="/spend/logs/ui/req-34099", allowed_routes=allowed_routes
-    )
+    assert RouteChecks.check_route_access(route="/spend/logs/ui/req-34099", allowed_routes=allowed_routes)
 
 
 def test_logs_drawer_detail_route_allowed_for_scoped_virtual_key():
@@ -2343,9 +2338,7 @@ def test_logs_drawer_detail_route_allowed_for_scoped_virtual_key():
         user_id="scoped_key_user",
         allowed_routes=["spend_tracking_routes"],
     )
-    assert RouteChecks.is_virtual_key_allowed_to_call_route(
-        route="/spend/logs/ui/req-34099", valid_token=valid_token
-    )
+    assert RouteChecks.is_virtual_key_allowed_to_call_route(route="/spend/logs/ui/req-34099", valid_token=valid_token)
 
 
 @pytest.mark.parametrize("route", ADMIN_VIEWER_LOGS_PAGE_ROUTES)
@@ -2566,6 +2559,29 @@ def test_proxy_admin_viewer_post_blocked_outside_allowlists(route):
             request_data={},
         )
     assert exc_info.value.status_code == 403
+
+
+@pytest.mark.parametrize("route,allowed", (("/lens/traces/findings", True), ("/lens/example/run", False)))
+def test_admin_viewer_can_read_trace_findings_but_cannot_start_investigations(route: str, allowed: bool) -> None:
+    request: Final = Request({"type": "http", "method": "POST", "path": route, "query_string": b""})
+    auth: Final = UserAPIKeyAuth(user_id="viewer", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+
+    def check_access() -> None:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=LiteLLM_UserTable(user_id="viewer", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY),
+            _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            route=route,
+            request=request,
+            valid_token=auth,
+            request_data={},
+        )
+
+    if allowed:
+        assert check_access() is None
+    else:
+        with pytest.raises(HTTPException) as error:
+            check_access()
+        assert error.value.status_code == 403
 
 
 # ── Admin Viewer: management_routes write endpoints stay blocked ─────────────
@@ -2930,7 +2946,7 @@ def test_available_roles_accessible_to_non_admin_users(user_role):
     )
 
 
-# ── _user_is_org_admin tests ──────────────────────────────────────────────────
+# ── user_is_org_admin tests ──────────────────────────────────────────────────
 
 
 def _make_org_admin_user(org_id: str) -> LiteLLM_UserTable:
@@ -2951,25 +2967,25 @@ def _make_org_admin_user(org_id: str) -> LiteLLM_UserTable:
 def test_user_is_org_admin_with_organizations_list():
     """Org admin can be identified via the `organizations` list field (used by /user/new)."""
     user_obj = _make_org_admin_user("org-1")
-    assert _user_is_org_admin({"organizations": ["org-1"]}, user_obj) is True
+    assert user_is_org_admin({"organizations": ["org-1"]}, user_obj) is True
 
 
 def test_user_is_org_admin_with_singular_organization_id():
     """Backward-compat: org admin can still be identified via singular `organization_id`."""
     user_obj = _make_org_admin_user("org-1")
-    assert _user_is_org_admin({"organization_id": "org-1"}, user_obj) is True
+    assert user_is_org_admin({"organization_id": "org-1"}, user_obj) is True
 
 
 def test_user_is_org_admin_organizations_list_wrong_org():
     """Non-member of the requested org is not considered an org admin for it."""
     user_obj = _make_org_admin_user("org-2")
-    assert _user_is_org_admin({"organizations": ["org-1"]}, user_obj) is False
+    assert user_is_org_admin({"organizations": ["org-1"]}, user_obj) is False
 
 
 def test_user_is_org_admin_no_org_fields():
     """Returns False when neither `organization_id` nor `organizations` is in the request."""
     user_obj = _make_org_admin_user("org-1")
-    assert _user_is_org_admin({}, user_obj) is False
+    assert user_is_org_admin({}, user_obj) is False
 
 
 def test_non_org_admin_with_organizations_list():
@@ -2986,13 +3002,13 @@ def test_non_org_admin_with_organizations_list():
         user_role=LitellmUserRoles.INTERNAL_USER.value,
         organization_memberships=[membership],
     )
-    assert _user_is_org_admin({"organizations": ["org-1"]}, user_obj) is False
+    assert user_is_org_admin({"organizations": ["org-1"]}, user_obj) is False
 
 
 def test_org_admin_cannot_escalate_to_other_org():
     """Regression: admin of org-A requesting [org-A, org-B] must be rejected."""
     user_obj = _make_org_admin_user("org-A")
-    assert _user_is_org_admin({"organizations": ["org-A", "org-B"]}, user_obj) is False
+    assert user_is_org_admin({"organizations": ["org-A", "org-B"]}, user_obj) is False
 
 
 def test_org_admin_of_multiple_orgs_can_operate_on_both():
@@ -3018,7 +3034,7 @@ def test_org_admin_of_multiple_orgs_can_operate_on_both():
         user_role=LitellmUserRoles.INTERNAL_USER.value,
         organization_memberships=memberships,
     )
-    assert _user_is_org_admin({"organizations": ["org-A", "org-B"]}, user_obj) is True
+    assert user_is_org_admin({"organizations": ["org-A", "org-B"]}, user_obj) is True
 
 
 # ── LIT-4221: /team/update org-context resolution from team_id ────────────────
@@ -3726,7 +3742,7 @@ def test_organization_daily_activity_not_granted_by_org_admin_request_data_branc
     self_managed_routes entry is load-bearing rather than redundant.
 
     Query params do reach request_data, so the reason is not body-vs-query: it
-    is the key name. _user_is_org_admin reads ``organization_id`` (singular) and
+    is the key name. user_is_org_admin reads ``organization_id`` (singular) and
     ``organizations``, while this endpoint's filter is ``organization_ids``
     (plural), and the dashboard's first page load sends no organization filter
     at all. Both shapes are pinned below because renaming the query param would
@@ -3748,11 +3764,11 @@ def test_organization_daily_activity_not_granted_by_org_admin_request_data_branc
     )
 
     # The dashboard's default page load: no organization filter at all.
-    assert not _user_is_org_admin(request_data={}, user_object=user_obj)
+    assert not user_is_org_admin(request_data={}, user_object=user_obj)
     # The filtered load, naming an org this user really does administer.
-    assert not _user_is_org_admin(request_data={"organization_ids": "org-a"}, user_object=user_obj)
+    assert not user_is_org_admin(request_data={"organization_ids": "org-a"}, user_object=user_obj)
     # The key name the helper would have had to see to grant it.
-    assert _user_is_org_admin(request_data={"organization_id": "org-a"}, user_object=user_obj)
+    assert user_is_org_admin(request_data={"organization_id": "org-a"}, user_object=user_obj)
     assert not RouteChecks.check_route_access(
         route="/organization/daily/activity",
         allowed_routes=LiteLLMRoutes.org_admin_only_routes.value,
@@ -4236,7 +4252,9 @@ def test_claude_code_marketplace_routes_open_to_internal_users(route):
     assert _gate(route, LitellmUserRoles.INTERNAL_USER.value) == "allowed"
 
 
-@pytest.mark.parametrize("user_role", [None, LitellmUserRoles.INTERNAL_USER.value, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value])
+@pytest.mark.parametrize(
+    "user_role", [None, LitellmUserRoles.INTERNAL_USER.value, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value]
+)
 @pytest.mark.parametrize("allowed_routes", [None, ["llm_api_routes"]])
 def test_auto_router_session_is_reachable_by_any_key_but_benchmarks_stays_admin_only(
     user_role: str | None, allowed_routes: list[str] | None
@@ -4429,8 +4447,12 @@ def test_legacy_sse_respects_virtual_key_route_permissions(route: str, route_gro
 
 @pytest.mark.parametrize(
     "route",
-    ("/v1/traces", "/v1/traces/trace-id", "/v1/traces/trace-id/spans/span-id",
-     "/v1/traces/trace-id/spans/span-id/error"),
+    (
+        "/v1/traces",
+        "/v1/traces/trace-id",
+        "/v1/traces/trace-id/spans/span-id",
+        "/v1/traces/trace-id/spans/span-id/error",
+    ),
 )
 def test_non_admin_trace_reads_reach_endpoint_visibility_checks(route: str) -> None:
     user_role: Final = LitellmUserRoles.INTERNAL_USER
@@ -4441,3 +4463,346 @@ def test_non_admin_trace_reads_reach_endpoint_visibility_checks(route: str) -> N
     RouteChecks.non_proxy_admin_allowed_routes_check(
         user_obj=user, _user_role=user_role.value, route=route, request=request, valid_token=auth, request_data={}
     )
+
+
+_DENY_TEST_REGISTERED_ROUTES: Final = {
+    "test-uuid-1:subpath:/svc:GET,POST": {
+        "endpoint_id": "test-uuid-1",
+        "path": "/svc",
+        "type": "subpath",
+        "auth": True,
+    },
+}
+
+
+def _check_route_with_registered_routes(
+    route: str, valid_token: UserAPIKeyAuth, user_role: LitellmUserRoles = LitellmUserRoles.INTERNAL_USER
+) -> None:
+    request: Final = MagicMock(spec=Request)
+    request.method = "POST"
+    with (
+        pytest.MonkeyPatch.context() as env,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            _DENY_TEST_REGISTERED_ROUTES,
+        ),
+    ):
+        env.delenv("SERVER_ROOT_PATH", raising=False)
+        _is_api_route_allowed(
+            route=route,
+            request=request,
+            request_data={},
+            valid_token=valid_token,
+            user_obj=LiteLLM_UserTable(user_id="test_user", user_role=user_role.value),
+        )
+
+
+@pytest.mark.parametrize(
+    "metadata, team_metadata, denied_route",
+    [
+        ({"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/admin"]}, {}, "/svc/admin"),
+        ({"denied_passthrough_routes": ["/svc/admin"]}, {"allowed_passthrough_routes": ["/svc"]}, "/svc/admin"),
+        ({"allowed_passthrough_routes": ["/svc"]}, {"denied_passthrough_routes": ["/svc/admin"]}, "/svc/admin"),
+        ({"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/adm*"]}, {}, "/svc/adm*"),
+    ],
+    ids=["key-deny-beats-key-allow", "key-deny-beats-team-allow", "team-deny-beats-key-allow", "wildcard-deny"],
+)
+def test_denied_passthrough_routes_win_over_allow(
+    metadata: dict[str, list[str]], team_metadata: dict[str, list[str]], denied_route: str
+) -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata=metadata,
+        team_metadata=team_metadata,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _check_route_with_registered_routes(route="/svc/admin/users", valid_token=valid_token)
+
+    assert exc_info.value.status_code == 403
+    assert f"Matched `{denied_route}` in `denied_passthrough_routes`" in exc_info.value.detail
+
+
+@pytest.mark.parametrize(
+    "route",
+    ["/svc/public", "/svc/administrator", "/anthropic/v1/messages", "/chat/completions"],
+    ids=["allowed-sibling", "no-false-prefix-match", "built-in-provider-route", "llm-api-route"],
+)
+def test_denied_passthrough_routes_leave_other_routes_untouched(route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata={
+            "allowed_passthrough_routes": ["/svc"],
+            "denied_passthrough_routes": ["/svc/admin", "/anthropic", "/chat/completions"],
+        },
+    )
+
+    _check_route_with_registered_routes(route=route, valid_token=valid_token)
+
+
+def test_denied_passthrough_routes_do_not_restrict_proxy_admins() -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        metadata={"denied_passthrough_routes": ["/svc"]},
+        team_metadata={"denied_passthrough_routes": ["/svc"]},
+    )
+
+    _check_route_with_registered_routes(
+        route="/svc/admin/users", valid_token=valid_token, user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/svc/public/../admin/users",
+        "/svc/public/../../admin/users",
+        "/svc//admin/users",
+        "/svc/./admin",
+        "/svc/admin?",
+        "/svc/admin?/users",
+        "/svc/admin#",
+        "/svc/admin#/users",
+        "/svc/public/../admin?x",
+        "/svc/public?x/../admin?",
+        "/svc/public#x/../admin#",
+    ],
+    ids=[
+        "dot-dot-segment",
+        "dot-dot-past-endpoint-root",
+        "empty-segment",
+        "dot-segment",
+        "query-mark",
+        "query-mark-then-subpath",
+        "fragment-mark",
+        "fragment-mark-then-subpath",
+        "dot-dot-then-query-mark",
+        "query-mark-then-dot-dot",
+        "fragment-mark-then-dot-dot",
+    ],
+)
+def test_dot_and_empty_segments_cannot_reach_a_denied_route(route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata={"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/admin"]},
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _check_route_with_registered_routes(route=route, valid_token=valid_token)
+
+    assert exc_info.value.status_code == 403
+    assert "Matched `/svc/admin` in `denied_passthrough_routes`" in exc_info.value.detail
+
+
+def test_dot_dot_out_of_a_denied_route_is_checked_as_the_route_it_forwards_to() -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata={"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/admin"]},
+    )
+
+    _check_route_with_registered_routes(route="/svc/admin/../public", valid_token=valid_token)
+
+
+@pytest.mark.parametrize("denied_route", ["/", "//"])
+@pytest.mark.parametrize("route", ["/svc", "/svc/public", "/svc/admin/users"])
+def test_root_deny_entry_blocks_every_route(route: str, denied_route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata={"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": [denied_route]},
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _check_route_with_registered_routes(route=route, valid_token=valid_token)
+
+    assert exc_info.value.status_code == 403
+    assert f"Matched `{denied_route}` in `denied_passthrough_routes`" in exc_info.value.detail
+
+
+@pytest.mark.parametrize("route", ["/svc/admin", "/svc/admin/", "/svc/admin/users"])
+def test_trailing_slash_deny_entry_blocks_the_route_and_everything_under_it(route: str) -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata={"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/admin/"]},
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _check_route_with_registered_routes(route=route, valid_token=valid_token)
+
+    assert exc_info.value.status_code == 403
+    assert "Matched `/svc/admin/` in `denied_passthrough_routes`" in exc_info.value.detail
+
+
+def test_trailing_slash_deny_entry_does_not_match_a_longer_segment() -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata={"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/admin/"]},
+    )
+
+    _check_route_with_registered_routes(route="/svc/administrator", valid_token=valid_token)
+
+
+def test_dot_segments_resolving_outside_a_denied_route_still_pass() -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata={"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/admin"]},
+    )
+
+    _check_route_with_registered_routes(route="/svc/public/./docs", valid_token=valid_token)
+
+
+def test_query_text_naming_a_denied_route_still_passes() -> None:
+    valid_token: Final = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        metadata={"allowed_passthrough_routes": ["/svc"], "denied_passthrough_routes": ["/svc/admin"]},
+    )
+
+    _check_route_with_registered_routes(route="/svc/public?next=/svc/admin", valid_token=valid_token)
+
+
+def test_is_llm_api_route():
+    assert RouteChecks.is_llm_api_route("/v1/chat/completions") is True
+    assert RouteChecks.is_llm_api_route("/v1/completions") is True
+    assert RouteChecks.is_llm_api_route("/v1/embeddings") is True
+    assert RouteChecks.is_llm_api_route("/v1/images/generations") is True
+    assert RouteChecks.is_llm_api_route("/v1/threads/thread_12345") is True
+    assert RouteChecks.is_llm_api_route("/bedrock/model/invoke") is True
+    assert RouteChecks.is_llm_api_route("/vertex-ai/text") is True
+    assert RouteChecks.is_llm_api_route("/gemini/generate") is True
+    assert RouteChecks.is_llm_api_route("/cohere/generate") is True
+    assert RouteChecks.is_llm_api_route("/anthropic/messages") is True
+    assert RouteChecks.is_llm_api_route("/anthropic/v1/messages") is True
+    assert RouteChecks.is_llm_api_route("/azure/endpoint") is True
+    assert RouteChecks.is_llm_api_route("/v1/realtime?model=gpt-4o-realtime-preview") is True
+    assert RouteChecks.is_llm_api_route("/realtime?model=gpt-4o-realtime-preview") is True
+    assert RouteChecks.is_llm_api_route("/openai/deployments/vertex_ai/gemini-1.5-flash/chat/completions") is True
+    assert RouteChecks.is_llm_api_route("/openai/deployments/gemini/gemini-1.5-flash/chat/completions") is True
+    assert (
+        RouteChecks.is_llm_api_route("/openai/deployments/anthropic/claude-sonnet-4-5-20250929/chat/completions")
+        is True
+    )
+    assert RouteChecks.is_llm_api_route("/mcp") is True
+    assert RouteChecks.is_llm_api_route("/mcp/") is True
+    assert RouteChecks.is_llm_api_route("/mcp/tools") is True
+    assert RouteChecks.is_llm_api_route("/mcp/tools/call") is True
+    assert RouteChecks.is_llm_api_route("/mcp/tools/list") is True
+    assert RouteChecks.is_llm_api_route("/some/random/route") is False
+    assert RouteChecks.is_llm_api_route("/key/regenerate/82akk800000000jjsk") is False
+    assert RouteChecks.is_llm_api_route("/key/82akk800000000jjsk/delete") is False
+
+    all_llm_api_routes = llm_passthrough_router.routes
+
+    for route in all_llm_api_routes:
+        route_path = str(route.path)
+        assert RouteChecks.is_llm_api_route(route_path) is True
+
+
+def test_route_matches_pattern():
+    assert RouteChecks._route_matches_pattern("/threads/thread_12345", "/threads/{thread_id}") is True
+    assert (
+        RouteChecks._route_matches_pattern("/key/regenerate/82akk800000000jjsk", "/key/{token_id}/regenerate") is False
+    )
+    assert RouteChecks._route_matches_pattern("/v1/chat/completions", "/v1/chat/completions") is True
+    assert RouteChecks._route_matches_pattern("/v1/models/gpt-4", "/v1/models/{model_name}") is True
+    assert (
+        RouteChecks._route_matches_pattern("/v1/chat/completionz/thread_12345", "/v1/chat/completions/{thread_id}")
+        is False
+    )
+    assert RouteChecks._route_matches_pattern("/v1/{thread_id}/messages", "/v1/messages/thread_2345") is False
+
+
+def _scope_request(method: str, path: str) -> Request:
+    return Request({"type": "http", "method": method, "path": path, "query_string": b""})
+
+
+def _internal_user_check(route: str, method: str, role: LitellmUserRoles = LitellmUserRoles.INTERNAL_USER) -> None:
+    user_obj = LiteLLM_UserTable(user_id="u", user_email="u@x", user_role=role.value)
+    valid_token = UserAPIKeyAuth(user_id="u", user_role=role)
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=role.value,
+        route=route,
+        request=_scope_request(method, route),
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
+@pytest.mark.parametrize(
+    ("method", "route"),
+    [
+        ("GET", "/credentials/user_connections"),
+        ("POST", "/credentials/x/user_connection/start"),
+        ("POST", "/credentials/x/user_connection/poll"),
+        ("DELETE", "/credentials/x/user_connection"),
+        ("DELETE", "/credentials/a/b/user_connection"),
+    ],
+)
+def test_internal_user_credential_connection_routes_allowed(method: str, route: str) -> None:
+    assert _internal_user_check(route, method) is None
+
+
+@pytest.mark.parametrize(
+    ("method", "route"),
+    [
+        ("PATCH", "/credentials/x/user_connection"),
+        ("GET", "/credentials/by_name/x/user_connection"),
+        ("PATCH", "/credentials/x/user_connection/start"),
+        ("GET", "/credentials/x/user_connection/poll"),
+        ("DELETE", "/credentials/user_connections"),
+        ("PATCH", "/credentials/user_connections"),
+    ],
+)
+def test_internal_user_credential_connection_route_collisions_denied(method: str, route: str) -> None:
+    """A name colliding with the connection paths would fall through to the generic
+    credential CRUD handlers, so only the exact method/route pairs are allowed."""
+    with pytest.raises(Exception, match="Only proxy admin"):
+        _internal_user_check(route, method)
+
+
+@pytest.mark.parametrize(
+    ("method", "route"),
+    [
+        ("GET", "/credentials/user_connections"),
+        ("POST", "/credentials/x/user_connection/start"),
+        ("POST", "/credentials/x/user_connection/poll"),
+        ("DELETE", "/credentials/x/user_connection"),
+    ],
+)
+def test_view_only_user_denied_credential_connection_routes(method: str, route: str) -> None:
+    with pytest.raises(Exception, match="Only proxy admin"):
+        _internal_user_check(route, method, role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
+
+
+def test_user_connection_route_registration_order_wins_over_generic_credential_routes() -> None:
+    """The :path placeholders in the generic CRUD routes could swallow the
+    user_connection paths; the concrete routes must register (and match) first."""
+    from starlette.routing import Match
+
+    from litellm.proxy.credential_endpoints import endpoints as credential_endpoints
+    from litellm.proxy.proxy_server import app
+
+    for method, path, expected in (
+        ("DELETE", "/credentials/foo/user_connection", credential_endpoints.delete_user_connection),
+        ("POST", "/credentials/foo/user_connection/start", credential_endpoints.start_user_connection),
+    ):
+        scope = {"type": "http", "method": method, "path": path}
+        match = next(
+            (
+                route
+                for route in app.router.routes
+                if hasattr(route, "matches") and route.matches(scope)[0] == Match.FULL
+            ),
+            None,
+        )
+        assert match is not None, f"no route matched {method} {path}"
+        assert getattr(match, "endpoint", None) is expected

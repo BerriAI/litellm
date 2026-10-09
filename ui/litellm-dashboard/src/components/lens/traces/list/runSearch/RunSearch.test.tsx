@@ -12,7 +12,7 @@ describe("RunSearch", () => {
   it("offers the run fields, then the agents seen in the loaded runs", async () => {
     const user = userEvent.setup();
     render(<RunSearch value="" onChange={vi.fn()} runs={runs} />);
-    expect(screen.getByText("Search runs, or filter like agent:researcher status:error")).toBeVisible();
+    expect(screen.getByText("Search input or trace ID")).toBeVisible();
     await user.click(box());
     expect(
       within(listbox())

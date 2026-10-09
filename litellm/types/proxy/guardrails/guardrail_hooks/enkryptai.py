@@ -1,7 +1,9 @@
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 from typing_extensions import TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from .base import GuardrailConfigModel
 
@@ -110,7 +112,7 @@ class EnkryptAIProcessedResult(TypedDict):
 
 
 # Pydantic Config Model
-class EnkryptAIGuardrailConfigs(BaseModel):
+class EnkryptAIGuardrailConfigs(LiteLLMBaseModel):
     """Configuration parameters for the EnkryptAI guardrail"""
 
     api_key: str | None = Field(

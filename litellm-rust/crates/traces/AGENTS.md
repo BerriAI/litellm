@@ -4,3 +4,8 @@
 - Keep ClickHouse schema, row encoding and queries in `litellm-traces-clickhouse`; keep PyO3 conversion in `python-bridge`
 - Test decoding and normalization through the public API
 - Expose one top-level `Error` enum in `src/error.rs` for decoding and normalization failures
+- Own the tracing HTTP contracts: request types in `src/request.rs`, response types in `src/response.rs`, and response views exported from `src/schema.rs`
+- Python and the dashboard consume them only through generated code: `uv run scripts/generate_trace_types.py` writes `litellm/rust_bridge/trace/generated/`, and `npm run gen:api` in `ui/litellm-dashboard` regenerates `schema.d.ts` from the proxy's OpenAPI
+- Declare each bound once as a constant and read it from both the schema attribute and the runtime check
+- GET request types accept unknown fields because the routes ignore unknown query parameters; body request types use `deny_unknown_fields`
+- Changing a request or response shape changes the public API; ship it in its own behavior-change PR

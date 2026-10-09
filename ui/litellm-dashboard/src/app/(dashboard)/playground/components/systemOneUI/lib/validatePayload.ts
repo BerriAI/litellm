@@ -1,4 +1,9 @@
-import { systemOneRequestSchema, type SystemOneRequest } from "./schemas";
+import {
+  decisionsRequestSchema,
+  systemOneRequestSchema,
+  type DecisionEndpoint,
+  type PlaygroundRequest,
+} from "./schemas";
 
 const RECOMMENDED_MAX_SCORE_LEVELS = 10;
 
@@ -10,7 +15,7 @@ export interface SystemOnePayloadIssue {
 
 export interface SystemOnePayloadValidation {
   isValid: boolean;
-  payload?: SystemOneRequest;
+  payload?: PlaygroundRequest;
   issues: SystemOnePayloadIssue[];
 }
 
@@ -27,7 +32,7 @@ function parseJson(raw: string): { ok: true; value: unknown } | { ok: false; mes
   }
 }
 
-const scoreLevelWarnings = (payload: SystemOneRequest): SystemOnePayloadIssue[] =>
+const scoreLevelWarnings = (payload: PlaygroundRequest): SystemOnePayloadIssue[] =>
   Object.entries(payload.questions)
     .filter(([, question]) => question.type === "score" && question.criteria.length > RECOMMENDED_MAX_SCORE_LEVELS)
     .map(([id]) => ({
@@ -36,7 +41,10 @@ const scoreLevelWarnings = (payload: SystemOneRequest): SystemOnePayloadIssue[] 
       severity: "warning",
     }));
 
-export function validateSystemOnePayload(raw: string): SystemOnePayloadValidation {
+export function validateSystemOnePayload(
+  raw: string,
+  endpoint: DecisionEndpoint = "/typesafe/v1/systemone",
+): SystemOnePayloadValidation {
   if (!raw.trim()) {
     return invalid("root", "Payload cannot be empty.");
   }
@@ -46,7 +54,8 @@ export function validateSystemOnePayload(raw: string): SystemOnePayloadValidatio
     return invalid("syntax", `Invalid JSON syntax: ${json.message}`);
   }
 
-  const result = systemOneRequestSchema.safeParse(json.value);
+  const schema = endpoint === "/v1/systemone" ? decisionsRequestSchema : systemOneRequestSchema;
+  const result = schema.safeParse(json.value);
   if (!result.success) {
     return {
       isValid: false,

@@ -1,34 +1,76 @@
 from datetime import datetime, timedelta, timezone
 from functools import reduce
-from typing import Final
+from typing import Final, Literal
 
 import pytest
 
 from litellm.proxy.lens.models import (
+    MAX_REVIEWS,
     MAX_STEPS,
+    Activity,
     AgentTestCase,
     Check,
+    Coverage,
     Evidence,
+    Execution,
     FindingDraft,
+    InFlight,
     IssueBrief,
+    Job,
     Lens,
     LensSettings,
+    MetadataFilter,
+    Progress,
+    Result,
+    Review,
+    RunAssessment,
+    Sample,
     Scope,
     Step,
     Worker,
 )
 from litellm.proxy.lens.state import (
+    add_review,
     add_step,
+    apply_progress,
     can_access,
+    cancel_job,
     claim_job,
     current_job,
+    due_at,
+    end_job,
     merge_finding,
     next_scan_start,
     queue_job,
     renew_budget,
+    replace_job,
+    result_status,
+    reviews_after,
+    summarized,
 )
 
 NOW: Final = datetime(2026, 1, 15, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    ("has_finding", "assessable", "error", "expected"),
+    (
+        (True, False, "One candidate exhausted its retries", "completed"),
+        (False, True, "One review exhausted its retries", "completed"),
+        (False, False, "Every review exhausted its retries", "failed"),
+        (False, False, "", "completed"),
+    ),
+)
+def test_partial_results_are_completed_while_total_failure_remains_failed(
+    has_finding: bool, assessable: bool, error: str, expected: str
+) -> None:
+    result: Final = Result(
+        findings=(finding("run"),) if has_finding else (),
+        assessments=(RunAssessment(execution_id="run", cannot_assess=not assessable),),
+        coverage=Coverage(screened=1, unassessable=int(not assessable)),
+        error=error,
+    )
+    assert result_status(result) == expected
 
 
 def lens() -> Lens:
@@ -48,6 +90,22 @@ def worker(team: str = "alpha", identity: str = "worker") -> Worker:
     return Worker(id=identity, name=identity, scope=Scope(team_id=team), last_seen=NOW)
 
 
+def lens_with_job(
+    status: Literal["queued", "running", "completed"],
+    lease_until: datetime | None = None,
+    *,
+    enabled: bool = True,
+    trigger: Literal["schedule", "manual"] = "schedule",
+) -> Lens:
+    original: Final = lens()
+    configured: Final = original.model_copy(
+        update={"settings": original.settings.model_copy(update={"enabled": enabled})}
+    )
+    queued: Final = queue_job(configured, NOW, "job", trigger=trigger)
+    job: Final = queued.jobs[0].model_copy(update={"status": status, "lease_until": lease_until})
+    return queued.model_copy(update={"jobs": (job,)})
+
+
 def finding(execution: str) -> FindingDraft:
     return FindingDraft(
         title="Repeated failed searches",
@@ -55,6 +113,29 @@ def finding(execution: str) -> FindingDraft:
         check_id="retries",
         evidence=(Evidence(execution_id=execution, span_id="span", quote="timeout"),),
     )
+
+
+@pytest.mark.parametrize(
+    ("candidate", "expected"),
+    (
+        pytest.param(lens(), NOW, id="idle-enabled"),
+        pytest.param(
+            lens().model_copy(update={"settings": lens().settings.model_copy(update={"enabled": False})}),
+            None,
+            id="idle-disabled",
+        ),
+        pytest.param(lens_with_job("queued", enabled=False, trigger="manual"), NOW, id="queued-manual-while-disabled"),
+        pytest.param(
+            lens_with_job("running", NOW + timedelta(minutes=5)),
+            NOW + timedelta(minutes=5),
+            id="running-with-lease",
+        ),
+        pytest.param(lens_with_job("running"), NOW, id="running-without-lease"),
+        pytest.param(lens_with_job("completed"), NOW, id="completed-only"),
+    ),
+)
+def test_due_at_matches_the_current_scheduling_state(candidate: Lens, expected: datetime | None) -> None:
+    assert due_at(candidate) == expected
 
 
 @pytest.mark.parametrize(
@@ -301,13 +382,21 @@ def test_issue_and_pattern_with_same_title_keep_independent_feedback(explicit_re
     assert pattern.kind == "pattern"
     assert pattern.status == "open" and pattern.reason == ""
     assert pattern.occurrences == ("new",)
-    assert snapshot_finding(reviewed, draft, 1, NOW).id == pattern.id
+    assert (
+        snapshot_finding(
+            reviewed.model_copy(update={"findings": (issue, pattern)}),
+            draft.model_copy(update={"existing_finding_id": pattern.id}),
+            1,
+            NOW,
+        ).id
+        == pattern.id
+    )
     both: Final = reviewed.model_copy(update={"findings": (issue, pattern)})
     assert merge_finding(both, finding("again"), 1, NOW).id == issue.id
     assert merge_finding(both, finding("again"), 1, NOW).status == "dismissed"
 
 
-def test_legacy_finding_identity_preserves_feedback_only_for_same_kind_and_check() -> None:
+def test_legacy_finding_identity_preserves_feedback_when_explicitly_matched_across_checks() -> None:
     import hashlib
 
     original: Final = lens()
@@ -322,8 +411,9 @@ def test_legacy_finding_identity_preserves_feedback_only_for_same_kind_and_check
     assert repeated.status == "dismissed" and repeated.reason == "Accepted"
     other: Final = finding("new").model_copy(update={"check_id": "different", "existing_finding_id": legacy_id})
     separate: Final = merge_finding(reviewed, other, 2, NOW)
-    assert separate.id != legacy_id
-    assert separate.status == "open" and separate.reason == ""
+    assert separate.id == legacy_id
+    assert separate.status == "dismissed"
+    assert separate.check_ids == ("different", "retries") and separate.reason == "Accepted"
 
 
 def test_only_successful_scheduled_scans_move_the_next_scan_forward() -> None:
@@ -345,3 +435,222 @@ def test_calendar_overflow_is_rejected_without_the_old_history_and_interval_caps
     assert getattr(accepted, field) == 100000
     with pytest.raises(ValidationError, match="supported calendar range"):
         LensSettings.model_validate({**lens().settings.model_dump(), field: 10**30})
+
+
+def review(index: int) -> Review:
+    return Review(
+        execution_id=f"run-{index}", trace_id="t", agent="support", name="task", model="analysis", duration_ms=1, at=NOW
+    )
+
+
+def test_reviews_keep_the_newest_window_while_counting_every_review() -> None:
+    job: Final = queue_job(lens(), NOW, "job").jobs[0]
+    grown: Final = reduce(add_review, tuple(review(i) for i in range(MAX_REVIEWS + 3)), job)
+    assert grown.reviewed == MAX_REVIEWS + 3
+    assert len(grown.reviews) == MAX_REVIEWS
+    assert grown.reviews[0].execution_id == "run-3"
+    assert grown.reviews[-1].execution_id == f"run-{MAX_REVIEWS + 2}"
+
+
+def test_reclaimed_run_starts_its_review_history_over() -> None:
+    queued: Final = queue_job(lens(), NOW, "job")
+    first: Final = claim_job(queued, worker(), NOW)
+    reviewed: Final = replace_job(first, reduce(add_review, (review(0), review(1)), first.jobs[0]))
+    stalled: Final = reviewed.jobs[0].model_copy(
+        update={"reading": (InFlight(execution_id="run-2", trace_id="t", agent="support", started_at=NOW),)}
+    )
+    reclaimed: Final = claim_job(replace_job(reviewed, stalled), worker(identity="other"), NOW + timedelta(minutes=6))
+    job: Final = reclaimed.jobs[0]
+    assert job.worker_id == "other"
+    assert (job.reviews, job.reviewed, job.reading) == ((), 0, ())
+    replayed: Final = reduce(add_review, (review(0), review(1)), job)
+    assert replayed.reviewed == len(replayed.reviews) == 2
+
+
+def test_progress_without_a_review_leaves_the_review_history_alone() -> None:
+    job: Final = add_review(queue_job(lens(), NOW, "job").jobs[0], review(0))
+    assert add_review(job, None) == job
+
+
+def reviewed_job() -> Job:
+    execution: Final = Execution(
+        id="run-0",
+        source="traces",
+        trace_id="t",
+        team_id="alpha",
+        name="task",
+        start_time="2026-01-15 00:00:00",
+        span_count=3,
+        service="support",
+        metadata=(MetadataFilter(key="gen_ai.agent.name", value="support"),),
+    )
+    job: Final = (
+        queue_job(lens(), NOW, "job")
+        .jobs[0]
+        .model_copy(update={"sample": Sample(executions=(execution,), eligible=4, selected=1)})
+    )
+    timed: Final = tuple(review(i).model_copy(update={"at": NOW + timedelta(seconds=i)}) for i in range(3))
+    return reduce(add_review, timed, job)
+
+
+def test_summary_drops_reviews_and_run_attributes_but_keeps_counts_and_run_identity() -> None:
+    job: Final = reviewed_job()
+    listed: Final = summarized(lens().model_copy(update={"jobs": (job,)})).jobs[0]
+    assert listed.reviews == ()
+    assert listed.reviewed == job.reviewed == 3
+    assert listed.sample is not None and job.sample is not None
+    assert listed.sample.executions[0].metadata == ()
+    assert (
+        listed.sample.executions[0].model_copy(update={"metadata": job.sample.executions[0].metadata})
+        == (job.sample.executions[0])
+    )
+    assert listed.model_copy(update={"reviews": job.reviews, "sample": job.sample}) == job
+
+
+def test_review_polling_returns_only_reviews_after_the_cursor_even_when_they_finished_out_of_order() -> None:
+    job: Final = reduce(add_review, (review(5).model_copy(update={"at": NOW - timedelta(hours=1)}),), reviewed_job())
+    assert reviews_after(job, 0).reviews == job.reviews
+    assert [r.execution_id for r in reviews_after(job, 2).reviews] == ["run-2", "run-5"]
+    assert reviews_after(job, 4).reviews == ()
+    assert reviews_after(job, 4).reviewed == 4
+
+
+def test_review_polling_after_the_window_moved_on_returns_what_is_still_kept() -> None:
+    job: Final = reduce(add_review, tuple(review(i) for i in range(MAX_REVIEWS + 10)), reviewed_job())
+    page: Final = reviews_after(job, 5)
+    assert page.reviews == job.reviews
+    assert page.reviewed == MAX_REVIEWS + 13
+    assert [r.execution_id for r in reviews_after(job, page.reviewed - 2).reviews] == [
+        f"run-{MAX_REVIEWS + 8}",
+        f"run-{MAX_REVIEWS + 9}",
+    ]
+
+
+def in_flight(execution: str) -> InFlight:
+    return InFlight(execution_id=execution, trace_id="t", agent="support", started_at=NOW)
+
+
+def reading_job() -> Job:
+    running: Final = claim_job(queue_job(lens(), NOW, "job"), worker(), NOW).jobs[0]
+    return apply_progress(running, Progress(stage=running.stage, reading=(in_flight("a"), in_flight("b"))), NOW)
+
+
+def test_progress_replaces_the_in_flight_runs_and_old_workers_leave_them_alone() -> None:
+    job: Final = reading_job()
+    assert [r.execution_id for r in job.reading] == ["a", "b"]
+    finished: Final = apply_progress(job, Progress(stage=job.stage, review=review(0), reading=(in_flight("b"),)), NOW)
+    assert [r.execution_id for r in finished.reading] == ["b"]
+    assert finished.reviewed == 1
+    assert apply_progress(job, Progress(stage=job.stage, review=review(1)), NOW).reading == job.reading
+    assert apply_progress(job, Progress(stage=job.stage, reading=()), NOW).reading == ()
+
+
+@pytest.mark.parametrize("status", ("completed", "failed", "cancelled"))
+def test_finished_jobs_stop_showing_runs_in_flight(status: Literal["completed", "failed", "cancelled"]) -> None:
+    ended: Final = end_job(reading_job(), status, NOW)
+    assert ended.status == status
+    assert ended.finished_at == NOW
+    assert ended.reading == ()
+
+
+def test_cancel_and_repeated_disconnects_clear_runs_in_flight() -> None:
+    reading: Final = replace_job(queue_job(lens(), NOW, "job"), reading_job())
+    cancelled: Final = cancel_job(reading, NOW).jobs[0]
+    assert (cancelled.status, cancelled.reading) == ("cancelled", ())
+    abandoned: Final = reading.model_copy(update={"jobs": (reading.jobs[0].model_copy(update={"attempts": 3}),)})
+    expired: Final = claim_job(abandoned, worker(), NOW + timedelta(minutes=10)).jobs[0]
+    assert (expired.status, expired.reading) == ("failed", ())
+
+
+def test_activity_updates_preserve_coverage_reviews_and_other_concurrent_lanes() -> None:
+    initial: Final = add_review(reading_job(), review(0))
+    first: Final = Activity(id="review:one", phase="review", label="Review one", execution_ids=("one",), started_at=NOW)
+    second: Final = Activity(id="group:one", phase="group", label="Compare batch", started_at=NOW)
+    started: Final = apply_progress(
+        apply_progress(initial, Progress(activity=first), NOW), Progress(activity=second), NOW
+    )
+    reading: Final = first.model_copy(update={"operations": ("python",)})
+    updated: Final = apply_progress(started, Progress(activity=reading), NOW)
+    assert updated.activities == (reading, second)
+    assert (updated.stage, updated.coverage, updated.reviews, updated.reading) == (
+        initial.stage,
+        initial.coverage,
+        initial.reviews,
+        initial.reading,
+    )
+    assert updated.reviewed == initial.reviewed
+    finished: Final = apply_progress(updated, Progress(activity=reading.model_copy(update={"finished": True})), NOW)
+    assert finished.activities == (second,)
+    assert end_job(updated, "cancelled", NOW).activities == ()
+    expired: Final = replace_job(queue_job(lens(), NOW, "job"), updated.model_copy(update={"lease_until": NOW}))
+    assert claim_job(expired, worker(), NOW).jobs[0].activities == ()
+
+
+def test_one_issue_preserves_all_traces_checks_and_contributing_runs_without_counting_overlap() -> None:
+    initial: Final = lens()
+    first: Final = merge_finding(initial, finding("trace-a"), 1, NOW, "run-1")
+    persisted: Final = initial.model_copy(update={"findings": (first,)})
+    repeated: Final = merge_finding(persisted, finding("trace-a"), 1, NOW + timedelta(hours=1), "run-2")
+    assert repeated.id == first.id
+    assert repeated.investigation_runs == ("run-1",)
+    assert repeated.last_seen == first.last_seen
+    next_draft: Final = finding("trace-b").model_copy(
+        update={
+            "title": "Same failure described differently",
+            "check_id": "unhappy",
+            "existing_finding_id": first.id,
+        }
+    )
+    updated: Final = merge_finding(persisted, next_draft, 1, NOW + timedelta(hours=2), "run-3")
+    assert updated.id == first.id
+    assert updated.occurrences == ("trace-a", "trace-b")
+    assert updated.check_ids == ("retries", "unhappy")
+    assert updated.investigation_runs == ("run-1", "run-3")
+    assert {quote.execution_id for quote in updated.evidence} == {"trace-a", "trace-b"}
+
+
+def test_old_criteria_run_cannot_advance_the_new_criteria_scan_cursor() -> None:
+    original: Final = lens()
+    running: Final = queue_job(original, NOW, "old-criteria").jobs[0]
+    updated: Final = original.model_copy(
+        update={"settings": original.settings.model_copy(update={"context": "Find failed tool calls"})}
+    )
+    assert next_scan_start(updated, running, failed=False) is None
+
+
+def test_explicit_cluster_match_does_not_absorb_a_same_title_issue_with_different_feedback() -> None:
+    first: Final = merge_finding(lens(), finding("trace-a"), 1, NOW, "first-run")
+    unrelated: Final = first.model_copy(
+        update={"id": "other", "status": "dismissed", "reason": "Intentional", "occurrences": ("trace-b",)}
+    )
+    stored: Final = lens().model_copy(update={"findings": (first, unrelated)})
+    updated: Final = merge_finding(
+        stored, finding("trace-c").model_copy(update={"existing_finding_id": first.id}), 1, NOW, "new-run"
+    )
+    assert updated.id == first.id
+    assert updated.occurrences == ("trace-a", "trace-c")
+    assert updated.status == "open"
+    assert "other" not in updated.merged_finding_ids
+
+
+def test_feedback_changed_during_analysis_survives_a_stale_merge_decision() -> None:
+    from litellm.proxy.lens.endpoints import merge_results
+    from litellm.proxy.lens.models import Result
+
+    first: Final = merge_finding(lens(), finding("trace-a"), 1, NOW, "first-run")
+    later: Final = merge_finding(lens(), finding("trace-b"), 1, NOW + timedelta(minutes=1), "second-run")
+    feedback: Final = later.model_copy(update={"status": "resolved", "reason": "Fixed in the latest release"})
+    stored: Final = lens().model_copy(update={"findings": (first, feedback)})
+    stale: Final = finding("trace-c").model_copy(
+        update={"existing_finding_id": first.id, "merged_finding_ids": (later.id,)}
+    )
+
+    updated: Final = merge_results(
+        stored, Result(coverage=Coverage(), findings=(stale,)), 1, NOW + timedelta(hours=1), "new-run"
+    )
+
+    assert len(updated.findings) == 2
+    assert feedback in updated.findings
+    extended: Final = next(item for item in updated.findings if item.id == first.id)
+    assert extended.status == "open" and extended.occurrences == ("trace-a", "trace-c")
+    assert feedback.id not in extended.merged_finding_ids

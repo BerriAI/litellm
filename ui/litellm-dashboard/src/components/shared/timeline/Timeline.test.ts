@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { bandForWindow, dragUpdate, formatSpan, type Bucket } from "./Timeline";
+import { bandForWindow, dragUpdate, formatSpan, timelineTicks, type TimeBucket } from "./Timeline";
 
 const HOUR = 3600 * 1000;
 const START = Date.UTC(2026, 8, 30, 0, 0, 0);
 
-const emptyBuckets = (count: number): Bucket[] =>
+const emptyBuckets = (count: number): TimeBucket[] =>
   Array.from({ length: count }, (_, i) => ({
     startMs: START + i * HOUR,
     endMs: START + (i + 1) * HOUR,
@@ -51,5 +51,19 @@ describe("bandForWindow", () => {
     const buckets = emptyBuckets(10);
     expect(bandForWindow(buckets, { startMs: START + 2 * HOUR, endMs: START + 5 * HOUR })).toEqual({ lo: 2, hi: 4 });
     expect(bandForWindow(buckets, null)).toBeNull();
+  });
+});
+
+describe("timelineTicks", () => {
+  it("keeps both edges visible and reduces labels in narrow timelines", () => {
+    const range = { startMs: 0, endMs: 24 * HOUR };
+    const narrow = timelineTicks(range, 280);
+    const wide = timelineTicks(range, 1000);
+    expect(narrow[0]).toBe(0);
+    expect(narrow.at(-1)).toBe(1);
+    expect(narrow.length).toBeLessThan(wide.length);
+    expect(280 / (narrow.length - 1)).toBeGreaterThanOrEqual(80);
+    expect(timelineTicks(range, 0)).toEqual([0, 1]);
+    expect(timelineTicks({ ...range, endMs: 30 * 24 * HOUR }, 280)).toEqual([0, 1]);
   });
 });

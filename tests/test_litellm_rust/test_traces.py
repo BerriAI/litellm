@@ -25,7 +25,7 @@ from litellm.rust_bridge.trace.generated.types import Trace, TraceScope
 from litellm.rust_bridge.trace.storage import ClickHouseStorage, TraceStorageConfig, span_rows
 from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
 from litellm.tracing.types import SpendLogRecord
-from scripts.seed_tracing_fixtures import (
+from seed_tracing_fixtures import (
     TRACE,
     TRACE_FIXTURES,
     Copies,
@@ -174,10 +174,11 @@ async def test_schema_setup_uses_configured_retention(recording_server: Recordin
         request.raw_body for request in recording_server.requests if b"MODIFY TTL" in request.raw_body
     )
     assert all(b"INTERVAL 7 DAY" in statement for statement in ttl_statements)
-    assert tuple(request.raw_body.strip() for request in recording_server.requests[-3:]) == (
+    assert tuple(request.raw_body.strip() for request in recording_server.requests[-4:]) == (
         b"ALTER TABLE `trace_test`.otel_traces MODIFY TTL toDateTime(Timestamp) + INTERVAL 7 DAY",
         b"ALTER TABLE `trace_test`.agent_traces_by_key MODIFY TTL toDateTime(StartTs) + INTERVAL 7 DAY",
         b"ALTER TABLE `trace_test`.spend_logs MODIFY TTL toDateTime(start_time) + INTERVAL 7 DAY",
+        b"ALTER TABLE `trace_test`.lens_feedback MODIFY TTL toDateTime(CreatedAt) + INTERVAL 7 DAY",
     )
 
 
@@ -300,7 +301,7 @@ async def test_insert_validates_values_without_pydantic_copy(recording_server: R
         ("internal_user", None, 403),
     ),
 )
-def test_trace_sql_endpoint_enforces_ownership_and_preserves_clickhouse_envelope(
+def test_trace_sql_endpoint_returns_data_only_and_enforces_ownership(
     recording_server: RecordingServer, role: str, user_id: str | None, expected_status: int
 ) -> None:
     from fastapi import FastAPI
@@ -316,6 +317,7 @@ def test_trace_sql_endpoint_enforces_ownership_and_preserves_clickhouse_envelope
         "data": [{"answer": 42}],
         "rows": 1,
         "statistics": {"elapsed": 0.01, "rows_read": 1, "bytes_read": 1},
+        "rows_before_limit_at_least": 1,
     }
     recording_server.expected_requests = 12 if expected_status == 200 else 0
     if expected_status == 200:
@@ -339,7 +341,7 @@ def test_trace_sql_endpoint_enforces_ownership_and_preserves_clickhouse_envelope
         if expected_status == 403:
             assert result.json() == {"detail": "Not allowed to view logs"}
             return
-        assert result.json() == envelope
+        assert result.json() == {"data": envelope["data"]}
         assert recording_server.requests[-1].raw_body == b"SELECT 42 AS answer"
         assert client.post("/v1/traces/query", json={"sql": "  "}).status_code == 400
         assert client.post("/v1/traces/query", json={}).status_code == 422
@@ -428,6 +430,7 @@ def test_trace_sql_endpoint_distinguishes_query_errors_from_reader_failures(
         "data": [{"answer": 42}],
         "rows": 1,
         "statistics": {"elapsed": 0.01, "rows_read": 1, "bytes_read": 1},
+        "rows_before_limit_at_least": 1,
     }
     recording_server.enqueue(ResponseSpec(body=envelope))
     storage: Final = ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test"))
@@ -441,7 +444,7 @@ def test_trace_sql_endpoint_distinguishes_query_errors_from_reader_failures(
         assert failed.status_code == expected_status, failed.text
         recovered: Final = client.post("/v1/traces/query", json={"sql": "SELECT 42 AS answer"})
         assert recovered.status_code == 200, recovered.text
-        assert recovered.json() == envelope
+        assert recovered.json() == {"data": envelope["data"]}
     assert recording_server.requests[-2].raw_body == b"SELEC 42"
 
 
@@ -496,7 +499,7 @@ class SeededTraceAPI:
 
 @pytest.fixture
 def seeded_trace_api(clickhouse_url: str) -> Iterator[SeededTraceAPI]:
-    from scripts.seed_tracing_fixtures import (
+    from seed_tracing_fixtures import (
         TRACE_FIXTURES,
         fixture_replays,
         rebase_spend,
@@ -531,9 +534,14 @@ def _fixture_trace_api(
     with TestClient(app) as client:
         assert client.portal is not None
         client.portal.call(storage.ensure_schema)
-        ingested: Final = tuple(client.post("/v1/traces", json=replay.export) for replay in replays)
-        for result in ingested:
-            assert result.status_code == 200, result.text
+        for replay in replays:
+            client.portal.call(
+                TraceReceiver(storage).ingest,
+                json.dumps(replay.export).encode(),
+                "application/json",
+                None,
+                Tenant(team_id="team-a", api_key_hash="fixture-key", user_id="fixture-user"),
+            )
         client.portal.call(storage.insert_rows, "spend_logs", stamped)
         response: Final = client.get("/v1/traces/query/help")
         assert response.status_code == 200, response.text

@@ -12,6 +12,8 @@ import time
 
 import httpx
 import pytest
+from openai.types.file_deleted import FileDeleted
+from pydantic import ValidationError
 from unittest.mock import Mock, patch
 
 from litellm.llms.anthropic.files.transformation import (
@@ -196,6 +198,45 @@ class TestAnthropicFilesConfig:
         assert result.purpose == "messages"
         assert result.status == "uploaded"
 
+    def test_create_file_response_maps_the_anthropic_file_onto_an_openai_file(self) -> None:
+        result = self.config.transform_create_file_response(
+            model=None,
+            raw_response=httpx.Response(
+                200,
+                json={
+                    "id": "file-abc123",
+                    "type": "file",
+                    "filename": "document.pdf",
+                    "mime_type": "application/pdf",
+                    "size_bytes": 12345,
+                    "created_at": "2025-01-15T10:30:00Z",
+                },
+            ),
+            logging_obj=Mock(),
+            litellm_params={},
+        )
+
+        assert result == OpenAIFileObject(
+            id="file-abc123",
+            bytes=12345,
+            created_at=1736937000,
+            filename="document.pdf",
+            object="file",
+            purpose="messages",
+            status="uploaded",
+            status_details=None,
+        )
+
+    @pytest.mark.parametrize("body", [b'["file-abc123"]', b'"file-abc123"', b"null", b"7"])
+    def test_create_file_response_rejects_a_body_that_is_not_a_json_object(self, body: bytes) -> None:
+        with pytest.raises(ValidationError):
+            self.config.transform_create_file_response(
+                model=None,
+                raw_response=httpx.Response(200, content=body),
+                logging_obj=Mock(),
+                litellm_params={},
+            )
+
     def test_transform_retrieve_file_request(self):
         url, params = self.config.transform_retrieve_file_request(
             file_id="file-abc123",
@@ -245,6 +286,43 @@ class TestAnthropicFilesConfig:
         assert result.id == "file-abc123"
         assert result.bytes == 5000
 
+    def test_retrieve_file_response_maps_the_anthropic_file_onto_an_openai_file(self) -> None:
+        result = self.config.transform_retrieve_file_response(
+            raw_response=httpx.Response(
+                200,
+                json={
+                    "id": "file-abc123",
+                    "type": "file",
+                    "filename": "document.pdf",
+                    "mime_type": "application/pdf",
+                    "size_bytes": 5000,
+                    "created_at": "2025-06-01T12:00:00Z",
+                },
+            ),
+            logging_obj=Mock(),
+            litellm_params={},
+        )
+
+        assert result == OpenAIFileObject(
+            id="file-abc123",
+            bytes=5000,
+            created_at=1748779200,
+            filename="document.pdf",
+            object="file",
+            purpose="messages",
+            status="uploaded",
+            status_details=None,
+        )
+
+    @pytest.mark.parametrize("body", [b'["file-abc123"]', b'"file-abc123"', b"null", b"7"])
+    def test_retrieve_file_response_rejects_a_body_that_is_not_a_json_object(self, body: bytes) -> None:
+        with pytest.raises(ValidationError):
+            self.config.transform_retrieve_file_response(
+                raw_response=httpx.Response(200, content=body),
+                logging_obj=Mock(),
+                litellm_params={},
+            )
+
     def test_transform_delete_file_request(self):
         url, params = self.config.transform_delete_file_request(
             file_id="file-abc123",
@@ -270,6 +348,35 @@ class TestAnthropicFilesConfig:
         assert result.id == "file-abc123"
         assert result.deleted is True
         assert result.object == "file"
+
+    @pytest.mark.parametrize(
+        ("payload", "expected_id"),
+        [
+            ({"id": "file-abc123", "type": "file_deleted"}, "file-abc123"),
+            ({"id": "file-abc123", "unknown": [1, {"nested": None}]}, "file-abc123"),
+            ({"type": "error", "error": {"type": "not_found_error", "message": "File not found"}}, ""),
+            ({}, ""),
+        ],
+    )
+    def test_delete_file_response_reports_the_id_anthropic_returned(self, payload: object, expected_id: str) -> None:
+        result = self.config.transform_delete_file_response(
+            raw_response=httpx.Response(200, json=payload),
+            logging_obj=Mock(),
+            litellm_params={},
+        )
+
+        assert result == FileDeleted(id=expected_id, deleted=True, object="file")
+
+    @pytest.mark.parametrize(
+        "body", [b'["file-abc123"]', b'"file-abc123"', b"null", b"7", b'{"id": null}', b'{"id": 7}']
+    )
+    def test_delete_file_response_rejects_a_body_without_a_string_id(self, body: bytes) -> None:
+        with pytest.raises(ValidationError):
+            self.config.transform_delete_file_response(
+                raw_response=httpx.Response(200, content=body),
+                logging_obj=Mock(),
+                litellm_params={},
+            )
 
     def test_transform_list_files_request(self):
         url, params = self.config.transform_list_files_request(

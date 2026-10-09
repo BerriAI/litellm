@@ -1,28 +1,14 @@
-import {
-  parseAsBoolean,
-  parseAsInteger,
-  parseAsNumberLiteral,
-  parseAsString,
-  parseAsStringLiteral,
-  useQueryState,
-  useQueryStates,
-} from "nuqs";
+import { parseAsBoolean, parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
 import { useCallback, useState } from "react";
 
-import { RANGE_PRESETS } from "@/components/shared/timeline/TimeRangeControls";
-import type { TimeWindow } from "@/components/shared/timeline/Timeline";
+import { TIME_RANGE_PARSERS } from "@/components/shared/timeRange/routing";
 import type { TraceSummary } from "./types";
 
-export const TRACE_VIEWS = ["steps", "conversation"] as const;
+export const TRACE_VIEWS = ["steps", "thread"] as const;
 export type TraceView = (typeof TRACE_VIEWS)[number];
 
 export const SPAN_TABS = ["content", "request", "attributes"] as const;
 export type SpanTab = (typeof SPAN_TABS)[number];
-
-const RANGE_HOURS = RANGE_PRESETS.map((preset) => preset.hours);
-type RangeHours = (typeof RANGE_PRESETS)[number]["hours"];
-const isRangeHours = (hours: number): hours is RangeHours => RANGE_HOURS.includes(hours as RangeHours);
-export const DEFAULT_RANGE_HOURS = 24;
 
 export interface TraceRef {
   traceId: string;
@@ -31,6 +17,17 @@ export interface TraceRef {
 
 export const traceRefOf = (run: TraceSummary): TraceRef => ({ traceId: run.trace_id, traceRef: run.trace_ref });
 export const traceKey = (ref: TraceRef): string => ref.traceRef || ref.traceId;
+
+/** A shareable link that opens just this run on the current page, dropping list filters and step selection. */
+export const traceShareUrl = (ref: TraceRef, location: Pick<Location, "origin" | "pathname" | "search">): string => {
+  const demo = new URLSearchParams(location.search).get("demo") === "true";
+  const params = new URLSearchParams({
+    ...(demo ? { demo: "true" } : {}),
+    trace: ref.traceId,
+    ...(ref.traceRef ? { trace_ref: ref.traceRef } : {}),
+  });
+  return `${location.origin}${location.pathname}?${params}`;
+};
 
 /** Which step, view and detail section of an open run are showing. Owned by the URL in the drawer, locally in sheets. */
 export interface RunSelection {
@@ -59,9 +56,9 @@ export const OPEN_TRACE_PARSERS = {
 
 export const RUN_FILTER_PARSERS = {
   q: parseAsString.withDefault(""),
-  hours: parseAsNumberLiteral(RANGE_HOURS).withDefault(DEFAULT_RANGE_HOURS),
-  from: parseAsInteger,
-  to: parseAsInteger,
+  agent: parseAsString.withDefault(""),
+  status: parseAsStringLiteral(["all", "ok", "error"]).withDefault("all"),
+  ...TIME_RANGE_PARSERS,
 };
 
 export interface OpenTraceRouting {
@@ -139,23 +136,14 @@ export function useLocalRunSelection(initialSpanId: string | null): RunSelection
   return { spanId, view, spanTab, stepQuery, errorsOnly, selectSpan, setView, setSpanTab, setStepQuery, setErrorsOnly };
 }
 
-export function useRunFilterRouting(): { query: string; setQuery: (query: string) => void } {
-  const [query, setQuery] = useQueryState("q", RUN_FILTER_PARSERS.q);
-  return { query, setQuery: useCallback((q: string) => void setQuery(q), [setQuery]) };
-}
-
-export function useRangeHoursRouting(): [number, (hours: number) => void] {
-  const [hours, setHours] = useQueryState("hours", RUN_FILTER_PARSERS.hours);
-  const setRangeHours = useCallback((next: number) => void (isRangeHours(next) && setHours(next)), [setHours]);
-  return [hours, setRangeHours];
-}
-
-/** A timeline brush narrows the list to a window inside the range; it is dropped whenever the range changes. */
-export function useZoomRouting(): [TimeWindow | null, (zoom: TimeWindow | null) => void] {
-  const [{ from, to }, setParams] = useQueryStates({ from: RUN_FILTER_PARSERS.from, to: RUN_FILTER_PARSERS.to });
-  const setZoom = useCallback(
-    (zoom: TimeWindow | null) => void setParams({ from: zoom?.startMs ?? null, to: zoom?.endMs ?? null }),
-    [setParams],
-  );
-  return [from !== null && to !== null && from < to ? { startMs: from, endMs: to } : null, setZoom];
+export function useRunFilterRouting() {
+  const [{ q, agent, status }, setParams] = useQueryStates(RUN_FILTER_PARSERS);
+  return {
+    query: q,
+    agent,
+    status,
+    setQuery: (query: string) => void setParams({ q: query }),
+    setAgent: (agent: string) => void setParams({ agent }),
+    setStatus: (status: "all" | "ok" | "error") => void setParams({ status }),
+  };
 }

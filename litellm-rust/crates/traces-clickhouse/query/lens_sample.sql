@@ -18,10 +18,14 @@ SELECT *, selection_key FROM (
     WHERE {source:String} IN ('traces','both')
       AND ({all_teams:UInt8}=1 OR TeamId={team:String})
       AND ({key_hash:String}='' OR ApiKeyHash={key_hash:String})
+      -- The 7 day slack covers spans that started before the window and late ingestion
+      AND Timestamp >= fromUnixTimestamp64Milli(toInt64({start:UInt64})) - INTERVAL 7 DAY
       AND (TeamId,ApiKeyHash,TraceId) IN (
           SELECT TeamId,ApiKeyHash,TraceId FROM otel_traces
           WHERE ({all_teams:UInt8}=1 OR TeamId={team:String})
             AND ({key_hash:String}='' OR ApiKeyHash={key_hash:String})
+            AND Timestamp >= fromUnixTimestamp64Milli(toInt64({start:UInt64})) - INTERVAL 7 DAY
+            AND Timestamp < fromUnixTimestamp64Milli(toInt64({end:UInt64}))
             AND if(EngineReceivedMs>0,toInt64(EngineReceivedMs),
                 toUnixTimestamp64Milli(Timestamp)+toInt64(intDiv(Duration,1000000))) >= {start:UInt64}
       )
@@ -42,6 +46,8 @@ SELECT *, selection_key FROM (
     WHERE {source:String} IN ('requests','both')
       AND ({all_teams:UInt8}=1 OR team_id={team:String})
       AND ({key_hash:String}='' OR api_key={key_hash:String})
+      AND spend_logs.start_time >= fromUnixTimestamp64Milli(toInt64({start:UInt64})) - INTERVAL 7 DAY
+      AND spend_logs.start_time < fromUnixTimestamp64Milli(toInt64({end:UInt64}))
       AND if(EngineReceivedMs>0,toInt64(EngineReceivedMs),toUnixTimestamp64Milli(end_time)) >= {start:UInt64}
       AND EngineReceivedMs < {end:UInt64}
       AND toUnixTimestamp64Milli(end_time) < {end:UInt64}
@@ -55,6 +61,8 @@ SELECT *, selection_key FROM (
           SELECT TeamId,ApiKeyHash,LiteLLMRequestId FROM otel_traces
           WHERE ({all_teams:UInt8}=1 OR TeamId={team:String})
             AND ({key_hash:String}='' OR ApiKeyHash={key_hash:String}) AND LiteLLMRequestId!=''
+            AND Timestamp >= fromUnixTimestamp64Milli(toInt64({start:UInt64})) - INTERVAL 7 DAY
+            AND Timestamp < fromUnixTimestamp64Milli(toInt64({end:UInt64}))
       ))
 )
 WHERE ({selected_team:String}='' OR team_id={selected_team:String})

@@ -115,35 +115,21 @@ type GroupOrSpan = Span | { group: Span[] };
 
 const groupKey = (span: Pick<Span, "name" | "type" | "agent">): string => `${span.agent}|${span.name}|${span.type}`;
 
-/** Siblings sharing agent + name + type fold into one group once there are enough of them (or enough failures). */
 function groupChildren(children: readonly Span[]): GroupOrSpan[] {
-  const byKey = new Map<string, Span[]>();
+  const runs: Span[][] = [];
   for (const child of children) {
-    const key = groupKey(child);
-    const list = byKey.get(key);
-    if (list) list.push(child);
-    else byKey.set(key, [child]);
+    const previous = runs.at(-1);
+    if (previous && groupKey(previous[0]) === groupKey(child)) previous.push(child);
+    else runs.push([child]);
   }
-  const emitted = new Set<string>();
-  const out: GroupOrSpan[] = [];
-  for (const child of children) {
-    const key = groupKey(child);
-    const group = byKey.get(key) ?? [child];
-    const failed = group.filter((s) => s.status === "error").length;
-    if (group.length >= GROUP_THRESHOLD_OK || failed >= GROUP_THRESHOLD_ERROR) {
-      if (!emitted.has(key)) {
-        emitted.add(key);
-        out.push({ group });
-      }
-    } else {
-      out.push(child);
-    }
-  }
-  return out;
+  return runs.flatMap((group): GroupOrSpan[] => {
+    const failed = group.filter((span) => span.status === "error").length;
+    return group.length >= GROUP_THRESHOLD_OK || failed >= GROUP_THRESHOLD_ERROR ? [{ group }] : group;
+  });
 }
 
-export const groupRowId = (parentKey: string, span: Pick<Span, "name" | "type" | "agent">): string =>
-  `grp::${parentKey}::${groupKey(span)}`;
+export const groupRowId = (parentKey: string, span: Pick<Span, "span_id">): string =>
+  `grp::${parentKey}::${span.span_id}`;
 
 interface RowContext {
   children: ChildrenMap;
@@ -269,16 +255,6 @@ export function nearestVisibleSpanId(spans: readonly Span[], spanId: string, hid
 }
 
 /* ------------------------------------------------------------------ */
-/*  Trace-level rollups                                                */
-/* ------------------------------------------------------------------ */
-
-/** Earliest failing non-root span (the root just echoes its children), else the root. */
-export function firstErrorSpan(spans: readonly Span[]): Span | null {
-  const failed = spans.filter((s) => s.status === "error").sort(byStart);
-  return failed.find((s) => s.parent_span_id !== null) ?? failed[0] ?? null;
-}
-
-/* ------------------------------------------------------------------ */
 /*  Span detail payloads                                               */
 /* ------------------------------------------------------------------ */
 
@@ -323,6 +299,9 @@ const LANGCHAIN_ROLE: Readonly<Record<string, string>> = {
   tool: "tool",
 };
 
+const isMessageContent = (value: unknown): value is string | unknown[] =>
+  typeof value === "string" || Array.isArray(value);
+
 const langchainToolCalls = (data: object): TraceToolCall[] | undefined => {
   const calls: unknown = Reflect.get(data, "tool_calls");
   if (!Array.isArray(calls) || calls.length === 0) return undefined;
@@ -337,7 +316,7 @@ const parseLangchainMessage = (value: object): TraceMessage | null => {
   const data: unknown = Reflect.get(value, "data");
   if (!role || typeof data !== "object" || data === null) return null;
   const content: unknown = Reflect.get(data, "content");
-  if (typeof content !== "string" && !Array.isArray(content)) return null;
+  if (!isMessageContent(content)) return null;
   const name: unknown = Reflect.get(data, "name");
   const toolCalls = langchainToolCalls(data);
   return {
@@ -348,14 +327,58 @@ const parseLangchainMessage = (value: object): TraceMessage | null => {
   };
 };
 
+const parseToolCall = (call: unknown): TraceToolCall => {
+  const unknownCall = { name: "Tool call", args: call };
+  if (!call || typeof call !== "object") return unknownCall;
+  const fn: unknown = Reflect.get(call, "function");
+  const source = fn && typeof fn === "object" ? fn : call;
+  const name: unknown = Reflect.get(source, "name");
+  if (typeof name !== "string" || !name) return unknownCall;
+  if ("args" in source) return { name, args: source.args };
+  const args: unknown = Reflect.get(source, "arguments");
+  return { name, args: typeof args === "string" ? parseJson(args) ?? args : args };
+};
+
 const parseMessage = (value: unknown): TraceMessage | null => {
   if (typeof value !== "object" || value === null) return null;
   if (!("role" in value) && "data" in value) return parseLangchainMessage(value);
   const role: unknown = Reflect.get(value, "role");
   const content: unknown = Reflect.get(value, "content") ?? Reflect.get(value, "parts");
-  if (typeof role !== "string" || (typeof content !== "string" && !Array.isArray(content))) return null;
-  return { ...value, role, content: messageText(typeof content === "string" ? content : JSON.stringify(content)) };
+  const rawCalls: unknown = Reflect.get(value, "tool_calls");
+  const callEntries = Array.isArray(rawCalls) ? rawCalls : [rawCalls];
+  const hasCalls = rawCalls != null && callEntries.length > 0;
+  const emptyToolMessage = content == null && hasCalls;
+  const hasContent = isMessageContent(content) || emptyToolMessage;
+  if (typeof role !== "string" || !hasContent) return null;
+  const calls = callEntries.map(parseToolCall);
+  const text = typeof content === "string" ? content : JSON.stringify(content ?? "");
+  return {
+    ...value,
+    role,
+    content: content == null ? "" : messageText(text),
+    ...(rawCalls != null ? { tool_calls: calls } : {}),
+  };
 };
+
+export function parseAssistantSummary(value: string): TraceMessage[] | null {
+  const parsed = parseJson(value);
+  if (!Array.isArray(parsed) || !parsed.length) return null;
+  const isSummary = (item: unknown): item is { content: string | null; tool_names: string[] } => {
+    if (!item || typeof item !== "object") return false;
+    const content: unknown = Reflect.get(item, "content");
+    const tools: unknown = Reflect.get(item, "tool_names");
+    const knownFields = Object.keys(item).every((key) => key === "content" || key === "tool_names");
+    const validContent = content === null || typeof content === "string";
+    const validTools = Array.isArray(tools) && tools.every((name: unknown) => typeof name === "string");
+    return knownFields && validContent && validTools;
+  };
+  if (!parsed.every(isSummary)) return null;
+  return parsed.map((item) => ({
+    role: "assistant",
+    content: item.content ?? "",
+    tool_calls: item.tool_names.map((name: string) => ({ name, args: undefined })),
+  }));
+}
 
 /** An llm span's input (array of messages) or output (one message); null when it isn't one. */
 export function parseMessages(value: string): TraceMessage[] | null {

@@ -2,12 +2,12 @@
 
 import { QueryErrorResetBoundary, useQueryClient, useSuspenseInfiniteQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
-import { Suspense, useDeferredValue, useEffect, useMemo } from "react";
+import { Suspense, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { ErrorBoundary } from "react-error-boundary";
 
+import { LoadingState } from "@/components/shared/LoadingState";
 import { Button } from "@/components/ui/button";
 import { Tabs } from "@/components/ui/tabs";
-import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cn } from "@/lib/cva.config";
 
 import { useTracesApi } from "../../api";
@@ -17,6 +17,8 @@ import type { Trace } from "../../types";
 import { PagingBanner } from "./PagingBanner";
 import { RunBody } from "./RunBody";
 import { RunHeader } from "./RunHeader";
+import { FeedbackPanel } from "../feedback/FeedbackPanel";
+import { useTraceSignalFlags } from "../../list/useTraceSignals";
 
 interface RunViewProps {
   traceId: string;
@@ -26,28 +28,15 @@ interface RunViewProps {
   onBack: () => void;
   /** Rendered inside the side drawer: the drawer owns closing and sizing. */
   embedded?: boolean;
+  showSignals?: boolean;
 }
 
 function selectedSpanMissing(trace: Trace, spanId: string | null): boolean {
   return Boolean(spanId && !trace.spans.some((span) => span.span_id === spanId));
 }
 
-function RunLoading({ embedded }: { embedded: boolean }) {
-  return (
-    <div
-      role="status"
-      aria-label="Loading trace"
-      className={embedded ? "flex flex-col gap-3 p-4" : "flex h-[60vh] items-center justify-center"}
-    >
-      {embedded ? (
-        [72, 48, 88, 60, 80].map((w) => (
-          <div key={w} className="h-4 animate-pulse rounded bg-trace-row-hover" style={{ width: `${w}%` }} />
-        ))
-      ) : (
-        <UiLoadingSpinner className="size-6 text-muted-foreground" />
-      )}
-    </div>
-  );
+function RunLoading() {
+  return <LoadingState title="Loading trace…" description="Fetching this run and its steps." />;
 }
 
 function RunLoadError({ error, onBack, onRetry }: { error: unknown; onBack: () => void; onRetry: () => void }) {
@@ -85,7 +74,7 @@ export function RunView(props: RunViewProps) {
             <RunLoadError error={error} onBack={props.onBack} onRetry={resetErrorBoundary} />
           )}
         >
-          <Suspense fallback={<RunLoading embedded={props.embedded ?? false} />}>
+          <Suspense fallback={<RunLoading />}>
             <LoadedRun key={shownKey} {...props} traceId={traceId} traceRef={traceRef} switching={switching} />
           </Suspense>
         </ErrorBoundary>
@@ -101,10 +90,13 @@ function LoadedRun({
   accessToken,
   onBack,
   embedded = false,
+  showSignals = false,
   switching,
 }: RunViewProps & { switching: boolean }) {
   const traces = useTracesApi(accessToken);
   const queryClient = useQueryClient();
+  const [live, setLive] = useState(traces.live);
+  const [manualRead, setManualRead] = useState(false);
   const queryKey = ["agentTrace", traceId, traceRef, accessToken];
   const traceQueryOptions = {
     queryKey,
@@ -112,25 +104,52 @@ function LoadedRun({
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage: Trace) => lastPage.next_cursor ?? undefined,
     staleTime: 30_000,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-    refetchOnMount: false,
+    refetchOnWindowFocus: live,
+    refetchOnReconnect: live,
+    refetchOnMount: true,
+    refetchInterval: live ? 30_000 : (false as const),
     retry: traceReadRetry,
     retryDelay: traceReadRetryDelay,
   };
   const traceQuery = useSuspenseInfiniteQuery(traceQueryOptions);
+  const signals = useTraceSignalFlags(accessToken, { trace_id: traceId, trace_ref: traceRef }, showSignals);
   const refreshTrace = () => queryClient.resetQueries({ queryKey, exact: true });
-  const failure = traceQuery.error ? classifyTraceReadFailure(traceQuery.error) : null;
+  const failure = traceQuery.isFetchNextPageError ? classifyTraceReadFailure(traceQuery.error) : null;
+  const readManually = (read: () => Promise<unknown>) => {
+    if (manualRead) return;
+    setManualRead(true);
+    void read().finally(() => setManualRead(false));
+  };
+  const refreshRun = () =>
+    readManually(async () => {
+      const refreshed = await traceQuery.refetch();
+      if (refreshed.isError) return;
+      const contentRef = refreshed.data?.pages[0].summary.trace_ref ?? traceRef;
+      await queryClient.invalidateQueries({
+        queryKey: ["agentTraceSpan", traceId, contentRef],
+        predicate: (query) => query.queryKey.at(-1) === accessToken,
+      });
+    });
+  const toggleLive = () => {
+    if (live && !manualRead && !traceQuery.isFetchingNextPage) {
+      void queryClient.cancelQueries({ queryKey, exact: true });
+    }
+    setLive((enabled) => !enabled);
+  };
   const trace = useMemo(() => {
-    const [first, ...rest] = traceQuery.data.pages;
-    return { ...first, spans: [first, ...rest].flatMap((page) => page.spans) };
+    const pages = traceQuery.data.pages;
+    return {
+      ...pages[0],
+      spans: pages.flatMap((page) => page.spans),
+      next_cursor: pages[pages.length - 1].next_cursor,
+    };
   }, [traceQuery.data]);
   const seekingSpan = !switching && selectedSpanMissing(trace, selection.spanId);
-  const { hasNextPage, isFetching, isError, fetchNextPage } = traceQuery;
+  const { hasNextPage, isFetching, isFetchNextPageError, fetchNextPage } = traceQuery;
   const canSeek = seekingSpan && hasNextPage;
   useEffect(() => {
-    if (canSeek && !isFetching && !isError) void fetchNextPage();
-  }, [canSeek, isFetching, isError, fetchNextPage]);
+    if (canSeek && !isFetching && !isFetchNextPageError) void fetchNextPage();
+  }, [canSeek, isFetching, isFetchNextPageError, fetchNextPage]);
 
   return (
     <Tabs
@@ -150,15 +169,30 @@ function LoadedRun({
         handoff={traces.handoff(trace.summary.trace_id, null, trace.summary.trace_ref)}
         onBack={onBack}
         embedded={embedded}
+        refreshing={manualRead || traceQuery.isFetching}
+        onRefresh={refreshRun}
+        live={live}
+        canLive={traces.live}
+        onLiveChange={toggleLive}
+        signals={signals}
       />
+      <FeedbackPanel summary={trace.summary} accessToken={accessToken} />
+      {traceQuery.isRefetchError && (
+        <div role="alert" className="flex items-center gap-3 border-b p-3 text-xs text-muted-foreground">
+          Could not refresh this run. Previously received steps are still shown.
+          <Button variant="outline" size="sm" disabled={manualRead || traceQuery.isFetching} onClick={refreshRun}>
+            Retry refresh
+          </Button>
+        </div>
+      )}
       {(traceQuery.hasNextPage || failure) && (
         <PagingBanner
           loaded={trace.spans.length}
           total={trace.summary.span_count}
           failure={failure}
-          busy={traceQuery.isFetching}
-          onLoadMore={() => void traceQuery.fetchNextPage()}
-          onRefresh={() => void refreshTrace()}
+          busy={manualRead || traceQuery.isFetching}
+          onLoadMore={() => readManually(() => traceQuery.fetchNextPage())}
+          onRefresh={() => readManually(refreshTrace)}
         />
       )}
       <RunBody
@@ -168,6 +202,11 @@ function LoadedRun({
         selection={selection}
         embedded={embedded}
         stale={switching}
+        conversationPaging={{
+          loading: manualRead || traceQuery.isFetching,
+          failed: isFetchNextPageError,
+          loadMore: fetchNextPage,
+        }}
       />
     </Tabs>
   );

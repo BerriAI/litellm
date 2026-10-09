@@ -13,7 +13,7 @@ describe("runPredicates", () => {
   it("turns each run field into a predicate over the per-trace rollup columns", () => {
     expect(predicates("agent:researcher status:error model:gpt-5 name:support trace_id:aaa111")).toEqual([
       "arrayExists(x -> x ILIKE 'researcher', agents)",
-      "errors > 0",
+      "status = 'error'",
       "arrayExists(x -> x ILIKE 'gpt-5', models)",
       "name ILIKE 'support'",
       "trace_id ILIKE 'aaa111'",
@@ -33,7 +33,7 @@ describe("runPredicates", () => {
   });
 
   it("resolves a status glob statically, since status has two values", () => {
-    expect(predicates("status:ok")).toEqual(["errors = 0"]);
+    expect(predicates("status:ok")).toEqual(["status = 'ok'"]);
     expect(predicates("status:*")).toEqual(["true"]);
     expect(predicates("-status:pending")).toEqual(["NOT (false)"]);
   });
@@ -52,12 +52,13 @@ describe("runQuerySql", () => {
     expect(sql).toBe(
       [
         "SELECT TraceId AS trace_id, any(RootName) AS name, any(RootInput) AS input, sum(ErrorCount) AS errors,",
+        "       if(ifNull(any(RootStatus), '') IN ('STATUS_CODE_ERROR', 'error'), 'error', 'ok') AS status,",
         "       groupUniqArrayArray(AgentNames) AS agents, groupUniqArrayArray(Models) AS models",
         "FROM agent_traces_by_key",
         "GROUP BY TraceId",
         `HAVING min(StartTs) >= fromUnixTimestamp64Milli(${RANGE.startMs}) AND min(StartTs) < fromUnixTimestamp64Milli(${RANGE.endMs})`,
         "   AND arrayExists(x -> x ILIKE 'researcher', agents)",
-        "   AND errors > 0",
+        "   AND status = 'error'",
         "ORDER BY min(StartTs) DESC",
         "LIMIT 100",
       ].join("\n"),
@@ -87,6 +88,6 @@ describe("runQueryCommand", () => {
     const command = runQueryCommand(RANGE)(query("agent:researcher status:error"));
     expect(command).toBe(traceQueryCommand(runQuerySql(query("agent:researcher status:error"), RANGE)));
     expect(command).toContain("arrayExists(x -> x ILIKE 'researcher', agents)");
-    expect(command).toContain("errors > 0");
+    expect(command).toContain("status = 'error'");
   });
 });

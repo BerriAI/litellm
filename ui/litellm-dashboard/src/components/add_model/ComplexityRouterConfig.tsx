@@ -2,7 +2,7 @@ import RoutingOptions from "./RoutingOptions";
 import ClassifierPrimarySettings from "./ClassifierPrimarySettings";
 import { AutoRouterAllowanceNote } from "./AutoRouterAvailability";
 import type { JevClassifierConfig } from "./jev_classifier_config";
-import { type ClassifierType } from "./classifier_types";
+import { isHeuristicChain, type ClassifierType, type LocalHeuristic } from "./classifier_types";
 export { type ClassifierType, usesLlmClassifier, usesClassifierContext } from "./classifier_types";
 import ForecastClassifierConfig, { ForecastSolverModels } from "./ForecastClassifierConfig";
 import { isForecastClassifier, type CapabilitySettings, type FuseSettings } from "./forecast_classifier_config";
@@ -156,16 +156,12 @@ export const DEFAULT_ADAPTIVE_WEIGHTS: AdaptiveRouterWeights = { quality: 0.3, c
 
 export type HeuristicScoringRole = "decides" | "fallback_only" | "never";
 
-/**
- * Whether the heuristic scorer runs on this router at all, which is what gates its knobs. An LLM
- * classifier still falls back to the scorer unless the fallback is the default model, so the gate cannot be
- * a plain classifier_type check. Under heuristic_first the scorer runs first on every request and
- * decides outright whenever it lands at or below the threshold.
- */
 export const heuristicScoringRoleFor = (
   classifierType: ClassifierType,
   classifierFallback: ClassifierFallback | undefined,
+  localHeuristic?: LocalHeuristic,
 ): HeuristicScoringRole => {
+  if (isHeuristicChain(classifierType) && localHeuristic === "heuristic_v2") return "never";
   if (classifierType === "heuristic_v2" || classifierType === "capability" || classifierType === "llm_v2")
     return "never";
   if (classifierType === "heuristic" || classifierType === "heuristic_first" || classifierType === "hybrid")
@@ -174,7 +170,23 @@ export const heuristicScoringRoleFor = (
 };
 
 export const heuristicScoringRole = (value: ComplexityRouterConfigValue): HeuristicScoringRole =>
-  value.custom_tier_set ? "never" : heuristicScoringRoleFor(value.classifier_type, value.classifier_fallback);
+  value.custom_tier_set
+    ? "never"
+    : heuristicScoringRoleFor(value.classifier_type, value.classifier_fallback, value.local_heuristic);
+
+export const usesHeuristicV2 = (value: ComplexityRouterConfigValue): boolean => {
+  if (value.custom_tier_set) return false;
+  return (
+    value.classifier_type === "heuristic_v2" ||
+    (isHeuristicChain(value.classifier_type) && value.local_heuristic === "heuristic_v2")
+  );
+};
+
+export const heuristicTuningType = (value: ComplexityRouterConfigValue): LocalHeuristic | undefined => {
+  if (value.custom_tier_set || value.classifier_type === "llm") return undefined;
+  if (usesHeuristicV2(value)) return "heuristic_v2";
+  return heuristicScoringRole(value) === "never" ? undefined : "heuristic";
+};
 
 // Derived, never written into the value, so undoing a tier edit reverts the form with nothing left behind.
 export const effectiveClassifierType = (
@@ -359,6 +371,7 @@ export interface ComplexityRouterConfigValue {
   /** An explicit pin. Unset means the default tracks the tiers - see resolveComplexityDefaultModel. */
   default_model?: string;
   classifier_type: ClassifierType;
+  local_heuristic?: LocalHeuristic;
   heuristic_v2_success_threshold?: number;
   capability_classifier_config?: CapabilitySettings;
   llm_v2_config?: FuseSettings;
@@ -405,6 +418,9 @@ export interface ComplexityRouterConfigValue {
    */
   enable_context_window_escalation?: boolean;
   context_window_escalation_buffer?: number;
+  cache_aware_routing?: boolean;
+  cache_aware_routing_output_tokens?: number;
+  cache_aware_routing_timeout_ms?: number;
   /**
    * Heuristic scorer knobs. Undefined means the operator never touched them, which keeps the key out of the
    * payload so the router tracks the backend defaults rather than freezing today's numbers.

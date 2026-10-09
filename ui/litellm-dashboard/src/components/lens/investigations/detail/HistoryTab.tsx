@@ -13,6 +13,7 @@ import type { Lens } from "../../model/types";
 import { useRunRoute } from "../../route";
 
 import { money, when } from "../../model/format";
+import { failedTaskSummary, isPartial, runStatus } from "../../model/status";
 
 const PAGE = 50;
 
@@ -22,11 +23,23 @@ export interface HistoryTabProps {
 
 export function HistoryTab({ lens }: HistoryTabProps) {
   const [offset, setOffset] = useState(0);
-  const history = useRunHistory(lens, offset);
+  return (
+    <TabsContent value="activity" className="pt-4 space-y-4">
+      <HistoryContent lens={lens} offset={offset} setOffset={setOffset} />
+    </TabsContent>
+  );
+}
+
+function HistoryContent({
+  lens,
+  offset,
+  setOffset,
+}: HistoryTabProps & { offset: number; setOffset: (offset: number) => void }) {
+  const history = useRunHistory(lens, offset, offset > 0);
   const { openRun } = useRunRoute();
   const rows = history.data ?? lens.jobs;
   return (
-    <TabsContent value="activity" className="pt-4 space-y-4">
+    <>
       {history.error && (
         <p role="alert" className="text-sm text-destructive">
           Could not load run history.{" "}
@@ -50,14 +63,18 @@ export function HistoryTab({ lens }: HistoryTabProps) {
                 {j.findings != null && <> · {j.findings.length} findings</>}
                 <ScanDuration job={j} />
               </p>
-              {j.error && <p className="mt-2 line-clamp-2 text-xs text-destructive">{j.error}</p>}
+              {j.error && (
+                <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
+                  {isPartial(j) ? failedTaskSummary(j) : j.error}
+                </p>
+              )}
             </div>
             <div className="text-right text-xs text-muted-foreground">
               <p
                 data-state={j.status === "failed" ? "failed" : "other"}
                 className="capitalize data-[state=failed]:text-destructive"
               >
-                {j.status}
+                {runStatus(j)}
               </p>
               <p className="mt-1">{money(j.cost ?? 0)}</p>
             </div>
@@ -80,6 +97,6 @@ export function HistoryTab({ lens }: HistoryTabProps) {
           </Button>
         </div>
       )}
-    </TabsContent>
+    </>
   );
 }

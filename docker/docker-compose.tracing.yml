@@ -9,13 +9,13 @@ services:
         LITELLM_RELEASE_TAG: ${LITELLM_RELEASE_TAG:-}
     command: ["--config", "/app/tracing-config.yaml", "--port", "4000"]
     environment:
-      LITELLM_MASTER_KEY: sk-1234
-      LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY: "true"
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?set LITELLM_MASTER_KEY}
       LITELLM_SALT_KEY: sk-local-tracing-salt-key
       DATABASE_URL: postgresql://litellm:litellm@db:5432/litellm
       STORE_MODEL_IN_DB: "True"
-      CLICKHOUSE_URL: http://default:local-tracing@clickhouse:8123
-      CLICKHOUSE_DATABASE: litellm
+      LITELLM_LENS_URL: http://lens-worker:4318
+      LITELLM_LENS_PUBLIC_URL: http://localhost:4318
+      LITELLM_LENS_SERVICE_TOKEN: ${LITELLM_LENS_SERVICE_TOKEN:?set LITELLM_LENS_SERVICE_TOKEN}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       LENS_WORKER_IMAGE: ${LENS_WORKER_IMAGE:-}
     volumes:
@@ -25,8 +25,29 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      clickhouse:
-        condition: service_healthy
+
+  lens-worker:
+    build:
+      context: ..
+      dockerfile: deploy/lens/Dockerfile
+      args:
+        LITELLM_RELEASE_TAG: ${LITELLM_RELEASE_TAG:?set LITELLM_RELEASE_TAG to the source commit}
+    environment:
+      LITELLM_URL: http://litellm:4000
+      LITELLM_LENS_SERVICE_TOKEN: ${LITELLM_LENS_SERVICE_TOKEN:?set LITELLM_LENS_SERVICE_TOKEN}
+      CLICKHOUSE_URL: http://default:local-tracing@clickhouse:8123
+      CLICKHOUSE_DATABASE: litellm
+    ports:
+      - "127.0.0.1:4318:4318"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=${LENS_WORKER_TMP_SIZE:-1g},mode=1777
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 64
+    restart: unless-stopped
 
   db:
     image: postgres:16

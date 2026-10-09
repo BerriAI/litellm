@@ -5,6 +5,8 @@ WITH greatest(toInt64({offset:UInt32})-1,1) AS content_offset,
 SELECT * FROM (
     SELECT SpanId AS span_id, ParentSpanId AS parent_span_id, SpanName AS name,
         ObservationType AS kind,
+        toString(Timestamp, 'UTC') AS start_time,
+        toString(addNanoseconds(Timestamp, Duration), 'UTC') AS end_time,
         if({offset:UInt32}=1 AND lengthUTF8(concat('Input: ',Input,'\nOutput: ',Output,'\nStatus: ',StatusCode,' ',StatusMessage))>8000,
             concat('Input: ',excerpt(Input,2000),'\nOutput: ',excerpt(Output,5000),
                 '\nStatus: ',StatusCode,' ',excerpt(StatusMessage,500)),
@@ -15,6 +17,7 @@ SELECT * FROM (
     FROM otel_traces WHERE {source:String}='traces'
       AND ({all_teams:UInt8}=1 OR TeamId={team:String})
       AND ({key_hash:String}='' OR ApiKeyHash={key_hash:String})
+      AND Timestamp >= parseDateTime64BestEffortOrZero({start_time:String}, 9) - INTERVAL 7 DAY
       AND ({trace_ref:String}='' OR hex(SHA256(concat(TeamId, char(0), ApiKeyHash, char(0), TraceId)))={trace_ref:String})
       AND TraceId={id:String} AND TeamId={record_team:String} AND SpanId > {cursor:String}
     ORDER BY SpanId LIMIT 1 BY SpanId LIMIT 40
@@ -22,6 +25,8 @@ SELECT * FROM (
 UNION ALL
 SELECT * FROM (
     SELECT request_id AS span_id, '' AS parent_span_id, model AS name, 'llm' AS kind,
+        toString(start_time, 'UTC') AS start_time,
+        toString(end_time, 'UTC') AS end_time,
         if({offset:UInt32}=1 AND lengthUTF8(concat('Input: ',messages,'\nOutput: ',response,'\nError: ',error_str))>8000,
             concat('Input: ',excerpt(messages,2000),'\nOutput: ',excerpt(response,5000),'\nError: ',excerpt(error_str,500)),
             substringUTF8(concat('Input: ',messages,'\nOutput: ',response,'\nError: ',error_str),
@@ -31,5 +36,6 @@ SELECT * FROM (
     FROM spend_logs FINAL WHERE {source:String}='requests'
       AND ({all_teams:UInt8}=1 OR team_id={team:String})
       AND ({key_hash:String}='' OR api_key={key_hash:String})
+      AND spend_logs.start_time >= parseDateTime64BestEffortOrZero({start_time:String}, 3) - INTERVAL 7 DAY
       AND request_id={id:String} AND team_id={record_team:String} LIMIT 1
 )

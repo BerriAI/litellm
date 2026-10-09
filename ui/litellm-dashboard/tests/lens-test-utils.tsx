@@ -2,8 +2,6 @@ import type { ReactElement } from "react";
 import { vi } from "vitest";
 import { LensServicesProvider, liveLensServices } from "@/components/lens/data/LensServices";
 import { OnboardingProvider, type Onboarding } from "@/components/lens/onboarding/OnboardingContext";
-import { LENS_INTRO_DISMISSED } from "@/components/lens/storage";
-import { writeStorage } from "@/lib/storage";
 import { renderWithProviders } from "./test-utils";
 
 export interface StubbedRequest {
@@ -20,7 +18,10 @@ export const requestPath = (input: RequestInfo | URL): string =>
 
 /** Reads a stubbed fetch call the same way whether a client passed a URL and init or a Request. */
 export async function readRequest(input: RequestInfo | URL, init?: RequestInit): Promise<StubbedRequest> {
-  const request = input instanceof Request ? input : new Request(new URL(String(input), "http://localhost"), init);
+  const request =
+    input instanceof Request
+      ? input
+      : new Request(new URL(String(input), "http://localhost"), { ...init, signal: undefined });
   const url = new URL(request.url);
   const text = await request.clone().text();
   return {
@@ -65,11 +66,6 @@ export function stubGateway() {
     }),
   );
   return gateway;
-}
-
-/** The Lens introduction opens on a first visit; tests about anything else start with it dismissed. */
-export function dismissLensIntro() {
-  writeStorage(LENS_INTRO_DISMISSED, true);
 }
 
 type LensRenderOptions = Parameters<typeof renderWithProviders>[1] & {

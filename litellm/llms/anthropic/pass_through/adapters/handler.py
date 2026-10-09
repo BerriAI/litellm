@@ -231,7 +231,7 @@ def _normalize_spec_edits(
 ) -> list[dict[str, object]] | None:
     """Return the normalized ``edits`` list, or ``None`` if the polyfill won't run.
 
-    Delegates spec-shape normalization to the dispatcher's ``_normalize_spec``
+    Delegates spec-shape normalization to the dispatcher's ``normalize_spec``
     so the prediction here can't drift from what the dispatcher actually does.
     """
     if not context_management_spec:
@@ -241,11 +241,11 @@ def _normalize_spec_edits(
         return None
 
     from litellm.llms.anthropic.pass_through.context_management.dispatcher import (
-        _normalize_spec,
+        normalize_spec,
     )
 
     try:
-        return _normalize_spec(context_management_spec)
+        return normalize_spec(context_management_spec)
     except Exception:
         return None
 

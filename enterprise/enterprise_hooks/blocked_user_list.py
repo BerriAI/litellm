@@ -21,7 +21,7 @@ from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 from litellm.proxy.utils import PrismaClient
 
 
-class _ENTERPRISE_BlockedUserList(CustomLogger):
+class ENTERPRISE_BlockedUserList(CustomLogger):
     enforces_request_content: bool = True
     # Class variables or attributes
     def __init__(self, prisma_client: Optional[PrismaClient]):
@@ -128,3 +128,4 @@ class _ENTERPRISE_BlockedUserList(CustomLogger):
                     str(e)
                 )
             )
+_ENTERPRISE_BlockedUserList = ENTERPRISE_BlockedUserList

@@ -4,6 +4,25 @@ export type Trace = paths["/v1/traces/{trace_id}"]["get"]["responses"][200]["con
 export type TracePage = paths["/v1/traces"]["get"]["responses"][200]["content"]["application/json"];
 export type SpanErrorPage =
   paths["/v1/traces/{trace_id}/spans/{span_id}/error"]["get"]["responses"][200]["content"]["application/json"];
+export type TraceListQuery = NonNullable<paths["/v1/traces"]["get"]["parameters"]["query"]>;
+export type TraceDetailQuery = NonNullable<paths["/v1/traces/{trace_id}"]["get"]["parameters"]["query"]>;
+export type SpanQuery = NonNullable<paths["/v1/traces/{trace_id}/spans/{span_id}"]["get"]["parameters"]["query"]>;
+export type SpanErrorQuery = NonNullable<
+  paths["/v1/traces/{trace_id}/spans/{span_id}/error"]["get"]["parameters"]["query"]
+>;
+export type TraceQueryBody = components["schemas"]["TraceQueryRequest"];
+export type TraceAgent = components["schemas"]["TraceAgent"];
+export type TraceAgentList = components["schemas"]["TraceAgentList"];
+export type TraceAgentsQuery = NonNullable<paths["/v1/traces/agents"]["get"]["parameters"]["query"]>;
+export type TraceFindingsRequest = components["schemas"]["TraceFindingsRequest"];
+export type TraceFindingCount = components["schemas"]["TraceFindingCount"];
+export type TraceSignals = components["schemas"]["TraceSignals"];
+export type SignalFlag = NonNullable<TraceSignals["flags"]>[number];
+export type TraceFeedback = components["schemas"]["TraceFeedback"];
+export type Feedback = components["schemas"]["Feedback"];
+export type TraceFeedbackRequest = components["schemas"]["TraceFeedbackRequest"];
+export type TraceFeedbackSummary = components["schemas"]["TraceFeedbackSummary"];
+export type FeedbackQuery = NonNullable<paths["/lens/feedback"]["get"]["parameters"]["query"]>;
 type ApiSpanDetail =
   paths["/v1/traces/{trace_id}/spans/{span_id}"]["get"]["responses"][200]["content"]["application/json"];
 export type Span = Trace["spans"][number];

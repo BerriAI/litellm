@@ -10,9 +10,10 @@ import { OnboardingSteps } from "./OnboardingSteps";
 export type OnboardingSetupProps = Omit<ComponentProps<"section">, "children"> & {
   state: LensReadiness;
   action?: ReactNode;
+  includeTracing?: boolean;
 };
 
-export function OnboardingSetup({ state, action, className, ...props }: OnboardingSetupProps) {
+export function OnboardingSetup({ state, action, includeTracing = true, className, ...props }: OnboardingSetupProps) {
   const { readOnly, canInvestigate } = useOnboarding();
   const titleId = useId();
   return (
@@ -33,7 +34,7 @@ export function OnboardingSetup({ state, action, className, ...props }: Onboardi
         </div>
         {action}
       </div>
-      <OnboardingSteps state={state} />
+      <OnboardingSteps state={state} includeTracing={includeTracing} />
       {state.error && (
         <div role="alert" className="mt-4 flex flex-wrap items-center gap-3 text-sm text-destructive">
           <p>Could not check setup. {state.error}</p>

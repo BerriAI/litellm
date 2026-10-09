@@ -5,6 +5,15 @@ import { scenarios, type Scenario } from "./scenarios";
 
 const executionId = (traceId: string) => btoa(JSON.stringify(["traces", "", traceId]));
 const iso = (time: number) => new Date(time).toISOString();
+const DEMO_ASKERS = ["maya@acme.dev", "jordan@acme.dev", "priya@acme.dev"];
+
+/** Demo runs start from a Slack thread so the run header shows who asked and where. */
+const demoSource = (scene: Scenario, index: number): NonNullable<Trace["summary"]["source"]> => ({
+  type: "slack",
+  url: `https://acme.slack.com/archives/C0DEMO/p${1_700_000_000_000 + index}`,
+  title: scene.question,
+  user: DEMO_ASKERS[index % DEMO_ASKERS.length],
+});
 
 function makeTrace(scene: Scenario, index: number, now: number) {
   const traceId = (index + 1).toString(16).padStart(32, "0");
@@ -26,6 +35,8 @@ function makeTrace(scene: Scenario, index: number, now: number) {
     parent_span_id: null,
     span_id: spanId(0),
     spend: null,
+    spend_log_request_id: null,
+    spend_match: null,
     start_offset_ms: 0,
     status: "ok",
     type: "agent",
@@ -53,6 +64,7 @@ function makeTrace(scene: Scenario, index: number, now: number) {
     input_tokens: 520 + index * 41,
     output_tokens: 48 + index * 7,
     spend: 0.003 + index * 0.0002,
+    spend_match: "matched",
   };
   const trace: Trace = {
     summary: {
@@ -71,10 +83,12 @@ function makeTrace(scene: Scenario, index: number, now: number) {
       service: "demo-agents",
       span_count: toolCount + 2,
       spend: model.spend,
+      priced_calls: 1,
       start_time: iso(now - (index + 1) * 35 * 60_000),
       status: scene.failed ? "error" : "ok",
       tool_calls: toolCount,
       trace_id: traceId,
+      source: demoSource(scene, index),
     },
     agents: [
       {
@@ -85,6 +99,7 @@ function makeTrace(scene: Scenario, index: number, now: number) {
         llm_calls: 1,
         tool_calls: toolCount,
         spend: model.spend,
+        priced_calls: 1,
       },
     ],
     spans: [base, ...tools, model],
@@ -132,6 +147,9 @@ export function createLensDemoData(now = Date.now()) {
   }): Finding => ({
     id,
     check_id: check,
+    check_ids: [check],
+    investigation_runs: [],
+    merged_finding_ids: [],
     title,
     description,
     suggestion,
@@ -279,6 +297,7 @@ export function createLensDemoData(now = Date.now()) {
         findings: snapshot,
         settings,
         revision: 1,
+        review_versions: [],
         assessments: sample.map((e) => ({
           execution_id: e.id,
           cannot_assess: false,
@@ -291,6 +310,31 @@ export function createLensDemoData(now = Date.now()) {
         })),
         attempts: 1,
         steps: [],
+        reviews: sample.map((execution, index) => ({
+          execution_id: execution.id,
+          trace_id: execution.trace_id,
+          name: execution.name,
+          agent: definition.agent,
+          model: settings.model,
+          at: iso(now - 320_000 - day * 60_000 + index * 1000),
+          duration_ms: 1200,
+          content_version: "",
+          reused: false,
+          consolidated: false,
+          partial: false,
+          cannot_assess: false,
+          reasoning:
+            snapshot.find((finding) => finding.occurrences.includes(execution.id))?.description ??
+            "The recorded response is consistent with the available information and follows the review criteria.",
+          spans: [],
+          tool_calls: [],
+          verdicts: snapshot
+            .filter((finding) => finding.occurrences.includes(execution.id))
+            .map((finding) => ({ check_id: finding.check_id, kind: finding.kind, summary: finding.title })),
+        })),
+        reviewed: sample.length,
+        reading: [],
+        activities: [],
         trigger: "schedule" as const,
         error: "",
         cost: sample.length * 0.012,
@@ -305,6 +349,9 @@ export function createLensDemoData(now = Date.now()) {
           candidates: snapshot.length,
           partial: 0,
           unassessable: 0,
+          failed_tasks: 0,
+          reused: 0,
+          reusable: 0,
         },
         status: "completed",
         stage: "Complete",
@@ -318,6 +365,7 @@ export function createLensDemoData(now = Date.now()) {
     return {
       id: definition.id,
       version: 1,
+      reservations: [],
       revision: 1,
       spent: jobs.reduce((sum, job) => sum + job.cost, 0),
       scope: { all_teams: true, api_key_hash: "", team_id: "" },

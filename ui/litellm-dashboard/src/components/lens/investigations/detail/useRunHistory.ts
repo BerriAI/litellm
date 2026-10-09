@@ -8,13 +8,14 @@ import { activeJob } from "../../model/status";
 import type { Lens } from "../../model/types";
 
 /** Run history polls off its own rows, so a job the list poll discovers has to push it to refetch. */
-export function useRunHistory(lens: Lens, historyOffset: number) {
+export function useRunHistory(lens: Lens, historyOffset: number, poll = true) {
   const api = useLensApi();
   const client = useQueryClient();
   const activeId = activeJob(lens.jobs)?.id;
   useEffect(() => {
-    if (!activeId) return;
+    if (!poll || !activeId) return;
     void client.invalidateQueries({ queryKey: lensKeys.histories() }, { cancelRefetch: false });
-  }, [activeId, client]);
-  return useQuery(lensQueries.history(api, { lensId: lens.id, historyOffset }));
+  }, [activeId, client, poll]);
+  const options = lensQueries.history(api, { lensId: lens.id, historyOffset });
+  return useQuery({ ...options, refetchInterval: poll ? options.refetchInterval : false });
 }

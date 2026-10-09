@@ -70,3 +70,15 @@ describe("Lens demo data", () => {
     network.mockRestore();
   });
 });
+
+it("serves review pages locally with the same cursor contract as live runs", async () => {
+  const api = createLensDemo().lens;
+  const { lenses } = await api.lenses();
+  const owner = lenses[0];
+  const job = owner.jobs[0];
+  const first = await api.reviews(owner.id, job.id, 0);
+  expect(first.reviews).toHaveLength(job.reviewed);
+  expect(first.reviews.some((review) => review.verdicts.some((verdict) => verdict.kind === "issue"))).toBe(true);
+  expect(await api.reviews(owner.id, job.id, first.reviewed)).toEqual({ reviews: [], reviewed: first.reviewed });
+  await expect(api.reviews(owner.id, "missing", 0)).rejects.toMatchObject({ status: 404 });
+});

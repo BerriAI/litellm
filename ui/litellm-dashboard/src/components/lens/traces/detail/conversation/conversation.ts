@@ -1,6 +1,8 @@
+import { groupBy, orderBy } from "es-toolkit";
 import type { Span, SpanDetail, TraceMessage, TraceToolCall, UIContent } from "../../types";
-import { isFrameworkSpan, parseJson, parseMessages, prettyPayload } from "../../utils";
-import { toTraceMessage } from "../content/payload";
+import { isFrameworkSpan, parseAssistantSummary, parseMessages, prettyPayload } from "../../utils";
+import { toTraceMessage, toolInput } from "../content/payload";
+import { claudeCaptureWarnings, claudeToolDetails, isClaudeSupplement } from "./nativeClaude";
 
 export const CONVERSATION_PAGE_SIZE = 20;
 
@@ -9,9 +11,52 @@ export function conversationSteps(spans: readonly Span[]): Span[] {
   return spans
     .filter((span) => {
       const isEvent = ["agent", "llm", "tool"].includes(span.type) || !parents.has(span.span_id);
-      return !isFrameworkSpan(span) && (span.parent_span_id === null || isEvent);
+      const visible = !isFrameworkSpan(span) && (span.parent_span_id === null || isEvent);
+      return isClaudeSupplement(span) || visible;
     })
     .sort((a, b) => a.start_offset_ms - b.start_offset_ms);
+}
+
+export function pendingConversationBranches(
+  spans: readonly Span[],
+  details: ReadonlyMap<string, SpanDetail>,
+  hasMoreSpans: boolean,
+): ReadonlySet<string> {
+  const byId = new Map(spans.map((span) => [span.span_id, span]));
+  const steps = new Set(conversationSteps(spans).map((span) => span.span_id));
+  const pageBoundary = spans.reduce((latest, span) => Math.max(latest, span.start_offset_ms), -Infinity);
+  const pending = spans.filter((span) => {
+    const missingDetail = steps.has(span.span_id) && !details.has(span.span_id);
+    const mayHaveLaterChildren = hasMoreSpans && span.start_offset_ms + span.duration_ms >= pageBoundary;
+    return missingDetail || mayHaveLaterChildren;
+  });
+  const initial = {
+    pending: new Set(pending.map((span) => span.span_id)),
+    ancestors: new Map(
+      spans.flatMap((span) =>
+        span.parent_span_id && byId.has(span.parent_span_id) ? [[span.span_id, span.parent_span_id] as const] : [],
+      ),
+    ),
+  };
+  const doublingPasses = Math.ceil(Math.log2(Math.max(1, spans.length)));
+  return Array.from({ length: doublingPasses }).reduce<typeof initial>((state) => {
+    if (!state.pending.size || !state.ancestors.size) return state;
+    return {
+      pending: new Set([
+        ...state.pending,
+        ...[...state.pending].flatMap((id) => {
+          const ancestor = state.ancestors.get(id);
+          return ancestor ? [ancestor] : [];
+        }),
+      ]),
+      ancestors: new Map(
+        [...state.ancestors].flatMap(([id, ancestor]) => {
+          const next = state.ancestors.get(ancestor);
+          return next ? [[id, next] as const] : [];
+        }),
+      ),
+    };
+  }, initial).pending;
 }
 
 function contentText(value: string, content?: UIContent): string {
@@ -24,10 +69,17 @@ function contentText(value: string, content?: UIContent): string {
 
 function messages(value: string, content: UIContent | undefined, role: string): TraceMessage[] {
   if (content?.kind === "messages") return content.messages.map(toTraceMessage);
-  const parsed = !content ? parseMessages(value) : null;
+  const source = content?.kind === "text" ? content.text : value;
+  const parsed = parseMessages(source) ?? (role === "assistant" ? parseAssistantSummary(source) : null);
   if (parsed) return parsed;
   const text = contentText(value, content);
   return text ? [{ role, content: text }] : [];
+}
+
+function inputMessages(detail: SpanDetail): TraceMessage[] {
+  return detail.attributes["lens.capture.messages_separate"] === "true"
+    ? []
+    : messages(detail.input, detail.input_ui, "user");
 }
 
 function stableValue(value: unknown): unknown {
@@ -69,6 +121,12 @@ export interface ConversationItem {
   messages: TraceMessage[];
   toolCall?: TraceToolCall;
   toolResult?: string;
+  agentId?: string;
+  agentName?: string;
+  branchId?: string;
+  parentBranchId?: string;
+  model?: string;
+  time?: number;
   showError?: boolean;
 }
 
@@ -78,16 +136,13 @@ function toolItem(
   pending: TraceToolCall[],
   items: ConversationItem[],
 ): ConversationItem {
-  const args =
-    parseJson(detail.input) ??
-    (detail.input_ui?.kind === "fields"
-      ? Object.fromEntries(detail.input_ui.fields.map((field) => [field.key, field.value]))
-      : detail.input);
+  const args = toolInput(detail.input, detail.input_ui);
   const call = { name: span.name, args };
   const match = pending.findIndex(
     (candidate) =>
       candidate.name === call.name &&
-      JSON.stringify(stableValue(candidate.args)) === JSON.stringify(stableValue(call.args)),
+      (candidate.args === undefined ||
+        JSON.stringify(stableValue(candidate.args)) === JSON.stringify(stableValue(call.args))),
   );
   if (match >= 0) {
     const [matched] = pending.splice(match, 1);
@@ -97,7 +152,10 @@ function toolItem(
           message.tool_calls = message.tool_calls.filter((call) => call !== matched);
       }
   }
-  const result = contentText(detail.output, detail.output_ui);
+  const result =
+    detail.output_ui?.kind === "text"
+      ? detail.output_ui.text
+      : prettyPayload(detail.output) || contentText(detail.output, detail.output_ui);
   return { id: span.span_id, span, messages: [], toolCall: call, toolResult: result };
 }
 
@@ -107,11 +165,31 @@ interface ConversationEvent {
   output: boolean;
 }
 
+function messageTime(span: Span, steps: readonly Span[], details: ReadonlyMap<string, SpanDetail>): number {
+  const attributes = details.get(span.span_id)?.attributes;
+  if (attributes?.["event.name"] !== "assistant_response") return span.start_offset_ms;
+  const source = attributes["query_source"];
+  const matches = steps.filter((candidate) => {
+    const recorded = details.get(candidate.span_id)?.attributes["query_source_safe"];
+    const unnamedAgent = recorded === "agent" && source?.startsWith("agent:");
+    const sameSource = recorded === source || recorded === source?.replace(/^agent:/, "agent.") || unnamedAgent;
+    const sameRequest = candidate.parent_span_id === span.parent_span_id && candidate.model === span.model;
+    const matchingCall = candidate.type === "llm" && sameRequest && sameSource;
+    return matchingCall && Math.abs(candidate.start_offset_ms + candidate.duration_ms - span.start_offset_ms) < 2;
+  });
+  if (matches.length !== 1) return span.start_offset_ms;
+  const request = matches[0];
+  const firstContent = Number(details.get(request.span_id)?.attributes["first_content_ms"]);
+  return Number.isFinite(firstContent) && firstContent >= 0 && firstContent <= request.duration_ms
+    ? request.start_offset_ms + firstContent
+    : span.start_offset_ms;
+}
+
 function conversationEvents(
   steps: readonly Span[],
   byId: ReadonlyMap<string, Span>,
   details: ReadonlyMap<string, SpanDetail>,
-  complete: boolean,
+  { complete, pendingBranches }: { complete: boolean; pendingBranches?: ReadonlySet<string> },
 ): ConversationEvent[] {
   const missingIndex = steps.findIndex((span) => !details.has(span.span_id));
   const loaded = missingIndex < 0 ? steps : steps.slice(0, missingIndex);
@@ -131,10 +209,11 @@ function conversationEvents(
   }
   return loaded
     .flatMap((span) => {
-      const start = { span, time: span.start_offset_ms, output: false };
+      const start = { span, time: messageTime(span, loaded, details), output: false };
       if (span.type === "tool" || (span.type !== "agent" && span.parent_span_id !== null)) return [start];
       const end = ends.get(span.span_id)!;
-      return (complete && missingIndex < 0) || end < boundary ? [start, { span, time: end, output: true }] : [start];
+      const branchComplete = (complete && missingIndex < 0) || pendingBranches?.has(span.span_id) === false;
+      return branchComplete || end < boundary ? [start, { span, time: end, output: true }] : [start];
     })
     .sort(
       (a, b) =>
@@ -168,31 +247,69 @@ function withoutForwardedAnswers(
   );
 }
 
+function isNativeAgent(span: Span): boolean {
+  return span.framework === "claude-code" && span.type === "tool" && ["Agent", "Task"].includes(span.name);
+}
+
+function conversationBranch(span: Span, byId: ReadonlyMap<string, Span>): string {
+  if (span.type === "agent" || span.parent_span_id === null) return span.span_id;
+  let parent = span.parent_span_id ? byId.get(span.parent_span_id) : undefined;
+  const visited = new Set<string>();
+  while (parent && !visited.has(parent.span_id)) {
+    visited.add(parent.span_id);
+    if (parent.type === "agent" || isNativeAgent(parent)) return parent.span_id;
+    parent = parent.parent_span_id ? byId.get(parent.parent_span_id) : undefined;
+  }
+  return span.parent_span_id ?? span.span_id;
+}
+
+function agentIdentity(span: Span, details: ReadonlyMap<string, SpanDetail>): string {
+  return isNativeAgent(span) ? span.span_id : details.get(span.span_id)?.attributes["gen_ai.agent.id"] || span.span_id;
+}
+
+function agentLabels(agents: readonly Span[], details: ReadonlyMap<string, SpanDetail>): ReadonlyMap<string, string> {
+  const identity = (agent: Span): string => agentIdentity(agent, details);
+  const unique = agents.filter(
+    (agent, index) => agents.findIndex((other) => identity(other) === identity(agent)) === index,
+  );
+  const named = unique.map((agent) => {
+    const detail = details.get(agent.span_id);
+    const args = detail && isNativeAgent(agent) ? toolInput(detail.input, detail.input_ui) : undefined;
+    const description = args && typeof args === "object" && "description" in args ? args.description : undefined;
+    const name =
+      agent.framework === "claude-code" && !isNativeAgent(agent)
+        ? agent.agent || agent.name || "Agent"
+        : agent.name || agent.agent || "Agent";
+    return { agent, name: typeof description === "string" && description ? description : name };
+  });
+  return new Map(
+    Object.values(groupBy(named, ({ name }) => JSON.stringify(name))).flatMap((group) =>
+      orderBy(group, [({ agent }) => agent.start_offset_ms, ({ agent }) => agent.span_id], ["asc", "asc"]).map(
+        ({ agent, name }, index) => [identity(agent), group.length > 1 ? `${name} (${index + 1})` : name] as const,
+      ),
+    ),
+  );
+}
+
 export function buildConversation(
   spans: readonly Span[],
-  details: ReadonlyMap<string, SpanDetail>,
+  recordedDetails: ReadonlyMap<string, SpanDetail>,
   complete: boolean,
+  pendingBranches?: ReadonlySet<string>,
 ): ConversationItem[] {
+  const details = claudeToolDetails(spans, recordedDetails);
   const byId = new Map(spans.map((span) => [span.span_id, span]));
   const histories = new Map<string, TraceMessage[]>();
   const completedOutputs = new Map<string, TraceMessage[]>();
   const pendingCalls = new Map<string, TraceToolCall[]>();
   const items: ConversationItem[] = [];
-  const events = conversationEvents(conversationSteps(spans), byId, details, complete);
-  const branch = (span: Span): string => {
-    if (span.type === "agent" || span.parent_span_id === null) return span.span_id;
-    let parent = span.parent_span_id ? byId.get(span.parent_span_id) : undefined;
-    const visited = new Set<string>();
-    while (parent && !visited.has(parent.span_id)) {
-      visited.add(parent.span_id);
-      if (parent.type === "agent") return parent.span_id;
-      parent = parent.parent_span_id ? byId.get(parent.parent_span_id) : undefined;
-    }
-    return span.parent_span_id ?? span.span_id;
-  };
+  const events = conversationEvents(conversationSteps(spans), byId, details, { complete, pendingBranches });
+  const branch = (span: Span): string => conversationBranch(span, byId);
   for (const event of events) {
     const { span } = event;
+    if (isClaudeSupplement(span)) continue;
     const detail = details.get(span.span_id)!;
+    if (["generate_session_title", "prompt_suggestion"].includes(detail.attributes["query_source_safe"])) continue;
     const key = branch(span);
     const history = histories.get(key) ?? [];
     if (event.output) {
@@ -203,7 +320,13 @@ export function buildConversation(
         completedOutputs,
         byId,
       );
-      const item = { id: `${span.span_id}-output`, span, messages: fresh, showError: span.status === "error" };
+      const item = {
+        id: `${span.span_id}-output`,
+        span,
+        time: event.time,
+        messages: fresh,
+        showError: span.status === "error",
+      };
       if (fresh.length || item.showError) items.push(item);
       completedOutputs.set(span.span_id, output);
       histories.set(key, [...history, ...fresh]);
@@ -215,12 +338,16 @@ export function buildConversation(
       histories.set(key, [...history, { role: "tool", name: span.name, content: item.toolResult ?? "" }]);
       continue;
     }
-    const input = messages(detail.input, detail.input_ui, "user");
+    const input = inputMessages(detail);
     const output = messages(detail.output, detail.output_ui, "assistant");
-    const fresh = newConversationMessages(history, input);
+    const fresh =
+      detail.attributes["lens.capture.source"] === "session_transcript"
+        ? input
+        : newConversationMessages(history, input);
     if (span.type === "agent" || span.parent_span_id === null) {
       histories.set(key, input);
-      if (fresh.length) items.push({ id: span.span_id, span, messages: fresh });
+      const item = { id: span.span_id, span, time: event.time, messages: fresh };
+      if (fresh.length) items.push(item);
       continue;
     }
     const combined = [...fresh, ...output];
@@ -233,6 +360,7 @@ export function buildConversation(
     const item = {
       id: span.span_id,
       span,
+      time: event.time,
       showError: span.status === "error",
       messages: combined.map((message) => ({
         ...message,
@@ -241,10 +369,120 @@ export function buildConversation(
     };
     if (combined.length || item.showError) items.push(item);
   }
+  const agents = [...new Set(conversationSteps(spans).map(branch))].flatMap((id) => {
+    const span = byId.get(id);
+    return span ? [span] : [];
+  });
+  const labels = agentLabels(agents, details);
+  const actor = (id: string): string => {
+    const span = byId.get(id);
+    return span ? agentIdentity(span, details) : id;
+  };
   return items
     .map((item) => ({
       ...item,
+      agentId: actor(branch(item.span)),
+      agentName: labels.get(actor(branch(item.span))) || item.span.agent,
+      branchId: branch(item.span),
+      parentBranchId: (() => {
+        const parentId = byId.get(branch(item.span))?.parent_span_id;
+        const parent = parentId ? byId.get(parentId) : undefined;
+        return parent ? branch(parent) : undefined;
+      })(),
+      model: item.span.model || details.get(item.span.span_id)?.attributes["gen_ai.request.model"] || undefined,
       messages: item.messages.filter((message) => Boolean(message.content) || Boolean(message.tool_calls?.length)),
     }))
     .filter((item) => item.messages.length || item.toolResult !== undefined || item.showError);
+}
+export type ConversationGroup =
+  | { kind: "item"; item: ConversationItem }
+  | { kind: "branch"; id: string; name: string; children: ConversationGroup[] };
+
+export function conversationBranchGroups(groups: ConversationGroup[], branchId: string | null): ConversationGroup[] {
+  if (branchId === null) return groups;
+  for (const group of groups) {
+    if (group.kind === "item") continue;
+    if (group.id === branchId) return group.children;
+    const nested = conversationBranchGroups(group.children, branchId);
+    if (nested.length) return nested;
+  }
+  return [];
+}
+
+export function groupConversation(items: readonly ConversationItem[], spans: readonly Span[]): ConversationGroup[] {
+  const byId = new Map(spans.map((span) => [span.span_id, span]));
+  const parentById = new Map(
+    conversationSteps(spans).flatMap((span) => {
+      const branch = byId.get(conversationBranch(span, byId));
+      if (!branch) return [];
+      const parent = branch.parent_span_id ? byId.get(branch.parent_span_id) : undefined;
+      return [[branch.span_id, parent ? conversationBranch(parent, byId) : undefined] as const];
+    }),
+  );
+  const roots = new Set(
+    [...parentById].flatMap(([id, parent]) => {
+      if (!parent) return [id];
+      return parentById.has(parent) ? [] : [parent];
+    }),
+  );
+  const directBranch = (item: ConversationItem, parent?: string): string | undefined => {
+    let id = item.branchId;
+    const visited = new Set<string>();
+    while (id && !visited.has(id)) {
+      visited.add(id);
+      const ancestor = parentById.get(id);
+      if (parent ? ancestor === parent : ancestor !== undefined && roots.has(ancestor)) return id;
+      id = ancestor;
+    }
+    return undefined;
+  };
+  const build = (parent?: string, ancestors = new Set<string>()): ConversationGroup[] => {
+    const seen = new Set<string>();
+    return items.flatMap((item): ConversationGroup[] => {
+      if (parent ? item.branchId === parent : !item.parentBranchId) return [{ kind: "item", item }];
+      const id = directBranch(item, parent);
+      if (!id || seen.has(id) || ancestors.has(id)) return [];
+      seen.add(id);
+      const first = items.find((candidate) => candidate.branchId === id);
+      const name = first?.agentName || byId.get(id)?.name || "Subagent";
+      return [{ kind: "branch", id, name, children: build(id, new Set([...ancestors, id])) }];
+    });
+  };
+  return build();
+}
+
+export function conversationWarnings(
+  details: ReadonlyMap<string, SpanDetail>,
+  complete: boolean,
+  toolSpanIds: ReadonlySet<string> = new Set(),
+): string[] {
+  const warnings = [
+    ...claudeCaptureWarnings(details),
+    ...[...details.values()].flatMap((detail) =>
+      detail.attributes["lens.capture.warning"] ? [detail.attributes["lens.capture.warning"]] : [],
+    ),
+  ];
+  const hasAssistantText = [...details.values()].some(
+    (detail) =>
+      !toolSpanIds.has(detail.span_id) &&
+      messages(detail.output, detail.output_ui, "assistant").some(
+        (message) => message.role === "assistant" && message.content.trim(),
+      ),
+  );
+  const hasReplyEvent = [...details.values()].some(
+    (detail) => detail.attributes["event.name"] === "assistant_response",
+  );
+  const hasEmptyRequest = [...details.values()].some(
+    (detail) =>
+      detail.attributes["span.type"] === "llm_request" &&
+      !detail.output &&
+      !messages(detail.output, detail.output_ui, "assistant").length,
+  );
+  const missingReplies = !hasAssistantText && !hasReplyEvent && hasEmptyRequest;
+  if (complete && missingReplies) {
+    warnings.push(
+      "This Claude Code trace has no recorded assistant replies. Enable assistant response logs for future sessions.",
+    );
+  }
+  return [...new Set(warnings)];
 }

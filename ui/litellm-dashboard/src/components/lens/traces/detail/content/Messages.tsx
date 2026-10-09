@@ -1,17 +1,14 @@
 "use client";
 
 import { Bot, Settings2, User, Wrench } from "lucide-react";
-import { useState } from "react";
 
 import CopyButton from "@/components/shared/CopyButton";
 import { cn } from "@/lib/cva.config";
 
-import { FoldChevron } from "../../ui/Collapse";
 import type { TraceMessage, TraceToolCall } from "../../types";
 import { Block, BlockBadge, type BadgeTone } from "./Block";
-import { FieldTree } from "./FieldTree";
 import { Markdown } from "./Markdown";
-import { fieldNode, type FieldEntry } from "./payload";
+import { ToolArguments, ToolOutput } from "./ToolContent";
 
 const ROLE_LABEL: Record<string, string> = { user: "User", system: "System", assistant: "Assistant", tool: "Tool" };
 const ROLE_TONE: Record<string, BadgeTone> = { user: "user", assistant: "assistant", tool: "tool", system: "neutral" };
@@ -23,12 +20,6 @@ const ROLE_ICON: Record<string, React.ReactNode> = {
 };
 
 const argsText = (args: unknown): string => (typeof args === "string" ? args : JSON.stringify(args));
-
-function argEntries(args: unknown): readonly FieldEntry[] {
-  const node = fieldNode(args);
-  if (node.kind === "object" && node.entries.length > 0) return node.entries;
-  return [["arguments", node]];
-}
 
 export function ToolCallBlock({ call }: { call: TraceToolCall }) {
   return (
@@ -46,8 +37,12 @@ export function ToolCallBlock({ call }: { call: TraceToolCall }) {
           className="ml-auto size-6 text-muted-foreground"
         />
       </div>
-      <div className="px-2.5 py-1">
-        <FieldTree entries={argEntries(call.args)} />
+      <div className="px-2.5 py-2">
+        {call.args === undefined ? (
+          <p className="py-2 text-xs text-muted-foreground">Arguments not recorded</p>
+        ) : (
+          <ToolArguments args={call.args} />
+        )}
       </div>
     </div>
   );
@@ -90,41 +85,19 @@ export function MessageList({ messages }: { messages: readonly TraceMessage[] })
   );
 }
 
-const LONG_RESULT_CHARS = 120;
-
-/** A tool's result: one line by default, long or multiline results expand in place. Red when the tool failed. */
 export function ToolResultCard({ name, result, failed = false }: { name: string; result: string; failed?: boolean }) {
-  const [open, setOpen] = useState(false);
-  const expandable = result.length > LONG_RESULT_CHARS || result.includes("\n");
-  const tone = failed ? "text-destructive" : "text-foreground";
   return (
     <article
       className={cn(
-        "group/block overflow-hidden rounded-lg border bg-card",
+        "min-w-0 overflow-hidden rounded-lg border bg-card",
         failed ? "border-destructive/40" : "border-border",
       )}
     >
-      <div className="flex min-h-9 items-center gap-2 py-1 pr-1.5 pl-2.5">
+      <div className="flex min-h-9 items-center gap-2 border-b border-border/70 px-3 py-1.5">
         <BlockBadge tone={failed ? "failed" : "tool"}>
           <Wrench />
         </BlockBadge>
-        <span className={cn("shrink-0 font-mono text-xs font-medium", failed ? "text-destructive" : "text-foreground")}>
-          {name}
-        </span>
-        {expandable ? (
-          <button
-            type="button"
-            aria-expanded={open}
-            aria-label={`${open ? "Collapse" : "Expand"} ${name} result`}
-            onClick={() => setOpen((value) => !value)}
-            className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-1 text-left text-muted-foreground")}
-          >
-            <FoldChevron open={open} className="size-3.5 shrink-0" />
-            {!open && <span className="min-w-0 truncate text-sm">{result}</span>}
-          </button>
-        ) : (
-          <span className={cn("min-w-0 flex-1 text-sm break-words", tone)}>{result || "No output"}</span>
-        )}
+        <span className="min-w-0 flex-1 truncate font-mono text-xs font-medium">{name}</span>
         <CopyButton
           variant="action"
           value={result}
@@ -133,16 +106,9 @@ export function ToolResultCard({ name, result, failed = false }: { name: string;
           className="size-6 shrink-0 text-muted-foreground"
         />
       </div>
-      {open && (
-        <pre
-          className={cn(
-            "max-h-96 overflow-auto border-t border-border/70 bg-muted/40 px-3 py-2.5 font-mono text-xs leading-relaxed break-words whitespace-pre-wrap",
-            tone,
-          )}
-        >
-          {result}
-        </pre>
-      )}
+      <div className="px-3 py-2.5">
+        <ToolOutput result={result} failed={failed} />
+      </div>
     </article>
   );
 }

@@ -10,11 +10,18 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 
-def holds_org_admin(user: LiteLLM_UserTable | None, organization_id: str) -> bool:
-    return user is not None and any(
-        membership.organization_id == organization_id and membership.user_role == LitellmUserRoles.ORG_ADMIN.value
+def org_admin_org_ids(user: LiteLLM_UserTable | None) -> frozenset[str]:
+    if user is None:
+        return frozenset()
+    return frozenset(
+        membership.organization_id
         for membership in user.organization_memberships or []
+        if membership.user_role == LitellmUserRoles.ORG_ADMIN.value
     )
+
+
+def holds_org_admin(user: LiteLLM_UserTable | None, organization_id: str) -> bool:
+    return organization_id in org_admin_org_ids(user)
 
 
 @dataclass(frozen=True, slots=True)

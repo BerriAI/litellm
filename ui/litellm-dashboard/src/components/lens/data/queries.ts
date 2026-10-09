@@ -6,6 +6,7 @@ import type { KeyPage, LensApi } from "./service";
 export type { Key } from "./service";
 
 type Activity = Awaited<ReturnType<LensApi["activity"]>>;
+const LIVE_REVIEW_POLL_MS = 1500;
 
 export const lensKeys = {
   all: ["lens"] as const,
@@ -17,11 +18,14 @@ export const lensKeys = {
   runs: () => [...lensKeys.all, "run"] as const,
   run: (scope: string, lensId: string | undefined, batchId: string) =>
     [...lensKeys.runs(), { scope, lensId, batchId }] as const,
+  reviews: (scope: string, page: { lensId: string; jobId: string; attempt: number; after: number }) =>
+    [...lensKeys.all, "reviews", { scope, ...page }] as const,
   evidence: (scope: string, lensId: string | undefined, evidenceId: string | undefined, offset: number) =>
     [...lensKeys.all, "evidence", { scope, lensId, evidenceId, offset }] as const,
   models: (scope: string) => [...lensKeys.all, "models", { scope }] as const,
   modelDetails: (scope: string) => [...lensKeys.all, "model-details", { scope }] as const,
   activity: (scope: string) => [...lensKeys.all, "activity-available", { scope }] as const,
+  signalConfig: (scope: string) => [...lensKeys.all, "signal-config", { scope }] as const,
   discoveries: () => [...lensKeys.all, "discovery"] as const,
   discovery: (scope: string, source: Settings["source"], hours: number | undefined) =>
     [...lensKeys.discoveries(), { scope, source, hours }] as const,
@@ -42,6 +46,13 @@ export const lensQueries = {
   },
   modelDetails(api: LensApi) {
     return queryOptions({ queryKey: lensKeys.modelDetails(api.scope), queryFn: () => api.modelDetails() });
+  },
+  signalConfig(api: LensApi) {
+    return queryOptions({
+      queryKey: lensKeys.signalConfig(api.scope),
+      queryFn: () => api.signalConfig(),
+      staleTime: 5000,
+    });
   },
   activity(api: LensApi, loaded: boolean) {
     const options = {
@@ -68,6 +79,24 @@ export const lensQueries = {
       queryKey: lensKeys.run(api.scope, lensId, batchId),
       enabled: !!lensId && !["latest", "all"].includes(batchId),
       queryFn: () => api.run(lensId as string, batchId),
+    };
+    return queryOptions(options);
+  },
+  reviews(
+    api: LensApi,
+    {
+      lensId,
+      jobId,
+      attempt,
+      after,
+      live,
+    }: { lensId: string; jobId: string; attempt: number; after: number; live: boolean },
+  ) {
+    const cursor = { lensId, jobId, attempt, after };
+    const options = {
+      queryKey: lensKeys.reviews(api.scope, cursor),
+      queryFn: () => api.reviews(lensId, jobId, after),
+      refetchInterval: live ? LIVE_REVIEW_POLL_MS : (false as const),
     };
     return queryOptions(options);
   },

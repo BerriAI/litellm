@@ -4,7 +4,7 @@ kind: Deployment
 metadata:
   name: {{ include "litellm.fullname" . }}-lens-worker
   labels:
-    {{- include "litellm.commonLabels" . | nindent 4 }}
+    {{- include "litellm.lensWorker.labels" . | nindent 4 }}
     app.kubernetes.io/component: lens-worker
 spec:
   replicas: {{ .Values.lensWorker.replicaCount }}
@@ -15,7 +15,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "litellm.commonLabels" . | nindent 8 }}
+        {{- include "litellm.lensWorker.labels" . | nindent 8 }}
         app.kubernetes.io/component: lens-worker
     spec:
       automountServiceAccountToken: false
@@ -42,11 +42,48 @@ spec:
           env:
             - name: LITELLM_URL
               value: {{ .Values.lensWorker.url | default (printf "http://%s:%v" (include "litellm.backend.fullname" .) .Values.backend.service.port) | quote }}
+            - name: LITELLM_LENS_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "litellm.lensWorker.serviceTokenSecretName" . | quote }}
+                  key: {{ .Values.lensWorker.serviceTokenSecret.key | quote }}
+            {{- if include "litellm.lensWorker.bundledClickhouse" . }}
+            - name: CLICKHOUSE_HOST
+              value: {{ include "litellm.lensWorker.clickhouseName" . | quote }}
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "litellm.lensWorker.clickhouseName" . | quote }}
+                  key: password
+            {{- else }}
+            - name: CLICKHOUSE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "lensWorker.clickhouseSecret.name is required" .Values.lensWorker.clickhouseSecret.name | quote }}
+                  key: {{ .Values.lensWorker.clickhouseSecret.key | quote }}
+            {{- end }}
+            - name: CLICKHOUSE_DATABASE
+              value: {{ .Values.lensWorker.clickhouseDatabase | quote }}
+            - name: AGENT_TRACING_RETENTION_DAYS
+              value: {{ .Values.lensWorker.retentionDays | quote }}
+            {{- if .Values.lensWorker.tokenSecret.name }}
             - name: LENS_WORKER_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ required "lensWorker.tokenSecret.name must reference a Lens worker token" .Values.lensWorker.tokenSecret.name | quote }}
+                  name: {{ .Values.lensWorker.tokenSecret.name | quote }}
                   key: {{ .Values.lensWorker.tokenSecret.key | quote }}
+            {{- end }}
+          ports:
+            - name: otlp
+              containerPort: 4318
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: otlp
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: otlp
           resources:
             {{- toYaml .Values.lensWorker.resources | nindent 12 }}
           volumeMounts:

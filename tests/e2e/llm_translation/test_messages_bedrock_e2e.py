@@ -5,6 +5,7 @@ from typing import Final
 import pytest
 from anthropic.types import RawContentBlockDeltaEvent, RawMessageDeltaEvent, TextBlock, TextDelta, ToolParam
 from e2e_config import unique_marker
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
@@ -13,7 +14,7 @@ from structured_output import SENTIMENT_OUTPUT_FORMAT, SENTIMENT_PROMPT, assert_
 
 pytestmark = pytest.mark.e2e
 
-CONVERSE_OPENAI_BACKEND: Final = "bedrock/converse/us.openai.gpt-6.1-sol"
+GPT_6_1_SOL_BACKEND: Final = "bedrock/global.openai.gpt-6.1-sol"
 CONVERSE_CLAUDE_BACKEND: Final = "bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 NOVA_BACKEND: Final = "bedrock/us.amazon.nova-2-lite-v1:0"
 
@@ -65,7 +66,7 @@ class TestBedrockMessages:
     def test_converse_tool_result_of_only_tool_references_is_accepted(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
-        model = _register(proxy, resources, CONVERSE_OPENAI_BACKEND)
+        model = _register(proxy, resources, GPT_6_1_SOL_BACKEND)
         client = sdk.anthropic(resources.key()).with_options(timeout=180)
 
         message = client.messages.create(
@@ -99,6 +100,16 @@ class TestBedrockMessages:
         assert message.stop_reason is not None, f"Bedrock Converse returned no stop_reason: {message!r}"
         assert message.content, f"Bedrock Converse returned no content blocks: {message!r}"
 
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.BEDROCK,),
+            models=(CONVERSE_CLAUDE_BACKEND,),
+            capabilities=(Capability.RESPONSE_SCHEMA,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_converse_output_format_returns_schema_json_text(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -116,6 +127,15 @@ class TestBedrockMessages:
         assert_sentiment_json("".join(texts))
 
     @pytest.mark.covers("llm.messages.bedrock_converse.basic.stream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.BEDROCK,),
+            models=(NOVA_BACKEND,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_nova_stream_relays_text_usage_and_stop(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:

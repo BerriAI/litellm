@@ -1,4 +1,4 @@
-SELECT o.TraceId AS trace_id, o.SpanId AS span_id, o.ParentSpanId AS parent_span_id, o.SpanName AS name,
+SELECT o.TraceId AS trace_id, o.SpanAttributes['lens.original_trace_id'] AS original_trace_id, o.SpanId AS span_id, o.ParentSpanId AS parent_span_id, o.SpanName AS name,
        o.ObservationType AS type, toUInt8(o.WrapperCandidate) AS wrapper_candidate, o.AgentName AS agent,
        o.Framework AS framework, o.StatusCode AS status,
        substringUTF8(o.StatusMessage, 1, 128) AS status_message,
@@ -12,6 +12,8 @@ SELECT o.TraceId AS trace_id, o.SpanId AS span_id, o.ParentSpanId AS parent_span
        if(o.ToolCallId != '' OR o.ObservationType != 'tool', o.ToolCallId,
           coalesce(nullIf(o.SpanAttributes['gen_ai.tool.call.id'], ''), nullIf(o.SpanAttributes['tool.id'], ''), ''))
           AS tool_call_id,
+       o.SpanAttributes['agent.source.type'] AS source_type, o.SpanAttributes['agent.source.url'] AS source_url,
+       o.SpanAttributes['agent.source.title'] AS source_title, o.SpanAttributes['agent.source.user'] AS source_user,
        o.UserId AS user_id, o.TeamId AS team_id, o.ApiKeyHash AS api_key_hash
 FROM otel_traces AS o
 WHERE o.TraceId = {trace_id:String}

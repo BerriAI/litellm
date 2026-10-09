@@ -235,7 +235,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
     def _not_run_reason(
         self,
-        messages: Sequence[dict[str, Any]],  # mutable-ok: raw request messages consumed by _extract_inputs
+        messages: Sequence[Mapping[str, object]],
     ) -> str | None:
         """Why nothing was scanned, or None when the only unscoped content is images, which this handler never scans."""
         texts: Final[list[str]] = []  # mutable-ok: filled by _extract_inputs

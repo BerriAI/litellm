@@ -160,6 +160,10 @@ impl<'de> Visitor<'de> for JsonBudget<'_> {
 #[derive(Clone, Copy)]
 enum MessageKind {
     Export,
+    ExportLogs,
+    ResourceLogs,
+    ScopeLogs,
+    LogRecord,
     ResourceSpans,
     Resource,
     ScopeSpans,
@@ -177,6 +181,13 @@ enum MessageKind {
 impl MessageKind {
     fn child(self, tag: u32) -> Option<Self> {
         match (self, tag) {
+            (Self::ExportLogs, 1) => Some(Self::ResourceLogs),
+            (Self::ResourceLogs, 1) => Some(Self::Resource),
+            (Self::ResourceLogs, 2) => Some(Self::ScopeLogs),
+            (Self::ScopeLogs, 1) => Some(Self::Scope),
+            (Self::ScopeLogs, 2) => Some(Self::LogRecord),
+            (Self::LogRecord, 5) => Some(Self::AnyValue),
+            (Self::LogRecord, 6) => Some(Self::KeyValue),
             (Self::Export, 1) => Some(Self::ResourceSpans),
             (Self::ResourceSpans, 1) => Some(Self::Resource),
             (Self::ResourceSpans, 2) => Some(Self::ScopeSpans),
@@ -201,6 +212,10 @@ impl MessageKind {
 
 pub(super) fn protobuf_preflight(payload: &[u8], limits: &DecodeLimits) -> Result<(), Error> {
     scan_message(payload, MessageKind::Export, 0, &mut 0, limits)
+}
+
+pub(super) fn protobuf_logs_preflight(payload: &[u8], limits: &DecodeLimits) -> Result<(), Error> {
+    scan_message(payload, MessageKind::ExportLogs, 0, &mut 0, limits)
 }
 
 fn scan_message(

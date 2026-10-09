@@ -4,7 +4,11 @@ import { fieldValues } from "@/components/shared/search/evaluate";
 import type { Job, Lens } from "../model/types";
 import { filterInvestigations, INVESTIGATION_INDEX } from "./investigationQuery";
 
-function makeLens(id: string, settings: Partial<Lens["settings"]>, jobs: readonly Pick<Job, "status">[] = []): Lens {
+function makeLens(
+  id: string,
+  settings: Partial<Lens["settings"]>,
+  jobs: readonly (Pick<Job, "status"> & Partial<Pick<Job, "error">>)[] = [],
+): Lens {
   return {
     version: 0,
     spent: 0,
@@ -65,6 +69,12 @@ describe("filterInvestigations", () => {
     expect(names("-schedule:paused")).toEqual(["Refund audit", "Lead scoring"]);
     expect(names("agent:billing-agent")).toEqual(["Refund audit"]);
     expect(names("agent:reviewer")).toEqual(["Release reviews"]);
+  });
+
+  it("finds partial runs separately from completed and failed runs", () => {
+    const partial = makeLens("Partial review", {}, [{ status: "completed", error: "One task failed" }]);
+    expect(filterInvestigations([...lenses, partial], "status:partial")).toEqual([partial]);
+    expect(fieldValues(INVESTIGATION_INDEX, [partial], "status")).toEqual(["partial"]);
   });
 });
 

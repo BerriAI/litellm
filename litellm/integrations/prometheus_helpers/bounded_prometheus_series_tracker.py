@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from collections import OrderedDict
+from dataclasses import dataclass
 from threading import RLock
 from typing import Final, Protocol
 
@@ -10,6 +11,17 @@ class _RemovableMetric(Protocol):
     """The one prometheus-client metric method this tracker calls."""
 
     def remove(self, *labelvalues: object) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class PrometheusSeriesLimits:
+    max_series: int | None
+    ttl_seconds: float | None
+    cleanup_interval_seconds: float | None
+
+    @property
+    def enabled(self) -> bool:
+        return self.max_series is not None or self.ttl_seconds is not None
 
 
 class BoundedPrometheusSeriesTracker:
@@ -49,13 +61,7 @@ class BoundedPrometheusSeriesTracker:
                 now=now,
                 cleanup_interval_seconds=cleanup_interval_seconds,
             ):
-                expired_label_values: Final = [
-                    tracked_label_values
-                    for tracked_label_values, last_seen in series.items()
-                    if now - last_seen > ttl_seconds
-                ]
-                for tracked_label_values in expired_label_values:
-                    self._remove_metric_series(metric, series, tracked_label_values)
+                self._remove_expired_series(metric, series, now, ttl_seconds)
 
             # max_series <= 0 is treated as "unlimited" so a misconfigured zero
             # value cannot silently drop every emission for this metric.
@@ -65,6 +71,34 @@ class BoundedPrometheusSeriesTracker:
                     if not self._remove_metric_child(metric, tracked_label_values):
                         break
                     del series[tracked_label_values]
+
+    def admit_series(
+        self,
+        metric: _RemovableMetric,
+        metric_name: str,
+        label_values: tuple[str | None, ...],
+        limits: PrometheusSeriesLimits,
+    ) -> bool:
+        now: Final = time.monotonic()
+
+        with self.lock:
+            series: Final = self._series.setdefault(metric_name, OrderedDict())
+            if limits.ttl_seconds is not None and self._should_run_ttl_cleanup(
+                metric_name=metric_name,
+                now=now,
+                cleanup_interval_seconds=limits.cleanup_interval_seconds,
+            ):
+                self._remove_expired_series(metric, series, now, limits.ttl_seconds)
+
+            if label_values not in series and limits.max_series is not None and len(series) >= limits.max_series:
+                return False
+            series[label_values] = now
+            series.move_to_end(label_values)
+            return True
+
+    def forget_series(self, metric_name: str, label_values: tuple[str | None, ...]) -> None:
+        with self.lock:
+            self._series.get(metric_name, OrderedDict()).pop(label_values, None)
 
     def remove_series(self, metric: _RemovableMetric, label_values: tuple[str | None, ...]) -> bool:
         """Drop one child series, True when it is gone (removed or never existed)."""
@@ -85,6 +119,19 @@ class BoundedPrometheusSeriesTracker:
             self._last_ttl_cleanup[metric_name] = now
             return True
         return False
+
+    def _remove_expired_series(
+        self,
+        metric: _RemovableMetric,
+        series: OrderedDict[tuple[str | None, ...], float],
+        now: float,
+        ttl_seconds: float,
+    ) -> None:
+        expired_label_values: Final = [
+            tracked_label_values for tracked_label_values, last_seen in series.items() if now - last_seen > ttl_seconds
+        ]
+        for tracked_label_values in expired_label_values:
+            self._remove_metric_series(metric, series, tracked_label_values)
 
     def _remove_metric_series(
         self,

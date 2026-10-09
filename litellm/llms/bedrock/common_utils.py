@@ -22,11 +22,12 @@ if TYPE_CHECKING:
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -37,6 +38,7 @@ from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams
 
 if TYPE_CHECKING:
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.types.llms.openai import AllMessageValues
 
 
@@ -44,6 +46,7 @@ _ERROR_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
 _OPENAI_FAMILY_MODEL_RE: Final = re.compile(r"(^|[./])openai\.")
 _OPENAI_GPT_VERSION_RE: Final = re.compile(r"(^|[./])openai\.gpt-(\d{1,3})(?!\d)(?:\.(\d{1,3})(?!\d))?")
 _BEDROCK_RUNTIME_CHAT_COMPLETIONS_DEFAULT_SINCE: Final = (5, 6)
+_XAI_GROK_MODEL_RE: Final = re.compile(r"(^|[./])xai\.grok-")
 _BEDROCK_RUNTIME_CHAT_COMPLETIONS_ENDPOINT: Final = "/v1/chat/completions"
 BedrockRoute = Literal[
     "converse",
@@ -246,9 +249,9 @@ def convert_bedrock_invoke_output_format_to_inline_schema(
 
 
 def _bedrock_model_supports(model: str, key: str) -> bool:
-    from litellm.utils import _supports_factory
+    from litellm.utils import supports_factory
 
-    return _supports_factory(model=model, custom_llm_provider="bedrock", key=key)
+    return supports_factory(model=model, custom_llm_provider="bedrock", key=key)
 
 
 def apply_bedrock_invoke_structured_output(
@@ -313,7 +316,7 @@ def strip_unsupported_bedrock_invoke_output_config_keys(
         return
     if all(key == "format" for key in output_config):
         return
-    if _bedrock_model_supports(model, "supports_output_config") or AnthropicConfig._model_supports_effort_param(
+    if _bedrock_model_supports(model, "supports_output_config") or AnthropicConfig.model_supports_effort_param(
         model, "bedrock"
     ):
         return
@@ -773,12 +776,15 @@ def get_bedrock_tool_name(response_tool_name: str) -> str:
 _BEDROCK_GLOBAL_REGIONS: list[str] | None = None
 
 
-def _get_all_bedrock_regions() -> list[str]:
+def get_all_bedrock_regions() -> list[str]:
     """Get all Bedrock regions, cached at module level."""
     global _BEDROCK_GLOBAL_REGIONS
     if _BEDROCK_GLOBAL_REGIONS is None:
         _BEDROCK_GLOBAL_REGIONS = AmazonBedrockGlobalConfig().get_all_regions()
     return _BEDROCK_GLOBAL_REGIONS
+
+
+_get_all_bedrock_regions = get_all_bedrock_regions
 
 
 def get_bedrock_cross_region_inference_regions() -> list[str]:
@@ -829,7 +835,7 @@ def split_bedrock_region_path(model: str) -> tuple[str | None, str]:
     """
     stripped: Final = strip_bedrock_routing_prefix(model)
     region, separator, model_id = stripped.partition("/")
-    if separator and region in _get_all_bedrock_regions():
+    if separator and region in get_all_bedrock_regions():
         return region, model_id
     return None, stripped
 
@@ -865,20 +871,36 @@ def _openai_gpt_version(model: str) -> tuple[int, int] | None:
     return int(match.group(2)), int(match.group(3) or 0)
 
 
+def _bedrock_runtime_chat_completions_default_family(model: str) -> bool:
+    if _XAI_GROK_MODEL_RE.search(model) is not None:
+        return True
+    gpt_version: Final = _openai_gpt_version(model)
+    return gpt_version is not None and gpt_version >= _BEDROCK_RUNTIME_CHAT_COMPLETIONS_DEFAULT_SINCE
+
+
 def bedrock_runtime_chat_completions_is_default(model: str) -> bool:
     """Whether a model with no route prefix goes to bedrock-runtime's native Chat Completions by default.
 
-    GPT 5.6 and newer (``openai.gpt-<major>[.<minor>]`` at or above 5.6, which gpt-oss never matches) whose
-    price-map row lists ``/v1/chat/completions`` in ``supported_endpoints``. Older GPT rows, gpt-oss and Grok
-    stay on Converse unless the ``chat_completions/`` prefix opts them in.
+    Grok (``xai.grok-*``) and GPT 5.6 and newer (``openai.gpt-<major>[.<minor>]`` at or above 5.6, which
+    gpt-oss never matches) whose price-map row lists ``/v1/chat/completions`` in ``supported_endpoints``.
+    Older GPT rows and gpt-oss stay on Converse unless the ``chat_completions/`` prefix opts them in.
     """
-    version: Final = _openai_gpt_version(model)
-    if version is None or version < _BEDROCK_RUNTIME_CHAT_COMPLETIONS_DEFAULT_SINCE:
+    if not _bedrock_runtime_chat_completions_default_family(model):
         return False
     return any(
         _price_map_entry_lists_endpoint(entry, _BEDROCK_RUNTIME_CHAT_COMPLETIONS_ENDPOINT)
         for entry in _bedrock_price_map_entries(model)
     )
+
+
+def bedrock_rejects_stop_sequences(model: str) -> bool:
+    """Whether AWS refuses stop sequences for this model on every Bedrock route.
+
+    Grok and GPT 5.6 and newer answer ``stopSequences`` on Converse and ``stop`` on native Chat Completions
+    alike with ``This model doesn't support the stopSequences field`` (Grok 4.6 and 4.7, GPT 5.6 and GPT 6.1
+    checked live on 2026-10-09), so litellm drops ``stop`` for them instead of forwarding it to a 400.
+    """
+    return _bedrock_runtime_chat_completions_default_family(model)
 
 
 def bedrock_runtime_chat_completions_serves_tools_with_reasoning(model: str) -> bool:
@@ -904,6 +926,17 @@ def bedrock_runtime_chat_completions_enforces_response_format(model: str) -> boo
 def bedrock_model_is_openai_gpt(model: str) -> bool:
     """A GPT-5.x or GPT-6.x id, never GPT-OSS: the families whose sampling params AWS ties to reasoning being off."""
     return _openai_gpt_version(model) is not None
+
+
+def bedrock_runtime_chat_completions_serves_reasoning_inline(model: str) -> bool:
+    """Whether AWS's native Chat Completions writes this model's reasoning inline in the answer text.
+
+    Data-driven from the price-map ``supports_bedrock_runtime_chat_completions_inline_reasoning`` flag (gpt-oss).
+    A flagged model opens its answer with a ``<reasoning>...</reasoning>`` block instead of a
+    ``reasoning_content`` field, so litellm splits that block out for it and keeps every other model's
+    text as sent.
+    """
+    return _bedrock_price_map_flag(model, "supports_bedrock_runtime_chat_completions_inline_reasoning")
 
 
 BEDROCK_CONVERSE_ONLY_REQUEST_KEYS: Final = frozenset(
@@ -946,7 +979,9 @@ def bedrock_request_needs_converse(model: str, request_params: Mapping[str, obje
     AWS's native OpenAI surface, a ``model_id`` override (an application inference profile or provisioned
     throughput ARN) is only encoded into Converse's request URL and so stays on Converse like the
     ``bedrock/arn:...`` model form, ``stop`` stays on Converse where it fails loudly instead of silently
-    stopping hidden reasoning, operator-owned request metadata is only written onto the Converse body,
+    stopping hidden reasoning (except on models that reject stop sequences everywhere,
+    ``bedrock_rejects_stop_sequences``, where both routes drop it), operator-owned request metadata is only
+    written onto the Converse body,
     function tools (``tools`` or legacy ``functions``) on a model without
     ``supports_bedrock_runtime_chat_completions_tools_with_reasoning`` are rejected there unless
     ``reasoning_effort`` is exactly ``"none"``, and a ``response_format`` goes native only as
@@ -956,7 +991,12 @@ def bedrock_request_needs_converse(model: str, request_params: Mapping[str, obje
     handling everywhere, since AWS's native surface rejects that type with a 400 unless the prompt
     mentions json.
     """
-    if any(request_params.get(key) is not None for key in BEDROCK_CONVERSE_ONLY_REQUEST_KEYS):
+    converse_only_keys: Final = (
+        BEDROCK_CONVERSE_ONLY_REQUEST_KEYS - {"stop"}
+        if bedrock_rejects_stop_sequences(model)
+        else BEDROCK_CONVERSE_ONLY_REQUEST_KEYS
+    )
+    if any(request_params.get(key) is not None for key in converse_only_keys):
         return True
     if bedrock_request_metadata_is_owned():
         return True
@@ -1104,7 +1144,7 @@ def get_bedrock_base_model(model: str) -> str:
 
     if potential_region in get_bedrock_cross_region_inference_regions():
         return model.split(".", 1)[1]
-    elif alt_potential_region in _get_all_bedrock_regions() and len(model.split("/", 1)) > 1:
+    elif alt_potential_region in get_all_bedrock_regions() and len(model.split("/", 1)) > 1:
         return model.split("/", 1)[1]
 
     return model
@@ -1174,7 +1214,7 @@ def bedrock_supports_tool_search(model: str) -> bool:
     """
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-    return AnthropicModelInfo._supports_model_capability(model, "supports_tool_search", "bedrock")
+    return AnthropicModelInfo.supports_model_capability(model, "supports_tool_search", "bedrock")
 
 
 def is_claude_4_5_on_bedrock(model: str) -> bool:
@@ -1324,6 +1364,10 @@ class BedrockModelInfo(BaseLLMModelInfo):
     global_config = AmazonBedrockGlobalConfig()
     all_global_regions = global_config.get_all_regions()
 
+    def __init__(self, client: HTTPHandler | None = None) -> None:
+        super().__init__()
+        self._client: Final = client
+
     @staticmethod
     def get_api_base(api_base: str | None = None) -> str | None:
         """
@@ -1351,7 +1395,15 @@ class BedrockModelInfo(BaseLLMModelInfo):
         return headers
 
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
-        return []
+        return self.discover_models({"api_key": api_key})
+
+    def discover_models(
+        self, litellm_params: Mapping[str, object] | None = None
+    ) -> list[str]:  # mutable-ok: matches get_models' list[str] contract shared by every provider override
+        from litellm.llms.bedrock.model_listing import BedrockModelLister
+
+        client: Final = self._client if self._client is not None else litellm.module_level_client
+        return sorted(BedrockModelLister(deployment=litellm_params or {}, client=client).invocable_model_ids())
 
     # def get_provider_info(self, model: str) -> Optional[ProviderSpecificModelInfo]:
     #     """
@@ -1406,8 +1458,8 @@ class BedrockModelInfo(BaseLLMModelInfo):
         """
         Get the bedrock route for the given model.
 
-        GPT 5.6 and newer go to bedrock-runtime's native OpenAI Chat Completions by default
-        (``bedrock_runtime_chat_completions_is_default``) and ``chat_completions/`` opts any other model in;
+        Grok and GPT 5.6 and newer go to bedrock-runtime's native OpenAI Chat Completions by
+        default (``bedrock_runtime_chat_completions_is_default``) and ``chat_completions/`` opts any other model in;
         ``request_params`` (the caller's chat params) sends such a request to Converse when it needs a
         feature only Converse serves, and ``converse/`` pins a model to Converse. Every other OpenAI-family
         model stays on Converse without the prefix.
@@ -1691,6 +1743,9 @@ def get_bedrock_chat_config(model: str):
         return litellm.AmazonInvokeConfig()
 
 
+_BOTOCORE_SERVICE_DESCRIPTION: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+
 def _load_bedrock_response_stream_shape():
     """
     Load the ResponseStream shape from botocore's bundled bedrock-runtime schema.
@@ -1703,7 +1758,9 @@ def _load_bedrock_response_stream_shape():
         from botocore.model import ServiceModel
 
         loader: Final = Loader()
-        service_dict: Final = loader.load_service_model("bedrock-runtime", "service-2")
+        service_dict: Final = _BOTOCORE_SERVICE_DESCRIPTION.validate_python(
+            loader.load_service_model("bedrock-runtime", "service-2")
+        )
         return ServiceModel(service_dict).shape_for("ResponseStream")
     except Exception as e:
         verbose_logger.warning(
@@ -1824,6 +1881,7 @@ class BedrockEventStreamDecoderBase:
     """
 
     def __init__(self):
+        ensure_optional_import("botocore")
         from botocore.parsers import EventStreamJSONParser
 
         self.parser = EventStreamJSONParser()
@@ -1856,9 +1914,12 @@ class BedrockEventStreamDecoderBase:
             return chunk.decode()
 
 
+_JSON_VALUE: Final = TypeAdapter(object)
+
+
 def _decoded_json_value(raw: str) -> object:
     """Decode a JSON document into an opaque value for isinstance narrowing."""
-    return json.loads(raw)
+    return _JSON_VALUE.validate_python(json.loads(raw))
 
 
 def get_anthropic_beta_from_headers(headers: dict) -> list[str]:
@@ -2041,13 +2102,11 @@ class CommonBatchFilesUtils:
         Returns:
             Tuple of (signed_headers, signed_data)
         """
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        ensure_optional_import("botocore")
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
 
-        aws_region_name: Final = self._base_aws._get_aws_region_name(optional_params=optional_params, model="")
+        aws_region_name: Final = self._base_aws.get_aws_region_name(optional_params=optional_params, model="")
         credentials: Final = self._base_aws.resolve_credentials(
             AwsAuthParams.model_validate(optional_params), aws_region_name
         )
