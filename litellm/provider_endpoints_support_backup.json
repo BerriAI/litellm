@@ -120,6 +120,23 @@
         "interactions": true
       }
     },
+    "aiand": {
+      "display_name": "ai& (`aiand`)",
+      "url": "https://docs.aiand.com/api/chat-completions/",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "amazon_nova": {
       "display_name": "Amazon Nova (`amazon_nova`)",
       "url": "https://docs.litellm.ai/docs/providers/amazon_nova",
