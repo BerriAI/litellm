@@ -765,7 +765,7 @@ def test_validate_environment_uses_per_user_session_and_skips_authenticator():
     session = GithubCopilotUserSession(token="user-copilot-token", api_base="https://api.githubcopilot.com")
     headers = config.validate_environment(
         headers={},
-        model="github_copilot/gpt-5.1",
+        model="github_copilot/gpt-5.4",
         litellm_params={"github_copilot_user_session": session},
     )
     assert headers["Authorization"] == "Bearer user-copilot-token"
@@ -811,7 +811,7 @@ def test_transform_response_carries_upstream_usage():
             "object": "response",
             "created_at": 1,
             "status": "completed",
-            "model": "github_copilot/gpt-5.1",
+            "model": "github_copilot/gpt-5.4",
             "output": [
                 {
                     "type": "message",
@@ -825,7 +825,7 @@ def test_transform_response_carries_upstream_usage():
         },
     )
     result = config.transform_response_api_response(
-        model="github_copilot/gpt-5.1",
+        model="github_copilot/gpt-5.4",
         raw_response=raw,
         logging_obj=MagicMock(),
     )

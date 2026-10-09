@@ -500,7 +500,7 @@ class TestGithubCopilotTransformResponse:
             "id": "chatcmpl-123",
             "object": "chat.completion",
             "created": 1700000000,
-            "model": "github_copilot/claude-opus-4.5",
+            "model": "github_copilot/claude-opus-4.8",
             "choices": [
                 {
                     "index": 0,
@@ -519,7 +519,7 @@ class TestGithubCopilotTransformResponse:
         model_response = ModelResponse()
 
         result = config.transform_response(
-            model="github_copilot/claude-opus-4.5",
+            model="github_copilot/claude-opus-4.8",
             raw_response=raw_response,
             model_response=model_response,
             logging_obj=self._make_logging_obj(),

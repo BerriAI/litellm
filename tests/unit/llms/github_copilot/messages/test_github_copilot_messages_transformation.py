@@ -336,7 +336,7 @@ def test_validate_environment_uses_per_user_session_and_skips_authenticator():
     session = GithubCopilotUserSession(token="user-copilot-token", api_base="https://tenant.githubcopilot.com/")
     headers, api_base = config.validate_anthropic_messages_environment(
         headers={},
-        model="github_copilot/claude-sonnet-4.5",
+        model="github_copilot/claude-sonnet-5.5",
         messages=[],
         optional_params={},
         litellm_params={"github_copilot_user_session": session},
@@ -371,14 +371,14 @@ def test_transform_response_carries_upstream_usage():
             "id": "msg_1",
             "type": "message",
             "role": "assistant",
-            "model": "github_copilot/claude-sonnet-4.5",
+            "model": "github_copilot/claude-sonnet-5.5",
             "content": [{"type": "text", "text": "hi"}],
             "stop_reason": "end_turn",
             "usage": {"input_tokens": 14, "output_tokens": 3},
         },
     )
     result = config.transform_anthropic_messages_response(
-        model="github_copilot/claude-sonnet-4.5",
+        model="github_copilot/claude-sonnet-5.5",
         raw_response=raw,
         logging_obj=MagicMock(),
     )
