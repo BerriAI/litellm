@@ -120,6 +120,7 @@ function BuilderDocument({
         </div>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">{builder.verdictLine}</p>
       </header>
+      <BuilderAgentSpendPanel agents={builder.agents} />
       <div className="grid grid-cols-1 gap-4 rounded-xl border bg-card px-4 py-4 sm:grid-cols-3 sm:divide-x sm:gap-0">
         <div className="sm:pr-4">
           <DetailStat
@@ -145,10 +146,7 @@ function BuilderDocument({
       />
       <section className="grid gap-3">
         <h2 className="text-lg font-semibold">Evidence</h2>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <BuilderAgentSpendPanel title="Agent mix" agents={builder.agents} />
-          <ModelMix builder={builder} />
-        </div>
+        <ModelMix builder={builder} />
       </section>
     </div>
   );

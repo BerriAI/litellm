@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChartSkeleton, Stat } from "../overview/Primitives";
 import { formatCompactUsd } from "../overview/overviewData";
-import { BuilderAgentSpendPanel } from "./BuilderAgentSpendPanel";
 import { BuilderDetail } from "./BuilderDetail";
 import { BuilderInsightsDemoBanner } from "./BuilderInsightsDemoBanner";
 import { BuilderList } from "./BuilderList";
@@ -49,10 +48,7 @@ export default function BuilderInsights() {
       <div className="grid gap-3">
         <ChartSkeleton className="h-16" />
         <ChartSkeleton className="h-24" />
-        <div className="grid gap-3 lg:grid-cols-3">
-          <ChartSkeleton className="h-[42rem] lg:col-span-2" />
-          <ChartSkeleton className="h-[42rem]" />
-        </div>
+        <ChartSkeleton className="h-[42rem]" />
       </div>
     );
   }
@@ -70,7 +66,6 @@ export default function BuilderInsights() {
     },
   )}`;
   const snapshotLabel = `${dateMeta}, ${snapshotEnd.getFullYear()}`;
-  const allAgents = data.builders.flatMap((builder) => builder.agents);
 
   return (
     <div className="grid gap-3">
@@ -92,18 +87,13 @@ export default function BuilderInsights() {
               <Stat label="Median cost / PR" value={formatCompactUsd(data.teamMedianCostPerPr)} />
             </div>
           </div>
-          <div className="grid gap-3 lg:grid-cols-3">
-            <div className="lg:col-span-2">
-              <BuilderList
-                builders={data.builders}
-                selectedId={null}
-                sort={sort}
-                onSelect={selectBuilder}
-                onSortChange={setSort}
-              />
-            </div>
-            <BuilderAgentSpendPanel title="Agents" agents={allAgents} />
-          </div>
+          <BuilderList
+            builders={data.builders}
+            selectedId={null}
+            sort={sort}
+            onSelect={selectBuilder}
+            onSortChange={setSort}
+          />
         </>
       )}
       {selectedBuilder && (

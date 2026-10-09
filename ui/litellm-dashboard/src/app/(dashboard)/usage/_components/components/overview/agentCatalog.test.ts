@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { agentDailyData, agentRowFor, isUserAgentTag, topAgents, userAgentProduct, type TagSummaryRow } from "./agentCatalog";
+import {
+  agentDailyData,
+  agentRowFor,
+  isUserAgentTag,
+  topAgents,
+  userAgentProduct,
+  type TagSummaryRow,
+} from "./agentCatalog";
 import type { DailyData } from "@/components/UsagePage/types";
 
 const metric = (spend: number, tokens: number) => ({
@@ -43,16 +50,20 @@ describe("userAgentProduct", () => {
 
 describe("agentRowFor", () => {
   it("resolves builder agent ids to catalog metadata with empty usage metrics", () => {
-    expect(agentRowFor("codex")).toMatchObject({
+    const expectedCodex = {
       id: "codex",
       label: "Codex",
       kind: "agent",
       spend: 0,
       requests: 0,
       tokens: 0,
-    });
-    expect(agentRowFor("browser")).toMatchObject({ id: "browser", label: "Browser", kind: "sdk", logo: null });
-    expect(agentRowFor("unlabeled")).toMatchObject({ id: "unlabeled", label: "Unlabeled", kind: "sdk", logo: null });
+    };
+    const expectedBrowser = { id: "browser", label: "Browser", kind: "sdk", logo: null };
+    const expectedUnlabeled = { id: "unlabeled", label: "Unlabeled", kind: "sdk", logo: null };
+
+    expect(agentRowFor("codex")).toMatchObject(expectedCodex);
+    expect(agentRowFor("browser")).toMatchObject(expectedBrowser);
+    expect(agentRowFor("unlabeled")).toMatchObject(expectedUnlabeled);
   });
 });
 

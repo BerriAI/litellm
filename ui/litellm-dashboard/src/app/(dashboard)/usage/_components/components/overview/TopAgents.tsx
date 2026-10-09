@@ -60,7 +60,8 @@ function ClaudeSpark({ size }: { size: "sm" | "md" }) {
 
 function AgentGlyph({ agent, size }: { agent: AgentRow; size: "sm" | "md" }) {
   if (agent.id === "claude-code") return <ClaudeSpark size={size} />;
-  if (agent.logo) return <Logo src={agent.logo} label={agent.label} className={cn(size === "sm" ? "size-3.5" : "size-5")} />;
+  if (agent.logo)
+    return <Logo src={agent.logo} label={agent.label} className={cn(size === "sm" ? "size-3.5" : "size-5")} />;
   const monogram = MONOGRAMS[agent.id];
   if (monogram) {
     return (

@@ -65,9 +65,6 @@ describe("BuilderList", () => {
     expect(screen.getByText("Sample Builder")).toBeInTheDocument();
     expect(screen.getByText("Productive")).toBeInTheDocument();
     expect(screen.queryByText(/Routes requests through/)).not.toBeInTheDocument();
-    expect(screen.getByRole("button")).toHaveAttribute(
-      "title",
-      "Routes requests through codex workflows",
-    );
+    expect(screen.getByRole("button")).toHaveAttribute("title", "Routes requests through codex workflows");
   });
 });
