@@ -1,5 +1,6 @@
 import io
 import json
+import re
 import wave
 from collections.abc import Iterator
 from typing import Final
@@ -303,9 +304,9 @@ def test_transform_audio_transcription_response_matches_real_response_shape():
 @pytest.mark.parametrize(
     ("word", "expected"),
     [
-        ({"type": "word"}, [{"word": "", "start": 0, "end": 0}]),
-        ({"type": "word", "text": None, "start": None, "end": None}, [{"word": None, "start": None, "end": None}]),
-        ({"type": "word", "text": 7, "start": "0.1", "end": [2]}, [{"word": 7, "start": "0.1", "end": [2]}]),
+        ({"type": "word"}, [{"word": "", "start": 0.0, "end": 0.0}]),
+        ({"type": "word", "text": None, "start": None, "end": None}, [{"word": None, "start": 0.0, "end": 0.0}]),
+        ({"type": "word", "text": 7, "start": "0.1", "end": [2]}, [{"word": 7, "start": 0.0, "end": 0.0}]),
         ({"text": "untyped"}, []),
         ({"type": None, "text": "untyped"}, []),
         ({}, []),
@@ -314,7 +315,10 @@ def test_transform_audio_transcription_response_matches_real_response_shape():
 def test_transform_audio_transcription_response_maps_one_word(
     word: dict[str, object], expected: list[dict[str, object]]
 ):
-    assert _transform({"text": "t", "words": [word]})["words"] == expected
+    words: Final = _transform({"text": "t", "words": [word]})["words"]
+
+    assert words == expected
+    assert all(isinstance(w[key], float) for w in words for key in ("start", "end"))
 
 
 @pytest.mark.parametrize("words", [[], "", {}])
@@ -396,6 +400,192 @@ def test_transcription_cost_uses_the_duration_in_the_elevenlabs_response(
 
     assert response["duration"] == billed_seconds
     assert response._hidden_params["response_cost"] == pytest.approx(billed_seconds * rate)
+
+
+RESPONSE_FORMATS: Final = ("json", "text", "verbose_json", "srt", "vtt")
+SUBTITLE_FORMATS: Final = ("srt", "vtt")
+NATIVE_FORMATS: Final = ("json", "text", "verbose_json")
+SPOKEN_BODY: Final = {
+    "language_code": "eng",
+    "language_probability": 0.97,
+    "text": "Four score (applause) again",
+    "audio_duration_secs": 11.0,
+    "words": [
+        {"text": "Four", "start": 0.44, "end": 0.7, "type": "word", "speaker_id": "speaker_0", "logprob": -0.1},
+        {"text": " ", "start": 0.7, "end": 0.82, "type": "spacing"},
+        {"text": "score", "start": 0.82, "end": 1.12, "type": "word", "speaker_id": "speaker_0", "logprob": -0.2},
+        {"text": "(applause)", "start": 1.2, "end": 2.0, "type": "audio_event"},
+        {"text": "again", "start": 6.0, "end": 6.5, "type": "word", "speaker_id": "speaker_0", "logprob": -0.3},
+    ],
+}
+
+
+def _form_values(request: httpx.Request) -> dict[str, bytes]:
+    boundary: Final = request.headers["content-type"].split("boundary=")[1].encode()
+    parts: Final = request.content.split(b"--" + boundary)
+    return {
+        match.group(1).decode(): match.group(2)
+        for part in parts
+        if (match := re.search(rb'name="([^"]+)"\r\n\r\n(.*)\r\n$', part, re.S)) and b"filename=" not in part
+    }
+
+
+def _transcribe(
+    respx_mock: respx.MockRouter, body: bytes, **params: object
+) -> tuple[TranscriptionResponse, dict[str, bytes]]:
+    api_base: Final = "http://localhost:12346"
+    route: Final = respx_mock.post(f"{api_base}/v1/speech-to-text").mock(
+        return_value=httpx.Response(200, content=body, headers={"content-type": "application/json"})
+    )
+    response: Final = litellm.transcription(
+        model="elevenlabs/scribe_v2",
+        file=("a.wav", _silent_wav(1)),
+        api_base=api_base,
+        api_key=ELEVENLABS_API_KEY,
+        **params,
+    )
+    return response, _form_values(route.calls.last.request)
+
+
+def _transcribe_spoken_body(
+    respx_mock: respx.MockRouter, **params: object
+) -> tuple[TranscriptionResponse, dict[str, bytes]]:
+    return _transcribe(respx_mock, json.dumps(SPOKEN_BODY).encode(), **params)
+
+
+@pytest.mark.parametrize("response_format", RESPONSE_FORMATS)
+def test_elevenlabs_transcription_accepts_response_format_without_drop_params(
+    response_format: str, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    optional_params: Final = litellm.utils.get_optional_params_transcription(
+        model="scribe_v2", custom_llm_provider="elevenlabs", response_format=response_format
+    )
+
+    assert optional_params["response_format"] == response_format
+
+
+@pytest.mark.parametrize("response_format", RESPONSE_FORMATS)
+def test_transform_audio_transcription_request_form_is_unchanged_by_response_format(response_format: str):
+    config: Final = ElevenLabsAudioTranscriptionConfig()
+    audio: Final = ("a.wav", b"fake audio data")
+    base_params: Final = {"language_code": "es", "temperature": 0.5, "diarize": True, "tag_audio_events": False}
+
+    without: Final = config.transform_audio_transcription_request(
+        model="scribe_v2", audio_file=audio, optional_params=dict(base_params), litellm_params={}
+    )
+    with_format: Final = config.transform_audio_transcription_request(
+        model="scribe_v2",
+        audio_file=audio,
+        optional_params={**base_params, "response_format": response_format},
+        litellm_params={},
+    )
+
+    assert with_format.data == without.data
+    assert without.data["diarize"] == "True" and without.data["temperature"] == "0.5"
+    assert response_format not in with_format.data.values()
+    assert "response_format" not in with_format.data
+
+
+@pytest.mark.parametrize("response_format", SUBTITLE_FORMATS)
+def test_elevenlabs_transcription_returns_subtitle_document_built_from_the_spoken_words(
+    response_format: str, respx_mock: respx.MockRouter
+):
+    response, form = _transcribe_spoken_body(respx_mock, response_format=response_format, language="es")
+
+    _, form_without_format = _transcribe_spoken_body(respx_mock, language="es")
+    assert form == form_without_format
+    assert form["language_code"] == b"es"
+    separator: Final = "," if response_format == "srt" else "."
+    cues: Final = re.findall(r"^(\d{2}:\d{2}:\d{2}[,.]\d{3}) --> (\d{2}:\d{2}:\d{2}[,.]\d{3})$", response.text, re.M)
+    assert [start for start, _ in cues] == [f"00:00:00{separator}440", f"00:00:06{separator}000"]
+    assert [end for _, end in cues] == [f"00:00:01{separator}120", f"00:00:06{separator}500"]
+    assert "Four score" in response.text and "again" in response.text
+    assert (response_format == "vtt") == response.text.startswith("WEBVTT")
+    assert response.text != SPOKEN_BODY["text"]
+
+
+@pytest.mark.parametrize("response_format", NATIVE_FORMATS)
+def test_elevenlabs_transcription_keeps_native_text_and_metadata_for_non_subtitle_formats(
+    response_format: str, respx_mock: respx.MockRouter
+):
+    response, form = _transcribe_spoken_body(respx_mock, response_format=response_format, temperature=0.5)
+
+    _, form_without_format = _transcribe_spoken_body(respx_mock, temperature=0.5)
+    assert form == form_without_format
+    assert form["temperature"] == b"0.5"
+    assert response.text == SPOKEN_BODY["text"]
+    assert [w["word"] for w in response["words"]] == ["Four", "score", "again"]
+    assert response["words"][0]["speaker"] == "speaker_0"
+    assert response["audio_events"] == [{"text": "(applause)", "start": 1.2, "end": 2.0}]
+    assert response["duration"] == SPOKEN_BODY["audio_duration_secs"]
+
+
+PASSING_TIMESTAMPS: Final = (("0", 0.0), ("2", 2.0), ("0.44", 0.44), ("6.5", 6.5), ("1e300", 1e300))
+UNUSABLE_TIMESTAMPS: Final = ("NaN", "Infinity", "-Infinity", "1e308", "-0.5", "true", "false", '"0.1"', "[2]", "null")
+
+
+def _item_body(item_type: str, start: str, end: str) -> bytes:
+    return b'{"words": [{"type": "%s", "text": "x", "start": %s, "end": %s}]}' % (
+        item_type.encode(),
+        start.encode(),
+        end.encode(),
+    )
+
+
+def _timed_item(response: TranscriptionResponse, item_type: str) -> dict[str, object]:
+    return response["words" if item_type == "word" else "audio_events"][0]
+
+
+@pytest.mark.parametrize("item_type", ["word", "audio_event"])
+@pytest.mark.parametrize(("literal", "expected"), PASSING_TIMESTAMPS)
+def test_transform_audio_transcription_response_passes_usable_start_and_end_through_as_float(
+    item_type: str, literal: str, expected: float
+):
+    item: Final = _timed_item(_transform_raw(_item_body(item_type, literal, literal)), item_type)
+
+    assert item["start"] == expected and item["end"] == expected
+    assert isinstance(item["start"], float) and isinstance(item["end"], float)
+
+
+@pytest.mark.parametrize("item_type", ["word", "audio_event"])
+@pytest.mark.parametrize("literal", UNUSABLE_TIMESTAMPS)
+def test_transform_audio_transcription_response_zeroes_unusable_start_and_end(item_type: str, literal: str):
+    item: Final = _timed_item(_transform_raw(_item_body(item_type, literal, literal)), item_type)
+
+    assert item["start"] == 0.0 and item["end"] == 0.0
+    assert isinstance(item["start"], float) and isinstance(item["end"], float)
+
+
+@pytest.mark.parametrize("item_type", ["word", "audio_event"])
+def test_transform_audio_transcription_response_zeroes_absent_start_and_end_and_keeps_the_other(item_type: str):
+    body: Final = b'{"words": [{"type": "%s", "text": "x", "end": 3}]}' % item_type.encode()
+
+    item: Final = _timed_item(_transform_raw(body), item_type)
+
+    assert item["start"] == 0.0 and isinstance(item["start"], float)
+    assert item["end"] == 3.0 and isinstance(item["end"], float)
+
+
+@pytest.mark.parametrize("response_format", SUBTITLE_FORMATS)
+@pytest.mark.parametrize("literal", ["Infinity", "NaN", "1e308", "-Infinity"])
+def test_elevenlabs_transcription_subtitles_survive_unusable_word_timestamps(
+    response_format: str, literal: str, respx_mock: respx.MockRouter
+):
+    word: Final = '{"type": "word", "text": "%s", "start": %s, "end": %s}'
+    body: Final = (
+        '{"text": "Four score", "words": [%s, %s]}'
+        % (word % ("Four", literal, literal), word % ("score", "1.0", literal))
+    ).encode()
+
+    response, _ = _transcribe(respx_mock, body, response_format=response_format)
+
+    separator: Final = "," if response_format == "srt" else "."
+    assert response.text != "Four score"
+    assert f"00:00:00{separator}000 --> " in response.text
+    assert "Four" in response.text and "score" in response.text
+    assert (response_format == "vtt") == response.text.startswith("WEBVTT")
 
 
 class TestElevenLabsAudioTranscription:

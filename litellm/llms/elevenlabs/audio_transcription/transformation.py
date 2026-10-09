@@ -27,6 +27,7 @@ from ..common_utils import ElevenLabsException
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_FORM_OPENAI_PARAMS: Final = frozenset({"language", "temperature"})
 
 
 def _finite_float(value: object) -> float | None:
@@ -39,6 +40,13 @@ def _finite_float(value: object) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def _timestamp(value: object) -> float:
+    seconds: Final = _finite_float(value)
+    if seconds is None or seconds < 0 or _finite_float(seconds * 1000) is None:
+        return 0.0
+    return seconds
+
+
 def _speaker_fields(item: Mapping[str, object]) -> Mapping[str, str]:
     speaker: Final = item.get("speaker_id")
     return {"speaker": speaker} if isinstance(speaker, str) else {}
@@ -48,8 +56,8 @@ def _word_fields(item: Mapping[str, object]) -> Mapping[str, object]:
     logprob: Final = _finite_float(item.get("logprob"))
     return {
         "word": item.get("text", ""),
-        "start": item.get("start", 0),
-        "end": item.get("end", 0),
+        "start": _timestamp(item.get("start")),
+        "end": _timestamp(item.get("end")),
         **({} if logprob is None else {"logprob": logprob}),
         **_speaker_fields(item),
     }
@@ -58,8 +66,8 @@ def _word_fields(item: Mapping[str, object]) -> Mapping[str, object]:
 def _audio_event_fields(item: Mapping[str, object]) -> Mapping[str, object]:
     return {
         "text": item.get("text", ""),
-        "start": item.get("start", 0),
-        "end": item.get("end", 0),
+        "start": _timestamp(item.get("start")),
+        "end": _timestamp(item.get("end")),
         **_speaker_fields(item),
     }
 
@@ -70,7 +78,11 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         return litellm.LlmProviders.ELEVENLABS.value
 
     def get_supported_openai_params(self, model: str) -> list[OpenAIAudioTranscriptionOptionalParams]:
-        return ["language", "temperature"]
+        return ["language", "temperature", "response_format"]
+
+    @property
+    def supports_subtitle_synthesis(self) -> bool:
+        return True
 
     def map_openai_params(
         self,
@@ -118,7 +130,7 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         # Add OpenAI Compatible Parameters
         #########################################################
         for key, value in optional_params.items():
-            if key in self.get_supported_openai_params(model) and value is not None:
+            if key in _FORM_OPENAI_PARAMS and value is not None:
                 # Convert values to strings for form data, but skip None values
                 form_data[key] = str(value)
 
