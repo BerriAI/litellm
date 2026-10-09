@@ -1469,6 +1469,26 @@ class TestCredentialDisplayName:
         repository.update_by_name.assert_not_awaited()
         assert litellm.credential_list == [_labeled_credential()]
 
+    def test_patch_stores_the_trimmed_display_name(self, restore_credential_list, monkeypatch):
+        monkeypatch.setattr(litellm, "credential_list", [_labeled_credential()])
+        with _repository_holding(_labeled_credential()) as repository:
+            response = _patch_credential("openai-prod", {"display_name": "  Staging OpenAI  ", "credential_info": {}})
+
+        assert response.status_code == 200, response.text
+        assert repository.update_by_name.await_args.kwargs["data"]["display_name"] == "Staging OpenAI"
+        assert litellm.credential_list[0].display_name == "Staging OpenAI"
+
+    def test_patch_treats_an_empty_credential_name_as_omitted(self, restore_credential_list, monkeypatch):
+        monkeypatch.setattr(litellm, "credential_list", [_labeled_credential()])
+        with _repository_holding(_labeled_credential()) as repository:
+            response = _patch_credential(
+                "openai-prod", {"credential_name": "", "display_name": "Staging OpenAI", "credential_info": {}}
+            )
+
+        assert response.status_code == 200, response.text
+        assert repository.update_by_name.await_args.args[0] == "openai-prod"
+        assert repository.update_by_name.await_args.kwargs["data"]["credential_name"] == "openai-prod"
+
     def test_patch_rejects_a_different_credential_name_and_changes_nothing(self, restore_credential_list, monkeypatch):
         monkeypatch.setattr(litellm, "credential_list", [_labeled_credential()])
         with _repository_holding(_labeled_credential()) as repository:
@@ -1516,6 +1536,21 @@ class TestCredentialDisplayName:
             response = _patch_credential("nowhere", {"display_name": "Prod", "credential_info": {}})
 
         assert response.status_code == 404, response.text
+
+    @pytest.mark.parametrize("method", ["PATCH", "DELETE"])
+    def test_a_db_credential_already_gone_from_the_db_answers_404_not_config_owned(
+        self, restore_credential_list, monkeypatch, method
+    ):
+        monkeypatch.setattr(litellm, "credential_list", [_labeled_credential()])
+        with _repository_holding(None) as repository:
+            response = (
+                _patch_credential("openai-prod", {"display_name": "Prod", "credential_info": {}})
+                if method == "PATCH"
+                else _delete_credential("openai-prod")
+            )
+
+        assert response.status_code == 404, response.text
+        repository.update_by_name.assert_not_awaited()
 
     def test_patch_on_a_name_stored_in_the_db_and_config_applies_to_the_row(self, restore_credential_list, monkeypatch):
         monkeypatch.setattr(litellm, "credential_list", [_labeled_credential(display_name=None)])

@@ -544,7 +544,7 @@ async def update_credential(
     from litellm.proxy.proxy_server import prisma_client
 
     try:
-        if credential.credential_name is not None and credential.credential_name != credential_name:
+        if credential.credential_name and credential.credential_name != credential_name:
             raise ProxyException(
                 message="credential_name is immutable. Set display_name to change how the credential is labeled.",
                 type=ProxyErrorTypes.validation_error.value,

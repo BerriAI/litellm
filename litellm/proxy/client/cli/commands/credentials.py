@@ -138,7 +138,7 @@ def update(ctx: click.Context, credential_name: str, display_name: str | None, c
     context: Final = cli_context_values(ctx)
     client: Final = CredentialsManagementClient(context["base_url"], context["api_key"])
     try:
-        response: Final = client.update_display_name(credential_name, None if clear_display_name else display_name)
+        response: Final = client.update_display_name(credential_name, display_name)
         _print_json(response)
     except requests.exceptions.HTTPError as e:
         click.echo(f"Error: HTTP {e.response.status_code}", err=True)
