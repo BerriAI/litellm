@@ -166,3 +166,74 @@ async def test_llm_guard_skips_unsupported_call_types(
     )
     assert result is data
     assert data == {"messages": [{"role": "user", "content": "unchanged"}]}
+
+
+@pytest.mark.asyncio
+async def test_llm_guard_sanitizes_multimodal_and_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "llm_guard_mode", "all")
+    llm_guard: Final = _ENTERPRISE_LLMGuard(
+        mock_testing=True,
+        mock_redacted_text={
+            "sanitized_prompt": "email: [REDACTED]",
+            "is_valid": True,
+            "scanners": {"Regex": 0.0},
+        },
+    )
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=hash_token("sk-98765"))
+
+    image_part: Final = {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}
+    data: Final = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "email: person@example.com"},
+                    image_part,
+                ],
+            }
+        ]
+    }
+    result: Final = await llm_guard.async_moderation_hook(
+        data=data, user_api_key_dict=user_api_key_dict, call_type="completion"
+    )
+    assert result["messages"][0]["content"][0]["text"] == "email: [REDACTED]"
+    assert result["messages"][0]["content"][1] == image_part
+
+    input_data: Final = {"input": ["email: person@example.com", "another prompt"]}
+    input_result: Final = await llm_guard.async_moderation_hook(
+        data=input_data, user_api_key_dict=user_api_key_dict, call_type="embeddings"
+    )
+    assert input_result["input"] == ["email: [REDACTED]", "email: [REDACTED]"]
+
+
+def test_llm_guard_key_specific_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "llm_guard_mode", "key-specific")
+
+    llm_guard: Final = _ENTERPRISE_LLMGuard(mock_testing=True)
+
+    _api_key: Final = "sk-98765"
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        api_key=_api_key,
+    )
+
+    assert llm_guard.should_proceed(user_api_key_dict=user_api_key_dict, data={}) == False
+
+    permitted_key: Final = UserAPIKeyAuth(api_key=_api_key, permissions={"enable_llm_guard_check": True})
+    assert llm_guard.should_proceed(user_api_key_dict=permitted_key, data={}) == True
+
+
+def test_llm_guard_request_specific_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "llm_guard_mode", "request-specific")
+
+    llm_guard: Final = _ENTERPRISE_LLMGuard(mock_testing=True)
+
+    _api_key: Final = "sk-98765"
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        api_key=_api_key,
+    )
+
+    assert llm_guard.should_proceed(user_api_key_dict=user_api_key_dict, data={}) == False
+
+    permitted_key: Final = UserAPIKeyAuth(api_key=_api_key, permissions={"enable_llm_guard_check": True})
+    permitted_request: Final = {"metadata": {"permissions": {"enable_llm_guard_check": True}}}
+    assert llm_guard.should_proceed(user_api_key_dict=permitted_key, data=permitted_request) == True
