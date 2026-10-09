@@ -11,7 +11,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
-import { SearchSelect } from "@/components/shared/SearchSelect";
+import { SearchSelect, SearchSelectOption } from "@/components/shared/SearchSelect";
 import React, { useEffect, useRef, useState } from "react";
 import { hasCapability } from "../../utils/capabilities";
 import { isProxyAdminRole, rolesWithWriteAccess } from "../../utils/roles";
@@ -359,6 +359,14 @@ export function KeyEditView({
   const visibleTeams = selectedOrganizationId
     ? teams?.filter((t) => t.organization_id === selectedOrganizationId)
     : teams;
+
+  const teamOptionsFor = (selectedTeamId: string | null): SearchSelectOption[] => {
+    const selectedTeamOutsideFilter = teams?.find((t) => t.team_id === selectedTeamId && !visibleTeams?.includes(t));
+    return [...(selectedTeamOutsideFilter ? [selectedTeamOutsideFilter] : []), ...(visibleTeams ?? [])].map(
+      ({ team_id, team_alias }: { team_id: string; team_alias?: string | null }) =>
+        team_alias ? { label: team_alias, value: team_id, sublabel: team_id } : { label: team_id, value: team_id },
+    );
+  };
 
   return (
     <TooltipProvider>
@@ -801,15 +809,7 @@ export function KeyEditView({
           >
             {({ value, onChange, id }) => (
               <SearchSelect
-                options={[
-                  ...(teams
-                    ?.filter(
-                      (t) =>
-                        t.team_id === value && !visibleTeams?.some((visibleTeam) => visibleTeam.team_id === t.team_id),
-                    )
-                    .slice(0, 1) ?? []),
-                  ...(visibleTeams ?? []),
-                ].map(({ team_id: id, team_alias }) => ({ label: team_alias || id, value: id, sublabel: id }))}
+                options={teamOptionsFor((value as string | null) ?? null)}
                 value={(value as string | null) ?? null}
                 onValueChange={(teamId) => handleTeamChange(onChange, teamId)}
                 disabled={hasProject}

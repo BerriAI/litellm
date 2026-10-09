@@ -2475,6 +2475,25 @@ describe("KeyEditView", () => {
       expect(betaOption).toHaveTextContent("team-2");
     });
 
+    it("shows a team without an alias by its ID once", async () => {
+      renderWithProviders(
+        <KeyEditView
+          keyData={{ ...MOCK_KEY_DATA, team_id: null }}
+          teams={[{ team_id: "team-3", team_alias: null }]}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken=""
+          userID=""
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await userEvent.click(screen.getByRole("combobox", { name: "Team" }));
+
+      expect(await screen.findByRole("option")).toHaveTextContent(/^team-3$/);
+    });
+
     it("clears the team in the update payload", async () => {
       const onSubmitMock = vi.fn().mockResolvedValue(undefined);
       renderWithProviders(
