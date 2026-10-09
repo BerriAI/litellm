@@ -8,7 +8,7 @@ import math
 import time
 from contextlib import asynccontextmanager
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -28,6 +28,23 @@ from tests.unit.proxy.db.fake_prisma_engine import engine_call
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup_metrics import (
     SpendLogCleanupMetrics,
 )
+
+
+class _FrozenDatetime(datetime):
+    @classmethod
+    def now(cls, tz: tzinfo | None = None) -> "_FrozenDatetime":
+        return _FROZEN_NOW.astimezone(tz) if tz else _FROZEN_NOW.replace(tzinfo=None)
+
+
+_FROZEN_NOW: Final = _FrozenDatetime(2026, 3, 14, 0, 0, 0, 500000, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def frozen_now(monkeypatch: pytest.MonkeyPatch) -> datetime:
+    import litellm.proxy.db.db_transaction_queue.spend_log_cleanup as cleanup_module
+
+    monkeypatch.setattr(cleanup_module, "datetime", _FrozenDatetime)
+    return _FROZEN_NOW
 
 
 def _far_deadline() -> float:
@@ -262,7 +279,7 @@ async def test_cleanup_old_spend_logs_batch_deletion():
 
 
 @pytest.mark.asyncio
-async def test_cleanup_old_spend_logs_retention_period_cutoff():
+async def test_cleanup_old_spend_logs_retention_period_cutoff(frozen_now: datetime):
     """
     Test that logs are filtered using correct cutoff based on retention
     """
@@ -290,10 +307,7 @@ async def test_cleanup_old_spend_logs_retention_period_cutoff():
 
     # Verify the cutoff date is correct
     cutoff_date = mock_db.execute_raw.call_args[0][1]
-    expected_cutoff = datetime.now(timezone.utc) - timedelta(seconds=86400)
-    assert (
-        abs((cutoff_date - expected_cutoff).total_seconds()) < 1
-    )  # Allow 1 second difference for test execution time
+    assert cutoff_date == frozen_now - timedelta(seconds=86400)
 
 
 @pytest.mark.asyncio
@@ -818,7 +832,7 @@ async def test_session_retention_alone_cleans_both_session_rollups_and_the_daily
 
 
 @pytest.mark.asyncio
-async def test_health_check_retention_alone_cleans_only_the_health_check_table():
+async def test_health_check_retention_alone_cleans_only_the_health_check_table(frozen_now: datetime):
     client = _mock_prisma_for_retention([0])
     cleaner = SpendLogCleanup(general_settings={"maximum_health_check_retention_period": "30d"})
     cleaner.pod_lock_manager = None
@@ -829,12 +843,11 @@ async def test_health_check_retention_alone_cleans_only_the_health_check_table()
     assert '"health_check_id"' in tables[0]
     assert '"checked_at"' in tables[0]
     cutoff_date = client.db.execute_raw.call_args[0][1]
-    expected_cutoff = datetime.now(timezone.utc) - timedelta(days=30)
-    assert abs((cutoff_date - expected_cutoff).total_seconds()) < 1
+    assert cutoff_date == frozen_now - timedelta(days=30)
 
 
 @pytest.mark.asyncio
-async def test_daily_tag_spend_retention_alone_prunes_only_that_table_by_calendar_day():
+async def test_daily_tag_spend_retention_alone_prunes_only_that_table_by_calendar_day(frozen_now: datetime):
     client = _mock_prisma_for_retention([0])
     cleaner = SpendLogCleanup(general_settings={"maximum_daily_tag_spend_retention_period": "90d"})
     cleaner.pod_lock_manager = None
@@ -843,7 +856,7 @@ async def test_daily_tag_spend_retention_alone_prunes_only_that_table_by_calenda
     assert len(tables) == 1
     assert '"LiteLLM_DailyTagSpend"' in tables[0]
     cutoff_day = client.db.execute_raw.call_args[0][1]
-    assert cutoff_day == (datetime.now(timezone.utc) - timedelta(days=90)).date().isoformat()
+    assert cutoff_day == (frozen_now - timedelta(days=90)).date().isoformat()
 
 
 @pytest.mark.asyncio
@@ -857,7 +870,7 @@ async def test_spend_logs_retention_alone_keeps_daily_tag_spend_forever():
 
 
 @pytest.mark.asyncio
-async def test_each_retention_key_cuts_off_at_its_own_horizon():
+async def test_each_retention_key_cuts_off_at_its_own_horizon(frozen_now: datetime):
     client = _mock_prisma_for_retention([0, 0, 0, 0, 0, 0])
     cleaner = SpendLogCleanup(
         general_settings={
@@ -882,12 +895,11 @@ async def test_each_retention_key_cuts_off_at_its_own_horizon():
         ): call[0][1]
         for call in client.db.execute_raw.call_args_list
     }
-    now = datetime.now(timezone.utc)
-    assert (now - cutoffs["logs"]).days == 7
-    assert (now - cutoffs["LiteLLM_AutoRouterSession"]).days == 365
+    assert cutoffs["logs"] == frozen_now - timedelta(days=7)
+    assert cutoffs["LiteLLM_AutoRouterSession"] == frozen_now - timedelta(days=365)
     assert cutoffs["LiteLLM_AutoRouterUserSession"] == cutoffs["LiteLLM_AutoRouterSession"]
     assert cutoffs["LiteLLM_AutoRouterDailySpend"] == cutoffs["LiteLLM_AutoRouterSession"].date().isoformat()
-    assert (now - cutoffs["LiteLLM_HealthCheckTable"]).days == 30
+    assert cutoffs["LiteLLM_HealthCheckTable"] == frozen_now - timedelta(days=30)
 
 
 @pytest.mark.asyncio
