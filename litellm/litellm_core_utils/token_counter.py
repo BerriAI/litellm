@@ -425,6 +425,27 @@ def token_counter(
     return num_tokens
 
 
+def count_cl100k_prompt_text(
+    system: Optional[Any] = None,
+    messages: Optional[List] = None,
+    framing: int = 0,
+) -> int:
+    texts: List[str] = []
+    if isinstance(system, str) and system:
+        texts.append(system)
+    for message in messages or []:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if isinstance(content, str) and content:
+            texts.append(content)
+    encoder = tiktoken.get_encoding("cl100k_base")
+    return (
+        sum(len(encoder.encode(text, disallowed_special=())) for text in texts)
+        + framing
+    )
+
+
 def _count_messages(
     params: _MessageCountParams,
     messages: List[AllMessageValues],

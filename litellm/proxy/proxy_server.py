@@ -8517,12 +8517,24 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     )
 
     tokenizer_used = str(_tokenizer_used["type"])
-    total_tokens = token_counter(
-        model=model_to_use,
-        text=prompt,
-        messages=messages,
-        custom_tokenizer=_tokenizer_used,  # type: ignore
-    )
+    from litellm.litellm_core_utils.token_counter import count_cl100k_prompt_text
+    from litellm.utils import get_token_count_framing
+
+    framing = get_token_count_framing(model_to_use)
+    if framing is not None:
+        total_tokens = count_cl100k_prompt_text(
+            system=system,
+            messages=messages,
+            framing=framing,
+        )
+        tokenizer_used = "cl100k_base"
+    else:
+        total_tokens = token_counter(
+            model=model_to_use,
+            text=prompt,
+            messages=messages,
+            custom_tokenizer=_tokenizer_used,  # type: ignore
+        )
     return TokenCountResponse(
         total_tokens=total_tokens,
         request_model=request.model,

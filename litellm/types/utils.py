@@ -244,6 +244,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     tpm: Optional[int]
     rpm: Optional[int]
     provider_specific_entry: Optional[Dict[str, float]]
+    token_count_framing: Optional[int]
 
 
 class ModelInfo(ModelInfoBase, total=False):

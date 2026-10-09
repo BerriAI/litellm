@@ -9,6 +9,7 @@ from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_base_model
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from litellm.types.utils import LlmProviders, TokenCountResponse
+from litellm.utils import get_token_count_framing
 
 
 class BedrockTokenCounter(BaseTokenCounter):
@@ -51,6 +52,17 @@ class BedrockTokenCounter(BaseTokenCounter):
         """
         if not messages:
             return None
+
+        if get_token_count_framing(model_to_use) is not None:
+            return TokenCountResponse(
+                total_tokens=0,
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type="bedrock_api",
+                error=True,
+                error_message="Use local framed token count",
+                status_code=501,
+            )
 
         deployment = deployment or {}
         litellm_params = deployment.get("litellm_params", {})

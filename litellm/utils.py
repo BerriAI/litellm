@@ -2659,6 +2659,32 @@ def supports_reasoning(model: str, custom_llm_provider: Optional[str] = None) ->
     )
 
 
+def get_token_count_framing(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> Optional[int]:
+    try:
+        info = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        framing = info.get("token_count_framing")
+        if not isinstance(framing, bool) and isinstance(framing, (int, float)):
+            return int(framing)
+    except Exception:
+        pass
+    names = {model}
+    if "/" in model:
+        names.add(model.split("/", 1)[1])
+        names.add(model.rsplit("/", 1)[-1])
+    cost_map = getattr(litellm, "model_cost", None) or {}
+    for name in names:
+        entry = cost_map.get(name)
+        if not isinstance(entry, dict):
+            continue
+        framing = entry.get("token_count_framing")
+        if isinstance(framing, bool) or not isinstance(framing, (int, float)):
+            continue
+        return int(framing)
+    return None
+
+
 def get_supported_regions(
     model: str, custom_llm_provider: Optional[str] = None
 ) -> Optional[List[str]]:
@@ -5751,6 +5777,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                 provider_specific_entry=_model_info.get(
                     "provider_specific_entry", None
                 ),
+                token_count_framing=_model_info.get("token_count_framing", None),
             )
     except Exception as e:
         verbose_logger.debug(f"Error getting model info: {e}")

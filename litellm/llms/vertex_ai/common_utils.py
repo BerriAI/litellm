@@ -1060,6 +1060,7 @@ class VertexAITokenCounter(BaseTokenCounter):
         import copy
 
         from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+            PartnerModelPrefixes,
             VertexAIPartnerModels,
         )
 
@@ -1070,6 +1071,16 @@ class VertexAITokenCounter(BaseTokenCounter):
 
         # Check if this is a partner model (Claude, Mistral, etc.)
         if VertexAIPartnerModels.is_vertex_partner_model(model_to_use):
+            if PartnerModelPrefixes.ZAI_PREFIX in model_to_use:
+                return TokenCountResponse(
+                    total_tokens=0,
+                    request_model=request_model,
+                    model_used=model_to_use,
+                    tokenizer_type="vertex_ai_partner_models",
+                    error=True,
+                    error_message="Z.ai has no Vertex count-tokens publisher",
+                    status_code=501,
+                )
             # Use partner models token counter
             partner_models_handler = VertexAIPartnerModels()
 
