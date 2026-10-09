@@ -81,27 +81,39 @@ def test_delegated_token_contains_only_authenticated_identity(connection: Connec
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("lookup_fails", (False, True), ids=("permitted_teams", "own_user_fallback"))
-async def test_delegated_scope_follows_gateway_log_permissions(lookup_fails: bool) -> None:
-    async def teams(auth: UserAPIKeyAuth) -> tuple[str, ...]:
-        if lookup_fails:
-            raise RuntimeError("Permission lookup unavailable")
-        return ("permitted-team",)
-
+@pytest.mark.parametrize(
+    "role",
+    (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+        None,
+    ),
+    ids=("admin", "admin_viewer", "user", "user_viewer", "default_user"),
+)
+async def test_delegated_identity_preserves_authenticated_lens_scope_without_log_permissions(
+    role: LitellmUserRoles | None,
+) -> None:
     identity: Final = await delegated_identity(
         UserAPIKeyAuth(
-            user_role=LitellmUserRoles.INTERNAL_USER,
+            user_role=role,
             user_id="user",
             team_id="credential-team",
+            org_id="org",
             token="token-hash",
             models=["model"],
         ),
-        teams,
     )
-    assert identity.user_id == "user"
-    assert identity.team_id == "credential-team"
-    assert identity.log_team_ids == (() if lookup_fails else ("permitted-team",))
-    assert identity.models == ("model",)
+    assert identity == Identity(
+        user_role=role or LitellmUserRoles.INTERNAL_USER,
+        user_id="user",
+        team_id="credential-team",
+        org_id="org",
+        token="token-hash",
+        models=("model",),
+        log_team_ids=(),
+    )
 
 
 @pytest.mark.asyncio
