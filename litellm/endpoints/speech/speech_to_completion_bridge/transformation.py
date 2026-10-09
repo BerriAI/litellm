@@ -179,4 +179,6 @@ class SpeechToCompletionBridgeTransformationHandler:
         )
         binary_response: Final = HttpxBinaryResponseContent(response)
         binary_response.set_response_cost(_completion_response_cost(model_response))
+        if hasattr(model_response, "usage"):
+            binary_response.usage = getattr(model_response, "usage")
         return binary_response

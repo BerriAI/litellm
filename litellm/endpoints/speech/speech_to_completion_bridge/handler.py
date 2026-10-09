@@ -100,13 +100,27 @@ class SpeechToCompletionBridgeHandler:
         custom_llm_provider = validated_kwargs["custom_llm_provider"]
         voice = validated_kwargs["voice"]
 
+        from litellm.litellm_core_utils.litellm_logging import Logging
+
+        inner_logging_obj = Logging(
+            model=model,
+            messages=[{"role": "user", "content": input}],
+            stream=False,
+            call_type="completion",
+            start_time=logging_obj.start_time,
+            litellm_call_id=logging_obj.litellm_call_id,
+            function_id=logging_obj.function_id,
+        )
+
+        litellm_params["turn_off_message_logging"] = True
+
         request_data: Final = self.transformation_handler.transform_request(
             model=model,
             input=input,
             optional_params=optional_params,
             litellm_params=litellm_params,
             headers=headers,
-            litellm_logging_obj=logging_obj,
+            litellm_logging_obj=inner_logging_obj,
             custom_llm_provider=custom_llm_provider,
             voice=voice,
         )
@@ -114,6 +128,7 @@ class SpeechToCompletionBridgeHandler:
         result: Final = completion(
             **request_data,
         )
+        
 
         requested_response_format: Final = optional_params.get("response_format")
         if isinstance(result, ModelResponse):

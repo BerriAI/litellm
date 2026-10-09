@@ -120,6 +120,7 @@ class BinaryResponseSummary(TypedDict):
 
 class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
     _hidden_params: dict
+    usage: Any | None
 
     @property
     def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
@@ -132,6 +133,7 @@ class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
     def __init__(self, response: httpx.Response) -> None:
         super().__init__(response)
         self._hidden_params = {}
+        self.usage = None
 
     def logging_summary(self) -> BinaryResponseSummary:
         return {
