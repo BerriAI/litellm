@@ -36,8 +36,8 @@ export default function DecisionModelNote({ catalog, litellmProvider }: Decision
       <AlertTitle>Decision model</AlertTitle>
       <AlertDescription>
         <p>
-          Call it at <code>/v1/decisions</code> (OpenAI format) or <code>/v1/systemone</code> (System One format), not{" "}
-          <code>/chat/completions</code>.{" "}
+          For decision requests, call <code>/v1/decisions</code> (OpenAI format) or <code>/v1/systemone</code> (System
+          One format).{" "}
           <a href={DECISIONS_DOCS_URL} target="_blank" rel="noopener noreferrer" className="underline">
             How to call decision models
           </a>

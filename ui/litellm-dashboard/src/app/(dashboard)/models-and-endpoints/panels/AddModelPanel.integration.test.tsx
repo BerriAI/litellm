@@ -598,6 +598,8 @@ describe("AddModelPanel decision models", () => {
 
     await user.click(await screen.findByText("gpt-6-luna"));
 
-    expect(await screen.findByRole("note", { name: "Decision model notice" })).toBeInTheDocument();
+    const note = await screen.findByRole("note", { name: "Decision model notice" });
+    expect(note).toHaveTextContent("/v1/decisions");
+    expect(note).not.toHaveTextContent("/chat/completions");
   });
 });
