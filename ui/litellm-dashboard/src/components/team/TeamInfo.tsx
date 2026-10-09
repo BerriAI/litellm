@@ -26,7 +26,7 @@ import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { StatusBadge, type StatusTone } from "@/components/shared/table_cells/status_badge";
 import { BadgeLink } from "@/components/shared/BadgeLink";
 import { Badge } from "@/components/ui/badge";
-import { modelGroupHref } from "@/utils/entityLinks";
+import { modelGroupHref, modelOrAccessGroupHref } from "@/utils/entityLinks";
 import { Card } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input as UIInput } from "@/components/ui/input";
@@ -119,6 +119,7 @@ import {
   TEAM_INFO_TAB_LABELS,
 } from "./tabVisibilityUtils";
 import TeamMembersComponent from "./TeamMemberTab";
+import { useModelAccessGroupNames } from "@/app/(dashboard)/hooks/models/useModels";
 import {
   isValidThreshold,
   TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY,
@@ -154,8 +155,14 @@ const TEAM_MODEL_BADGE_TONES: Record<TeamModelBadgeKind, StatusTone> = {
   "access-group": "success",
 };
 
-const teamModelBadgeHref = (badge: TeamModelBadge): string | undefined =>
-  badge.kind === "direct" || badge.kind === "access-group" ? modelGroupHref(badge.label) : undefined;
+const teamModelBadgeHref = (
+  badge: TeamModelBadge,
+  accessGroupNames: ReadonlySet<string> | undefined,
+): string | undefined => {
+  if (badge.kind === "direct") return modelOrAccessGroupHref(badge.label, accessGroupNames);
+  if (badge.kind === "access-group") return modelGroupHref(badge.label);
+  return undefined;
+};
 
 export type McpGrantResolution =
   | { readonly kind: "resolved"; readonly serverIds: ReadonlySet<string> }
@@ -622,6 +629,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const routerSettingsRef = React.useRef<RouterSettingsAccordionRef>(null);
   const [organization, setOrganization] = useState<Organization | null>(null);
   const { userRole } = useAuthorized();
+  const accessGroupNames = useModelAccessGroupNames();
   const { data: allMcpServers = [], isError: mcpServersFailed, isLoading: mcpServersLoading } = useMCPServers();
   const { data: allMcpToolsets = [], isError: mcpToolsetsFailed, isLoading: mcpToolsetsLoading } = useMCPToolsets();
   const { data: allAccessGroups = [], isError: accessGroupsFailed, isLoading: accessGroupsLoading } = useAccessGroups();
@@ -1258,6 +1266,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       <TeamAdminSettingsForm
         initialValues={{ tpm_limit: info.tpm_limit, rpm_limit: info.rpm_limit, max_budget: info.max_budget }}
         editableFields={teamEditAccess.editableFields}
+        mayRaiseMaxBudget={teamEditAccess.mayRaiseMaxBudget}
         isSaving={isTeamSaving}
         onCancel={() => setIsEditing(false)}
         onSave={saveTeamAdminSettings}
@@ -1355,7 +1364,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <StatusBadge
                         tone={TEAM_MODEL_BADGE_TONES[badge.kind]}
                         label={badge.label}
-                        href={teamModelBadgeHref(badge)}
+                        href={teamModelBadgeHref(badge, accessGroupNames)}
                       />
                     </span>
                   </SimpleTooltip>
@@ -2191,7 +2200,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <p className="font-medium">Models</p>
                 <div className="flex flex-wrap gap-2 mt-1">
                   {info.models.map((model, index) => (
-                    <BadgeLink key={index} href={modelGroupHref(model)}>
+                    <BadgeLink key={index} href={modelOrAccessGroupHref(model, accessGroupNames)}>
                       {model}
                     </BadgeLink>
                   ))}
@@ -2202,7 +2211,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   <p className="font-medium">Default Member Models</p>
                   <div className="flex flex-wrap gap-2 mt-1">
                     {info.default_team_member_models.map((model, index) => (
-                      <BadgeLink key={index} href={modelGroupHref(model)}>
+                      <BadgeLink key={index} href={modelOrAccessGroupHref(model, accessGroupNames)}>
                         {model}
                       </BadgeLink>
                     ))}

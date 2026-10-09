@@ -6,7 +6,7 @@ import json
 import os
 from datetime import datetime, timedelta
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -27,7 +27,7 @@ from mcp.types import (
 )
 from mcp.types import Tool as MCPTool
 from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS, LATEST_HANDSHAKE_VERSION, MODERN_PROTOCOL_VERSIONS
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 from starlette.types import Message, Receive, Scope, Send
 
 from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
@@ -1086,6 +1086,9 @@ async def test_mcp_get_prompt_success():
         extra_headers={"X-Test": "1"},
         raw_headers=None,
         client_ip=None,
+        input_responses=None,
+        request_state=None,
+        allow_input_required=False,
     )
     assert result is prompt_result
 
@@ -1149,6 +1152,9 @@ async def test_mcp_read_resource_success():
         extra_headers={"X-Test": "1"},
         raw_headers=None,
         client_ip=None,
+        input_responses=None,
+        request_state=None,
+        allow_input_required=False,
     )
     assert result is read_result
 
@@ -3500,7 +3506,8 @@ async def test_initialize_request_with_existing_session_tracks_new_session():
             patch(  # test-quality-ok: registry is empty in unit tests; key owns one server
                 "litellm.proxy._experimental.mcp_server.operations._get_allowed_mcp_servers",
                 new_callable=AsyncMock,
-                return_value=[MagicMock()],
+                return_value=[MCPServer(server_id="new-server", name="new-server", url="http://upstream/mcp",
+                                        transport=MCPTransport.http, auth_type=MCPAuth.none)],
             ),
             patch(
                 "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
@@ -7108,6 +7115,9 @@ async def test_legacy_delegate_bare_token_is_not_probed_upstream():  # test-qual
             user_api_key_auth=UserAPIKeyAuth(),
             mcp_servers=["delegate_test"],
             client_ip=None,
+            oauth2_headers=None,
+            mcp_server_auth_headers=None,
+            raw_headers=None,
         )
 
     probe.assert_not_awaited()
@@ -7144,6 +7154,9 @@ async def test_legacy_delegate_dual_credentials_are_not_probed_upstream():  # te
             user_api_key_auth=UserAPIKeyAuth(user_id="admitted-user"),
             mcp_servers=["delegate_test"],
             client_ip=None,
+            oauth2_headers={"Authorization": "Bearer upstream-token"},
+            mcp_server_auth_headers=None,
+            raw_headers={"x-litellm-api-key": "sk-litellm-proxy-key", "Authorization": "Bearer upstream-token"},
         )
 
     probe.assert_not_awaited()
@@ -7192,6 +7205,9 @@ async def test_oauth_passthrough_preflight_preserves_status_contract(probe_statu
                 user_api_key_auth=UserAPIKeyAuth(user_id="admitted-user"),
                 mcp_servers=["passthrough_server"],
                 client_ip=None,
+            oauth2_headers={"Authorization": "Bearer upstream-token"},
+            mcp_server_auth_headers=None,
+            raw_headers={"x-litellm-api-key": "sk-litellm-proxy-key", "Authorization": "Bearer upstream-token"},
             )
             assert result is None
         else:
@@ -7201,6 +7217,9 @@ async def test_oauth_passthrough_preflight_preserves_status_contract(probe_statu
                     user_api_key_auth=UserAPIKeyAuth(user_id="admitted-user"),
                     mcp_servers=["passthrough_server"],
                     client_ip=None,
+            oauth2_headers={"Authorization": "Bearer upstream-token"},
+            mcp_server_auth_headers=None,
+            raw_headers={"x-litellm-api-key": "sk-litellm-proxy-key", "Authorization": "Bearer upstream-token"},
                 )
             assert exc_info.value.status_code == expected_status
             if expected_status == 401:
@@ -7237,6 +7256,9 @@ async def test_delegate_tokenless_request_not_probed():
             user_api_key_auth=UserAPIKeyAuth(),
             mcp_servers=["delegate_test"],
             client_ip=None,
+            oauth2_headers=None,
+            mcp_server_auth_headers=None,
+            raw_headers=None,
         )
 
     probe.assert_not_awaited()
@@ -7270,6 +7292,9 @@ async def test_delegate_preflight_skipped_on_multi_server_routes():
             user_api_key_auth=UserAPIKeyAuth(),
             mcp_servers=["delegate_test", "other_server"],
             client_ip=None,
+            oauth2_headers=None,
+            mcp_server_auth_headers=None,
+            raw_headers=None,
         )
 
     probe.assert_not_awaited()
@@ -7313,6 +7338,9 @@ async def test_bare_authorization_never_probes_passthrough_servers():
             user_api_key_auth=UserAPIKeyAuth(),
             mcp_servers=["pt_server"],
             client_ip=None,
+            oauth2_headers=None,
+            mcp_server_auth_headers=None,
+            raw_headers=None,
         )
 
     probe.assert_not_awaited()
@@ -7359,6 +7387,9 @@ async def test_delegate_not_probed_when_named_only_via_server_id():
             user_api_key_auth=UserAPIKeyAuth(user_id="u1", api_key="hashed-sk"),
             mcp_servers=["delegate-secret-id"],
             client_ip=None,
+            oauth2_headers=None,
+            mcp_server_auth_headers=None,
+            raw_headers=None,
         )
 
     probe.assert_not_awaited()
@@ -7392,6 +7423,9 @@ async def test_delegate_probe_not_fanned_out_to_access_group_members():
             user_api_key_auth=UserAPIKeyAuth(),
             mcp_servers=["prod_tools_group"],
             client_ip=None,
+            oauth2_headers=None,
+            mcp_server_auth_headers=None,
+            raw_headers=None,
         )
 
     probe.assert_not_awaited()
@@ -11149,3 +11183,415 @@ async def test_discovery_adapter_preserves_authenticated_context(_mcp_request_ct
     context = dispatched.await_args.args[1]
     assert context.user_api_key_auth.user_id == "discover-caller"
     assert context.mcp_servers == ("allowed",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method,params",
+    (
+        ("tools/call", {"name": "confirm", "arguments": {}}),
+        ("prompts/get", {"name": "confirm"}),
+        ("resources/read", {"uri": "test://confirm"}),
+    ),
+)
+@pytest.mark.parametrize("continuation", ("initial", "valid", "tampered", "revoked"))
+@pytest.mark.parametrize("large_body", (False, True))
+@pytest.mark.parametrize("passthrough", (False, True))
+@pytest.mark.parametrize("route_name", ("interactive", "friendly"))
+async def test_modern_oauth_challenge_follows_continuation_authorization(
+    method: str,
+    params: dict[str, JsonValue],
+    continuation: Literal["initial", "valid", "tampered", "revoked"],
+    large_body: bool,
+    passthrough: bool,
+    route_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+    from pydantic import TypeAdapter
+    from litellm.proxy._experimental.mcp_server import server
+    from litellm.proxy._experimental.mcp_server.contracts import OperationContext
+    from litellm.proxy._experimental.mcp_server.interactions import InteractionOperation, bind_target, seal_continuation
+    from mcp.types import InputRequiredResult
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "challenge-test-salt")
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"mcp_advertised_versions": ["2026-07-28"]})
+    caller: Final = UserAPIKeyAuth(user_id="alice")
+    target: Final = _make_oauth2_server("interactive", oauth2_flow="authorization_code").model_copy(
+        update={
+            "alias": "friendly",
+            **(
+                {"auth_type": MCPAuth.none, "extra_headers": ["Authorization"], "oauth_passthrough": True}
+                if passthrough
+                else {}
+            ),
+        }
+    )
+    operation: Final = TypeAdapter(InteractionOperation).validate_python({"method": method, "params": params})
+    context: Final = OperationContext(_caller=caller, mcp_servers=(route_name,))
+    sealed: Final = seal_continuation(
+        bind_target(InputRequiredResult(request_state="upstream"), target), operation, context, now=int(time.time())
+    )
+    request_params: Final = {
+        **params,
+        **(
+            {"requestState": "invalid" if continuation == "tampered" else sealed.request_state}
+            if continuation != "initial"
+            else {}
+        ),
+    }
+    body: Final = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": method,
+            "params": {
+                **request_params,
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                    "padding": "x" * (server._MCP_ROUTING_PEEK_MAX_BYTES * 2 if large_body else 0),
+                },
+            },
+        }
+    ).encode()
+    route_value: Final = params["uri" if method == "resources/read" else "name"]
+    assert isinstance(route_value, str)
+    scope: Final[Scope] = {
+        "type": "http",
+        "method": "POST",
+        "path": f"/mcp/{route_name}",
+        "scheme": "http",
+        "server": ("localhost", 8000),
+        "query_string": b"",
+        "root_path": "",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"x-litellm-api-key", b"test-gateway-key"),
+            (b"authorization", b"Bearer expired-upstream-token"),
+            (b"mcp-protocol-version", b"2026-07-28"),
+            (b"mcp-method", method.encode()),
+            (b"mcp-name", route_value.encode()),
+            (b"accept", b"application/json, text/event-stream"),
+        ],
+    }
+    receive: Final = AsyncMock(
+        side_effect=[
+            {"type": "http.request", "body": body[: len(body) // 2], "more_body": True},
+            {"type": "http.request", "body": body[len(body) // 2 :], "more_body": False},
+        ]
+    )
+    send: Final = AsyncMock()
+    with (
+        patch.object(
+            server,
+            "extract_mcp_auth_context",
+            AsyncMock(
+                return_value=(
+                    caller,
+                    None,
+                    [route_name],
+                    None,
+                    {"Authorization": "Bearer expired-upstream-token"},
+                    {"Authorization": "Bearer expired-upstream-token"},
+                )
+            ),
+        ),
+        patch.object(server, "_SESSION_MANAGERS_INITIALIZED", True),
+        patch.object(server, "_probe_upstream_auth", AsyncMock(return_value=(401, None))) as probe,
+        patch.object(server.session_manager_stateless, "handle_request", AsyncMock()) as dispatch,
+        patch.object(
+            mcp_operations,
+            "_get_allowed_mcp_servers",
+            AsyncMock(return_value=[] if continuation == "revoked" else [target]),
+        ),
+        patch.object(mcp_operations.global_mcp_server_manager, "get_mcp_server_by_id", return_value=target),
+        patch.object(mcp_operations.global_mcp_server_manager, "get_mcp_server_by_name", return_value=target),
+        patch.object(
+            mcp_operations.global_mcp_server_manager, "ensure_oauth_metadata_discovered", AsyncMock(return_value=target)
+        ) as discovery,
+        patch.object(
+            mcp_operations.global_mcp_server_manager, "has_user_oauth_token", AsyncMock(return_value=False)
+        ) as token,
+    ):
+        if continuation in ("initial", "valid"):
+            with pytest.raises(HTTPException) as rejected:
+                await server.handle_streamable_http_mcp(scope, receive, send)
+            assert rejected.value.status_code == 401
+            if passthrough:
+                assert "resource_metadata=" in rejected.value.headers["www-authenticate"]
+                assert "invalid_token" in rejected.value.headers["www-authenticate"]
+                probe.assert_awaited_once_with(target.url, "Bearer expired-upstream-token")
+                token.assert_not_awaited()
+            else:
+                assert (
+                    f'Bearer authorization_uri="http://localhost:8000/.well-known/oauth-authorization-server/mcp/{route_name}"'
+                    == rejected.value.headers["www-authenticate"]
+                )
+                token.assert_awaited_once()
+                probe.assert_not_awaited()
+        elif continuation == "revoked":
+            with pytest.raises(HTTPException) as rejected:
+                await server.handle_streamable_http_mcp(scope, receive, send)
+            assert rejected.value.status_code == 403
+            probe.assert_not_awaited()
+            discovery.assert_not_awaited()
+            token.assert_not_awaited()
+        else:
+            await server.handle_streamable_http_mcp(scope, receive, send)
+            response_body: Final = json.loads(
+                next(
+                    call.args[0]["body"]
+                    for call in send.await_args_list
+                    if call.args[0]["type"] == "http.response.body"
+                )
+            )
+            assert response_body["error"]["code"] == -32602
+            probe.assert_not_awaited()
+            discovery.assert_not_awaited()
+            token.assert_not_awaited()
+        dispatch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ("tools/call", "prompts/get", "resources/read"))
+@pytest.mark.parametrize("size_delta", (-1, 0, 1))
+@pytest.mark.parametrize("chunked", (False, True))
+async def test_modern_preflight_enforces_sdk_body_limit(
+    method: str, size_delta: int, chunked: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy._experimental.mcp_server import server
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"mcp_advertised_versions": ["2026-07-28"]})
+    limit: Final = server.session_manager_stateless.max_request_body_size
+    params: Final = {"uri": "test://confirm"} if method == "resources/read" else {"name": "confirm"}
+    payload: Final = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": method,
+            "params": {
+                **params,
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                    "padding": "",
+                },
+            },
+        }
+    ).encode()
+    body: Final = payload.replace(
+        b'"padding": ""', b'"padding": "' + b"x" * (limit + size_delta - len(payload)) + b'"', 1
+    )
+    assert len(body) == limit + size_delta
+    chunks: Final = (body[: limit - 1], body[limit - 1 :]) if chunked else (body,)
+    messages: Final[list[Message]] = [
+        {"type": "http.request", "body": chunk, "more_body": index < len(chunks) - 1 or size_delta > 0}
+        for index, chunk in enumerate(chunks)
+    ]
+    receive: Final = AsyncMock(side_effect=[*messages, {"type": "http.request", "body": b"", "more_body": False}])
+    scope: Final[Scope] = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "scheme": "http",
+        "server": ("localhost", 8000),
+        "query_string": b"",
+        "root_path": "",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer test-key"),
+            (b"mcp-protocol-version", b"2026-07-28"),
+            (b"mcp-method", method.encode()),
+            (b"mcp-name", next(iter(params.values())).encode()),
+            *([] if chunked else [(b"content-length", str(len(body)).encode())]),
+        ],
+    }
+    with (
+        patch.object(
+            server, "extract_mcp_auth_context", AsyncMock(return_value=(UserAPIKeyAuth(), None, None, None, None, None))
+        ),
+        patch.object(server, "_SESSION_MANAGERS_INITIALIZED", True),
+        patch.object(server.session_manager_stateless, "handle_request", AsyncMock()) as dispatch,
+        patch.object(server.operations, "_get_allowed_mcp_servers", AsyncMock()) as authorization,
+    ):
+        if size_delta > 0:
+            with pytest.raises(HTTPException) as rejected:
+                await server.handle_streamable_http_mcp(scope, receive, AsyncMock())
+            assert rejected.value.status_code == 413
+            assert rejected.value.detail == "Request body too large"
+            dispatch.assert_not_awaited()
+        else:
+            await server.handle_streamable_http_mcp(scope, receive, AsyncMock())
+            dispatch.assert_awaited_once()
+        assert receive.await_count == len(chunks)
+        authorization.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_request", ("malformed", "other_method", "header_mismatch", "duplicate_header"))
+async def test_modern_preflight_leaves_invalid_envelopes_to_sdk_without_upstream_work(
+    invalid_request: Literal["malformed", "other_method", "header_mismatch", "duplicate_header"],
+) -> None:
+    from litellm.proxy._experimental.mcp_server import server
+    from litellm.proxy._experimental.mcp_server.contracts import OperationContext
+
+    envelope: Final = {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/list" if invalid_request == "other_method" else "tools/call",
+        "params": {
+            "name": "confirm",
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {},
+            },
+        },
+    }
+    headers: Final = [
+        (b"mcp-protocol-version", b"2026-07-28"),
+        (b"mcp-method", b"tools/call"),
+        (b"mcp-name", b"wrong" if invalid_request == "header_mismatch" else b"confirm"),
+    ]
+    scope: Final[Scope] = {
+        "type": "http",
+        "headers": [*headers, *([(b"mcp-method", b"tools/call")] if invalid_request == "duplicate_header" else [])],
+    }
+    with patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock()) as resolve:
+        result: Final = await server._preflight_modern_interaction(
+            scope,
+            b"{" if invalid_request == "malformed" else json.dumps(envelope).encode(),
+            OperationContext(_caller=UserAPIKeyAuth(user_id="alice"), mcp_servers=("interactive",)),
+        )
+    assert result is None
+    resolve.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize("binding", ("probe", "PROBE", "shared"))
+@pytest.mark.parametrize("forwarded_token", (False, True))
+async def test_modern_passthrough_probe_uses_scrubbed_server_credential(binding: str, forwarded_token: bool):
+    import respx
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+    from litellm.proxy._experimental.mcp_server import server
+    from litellm.proxy._experimental.mcp_server.contracts import OperationContext
+
+    target: Final = MCPServer(
+        server_id="probe-id",
+        name="probe",
+        alias="probe",
+        access_groups=["shared"],
+        url="http://upstream/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.none,
+        oauth_passthrough=True,
+        extra_headers=["Authorization"],
+    )
+    scope: Final = _delegate_scope(
+        [
+            (b"x-litellm-api-key", b"sk-admission-key"),
+            (b"authorization", b"Bearer distinct-upstream-token" if forwarded_token else b"Bearer sk-admission-key"),
+            (b"mcp-protocol-version", b"2026-07-28"),
+            (b"mcp-method", b"tools/call"),
+            (b"mcp-name", b"probe-add"),
+        ]
+    )
+    context: Final = OperationContext(
+        _caller=UserAPIKeyAuth(
+            api_key="hashed-admission-key",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="probe-permission", mcp_servers=[target.server_id]
+            ),
+        ),
+        mcp_servers=("probe",),
+        mcp_server_auth_headers={
+            binding: {"Authorization": "Bearer expired-token" if forwarded_token else "Bearer distinct-upstream-token"}
+        },
+        oauth2_headers={"Authorization": "Bearer distinct-upstream-token"} if forwarded_token else None,
+        raw_headers={
+            "x-litellm-api-key": "sk-admission-key",
+            **({"Authorization": "Bearer distinct-upstream-token"} if forwarded_token else {}),
+        },
+    )
+    body: Final = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "probe-add",
+                "arguments": {"a": 2, "b": 3},
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                },
+            },
+        }
+    ).encode()
+    mcp_operations.global_mcp_server_manager.registry[target.server_id] = target
+    with respx.mock as upstream:
+        probe: Final = upstream.post(target.url).respond(200)
+        result: Final = await server._preflight_modern_interaction(scope, body, context)
+    assert result is None
+    assert probe.call_count == 1
+    sent_headers: Final = probe.calls[0].request.headers
+    assert sent_headers["Authorization"] == "Bearer distinct-upstream-token"
+    assert all("sk-admission-key" not in value for value in sent_headers.values())
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+@pytest.mark.parametrize("allowed", (True, False))
+@pytest.mark.parametrize("header_shape", ("mapping", "non_authorization"))
+async def test_passthrough_probes_bind_each_token_to_its_authorized_server(allowed: bool, header_shape: str):
+    import respx
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+    from litellm.proxy._experimental.mcp_server import server
+
+    targets: Final = [
+        MCPServer(
+            server_id=name,
+            name=name,
+            alias=name,
+            url=f"http://{name}/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            oauth_passthrough=True,
+            extra_headers=["Authorization"],
+        )
+        for name in ("first", "second")
+    ]
+    mcp_operations.global_mcp_server_manager.registry.update({target.server_id: target for target in targets})
+    with respx.mock(assert_all_called=False) as upstream:
+        first: Final = upstream.post(targets[0].url).respond(200)
+        second: Final = upstream.post(targets[1].url).respond(200)
+        result: Final = await server._check_passthrough_upstream_auth(
+            raw_headers=None,
+            scope=_delegate_scope([(b"authorization", b"Bearer sk-admission-key")]),
+            user_api_key_auth=UserAPIKeyAuth(
+                api_key="hashed-admission-key",
+                object_permission=LiteLLM_ObjectPermissionTable(
+                    object_permission_id="probe-permission",
+                    mcp_servers=[target.server_id for target in targets] if allowed else [],
+                ),
+            ),
+            mcp_servers=["first", "second"],
+            client_ip=None,
+            oauth2_headers=None,
+            mcp_server_auth_headers={
+                "first": {"x-other" if header_shape == "non_authorization" else "aUtHoRiZaTiOn": "Bearer first-token"},
+                "second": {
+                    "x-other" if header_shape == "non_authorization" else "Authorization": "Bearer second-token"
+                },
+            },
+        )
+    assert result is None
+    assert tuple(
+        (str(call.request.url), call.request.headers["Authorization"])
+        for call in (*first.calls, *second.calls)
+    ) == (
+        (("http://first/mcp", "Bearer first-token"), ("http://second/mcp", "Bearer second-token"))
+        if allowed and header_shape != "non_authorization"
+        else ()
+    )

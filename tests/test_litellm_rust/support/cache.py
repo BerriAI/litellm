@@ -51,7 +51,7 @@ async def invoke(
         request: Final = NativeCall(
             args=(),
             kwargs=arguments,
-            bound={
+            base={
                 "model": RESPONSES_MODEL,
                 "input": "hello",
                 "stream": None,
@@ -78,7 +78,7 @@ async def invoke(
     if route == "chat":
         if not native:
             return await litellm.acompletion(**parameters)
-        chat: Final = NativeCall(args=(), kwargs=parameters, bound=parameters)
+        chat: Final = NativeCall(args=(), kwargs=parameters, base={})
         return await runtime.arun(
             RouteContext(Route.CHAT_COMPLETIONS),
             binding=NATIVE_ACOMPLETION,
@@ -91,7 +91,7 @@ async def invoke(
     messages: Final = NativeCall(
         args=(),
         kwargs=parameters,
-        bound={
+        base={
             "model": MESSAGES_MODEL,
             "messages": list(MESSAGES),
             "max_tokens": 32,

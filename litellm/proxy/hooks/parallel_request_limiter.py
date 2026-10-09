@@ -1,5 +1,6 @@
 import asyncio
 import sys
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn
 
@@ -36,6 +37,10 @@ else:
     InternalUsageCache = Any
 
 
+def _precise_minute(now: datetime) -> str:
+    return now.strftime("%Y-%m-%d-%H-%M")
+
+
 def _response_total_tokens(response_obj: object) -> int:
     if not isinstance(response_obj, (ModelResponse, EmbeddingResponse, TextCompletionResponse)):
         return 0
@@ -54,8 +59,9 @@ class CacheObject(TypedDict):
 
 class _PROXY_MaxParallelRequestsHandler(CustomLogger):
     # Class variables or attributes
-    def __init__(self, internal_usage_cache: InternalUsageCache):
+    def __init__(self, internal_usage_cache: InternalUsageCache, *, clock: Callable[[], datetime] = datetime.now):
         self.internal_usage_cache = internal_usage_cache
+        self._clock: Final = clock
 
     def print_verbose(self, print_statement) -> None:
         try:
@@ -151,7 +157,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
 
     def time_to_next_minute(self) -> float:
         # Get the current time
-        now: Final = datetime.now()
+        now: Final = self._clock()
 
         # Calculate the next minute
         next_minute: Final = (now + timedelta(minutes=1)).replace(second=0, microsecond=0)
@@ -310,10 +316,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 )
         _model = data.get("model", None)
 
-        current_date: Final = datetime.now().strftime("%Y-%m-%d")
-        current_hour: Final = datetime.now().strftime("%H")
-        current_minute: Final = datetime.now().strftime("%M")
-        precise_minute: Final = f"{current_date}-{current_hour}-{current_minute}"
+        precise_minute: Final = _precise_minute(self._clock())
 
         cache_objects: Final[CacheObject] = await self.get_all_cache_objects(
             current_global_requests=(
@@ -542,10 +545,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 )
 
-            current_date: Final = datetime.now().strftime("%Y-%m-%d")
-            current_hour: Final = datetime.now().strftime("%H")
-            current_minute: Final = datetime.now().strftime("%M")
-            precise_minute: Final = f"{current_date}-{current_hour}-{current_minute}"
+            precise_minute: Final = _precise_minute(self._clock())
 
             total_tokens: int = _response_total_tokens(response_obj)
 
@@ -741,10 +741,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                         litellm_parent_otel_span=litellm_parent_otel_span,
                     )
 
-                current_date: Final = datetime.now().strftime("%Y-%m-%d")
-                current_hour: Final = datetime.now().strftime("%H")
-                current_minute: Final = datetime.now().strftime("%M")
-                precise_minute: Final = f"{current_date}-{current_hour}-{current_minute}"
+                precise_minute: Final = _precise_minute(self._clock())
 
                 request_count_api_key: Final = f"{user_api_key}::{precise_minute}::request_count"
 
@@ -817,10 +814,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         Retrieve the key's remaining rate limits.
         """
         api_key: Final = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
-        current_date: Final = datetime.now().strftime("%Y-%m-%d")
-        current_hour: Final = datetime.now().strftime("%H")
-        current_minute: Final = datetime.now().strftime("%M")
-        precise_minute: Final = f"{current_date}-{current_hour}-{current_minute}"
+        precise_minute: Final = _precise_minute(self._clock())
         request_count_api_key: Final = f"{api_key}::{precise_minute}::request_count"
         current: Final[CurrentItemRateLimit | None] = await self.internal_usage_cache.async_get_cache(
             key=request_count_api_key,

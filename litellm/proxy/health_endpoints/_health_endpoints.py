@@ -46,6 +46,7 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.model_checks import get_key_models
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils import http_parsing_utils
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.db.health_check_latest import (
@@ -78,6 +79,7 @@ from litellm.router_utils.clientside_credential_handler import (
     clientside_credential_keys,
 )
 from litellm.secret_managers.main import get_secret_bool
+from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
 
 #### Health ENDPOINTS ####
 
@@ -135,19 +137,24 @@ def _request_inherits_config_credentials(
     config_params: Mapping[str, object],
     request_params: Mapping[str, object],
     allow_client_side_credentials: bool,
+    *,
+    selected_by_id: bool,
 ) -> bool:
     """Whether the configuration's credentials are this request's to be probed with.
 
     The configuration reached here by matching the request's model string, which
     also matches wildcard routes and unrelated deployments that merely serve the
     same model, so a request naming a stored credential of its own has already
-    said where its credentials come from and does not borrow that one's. A blank
-    name is no name: ``load_credentials_from_list`` resolves nothing from it, so
-    it must not cost the request the credentials it would otherwise be probed
-    with.
+    said where its credentials come from and does not borrow that one's. A request
+    bringing its own ``api_key`` describes its own connection when matched only by
+    model name. A blank name or key is no name or key: ``load_credentials_from_list``
+    resolves nothing from it, so it must not cost the request the credentials it
+    would otherwise be probed with.
     """
     requested_credential: Final = request_params.get("litellm_credential_name")
     if requested_credential and requested_credential != config_params.get("litellm_credential_name"):
+        return False
+    if not selected_by_id and request_params.get("api_key"):
         return False
     if allow_client_side_credentials:
         return True
@@ -158,22 +165,28 @@ def _config_base_for_health_check(
     config_params: Mapping[str, object],
     request_params: Mapping[str, object],
     allow_client_side_credentials: bool = False,
+    *,
+    selected_by_id: bool,
 ) -> dict[str, object]:
     """Return the configured parameters to merge under a connection-test request.
 
-    A request that sets its own connection fields, or names its own stored
-    credential, describes a connection of its own, so the configuration's
-    credentials are not carried into it: they belong to the endpoint the
-    configuration names. Anything the request does not set still comes from the
-    configuration, which is what lets a request name a configured model and test
-    it as configured.
+    A request that sets its own connection fields, brings an ``api_key`` when
+    matched only by model name, or names its own stored credential describes a
+    connection of its own, so the configuration's credentials are not carried
+    into it. Anything the request does not set still comes from the configuration,
+    which is what lets a request name a configured model and test it as configured.
 
     ``litellm_credential_name`` is dropped alongside the literal credential
     fields: it names a stored credential that ``load_credentials_from_list``
     resolves into the same secrets further down the call, so leaving it in place
     would reintroduce them by reference.
     """
-    if _request_inherits_config_credentials(config_params, request_params, allow_client_side_credentials):
+    if _request_inherits_config_credentials(
+        config_params,
+        request_params,
+        allow_client_side_credentials,
+        selected_by_id=selected_by_id,
+    ):
         return dict(config_params)
     return {key: value for key, value in config_params.items() if key not in _CONFIG_CONNECTION_FIELDS}
 
@@ -978,11 +991,10 @@ def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
 
 def _strip_admin_only_fields_from_health_result(result: dict) -> dict:
     """
-    Return a copy of the /health response with the admin-only fields (provider routing plus the
-    workload identity federation params naming the identity a deployment mints as) removed from
-    each healthy/unhealthy endpoint entry. Used to hide those fields from non-admin callers while
-    still showing them which deployments they own and whether each one is
-    healthy. Proxy admins receive the unmodified result.
+    Return a copy of the /health response with the admin-only fields (provider routing plus
+    server-owned federation or OAuth token-exchange params) removed from each healthy/unhealthy
+    endpoint entry. Used to hide those fields from non-admin callers while still showing them which
+    deployments they own and whether each one is healthy. Proxy admins receive the unmodified result.
     """
     out: Final = dict(result)
     drop: Final = set(ADMIN_ONLY_HEALTH_DISPLAY_PARAMS)
@@ -2078,6 +2090,7 @@ async def test_model_connection(
         "responses",
         "anthropic_messages",
         "ocr",
+        "evaluation",
     ]
     | None = fastapi.Body(
         None,
@@ -2179,6 +2192,7 @@ async def test_model_connection(
         # This gets the litellm_params from proxy config (with resolved env vars)
         config_litellm_params: dict = {}
         loaded_model_info: dict | None = None
+        deployment_by_id: Deployment | None = None
         if llm_router is not None:
             # Prefer disambiguation by deployment id (`model_info.id`) when
             # the caller supplies it. This is required when multiple
@@ -2191,7 +2205,6 @@ async def test_model_connection(
             request_model_info: Final = model_info or {}
             request_model_id: Final = request_model_info.get("id")
             try:
-                deployment_by_id = None
                 if request_model_id:
                     deployment_by_id = llm_router.get_deployment(model_id=request_model_id)
 
@@ -2225,6 +2238,7 @@ async def test_model_connection(
                     "Could not find model %s in router: %s. Proceeding with request params only.", model_name, e
                 )
 
+        selected_by_id: Final = deployment_by_id is not None
         reject_server_owned_wif_params(request_litellm_params)
         # Merge: config params (from proxy config) as base, request params override
         litellm_params = {
@@ -2232,6 +2246,7 @@ async def test_model_connection(
                 config_litellm_params,
                 request_litellm_params,
                 allow_client_side_credentials=general_settings.get("allow_client_side_credentials") is True,
+                selected_by_id=selected_by_id,
             ),
             **request_litellm_params,
         }
@@ -2269,9 +2284,17 @@ async def test_model_connection(
             or resolve_health_check_mode(probe_model_info, _OBJECT_MAPPING.validate_python(litellm_params))
         )
 
+        raw_headers: Final[dict[str, str]] = TypeAdapter(dict[str, str]).validate_python(
+            http_parsing_utils.safe_get_request_headers(request)
+        )
+        health_check_params: Final = {
+            **_OBJECT_MAPPING.validate_python(litellm_params),
+            "secret_fields": SecretFields(raw_headers=RedactedDict(raw_headers)),
+        }
+
         result: Final = await run_with_timeout(
             litellm.ahealth_check(
-                model_params=litellm_params,
+                model_params=health_check_params,
                 mode=probe_mode,
                 prompt="test from litellm",
                 input=["test from litellm"],
@@ -2280,7 +2303,7 @@ async def test_model_connection(
         )
 
         # Clean the result for display
-        cleaned_result: Final = clean_endpoint_data({**litellm_params, **result}, details=True)
+        cleaned_result: Final = clean_endpoint_data({**health_check_params, **result}, details=True)
 
         return {
             "status": "error" if "error" in result else "success",
