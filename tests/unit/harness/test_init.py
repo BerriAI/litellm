@@ -79,7 +79,7 @@ def test_errors_share_base_class():
 
 def test_litellm_harness_attribute_is_lazy():
     env: Final = {k: v for k, v in os.environ.items() if k != "LITELLM_LOG"}
-    out = run_child_interpreter(LAZY_IMPORT_CHECK, env=env, timeout=120)
+    out: Final = run_child_interpreter(LAZY_IMPORT_CHECK, env=env, timeout=120)
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip() == "ok"
 
