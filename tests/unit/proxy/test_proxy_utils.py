@@ -3327,6 +3327,83 @@ def test_handle_exception_on_proxy_preserves_auth_error_status_code():
     assert int(result.code) == 401, f"Expected 401, got {result.code}"
 
 
+def _anthropic_thinking_sse(deltas: int) -> list[bytes]:
+    def event(name: str, payload: dict) -> bytes:
+        return f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode()
+
+    message: Final = {"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet-4-5"}
+    return [
+        event(
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {**message, "content": [], "usage": {"input_tokens": 1, "output_tokens": 1}},
+            },
+        ),
+        event(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}},
+        ),
+        *(
+            event(
+                "content_block_delta",
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": f"t{i} "}},
+            )
+            for i in range(deltas)
+        ),
+        event("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        event(
+            "content_block_start",
+            {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
+        ),
+        event(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "final answer"}},
+        ),
+        event("content_block_stop", {"type": "content_block_stop", "index": 1}),
+        event(
+            "message_delta",
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}},
+        ),
+        event("message_stop", {"type": "message_stop"}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_record_served_stream_output_lets_the_event_loop_run_while_assembling_the_stream():
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
+    from litellm.proxy.utils import ProxyLogging
+
+    logging_obj: Final = Logging(
+        model="claude-sonnet-4-5",
+        messages=[],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="served-output",
+        function_id="served-output",
+    )
+    loop_turns: Final = []
+    done: Final = asyncio.Event()
+
+    async def count_loop_turns() -> None:
+        while not done.is_set():
+            loop_turns.append(None)
+            await asyncio.sleep(0)
+
+    counter: Final = asyncio.create_task(count_loop_turns())
+    await asyncio.sleep(0)
+    turns_before: Final = len(loop_turns)
+    await ProxyLogging._record_served_stream_output({"litellm_logging_obj": logging_obj}, _anthropic_thinking_sse(2000))
+    turns_during: Final = len(loop_turns) - turns_before
+    done.set()
+    await counter
+
+    assert logging_obj.model_call_details[SERVED_OUTPUT_TEXTS_KEY] == ("final answer",)
+    assert turns_during > 0
+
+
 class _RedisDown:
     async def async_delete_cache(self, key: str) -> None:
         raise ConnectionError("redis is down")
