@@ -455,7 +455,7 @@ async def update_tag(
         model_info: Final = await _get_model_names(prisma_client, tag.models or [])
 
         # Prepare update data
-        update_data: Final[dict[str, object]] = {
+        update_data: Final[dict[str, object]] = {  # mutable-ok: prisma update input, amended below
             "description": tag.description,
             "models": tag.models or [],
             "model_info": json.dumps(model_info),
