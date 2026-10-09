@@ -9,7 +9,12 @@ import os
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
-from typing import Any, Final, TypedDict, cast
+from typing import (
+    Any,
+    Final,
+    TypedDict,
+    cast,  # noqa: TID251  # dynamic OpenAPI and PyYAML payloads require runtime narrowing
+)
 from urllib.parse import quote
 
 import httpx
