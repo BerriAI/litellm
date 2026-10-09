@@ -707,7 +707,7 @@ class LangFuseLogger:
 
             # Apply custom masking function if provided
             masked_input: Final[object] = cap_payload(
-                cast(
+                cast(  # cast-ok: unknown-typed logging payload; passes through cap_payload unchanged
                     "object",
                     self._apply_masking_function(input, masking_function)
                     if masking_function is not None and callable(masking_function)
@@ -716,7 +716,7 @@ class LangFuseLogger:
                 max_field_bytes,
             )
             masked_output: Final[object] = cap_payload(
-                cast(
+                cast(  # cast-ok: unknown-typed logging payload; passes through cap_payload unchanged
                     "object",
                     self._apply_masking_function(output, masking_function)
                     if masking_function is not None and callable(masking_function)
@@ -885,7 +885,7 @@ class LangFuseLogger:
                 "output": masked_output if not mask_output else "redacted-by-litellm",
                 "cost_details": {"total": cost} if usage is not None and isinstance(cost, (int, float)) else None,
                 "metadata": cap_payload(
-                    cast(
+                    cast(  # cast-ok: unknown-typed logging payload; passes through cap_payload unchanged
                         "object",
                         {
                             **log_requester_metadata(redact_user_api_key_info(metadata=allowlisted_metadata)),  # pyright: ignore[reportArgumentType]  # TypedDict in, plain metadata dict out
@@ -927,17 +927,47 @@ class LangFuseLogger:
                 name=trace_params.get("name"),
                 user_id=trace_params.get("user_id"),
                 session_id=trace_params.get("session_id"),
-                version=cap_payload(cast("object", trace_params.get("version")), max_field_bytes),
+                version=cap_payload(
+                    cast(  # cast-ok: unknown-typed payload
+                        "object",
+                        trace_params.get("version"),
+                    ),
+                    max_field_bytes,
+                ),
                 release=trace_params.get("release"),
-                tags=cap_payload(cast("object", trace_params.get("tags")), max_field_bytes),
-                metadata=cap_payload(cast("object", trace_params.get("metadata")), max_field_bytes),
+                tags=cap_payload(
+                    cast(  # cast-ok: unknown-typed payload
+                        "object",
+                        trace_params.get("tags"),
+                    ),
+                    max_field_bytes,
+                ),
+                metadata=cap_payload(
+                    cast(  # cast-ok: unknown-typed payload
+                        "object",
+                        trace_params.get("metadata"),
+                    ),
+                    max_field_bytes,
+                ),
                 public=trace_public,
                 input=None
                 if generation_is_trace_root and trace_input == generation_params["input"]
-                else cap_payload(cast("object", trace_input), max_field_bytes),
+                else cap_payload(
+                    cast(  # cast-ok: unknown-typed payload
+                        "object",
+                        trace_input,
+                    ),
+                    max_field_bytes,
+                ),
                 output=None
                 if generation_is_trace_root and trace_output == generation_params["output"]
-                else cap_payload(cast("object", trace_output), max_field_bytes),
+                else cap_payload(
+                    cast(  # cast-ok: unknown-typed payload
+                        "object",
+                        trace_output,
+                    ),
+                    max_field_bytes,
+                ),
             )
             generation_attributes: Final = observation_attributes(
                 observation_type="generation",
@@ -948,7 +978,13 @@ class LangFuseLogger:
                 status_message=generation_params.get("status_message"),
                 version=generation_params["version"],
                 model=model_name,
-                model_parameters=cap_payload(cast("object", optional_params), max_field_bytes),
+                model_parameters=cap_payload(
+                    cast(  # cast-ok: unknown-typed payload
+                        "object",
+                        optional_params,
+                    ),
+                    max_field_bytes,
+                ),
                 usage_details=usage_details,
                 cost_details=generation_params["cost_details"],
                 completion_start_time=kwargs.get("completion_start_time", None),
@@ -969,7 +1005,16 @@ class LangFuseLogger:
                 log_provider_specific_information_as_span(
                     tracing=self.tracing,
                     parent=generation,
-                    enrichments=cast("Mapping[str, Any]", cap_payload(cast("object", enrichments), max_field_bytes)),
+                    enrichments=cast(  # cast-ok: cap_payload returns object; parameter wants Mapping
+                        "Mapping[str, Any]",
+                        cap_payload(
+                            cast(  # cast-ok: unknown-typed payload
+                                "object",
+                                enrichments,
+                            ),
+                            max_field_bytes,
+                        ),
+                    ),
                 )
                 self._log_guardrail_information_as_span(
                     tracing=self.tracing,
@@ -1161,9 +1206,19 @@ class LangFuseLogger:
                 start_time=guardrail_entry.get("start_time", None),
                 attributes=observation_attributes(
                     observation_type="span",
-                    input=cap_payload(cast("object", guardrail_entry.get("guardrail_request", None)), max_field_bytes),
+                    input=cap_payload(
+                        cast(  # cast-ok: unknown-typed payload
+                            "object",
+                            guardrail_entry.get("guardrail_request", None),
+                        ),
+                        max_field_bytes,
+                    ),
                     output=cap_payload(
-                        cast("object", guardrail_entry.get("guardrail_response", None)), max_field_bytes
+                        cast(  # cast-ok: unknown-typed payload
+                            "object",
+                            guardrail_entry.get("guardrail_response", None),
+                        ),
+                        max_field_bytes,
                     ),
                     metadata=MappingProxyType(
                         {
