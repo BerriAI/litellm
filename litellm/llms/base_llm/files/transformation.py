@@ -135,6 +135,9 @@ class BaseFilesConfig(BaseConfig):
     ) -> OpenAIFileObject:
         """Transform file retrieve response into OpenAI format."""
 
+    def is_retrieve_file_response_successful(self, response: httpx.Response) -> bool:
+        return not httpx.codes.is_error(response.status_code)
+
     @abstractmethod
     def transform_delete_file_request(
         self,

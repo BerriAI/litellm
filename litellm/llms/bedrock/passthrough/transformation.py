@@ -22,6 +22,13 @@ if TYPE_CHECKING:
     from litellm.types.utils import CostResponseTypes
 
 
+BEDROCK_STREAMING_ACTIONS: Final = frozenset({"invoke-with-response-stream", "converse-stream"})
+
+
+def is_bedrock_streaming_endpoint(endpoint: str) -> bool:
+    return endpoint.partition("?")[0].rstrip("/").rsplit("/", 1)[-1] in BEDROCK_STREAMING_ACTIONS
+
+
 _TEXT_ONLY_DELTA_FIELDS: Final = frozenset({"content", "role"})
 
 

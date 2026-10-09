@@ -164,7 +164,6 @@ const createTestProps = (userRole = "proxy_admin", userId = "user-1", isTeamAdmi
     mountedValues: () => projectMountedValues(registry, form.getValues),
     handleOk: vi.fn().mockResolvedValue(true),
     setSelectedProvider: vi.fn(),
-    setProviderModelsFn: vi.fn(),
     getPlaceholder: vi.fn((provider: string) => `Enter ${provider} model name`),
     setShowAdvancedSettings: vi.fn(),
     selectedProvider: Providers.OpenAI,

@@ -16,6 +16,7 @@ from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
 import litellm
+from litellm.constants import SERVER_STREAMING_CLASSIFICATION_KEY, SERVER_STREAMING_CLASSIFICATION_MARKER
 from litellm.proxy._types import AddTeamCallback, ProxyException, TeamCallbackMetadata, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import (
     KeyAndTeamLoggingSettings,
@@ -850,8 +851,13 @@ def test_initial_snapshot_refresh_clears_a_previous_guardrail_checkpoint() -> No
     from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
 
     logging_obj: Final = Logging(
-        model="test-model", messages=[], stream=False, call_type="acompletion",
-        start_time=datetime.now(), litellm_call_id="new-request", function_id="new-request",
+        model="test-model",
+        messages=[],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.now(),
+        litellm_call_id="new-request",
+        function_id="new-request",
     )
     logging_obj.shadow_eval_request_snapshot = GuardrailRequestSnapshot.capture(
         {"messages": [{"role": "user", "content": "previous request"}]},
@@ -913,8 +919,14 @@ async def test_post_guardrail_snapshot_preserves_logging_only_masking_in_spend_l
     }
     data: Final = {"messages": messages, "metadata": metadata, "proxy_server_request": {}}
     logging_obj: Final = Logging(
-        model="test-model", messages=messages, stream=False, call_type="acompletion",
-        start_time=datetime.now(), litellm_call_id="mask-spend", function_id="mask-spend", kwargs=data,
+        model="test-model",
+        messages=messages,
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.now(),
+        litellm_call_id="mask-spend",
+        function_id="mask-spend",
+        kwargs=data,
     )
     data["litellm_logging_obj"] = logging_obj
     refresh_proxy_server_request_body_snapshot(data, guardrails_applied=True)
@@ -928,9 +940,13 @@ async def test_post_guardrail_snapshot_preserves_logging_only_masking_in_spend_l
     kwargs, _ = await guardrail.async_logging_hook(
         kwargs=logging_obj.model_call_details, result=None, call_type="acompletion"
     )
-    stored: Final = json.loads(_get_proxy_server_request_for_spend_logs_payload(
-        metadata={}, litellm_params=kwargs["litellm_params"], kwargs=kwargs,
-    ))
+    stored: Final = json.loads(
+        _get_proxy_server_request_for_spend_logs_payload(
+            metadata={},
+            litellm_params=kwargs["litellm_params"],
+            kwargs=kwargs,
+        )
+    )
 
     assert kwargs["messages"] == [{"role": "user", "content": "email [EMAIL]"}]
     assert stored["messages"] == kwargs["messages"]
@@ -1052,6 +1068,66 @@ async def test_add_litellm_data_to_request_strips_string_encoded_admin_injection
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "forged_field,forged_value",
+    [
+        ("fallback_depth", 1),
+        ("fallback_depth", True),
+        ("_target_order", 2),
+        ("attempted_targets", ["forged"]),
+    ],
+)
+async def test_add_litellm_data_to_request_strips_forged_fallback_hop_state(
+    forged_field: str, forged_value: object
+) -> None:
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/responses"
+    request_mock.url.__str__.return_value = "http://localhost/v1/responses"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "hop", "input": "hello", forged_field: forged_value},
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert forged_field not in updated
+    assert forged_field not in updated["proxy_server_request"]["body"]
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_keeps_the_request_max_fallbacks_cap() -> None:
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/responses"
+    request_mock.url.__str__.return_value = "http://localhost/v1/responses"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "hop", "input": "hello", "max_fallbacks": 0},
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated["max_fallbacks"] == 0
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_strips_user_control_fields():
     """Strip untrusted proxy-control fields before guardrails, logging, and headers read metadata."""
     request_mock = MagicMock(spec=Request)
@@ -1089,6 +1165,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "messages": [{"role": "user", "content": "hello"}],
         "mock_response": "free response",
         "mock_tool_calls": [{"id": "call_1"}],
+        "is_streaming_request": "caller-value",
         "disable_global_guardrails": True,
         "enable_prompt_caching": True,
         "routing_decision": {"cause": "forged", "routed_model": "spoofed"},
@@ -1114,6 +1191,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
     assert "enable_prompt_caching" not in updated
     assert "routing_decision" not in updated
     assert "litellm_gateway_injected_cache" not in updated
+    assert updated["is_streaming_request"] == "caller-value"
     assert "weights" not in updated
     assert "_router_weights" not in updated
     assert "weights" not in updated["proxy_server_request"]["body"]
@@ -8803,20 +8881,27 @@ async def test_mcp_credentials_only_removed_from_logging_copies(path: str, custo
     request.headers = Headers(request.headers)
     settings: Final = {"mcp_client_side_auth_header_name": custom_auth, "user_header_name": "x-user-id"}
     server: Final = MCPServer(
-        server_id="header-test", name="header-test", transport="http", url="https://example.com/mcp",
+        server_id="header-test",
+        name="header-test",
+        transport="http",
+        url="https://example.com/mcp",
         extra_headers=["x-service-token", "x-user-id"],
     )
     with (
         patch("litellm.proxy.proxy_server.general_settings", settings),
         patch.dict(
             "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.config_mcp_servers",
-            {"header-test": server}, clear=True,
+            {"header-test": server},
+            clear=True,
         ),
     ):
         updated: Final = await add_litellm_data_to_request(
             data={"model": "test-model", "messages": [{"role": "user", "content": "hello"}]},
-            request=request, user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
-            proxy_config=MagicMock(), general_settings=settings, version="test",
+            request=request,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings=settings,
+            version="test",
         )
     for header_dict in _all_header_dicts(updated, metadata_name):
         assert not any(value in json.dumps(header_dict) for value in secrets.values())
@@ -8836,7 +8921,10 @@ def test_signoz_callback_vars_are_scoped_to_the_signoz_callback():
         data=AddTeamCallback(
             callback_name="signoz",
             callback_type="success",
-            callback_vars={"signoz_ingestion_key": "team-key", "signoz_ingestion_endpoint": "https://ingest.eu.signoz.cloud:443"},
+            callback_vars={
+                "signoz_ingestion_key": "team-key",
+                "signoz_ingestion_endpoint": "https://ingest.eu.signoz.cloud:443",
+            },
         ),
         team_callback_settings_obj=None,
     )
@@ -8856,6 +8944,54 @@ def test_signoz_callback_vars_are_scoped_to_the_signoz_callback():
     assert under_other.callback_vars == {"langfuse_host": "https://cloud.langfuse.com"}
 
 
+def test_body_snapshot_excludes_the_server_streaming_marker() -> None:
+    from litellm.constants import SERVER_STREAMING_CLASSIFICATION_KEY, SERVER_STREAMING_CLASSIFICATION_MARKER
+    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
+
+    proxy_request: Final = {"body": {}}
+    data: Final = {
+        "messages": [{"role": "user", "content": "hi"}],
+        SERVER_STREAMING_CLASSIFICATION_KEY: SERVER_STREAMING_CLASSIFICATION_MARKER,
+        "proxy_server_request": proxy_request,
+    }
+
+    refresh_proxy_server_request_body_snapshot(data)
+
+    assert proxy_request == {"body": {"messages": [{"role": "user", "content": "hi"}]}}
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        SERVER_STREAMING_CLASSIFICATION_MARKER,
+        json.loads(json.dumps(SERVER_STREAMING_CLASSIFICATION_MARKER)),
+    ],
+    ids=["enum", "json-string"],
+)
+def test_body_snapshot_drops_only_the_marker_and_keeps_caller_value(marker: str) -> None:
+    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
+
+    marker_request: Final = {"body": {}}
+    marker_data: Final = {
+        "messages": [{"role": "user", "content": "hi"}],
+        SERVER_STREAMING_CLASSIFICATION_KEY: marker,
+        "proxy_server_request": marker_request,
+    }
+
+    refresh_proxy_server_request_body_snapshot(marker_data)
+
+    assert SERVER_STREAMING_CLASSIFICATION_KEY not in marker_request["body"], marker_request
+
+    caller_request: Final = {"body": {}}
+    caller_data: Final = {
+        "messages": [{"role": "user", "content": "hi"}],
+        SERVER_STREAMING_CLASSIFICATION_KEY: "caller-value",
+        "proxy_server_request": caller_request,
+    }
+
+    refresh_proxy_server_request_body_snapshot(caller_data)
+
+    assert caller_request["body"][SERVER_STREAMING_CLASSIFICATION_KEY] == "caller-value", caller_request
 def test_arize_otlp_protocol_on_a_key_logging_entry_reaches_the_destination(monkeypatch):
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.proxy.litellm_pre_call_utils import resolve_tenant_otel_destinations

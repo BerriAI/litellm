@@ -7917,3 +7917,54 @@ def test_is_prompt_caching_enabled(anthropic_messages):
         custom_llm_provider="anthropic",
         model="anthropic/claude-sonnet-4-5-20250929",
     )
+
+
+def test_calculate_usage_sums_compaction_and_message_iterations():
+    usage: Final = AnthropicConfig().calculate_usage(
+        usage_object={
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "iterations": [
+                {"iteration": 1, "type": "compaction", "input_tokens": 1000, "output_tokens": 500},
+                {"iteration": 2, "type": "message", "input_tokens": 100, "output_tokens": 50},
+            ],
+        },
+        reasoning_content=None,
+    )
+    assert usage.prompt_tokens == 1100
+    assert usage.completion_tokens == 550
+    assert usage.total_tokens == 1650
+    assert usage.prompt_tokens_details.text_tokens == 1100
+    assert usage.iterations is not None
+    assert len(usage.iterations) == 2
+    assert usage.iterations[0]["type"] == "compaction"
+
+
+def test_calculate_usage_sums_cache_tokens_across_compaction_iterations():
+    usage: Final = AnthropicConfig().calculate_usage(
+        usage_object={
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "iterations": [
+                {
+                    "type": "compaction",
+                    "input_tokens": 500,
+                    "output_tokens": 200,
+                    "cache_creation_input_tokens": 50,
+                    "cache_read_input_tokens": 17000,
+                },
+                {
+                    "type": "message",
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "cache_creation_input_tokens": 10,
+                    "cache_read_input_tokens": 20,
+                },
+            ],
+        },
+        reasoning_content=None,
+    )
+    assert usage.prompt_tokens == 17680
+    assert usage.completion_tokens == 250
+    assert usage.prompt_tokens_details.cache_creation_tokens == 60
+    assert usage.prompt_tokens_details.cached_tokens == 17020

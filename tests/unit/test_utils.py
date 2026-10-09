@@ -37,6 +37,10 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.humanloop import HumanloopLogger
+from litellm.llms.base_llm.audio_transcription.transformation import BaseAudioTranscriptionConfig
+from litellm.integrations.langfuse.langfuse_prompt_management import LangfusePromptManagement
+from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.duration_parser import (
     _extract_from_regex,
     duration_in_seconds,
@@ -50,7 +54,7 @@ from litellm.proxy.utils import is_valid_api_key
 from litellm.types.caching import CachingSupportedCallTypes
 from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
+from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import (
     ADDRESSED_RESPONSE_ID_FIELD,
     CallTypes,
@@ -74,6 +78,7 @@ from litellm.types.utils import (
 from litellm.types.videos.main import VideoObject
 from litellm.utils import (
     _invalidate_model_cost_lowercase_map,
+    add_custom_logger_callback_to_specific_event,
     check_valid_key,
     CustomStreamWrapper,
     filter_out_litellm_params,
@@ -323,6 +328,25 @@ def test_check_provider_match_github_allows_upstream_provider_metadata():
 
 def test_supports_function_calling_unknown_github_alias_returns_false():
     assert litellm.utils.supports_function_calling(model="github/non-existent-model-for-capability-check") is False
+
+
+@pytest.mark.parametrize(("audio_input", "audio_output"), [(True, False), (False, True)])
+def test_supports_audio_output_reads_its_own_cost_map_flag(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, audio_input: bool, audio_output: bool
+) -> None:
+    model: Final = "openai/audio-flags-disagree-model"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "supports_audio_input": audio_input,
+            "supports_audio_output": audio_output,
+        },
+    )
+    assert litellm.supports_audio_input(model) is audio_input
+    assert litellm.supports_audio_output(model) is audio_output
 
 
 def test_get_optional_params_image_gen():
@@ -996,6 +1020,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_web_search": {"type": "boolean"},
                 "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {"type": "boolean"},
                 "supports_bedrock_runtime_chat_completions_response_format": {"type": "boolean"},
+                "supports_bedrock_runtime_chat_completions_inline_reasoning": {"type": "boolean"},
                 "supports_url_context": {"type": "boolean"},
                 "supports_multimodal": {"type": "boolean"},
                 "uses_embed_content": {"type": "boolean"},
@@ -6783,6 +6808,7 @@ def setup_and_teardown():
 
 MODEL: Final = "anthropic/claude-haiku-4-5"
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_validate_tool_choice_none():
     """Test that None is returned as-is."""
@@ -6926,6 +6952,7 @@ _SCALAR_DEFAULTS = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
+
 
 @pytest.fixture(scope="module")
 def setup_and_teardown_local_testing():
@@ -8765,6 +8792,407 @@ def test_get_valid_models_from_provider():
     valid_models = get_valid_models(custom_llm_provider="openai")
     assert len(valid_models) > 0
     assert "gpt-5-mini" in valid_models
+
+
+@pytest.mark.parametrize(
+    ("provider", "api_base", "api_key", "model_id"),
+    [
+        ("anthropic", "https://anthropic.models.test", "anthropic-test-key", "claude-test-model"),
+        ("xai", "https://xai.models.test", "xai-test-key", "grok-test-model"),
+    ],
+)
+def test_get_valid_models_discovers_provider_models_from_http(
+    provider: str,
+    api_base: str,
+    api_key: str,
+    model_id: str,
+) -> None:
+    response_body: Final = {
+        "data": [
+            {
+                "id": model_id,
+                "type": "model",
+                "display_name": "Test model",
+                "created_at": "2024-01-01T00:00:00Z",
+            }
+        ],
+        "has_more": False,
+        "first_id": model_id,
+        "last_id": model_id,
+    }
+    models_url: Final = f"{api_base}/v1/models"
+    upstream: Final[respx.MockRouter]
+
+    with respx.mock(assert_all_called=True) as upstream:
+        model_list_route: Final = upstream.get(models_url).respond(200, json=response_body)
+
+        discovered_models: Final = get_valid_models(
+            check_provider_endpoint=True,
+            custom_llm_provider=provider,
+            api_key=api_key,
+            api_base=api_base,
+        )
+
+        assert discovered_models == [f"{provider}/{model_id}"]
+        assert model_list_route.called
+        assert len(upstream.calls) == 1
+
+
+def test_check_valid_key_returns_false_for_http_unauthorized() -> None:
+    response_body: Final = {
+        "error": {
+            "message": "Invalid API key",
+            "type": "invalid_request_error",
+            "param": None,
+            "code": "invalid_api_key",
+        }
+    }
+    upstream: Final[respx.MockRouter]
+
+    with respx.mock(assert_all_called=True) as upstream:
+        invalid_key_route: Final = upstream.post("https://api.openai.com/v1/chat/completions").respond(
+            401,
+            json=response_body,
+        )
+
+        valid_key: Final = check_valid_key(model="gpt-5-mini", api_key="invalid-test-key")
+
+        assert valid_key is False
+        assert invalid_key_route.called
+        assert upstream.calls.last.request.headers["Authorization"] == "Bearer invalid-test-key"
+
+
+def test_check_valid_key_returns_true_for_successful_completion() -> None:
+    response_body: Final = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "gpt-5-mini",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "ok"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    upstream: Final[respx.MockRouter]
+
+    with respx.mock(assert_all_called=True) as upstream:
+        valid_key_route: Final = upstream.post("https://api.openai.com/v1/chat/completions").respond(
+            200,
+            json=response_body,
+        )
+
+        valid_key: Final = check_valid_key(model="gpt-5-mini", api_key="valid-test-key")
+
+        assert valid_key is True
+        assert valid_key_route.called
+        assert upstream.calls.last.request.headers["Authorization"] == "Bearer valid-test-key"
+
+
+def test_function_to_dict_parses_numpy_docstring_schema() -> None:
+    pytest.importorskip("numpydoc")
+
+    def get_current_weather(location: str, unit: str) -> str:
+        """Get the current weather in a given location
+
+        Parameters
+        ----------
+        location : str
+            The city and state, e.g. San Francisco, CA
+        unit : {'celsius', 'fahrenheit'}
+            Temperature unit
+
+        Returns
+        -------
+        str
+            A sentence indicating the weather
+        """
+        return f"Weather for {location} in {unit}"
+
+    schema: Final = litellm.utils.function_to_dict(get_current_weather)
+
+    assert schema["name"] == "get_current_weather"
+    assert schema["description"] == "Get the current weather in a given location"
+    assert schema["parameters"]["type"] == "object"
+    assert schema["parameters"]["properties"]["location"] == {
+        "type": "string",
+        "description": "The city and state, e.g. San Francisco, CA",
+    }
+    assert schema["parameters"]["properties"]["unit"]["type"] == "string"
+    assert schema["parameters"]["properties"]["unit"]["description"] == "Temperature unit"
+    assert schema["parameters"]["required"] == ["location", "unit"]
+
+
+def test_duration_in_seconds_one_month_uses_the_fixed_calendar_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixed_start: Final = datetime(2025, 2, 15, 12, 0, 0, 123456)
+    fixed_timestamp: Final = fixed_start.timestamp()
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.duration_parser.time_module.time",
+        lambda: fixed_timestamp,
+    )
+
+    assert duration_in_seconds("1mo") == 28 * 24 * 60 * 60
+
+
+def test_prompt_caching_image_check_uses_default_image_dimensions() -> None:
+    image_bytes: Final = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/x+AAwMCAO+ip1sAAAAASUVORK5CYII="
+    )
+    image_url: Final = "https://93.184.216.34/test.png"
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": image_url, "detail": "high"},
+                },
+            ],
+        }
+    ]
+
+    with respx.mock(assert_all_called=False) as upstream:
+        image_route: Final = upstream.get(image_url).respond(200, content=image_bytes)
+        cacheable: Final = is_prompt_caching_valid_prompt(
+            model="gpt-4o-mini",
+            messages=messages,
+            custom_llm_provider="openai",
+            min_token_count=100_000,
+        )
+
+        assert cacheable is False
+        assert image_route.called is False
+        assert len(upstream.calls) == 0
+
+
+def test_get_valid_models_discovers_fireworks_models_from_http(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api_base: Final = "https://fireworks.models.test/v1"
+    api_key: Final = "fireworks-test-key"
+    account_id: Final = "fireworks-test-account"
+    model_name: Final = "accounts/fireworks/models/llama-test-model"
+    models_url: Final = f"https://fireworks.models.test/v1/accounts/{account_id}/models"
+    monkeypatch.setenv("FIREWORKS_ACCOUNT_ID", account_id)
+    upstream: Final[respx.MockRouter]
+
+    with respx.mock(assert_all_called=True) as upstream:
+        model_list_route: Final = upstream.get(models_url).respond(
+            200,
+            json={"models": [{"name": model_name}]},
+        )
+
+        discovered_models: Final = get_valid_models(
+            check_provider_endpoint=True,
+            custom_llm_provider="fireworks_ai",
+            api_key=api_key,
+            api_base=api_base,
+        )
+
+        assert discovered_models == [f"fireworks_ai/{model_name}"]
+        assert model_list_route.called
+        assert upstream.calls.last.request.headers["Authorization"] == f"Bearer {api_key}"
+
+
+def test_get_valid_models_returns_static_fireworks_models_without_endpoint_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+    monkeypatch.setenv("FIREWORKS_AI_API_KEY", "fireworks-test-key")
+    expected_models: Final = litellm.models_by_provider["fireworks_ai"]
+
+    actual_models: Final = get_valid_models(
+        check_provider_endpoint=False,
+        custom_llm_provider="fireworks_ai",
+    )
+    env_inferred_models: Final = get_valid_models()
+
+    assert set(actual_models) == expected_models
+    assert actual_models
+    assert expected_models <= set(env_inferred_models)
+
+
+def test_get_valid_models_uses_the_litellm_params_anthropic_api_key() -> None:
+    model_id: Final = "claude-test-model"
+    models_url: Final = "https://api.anthropic.com/v1/models"
+    response_body: Final = {
+        "data": [
+            {
+                "id": model_id,
+                "type": "model",
+                "display_name": "Test Claude",
+                "created_at": "2024-01-01T00:00:00Z",
+            }
+        ],
+        "has_more": False,
+        "first_id": model_id,
+        "last_id": model_id,
+    }
+    upstream: Final[respx.MockRouter]
+
+    def response_for_api_key(request: httpx.Request) -> httpx.Response:
+        if request.headers["x-api-key"] == "bad-test-key":
+            return httpx.Response(401, json={"error": {"message": "invalid key"}}, request=request)
+        return httpx.Response(200, json=response_body, request=request)
+
+    with respx.mock(assert_all_called=True) as upstream:
+        model_list_route: Final = upstream.get(models_url).mock(side_effect=response_for_api_key)
+
+        bad_key_models: Final = get_valid_models(
+            check_provider_endpoint=True,
+            custom_llm_provider="anthropic",
+            litellm_params=LiteLLM_Params(model="anthropic/*", api_key="bad-test-key"),
+        )
+        good_key_models: Final = get_valid_models(
+            check_provider_endpoint=True,
+            custom_llm_provider="anthropic",
+            litellm_params=LiteLLM_Params(model="anthropic/*", api_key="good-test-key"),
+        )
+
+        assert bad_key_models == []
+        assert good_key_models == [f"anthropic/{model_id}"]
+        assert model_list_route.called
+        assert [call.request.headers["x-api-key"] for call in upstream.calls] == [
+            "bad-test-key",
+            "good-test-key",
+        ]
+
+
+def test_add_custom_logger_to_success_callback_registers_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+
+    add_custom_logger_callback_to_specific_event("langfuse", "success")
+
+    assert len(litellm.success_callback) == 1
+    assert isinstance(litellm.success_callback[0], LangfusePromptManagement)
+    assert len(litellm._async_success_callback) == 1
+    assert isinstance(litellm._async_success_callback[0], LangfusePromptManagement)
+    assert litellm.failure_callback == []
+    assert litellm._async_failure_callback == []
+
+
+@pytest.mark.parametrize(
+    "registered_lists",
+    [
+        ("success_callback", "_async_success_callback"),
+        ("success_callback",),
+    ],
+)
+def test_add_custom_logger_callback_does_not_duplicate_existing_success_logger(
+    monkeypatch: pytest.MonkeyPatch,
+    registered_lists: tuple[str, ...],
+) -> None:
+    logger: Final = HumanloopLogger()
+    async_success_callbacks: Final = [logger] if "_async_success_callback" in registered_lists else []
+    success_callbacks: Final = [logger] if "success_callback" in registered_lists else []
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", async_success_callbacks)
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", success_callbacks)
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+
+    add_custom_logger_callback_to_specific_event("humanloop", "success")
+
+    assert sum(type(callback) is HumanloopLogger for callback in litellm.success_callback) == int(
+        "success_callback" in registered_lists
+    )
+    assert sum(type(callback) is HumanloopLogger for callback in litellm._async_success_callback) == int(
+        "_async_success_callback" in registered_lists
+    )
+    assert litellm.failure_callback == []
+    assert litellm._async_failure_callback == []
+
+
+@pytest.mark.parametrize(
+    ("registered_lists", "expected_async_success_callback_count"),
+    [
+        (("success_callback", "_async_success_callback"), 1),
+        (("success_callback",), 0),
+    ],
+)
+@pytest.mark.asyncio
+async def test_acompletion_does_not_duplicate_a_logger_already_in_success_callbacks(
+    monkeypatch: pytest.MonkeyPatch,
+    registered_lists: tuple[str, ...],
+    expected_async_success_callback_count: int,
+) -> None:
+    logger: Final = HumanloopLogger()
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [logger])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_input_callback", [])
+    monkeypatch.setattr(
+        litellm, "_async_success_callback", [logger] if "_async_success_callback" in registered_lists else []
+    )
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+
+    await litellm.acompletion(
+        model="gpt-5-mini",
+        messages=[{"role": "user", "content": "callback registration"}],
+        mock_response="ok",
+    )
+
+    assert litellm.success_callback == [logger]
+    assert litellm._async_success_callback == [logger] * expected_async_success_callback_count
+
+
+@pytest.mark.asyncio
+async def test_custom_logger_in_global_callbacks_registers_once_across_completion_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger: Final = HumanloopLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_input_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+
+    for _ in range(11):
+        await litellm.acompletion(
+            model="gpt-5-mini",
+            messages=[{"role": "user", "content": "callback registration"}],
+            mock_response="ok",
+        )
+
+    assert litellm.callbacks == [logger]
+    assert litellm.input_callback == [logger]
+    assert litellm.success_callback == [logger]
+    assert litellm.failure_callback == [logger]
+    assert litellm._async_input_callback == []
+    assert litellm._async_success_callback == [logger]
+    assert litellm._async_failure_callback == [logger]
+
+
+def test_get_provider_audio_transcription_config_resolves_for_every_provider() -> None:
+    configs: Final = {
+        provider: ProviderConfigManager.get_provider_audio_transcription_config(model="whisper-1", provider=provider)
+        for provider in LlmProviders
+    }
+    unexpected: Final = {
+        provider: config
+        for provider, config in configs.items()
+        if config is not None and not isinstance(config, BaseAudioTranscriptionConfig)
+    }
+
+    assert unexpected == {}
+    assert isinstance(configs[LlmProviders.OPENAI], litellm.OpenAIWhisperAudioTranscriptionConfig)
 
 
 def test_get_valid_models_from_provider_cache_invalidation(monkeypatch):

@@ -114,7 +114,6 @@ from litellm.proxy._types import (
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LitellmUserRoles,
-    ModelAccessDeniedProxyException,
     PassThroughGenericEndpoint,
     ProxyErrorTypes,
     ProxyException,
@@ -356,6 +355,7 @@ from litellm.proxy.auth.auth_object_prefetch import AUTH_OBJECTS_TARGET
 from litellm.proxy.auth.auth_utils import (
     check_response_size_is_safe,
     is_request_body_safe,
+    log_model_access_denial,
     log_once_if_budget_reservation_disabled,
     warn_once_if_custom_auth_skips_common_checks,
 )
@@ -768,6 +768,7 @@ except ImportError:
     shutdown_billing_metrics_recorder = None
 from fastapi.exception_handlers import http_exception_handler
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.websockets import WebSocketState
 
 from litellm.proxy import tracing_endpoints
 from litellm.proxy.middleware.admission_control_middleware import (
@@ -886,7 +887,7 @@ from litellm.proxy.utils import (  # noqa: F401, RUF100  # legacy module exports
     hash_password,
     hash_token,
     invalidate_config_param,
-    is_projected_spend_over_limit,
+    is_projected_spend_over_limit,  # pyright: ignore[reportUnusedImport]  # backwards-compatible package export
     is_valid_team_configs,
     litellm_config_cache,
     migrate_passwords_to_scrypt_async,
@@ -2057,7 +2058,7 @@ class UserAPIKeyCacheTTLEnum(enum.Enum):
 @app.exception_handler(ProxyException)
 async def openai_exception_handler(request: Request, exc: ProxyException):
     # NOTE: DO NOT MODIFY THIS, its crucial to map to Openai exceptions
-    _log_model_access_denial(exc)
+    log_model_access_denial(exc)
     headers: Final = exc.headers
     error_dict: Final = with_call_id(
         JSON_OBJECT.validate_python(exc.to_dict()),
@@ -2076,18 +2077,32 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
 
 
 @app.exception_handler(StarletteHTTPException)
-async def otlp_http_exception_handler(request: Request, exc: StarletteHTTPException) -> Response:
-    response: Final = tracing_endpoints.otlp_error_response(request, exc.status_code, exc.headers)
+async def otlp_http_exception_handler(connection: Request | WebSocket, exc: StarletteHTTPException) -> Response | None:
+    if isinstance(connection, WebSocket):
+        return await _websocket_http_exception_response(connection, exc)
+    response: Final = tracing_endpoints.otlp_error_response(connection, exc.status_code, exc.headers)
     if response is not None:
-        _close_dangling_otel_server_span(request, exc.status_code, exc=exc)
+        _close_dangling_otel_server_span(connection, exc.status_code, exc=exc)
         return response
-    return await http_exception_handler(request, exc)
+    return await http_exception_handler(connection, exc)
 
 
-def _log_model_access_denial(exc: ProxyException) -> None:
-    if not isinstance(exc, ModelAccessDeniedProxyException):
-        return
-    verbose_proxy_logger.warning(exc.sanitized_internal_message())
+async def _websocket_http_exception_response(websocket: WebSocket, exc: StarletteHTTPException) -> Response | None:
+    state: Final = websocket.application_state
+    match state:
+        case WebSocketState.CONNECTING:
+            return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers)
+        case WebSocketState.CONNECTED:
+            await websocket.close(code=_websocket_close_code(exc.status_code))
+            return None
+        case WebSocketState.RESPONSE | WebSocketState.DISCONNECTED:
+            return None
+        case _:
+            assert_never(state)
+
+
+def _websocket_close_code(status_code: int) -> int:
+    return status.WS_1011_INTERNAL_ERROR if status_code >= 500 else status.WS_1008_POLICY_VIOLATION
 
 
 def _close_dangling_otel_server_span(request: Request, status_code: int, exc: Exception | None = None) -> None:
@@ -4150,21 +4165,18 @@ async def update_cache(
         new_spend: Final = existing_spend + response_cost
 
         ## CHECK IF USER PROJECTED SPEND > SOFT LIMIT
-        if (
-            existing_spend_obj.soft_budget_cooldown is False
-            and existing_spend_obj.soft_budget is not None
-            and (
-                is_projected_spend_over_limit(
-                    current_spend=new_spend,
-                    soft_budget_limit=existing_spend_obj.soft_budget,
-                )
-                is True
-            )
-        ):
-            projected_spend, projected_exceeded_date = get_projected_spend_over_limit(
+        projection: Final = (
+            get_projected_spend_over_limit(
                 current_spend=new_spend,
                 soft_budget_limit=existing_spend_obj.soft_budget,
+                budget_duration=existing_spend_obj.budget_duration,
+                budget_reset_at=existing_spend_obj.budget_reset_at,
             )
+            if existing_spend_obj.soft_budget_cooldown is False and existing_spend_obj.soft_budget is not None
+            else None
+        )
+        if projection is not None:
+            projected_spend, projected_exceeded_date = projection
             soft_limit: Final = existing_spend_obj.soft_budget
             call_info: Final = CallInfo(
                 token=existing_spend_obj.token or "",
@@ -6936,6 +6948,13 @@ class ProxyConfig:
                             {"user_api_key_cache_max_size": general_settings["user_api_key_cache_max_size"]}
                         )
                     ).user_api_key_cache_max_size
+                )
+
+            if "spend_logs_metadata_fields" in general_settings:
+                _ = ConfigGeneralSettings.model_validate(
+                    MappingProxyType(
+                        {"spend_logs_metadata_fields": typed_general_settings["spend_logs_metadata_fields"]}
+                    )
                 )
 
             ### PKCE MULTI-INSTANCE PREREQUISITE CHECK ###
@@ -13247,7 +13266,7 @@ async def realtime_websocket_endpoint(
             llm_router=llm_router,
         )
     except ProxyException as e:
-        _log_model_access_denial(e)
+        log_model_access_denial(e)
         await _reject_realtime_session(websocket, user_api_key_dict, code=1008, reason=e.message[:120])
         return
     await websocket.accept(**accept_kwargs)
@@ -18523,6 +18542,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "mcp_client_id_header": "String",
         "mcp_trusted_proxy_ranges": "List",
         "mcp_xff_num_trusted_hops": "Integer",
+        "mcp_prefer_client_id_metadata_document": "Boolean",
         "always_include_stream_usage": "Boolean",
         "forward_client_headers_to_llm_api": "Boolean",
         "mcp_required_fields": "List",
