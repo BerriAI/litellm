@@ -11664,6 +11664,7 @@
             "max_input_chars": {
               "anyOf": [
                 {
+                  "exclusiveMinimum": 0.0,
                   "type": "integer"
                 },
                 {
@@ -14187,6 +14188,7 @@
             "max_input_chars": {
               "anyOf": [
                 {
+                  "exclusiveMinimum": 0.0,
                   "type": "integer"
                 },
                 {

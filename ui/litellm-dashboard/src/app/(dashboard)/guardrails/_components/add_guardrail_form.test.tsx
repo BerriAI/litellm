@@ -1,7 +1,9 @@
 import React from "react";
 import { fireEvent, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getGuardrailProviderSpecificParams } from "@/components/networking";
 import AddGuardrailForm from "./add_guardrail_form";
 
 vi.mock("@/components/networking", () => ({
@@ -54,5 +56,32 @@ describe("AddGuardrailForm provider options", () => {
 
     const logo = await screen.findByAltText("Presidio PII logo");
     expect(logo).toHaveAttribute("src", expect.stringContaining("microsoft_azure.svg"));
+  });
+});
+
+describe("AddGuardrailForm decision model checks", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("shows 0.5 in a custom check threshold input", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(getGuardrailProviderSpecificParams).mockResolvedValue({
+      decision_model: { ui_friendly_name: "Decision Model" },
+    });
+    renderWithProviders(
+      <AddGuardrailForm visible={true} onClose={vi.fn()} accessToken="test-token" onSuccess={vi.fn()} />,
+    );
+
+    await user.type(await screen.findByLabelText("Guardrail Name"), "dm-threshold");
+    await user.click(screen.getByLabelText("Guardrail Provider"));
+    await user.click(await screen.findByText("Decision Model"));
+    await user.click(screen.getByRole("button", { name: "Next" }));
+
+    await user.type(await screen.findByLabelText("Custom check name"), "invoice_policy");
+    await user.type(screen.getByLabelText("Custom check instructions"), "Does the text ask about invoices?");
+    await user.click(screen.getByRole("button", { name: "Add check" }));
+
+    expect(await screen.findByLabelText("invoice_policy threshold")).toHaveValue(0.5);
   });
 });

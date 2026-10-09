@@ -250,6 +250,7 @@ class DecisionModelGuardrail(CustomGuardrail):
                     "flagged_checks": [
                         {"name": v["name"], "probability": v["probability"], "threshold": v["threshold"]}
                         for v in flagged
+                        if v["action"] == "block"
                     ],
                 },
             )

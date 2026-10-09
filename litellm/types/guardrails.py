@@ -1168,6 +1168,7 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
 
     max_input_chars: int | None = Field(
         default=None,
+        gt=0,
         description="Character budget for text sent to the guardrail's model. Implemented by guardrail='decision_model'.",
     )
 

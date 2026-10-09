@@ -253,7 +253,7 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="flex w-28 items-center gap-1 pl-4">
+                <div className="w-28 pl-4">
                   <Input
                     type="number"
                     min={0}
@@ -263,6 +263,8 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
                     value={check.threshold}
                     onChange={(event) => setCheck(check.name, { threshold: Number(event.target.value) || 0 })}
                   />
+                </div>
+                <div>
                   <Button
                     variant="ghost"
                     size="sm"
