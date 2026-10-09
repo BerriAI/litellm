@@ -188,10 +188,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         provider's validation error surfaces to the caller, and None or values
         already at/above the minimum are returned unchanged.
         """
-        if (
-            isinstance(max_output_tokens, int)
-            and 0 < max_output_tokens < OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS
-        ):
+        if isinstance(max_output_tokens, int) and 0 < max_output_tokens < OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS:
             return OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS
         return max_output_tokens
 
