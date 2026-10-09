@@ -260,5 +260,491 @@
       "all_runtime_prompts_redacted": true
     },
     "review_url": "http://127.0.0.1:4491/ui/lens/?tab=investigations&lens=b598954e-54d7-486f-8a10-2ce84876f587"
+  },
+  "gateway_restart": {
+    "created_at": "2026-10-09T04:59:06.305Z",
+    "source_sha": "a54b38e779c5d960b2515e2807c1858cc5842b4d",
+    "base_sha": "72ab7368639cffb20dc70b124609d232be40901d",
+    "retained_investigation": "b598954e-54d7-486f-8a10-2ce84876f587",
+    "checks": [
+      {
+        "method": "GET",
+        "path": "/lens/service",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "path": "/v1/traces/3ae3c28413aeec05ac9c512f5a241ffe",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "path": "/v1/traces/3ae3c28413aeec05ac9c512f5a241ffe",
+        "status": 404
+      },
+      {
+        "method": "PUT",
+        "path": "/lens/signals",
+        "status": 403
+      },
+      {
+        "method": "GET",
+        "path": "/lens/datasets",
+        "status": 409
+      },
+      {
+        "method": "GET",
+        "path": "/lens/b598954e-54d7-486f-8a10-2ce84876f587",
+        "status": 200
+      }
+    ]
+  },
+  "merged_sdk": {
+    "status": "passed",
+    "generated_at": "2026-10-09T06:07:17.466Z",
+    "gateway": "http://127.0.0.1:4490",
+    "lens": "http://127.0.0.1:4324",
+    "sdk_version": "0.1.0a3",
+    "doctor": {
+      "ok": true,
+      "checks": [
+        {
+          "name": "version",
+          "ok": true,
+          "detail": "gateway-merge-build on main"
+        },
+        {
+          "name": "agent",
+          "ok": true,
+          "detail": "lens-sdk-smoke"
+        },
+        {
+          "name": "gateway-merge-smoke",
+          "ok": true,
+          "detail": "gateway-sdk-219a81d130@1: 1 included cases, 1 trials"
+        },
+        {
+          "name": "eval API",
+          "ok": true,
+          "detail": "Contract v1 run lookup is available"
+        }
+      ]
+    },
+    "setup": {
+      "steps": [
+        {
+          "method": "POST",
+          "path": "/lens/tracing/keys",
+          "status": 200
+        },
+        {
+          "method": "POST",
+          "path": "/lens/datasets",
+          "status": 200
+        },
+        {
+          "method": "POST",
+          "path": "/lens/datasets/build",
+          "status": 200
+        },
+        {
+          "method": "POST",
+          "path": "/lens/datasets/594c8895-b7d0-4611-9421-41a9d36dd7a9/revisions",
+          "status": 200
+        }
+      ],
+      "dataset": {
+        "id": "594c8895-b7d0-4611-9421-41a9d36dd7a9",
+        "name": "gateway-sdk-219a81d130",
+        "revision": 1
+      },
+      "case_id": "1fec9b554dc719e3b1e66456d90caae7c78c22c459bbc45dc190980b8bfe5b7b",
+      "key_id": "0baf4930-366d-4cdd-bba2-c591c9cc2a58"
+    },
+    "run": {
+      "agent": "lens-sdk-smoke",
+      "branch": "main",
+      "eval": "gateway-merge-smoke",
+      "expected_trials": 1,
+      "failure": "",
+      "id": "18444952547739102662_42849a16931e4a38b9f5a84fbe381cbb",
+      "pr": null,
+      "received_trials": 1,
+      "status": "done",
+      "summary": {
+        "baseline_run_id": "18444952548293116962_681e60f377bb40dbaaf83371831cac3e",
+        "baseline_version": "gateway-merge-build",
+        "cost_per_case": 0.000292,
+        "errors": 0,
+        "fixed": [],
+        "gate": {
+          "passed": true,
+          "reasons": []
+        },
+        "pass_rate": 1,
+        "passed": 1,
+        "regressions": [],
+        "scores": {
+          "judge": 1,
+          "task_completed": 1
+        },
+        "total": 1
+      },
+      "url": "http://127.0.0.1:4324/ui/?tab=evals&eval=gateway-merge-smoke&eval_run=18444952547739102662_42849a16931e4a38b9f5a84fbe381cbb",
+      "version": "gateway-merge-build"
+    },
+    "agent": {
+      "case_id": "1fec9b554dc719e3b1e66456d90caae7c78c22c459bbc45dc190980b8bfe5b7b",
+      "trace_id": "8c4d06ab8bea430ca9e01f441dfd3ab8",
+      "session_id": "pass-sdk-smoke-b885c113c75b4560931ced59e7f052b7",
+      "model": "openai/gpt-6.1-sol",
+      "inference_status": 200,
+      "ingest_status": 200,
+      "cost_usd": 0.000292,
+      "response_characters": 89
+    },
+    "permissions": [
+      {
+        "who": "viewer",
+        "method": "GET",
+        "status": 200
+      },
+      {
+        "who": "viewer",
+        "method": "PUT",
+        "status": 401
+      },
+      {
+        "who": "other",
+        "method": "GET",
+        "status": 401
+      },
+      {
+        "who": "owner",
+        "method": "GET",
+        "status": 401
+      },
+      {
+        "who": "admin",
+        "contract": 99,
+        "status": 409
+      }
+    ],
+    "judges": [
+      {
+        "request_id": "chatcmpl-EWy2B2WmiXpDh2GmAHumCkL2Cgv1P",
+        "response_id": "chatcmpl-EWy2B2WmiXpDh2GmAHumCkL2Cgv1P",
+        "spend": 0.00119,
+        "internal": true,
+        "eval_run_id": "18444952547739102662_42849a16931e4a38b9f5a84fbe381cbb",
+        "team_id": "",
+        "case_id": "1fec9b554dc719e3b1e66456d90caae7c78c22c459bbc45dc190980b8bfe5b7b",
+        "environment": "lens-eval",
+        "messages_redacted": true,
+        "response_redacted": true
+      }
+    ],
+    "native_wheel": {
+      "name": "lens_evals-0.1.0a3-cp311-abi3-macosx_11_0_arm64.whl",
+      "sha256": "0d9707ad3cfab4126896682e3a434169523d9285697c803b97eadc145b1e674d",
+      "built_from_current_checkout": true,
+      "official_release": false
+    },
+    "sdk_tests": {
+      "passed": 38,
+      "failed": 0,
+      "log_sha256": "80172d55091ed2d969fe1c04469f8226d49983f214413cf10d30eeacf14b96e9"
+    },
+    "qualified_source_sha256": {
+      "src/worker/crates/lens/src/eval_judge.rs": "1e3ed79b27a8dc0e40aa85f89a4c58e919a2825c00077a3a579bc53bbc0f90f7",
+      "src/worker/crates/analysis/src/transport.rs": "2019992954c5e0e73e13f2d69ebe7209f3516009393c8cc9b7e97aceb36a948a"
+    }
+  },
+  "outage_independence": {
+    "status": "passed",
+    "verified_at": "2026-10-09T06:01:35.427Z",
+    "gateway_source_commit": "a54b38e779c5d960b2515e2807c1858cc5842b4d",
+    "scope": "Live gateway ordinary paid inference during a stopped Lens process, plus independent actual exporter fault injection against the Rust Lens receiver and ClickHouse",
+    "ordinary_inference": {
+      "verified_connection_refused": true,
+      "stopped_at": "2026-10-09T05:59:08.349Z",
+      "generated_at": "2026-10-09T06:00:09.846Z",
+      "calls": [
+        {
+          "phase": "before",
+          "status": 200,
+          "elapsed_ms": 2080,
+          "trace_id": "985bd012914be1b97ac7b968477b52ca",
+          "parent_span_id": "f6b6ee50b82b16f2",
+          "response_id": "chatcmpl-EWxpiOTo1Fv37ZksGb38ck0DbqN0n",
+          "request_id": "19f2f5ab-3a74-4565-aa53-37d0e760c0cd",
+          "cost_usd": 0.000066,
+          "response_characters": 5
+        },
+        {
+          "phase": "during",
+          "status": 200,
+          "elapsed_ms": 1067,
+          "trace_id": "a677244c6f940f7c255c2429900bd9f9",
+          "parent_span_id": "40fc45329a66c500",
+          "response_id": "chatcmpl-EWxvTJXDxOTHW6c85jsS1WF6jHwOn",
+          "request_id": "af13ccce-8efc-44b0-8abd-9656f9c6b9dd",
+          "cost_usd": 0.00011200000000000001,
+          "response_characters": 5
+        },
+        {
+          "phase": "after",
+          "status": 200,
+          "elapsed_ms": 1280,
+          "trace_id": "4c0b3ac7e2d43e733767b883c5c50b0a",
+          "parent_span_id": "b23c823434b60965",
+          "response_id": "chatcmpl-EWxvze7KCLNkYIhR5sZPzeXhj9QKL",
+          "request_id": "17b64853-f499-4774-a929-a1ff5361d134",
+          "cost_usd": 0.00012200000000000001,
+          "response_characters": 5
+        }
+      ],
+      "stored": [
+        {
+          "request_id": "chatcmpl-EWxpiOTo1Fv37ZksGb38ck0DbqN0n",
+          "response_id": "chatcmpl-EWxpiOTo1Fv37ZksGb38ck0DbqN0n",
+          "trace_id": "985bd012914be1b97ac7b968477b52ca",
+          "span_id": "f6b6ee50b82b16f2",
+          "spend": 0.000066
+        },
+        {
+          "request_id": "chatcmpl-EWxvze7KCLNkYIhR5sZPzeXhj9QKL",
+          "response_id": "chatcmpl-EWxvze7KCLNkYIhR5sZPzeXhj9QKL",
+          "trace_id": "4c0b3ac7e2d43e733767b883c5c50b0a",
+          "span_id": "b23c823434b60965",
+          "spend": 0.00012200000000000001
+        }
+      ],
+      "missing_phases": [
+        "during"
+      ],
+      "provider": "Real paid openai/gpt-6.1-sol calls with unique requests during and after outage",
+      "gateway_remained_running": true,
+      "traceparent_and_response_cost_preserved": true,
+      "outage_record_replayed": false,
+      "loss_policy": "The bounded asynchronous exporter gives up after three attempts. This proof verifies the intended finite loss, not durable delivery."
+    },
+    "bounded_exporter": {
+      "status": "passed",
+      "source_sha256": "d1290af623614e176097b5d862b8d2d67f1c391df4b3c8719c7ee0ea76cf7bcc",
+      "prefix": "export-qualification-ce10f50def68490e8665eb3965183ffa",
+      "transport": "httpx actual TCP via fault injection relay to Rust receiver and ClickHouse",
+      "limits": {
+        "events": 1000,
+        "bytes": 33554432,
+        "event_bytes": 1048576
+      },
+      "at_event_limit": {
+        "buffered_events": 1000,
+        "buffered_bytes": 427670,
+        "rows_written": 0,
+        "rows_dropped": 1,
+        "last_error": ""
+      },
+      "in_flight": {
+        "buffered_events": 1000,
+        "buffered_bytes": 427670,
+        "rows_written": 0,
+        "rows_dropped": 1,
+        "last_error": ""
+      },
+      "recovered": {
+        "buffered_events": 0,
+        "buffered_bytes": 0,
+        "rows_written": 1000,
+        "rows_dropped": 2,
+        "last_error": ""
+      },
+      "terminal": {
+        "buffered_events": 0,
+        "buffered_bytes": 0,
+        "rows_written": 0,
+        "rows_dropped": 1,
+        "last_error": "retry limit reached",
+        "elapsed_ms": 3050
+      },
+      "after_terminal": {
+        "buffered_events": 0,
+        "buffered_bytes": 0,
+        "rows_written": 1,
+        "rows_dropped": 1,
+        "last_error": ""
+      },
+      "at_byte_limit": {
+        "buffered_events": 32,
+        "buffered_bytes": 33554432,
+        "rows_written": 0,
+        "rows_dropped": 1,
+        "last_error": ""
+      },
+      "after_byte_shutdown": {
+        "buffered_events": 0,
+        "buffered_bytes": 0,
+        "rows_written": 0,
+        "rows_dropped": 33,
+        "last_error": ""
+      },
+      "stored_unique_records": 1001,
+      "expected_unique_records": 1001,
+      "exact_id_set_matches": true,
+      "attempts": {
+        "retry": 2,
+        "drop": 4
+      },
+      "events": [
+        {
+          "lane": "retry",
+          "attempt": 1,
+          "status": 503
+        },
+        {
+          "lane": "retry",
+          "attempt": 2,
+          "status": 204
+        },
+        {
+          "lane": "drop",
+          "attempt": 1,
+          "status": 503
+        },
+        {
+          "lane": "drop",
+          "attempt": 2,
+          "status": 503
+        },
+        {
+          "lane": "drop",
+          "attempt": 3,
+          "status": 503
+        },
+        {
+          "lane": "drop",
+          "attempt": 4,
+          "status": 204
+        }
+      ],
+      "byte_limit_method": "Exact 32MiB queue fill without dispatch; shutdown drops all32queuedrecords plus1overflow. Event-limit recovery used real HTTP forwarding and verified persisted ID sets."
+    }
+  },
+  "embedded_ui": {
+    "qualification": "Final source package; published release adoption pending",
+    "companion_base_sha": "a54b38e779c5d960b2515e2807c1858cc5842b4d",
+    "package": {
+      "path": "ui/litellm-dashboard/vendor/litellm-lens-ui-0.1.0-dev.0.tgz",
+      "sha256": "490d2848dce174826d275959fbb1a5d456acdca45f58cd283487dce89ea3b602",
+      "integrity": "sha512-Rht4jazqGbdJSGHeBHOs6L2AW2O/X1Q6hBavKv8GgtmDkFUWa9KDp/o0mgiCS4+B+kKa78qLSuIPbVbHbYIGSg=="
+    },
+    "sources": {
+      "ui/litellm-dashboard/src/components/lens/EmbeddedLens.tsx": "7eab9ed647367903c85426786fa027977b1c0d10acf9e9d7fc00c4b51c317b88",
+      "ui/litellm-dashboard/src/components/lens/EmbeddedLens.integration.test.tsx": "75889d9818ea991200dca01f045556235b3d92bc0771ad6ca2b2e846a8360629"
+    },
+    "checks": [
+      {
+        "command": "npx vitest run src/components/lens/EmbeddedLens.integration.test.tsx 'src/app/(dashboard)/lens/page.test.tsx'",
+        "result": "passed",
+        "files": 2,
+        "tests": 7,
+        "log": {
+          "path": "/tmp/lens-host-final-ui-tests.log",
+          "sha256": "d64e39806ff66f843d3df4f5f1aaac3163281ebf84c13ea20fe3d4b189351fc4"
+        }
+      },
+      {
+        "command": "npm run build",
+        "result": "passed",
+        "includes_typecheck": true,
+        "log": {
+          "path": "/tmp/lens-host-final-ui-build.log",
+          "sha256": "a81b24957fb39967df81896c883ea0d15252bda74739d6d451718ce93c18ccdc"
+        }
+      }
+    ],
+    "verified_behaviors": [
+      "Packaged UI uses gateway session, URL prefix and public API contract",
+      "Analysis setup prompt identifies the embedded dashboard and excludes its session credential",
+      "Demo trace selection preserves a shareable gateway URL",
+      "Unconfigured gateway preserves Install Lens, Helm setup, Docker setup and Check setup controls",
+      "Unconfigured setup prompt carries gateway address and observed configured:false state",
+      "Manual installation links point to the documented Kubernetes and Docker Compose setup paths"
+    ],
+    "regression_proof": {
+      "before": "Prior packaged UI failed because the unconfigured embedded landing hid Helm setup",
+      "after": "Same network-boundary integration test passed against the final package",
+      "log": "/tmp/lens-host-prompt-before.log",
+      "sha256": "a40a19543fc5ccd73ff215162b9ca835dadde26e14ffc906c1d44c65bfa2f3d7"
+    },
+    "actual_unconfigured_gateway": {
+      "url": "http://127.0.0.1:4493",
+      "results": [
+        {
+          "path": "/lens/service",
+          "status": 200,
+          "configured": false,
+          "connected": false,
+          "storage_ready": false
+        },
+        {
+          "path": "/lens",
+          "status": 503
+        },
+        {
+          "path": "/v1/traces?start_ms=0",
+          "status": 501
+        }
+      ],
+      "browser": {
+        "result": "passed",
+        "verified_by": "Independent root-agent browser review",
+        "checks": [
+          "Opened the existing Set up Lens flow on the actual unconfigured gateway",
+          "Copied Set it up for me while background readiness requests returned503 and controls remained mounted",
+          "Preview carried embedded LiteLLM context, current4493 API address and configured:false state",
+          "Verified actual native clipboard by pasting into local command-palette Search, then cleared and closed it",
+          "Helm and Docker manual setup links remained available with corrected destinations"
+        ],
+        "screenshot": {
+          "repository": "BerriAI/lens",
+          "path": "docs/extraction/evidence/ui/connected/setup-agent-embedded.png",
+          "sha256": "8615be2e0f27819bc00268c066e8f1ea8fa510ecf2f77047d7dd3e84e4c80639"
+        }
+      }
+    },
+    "shared_readiness_regression": {
+      "source": "src/ui/lib/src/components/lens/hooks/useLensReadiness.ts",
+      "sha256": "bd1916ba2715f12d21f66d2954f67cebfab469a507a17503864a0cce7c97ec07",
+      "behavior": "Keep setup controls mounted and copyable during failed readiness retries; explicit Check setup proceeds to agent instrumentation after connection recovery",
+      "before": {
+        "path": "/tmp/lens-setup-retry-before.log",
+        "sha256": "8aa1cbcb7c62f274afbfb080c0c5e44d92f5092f47abca7028f63bfe3320d44d"
+      },
+      "after": {
+        "result": "passed",
+        "files": 2,
+        "tests": 33,
+        "log": {
+          "path": "/tmp/lens-setup-retry-validation.log",
+          "sha256": "07aba52045fc72cee003e90be82c51a6044d558224327eb375c1f4c8e4b6f694"
+        }
+      },
+      "typecheck": {
+        "result": "passed",
+        "log": {
+          "path": "/tmp/lens-setup-retry-typecheck.log",
+          "sha256": "3cea5e5e9f18766054450e04d337e51b49430c814478a4fed2bc965f97b17dc2"
+        }
+      },
+      "standalone_build": {
+        "result": "passed",
+        "log": {
+          "path": "/tmp/lens-final-setup-ui-build.log",
+          "sha256": "8fd3e9f2e57cae2556c05c8f151c4e91c7d9f179d302ef3b4ca4e69e62cbf46f"
+        }
+      }
+    }
   }
 }

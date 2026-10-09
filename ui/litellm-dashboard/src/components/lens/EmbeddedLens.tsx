@@ -8,6 +8,7 @@ import { getAuthToken } from "@/lib/http/runtime";
 import { serverRootPath } from "@/lib/serverRootPath";
 
 const host: LensHost = {
+  surface: "embedded",
   analysis: "deployment",
   spendLogs: { lookup: uiSpendLogsCall, Drawer: LogDetailsDrawer },
 };

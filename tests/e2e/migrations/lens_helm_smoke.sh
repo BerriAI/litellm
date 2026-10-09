@@ -75,6 +75,14 @@ forward() {
   return 1
 }
 
+stop_forwards() {
+  for pid in "${forward_pids[@]}"; do
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  done
+  forward_pids=()
+}
+
 for chart in litellm-helm litellm; do
   namespace="lens-$chart"
   kubectl create namespace "$namespace"
@@ -270,15 +278,55 @@ YAML
   kubectl -n "$namespace" get deployment lens-lens-worker -o json \
     | jq -S .spec.template > "$qa_dir/lens-after.json"
   cmp "$qa_dir/lens-before.json" "$qa_dir/lens-after.json"
-  for pid in "${forward_pids[@]}"; do kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; done
-  forward_pids=()
+  stop_forwards
   kubectl -n "$namespace" rollout restart "deployment/$control" deployment/lens-lens-worker
   kubectl -n "$namespace" rollout status "deployment/$control" --timeout=180s
   kubectl -n "$namespace" rollout status deployment/lens-lens-worker --timeout=180s
   forward "$control" 14418 "$control_port"
   saved_trace
   printf '%s: fresh install, ingestion, independent upgrades, Lens rollback, and restart passed\n' "$chart"
-  for pid in "${forward_pids[@]}"; do kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; done
-  forward_pids=()
+  stop_forwards
+  helm upgrade --install external-lens helm/litellm-helm/charts/lens-0.1.0-dev.0.tgz \
+    -n "$namespace" --wait --timeout 5m \
+    --set fullnameOverride=external-lens \
+    --set image.repository=lens-ci-worker --set image.tag=upgrade --set image.pullPolicy=Never \
+    --set adminTokenSecret.name=lens-secrets --set adminTokenSecret.key=master-key \
+    --set gateway.enabled=true --set serviceTokenSecret.name=lens-secrets \
+    --set clickhouseSecret.name=lens-secrets --set clickhouseDatabase=existing_traces \
+    --set publicUrl=http://127.0.0.1:14419
+  "${install[@]}" --set lensWorker.mode=external \
+    --set lensWorker.externalUrl=http://external-lens:4318 || diagnose
+  test -z "$(kubectl -n "$namespace" get deployment lens-lens-worker --ignore-not-found -o name)"
+  forward "$control" 14418 "$control_port"
+  forward external-lens 14419 4318
+  api /lens/service | jq -e '.configured and .connected and .status.storage_ready'
+  saved_trace
+  trace_id=$(openssl rand -hex 16)
+  span_id=$(openssl rand -hex 8)
+  jq --arg trace "$trace_id" --arg span "$span_id" \
+    '.resourceSpans[0].scopeSpans[0].spans[0] |= (.traceId=$trace | .spanId=$span)' \
+    "$qa_dir/trace.json" > "$qa_dir/external-trace.json"
+  curl --fail-with-body --silent --show-error --max-time 20 \
+    -H "Authorization: Bearer $tracing_key" -H 'Content-Type: application/json' \
+    -d "@$qa_dir/external-trace.json" http://127.0.0.1:14419/v1/traces
+  saved_trace
+  kubectl -n "$namespace" get deployment external-lens -o json \
+    | jq -S '{uid:.metadata.uid,template:.spec.template}' > "$qa_dir/external-before.json"
+  stop_forwards
+  tracing_setting=proxy_config.general_settings.tracing.enabled
+  if [[ "$chart" == litellm ]]; then
+    tracing_setting=gateway.config.proxy_config.general_settings.tracing.enabled
+  fi
+  "${install[@]}" --set lensWorker.mode=disabled --set "$tracing_setting=false" || diagnose
+  test -z "$(kubectl -n "$namespace" get deployment lens-lens-worker --ignore-not-found -o name)"
+  forward "$control" 14418 "$control_port"
+  api /lens/service | jq -e '.configured == false and .connected == false'
+  test "$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 20 \
+    -H "Authorization: Bearer $master_key" http://127.0.0.1:14418/lens/datasets)" = 503
+  kubectl -n "$namespace" get deployment external-lens -o json \
+    | jq -S '{uid:.metadata.uid,template:.spec.template}' > "$qa_dir/external-after.json"
+  cmp "$qa_dir/external-before.json" "$qa_dir/external-after.json"
+  printf '%s: external Lens trace reads/writes and disabled gateway behavior passed\n' "$chart"
+  stop_forwards
   kubectl delete namespace "$namespace" --wait=true
 done
