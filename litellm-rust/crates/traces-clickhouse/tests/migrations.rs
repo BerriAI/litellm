@@ -972,6 +972,157 @@ async fn rollup_merges_spans_across_days_without_losing_root_fields(
 
 #[rstest]
 #[tokio::test]
+async fn time_window_reads_keep_partial_rollups_that_straddle_the_window_edges(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+    execute_write(
+        &database,
+        "SYSTEM STOP MERGES trace_test.agent_traces_by_key",
+    )
+    .await?;
+    let window_start_ms =
+        time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64 / 1_000_000 - 3_600_000;
+    let window_end_ms = window_start_ms + 1_800_000;
+    let spans = [
+        ("inside", "root", "", window_start_ms + 60_000),
+        ("inside", "child", "root", window_start_ms + 61_000),
+        ("inside_twin", "root", "", window_start_ms + 60_000),
+        ("started_before", "root", "", window_start_ms - 1000),
+        ("started_before", "child", "root", window_start_ms + 1000),
+        ("ends_after", "root", "", window_end_ms - 1000),
+        ("ends_after", "child", "root", window_end_ms + 1000),
+        ("starts_after", "root", "", window_end_ms + 1000),
+    ];
+    for (trace, span, parent, offset_ms) in spans {
+        insert_rows(
+            &database,
+            "otel_traces",
+            vec![serde_json::from_value(serde_json::json!({
+                "Timestamp": offset_ms * 1_000_000, "TraceId": trace, "SpanId": span,
+                "ParentSpanId": parent, "ServiceName": "app", "SpanName": span,
+                "AgentName": "worker", "ObservationType": "agent",
+                "ResourceAttributes": {"litellm.team_id": "team", "litellm.api_key_hash": "key"}
+            }))?],
+        )
+        .await?;
+    }
+    assert_eq!(
+        table_rows(&database, "agent_traces_by_key").await?,
+        spans.len() as u64
+    );
+    let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
+    let list =
+        async |limit: i64, cursor: Option<(i64, String)>| -> TestResult<Vec<serde_json::Value>> {
+            let (cursor_ms, cursor_trace_id) = cursor.unwrap_or_default();
+            let body = execute_named_read(
+                &database.client,
+                &connection,
+                ReadQuery::ListTraces,
+                &BTreeMap::from([
+                    ("all_teams".into(), Parameter::Integer(0)),
+                    ("user_id".into(), Parameter::Text(String::new())),
+                    ("team_ids".into(), Parameter::Strings(vec!["team".into()])),
+                    ("start_ms".into(), Parameter::Integer(window_start_ms)),
+                    ("end_ms".into(), Parameter::Integer(window_end_ms)),
+                    ("cursor_ms".into(), Parameter::Integer(cursor_ms)),
+                    ("cursor_trace_id".into(), Parameter::Text(cursor_trace_id)),
+                    ("limit".into(), Parameter::Integer(limit)),
+                ]),
+            )
+            .await?;
+            let response: serde_json::Value = serde_json::from_str(&body)?;
+            Ok(response["data"].as_array().cloned().unwrap_or_default())
+        };
+    let summary = |rows: &[serde_json::Value]| {
+        rows.iter()
+            .map(|row| {
+                (
+                    row["trace_id"].as_str().unwrap_or_default().to_owned(),
+                    row["start_ms"].to_string().trim_matches('"').to_owned(),
+                    row["span_count"].to_string().trim_matches('"').to_owned(),
+                    row["duration_ms"].to_string().trim_matches('"').to_owned(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let listed = summary(&list(10, None).await?);
+    let inside = |trace: &str, spans: &str, duration: &str| {
+        (
+            trace.to_owned(),
+            (window_start_ms + 60_000).to_string(),
+            spans.to_owned(),
+            duration.to_owned(),
+        )
+    };
+    assert_eq!(
+        listed[0],
+        (
+            "ends_after".to_owned(),
+            (window_end_ms - 1000).to_string(),
+            "2".to_owned(),
+            "2000".to_owned()
+        )
+    );
+    assert_eq!(
+        listed[1..]
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from([
+            inside("inside", "2", "1000"),
+            inside("inside_twin", "1", "0")
+        ])
+    );
+    let mut paged = Vec::new();
+    let mut cursor = None;
+    for _ in 0..=listed.len() {
+        let page = list(1, cursor.clone()).await?;
+        let Some(row) = page.first() else { break };
+        cursor = Some((
+            row["start_ms"]
+                .to_string()
+                .trim_matches('"')
+                .parse::<i64>()?,
+            row["trace_ref"]
+                .as_str()
+                .ok_or("missing trace_ref")?
+                .to_owned(),
+        ));
+        paged.extend(summary(&page));
+    }
+    assert_eq!(paged, listed);
+    let agents: serde_json::Value = serde_json::from_str(
+        &execute_named_read(
+            &database.client,
+            &connection,
+            ReadQuery::TraceAgents,
+            &BTreeMap::from([
+                ("all_teams".into(), Parameter::Integer(0)),
+                ("user_id".into(), Parameter::Text(String::new())),
+                ("team_ids".into(), Parameter::Strings(vec!["team".into()])),
+                ("start_ms".into(), Parameter::Integer(window_start_ms)),
+                ("end_ms".into(), Parameter::Integer(window_end_ms)),
+                ("limit".into(), Parameter::Integer(10)),
+            ]),
+        )
+        .await?,
+    )?;
+    assert_eq!(agents["data"][0]["agent_name"], "worker");
+    assert_eq!(agents["data"][0]["runs"].to_string().trim_matches('"'), "3");
+    assert_eq!(
+        agents["data"][0]["last_seen_ms"]
+            .to_string()
+            .trim_matches('"'),
+        (window_end_ms - 1000).to_string()
+    );
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
 async fn spend_deduplication_preserves_subsecond_requests_and_retries(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
 ) -> TestResult {
