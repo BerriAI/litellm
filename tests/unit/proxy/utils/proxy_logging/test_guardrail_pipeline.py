@@ -14,7 +14,7 @@ import json
 from collections.abc import AsyncGenerator, Iterator
 from copy import deepcopy
 import logging
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -3008,6 +3008,7 @@ _DETECT_ONLY_STEP: PipelineStep = PipelineStep(guardrail="gr-post", on_pass="all
 def _live_scan_guardrail(
     seen: Dict[str, Any],
     *,
+    guardrail_name: str = "gr-post",
     buffer_until_moderated: bool | None = False,
     mask_response_content: bool = False,
     rewrite: str | None = None,
@@ -3024,7 +3025,7 @@ def _live_scan_guardrail(
             return inputs
 
     guardrail = LiveScanGuardrail(
-        guardrail_name="gr-post",
+        guardrail_name=guardrail_name,
         event_hook=GuardrailEventHooks.post_call,
         default_on=False,
         mask_response_content=mask_response_content,
@@ -3118,24 +3119,47 @@ async def test_streaming_iterator_hook_pipeline_keeps_buffering_unless_a_detect_
 
 
 @pytest.mark.asyncio
-async def test_streaming_iterator_hook_live_pipeline_discards_a_rewrite_the_client_already_received(
+async def test_streaming_iterator_hook_live_pipeline_discards_each_rewrite_before_the_next_step_scans(
     proxy_logging: ProxyLogging,
     make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    seen: Dict[str, Any] = {}
-    monkeypatch.setattr(litellm, "callbacks", [_live_scan_guardrail(seen, rewrite="hello [MASKED]")])
+    first_seen: Final[Dict[str, Any]] = {}
+    second_seen: Final[Dict[str, Any]] = {}
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            _live_scan_guardrail(first_seen, guardrail_name="gr-first", rewrite="hello [MASKED]"),
+            _live_scan_guardrail(second_seen, guardrail_name="gr-second"),
+        ],
+    )
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
-    data = _post_call_pipeline_data(step=_DETECT_ONLY_STEP, stream=True)
+    pipeline: Final = GuardrailPipeline(
+        mode="post_call",
+        steps=[
+            PipelineStep(guardrail="gr-first", on_pass="next", on_fail="next"),
+            PipelineStep(guardrail="gr-second", on_pass="allow", on_fail="next"),
+        ],
+    )
+    data: Final = _post_call_pipeline_data(stream=True)
+    data["metadata"]["_guardrail_pipelines"] = [("response-governance", pipeline)]
+    data["metadata"]["_pipeline_managed_guardrails"] = {"gr-first", "gr-second"}
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        delivered, _ = await _deliver_with_scan_counts(
-            proxy_logging, make_user_api_key_auth(request_route="/v1/chat/completions"), data, seen
+        delivered, scans_before_delivery = await _deliver_with_scan_counts(
+            proxy_logging, make_user_api_key_auth(request_route="/v1/chat/completions"), data, second_seen
         )
 
+    assert scans_before_delivery == [0, 0]
     assert _delta_contents(delivered) == [("hello ", None), ("world", "stop")]
-    assert any("response-governance" in message and "discarded" in message for message in _warnings(caplog))
+    assert first_seen["texts"] == ["hello world"]
+    assert second_seen["texts"] == ["hello world"]
+    assert any(
+        "'gr-first'" in message and "already received the stream live" in message and "discarded" in message
+        for message in _warnings(caplog)
+    )
 
 
 @pytest.mark.asyncio
@@ -3185,6 +3209,36 @@ async def test_streaming_iterator_hook_live_pipeline_records_a_scan_that_failed_
     assert _post_call_statuses(data) == ["guardrail_failed_to_respond"]
 
 
+async def _provider_error_after_first_chunk(chunks: List[Any]) -> AsyncGenerator[Any, None]:
+    yield chunks[0]
+    raise RuntimeError("provider dropped the stream")
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_live_pipeline_scans_what_the_client_received_before_a_provider_error(
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: Final[Dict[str, Any]] = {}
+    monkeypatch.setattr(litellm, "callbacks", [_live_scan_guardrail(seen)])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data: Final = _post_call_pipeline_data(step=_DETECT_ONLY_STEP, stream=True)
+    stream: Final = proxy_logging.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=make_user_api_key_auth(request_route="/v1/chat/completions"),
+        response=_provider_error_after_first_chunk(_stream_chunks()),
+        request_data=data,
+    )
+
+    first: Final = await stream.__anext__()
+    with pytest.raises(RuntimeError, match="provider dropped the stream"):
+        await stream.__anext__()
+
+    assert first.choices[0].delta.content == "hello "
+    assert seen["texts"] == ["hello "]
+    assert _post_call_statuses(data) == ["success"]
+
+
 class _EndingRaisesTranslation(OpenAIChatCompletionsHandler):
     def released_stream_as_ended(self, responses_so_far):
         raise RuntimeError("synthetic translation failure")
@@ -3202,7 +3256,7 @@ async def test_live_pipeline_disconnect_scan_that_cannot_run_records_every_step_
     data = _post_call_pipeline_data(step=_DETECT_ONLY_STEP, stream=True)
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        await proxy_logging._scan_pipeline_stream_after_disconnect(
+        await proxy_logging._scan_pipeline_stream_cut_short(
             released=_stream_chunks()[:1],
             user_api_key_dict=make_user_api_key_auth(request_route="/v1/chat/completions"),
             request_data=data,
@@ -3212,5 +3266,5 @@ async def test_live_pipeline_disconnect_scan_that_cannot_run_records_every_step_
 
     assert seen.get("count") is None
     assert _post_call_statuses(data) == ["guardrail_failed_to_respond"]
-    assert any("disconnected" in message and "RuntimeError" in message for message in _warnings(caplog))
+    assert any("cut short" in message and "RuntimeError" in message for message in _warnings(caplog))
 

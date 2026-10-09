@@ -4203,20 +4203,21 @@ class ProxyLogging:
         Every chunk reaches the client as the provider sends it. Once the stream ends, each pipeline's steps run
         against a copy of the assembled output, the same end-of-stream scan ``_pipeline_gated_stream`` runs
         before release. The steps can only allow or pass to the next one, so the scan records each guardrail's
-        verdict in guardrail_information without changing what was sent; a rewrite a guardrail returns is
-        discarded with a warning, since the client already holds the original. A client that disconnects
-        mid-stream still gets the scan over what it received, shielded from the cancellation, and a scan that
-        raises then records guardrail_failed_to_respond for every step guardrail without a verdict, so the spend
-        log never shows a silent skip.
+        verdict in guardrail_information without changing what was sent; the executor discards a rewrite right
+        after the step that returned it, with a warning, so every step scans the text the client received. A
+        stream cut short, by a client disconnect or by a provider error after some chunks went out, still gets
+        the scan over what the client received, shielded from cancellation, and a scan that raises then records
+        guardrail_failed_to_respond for every step guardrail without a verdict, so the spend log never shows a
+        silent skip.
         """
         released: Final[list[object]] = []  # mutable-ok: accumulates the chunks the client already received
         try:
             async for item in response:
                 released.append(item)
                 yield item
-        except (GeneratorExit, asyncio.CancelledError):
+        except (GeneratorExit, asyncio.CancelledError, Exception):
             if released:
-                await self._scan_pipeline_stream_after_disconnect(
+                await self._scan_pipeline_stream_cut_short(
                     released=released,
                     user_api_key_dict=user_api_key_dict,
                     request_data=request_data,
@@ -4245,7 +4246,7 @@ class ProxyLogging:
         translation: "tuple[str, BaseTranslation]",
     ) -> None:
         call_type, endpoint_translation = translation
-        scanned: Final[list[object]] = list(copy.deepcopy(tuple(originals)))  # mutable-ok: executor rewrites in place
+        scanned: Final[list[object]] = list(copy.deepcopy(tuple(originals)))  # mutable-ok: executor scans in place
         for policy_name, pipeline in pipelines:
             result: PipelineExecutionResult = await PipelineExecutor.execute_steps(
                 steps=pipeline.steps,
@@ -4256,19 +4257,13 @@ class ProxyLogging:
                 policy_name=policy_name,
                 streaming_chunks=scanned,
                 endpoint_translation=endpoint_translation,
+                stream_already_sent=True,
             )
             ProxyLogging._handle_pipeline_result(
                 result, data=request_data, policy_name=policy_name, original_response=originals
             )
-            if scanned == list(originals):
-                continue
-            verbose_proxy_logger.warning(
-                "Policy %s rewrote a response the client already received live; the rewrite is discarded",
-                policy_name,
-            )
-            scanned[:] = copy.deepcopy(tuple(originals))
 
-    async def _scan_pipeline_stream_after_disconnect(
+    async def _scan_pipeline_stream_cut_short(
         self,
         *,
         released: Sequence[object],
@@ -4288,9 +4283,9 @@ class ProxyLogging:
                     pipelines=pipelines,
                     translation=translation,
                 )
-            except Exception as e:  # noqa: BLE001  # the client is gone, so the verdict can only be recorded
+            except Exception as e:  # noqa: BLE001  # the stream already ended, so the verdict can only be recorded
                 verbose_proxy_logger.warning(
-                    "Policy pipelines scanned a stream the client disconnected from and raised %s",
+                    "Policy pipelines scanned a stream that was cut short and raised %s",
                     type(e).__name__,
                 )
                 recorded_names: Final = frozenset(

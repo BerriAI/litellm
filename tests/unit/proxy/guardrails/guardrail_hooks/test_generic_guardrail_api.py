@@ -6,6 +6,7 @@ specifically focusing on metadata extraction and passing.
 """
 
 import os
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -1341,8 +1342,8 @@ class TestGenericGuardrailAPIStreamingConfig:
         ],
     )
     def test_initialize_guardrail_streaming_buffer_until_moderated_reaches_the_pipeline_live_check(
-        self, monkeypatch, configured, streams_live
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, configured: bool | None, streams_live: bool
+    ) -> None:
         from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
             initialize_guardrail,
         )
@@ -1350,19 +1351,20 @@ class TestGenericGuardrailAPIStreamingConfig:
         from litellm.types.guardrails import LitellmParams
         from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
 
-        litellm_params = LitellmParams(
-            guardrail="generic_guardrail_api",
-            mode="post_call",
-            api_base="https://api.test.guardrail.com",
-            default_on=False,
+        litellm_params: Final = LitellmParams.model_validate(
+            {
+                "guardrail": "generic_guardrail_api",
+                "mode": "post_call",
+                "api_base": "https://api.test.guardrail.com",
+                "default_on": False,
+                **({} if configured is None else {"streaming_buffer_until_moderated": configured}),
+            }
         )
-        if configured is not None:
-            litellm_params.streaming_buffer_until_moderated = configured  # type: ignore[attr-defined]
 
         with patch("litellm.logging_callback_manager.add_litellm_callback"):
-            guardrail = initialize_guardrail(litellm_params, {"guardrail_name": "pipeline-scanner"})
+            guardrail: Final = initialize_guardrail(litellm_params, {"guardrail_name": "pipeline-scanner"})
         monkeypatch.setattr(litellm, "callbacks", [guardrail])
-        pipeline = GuardrailPipeline(
+        pipeline: Final = GuardrailPipeline(
             mode="post_call",
             steps=[PipelineStep(guardrail="pipeline-scanner", on_pass="allow", on_fail="next")],
         )
