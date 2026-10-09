@@ -3,44 +3,66 @@ use std::time::Duration;
 
 use litellm_auth::AuthServices;
 use litellm_host::interceptors::{Interceptors, RawResponse, RequestContext, WireRequest};
-use litellm_http::{Client, outbound::OutboundRequest, request::truncate_error_body};
+use litellm_http::{
+    Client,
+    outbound::OutboundRequest,
+    request::{truncate_error_body, with_default_headers},
+};
 use litellm_llms::base_llm::{
-    auth::{Authenticated, resolve_auth},
+    auth::{Authenticated, ValidatedEnvironment, resolve_auth},
+    chat::transformation::BaseConfig,
     chat::transformation::ProviderChatResponseData,
 };
 use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
+use litellm_secrets::source::Secrets;
 use serde_json::Value;
 
 use super::Error;
-use crate::{constants::CHAT_COMPLETIONS_TIMEOUT_SECS, types::ProviderChatCompletionsRequest};
+use crate::{
+    common_utils::string_headers, constants::CHAT_COMPLETIONS_TIMEOUT_SECS,
+    types::ResolvedChatCompletionsRequest,
+};
 
+#[allow(clippy::too_many_arguments)] // Required by the shared route execution signature.
 pub(super) async fn execute(
     http: &Client,
     auth: &AuthServices,
-    request: ProviderChatCompletionsRequest,
+    config: &'static dyn BaseConfig,
+    provider: litellm_inference::provider::ResolvedProvider<'_>,
+    call: ResolvedChatCompletionsRequest,
+    secrets: Secrets,
     cache: Option<litellm_cache_response::ScopedCache>,
     cache_options: Option<litellm_cache_response::CachePolicy>,
     interceptors: &impl Interceptors<Error>,
     observers: Option<&ObservationSender>,
 ) -> Result<ChatCompletionsResponse, Error> {
-    let ProviderChatCompletionsRequest {
-        model,
-        custom_llm_provider,
-        config,
-        url,
-        body,
-        optional_params,
-        environment,
-        secrets,
-        timeout,
-        api_key,
-    } = request;
+    let validated = config.validate_environment(
+        string_headers(call.extra_headers)?,
+        call.api_key.as_deref(),
+        provider.model,
+        &call.optional_params,
+        &|key| secrets.get(key),
+    )?;
+    let url = config.get_complete_url(
+        call.api_base.as_deref(),
+        provider.model,
+        &call.optional_params,
+        &|key| secrets.get(key),
+    )?;
+    let body = config
+        .transform_request(provider.model, call.messages, call.optional_params.clone())?
+        .body;
+    let environment = ValidatedEnvironment {
+        headers: with_default_headers(validated.headers, config.default_headers()),
+        auth: validated.auth,
+    };
+    let provider_name = <&'static str>::from(provider.provider);
     let context = RequestContext {
-        model: model.clone(),
-        custom_llm_provider,
-        optional_params: Value::Object(optional_params),
+        model: provider.model.to_owned(),
+        custom_llm_provider: provider_name.to_owned(),
+        optional_params: Value::Object(call.optional_params),
         secret_fields: Vec::new(),
-        api_key,
+        api_key: call.api_key.map(litellm_auth::SecretValue::new),
     };
     let authenticated = resolve_auth(auth, environment, &|key| secrets.get(key)).await?;
     let identity = litellm_host::interceptors::ProviderIdentity {
@@ -76,7 +98,7 @@ pub(super) async fn execute(
                 },
                 wire.url,
                 &wire.body,
-                timeout,
+                call.timeout,
             )?;
 
             let response = litellm_inference::outbound::send(outbound, http)
@@ -121,7 +143,7 @@ pub(super) async fn execute(
                 ))
             })?;
             config
-                .transform_response(&model, ProviderChatResponseData { body })
+                .transform_response(provider.model, ProviderChatResponseData { body })
                 .map_err(Error::from)
                 .map_err(as_response_error)
         },
@@ -178,8 +200,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        prepare::{prepare_provider_request, resolve_request},
-        types::ChatCompletionsRequest,
+        common_utils::resolve_request,
+        provider_config::resolve_provider_config,
+        types::{ChatCompletionsCall, ResolvedChatCompletionsRequest},
     };
 
     const ANTHROPIC_MESSAGE: &str = r#"{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":11,"output_tokens":4}}"#;
@@ -217,22 +240,94 @@ mod tests {
         }
     }
 
-    fn prepared(api_base: &str) -> ProviderChatCompletionsRequest {
-        prepare_provider_request(
-            resolve_request(ChatCompletionsRequest {
-                model: "anthropic/claude-sonnet-4-5",
+    fn prepared(
+        api_base: &str,
+    ) -> (
+        litellm_inference::provider::ResolvedProvider<'static>,
+        &'static dyn BaseConfig,
+        ResolvedChatCompletionsRequest,
+    ) {
+        let (provider, config) =
+            resolve_provider_config("anthropic/claude-sonnet-4-5", None).unwrap();
+        let request = resolve_request(
+            ChatCompletionsCall {
+                model: "anthropic/claude-sonnet-4-5".into(),
                 messages: json!([{"role": "user", "content": "hi"}]),
                 optional_params: json!({"max_tokens": 16}).as_object().unwrap().clone(),
-                api_key: Some("sk-test"),
-                api_base: Some(api_base),
+                api_key: Some("sk-test".into()),
+                api_base: Some(api_base.into()),
                 custom_llm_provider: None,
                 extra_headers: None,
                 timeout: None,
-            })
-            .unwrap(),
-            std::sync::Arc::new(|_: &str| None),
+            },
+            config,
         )
-        .unwrap()
+        .unwrap();
+        (provider, config, request)
+    }
+
+    #[rstest::rstest]
+    fn prepares_a_bedrock_call_without_resolving_credentials() {
+        let (provider, config) =
+            resolve_provider_config("bedrock/us-east-1/anthropic.claude-v2", None).unwrap();
+        let request = resolve_request(
+            ChatCompletionsCall {
+                model: "bedrock/us-east-1/anthropic.claude-v2".into(),
+                messages: json!([{"role": "user", "content": "hi"}]),
+                optional_params: json!({"maxTokens": 16}).as_object().unwrap().clone(),
+                api_key: None,
+                api_base: None,
+                custom_llm_provider: None,
+                extra_headers: None,
+                timeout: None,
+            },
+            config,
+        )
+        .unwrap();
+        let environment = config
+            .validate_environment(
+                Vec::new(),
+                request.api_key.as_deref(),
+                provider.model,
+                &request.optional_params,
+                &|_| None,
+            )
+            .unwrap();
+        let url = config
+            .get_complete_url(
+                request.api_base.as_deref(),
+                provider.model,
+                &request.optional_params,
+                &|_| None,
+            )
+            .unwrap();
+        let body = config
+            .transform_request(
+                provider.model,
+                request.messages,
+                request.optional_params.clone(),
+            )
+            .unwrap()
+            .body;
+        assert_eq!(
+            url,
+            "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-v2/converse"
+        );
+        assert!(matches!(
+            &environment.auth,
+            litellm_llms::base_llm::auth::AuthScheme::AwsSigV4 {
+                region,
+                service: "bedrock",
+                ..
+            } if region == "us-east-1"
+        ));
+        assert!(
+            !environment
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+        );
+        assert_eq!(body["inferenceConfig"], json!({"maxTokens": 16}));
     }
 
     #[rstest]
@@ -247,10 +342,14 @@ mod tests {
             .await;
         let interceptors = RecordingHooks::default();
 
+        let (provider, config, request) = prepared(&upstream.uri());
         execute(
             &Client::plain_for_test(),
             &AuthServices::default(),
-            prepared(&upstream.uri()),
+            config,
+            provider,
+            request,
+            std::sync::Arc::new(|_: &str| None),
             None,
             None,
             &interceptors,
@@ -288,10 +387,14 @@ mod tests {
             .await;
         let interceptors = RecordingHooks::default();
 
+        let (provider, config, request) = prepared(&upstream.uri());
         let error = execute(
             &Client::plain_for_test(),
             &AuthServices::default(),
-            prepared(&upstream.uri()),
+            config,
+            provider,
+            request,
+            std::sync::Arc::new(|_: &str| None),
             None,
             None,
             &interceptors,
