@@ -895,3 +895,26 @@ def test_grok_bug(load_env):
     litellm.set_verbose = True
     _, LLAMA3_3 = load_env
     execute_completion(LLAMA3_3)
+
+
+def test_stream_chunk_builder_empty_choices_guard():
+    """
+    Test that stream_chunk_builder does not crash with IndexError when
+    streaming chunks contain empty choices lists (e.g. trailing usage chunks).
+    """
+    from litellm.main import _simple_text_part
+
+    # Direct unit test exercising empty-sequence guards in _simple_text_part
+    assert _simple_text_part([]) is None
+    assert _simple_text_part([{"delta": {}}]) == ""
+
+    chunks = [
+        {"id": "chat-test-1", "model": "gpt-4o", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Hello"}}]},
+        {"id": "chat-test-1", "model": "gpt-4o", "choices": [{"index": 0, "delta": {"content": " world"}}]},
+        {"id": "chat-test-1", "model": "gpt-4o", "choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12}},
+    ]
+    res = litellm.stream_chunk_builder(chunks)
+    assert res is not None
+    assert res["choices"][0]["message"]["content"] == "Hello world"
+
+
