@@ -39,7 +39,7 @@ from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams, AwsSe
 
 if TYPE_CHECKING:
     from botocore.awsrequest import AWSPreparedRequest
-    from botocore.credentials import Credentials
+    from botocore.credentials import Credentials, ReadOnlyCredentials
 else:
     Credentials = Any
     AWSPreparedRequest = Any
@@ -1593,7 +1593,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
     @tracer.wrap()
     def get_request_headers(
         self,
-        credentials: Credentials | None,
+        credentials: "Credentials | ReadOnlyCredentials | None",
         aws_region_name: str,
         extra_headers: dict | None,
         endpoint_url: str,
@@ -1628,7 +1628,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             # Filter headers for AWS signature calculation
             # AWS SigV4 only includes specific headers in signature calculation
             aws_signature_headers: Final = self._filter_headers_for_aws_signature(headers)
-            sigv4: Final = SigV4Auth(credentials, "bedrock", aws_region_name)
+            sigv4: Final = SigV4Auth(_freeze_aws_credentials(credentials), "bedrock", aws_region_name)
             request = AWSRequest(
                 method="POST",
                 url=endpoint_url,
@@ -1722,7 +1722,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         aws_region_name: Final = self._get_aws_region_name(optional_params=optional_params, model=model)
         credentials: Final[Credentials] = self.resolve_credentials(auth_params, aws_region_name)
 
-        sigv4: Final = SigV4Auth(credentials, service_name, aws_region_name)
+        sigv4: Final = SigV4Auth(_freeze_aws_credentials(credentials), service_name, aws_region_name)
         headers = headers or {}
         if not any(header_name.lower() == "content-type" for header_name in headers):
             headers = {"Content-Type": "application/json", **headers}
@@ -1754,8 +1754,16 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         return request_headers_dict, request.body
 
 
+def _freeze_aws_credentials(credentials: "Credentials | ReadOnlyCredentials") -> "ReadOnlyCredentials":
+    from botocore.credentials import Credentials
+
+    if isinstance(credentials, Credentials):
+        return credentials.get_frozen_credentials()
+    return credentials
+
+
 def sign_aws_json_post(
-    get_credentials: Callable[[], Credentials],
+    get_credentials: Callable[[], "Credentials | ReadOnlyCredentials"],
     service_name: str,
     aws_region_name: str | None,
     url: str,
@@ -1767,7 +1775,7 @@ def sign_aws_json_post(
     from botocore.awsrequest import AWSRequest
 
     aws_request: Final = AWSRequest(method="POST", url=url, data=body, headers=headers)
-    SigV4Auth(get_credentials(), service_name, aws_region_name).add_auth(aws_request)
+    SigV4Auth(_freeze_aws_credentials(get_credentials()), service_name, aws_region_name).add_auth(aws_request)
     return aws_request.prepare()
 
 
