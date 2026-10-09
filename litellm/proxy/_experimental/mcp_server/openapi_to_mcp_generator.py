@@ -206,21 +206,25 @@ def _parse_openapi_spec(text: str) -> _OpenAPISpec:
         parsed_json: Final[object] = json.loads(text)
     except json.JSONDecodeError:
         import yaml
-        from yaml.nodes import ScalarNode
+        from yaml.nodes import MappingNode, Node, ScalarNode
 
         class _NoMergeSafeLoader(yaml.SafeLoader):
-            def compose_node(self, parent: object, index: object) -> object:
-                if self.check_event(yaml.events.AliasEvent):
+            def compose_node(self, parent: Node | None, index: int) -> Node | None:
+                if self.check_event(  # pyright: ignore[reportUnknownMemberType]  # PyYAML lacks typed loader stubs
+                    yaml.events.AliasEvent
+                ):
                     raise yaml.YAMLError("YAML aliases are not supported")
                 return super().compose_node(parent, index)
 
-            def flatten_mapping(self, node: object) -> None:
-                if any(key_node.tag == "tag:yaml.org,2002:merge" for key_node, _ in getattr(node, "value", ())):
+            def flatten_mapping(self, node: MappingNode) -> None:
+                node_values: Final = cast(tuple[tuple[Node, Node], ...], node.value)
+                if any(key_node.tag == "tag:yaml.org,2002:merge" for key_node, _ in node_values):
                     raise yaml.YAMLError("YAML merge keys are not supported")
                 super().flatten_mapping(node)
 
             def construct_yaml_int(self, node: ScalarNode) -> int:
-                if len(node.value) > _MAX_YAML_INT_LENGTH:
+                node_value: Final = cast(str, node.value)
+                if len(node_value) > _MAX_YAML_INT_LENGTH:
                     raise yaml.YAMLError("YAML integer is too long")
                 return super().construct_yaml_int(node)
 
