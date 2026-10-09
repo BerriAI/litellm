@@ -13,6 +13,7 @@ from functools import wraps
 from types import MappingProxyType
 from typing import Final
 
+from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceTypes
 
 _PRISMA_CLIENT_CRUD: Final = frozenset({"get_data", "update_data", "delete_data"})
@@ -174,7 +175,7 @@ def log_db_metrics(func):
     return wrapper
 
 
-def _is_exception_related_to_db(e: Exception) -> bool:
+def is_exception_related_to_db(e: Exception) -> bool:
     """
     Returns True if the exception is related to the DB
     """
@@ -183,6 +184,9 @@ def _is_exception_related_to_db(e: Exception) -> bool:
     from prisma.errors import PrismaError
 
     return isinstance(e, (PrismaError, httpx.TransportError))
+
+
+_is_exception_related_to_db: Final = is_exception_related_to_db
 
 
 async def _handle_logging_db_exception(
@@ -197,17 +201,20 @@ async def _handle_logging_db_exception(
     from litellm.proxy.proxy_server import proxy_logging_obj
 
     # don't log this as a DB Service Failure, if the DB did not raise an exception
-    if _is_exception_related_to_db(e) is not True:
+    if is_exception_related_to_db(e) is not True:
         return False
 
-    await proxy_logging_obj.service_logging_obj.async_service_failure_hook(
-        error=e,
-        service=ServiceTypes.DB,
-        call_type=func.__name__,
-        parent_otel_span=kwargs.get("parent_otel_span"),
-        duration=(end_time - start_time).total_seconds(),
-        start_time=start_time,
-        end_time=end_time,
-        event_metadata=metadata_of(kwargs),
-    )
+    try:
+        await proxy_logging_obj.service_logging_obj.async_service_failure_hook(
+            error=e,
+            service=ServiceTypes.DB,
+            call_type=func.__name__,
+            parent_otel_span=kwargs.get("parent_otel_span"),
+            duration=(end_time - start_time).total_seconds(),
+            start_time=start_time,
+            end_time=end_time,
+            event_metadata=metadata_of(kwargs),
+        )
+    except Exception as hook_error:
+        verbose_proxy_logger.debug("log_db_metrics: failure hook raised for %s: %s", func.__name__, hook_error)
     return True

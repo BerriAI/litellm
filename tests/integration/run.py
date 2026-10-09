@@ -13,15 +13,18 @@ from typing import Final
 GROUPS: Final = MappingProxyType(
     {
         "management": ("management", "authorization", "configuration"),
-        "accounting": ("pricing", "spend"),
+        "accounting": ("pricing", "spend", "caching"),
         "database": ("database",),
-        "providers": ("providers", "routing", "streaming", "messages_endpoint"),
+        "providers": ("providers", "routing", "streaming", "messages_endpoint", "translation"),
         "extensions": ("observability", "compatibility"),
         "mcp": ("mcp",),
         "sdk": ("sdk",),
         "cost": ("cost_calculation",),
         "security": ("security",),
     }
+)
+GITHUB_FILES: Final = frozenset(
+    {"tests/integration/database/test_roi_observed.py", "tests/integration/mcp/test_interactions.py"}
 )
 
 
@@ -63,6 +66,7 @@ def main() -> int:
         str(path.relative_to(root))
         for folder in GROUPS[options.group]
         for path in sorted((root / "tests/integration" / folder).rglob("test_*.py"))
+        if str(path.relative_to(root)) not in GITHUB_FILES
     )
     if options.list:
         print("\n".join(group_files))

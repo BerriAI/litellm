@@ -712,6 +712,62 @@ async def test_single_use_guard_fails_closed_when_redis_errors():
     assert await guard.claim("jti-fault", 60) == "unavailable"  # fail closed, not a fallback count of 1
 
 
+@pytest.mark.asyncio
+async def test_single_use_guard_peek_fails_closed_when_redis_errors():
+    """The peek that gates a refresh on its chain's revocation marker must read the Redis client
+    itself: the cache wrapper's get swallows a fault into ``None``, which would make a revoked chain
+    look unclaimed for exactly as long as Redis is down."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import _SingleUseGuard
+
+    cache = DualCache()
+    cache.redis_cache = MagicMock()
+    cache.redis_cache.async_get_cache = AsyncMock(return_value=None)
+    cache.redis_cache.check_and_fix_namespace = MagicMock(side_effect=lambda key: key)
+    cache.redis_cache.init_async_client.return_value.get = AsyncMock(side_effect=ConnectionError("redis down"))
+
+    guard = _SingleUseGuard(cache)
+    assert await guard.peek("family-fault") == "unavailable"
+
+    cache.redis_cache.init_async_client.return_value.get = AsyncMock(return_value=b"1")
+    assert await guard.peek("family-fault") == "claimed"
+
+
+@pytest.mark.asyncio
+async def test_single_use_guard_peek_reads_the_key_under_the_namespace_claim_wrote():
+    """A configured ``redis_namespace`` prefixes every key the cache wrapper writes, so the raw client
+    read behind peek must ask for the same prefixed key: a revocation written under ``ns:...`` and
+    peeked at the bare key would never be seen, and the revoked chain would keep renewing."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import _SingleUseGuard
+
+    stored: dict[str, int] = {}  # mutable-ok: the fake Redis store the test inspects
+
+    def namespaced(key: str) -> str:
+        return f"ns:{key}"
+
+    async def increment(key: str, value: int, ttl: int) -> int:
+        stored[namespaced(key)] = stored.get(namespaced(key), 0) + value
+        return stored[namespaced(key)]
+
+    async def raw_get(key: str) -> bytes | None:
+        return None if key not in stored else str(stored[key]).encode()
+
+    cache = DualCache()
+    cache.redis_cache = MagicMock()
+    cache.redis_cache.check_and_fix_namespace = MagicMock(side_effect=namespaced)
+    cache.redis_cache.async_increment = AsyncMock(side_effect=increment)
+    cache.redis_cache.init_async_client.return_value.get = AsyncMock(side_effect=raw_get)
+
+    guard = _SingleUseGuard(cache)
+    assert await guard.peek("family-ns") == "unclaimed"
+    assert await guard.claim("family-ns", 60) == "first"
+    assert set(stored) == {"ns:family-ns"}
+    assert await guard.peek("family-ns") == "claimed"
+
+
 LOOPBACK_REDIRECT_URI = "http://localhost:3118/callback"
 
 
@@ -1850,12 +1906,15 @@ async def test_revoke_burns_the_refresh_token_and_answers_200_for_dead_or_unknow
     assert garbage.status_code == 200
 
 
-def _redis_that(async_increment):
+def _redis_that(async_increment, get=None):
     from unittest.mock import AsyncMock, MagicMock
 
     cache = DualCache()
     cache.redis_cache = MagicMock()
     cache.redis_cache.async_increment = async_increment
+    cache.redis_cache.check_and_fix_namespace = MagicMock(side_effect=lambda key: key)
+    cache.redis_cache.init_async_client.return_value.get = get or AsyncMock(return_value=None)
+    cache.redis_cache.async_get_cache = AsyncMock(side_effect=AssertionError("peek must read the client, not the wrapper"))
     cache.async_increment_cache = AsyncMock(side_effect=AssertionError("must not fall back to in-memory"))
     return cache
 
@@ -1903,6 +1962,64 @@ async def test_revoke_answers_503_while_the_shared_record_cannot_be_written_then
     assert already_burned.status_code == 200
 
 
+class _RedisThatFaultsOnTheSecondWrite:
+    """A shared Redis double whose first increment lands and whose second raises, the fault between
+    revoke's two writes; its raw client reads back exactly the keys that landed, and later writes land."""
+
+    def __init__(self) -> None:
+        self.landed: tuple[str, ...] = ()
+        self.writes = 0
+
+    def check_and_fix_namespace(self, key: str) -> str:
+        return key
+
+    def init_async_client(self) -> "_RedisThatFaultsOnTheSecondWrite":
+        return self
+
+    async def async_increment(self, key: str, value: int, **kwargs: object) -> int:
+        self.writes += 1
+        if self.writes == 2:
+            raise ConnectionError("redis down")
+        self.landed = (*self.landed, key)
+        return self.landed.count(key)
+
+    async def get(self, key: str) -> int | None:
+        return self.landed.count(key) or None
+
+
+@pytest.mark.asyncio
+async def test_revoke_ends_the_chain_first_so_a_fault_before_the_jti_burn_leaves_no_descendant_renewable():
+    """A revocation whose chain marker landed but whose ``jti`` burn faulted answers 503, and the
+    descendant a copy already rotated must be refused from that moment, not renewable until the
+    client retries; the retry then lands with only the ``jti`` left to burn."""
+    client_id = (await _register([LOOPBACK_REDIRECT_URI]))["client_id"]
+    issued = DualCache()
+    payload = json.loads(
+        (await _redeem_native(await _native_code(client_id, cache=issued), client_id, _Minter(), cache=issued)).body
+    )
+    copied_and_rotated = json.loads(
+        (await _refresh_native(payload["refresh_token"], client_id, _Minter(), issued)).body
+    )
+    redis: Final = _RedisThatFaultsOnTheSecondWrite()
+    shared: Final = DualCache(redis_cache=redis)  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+
+    half_written = await revoke_refresh_token(
+        token=payload["refresh_token"], client_id=client_id, master_key=MASTER_KEY, cache=shared
+    )
+    assert half_written.status_code == 503
+
+    refused = await _refresh_native(copied_and_rotated["refresh_token"], client_id, _Minter(), shared)
+    assert refused.status_code == 400
+    assert json.loads(refused.body)["error"] == "invalid_grant"
+    assert "revoked" in json.loads(refused.body)["error_description"]
+
+    retried = await revoke_refresh_token(
+        token=payload["refresh_token"], client_id=client_id, master_key=MASTER_KEY, cache=shared
+    )
+    assert retried.status_code == 200
+    assert json.loads(retried.body) == {}
+
+
 @pytest.mark.asyncio
 async def test_refresh_answers_503_without_burning_the_token_while_redis_is_down():
     """Fail closed, but say why: a refresh the shared backend could not record is refused with 503
@@ -1940,6 +2057,36 @@ async def test_refresh_answers_503_without_burning_the_token_while_redis_is_down
 
 
 @pytest.mark.asyncio
+async def test_refresh_of_a_rotated_token_answers_503_before_minting_while_redis_cannot_be_read():
+    """A rotated token's chain marker is read before anything is minted or claimed; a Redis read fault
+    is a 503, never a pass: the token stays unburned and unminted until Redis answers."""
+    from unittest.mock import AsyncMock
+
+    client_id = (await _register([LOOPBACK_REDIRECT_URI]))["client_id"]
+    issued = DualCache()
+    payload = json.loads(
+        (await _redeem_native(await _native_code(client_id, cache=issued), client_id, _Minter(), cache=issued)).body
+    )
+    rotated = json.loads(
+        (await _refresh_native(payload["refresh_token"], client_id, _Minter(), _redis_that(AsyncMock(return_value=1)))).body
+    )["refresh_token"]
+
+    minter = _Minter()
+    claim = AsyncMock(return_value=1)
+    unreadable = await _refresh_native(
+        rotated, client_id, minter, _redis_that(claim, get=AsyncMock(side_effect=ConnectionError("redis down")))
+    )
+    assert unreadable.status_code == 503
+    assert json.loads(unreadable.body)["error"] == "temporarily_unavailable"
+    assert minter.calls == []
+    assert claim.await_count == 0
+
+    readable = await _refresh_native(rotated, client_id, _Minter(), _redis_that(AsyncMock(return_value=1)))
+    assert readable.status_code == 200
+    assert json.loads(readable.body)["refresh_token"] != rotated
+
+
+@pytest.mark.asyncio
 async def test_revoke_from_another_client_leaves_the_token_usable():
     client_id = (await _register([LOOPBACK_REDIRECT_URI]))["client_id"]
     other = (await _register([LOOPBACK_REDIRECT_URI]))["client_id"]
@@ -1953,6 +2100,24 @@ async def test_revoke_from_another_client_leaves_the_token_usable():
     assert revoked.status_code == 200
     refreshed = await _refresh_native(payload["refresh_token"], client_id, _Minter(), cache)
     assert refreshed.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_revoke_of_an_already_rotated_token_ends_its_chain():
+    client_id = (await _register([LOOPBACK_REDIRECT_URI]))["client_id"]
+    cache = DualCache()
+    payload = json.loads(
+        (await _redeem_native(await _native_code(client_id, cache=cache), client_id, _Minter(), cache=cache)).body
+    )
+    rotated = json.loads((await _refresh_native(payload["refresh_token"], client_id, _Minter(), cache)).body)
+    revoked = await revoke_refresh_token(
+        token=payload["refresh_token"], client_id=client_id, master_key=MASTER_KEY, cache=cache
+    )
+    assert revoked.status_code == 200
+    refused = await _refresh_native(rotated["refresh_token"], client_id, _Minter(), cache)
+    assert refused.status_code == 400
+    assert json.loads(refused.body)["error"] == "invalid_grant"
+    assert "revoked" in json.loads(refused.body)["error_description"]
 
 
 @pytest.mark.asyncio
@@ -2076,6 +2241,50 @@ async def test_introspect_refresh_token_goes_inactive_once_rotated():
 
 
 @pytest.mark.asyncio
+async def test_refresh_replay_refuses_only_itself_and_leaves_the_session_pair_chain_renewing():
+    """A second terminal of the same sign-in presents the refresh token the first one already
+    rotated (Claude Code renews from its in-memory copy, then recovers from the shared credential
+    file), so a replay refuses only itself: the live descendant keeps renewing, introspection keeps
+    reporting it active, and a token the gateway minted before chains were stamped (no ``family``
+    claim) roots its own chain and rotates too."""
+    keys, now, principal = _introspection_fixtures()
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    cache = DualCache()
+    root = mint_session_refresh_token(SessionPrincipal(user_id="u1", client_id=client_id), keys, now)
+
+    async def _refresh(token):
+        return await aggregate_token(
+            request=_request("/token", method="POST"),
+            grant_type="refresh_token",
+            code=None,
+            redirect_uri=None,
+            client_id=client_id,
+            code_verifier=None,
+            refresh_token=token,
+            master_key=MASTER_KEY,
+            reload_user=_reload_user_active,
+            cache=cache,
+        )
+
+    root_token = root.token.get_secret_value()
+    rotated = json.loads((await _refresh(root_token)).body)["refresh_token"]
+    twice_rotated = json.loads((await _refresh(rotated)).body)["refresh_token"]
+    replayed = await _refresh(root_token)
+    assert replayed.status_code == 400
+    assert json.loads(replayed.body)["error"] == "invalid_grant"
+    assert "already used" in json.loads(replayed.body)["error_description"]
+
+    renewed = await _refresh(twice_rotated)
+    assert renewed.status_code == 200
+    thrice_rotated = json.loads(renewed.body)["refresh_token"]
+    status, body = await _introspect(thrice_rotated, cache=cache)
+    assert (status, body["active"]) == (200, True)
+
+    unrelated = mint_session_refresh_token(principal.model_copy(update={"client_id": client_id}), keys, now)
+    assert (await _refresh(unrelated.token.get_secret_value())).status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_introspect_accepts_rs256_signed_tokens_under_configured_signing(monkeypatch):
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
@@ -2135,6 +2344,21 @@ async def test_introspect_fails_closed_on_dead_user_and_503s_on_outage():
 
     status, body = await _introspect(minted.token.get_secret_value(), master_key=None)
     assert (status, body["error"]) == (500, "server_error")
+
+
+@pytest.mark.asyncio
+async def test_introspect_503s_while_the_single_use_record_cannot_be_read():
+    """A token whose chain may have been revoked is never reported active on a Redis read fault."""
+    from unittest.mock import AsyncMock
+
+    keys, now, principal = _introspection_fixtures()
+    minted = mint_session_refresh_token(principal, keys, now)
+    unreadable = _redis_that(AsyncMock(return_value=1), get=AsyncMock(side_effect=ConnectionError("redis down")))
+    status, body = await _introspect(minted.token.get_secret_value(), cache=unreadable)
+    assert (status, body["error"]) == (503, "temporarily_unavailable")
+
+    status, body = await _introspect(minted.token.get_secret_value(), cache=_redis_that(AsyncMock(return_value=1)))
+    assert (status, body["active"]) == (200, True)
 
 
 @pytest.mark.asyncio

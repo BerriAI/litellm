@@ -1,8 +1,8 @@
-import { renderHook, screen, waitFor, renderWithProviders } from "../../../tests/test-utils";
+import { fireEvent, renderHook, screen, waitFor, within, renderWithProviders } from "../../../tests/test-utils";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { Team } from "../key_team_helpers/key_list";
-import type { CredentialItem } from "../networking";
+import { credentialCreateCall, type CredentialItem } from "../networking";
 import { Providers } from "../provider_info_helpers";
 import { projectMountedValues, useMountRegistry, type MountedFormValues } from "../common_components/MountedFormField";
 import { useForm } from "react-hook-form";
@@ -34,6 +34,7 @@ vi.mock("../networking", async () => {
       ],
     }),
     testConnectionRequest: vi.fn().mockResolvedValue({ status: "success" }),
+    credentialCreateCall: vi.fn().mockResolvedValue({ success: true }),
     getProviderCreateMetadata: vi.fn().mockResolvedValue([
       {
         provider: "OpenAI",
@@ -149,6 +150,7 @@ const createTestProps = (userRole = "proxy_admin", userId = "user-1", isTeamAdmi
   const credentials: CredentialItem[] = [
     {
       credential_name: "test-credential",
+      display_name: "Prod OpenAI",
       credential_values: {},
       credential_info: {
         custom_llm_provider: "openai",
@@ -163,7 +165,6 @@ const createTestProps = (userRole = "proxy_admin", userId = "user-1", isTeamAdmi
     mountedValues: () => projectMountedValues(registry, form.getValues),
     handleOk: vi.fn().mockResolvedValue(true),
     setSelectedProvider: vi.fn(),
-    setProviderModelsFn: vi.fn(),
     getPlaceholder: vi.fn((provider: string) => `Enter ${provider} model name`),
     setShowAdvancedSettings: vi.fn(),
     selectedProvider: Providers.OpenAI,
@@ -299,6 +300,47 @@ describe("AddModelForm", () => {
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
 
+  describe("the existing-credentials picker", () => {
+    const openPicker = async () => {
+      const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
+      mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+      const props = createTestProps();
+      renderWithProviders(<AddModelForm {...props} />);
+      const input = await screen.findByPlaceholderText("Select or search for existing credentials");
+      await user.click(input);
+      return { user, input, form: props.form };
+    };
+
+    it("shows each credential's display name and credential name together", async () => {
+      await openPicker();
+
+      const option = await screen.findByRole("option", { name: /test-credential/ });
+      expect(option).toHaveTextContent("test-credential");
+      expect(option).toHaveTextContent("Prod OpenAI");
+    });
+
+    it("filters by the display name, not only the credential name", async () => {
+      const { user, input } = await openPicker();
+
+      await user.type(input, "prod open");
+
+      expect(await screen.findByRole("option", { name: /test-credential/ })).toBeInTheDocument();
+    });
+
+    it("selecting by display name sets litellm_credential_name to the credential name", async () => {
+      const { user, input, form } = await openPicker();
+      expect(screen.getByText("OR")).toBeInTheDocument();
+
+      await user.type(input, "prod open");
+      await user.click(await screen.findByRole("option", { name: /test-credential/ }));
+
+      expect(input).toHaveValue("Prod OpenAI");
+      expect(form.getValues("litellm_credential_name")).toBe("test-credential");
+      expect(screen.queryByText("OR")).not.toBeInTheDocument();
+    });
+  });
+
   it("should display the provider field and the Test Connect / Add Model buttons", async () => {
     const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
     mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
@@ -310,6 +352,18 @@ describe("AddModelForm", () => {
     expect(await screen.findByText("Provider")).toBeInTheDocument();
     expect((await screen.findAllByRole("button", { name: "Test Connect" })).length).toBeGreaterThan(0);
     expect(await screen.findByRole("button", { name: "Add Model" })).toBeInTheDocument();
+  });
+
+  it("offers the Evaluation decisions mode", async () => {
+    const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
+    mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
+
+    renderWithProviders(<AddModelForm {...createTestProps()} />);
+
+    await screen.findByText("Provider");
+    await userEvent.click(screen.getByRole("combobox", { name: "Mode" }));
+
+    expect(await screen.findByRole("option", { name: "Evaluation - /v1/decisions", exact: true })).toBeInTheDocument();
   });
 
   it("shows only the Close button in the connection test dialog footer", async () => {
@@ -352,6 +406,98 @@ describe("AddModelForm", () => {
       await user.hover(teamOnlySwitch);
 
       expect(screen.queryByText(/enterprise-only feature/)).not.toBeInTheDocument();
+    });
+  });
+
+  describe("workload identity federation entry point", () => {
+    const renderAsRole = async (userRole: string, selectedProvider: Providers) => {
+      const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
+      mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser(userRole, "user-1", true));
+      const props = { ...createTestProps(userRole, "user-1", false), selectedProvider };
+      renderWithProviders(<AddModelForm {...props} />);
+      await screen.findByText("Existing Credentials");
+      return props;
+    };
+
+    const fill = (label: string | RegExp, value: string) =>
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+
+    it("saves the federation fields as a credential and attaches it to the model", async () => {
+      const user = userEvent.setup();
+      const props = await renderAsRole("proxy_admin", Providers.Anthropic);
+
+      await user.click(screen.getByRole("button", { name: "Use workload identity federation" }));
+      expect(await screen.findByRole("combobox", { name: /^Authentication:/ })).toHaveTextContent(
+        "Workload identity federation",
+      );
+      fill("Credential Name:", "anthropic-federated");
+      fill(/Federation Rule ID/, "fdrl_new");
+      fill(/Organization ID/, "org-new");
+      fill(/Identity Token File/, "/var/run/secrets/anthropic/token");
+      await user.click(screen.getByRole("button", { name: "Add Credential" }));
+
+      await waitFor(() => {
+        expect(credentialCreateCall).toHaveBeenCalledWith("test-access-token", {
+          credential_name: "anthropic-federated",
+          credential_values: {
+            anthropic_federation_rule_id: "fdrl_new",
+            anthropic_organization_id: "org-new",
+            anthropic_identity_token_file: "/var/run/secrets/anthropic/token",
+          },
+          credential_info: { custom_llm_provider: Providers.Anthropic },
+        });
+      });
+      await waitFor(() => {
+        expect(props.form.getValues("litellm_credential_name")).toBe("anthropic-federated");
+      });
+      expect(props.mountedValues()).not.toHaveProperty("anthropic_federation_rule_id");
+    });
+
+    it("keeps the credential dialog on the model's provider", async () => {
+      const user = userEvent.setup();
+      await renderAsRole("proxy_admin", Providers.Anthropic);
+
+      await user.click(screen.getByRole("button", { name: "Use workload identity federation" }));
+
+      const providerSelect = within(await screen.findByRole("dialog")).getByPlaceholderText("Select a provider");
+      expect(providerSelect).toHaveValue("Anthropic");
+      expect(providerSelect).toBeDisabled();
+    });
+
+    it("saves an OpenAI federated credential and attaches it to the model", async () => {
+      const user = userEvent.setup();
+      const props = await renderAsRole("proxy_admin", Providers.OpenAI);
+
+      await user.click(screen.getByRole("button", { name: "Use workload identity federation" }));
+      expect(await screen.findByRole("combobox", { name: /^Authentication:/ })).toHaveTextContent(
+        "Workload identity federation",
+      );
+      fill("Credential Name:", "openai-federated");
+      fill(/Service Account ID/, "svc_new");
+      await user.click(screen.getByRole("button", { name: "Add Credential" }));
+
+      await waitFor(() => {
+        expect(credentialCreateCall).toHaveBeenCalledWith("test-access-token", {
+          credential_name: "openai-federated",
+          credential_values: { openai_service_account_id: "svc_new" },
+          credential_info: { custom_llm_provider: Providers.OpenAI },
+        });
+      });
+      await waitFor(() => {
+        expect(props.form.getValues("litellm_credential_name")).toBe("openai-federated");
+      });
+    });
+
+    it("is not offered for a provider without federation support", async () => {
+      await renderAsRole("proxy_admin", Providers.OpenAI_Compatible);
+
+      expect(screen.queryByRole("button", { name: "Use workload identity federation" })).not.toBeInTheDocument();
+    });
+
+    it("is not offered to an admin who is not a proxy admin", async () => {
+      await renderAsRole("org_admin", Providers.Anthropic);
+
+      expect(screen.queryByRole("button", { name: "Use workload identity federation" })).not.toBeInTheDocument();
     });
   });
 

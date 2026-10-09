@@ -73,6 +73,28 @@ fn decode(
 }
 
 #[rstest]
+#[case::interaction("interaction", "user_prompt", "")]
+#[case::model_context("llm_request", "new_context", "[USER]\n")]
+fn native_claude_prompts_preserve_notification_text_and_user_role(
+    span: Span,
+    #[case] kind: &str,
+    #[case] key: &str,
+    #[case] prefix: &str,
+) {
+    let prompt = "<task-notification><summary>Quoted summary</summary><result>Keep this result</result></task-notification>\nExplain this example";
+    let payload = format!("{prefix}{prompt}");
+    let decoded = decode(
+        span,
+        "com.anthropic.claude_code.tracing",
+        &[("span.type", kind), (key, &payload)],
+        vec![],
+    )
+    .unwrap();
+    let messages: Value = serde_json::from_str(&decoded.normalized.input).unwrap();
+    assert_eq!(messages, json!([{"role": "user", "content": prompt}]));
+}
+
+#[rstest]
 #[case::agent("agent", ObservationType::Agent)]
 #[case::workflow("workflow", ObservationType::Chain)]
 #[case::task("task", ObservationType::Chain)]
@@ -481,6 +503,25 @@ fn existing_formats_win_over_new_formats(span: Span, #[case] kind: &str) {
 }
 
 #[rstest]
+fn input_preview_is_the_first_user_message(span: Span) {
+    let conversation = json!([
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "initial question"},
+        {"role": "assistant", "content": "answer"},
+        {"role": "user", "content": "follow up"},
+    ])
+    .to_string();
+    let decoded = decode(
+        span,
+        "custom",
+        &[("gen_ai.input.messages", &conversation)],
+        vec![],
+    )
+    .unwrap();
+    assert_eq!(decoded.normalized.input_preview, "initial question");
+}
+
+#[rstest]
 #[case::messages(&[("gen_ai.input.messages", r#"[{"role":"user","content":"modern"}]"#)], "modern")]
 #[case::indexed(&[("gen_ai.prompt.0.role", "user"), ("gen_ai.prompt.0.content", "indexed")], "indexed")]
 #[case::events(&[], "event")]
@@ -670,4 +711,264 @@ fn openinference_provider_response_identity(
         ]))
     });
     assert_eq!(decoded.normalized.calls, expected);
+}
+
+#[rstest]
+#[case::unknown("custom", "gen_ai.response.id", CallKey::ProviderResponse("id".into()))]
+#[case::gateway("custom", "litellm.call_id", CallKey::LiteLlmRequest("id".into()))]
+#[case::other_format("langsmith", "litellm.call_id", CallKey::LiteLlmRequest("id".into()))]
+fn generic_ids_do_not_prove_call_completeness(
+    span: Span,
+    #[case] scope: &str,
+    #[case] attribute: &str,
+    #[case] key: CallKey,
+) {
+    let decoded = decode(span, scope, &[(attribute, "id")], vec![]).unwrap();
+    assert_eq!(
+        decoded.normalized.calls,
+        CallEvidence::Partial(std::collections::BTreeSet::from([key]))
+    );
+}
+
+#[rstest]
+#[case::chat("chat", true)]
+#[case::text_completion("text_completion", true)]
+#[case::generate_content("generate_content", true)]
+#[case::agent("invoke_agent", false)]
+#[case::tool("execute_tool", false)]
+fn genai_model_operations_with_a_response_id_are_complete_calls(
+    span: Span,
+    #[case] operation: &str,
+    #[case] complete: bool,
+) {
+    let decoded = decode(
+        span,
+        "custom",
+        &[
+            ("gen_ai.operation.name", operation),
+            ("gen_ai.response.id", "chatcmpl-1"),
+        ],
+        vec![],
+    )
+    .unwrap();
+    let keys = std::collections::BTreeSet::from([CallKey::ProviderResponse("chatcmpl-1".into())]);
+    let expected = if complete {
+        CallEvidence::Complete(keys)
+    } else {
+        CallEvidence::Partial(keys)
+    };
+    assert_eq!(decoded.normalized.calls, expected);
+}
+
+#[rstest]
+fn transport_contract_keeps_independent_call_ids(span: Span) {
+    let decoded = decode(
+        span,
+        "opentelemetry.instrumentation.httpx",
+        &[
+            ("litellm.call_id", "gateway"),
+            ("gen_ai.response.id", "response"),
+        ],
+        vec![],
+    )
+    .unwrap();
+    assert_eq!(
+        decoded.normalized.calls,
+        CallEvidence::Complete(std::collections::BTreeSet::from([
+            CallKey::Transport,
+            CallKey::LiteLlmRequest("gateway".into()),
+            CallKey::ProviderResponse("response".into()),
+        ]))
+    );
+}
+
+#[rstest]
+#[case::request("litellm.gateway.client", "gateway.request", "true", "POST", true)]
+#[case::unrelated_scope("custom", "gateway.request", "true", "POST", false)]
+#[case::unrelated_span("litellm.gateway.client", "step", "true", "POST", false)]
+#[case::missing_contract("litellm.gateway.client", "gateway.request", "", "POST", false)]
+#[case::disabled_contract("litellm.gateway.client", "gateway.request", "false", "POST", false)]
+#[case::unrelated_method("litellm.gateway.client", "gateway.request", "true", "GET", false)]
+fn gateway_attempt_contract_requires_recorded_request_boundary(
+    span: Span,
+    #[case] scope: &str,
+    #[case] name: &str,
+    #[case] attempt: &str,
+    #[case] method: &str,
+    #[case] complete: bool,
+) {
+    let decoded = decode(
+        Span {
+            name: name.into(),
+            ..span
+        },
+        scope,
+        &[
+            ("litellm.gateway.attempt", attempt),
+            ("http.request.method", method),
+            ("litellm.call_id", "gateway"),
+        ],
+        vec![],
+    )
+    .unwrap();
+    let gateway = CallKey::LiteLlmRequest("gateway".into());
+    assert_eq!(
+        decoded.normalized.calls,
+        if complete {
+            CallEvidence::Complete(std::collections::BTreeSet::from([
+                CallKey::GatewayAttempt,
+                gateway,
+            ]))
+        } else {
+            CallEvidence::Partial(std::collections::BTreeSet::from([gateway]))
+        }
+    );
+    if complete {
+        assert_eq!(
+            decoded.normalized.observation_type,
+            ObservationType::Framework
+        );
+    }
+}
+
+#[rstest]
+#[case::both(true, true)]
+#[case::input_only(true, false)]
+#[case::output_only(false, true)]
+fn langsmith_consumption_follows_selected_payloads(
+    span: Span,
+    #[case] legacy_input: bool,
+    #[case] legacy_output: bool,
+) {
+    let decoded = decode(
+        span,
+        "langsmith",
+        &[
+            ("langsmith.span.kind", "chain"),
+            (
+                "gen_ai.input.messages",
+                r#"[{"role":"user","content":"modern input"}]"#,
+            ),
+            (
+                "gen_ai.output.messages",
+                r#"[{"role":"assistant","content":"modern output"}]"#,
+            ),
+            (
+                "gen_ai.prompt",
+                if legacy_input { "legacy input" } else { "" },
+            ),
+            (
+                "gen_ai.completion",
+                if legacy_output { "legacy output" } else { "" },
+            ),
+        ],
+        vec![],
+    )
+    .unwrap();
+    for (legacy, modern, selected, payload, expected) in [
+        (
+            "gen_ai.prompt",
+            "gen_ai.input.messages",
+            legacy_input,
+            &decoded.normalized.input,
+            "legacy input",
+        ),
+        (
+            "gen_ai.completion",
+            "gen_ai.output.messages",
+            legacy_output,
+            &decoded.normalized.output,
+            "legacy output",
+        ),
+    ] {
+        assert_eq!(decoded.consumed_attributes.contains(&legacy), selected);
+        assert_eq!(decoded.consumed_attributes.contains(&modern), !selected);
+        if selected {
+            assert_eq!(payload, expected);
+        } else {
+            assert!(serde_json::from_str::<Value>(payload).unwrap().is_array());
+        }
+    }
+}
+
+#[rstest]
+#[case::with_output_messages(&[
+    ("langsmith.span.kind", "llm"),
+    ("gen_ai.operation.name", "chat"),
+    ("gen_ai.response.id", "chatcmpl-1"),
+    (
+        "gen_ai.output.messages",
+        r#"[{"role":"assistant","parts":[{"type":"text","content":"hi"}]}]"#,
+    ),
+])]
+#[case::without_output_messages(&[
+    ("langsmith.span.kind", "llm"),
+    ("gen_ai.operation.name", "chat"),
+    ("gen_ai.response.id", "chatcmpl-1"),
+])]
+fn langsmith_response_id_is_complete_without_legacy_payloads(
+    span: Span,
+    #[case] attributes: &[(&str, &str)],
+) {
+    let decoded = decode(span, "langsmith", attributes, vec![]).unwrap();
+    assert_eq!(
+        decoded.normalized.calls,
+        CallEvidence::Complete(std::collections::BTreeSet::from([
+            CallKey::ProviderResponse("chatcmpl-1".into()),
+        ]))
+    );
+}
+
+#[rstest]
+#[case::langsmith("langsmith", "langsmith.span.kind", "llm")]
+#[case::logfire("logfire", "events", "[]")]
+#[case::traceloop("custom", "traceloop.span.kind", "llm")]
+#[case::vercel("ai", "ai.operationId", "ai.generateText")]
+fn convention_markers_keep_genai_call_evidence(
+    span: Span,
+    #[case] scope: &str,
+    #[case] marker: &str,
+    #[case] marker_value: &str,
+) {
+    let attributes = [
+        ("gen_ai.operation.name", "chat"),
+        ("gen_ai.response.id", "chatcmpl-1"),
+        ("gen_ai.request.model", "fixture-model"),
+        (
+            "gen_ai.output.messages",
+            r#"[{"role":"assistant","parts":[{"type":"text","content":"hi"}]}]"#,
+        ),
+    ];
+    let plain = decode(span.clone(), "custom", &attributes, vec![]).unwrap();
+    let marked_attributes = attributes
+        .into_iter()
+        .chain([(marker, marker_value)])
+        .collect::<Vec<_>>();
+    let marked = decode(span, scope, &marked_attributes, vec![]).unwrap();
+    assert_eq!(marked.normalized.calls, plain.normalized.calls);
+}
+
+#[rstest]
+#[case::request("req_native", CallKey::ProviderRequest("req_native".into()))]
+#[case::legacy_message("msg_legacy", CallKey::ProviderResponse("msg_legacy".into()))]
+fn native_claude_preserves_the_provider_id_family(
+    span: Span,
+    #[case] id: &str,
+    #[case] key: CallKey,
+) {
+    let native = Span {
+        name: "claude_code.llm_request".into(),
+        ..span
+    };
+    let decoded = decode(
+        native,
+        "com.anthropic.claude_code.tracing",
+        &[("gen_ai.response.id", id)],
+        Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        decoded.normalized.calls,
+        CallEvidence::Complete(std::collections::BTreeSet::from([key]))
+    );
 }

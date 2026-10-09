@@ -28,11 +28,14 @@ def _fake_storage() -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_ingest_decompresses_and_passes_the_authenticated_tenant() -> None:
+@pytest.mark.parametrize("logs", (False, True))
+async def test_ingest_decompresses_and_passes_the_authenticated_tenant(logs: bool) -> None:
     storage: Final = _fake_storage()
-    count: Final = await TraceReceiver(storage).ingest(gzip.compress(b"export"), "application/json", "gzip", TENANT)
+    count: Final = await TraceReceiver(storage).ingest(
+        gzip.compress(b"export"), "application/json", "gzip", TENANT, logs=logs
+    )
     assert count == 6
-    storage.ingest.assert_awaited_once_with(b"export", "application/json", TENANT)
+    storage.ingest.assert_awaited_once_with(b"export", "application/json", TENANT, logs)
 
 
 @pytest.mark.asyncio
@@ -61,11 +64,12 @@ async def test_ingest_rejects_oversized_body_before_storage() -> None:
 
 
 @pytest.mark.asyncio
-async def test_reads_delegate_to_storage() -> None:
+@pytest.mark.parametrize("cursor,page_size", ((None, None), ("next", 200)))
+async def test_reads_delegate_to_storage(cursor: str | None, page_size: int | None) -> None:
     storage: Final = _fake_storage()
     scope: Final[TraceScope] = {"all_teams": 0, "user_id": "", "team_ids": ("team-research",)}
-    assert await TraceReceiver(storage).get_trace("t1", scope) is None
-    storage.get_trace.assert_awaited_once_with("t1", scope, "")
+    assert await TraceReceiver(storage).get_trace("t1", scope, "", cursor, page_size) is None
+    storage.get_trace.assert_awaited_once_with("t1", scope, "", cursor, page_size)
 
 
 @pytest.mark.asyncio
@@ -84,7 +88,7 @@ async def test_cancelled_request_keeps_its_worker_slot_until_decompression_finis
 
     storage: Final = _fake_storage()
 
-    async def store(payload: bytes, content_type: str | None, tenant: Tenant) -> int:
+    async def store(payload: bytes, content_type: str | None, tenant: Tenant, logs: bool) -> int:
         stored.set()
         return 0
 

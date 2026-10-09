@@ -59,20 +59,47 @@ export function analysisProgress(job: Job) {
   };
 }
 
-export function analysisStages(job: Job): { done: number; total: number }[] {
-  const {
-    screened = 0,
-    selected = 0,
-    grouped_batches = 0,
-    grouping_batches = 0,
-    investigated = 0,
-    candidates = 0,
-  } = job.coverage ?? {};
-  return [
-    { done: screened, total: selected },
-    { done: grouped_batches, total: grouping_batches },
-    { done: investigated, total: candidates },
-  ];
+type Coverage = Job["coverage"];
+
+export const ANALYSIS_STAGES = [
+  { label: "Review runs", weight: 0.6, done: (c: Coverage) => c.screened, total: (c: Coverage) => c.selected },
+  {
+    label: "Find patterns",
+    weight: 0.2,
+    done: (c: Coverage) => c.grouped_batches,
+    total: (c: Coverage) => c.grouping_batches,
+  },
+  { label: "Check evidence", weight: 0.2, done: (c: Coverage) => c.investigated, total: (c: Coverage) => c.candidates },
+] as const;
+
+export interface StageProgress {
+  readonly label: string;
+  readonly weight: number;
+  readonly state: "done" | "active" | "todo";
+  readonly done: number;
+  readonly total: number;
+  readonly fill: number;
+}
+
+function stageState(index: number, current: number): StageProgress["state"] {
+  if (index < current) return "done";
+  return index === current ? "active" : "todo";
+}
+
+function stageFill(state: StageProgress["state"], done: number, total: number): number {
+  if (state === "done") return 1;
+  if (state === "todo" || !total) return 0;
+  return Math.min(1, done / total);
+}
+
+export function analysisStages(job: Job): readonly StageProgress[] {
+  const step = analysisProgress(job).step;
+  return ANALYSIS_STAGES.map((stage, index) => {
+    const state = stageState(index, step);
+    const done = job.coverage ? stage.done(job.coverage) : 0;
+    const total = job.coverage ? stage.total(job.coverage) : 0;
+    return { label: stage.label, weight: stage.weight, state, done, total, fill: stageFill(state, done, total) };
+  });
 }
 
 export interface ProgressSample {
@@ -82,16 +109,14 @@ export interface ProgressSample {
   fraction: number;
 }
 
-export const stageWeights = [0.6, 0.2, 0.2];
-
 export function analysisFraction({
   step,
   done,
   total,
 }: Pick<ReturnType<typeof analysisProgress>, "step" | "done" | "total">): number {
   if (step < 0) return 0;
-  const before = stageWeights.slice(0, step).reduce((sum, weight) => sum + weight, 0);
-  return before + stageWeights[step] * (total ? Math.min(1, done / total) : 0);
+  const before = ANALYSIS_STAGES.slice(0, step).reduce((sum, stage) => sum + stage.weight, 0);
+  return before + ANALYSIS_STAGES[step].weight * (total ? Math.min(1, done / total) : 0);
 }
 
 function windowStart(samples: readonly ProgressSample[], now: number): ProgressSample | undefined {
@@ -113,22 +138,6 @@ export function analysisPace(samples: readonly ProgressSample[], now: number) {
   const gained = latest.fraction - anchor.fraction;
   const secondsLeft = spanSeconds >= 10 && gained > 0 ? ((1 - latest.fraction) * spanSeconds) / gained : null;
   return { perMinute, secondsLeft };
-}
-
-export function stageDurations(samples: readonly ProgressSample[], createdAt: string, now: number): (number | null)[] {
-  const current = samples.at(-1)?.step ?? -1;
-  const starts = [0, 1, 2].map((stage) => {
-    if (stage === 0) return Date.parse(createdAt);
-    const entered = samples.findIndex(
-      (sample, index) => index > 0 && sample.step >= stage && samples[index - 1].step < stage,
-    );
-    return entered < 0 ? null : samples[entered].at;
-  });
-  return starts.map((start, stage) => {
-    if (start === null || stage > current) return null;
-    const end = stage === current ? now : starts[stage + 1];
-    return end === null ? null : Math.max(0, Math.floor((end - start) / 1000));
-  });
 }
 
 export function remainingLabel(seconds: number | null): string {

@@ -11,16 +11,20 @@ as the `image` part, not a JSON body. The fixture image is a small generated
 from __future__ import annotations
 
 import base64
+from typing import Final
 
 import openai
 import pytest
 from e2e_config import SLOW_PROVIDER_TIMEOUT_SECONDS, unique_marker
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
 from sdk_clients import SdkClients
 
 pytestmark = pytest.mark.e2e
+
+IMAGE_EDIT_BACKEND: Final = "openai/gpt-image-1"
 
 _TEST_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAS0lEQVR42u3PMQ0AAAwDoPo3"
@@ -33,7 +37,7 @@ def _register_image_model(proxy: ProxyClient, resources: ResourceManager) -> tup
     model = f"e2e-image-edit-{unique_marker()}"
     model_id = proxy.create_model(
         model,
-        LiteLLMParamsBody(model="openai/gpt-image-1", api_key="os.environ/OPENAI_API_KEY"),
+        LiteLLMParamsBody(model=IMAGE_EDIT_BACKEND, api_key="os.environ/OPENAI_API_KEY"),
     )
     resources.defer(lambda: proxy.delete_model(model_id))
     return model, resources.key()
@@ -49,6 +53,15 @@ def _assert_client_error(error: openai.APIStatusError, context: str) -> None:
 
 class TestImageEdit:
     @pytest.mark.covers("llm.images_edits.openai.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.IMAGES,
+            providers=(Provider.OPENAI,),
+            models=(IMAGE_EDIT_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_image_edit_returns_image(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         model, key = _register_image_model(proxy, resources)
         client = sdk.openai(key)
@@ -64,6 +77,15 @@ class TestImageEdit:
         assert first.b64_json or first.url, f"edited image has neither b64_json nor url: {first!r}"
 
     @pytest.mark.covers("llm.images_edits.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.IMAGES,
+            providers=(Provider.OPENAI,),
+            models=(IMAGE_EDIT_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_empty_prompt_returns_error(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         model, key = _register_image_model(proxy, resources)
         client = sdk.openai(key)
@@ -73,6 +95,15 @@ class TestImageEdit:
         _assert_client_error(raised.value, "empty image-edit prompt")
 
     @pytest.mark.covers("llm.images_edits.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.IMAGES,
+            providers=(Provider.OPENAI,),
+            models=(IMAGE_EDIT_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_empty_image_returns_error(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         model, key = _register_image_model(proxy, resources)
         client = sdk.openai(key)

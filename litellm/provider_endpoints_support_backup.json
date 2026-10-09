@@ -2100,6 +2100,24 @@
         "interactions": true
       }
     },
+    "reka": {
+      "display_name": "Reka (`reka`)",
+      "url": "https://docs.litellm.ai/docs/providers/reka",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "scaleway": {
       "display_name": "Scaleway (`scaleway`)",
       "url": "https://docs.litellm.ai/docs/providers/scaleway",
@@ -2336,7 +2354,7 @@
       }
     },
     "voyage": {
-      "display_name": "Voyage AI (`voyage`)",
+      "display_name": "VoyageAI by MongoDB (`voyage`)",
       "url": "https://docs.litellm.ai/docs/providers/voyage",
       "endpoints": {
         "chat_completions": false,
