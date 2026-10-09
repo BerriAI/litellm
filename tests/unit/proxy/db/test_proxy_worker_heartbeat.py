@@ -1,7 +1,10 @@
 from collections.abc import Awaitable, Callable
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.interval import IntervalTrigger
 
 from litellm.proxy.db.proxy_worker_heartbeat import (
     BEAT_SQL,
@@ -22,6 +25,72 @@ def _prisma():
     prisma.db.execute_raw = AsyncMock()
     prisma.db.query_raw = AsyncMock()
     return prisma
+
+
+@pytest.mark.asyncio
+async def test_disabled_heartbeat_does_not_access_the_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PROXY_WORKER_HEARTBEAT_INTERVAL_SECONDS", "0")
+    prisma: Final = _prisma()
+    heartbeat: Final = ProxyWorkerHeartbeat(prisma_client=prisma, worker_id="disabled-worker")
+
+    await heartbeat.beat()
+    await heartbeat.deregister()
+
+    assert await count_live_proxy_workers(prisma) is None
+    prisma.db.execute_raw.assert_not_awaited()
+    prisma.db.query_raw.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured_interval", "expected_interval"),
+    ((None, 60), ("15", 15), ("1800", 1800), ("-1", 60), ("invalid", 60), ("", 60), ("1.5", 60)),
+)
+async def test_heartbeat_uses_configured_liveness_and_retention(
+    monkeypatch: pytest.MonkeyPatch, configured_interval: str | None, expected_interval: int
+) -> None:
+    if configured_interval is None:
+        monkeypatch.delenv("PROXY_WORKER_HEARTBEAT_INTERVAL_SECONDS", raising=False)
+    else:
+        monkeypatch.setenv("PROXY_WORKER_HEARTBEAT_INTERVAL_SECONDS", configured_interval)
+    prisma: Final = _prisma()
+    prisma.db.query_raw.return_value = [{"live_workers": 2}]
+    heartbeat: Final = ProxyWorkerHeartbeat(prisma_client=prisma, worker_id="configured-worker")
+
+    await heartbeat.beat()
+
+    assert prisma.db.execute_raw.call_args_list[0].args == (BEAT_SQL, "configured-worker", heartbeat.hostname)
+    assert prisma.db.execute_raw.call_args_list[1].args == (
+        PRUNE_SQL,
+        max(STALE_ROW_RETENTION_SECONDS, 3 * expected_interval),
+    )
+    assert await count_live_proxy_workers(prisma) == 2
+    prisma.db.query_raw.assert_awaited_once_with(COUNT_SQL, 3 * expected_interval)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interval_seconds", (0, 15, 60, 1800))
+async def test_start_registers_only_enabled_heartbeats(monkeypatch: pytest.MonkeyPatch, interval_seconds: int) -> None:
+    monkeypatch.setenv("PROXY_WORKER_HEARTBEAT_INTERVAL_SECONDS", str(interval_seconds))
+    prisma: Final = _prisma()
+    heartbeat: Final = ProxyWorkerHeartbeat(prisma_client=prisma, worker_id="scheduled-worker")
+    scheduler: Final = AsyncIOScheduler()
+
+    await heartbeat.start(scheduler)
+
+    job: Final = scheduler.get_job("proxy_worker_heartbeat_job")
+    if interval_seconds == 0:
+        assert job is None
+        prisma.db.execute_raw.assert_not_awaited()
+        return
+
+    assert job is not None
+    assert isinstance(job.trigger, IntervalTrigger)
+    assert job.trigger.interval.total_seconds() == interval_seconds
+    assert prisma.db.execute_raw.await_count == 2
+    await job.func()
+    assert prisma.db.execute_raw.await_count == 4
+    assert prisma.db.execute_raw.call_args_list[2].args == (BEAT_SQL, "scheduled-worker", heartbeat.hostname)
 
 
 @pytest.mark.asyncio
