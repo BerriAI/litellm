@@ -442,3 +442,143 @@ describe("CredentialModal with Anthropic workload identity federation", () => {
     );
   });
 });
+
+const openAIFederatedCredential: CredentialItem = {
+  credential_name: "openai-federated",
+  credential_values: {
+    api_base: "https://api.openai.com/v1",
+    openai_identity_provider_id: "idp_stored",
+    openai_service_account_id: "svc_stored",
+    openai_identity_token_file: "/var****",
+  },
+  credential_info: { custom_llm_provider: "openai" },
+};
+
+describe("CredentialModal with OpenAI workload identity federation", () => {
+  it("creates a federated OpenAI credential and never sends an API key", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({ initialProvider: "OpenAI" });
+    await screen.findByLabelText("OpenAI API Key");
+    fill("OpenAI API Key", "sk-proj-typed-before-switching");
+
+    await chooseOption(user, /^Authentication:/, "Workload identity federation");
+
+    expect(screen.queryByLabelText("OpenAI API Key")).not.toBeInTheDocument();
+    expect(screen.getByText(/only when OPENAI_API_KEY is unset/)).toBeInTheDocument();
+    fill("Credential Name:", "openai-federated");
+    fill(/Identity Provider ID/, "idp_new");
+    fill(/Service Account ID/, " svc_new ");
+    fill(/Identity Token File/, "/var/run/secrets/kubernetes.io/serviceaccount/token");
+    await user.click(screen.getByRole("button", { name: "Add Credential" }));
+
+    const expectedPayload = {
+      credential_name: "openai-federated",
+      custom_llm_provider: "OpenAI",
+      openai_identity_provider_id: "idp_new",
+      openai_service_account_id: "svc_new",
+      openai_identity_token_file: "/var/run/secrets/kubernetes.io/serviceaccount/token",
+    };
+    expect(onSubmit).toHaveBeenCalledWith(expectedPayload, []);
+  });
+
+  it("saves a stored federated OpenAI credential untouched when its service account comes from the proxy environment", async () => {
+    const user = userEvent.setup();
+    const { openai_service_account_id: _, ...valuesWithoutServiceAccount } =
+      openAIFederatedCredential.credential_values;
+    const onSubmit = renderModal({
+      mode: "edit",
+      existingCredential: { ...openAIFederatedCredential, credential_values: valuesWithoutServiceAccount },
+    });
+    await screen.findByLabelText(/Service Account ID/);
+
+    await user.click(screen.getByRole("button", { name: "Update Credential" }));
+
+    expect(onSubmit).toHaveBeenCalledWith({ credential_name: "openai-federated", custom_llm_provider: "openai" }, []);
+  });
+
+  it("refuses a base URL the proxy would not federate with, and drops that check once the admin picks an API key", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({ initialProvider: "OpenAI", initialAuthMethod: "federation" });
+    await screen.findByLabelText("API Base");
+    fill("Credential Name:", "openai-gateway");
+    fill(/Service Account ID/, "svc_new");
+    fill("API Base", "https://gateway.example.com/v1");
+
+    await user.click(screen.getByRole("button", { name: "Add Credential" }));
+
+    expect(await screen.findByText(/only reaches the OpenAI API/)).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    await chooseOption(user, /^Authentication:/, "API key");
+    await screen.findByLabelText("OpenAI API Key");
+    expect(screen.queryByText(/only reaches the OpenAI API/)).not.toBeInTheDocument();
+    fill("OpenAI API Key", "sk-proj-new");
+    await user.click(screen.getByRole("button", { name: "Add Credential" }));
+
+    const expectedPayload = {
+      credential_name: "openai-gateway",
+      custom_llm_provider: "OpenAI",
+      api_base: "https://gateway.example.com/v1",
+      api_key: "sk-proj-new",
+    };
+    expect(onSubmit).toHaveBeenCalledWith(expectedPayload, []);
+  });
+
+  it("shows a stored federated OpenAI credential and writes nothing when it is saved untouched", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({ mode: "edit", existingCredential: openAIFederatedCredential });
+
+    expect(await screen.findByRole("combobox", { name: /^Authentication:/ })).toHaveTextContent(
+      "Workload identity federation",
+    );
+    expect(screen.getByLabelText(/Service Account ID/)).toHaveValue("svc_stored");
+    expect(screen.getByLabelText(/Identity Token File/)).toHaveValue("/var****");
+    expect(screen.queryByLabelText("OpenAI API Key")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Update Credential" }));
+
+    expect(onSubmit).toHaveBeenCalledWith({ credential_name: "openai-federated", custom_llm_provider: "openai" }, []);
+  });
+
+  it("deletes the stored OpenAI federation values when the admin switches the credential to an API key", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({ mode: "edit", existingCredential: openAIFederatedCredential });
+    await screen.findByLabelText(/Service Account ID/);
+
+    await chooseOption(user, /^Authentication:/, "API key");
+    await screen.findByLabelText("OpenAI API Key");
+    fill("OpenAI API Key", "sk-proj-replacement");
+    await user.click(screen.getByRole("button", { name: "Update Credential" }));
+
+    const [values, valuesToDelete] = onSubmit.mock.calls[0];
+    expect(values).toEqual({
+      credential_name: "openai-federated",
+      custom_llm_provider: "openai",
+      api_key: "sk-proj-replacement",
+    });
+    expect([...valuesToDelete].sort()).toEqual([
+      "openai_identity_provider_id",
+      "openai_identity_token_file",
+      "openai_service_account_id",
+    ]);
+  });
+
+  it("restores the stored federation settings when the admin returns to the credential's own provider", async () => {
+    const user = userEvent.setup();
+    const onSubmit = renderModal({ mode: "edit", existingCredential: federatedCredential });
+    await screen.findByLabelText(/Federation Rule ID/);
+
+    await chooseProvider(user, "OpenAI");
+    expect(await screen.findByRole("combobox", { name: /^Authentication:/ })).toHaveTextContent("API key");
+    await chooseProvider(user, "Anthropic");
+
+    expect(await screen.findByRole("combobox", { name: /Identity Source/ })).toHaveTextContent(
+      "Keycloak client credentials",
+    );
+    await user.click(screen.getByRole("button", { name: "Update Credential" }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      { credential_name: "anthropic-federated", custom_llm_provider: "Anthropic" },
+      [],
+    );
+  });
+});
