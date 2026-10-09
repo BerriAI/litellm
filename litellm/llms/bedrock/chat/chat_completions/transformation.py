@@ -256,9 +256,7 @@ class BedrockRuntimeChatCompletionsStreamingHandler(OpenAIChatCompletionStreamin
         self._minted_tool_call_ids = MappingProxyType({**self._minted_tool_call_ids, key: minted})
         return minted
 
-    def _mint_unique_tool_call_ids(self, parsed: ModelResponseStream) -> None:
-        if not bedrock_runtime_chat_completions_numbers_tool_calls(parsed.model or ""):
-            return
+    def _mint_streamed_tool_call_ids(self, parsed: ModelResponseStream) -> None:
         for choice in parsed.choices:
             for tool_call in choice.delta.tool_calls or ():
                 if is_positional_tool_call_id(tool_call.id):
@@ -266,7 +264,8 @@ class BedrockRuntimeChatCompletionsStreamingHandler(OpenAIChatCompletionStreamin
 
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:  # mutable-ok: BaseModelResponseIterator signature
         parsed: Final = super().chunk_parser(chunk)
-        self._mint_unique_tool_call_ids(parsed)
+        if bedrock_runtime_chat_completions_numbers_tool_calls(parsed.model or ""):
+            self._mint_streamed_tool_call_ids(parsed)
         if not bedrock_runtime_chat_completions_serves_reasoning_inline(parsed.model or ""):
             return parsed
         for choice in parsed.choices:
