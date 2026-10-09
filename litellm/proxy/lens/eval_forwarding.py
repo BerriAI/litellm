@@ -117,6 +117,11 @@ async def forward(request: Request, path: str, auth: UserAPIKeyAuth, upstream: E
         raise HTTPException(502, "Lens service is unavailable") from error
 
 
+@router.get("/lens/evals", include_in_schema=False)
+async def list_evals(request: Request, auth: Auth, upstream: Upstream) -> Response:
+    return await forward(request, "/lens/evals", auth, upstream)
+
+
 @router.api_route("/lens/evals/{path:path}", methods=["GET", "POST", "PUT"], include_in_schema=False)
 async def forward_evals(path: str, request: Request, auth: Auth, upstream: Upstream) -> Response:
     return await forward(request, f"/lens/evals/{quote(path, safe='/')}", auth, upstream)

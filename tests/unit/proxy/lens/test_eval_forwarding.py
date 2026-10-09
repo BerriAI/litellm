@@ -111,6 +111,8 @@ async def test_eval_writes_reach_lens_with_a_signed_identity_for_the_calling_key
 @pytest.mark.parametrize(
     ("method", "path"),
     [
+        ("GET", "/lens/evals"),
+        ("PUT", "/lens/evals/moyai-regressions"),
         ("PUT", "/lens/evals/runs/run-1/results/case-1/0"),
         ("GET", "/lens/evals/runs/run-1/cases/case-1"),
         ("GET", "/lens/datasets/resolve?name=regressions&revision=7"),
