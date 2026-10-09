@@ -1026,3 +1026,66 @@ async def test_openai_moderation_records_moderation_id_as_scan_metadata(input_ty
     assert json.loads(headers["x-litellm-guardrail-scan-metadata"]) == [
         {"guardrail": "openai-mod", "stage": stage, "provider": "openai_moderation", "scan_id": f"modr-{stage}"}
     ]
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_responses_api_input_field():
+    from litellm.types.utils import GenericGuardrailAPIInputs
+
+    flagged_moderation: Final = {
+        "id": "modr-123",
+        "model": "omni-moderation-latest",
+        "results": [
+            {
+                "flagged": True,
+                "categories": {"violence": True, "hate": False},
+                "category_scores": {"violence": 0.95, "hate": 0.1},
+                "category_applied_input_types": None,
+            }
+        ],
+    }
+    http_client: Final = AsyncHTTPHandler()
+    http_client.client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=flagged_moderation))
+    )
+
+    openai_mod: Final = OpenAIModerationGuardrail(
+        guardrail_name="openai-moderation-test",
+        api_key="fake-key-for-testing",
+        model="omni-moderation-latest",
+    )
+    openai_mod.async_handler = http_client
+
+    with pytest.raises(Exception, match="Violated OpenAI moderation policy") as texts_error:
+        await openai_mod.apply_guardrail(
+            inputs=GenericGuardrailAPIInputs(texts=["I want to hurt people"]),
+            request_data={"model": "gpt-4o", "input": "I want to hurt people"},
+            input_type="request",
+        )
+    assert "Violated OpenAI moderation policy" in str(texts_error.value)
+
+    with pytest.raises(Exception, match="Violated OpenAI moderation policy") as responses_error:
+        await openai_mod.apply_guardrail(
+            inputs=GenericGuardrailAPIInputs(
+                structured_messages=[{"role": "user", "content": "I want to hurt people"}]
+            ),
+            request_data={
+                "model": "gpt-4o",
+                "input": [{"role": "user", "content": "I want to hurt people"}],
+            },
+            input_type="request",
+        )
+    assert "Violated OpenAI moderation policy" in str(responses_error.value)
+
+    with pytest.raises(Exception, match="Violated OpenAI moderation policy") as chat_error:
+        await openai_mod.apply_guardrail(
+            inputs=GenericGuardrailAPIInputs(
+                structured_messages=[{"role": "user", "content": "I want to hurt people"}]
+            ),
+            request_data={
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "I want to hurt people"}],
+            },
+            input_type="request",
+        )
+    assert "Violated OpenAI moderation policy" in str(chat_error.value)
