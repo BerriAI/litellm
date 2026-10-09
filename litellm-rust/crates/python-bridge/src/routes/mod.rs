@@ -16,22 +16,14 @@ use pyo3::{
     types::{PyDict, PyMapping, PyTuple},
 };
 
+#[derive(FromPyObject)]
 pub(crate) struct NativeCall<'py> {
+    #[pyo3(attribute)]
     args: Bound<'py, PyTuple>,
+    #[pyo3(attribute, from_py_with = mapping_dict)]
     kwargs: Bound<'py, PyDict>,
+    #[pyo3(attribute, from_py_with = mapping_dict)]
     bound: Bound<'py, PyDict>,
-}
-
-impl<'py> FromPyObject<'_, 'py> for NativeCall<'py> {
-    type Error = PyErr;
-
-    fn extract(call: Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
-        Ok(Self {
-            args: call.getattr("args")?.cast_into()?,
-            kwargs: mapping_dict(&call.getattr("kwargs")?)?,
-            bound: mapping_dict(&call.getattr("bound")?)?,
-        })
-    }
 }
 
 fn mapping_dict<'py>(value: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> {
