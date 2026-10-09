@@ -128,8 +128,6 @@ model_list:
       api_base: http://127.0.0.1:8191
       api_key: synthetic-bedrock-key
       aws_region_name: us-east-1
-      model_info:
-        supported_endpoints: ["/v1/responses"]
   - model_name: openai/gpt-5.4
     litellm_params:
       model: openai/gpt-5.4

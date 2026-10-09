@@ -132,8 +132,13 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if not isinstance(part, dict):
             return ""
         mapping: Final = cast(dict[str, object], part)  # cast-ok: isinstance confirms a dict part
-        value: Final = mapping.get("text") if mapping.get("type") == "text" else mapping.get("tool_name")
-        return value if isinstance(value, str) else ""
+        match mapping.get("type"):
+            case "text" if isinstance(text := mapping.get("text"), str):
+                return text
+            case "tool_reference" if isinstance(tool_name := mapping.get("tool_name"), str):
+                return tool_name
+            case _:
+                return ""
 
     @staticmethod
     def _tool_result_output_value(
