@@ -100,6 +100,18 @@ def _proxy_stamped_used_client_oauth_token(
     return stamped if isinstance(stamped, bool) else None
 
 
+def _failure_snapshot_with_guardrails_recorded_after_it(
+    failure_snapshot: object, recorded_guardrail_information: object
+) -> Mapping[str, object] | None:
+    if (
+        not recorded_guardrail_information
+        or not isinstance(failure_snapshot, dict)
+        or failure_snapshot.get("guardrail_information")
+    ):
+        return None
+    return {**failure_snapshot, "guardrail_information": recorded_guardrail_information}
+
+
 def _proxy_spend_writer() -> DBSpendUpdateWriter:
     from litellm.proxy.proxy_server import proxy_logging_obj
 
@@ -275,13 +287,22 @@ class _ProxyDBLogger(CustomLogger):
             existing_metadata.get("standard_logging_guardrail_information")
         )
 
+        failure_snapshot_with_late_guardrails: Final = _failure_snapshot_with_guardrails_recorded_after_it(
+            request_data.get("standard_logging_object"),
+            existing_metadata.get("standard_logging_guardrail_information"),
+        )
+
         await self._spend_writer().update_database(
             token=LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
             response_cost=recovered_response_cost,
             user_id=user_api_key_dict.user_id,
             end_user_id=user_api_key_dict.end_user_id,
             team_id=user_api_key_dict.team_id,
-            kwargs=request_data,
+            kwargs=(
+                request_data
+                if failure_snapshot_with_late_guardrails is None
+                else {**request_data, "standard_logging_object": failure_snapshot_with_late_guardrails}
+            ),
             completion_response=original_exception,
             start_time=actual_start_time,
             end_time=datetime.now(),
