@@ -17,6 +17,8 @@ import os
 # Load .env before any other litellm imports so env vars (e.g. LITELLM_UI_SESSION_DURATION) are available
 import dotenv as _dotenv
 
+from ._version import version as __version__
+
 
 def _dev_env_hot_reload_enabled() -> bool:
     """The proxy exports this flag when started with ``--reload``. A reloaded
