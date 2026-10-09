@@ -21970,7 +21970,10 @@ async def test_key_update_invalidates_cached_object_permission(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_key_regeneration_invalidates_cached_object_permission(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize("key_has_permission", [True, False], ids=["existing-permission", "new-permission"])
+async def test_key_regeneration_invalidates_cached_object_permission(
+    monkeypatch: pytest.MonkeyPatch, key_has_permission: bool
+):
     """Regression: regenerating a key with new permissions must not keep serving the old grants."""
     from litellm.proxy._types import LiteLLM_ObjectPermissionBase, RegenerateKeyRequest
     from litellm.proxy.auth.auth_checks import get_object_permission
@@ -22002,6 +22005,8 @@ async def test_key_regeneration_invalidates_cached_object_permission(monkeypatch
     )
 
     existing_key = _make_regenerate_existing_key()
+    if key_has_permission:
+        existing_key.object_permission_id = permission_id
     user_api_key_cache = UserApiKeyCache()
     assert (
         await get_object_permission(
