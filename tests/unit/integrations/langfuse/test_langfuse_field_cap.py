@@ -106,6 +106,29 @@ def test_cap_below_marker_size_leaves_only_the_marker():
     assert cap_payload("x" * 100, 16) == _TRUNCATION_SUFFIX
 
 
+def test_cap_below_marker_width_returns_empty_string():
+    assert cap_payload("x" * 100, 15) == ""
+    assert cap_payload("x" * 100, 1) == ""
+
+
+def test_circular_reference_resolves_to_the_safe_dumps_marker():
+    payload: Final[dict[str, object]] = {"messages": []}
+    payload["messages"].append({"role": "user", "content": payload})
+    capped: Final = cap_payload(payload, DEFAULT_MAX_FIELD_BYTES)
+    assert capped["messages"][0]["content"] == "CircularReference Detected"
+
+
+def test_over_deep_nesting_resolves_to_the_safe_dumps_marker():
+    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+    payload: Final[dict[str, object]] = {"leaf": "x" * 10}
+    for _ in range(200):
+        payload = {"nested": payload}
+    capped: Final = cap_payload(payload, DEFAULT_MAX_FIELD_BYTES)
+    assert "MaxDepthExceeded" in repr(capped)
+    assert safe_dumps(capped) == safe_dumps(payload)
+
+
 def test_non_container_objects_pass_through():
     sentinel: Final = object()
     assert cap_payload(sentinel, 16) is sentinel
@@ -172,8 +195,11 @@ def _log_with_capture(monkeypatch, metadata, content_size):
 
 def test_exported_generation_fields_are_capped_before_ingestion(monkeypatch):
     _mock_mode(monkeypatch)
+    monkeypatch.setattr(litellm, "langfuse_default_tags", ["huge_tag"])
     attributes: Final = _log_with_capture(
-        monkeypatch, metadata={"trace_id": "b" * 32}, content_size=DEFAULT_MAX_FIELD_BYTES * 4
+        monkeypatch,
+        metadata={"trace_id": "b" * 32, "trace_version": "v" * 100_000, "huge_tag": "t" * 100_000},
+        content_size=DEFAULT_MAX_FIELD_BYTES * 4,
     )
 
     envelope_slack: Final = 256  # the JSON envelope around the capped string
@@ -183,6 +209,9 @@ def test_exported_generation_fields_are_capped_before_ingestion(monkeypatch):
         assert len(value.encode("utf-8")) <= (DEFAULT_MAX_FIELD_BYTES + len(_TRUNCATION_SUFFIX) + envelope_slack), (
             f"{key} exceeded the cap"
         )
+
+    for key in (A.VERSION, A.TRACE_TAGS):
+        assert len(str(attributes[key])) <= DEFAULT_MAX_FIELD_BYTES + envelope_slack, f"{key} exceeded the cap"
 
     assert json.loads(attributes[A.OBSERVATION_MODEL_PARAMETERS]) == {"temperature": 0.5}
 
