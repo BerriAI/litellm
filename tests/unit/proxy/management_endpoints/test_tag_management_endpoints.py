@@ -719,7 +719,7 @@ async def test_update_tag_resets_spend():
             response = client.post(
                 "/tag/update",
                 json={"name": "batch-jobs", "spend": 0},
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-test-tag-spend"},
             )
             assert response.status_code == 200
             result = response.json()
@@ -783,7 +783,7 @@ async def test_update_tag_resets_spend_in_redis():
             response = client.post(
                 "/tag/update",
                 json={"name": "batch-jobs", "spend": 0},
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-test-tag-spend"},
             )
             assert response.status_code == 200
             result = response.json()
@@ -846,7 +846,7 @@ async def test_update_tag_resets_spend_redis_failure_does_not_fail_request():
             response = client.post(
                 "/tag/update",
                 json={"name": "batch-jobs", "spend": 0},
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-test-tag-spend"},
             )
             assert response.status_code == 200
             result = response.json()
@@ -900,7 +900,7 @@ async def test_update_tag_without_spend_does_not_touch_counter_cache():
             response = client.post(
                 "/tag/update",
                 json={"name": "batch-jobs", "description": "new description"},
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-test-tag-spend"},
             )
             assert response.status_code == 200
             result = response.json()
@@ -939,7 +939,7 @@ async def test_update_tag_rejects_non_finite_spend():
                 "/tag/update",
                 content=json.dumps({"name": "batch-jobs", "spend": float("nan")}),
                 headers={
-                    "Authorization": "Bearer sk-1234",
+                    "Authorization": "Bearer sk-test-tag-spend",
                     "Content-Type": "application/json",
                 },
             )
