@@ -12,7 +12,10 @@ import json
 import os
 from collections.abc import Mapping
 from itertools import accumulate
-from typing import Final, cast
+from typing import (
+    Final,
+    cast,  # noqa: TID251  # identity-preserving type laundering for isinstance-narrowed user payloads
+)
 
 from litellm._logging import verbose_logger
 
