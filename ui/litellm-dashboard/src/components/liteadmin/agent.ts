@@ -1,9 +1,19 @@
 import type OpenAI from "openai";
 import type { ChatMessage } from "@/components/chat/types";
+import type { ModelGroup } from "@/components/llm_calls/fetch_models";
 import { createGatewayClient } from "@/components/llm_calls/gateway_client";
 import { createLiteAdminOperations, type OperationContext } from "./operations";
 
 export const MAX_INPUT_LENGTH = 8_000;
+
+export function getPreferredLiteAdminModel(models: readonly ModelGroup[]): string | null {
+  const sonnet = models.filter(({ model_group }) =>
+    /(?:^|[/.])(?:claude-)?sonnet-5[-.]5(?:$|[-.:@])/i.test(model_group),
+  );
+  return (
+    sonnet.find(({ providers }) => providers?.includes("anthropic"))?.model_group ?? sonnet[0]?.model_group ?? null
+  );
+}
 
 const SYSTEM_PROMPT = `You are LiteAdmin, the assistant for a LiteLLM gateway administrator.
 Use the provided tools for gateway facts and requested changes. Look up resource identifiers before making changes.
