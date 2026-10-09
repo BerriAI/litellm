@@ -2206,11 +2206,13 @@ async def add_litellm_data_to_request(
     verbose_proxy_logger.debug("Request Headers: %s", _logging_safe_headers)
     verbose_proxy_logger.debug("Raw Headers: %s", _raw_headers)
 
-    if forward_llm_auth and "x-api-key" in _headers:
-        data["api_key"] = _headers["x-api-key"]
-        verbose_proxy_logger.debug(
-            "Setting client-provided x-api-key as api_key parameter (will override deployment key)"
-        )
+    if forward_llm_auth:
+        data["has_forwarded_client_auth"] = True
+        if "x-api-key" in _headers:
+            data["api_key"] = _headers["x-api-key"]
+            verbose_proxy_logger.debug(
+                "Setting client-provided x-api-key as api_key parameter (will override deployment key)"
+            )
 
     ##########################################################
     # Init - Proxy Server Request

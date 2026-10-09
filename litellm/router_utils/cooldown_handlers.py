@@ -688,3 +688,44 @@ def is_caller_timeout_408(
     if not isinstance(timeout, (int, float)) or not isinstance(started, datetime) or not isinstance(finished, datetime):
         return False
     return (finished - started).total_seconds() >= timeout
+
+
+def is_client_credential_rate_limit(
+    model_call_details: Mapping[str, object],
+    exception_status: str | int,
+    exception: Exception | None = None,
+) -> bool:
+    """A 429 RateLimitError that stems from client-supplied or forwarded credentials
+    (BYOK) describes the caller's own account quota / subscription, not the health
+    of the shared deployment. Exits failure callback without cooling down the deployment.
+    """
+    status_code: Final = cast_exception_status_to_int(exception_status)
+    is_429 = status_code == 429 or (exception is not None and isinstance(exception, litellm.RateLimitError))
+    if not is_429:
+        return False
+
+    if model_call_details.get("is_clientside_credential") is True:
+        return True
+    if model_call_details.get("has_forwarded_client_auth") is True:
+        return True
+
+    litellm_params: Final = model_call_details.get("litellm_params")
+    if isinstance(litellm_params, Mapping):
+        if litellm_params.get("is_clientside_credential") is True:
+            return True
+        if litellm_params.get("has_forwarded_client_auth") is True:
+            return True
+        model_info: Final = litellm_params.get("model_info")
+        if isinstance(model_info, Mapping):
+            if model_info.get("is_clientside_credential") is True:
+                return True
+            if model_info.get("original_model_id") is not None:
+                return True
+        metadata: Final = litellm_params.get("metadata")
+        if isinstance(metadata, Mapping) and metadata.get("is_clientside_credential") is True:
+            return True
+        proxy_req: Final = litellm_params.get("proxy_server_request")
+        if isinstance(proxy_req, Mapping) and proxy_req.get("credential_fields"):
+            return True
+
+    return False

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import litellm
 from litellm._logging import verbose_router_logger
+from litellm.constants import DEFAULT_MAX_COOLDOWN_TIME_SECONDS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs, safe_deep_copy
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
@@ -23,6 +24,7 @@ from litellm.router_utils.cooldown_handlers import (
     cast_exception_status_to_int,
     is_advisor_orchestration_failure,
     is_caller_timeout_408,
+    is_client_credential_rate_limit,
     set_cooldown_deployments,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
@@ -97,6 +99,13 @@ def _trigger_cooldown_for_failed_deployment(
             )
             return
 
+        if is_client_credential_rate_limit(model_call_details, exception_status, exception):
+            verbose_router_logger.debug(
+                "Not triggering cooldown for fallback deployment: "
+                "Rate limit error (429) was caused by client-supplied / forwarded credentials, not deployment health."
+            )
+            return
+
         # Only Router._set_failed_deployment_id_on_exception()'s server-stamped id is
         # trusted here: a metadata-bucket lookup (e.g. "metadata"/"litellm_metadata")
         # can't reliably tell a caller-supplied bucket from a router-authored one
@@ -124,8 +133,14 @@ def _trigger_cooldown_for_failed_deployment(
         _get_retry_after: Final = (
             litellm.utils._get_retry_after_from_exception_header  # pyright: ignore[reportPrivateUsage] - as router.py
         )
-        header_cooldown: Final = (
+        raw_header_cooldown: Final = (
             _get_retry_after(response_headers=exception_headers) if exception_headers is not None else None
+        )
+        _max_cd: Final = getattr(litellm_router, "max_cooldown_time", None) or DEFAULT_MAX_COOLDOWN_TIME_SECONDS
+        header_cooldown: Final = (
+            min(raw_header_cooldown, _max_cd)
+            if raw_header_cooldown is not None and raw_header_cooldown >= 0 and _max_cd is not None and _max_cd >= 0
+            else raw_header_cooldown
         )
         time_to_cooldown: Final = (
             deployment_cooldown
