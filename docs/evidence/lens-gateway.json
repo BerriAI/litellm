@@ -1036,5 +1036,502 @@
       "type_test_move": "Lens trace-message type assertion moved to BerriAI/lens src/ui/lib/src/components/lens/traces/requestTypes.test-d.ts; 2 focused type tests pass",
       "package_bytes_changed": false
     }
+  },
+  "final_image_adapter_qualification": {
+    "recorded_at": "2026-10-09T08:16:14.565Z",
+    "production_source": "a41b93a709b95a7fd30ed8093a9b8d799990c3ea",
+    "lens_source": "0b8e2c23f73588c4b3e40e850edd1bad1654c19c",
+    "lens_image_id": "sha256:6507a7912b1eb948253a7c76bfa0df004f9b4df5ef6c95ddd95d941af239500b",
+    "change": "Removed unused trace-team lookup from /lens identity delegation. /v1/traces retains the existing gateway team permission lookup; authenticated user, team, organization, token, model and role fields are preserved.",
+    "current_source_live_checks": {
+      "sha256": "b564531122fe97bc2c600831638ed3395d34731bd6348f6cf338b4ebfc29e4bb",
+      "result": {
+        "created_at": "2026-10-09T08:15:32.127Z",
+        "gateway_source": "a41b93a709b95a7fd30ed8093a9b8d799990c3ea",
+        "lens_source": "0b8e2c23f73588c4b3e40e850edd1bad1654c19c",
+        "lens_image_id": "sha256:6507a7912b1eb948253a7c76bfa0df004f9b4df5ef6c95ddd95d941af239500b",
+        "trace_id": "01a8ca446a5875c6cf64712040596add",
+        "checks": [
+          {
+            "label": "admin trace access stays scoped",
+            "expected": 200,
+            "observed": 200,
+            "passed": true
+          },
+          {
+            "label": "admin reads the stored trace",
+            "expected": "01a8ca446a5875c6cf64712040596add",
+            "observed": "01a8ca446a5875c6cf64712040596add",
+            "passed": true
+          },
+          {
+            "label": "admin Lens product role is preserved",
+            "expected": 200,
+            "observed": 200,
+            "passed": true
+          },
+          {
+            "label": "admin can read authenticated setup status",
+            "expected": 200,
+            "observed": 200,
+            "passed": true
+          },
+          {
+            "label": "admin sees connected storage",
+            "expected": true,
+            "observed": true,
+            "passed": true
+          },
+          {
+            "label": "viewer trace access stays scoped",
+            "expected": 200,
+            "observed": 200,
+            "passed": true
+          },
+          {
+            "label": "viewer reads the stored trace",
+            "expected": "01a8ca446a5875c6cf64712040596add",
+            "observed": "01a8ca446a5875c6cf64712040596add",
+            "passed": true
+          },
+          {
+            "label": "viewer Lens product role is preserved",
+            "expected": 200,
+            "observed": 200,
+            "passed": true
+          },
+          {
+            "label": "viewer can read authenticated setup status",
+            "expected": 200,
+            "observed": 200,
+            "passed": true
+          },
+          {
+            "label": "viewer sees connected storage",
+            "expected": true,
+            "observed": true,
+            "passed": true
+          },
+          {
+            "label": "viewer cannot perform Lens admin mutation",
+            "expected": 403,
+            "observed": 403,
+            "passed": true
+          },
+          {
+            "label": "owner trace access stays scoped",
+            "expected": 200,
+            "observed": 200,
+            "passed": true
+          },
+          {
+            "label": "owner reads the stored trace",
+            "expected": "01a8ca446a5875c6cf64712040596add",
+            "observed": "01a8ca446a5875c6cf64712040596add",
+            "passed": true
+          },
+          {
+            "label": "owner Lens product role is preserved",
+            "expected": 403,
+            "observed": 403,
+            "passed": true
+          },
+          {
+            "label": "owner can read authenticated setup status",
+            "expected": 200,
+            "observed": 200,
+            "passed": true
+          },
+          {
+            "label": "owner sees connected storage",
+            "expected": true,
+            "observed": true,
+            "passed": true
+          },
+          {
+            "label": "owner cannot perform Lens admin mutation",
+            "expected": 403,
+            "observed": 403,
+            "passed": true
+          },
+          {
+            "label": "other trace access stays scoped",
+            "expected": 404,
+            "observed": 404,
+            "passed": true
+          },
+          {
+            "label": "other Lens product role is preserved",
+            "expected": 403,
+            "observed": 403,
+            "passed": true
+          },
+          {
+            "label": "other can read authenticated setup status",
+            "expected": 200,
+            "observed": 200,
+            "passed": true
+          },
+          {
+            "label": "other sees connected storage",
+            "expected": true,
+            "observed": true,
+            "passed": true
+          },
+          {
+            "label": "other cannot perform Lens admin mutation",
+            "expected": 403,
+            "observed": 403,
+            "passed": true
+          },
+          {
+            "label": "Temporary gateway key is created",
+            "expected": 200,
+            "observed": 200,
+            "passed": true
+          },
+          {
+            "label": "Temporary key reads Lens before revocation",
+            "expected": 200,
+            "observed": 200,
+            "passed": true
+          },
+          {
+            "label": "Temporary gateway key is revoked",
+            "expected": 200,
+            "observed": 200,
+            "passed": true
+          },
+          {
+            "label": "Revocation denies Lens immediately",
+            "expected": 401,
+            "observed": 401,
+            "passed": true
+          },
+          {
+            "label": "Revocation denies setup immediately",
+            "expected": 401,
+            "observed": 401,
+            "passed": true
+          }
+        ]
+      }
+    },
+    "local_checks": {
+      "focused_tests": 136,
+      "focused_test_paths": [
+        "tests/unit/proxy/lens/test_adapter.py",
+        "tests/unit/proxy/auth/test_authorization.py",
+        "tests/unit/proxy/test_tracing_endpoints.py"
+      ],
+      "make_check": "passed",
+      "test_log_sha256": "b8ff4aecfbdbee7b1e64b1ea8fddfb1f4e423d6421ad792f277cd525f17c6147",
+      "make_check_log_sha256": "d6b9cc2290763ef60895f2412555b04b30b2645697d9e5dd1545965cd4491745"
+    },
+    "earlier_same_image_boundaries": {
+      "created_at": "2026-10-09T08:03:09.877Z",
+      "gateway_implementation": "bc3083be4c2ec3f6676a4fa0261bd4be2d9ae68f",
+      "gateway_test_followup": "09a3d18dfd363c5eaa0c69889e5466cd026316c7",
+      "lens_source": "0b8e2c23f73588c4b3e40e850edd1bad1654c19c",
+      "image_id": "sha256:6507a7912b1eb948253a7c76bfa0df004f9b4df5ef6c95ddd95d941af239500b",
+      "environment": {
+        "lens_url": "http://127.0.0.1:4326",
+        "gateway_url": "http://127.0.0.1:4494",
+        "clickhouse_database": "lens_final_acceptance",
+        "gateway_database": "Existing local gateway fixture database, isolated gateway process",
+        "private_credentials": "Excluded"
+      },
+      "evidence": [
+        {
+          "name": "auth-proof.json",
+          "sha256": "6c8b77aea416b9615e7be1f7d4bd1483aa483726658ce9b0fa14d1076c9d51cc",
+          "result": {
+            "source": "0b8e2c23f73588c4b3e40e850edd1bad1654c19c",
+            "gateway_source": "bc3083be4c2ec3f6676a4fa0261bd4be2d9ae68f",
+            "image_id": "sha256:6507a7912b1eb948253a7c76bfa0df004f9b4df5ef6c95ddd95d941af239500b",
+            "created_at": "2026-10-09T07:56:47.070Z",
+            "checks": [
+              {
+                "label": "Lens requires authentication",
+                "passed": true,
+                "status": 401
+              },
+              {
+                "label": "Standalone sign-in succeeds",
+                "passed": true,
+                "status": 200
+              },
+              {
+                "label": "Session cookie is HttpOnly and SameSite Strict",
+                "passed": true
+              },
+              {
+                "label": "Cookie mutation rejects missing origin",
+                "passed": true,
+                "status": 403
+              },
+              {
+                "label": "Cookie mutation rejects foreign origin",
+                "passed": true,
+                "status": 403
+              },
+              {
+                "label": "Gateway administrator creates active Lens-owned tracing key",
+                "passed": true,
+                "status": 200
+              },
+              {
+                "label": "Direct OTLP ingestion accepts tracing key",
+                "passed": true,
+                "status": 200
+              },
+              {
+                "label": "Key listing does not disclose plaintext credential",
+                "passed": true
+              },
+              {
+                "label": "Ingestion key cannot read traces",
+                "passed": true,
+                "status": 401
+              },
+              {
+                "label": "Gateway service key cannot administer Lens",
+                "passed": true,
+                "status": 401
+              },
+              {
+                "label": "Gateway trace access for admin",
+                "passed": true,
+                "status": 200,
+                "expected": 200
+              },
+              {
+                "label": "Gateway trace access for viewer",
+                "passed": true,
+                "status": 200,
+                "expected": 200
+              },
+              {
+                "label": "Gateway trace access for owner",
+                "passed": true,
+                "status": 200,
+                "expected": 200
+              },
+              {
+                "label": "Gateway trace access for other",
+                "passed": true,
+                "status": 404,
+                "expected": 404
+              },
+              {
+                "label": "Gateway viewer cannot create tracing keys",
+                "passed": true,
+                "status": 403
+              },
+              {
+                "label": "Gateway owner cannot create tracing keys",
+                "passed": true,
+                "status": 403
+              },
+              {
+                "label": "Gateway other cannot create tracing keys",
+                "passed": true,
+                "status": 403
+              },
+              {
+                "label": "Incompatible public contract is rejected",
+                "passed": true,
+                "status": 409
+              },
+              {
+                "label": "Delegated identity rejects expired",
+                "passed": true,
+                "status": 401
+              },
+              {
+                "label": "Delegated identity rejects wrong subject",
+                "passed": true,
+                "status": 401
+              },
+              {
+                "label": "Delegated identity rejects excess lifetime",
+                "passed": true,
+                "status": 401
+              },
+              {
+                "label": "Gateway administrator revokes Lens-owned key",
+                "passed": true,
+                "status": 200
+              },
+              {
+                "label": "Revoked key cannot ingest",
+                "passed": true,
+                "status": 429
+              },
+              {
+                "label": "Revocation preserves stored trace",
+                "passed": true,
+                "status": 200
+              },
+              {
+                "label": "Standalone logout succeeds",
+                "passed": true,
+                "status": 204
+              },
+              {
+                "label": "Revoked session cannot authenticate",
+                "passed": true,
+                "status": 401
+              }
+            ],
+            "trace_id": "01a8ca446a5875c6cf64712040596add",
+            "span_id": "bd26ef13758394f5"
+          }
+        },
+        {
+          "name": "outage-proof.json",
+          "sha256": "0fdf913926b4ffdaf2d2219785244ba253652ffd77386770394df5408ff45631",
+          "result": {
+            "created_at": "2026-10-09T07:58:10.361Z",
+            "image_id": "sha256:6507a7912b1eb948253a7c76bfa0df004f9b4df5ef6c95ddd95d941af239500b",
+            "gateway_source": "bc3083be4c2ec3f6676a4fa0261bd4be2d9ae68f",
+            "calls": [
+              {
+                "phase": "before",
+                "status": 200,
+                "elapsed_ms": 3524,
+                "trace_id": "424967edc13f847a7548afe1ac0b12e5",
+                "parent_span_id": "89be640b2aee818c",
+                "request_id": "6aaa503f-4e04-4cca-ac7c-6e1dac9ed7e5",
+                "response_id": "chatcmpl-EWzmV2j4VVRwaUVeKXUzLIT26gSEf",
+                "cost_usd": 0.00010999999999999999,
+                "response_characters": 5
+              },
+              {
+                "phase": "during",
+                "status": 200,
+                "elapsed_ms": 2315,
+                "trace_id": "d557cb86a796150dcdf81fcd4f4616c7",
+                "parent_span_id": "0de4b592c9b94e8b",
+                "request_id": "cf4baabb-3657-4a35-9cee-02abd96b7aa1",
+                "response_id": "chatcmpl-EWzmdV37AlNyBadvGRHraVSijSECy",
+                "cost_usd": 0.000108,
+                "response_characters": 5
+              },
+              {
+                "phase": "after",
+                "status": 200,
+                "elapsed_ms": 2107,
+                "trace_id": "d7cf27915c9dead897a6313d9af2a258",
+                "parent_span_id": "f5f49f2b622c2638",
+                "request_id": "dd5e8142-6e4c-4f66-94e4-cd09888cd6e0",
+                "response_id": "chatcmpl-EWzmmCWsaLDTHKKhM0xzDK1xC2O4H",
+                "cost_usd": 0.000108,
+                "response_characters": 5
+              }
+            ],
+            "checks": [
+              {
+                "label": "Ordinary gateway inference succeeds before",
+                "passed": true,
+                "status": 200,
+                "elapsed_ms": 3524
+              },
+              {
+                "label": "Fixture model cost stays within authorized budget",
+                "passed": true
+              },
+              {
+                "label": "Gateway reports configured Lens outage",
+                "passed": true,
+                "status": 200
+              },
+              {
+                "label": "Lens product requests fail explicitly during outage",
+                "passed": true,
+                "status": 503
+              },
+              {
+                "label": "Gateway still rejects invalid credentials during outage",
+                "passed": true,
+                "status": 401
+              },
+              {
+                "label": "Ordinary gateway inference succeeds during",
+                "passed": true,
+                "status": 200,
+                "elapsed_ms": 2315
+              },
+              {
+                "label": "Fixture model cost stays within authorized budget",
+                "passed": true
+              },
+              {
+                "label": "Gateway reconnects to recovered Lens",
+                "passed": true,
+                "status": 200
+              },
+              {
+                "label": "Stored fixture trace survives Lens restart",
+                "passed": true,
+                "status": 200
+              },
+              {
+                "label": "Ordinary gateway inference succeeds after",
+                "passed": true,
+                "status": 200,
+                "elapsed_ms": 2107
+              },
+              {
+                "label": "Fixture model cost stays within authorized budget",
+                "passed": true
+              },
+              {
+                "label": "Available-service requests persist billing records",
+                "passed": true
+              }
+            ],
+            "stored": [
+              {
+                "request_id": "chatcmpl-EWzmV2j4VVRwaUVeKXUzLIT26gSEf",
+                "response_id": "chatcmpl-EWzmV2j4VVRwaUVeKXUzLIT26gSEf",
+                "trace_id": "424967edc13f847a7548afe1ac0b12e5",
+                "span_id": "89be640b2aee818c",
+                "spend": 0.00010999999999999999
+              },
+              {
+                "request_id": "chatcmpl-EWzmmCWsaLDTHKKhM0xzDK1xC2O4H",
+                "response_id": "chatcmpl-EWzmmCWsaLDTHKKhM0xzDK1xC2O4H",
+                "trace_id": "d7cf27915c9dead897a6313d9af2a258",
+                "span_id": "f5f49f2b622c2638",
+                "spend": 0.000108
+              }
+            ],
+            "outage_telemetry_persisted": false,
+            "total_cost_usd": 0.000326,
+            "finished_at": "2026-10-09T07:58:31.222Z"
+          }
+        },
+        {
+          "name": "gateway-key-revocation-proof.json",
+          "sha256": "f6deb84fc3512e680b162e7005979fb833fda1e5d87199af791ee93b4b108d7e",
+          "result": {
+            "recorded_at": "2026-10-09T08:00:49.393Z",
+            "gateway_source": "bc3083be4c2ec3f6676a4fa0261bd4be2d9ae68f",
+            "temporary_key_created": 200,
+            "read_before_revocation": 200,
+            "delete_status": 200,
+            "read_after_revocation": 401,
+            "passed": true
+          }
+        }
+      ],
+      "limits": [
+        "The during-outage request completed successfully but its asynchronous telemetry did not persist; bounded retry loss is documented",
+        "These checks cover live authentication, revocation, persistence and gateway outage with real provider calls; browser parity, full SDK/eval flows, Helm installs and the dedicated removal audit are separate",
+        "The gateway followup only changes one existing test; the runtime and UI artifact source remain the frozen implementation commit"
+      ]
+    },
+    "limitation": "Earlier full auth and paid outage checks identify gateway source bc3083. The a41b93 adapter-only production delta is covered by 27 current-source live checks. Full companion image, chart, browser and published release qualification remain separate gates."
   }
 }
