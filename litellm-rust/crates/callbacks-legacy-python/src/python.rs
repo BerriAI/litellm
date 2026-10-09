@@ -190,7 +190,11 @@ mod tests {
                     .iter()
                     .map(|&function| LegacyPython::Streaming(function)),
             )
-            .chain(Body::VARIANTS.iter().map(|&function| LegacyPython::Body(function)))
+            .chain(
+                Body::VARIANTS
+                    .iter()
+                    .map(|&function| LegacyPython::Body(function)),
+            )
             .map(LegacyPython::name)
             .collect();
         assert_eq!(called.len(), declared.len(), "a function is borrowed twice");

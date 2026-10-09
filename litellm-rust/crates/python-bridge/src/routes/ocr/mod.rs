@@ -4,8 +4,8 @@ mod host;
 mod project;
 
 use host::OcrPythonHost;
-use litellm_callbacks_legacy_python::LoggingOperation;
 use litellm_core_utils::settings::ProcessEnvironment;
+use litellm_host::call::Operation;
 use litellm_host_python::to_py;
 use litellm_inference_ocr::provider_config;
 use litellm_llms::base_llm::ocr::settings::OcrSettings;
@@ -29,8 +29,7 @@ const ENABLE_AZURE_AD_TOKEN_REFRESH: FieldSpec<bool> =
     });
 
 fn run_ocr(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyResult<Py<PyAny>> {
-    let (arguments, hooks) =
-        crate::routes::call_hooks(py, LoggingOperation::Ocr, &call, asynchronous)?;
+    let (arguments, hooks) = crate::routes::call_hooks(py, Operation::Ocr, &call, asynchronous)?;
     crate::routes::run_public_call(
         py,
         arguments,

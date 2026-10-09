@@ -4,7 +4,7 @@ use litellm_host::{
 };
 use pyo3::{prelude::*, types::PyDict};
 
-use crate::{HookResume, HookStep, missing_state};
+use crate::HookStep;
 
 use super::adapter::{ChainHooks, ChainStep};
 use super::dispatch::{HookChain, resume_unless_cancelled};
@@ -48,8 +48,8 @@ pub(super) enum Stage {
 }
 
 /// A value one boundary threads through every hook in turn.
-pub(super) trait Transformed: Sized {
-    type Context: Clone;
+pub(super) trait Transformed: Sized + 'static {
+    type Context: Clone + Send + Sync + 'static;
 
     fn invoke(
         hooks: &mut dyn ChainHooks,
@@ -131,86 +131,54 @@ impl Transformed for Py<PyAny> {
     }
 }
 
-/// One boundary's walk over the chain, suspended at most once at a time.
-pub(super) struct Transform<P: Transformed> {
-    suspended: Option<(usize, Order, P::Context)>,
+/// One boundary's walk over the chain. A hook that suspends captures its position and the
+/// rest of the walk in the continuation, so the chain keeps no per-boundary state.
+pub(super) fn transform<P: Transformed>(
+    py: Python<'_>,
+    hooks: &mut [Box<dyn ChainHooks>],
+    order: Order,
+    value: P,
+    context: P::Context,
+) -> PyResult<HookStep<HookChain, P>> {
+    advance(py, hooks, order, order.first(hooks.len()), value, context)
 }
 
-impl<P: Transformed> Default for Transform<P> {
-    fn default() -> Self {
-        Self { suspended: None }
-    }
+fn advance<P: Transformed>(
+    py: Python<'_>,
+    hooks: &mut [Box<dyn ChainHooks>],
+    order: Order,
+    index: Option<usize>,
+    value: P,
+    context: P::Context,
+) -> PyResult<HookStep<HookChain, P>> {
+    let Some(index) = index else {
+        return Ok(HookStep::Ready(value));
+    };
+    let step = P::invoke(hooks[index].as_mut(), py, value, &context)?;
+    continue_from(py, hooks, order, index, step, context)
 }
 
-impl<P: Transformed> Transform<P> {
-    pub(super) fn run(
-        &mut self,
-        py: Python<'_>,
-        hooks: &mut [Box<dyn ChainHooks>],
-        order: Order,
-        value: P,
-        context: P::Context,
-        resume: HookResume<HookChain, P>,
-    ) -> PyResult<HookStep<HookChain, P>> {
-        self.advance(py, hooks, order, order.first(hooks.len()), value, context, resume)
-    }
-
-    pub(super) fn resume(
-        &mut self,
-        py: Python<'_>,
-        hooks: &mut [Box<dyn ChainHooks>],
-        result: PyResult<Py<PyAny>>,
-        resume: HookResume<HookChain, P>,
-    ) -> PyResult<HookStep<HookChain, P>> {
-        let (index, order, context) = self.suspended.take().ok_or_else(missing_state)?;
-        let result = resume_unless_cancelled(py, result)?;
-        let step = P::resume(hooks[index].as_mut(), py, result)?;
-        self.step(py, hooks, order, index, step, context, resume)
-    }
-
-    pub(super) fn clear(&mut self) {
-        self.suspended = None;
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn advance(
-        &mut self,
-        py: Python<'_>,
-        hooks: &mut [Box<dyn ChainHooks>],
-        order: Order,
-        index: Option<usize>,
-        value: P,
-        context: P::Context,
-        resume: HookResume<HookChain, P>,
-    ) -> PyResult<HookStep<HookChain, P>> {
-        let Some(index) = index else {
-            return Ok(HookStep::Ready(value));
-        };
-        let step = P::invoke(hooks[index].as_mut(), py, value, &context)?;
-        self.step(py, hooks, order, index, step, context, resume)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn step(
-        &mut self,
-        py: Python<'_>,
-        hooks: &mut [Box<dyn ChainHooks>],
-        order: Order,
-        index: usize,
-        step: ChainStep<P>,
-        context: P::Context,
-        resume: HookResume<HookChain, P>,
-    ) -> PyResult<HookStep<HookChain, P>> {
-        match step {
-            ChainStep::Ready(value) => {
-                let next = order.next(index, hooks.len());
-                self.advance(py, hooks, order, next, value, context, resume)
-            }
-            ChainStep::Await(awaitable) => {
-                self.suspended = Some((index, order, context));
-                Ok(HookStep::Await(awaitable, resume))
-            }
+fn continue_from<P: Transformed>(
+    py: Python<'_>,
+    hooks: &mut [Box<dyn ChainHooks>],
+    order: Order,
+    index: usize,
+    step: ChainStep<P>,
+    context: P::Context,
+) -> PyResult<HookStep<HookChain, P>> {
+    match step {
+        ChainStep::Ready(value) => {
+            let next = order.next(index, hooks.len());
+            advance(py, hooks, order, next, value, context)
         }
+        ChainStep::Await(awaitable) => Ok(HookStep::Await(
+            awaitable,
+            Box::new(move |chain, py, result| {
+                let result = resume_unless_cancelled(py, result)?;
+                let step = P::resume(chain.hooks[index].as_mut(), py, result)?;
+                continue_from(py, &mut chain.hooks, order, index, step, context)
+            }),
+        )),
     }
 }
 

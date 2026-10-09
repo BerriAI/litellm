@@ -4,7 +4,7 @@
 //! over the signature base, and the pre-request replacement becomes the call's keyword
 //! layer so every later reader sees it.
 
-use litellm_host::{hooks::CallHooks, lifecycle::Timing};
+use litellm_host::{call::Operation, hooks::CallHooks, lifecycle::Timing};
 use litellm_host_python::{HookStep, PythonOwned, PythonRuntime, effective_py_args, missing_state};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
@@ -12,50 +12,25 @@ use pyo3::{
     types::PyDict,
 };
 
-use crate::{
-    CallBoundary, CallbackMapping, LoggingOperation, PublicCall, mapping::Binding, python::Body,
-};
+use crate::{PublicCall, python::Body};
 
-pub struct MessagesBody {
+pub(crate) struct MessagesBody {
     base: Option<Py<PyDict>>,
     request: Option<Py<PyDict>>,
 }
 
 type Step<T> = PyResult<HookStep<MessagesBody, T>>;
-type Prepare = fn(&mut MessagesBody, Python<'_>, Py<PyDict>) -> Step<Py<PyDict>>;
-type Transform = fn(&mut MessagesBody, Python<'_>, Py<PyAny>, Timing) -> Step<Py<PyAny>>;
-
-const PREPARE: Binding<Prepare> = Binding {
-    boundary: CallBoundary::PrepareRequest,
-    invoke: MessagesBody::run_pre_request_hooks,
-    callbacks: &["async_pre_request_hook"],
-};
-
-const TRANSFORM: Binding<Transform> = Binding {
-    boundary: CallBoundary::TransformResponse,
-    invoke: MessagesBody::run_agentic_loop,
-    callbacks: &[
-        "async_should_run_agentic_loop",
-        "async_run_agentic_loop",
-        "async_build_agentic_loop_plan",
-        "async_post_agentic_loop_response_hook",
-    ],
-};
-
-pub(crate) fn callback_mappings() -> impl Iterator<Item = CallbackMapping> {
-    PREPARE.mappings().chain(TRANSFORM.mappings())
-}
 
 /// The body hooks a native call runs, when the Python handler would run any. The sync
 /// Messages handler runs neither fan-out, so neither does the native sync call.
-pub fn body_hooks(
+pub(crate) fn body_hooks(
     py: Python<'_>,
-    operation: LoggingOperation,
+    operation: Operation,
     call: &PublicCall,
     asynchronous: bool,
 ) -> Option<MessagesBody> {
     match (operation, asynchronous) {
-        (LoggingOperation::Messages, true) => Some(MessagesBody::new(py, call)),
+        (Operation::Messages, true) => Some(MessagesBody::new(py, call)),
         _ => None,
     }
 }
@@ -72,42 +47,19 @@ impl MessagesBody {
         let base = self.base.as_ref().ok_or_else(missing_state)?;
         effective_py_args(base.bind(py), kwargs.bind(py))
     }
-
-    fn run_pre_request_hooks(&mut self, py: Python<'_>, arguments: Py<PyDict>) -> Step<Py<PyDict>> {
-        let awaitable = Body::PrepareRequest.call(py, (self.effective(py, &arguments)?,))?;
-        Ok(HookStep::Await(awaitable.unbind(), Self::resume_request))
-    }
-
-    fn resume_request(
-        &mut self,
-        py: Python<'_>,
-        result: PyResult<Py<PyAny>>,
-    ) -> Step<Py<PyDict>> {
-        Ok(HookStep::Ready(
-            result?.into_bound(py).cast_into::<PyDict>()?.unbind(),
-        ))
-    }
-
-    fn run_agentic_loop(
-        &mut self,
-        py: Python<'_>,
-        response: Py<PyAny>,
-        _: Timing,
-    ) -> Step<Py<PyAny>> {
-        let request = self.request.as_ref().ok_or_else(missing_state)?;
-        let awaitable =
-            Body::TransformResponse.call(py, (&response, self.effective(py, request)?))?;
-        Ok(HookStep::Await(awaitable.unbind(), Self::resume_response))
-    }
-
-    fn resume_response(&mut self, _: Python<'_>, result: PyResult<Py<PyAny>>) -> Step<Py<PyAny>> {
-        result.map(HookStep::Ready)
-    }
 }
 
 impl CallHooks<PythonRuntime> for MessagesBody {
     fn prepare_request(&mut self, py: Python<'_>, arguments: Py<PyDict>) -> Step<Py<PyDict>> {
-        (PREPARE.invoke)(self, py, arguments)
+        let awaitable = Body::PrepareRequest.call(py, (self.effective(py, &arguments)?,))?;
+        Ok(HookStep::Await(
+            awaitable.unbind(),
+            Box::new(|_, py, result| {
+                Ok(HookStep::Ready(
+                    result?.into_bound(py).cast_into::<PyDict>()?.unbind(),
+                ))
+            }),
+        ))
     }
 
     fn arguments_prepared(&mut self, py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<()> {
@@ -119,9 +71,15 @@ impl CallHooks<PythonRuntime> for MessagesBody {
         &mut self,
         py: Python<'_>,
         response: Py<PyAny>,
-        timing: Timing,
+        _: Timing,
     ) -> Step<Py<PyAny>> {
-        (TRANSFORM.invoke)(self, py, response, timing)
+        let request = self.request.as_ref().ok_or_else(missing_state)?;
+        let awaitable =
+            Body::TransformResponse.call(py, (&response, self.effective(py, request)?))?;
+        Ok(HookStep::Await(
+            awaitable.unbind(),
+            Box::new(|_, _, result| result.map(HookStep::Ready)),
+        ))
     }
 }
 
@@ -136,7 +94,6 @@ impl PythonOwned for MessagesBody {
         visit.call(&self.request)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::ffi::CStr;
@@ -151,8 +108,9 @@ mod tests {
     use rstest::rstest;
 
     use super::{MessagesBody, body_hooks};
+    use crate::PublicCall;
     use crate::test_support::{local, local_dict, namespace, run};
-    use crate::{LoggingOperation, PublicCall};
+    use litellm_host::call::Operation;
 
     const TIMING: Timing = Timing {
         start_time: 0.0,
@@ -304,13 +262,13 @@ kwargs = {}
     }
 
     #[rstest]
-    #[case::async_messages(LoggingOperation::Messages, true, true)]
-    #[case::sync_messages(LoggingOperation::Messages, false, false)]
-    #[case::async_ocr(LoggingOperation::Ocr, true, false)]
-    #[case::async_completion(LoggingOperation::Completion, true, false)]
-    #[case::async_responses(LoggingOperation::Responses, true, false)]
+    #[case::async_messages(Operation::Messages, true, true)]
+    #[case::sync_messages(Operation::Messages, false, false)]
+    #[case::async_ocr(Operation::Ocr, true, false)]
+    #[case::async_completion(Operation::Completion, true, false)]
+    #[case::async_responses(Operation::Responses, true, false)]
     fn only_the_asynchronous_messages_call_runs_body_hooks(
-        #[case] operation: LoggingOperation,
+        #[case] operation: Operation,
         #[case] asynchronous: bool,
         #[case] expected: bool,
     ) {
@@ -318,7 +276,10 @@ kwargs = {}
         Python::attach(|py| {
             let call = PublicCall::capture(&PyDict::new(py), &PyTuple::empty(py), &PyDict::new(py))
                 .unwrap();
-            assert_eq!(body_hooks(py, operation, &call, asynchronous).is_some(), expected);
+            assert_eq!(
+                body_hooks(py, operation, &call, asynchronous).is_some(),
+                expected
+            );
         });
     }
 }

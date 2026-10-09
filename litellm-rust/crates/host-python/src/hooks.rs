@@ -1,5 +1,5 @@
 mod chain;
-pub use chain::HookChain;
+pub use chain::{HookChain, Hooks};
 
 use crate::PythonOwned;
 use litellm_host::hooks::{CallHooks, HookRuntime, RuntimeCallEvent};
@@ -7,8 +7,11 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 /// What a hook step produced: either the value the driver asked for, or a Python
-/// awaitable the driver hands back to the caller's task before asking again.
-pub type HookResume<L, T> = fn(&mut L, Python<'_>, PyResult<Py<PyAny>>) -> PyResult<HookStep<L, T>>;
+/// awaitable the driver hands back to the caller's task, with the continuation that takes
+/// the awaited result and carries on.
+pub type HookResume<L, T> = Box<
+    dyn FnOnce(&mut L, Python<'_>, PyResult<Py<PyAny>>) -> PyResult<HookStep<L, T>> + Send + Sync,
+>;
 
 pub enum HookStep<L, T> {
     Await(Py<PyAny>, HookResume<L, T>),

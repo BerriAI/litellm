@@ -9,6 +9,7 @@ use crate::{LegacyLogging, PublicCall};
 /// `tests/unit/rust_bridge/test_callbacks_legacy_python.py` pins this file to the Python
 /// signatures, and [`namespace`] binds every fake call against it.
 pub(crate) const PYTHON_CONTRACT: &str = include_str!("../python_contract.json");
+pub(crate) const CUSTOM_LOGGER_CONTRACT: &str = include_str!("../custom_logger_contract.json");
 
 /// Stand-ins for `callbacks_legacy_python`, the only Python module the crate calls. Tests
 /// share one interpreter and run concurrently, so each fake is installed idempotently and
@@ -193,5 +194,5 @@ pub(crate) fn legacy_call(
             .unwrap_or_else(|| PyDict::new(py))
     };
     let call = PublicCall::capture(&dict("bound"), &PyTuple::empty(py), &dict("kwargs")).unwrap();
-    LegacyLogging::new(py, crate::LoggingOperation::Ocr, call, asynchronous)
+    LegacyLogging::new(py, litellm_host::call::Operation::Ocr, call, asynchronous)
 }

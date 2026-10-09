@@ -85,7 +85,7 @@ impl CallHooks<PythonRuntime> for ScriptHooks {
     ) -> PyResult<HookStep<Self, Py<PyDict>>> {
         let value = self.invoke(py, "prepare", arguments.into_any())?;
         if self.asynchronous {
-            Ok(HookStep::Await(value, Self::arguments))
+            Ok(HookStep::Await(value, Box::new(Self::arguments)))
         } else {
             self.arguments(py, Ok(value))
         }
@@ -110,7 +110,7 @@ impl CallHooks<PythonRuntime> for ScriptHooks {
         )?;
         self.wire = Some(wire);
         if self.asynchronous {
-            Ok(HookStep::Await(value, Self::request))
+            Ok(HookStep::Await(value, Box::new(Self::request)))
         } else {
             self.request(py, Ok(value))
         }
@@ -124,7 +124,7 @@ impl CallHooks<PythonRuntime> for ScriptHooks {
     ) -> PyResult<HookStep<Self, Py<PyAny>>> {
         let value = self.invoke(py, "transform", response)?;
         if self.asynchronous {
-            Ok(HookStep::Await(value, Self::response))
+            Ok(HookStep::Await(value, Box::new(Self::response)))
         } else {
             self.response(py, Ok(value))
         }
@@ -152,7 +152,7 @@ impl CallHooks<PythonRuntime> for ScriptHooks {
                 .unbind(),
         )?;
         if self.asynchronous {
-            Ok(HookStep::Await(value, Self::notification))
+            Ok(HookStep::Await(value, Box::new(Self::notification)))
         } else {
             self.notification(py, Ok(value))
         }

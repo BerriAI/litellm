@@ -1,0 +1,183 @@
+{
+  "async_agentic_loop_cleanup_hook": [
+    "python:litellm.litellm_core_utils.chat_completion_agentic_loop",
+    "python:litellm.llms.custom_httpx.llm_http_handler"
+  ],
+  "async_build_agentic_loop_plan": [
+    "call:TransformResponse[Messages]",
+    "python:litellm.litellm_core_utils.chat_completion_agentic_loop"
+  ],
+  "async_build_chat_completion_agentic_loop_plan": [
+    "python:litellm.llms.custom_httpx.llm_http_handler"
+  ],
+  "async_dataset_hook": [
+    "python:litellm.integrations.argilla"
+  ],
+  "async_filter_deployments": [
+    "python:litellm.router"
+  ],
+  "async_filter_listed_models": [
+    "python:litellm.proxy.utils"
+  ],
+  "async_get_chat_completion_prompt": [
+    "python:litellm.litellm_core_utils.litellm_logging"
+  ],
+  "async_log_audit_log_event": [
+    "python:litellm.proxy.management_helpers.audit_logs"
+  ],
+  "async_log_event": [
+    "call:Failed",
+    "call:Succeeded"
+  ],
+  "async_log_failure_event": [
+    "call:Failed"
+  ],
+  "async_log_input_event": [
+    "declaration-only"
+  ],
+  "async_log_pre_api_call": [
+    "declaration-only"
+  ],
+  "async_log_stream_event": [
+    "python:litellm.litellm_core_utils.litellm_logging"
+  ],
+  "async_log_success_event": [
+    "call:Succeeded"
+  ],
+  "async_logging_hook": [
+    "call:Succeeded"
+  ],
+  "async_moderation_hook": [
+    "python:litellm.proxy.utils"
+  ],
+  "async_post_agentic_loop_response_hook": [
+    "call:TransformResponse[Messages]",
+    "python:litellm.litellm_core_utils.chat_completion_agentic_loop"
+  ],
+  "async_post_call_failure_deployment_hook": [
+    "call:Failed"
+  ],
+  "async_post_call_failure_hook": [
+    "python:litellm.proxy.utils"
+  ],
+  "async_post_call_response_headers_hook": [
+    "python:litellm.proxy.utils"
+  ],
+  "async_post_call_streaming_deployment_hook": [
+    "python:litellm.litellm_core_utils.streaming_handler",
+    "python:litellm.responses.streaming_iterator"
+  ],
+  "async_post_call_streaming_hook": [
+    "python:litellm.proxy.utils"
+  ],
+  "async_post_call_streaming_iterator_hook": [
+    "python:litellm.proxy.utils"
+  ],
+  "async_post_call_success_deployment_hook": [
+    "call:TransformResponse"
+  ],
+  "async_post_call_success_hook": [
+    "python:litellm.proxy.utils"
+  ],
+  "async_post_mcp_tool_call_hook": [
+    "python:litellm.litellm_core_utils.litellm_logging"
+  ],
+  "async_pre_call_check": [
+    "python:litellm.router"
+  ],
+  "async_pre_call_deployment_hook": [
+    "call:PrepareArguments"
+  ],
+  "async_pre_call_hook": [
+    "python:litellm.proxy.utils"
+  ],
+  "async_pre_request_hook": [
+    "call:PrepareRequest[Messages]"
+  ],
+  "async_pre_routing_hook": [
+    "python:litellm.router"
+  ],
+  "async_run_agentic_loop": [
+    "call:TransformResponse[Messages]",
+    "python:litellm.litellm_core_utils.chat_completion_agentic_loop"
+  ],
+  "async_run_chat_completion_agentic_loop": [
+    "python:litellm.llms.custom_httpx.llm_http_handler",
+    "python:litellm.llms.openai.openai"
+  ],
+  "async_should_run_agentic_loop": [
+    "call:TransformResponse[Messages]",
+    "python:litellm.litellm_core_utils.chat_completion_agentic_loop"
+  ],
+  "async_should_run_chat_completion_agentic_loop": [
+    "python:litellm.llms.custom_httpx.llm_http_handler",
+    "python:litellm.llms.openai.openai"
+  ],
+  "get_callback_env_vars": [
+    "python:litellm.integrations.custom_logger"
+  ],
+  "get_chat_completion_prompt": [
+    "python:litellm.litellm_core_utils.litellm_logging"
+  ],
+  "get_proxy_server_request_from_cold_storage_with_object_key": [
+    "python:litellm.proxy.spend_tracking.cold_storage_handler"
+  ],
+  "handle_callback_failure": [
+    "python:litellm.integrations.custom_logger"
+  ],
+  "log_event": [
+    "call:Failed",
+    "call:Succeeded"
+  ],
+  "log_failure_event": [
+    "call:Failed"
+  ],
+  "log_failure_fallback_event": [
+    "python:litellm.router_utils.fallback_event_handlers"
+  ],
+  "log_input_event": [
+    "call:BeforeProviderRequest"
+  ],
+  "log_model_group_rate_limit_error": [
+    "call:Failed"
+  ],
+  "log_post_api_call": [
+    "call:AfterProviderResponse"
+  ],
+  "log_pre_api_call": [
+    "call:BeforeProviderRequest"
+  ],
+  "log_stream_event": [
+    "python:litellm.litellm_core_utils.litellm_logging"
+  ],
+  "log_success_event": [
+    "call:Succeeded"
+  ],
+  "log_success_fallback_event": [
+    "python:litellm.router_utils.fallback_event_handlers"
+  ],
+  "logging_hook": [
+    "call:Succeeded"
+  ],
+  "pre_call_check": [
+    "python:litellm.router"
+  ],
+  "redact_standard_logging_payload_from_model_call_details": [
+    "call:Succeeded"
+  ],
+  "redacts_messages_itself": [
+    "python:litellm.integrations.custom_logger"
+  ],
+  "translate_completion_input_params": [
+    "python:litellm.main"
+  ],
+  "translate_completion_output_params": [
+    "python:litellm.main"
+  ],
+  "translate_completion_output_params_streaming": [
+    "python:litellm.main"
+  ],
+  "truncate_standard_logging_payload_content": [
+    "python:litellm.integrations.custom_logger"
+  ]
+}

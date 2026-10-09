@@ -3,6 +3,21 @@ use crate::{
     lifecycle::{CallEvent, Timing},
 };
 
+/// Where in a call a hook runs: one name per [`CallHooks`] method, with the terminal
+/// events split out, so a callback crate can declare which of its callbacks each one runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CallBoundary {
+    PrepareArguments,
+    PrepareRequest,
+    BeforeProviderRequest,
+    AfterProviderResponse,
+    TransformResponse,
+    Succeeded,
+    Failed,
+    StreamOpened,
+    StreamChunk,
+}
+
 pub trait HookRuntime {
     type Context<'a>;
     type Arguments;

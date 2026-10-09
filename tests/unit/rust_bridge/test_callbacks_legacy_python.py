@@ -323,10 +323,22 @@ def test_failure_handler_of_an_internal_call_leaves_the_outer_budget_reservation
     pending.close()
 
 
-CONTRACT_PATH: Final = Path(__file__).parents[3] / "litellm-rust/crates/callbacks-legacy-python/python_contract.json"
+CRATE: Final = Path(__file__).parents[3] / "litellm-rust/crates/callbacks-legacy-python"
+CONTRACT_PATH: Final = CRATE / "python_contract.json"
+CALLBACK_TABLE_PATH: Final = CRATE / "custom_logger_contract.json"
 
 
 def test_the_rust_contract_matches_the_shim_signatures() -> None:
     contract: Final = TypeAdapter(dict[str, list[str]]).validate_json(CONTRACT_PATH.read_text())
 
     assert contract == {name: list(inspect.signature(getattr(legacy, name)).parameters) for name in contract}
+
+
+def test_every_public_custom_logger_method_has_a_row_in_the_rust_callback_table() -> None:
+    table: Final = TypeAdapter(dict[str, list[str]]).validate_json(CALLBACK_TABLE_PATH.read_text())
+    public: Final = {
+        name for name, _ in inspect.getmembers(CustomLogger, inspect.isroutine) if not name.startswith("_")
+    }
+
+    assert set(table) == public
+    assert all(table[name] for name in public)
