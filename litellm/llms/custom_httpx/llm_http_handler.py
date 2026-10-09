@@ -1604,6 +1604,7 @@ class BaseLLMHTTPHandler:
             model=model,
             messages=[],
             optional_params=optional_params,
+            api_base=api_base,
             litellm_params=litellm_params,
         )
 
