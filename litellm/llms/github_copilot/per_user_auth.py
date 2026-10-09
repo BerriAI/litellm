@@ -328,7 +328,7 @@ def _new_async_github_client() -> _AsyncGitHubClient:
 
     return cast(  # cast-ok: pins the untyped litellm client factory to the local Protocol
         Callable[[str], _AsyncGitHubClient],
-        getattr(http_handler, "get_async_httpx_client"),  # noqa: B009  # getattr keeps the untyped factory out of membe
+        getattr(http_handler, "get_async_httpx_client"),  # noqa: B009  # untyped factory
     )(_LLM_PROVIDER)
 
 

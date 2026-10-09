@@ -72,7 +72,7 @@ def _decrypted(db_credential: CredentialItem) -> CredentialItem:
     """The stored credential with every value decrypted, leaving already-plaintext values alone."""
     decrypted_values: Final = MappingProxyType(
         {
-            key: decrypted_or_stored(key, cast("str", value))  # cast-ok: credential values are str at the decrypt bound
+            key: decrypted_or_stored(key, cast("str", value))  # cast-ok: stored values are str
             for key, value in db_credential.credential_values.items()
         }
     )
