@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
@@ -8,7 +10,10 @@ if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
 
-def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail") -> WingbackGuardrail:
+def initialize_guardrail(
+    litellm_params: LitellmParams,
+    guardrail: Guardrail,
+) -> WingbackGuardrail:
     import litellm
 
     _wingback_callback: Final = WingbackGuardrail(
