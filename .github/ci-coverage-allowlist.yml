@@ -38,10 +38,8 @@ test_paths:
       Mixed file that no job has ever run in full. Every CircleCI job that globs
       tests/local_testing deselects it by name ("caching") or keeps only another keyword, so only
       its router test ran, and that test now lives in tests/unit/router_utils/pre_call_checks.
-      Five of the seven left need ANTHROPIC_API_KEY or Vertex credentials. The other two,
-      test_litellm_anthropic_prompt_caching_tools and test_litellm_anthropic_prompt_caching_system,
-      are offline mocks that already fail on main against a stale expected request body; they need
-      that fixed before they can move to tests/unit
+      Its two offline tests now live in tests/unit/llms/anthropic/chat, and the five left all need
+      ANTHROPIC_API_KEY or Vertex credentials
     paths:
       - tests/local_testing/test_anthropic_prompt_caching.py
   - reason: >-
