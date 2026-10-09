@@ -109,7 +109,11 @@ async function pickAuthMethod(
   dialog: Locator,
   label: string,
 ): Promise<void> {
-  await pickOption(page, dialog.locator("#anthropic_auth_method"), label);
+  await pickOption(
+    page,
+    dialog.getByRole("combobox", { name: "Authentication:", exact: true }),
+    label,
+  );
 }
 
 async function pickIdentitySource(
@@ -142,9 +146,7 @@ async function openAddCredentialDialog(
     .click();
   const dialog = page.getByRole("dialog", { name: "Add New Credential" });
   await expect(dialog).toBeVisible();
-  await dialog
-    .getByPlaceholder("Enter a friendly name for these credentials")
-    .fill(name);
+  await dialog.getByLabel("Credential Name:", { exact: true }).fill(name);
   await pickProvider(page, dialog, ANTHROPIC_LABEL);
   await pickAuthMethod(page, dialog, FEDERATION_BADGE);
   return dialog;
@@ -161,6 +163,11 @@ async function openEditDialog(
   await page.getByTestId("credential-action-edit").click();
   const dialog = page.getByRole("dialog", { name: "Edit Credential" });
   await expect(dialog).toBeVisible();
+  const credentialNameField = dialog.getByLabel("Credential Name:", {
+    exact: true,
+  });
+  await expect(credentialNameField).toHaveValue(name);
+  await expect(credentialNameField).toBeDisabled();
   return dialog;
 }
 
@@ -637,11 +644,14 @@ test("a proxy admin saves a federation credential from the Add Model tab and the
     const provider = dialog.getByPlaceholder("Select a provider");
     await expect(provider).toHaveValue(ANTHROPIC_LABEL);
     await expect(provider).toBeDisabled();
-    await expect(dialog.locator("#anthropic_auth_method")).toContainText(
-      FEDERATION_BADGE,
-    );
+    await expect(
+      dialog.getByRole("combobox", {
+        name: "Authentication:",
+        exact: true,
+      }),
+    ).toContainText(FEDERATION_BADGE);
     await dialog
-      .getByPlaceholder("Enter a friendly name for these credentials")
+      .getByLabel("Credential Name:", { exact: true })
       .fill(credentialName);
     await fillFields(dialog, {
       ...ids,
