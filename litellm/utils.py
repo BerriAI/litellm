@@ -9788,6 +9788,10 @@ class ProviderConfigManager:
             return get_hosted_vllm_video_config(model)
         elif LlmProviders.EDENAI == provider:
             return litellm.EdenAIVideoConfig()
+        elif LlmProviders.BYTEDANCE == provider:
+            from litellm.llms.bytedance.videos.transformation import ByteDanceVideoConfig
+
+            return ByteDanceVideoConfig()
         return None
 
     @staticmethod

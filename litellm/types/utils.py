@@ -4167,6 +4167,7 @@ class LlmProviders(str, Enum):
     NADIR = "nadir"
     AI21_CHAT = "ai21_chat"
     VOLCENGINE = "volcengine"
+    BYTEDANCE = "bytedance"
     CODESTRAL = "codestral"
     TEXT_COMPLETION_CODESTRAL = "text-completion-codestral"
     DASHSCOPE = "dashscope"
