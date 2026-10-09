@@ -3378,26 +3378,14 @@ workflows:
         - not:
             equal: ["", << pipeline.parameters.routing_parity_base >>]
     jobs:
-      - using_litellm_on_windows:
-          filters: &full_suite_branches
-            branches:
-              only:
-                - main
-                - /^litellm_rc_.*/
-      - windows_release_wheel:
-          filters: *full_suite_branches
-      - provider_replay_harness:
-          filters: *full_suite_branches
-      - base_sdk_install:
-          filters: *full_suite_branches
-      - local_testing_part1:
-          filters: *full_suite_branches
-      - local_testing_part2:
-          filters: *full_suite_branches
-      - langfuse_logging_unit_tests:
-          filters: *full_suite_branches
-      - litellm_router_testing:
-          filters: *full_suite_branches
+      - using_litellm_on_windows
+      - windows_release_wheel
+      - provider_replay_harness
+      - base_sdk_install
+      - local_testing_part1
+      - local_testing_part2
+      - langfuse_logging_unit_tests
+      - litellm_router_testing
       - auth_ui_unit_tests
       - build_docker_database_image
       - e2e_ui_testing
@@ -3417,39 +3405,26 @@ workflows:
       - proxy_store_model_in_db_tests:
           requires:
             - build_docker_database_image
-      - proxy_build_from_pip_tests:
-          filters: *full_suite_branches
+      - proxy_build_from_pip_tests
       - proxy_pass_through_endpoint_tests:
           requires:
             - build_docker_database_image
       - proxy_e2e_anthropic_messages_tests:
           requires:
             - build_docker_database_image
-      - llm_translation_testing:
-          filters: *full_suite_branches
-      - realtime_translation_testing:
-          filters: *full_suite_branches
+      - llm_translation_testing
+      - realtime_translation_testing
       - guardrails_testing
-      - google_generate_content_endpoint_testing:
-          filters: *full_suite_branches
-      - ocr_testing:
-          filters: *full_suite_branches
-      - search_testing:
-          filters: *full_suite_branches
-      - batches_testing:
-          filters: *full_suite_branches
-      - litellm_utils_testing:
-          filters: *full_suite_branches
-      - pass_through_unit_testing:
-          filters: *full_suite_branches
-      - image_gen_testing:
-          filters: *full_suite_branches
-      - logging_testing:
-          filters: *full_suite_branches
-      - audio_testing:
-          filters: *full_suite_branches
+      - google_generate_content_endpoint_testing
+      - ocr_testing
+      - search_testing
+      - batches_testing
+      - litellm_utils_testing
+      - pass_through_unit_testing
+      - image_gen_testing
+      - logging_testing
+      - audio_testing
       - upload-coverage:
-          filters: *full_suite_branches
           requires:
             - realtime_translation_testing
             - google_generate_content_endpoint_testing
@@ -3467,17 +3442,12 @@ workflows:
       - db_migration_disable_update_check:
           requires:
             - build_docker_database_image
-      - installing_litellm_on_python:
-          filters: *full_suite_branches
-      - installing_litellm_on_python_3_13:
-          filters: *full_suite_branches
-      - installing_litellm_on_python_v2_migration_resolver:
-          filters: *full_suite_branches
+      - installing_litellm_on_python
+      - installing_litellm_on_python_3_13
+      - installing_litellm_on_python_v2_migration_resolver
       - helm_chart_testing:
-          filters: *full_suite_branches
           requires:
             - build_docker_database_image
       - test_bad_database_url:
-          filters: *full_suite_branches
           requires:
             - build_docker_database_image
