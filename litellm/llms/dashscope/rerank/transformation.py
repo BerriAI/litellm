@@ -140,16 +140,14 @@ class DashScopeRerankConfig(BaseRerankConfig):
             params["top_n"] = top_n
         if return_documents is not None:
             params["return_documents"] = return_documents
-        mapped_params: Final[OptionalRerankParams] = {
-            **params,
-            **({"instruction": instruction} if instruction is not None else {}),
-        }
-        return dict(mapped_params)
+        if instruction is not None:
+            params["instruction"] = instruction
+        return dict(params)
 
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: dict,
+        optional_rerank_params: dict[str, object],
         headers: dict,
         litellm_params: dict | None = None,
     ) -> dict:
@@ -167,9 +165,10 @@ class DashScopeRerankConfig(BaseRerankConfig):
             request["top_n"] = optional_rerank_params["top_n"]
         if optional_rerank_params.get("return_documents") is not None:
             request["return_documents"] = optional_rerank_params["return_documents"]
-        if optional_rerank_params.get("instruction") is None:
+        instruction: Final = optional_rerank_params.get("instruction")
+        if instruction is None:
             return request
-        return dict(request, instruct=optional_rerank_params["instruction"])
+        return dict(request, instruct=_STR.validate_python(instruction))
 
     def transform_rerank_response(
         self,
