@@ -25,7 +25,10 @@ pub fn validate_vertex_location(location: &str) -> Result<&str, Error> {
         return Ok(location);
     }
     Err(Error::Auth(litellm_auth::Error::InvalidConfiguration(
-        format!("invalid Vertex AI location {location:?}").into(),
+        litellm_auth::ErrorDetail::InvalidType {
+            field: "vertex_location".into(),
+            expected: "global or a lowercase alphanumeric token with hyphens",
+        },
     )))
 }
 

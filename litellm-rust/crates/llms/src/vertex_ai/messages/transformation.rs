@@ -1,6 +1,6 @@
 use litellm_auth_gcp::{
-    SECRET_NAMES, VertexConfig, get_vertex_ai_location, get_vertex_ai_project,
-    get_vertex_ai_project_from_credentials,
+    SECRET_NAMES, VertexConfig, constants::VERTEXAI_PROJECT_ENV, get_vertex_ai_location,
+    get_vertex_ai_project, get_vertex_ai_project_from_credentials,
 };
 use litellm_http::request::has_header;
 use litellm_llms_types::{
@@ -63,12 +63,12 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
         let config = VertexConfig::from_params(&litellm_params.vertex);
         let project = get_vertex_ai_project(&config, env_lookup)
             .or_else(|| get_vertex_ai_project_from_credentials(&config, env_lookup))
-            .ok_or_else(|| {
-                Error::Auth(litellm_auth::Error::InvalidConfiguration(
-                    "Vertex AI project is required: set vertex_project, VERTEXAI_PROJECT, or credentials that name one"
-                        .into(),
-                ))
-            })?;
+            .ok_or(Error::Auth(litellm_auth::Error::MissingSetting {
+                provider: "Vertex AI",
+                setting: "project",
+                param: "vertex_project",
+                environment_variables: &[VERTEXAI_PROJECT_ENV],
+            }))?;
         let location = get_vertex_ai_location(&config, env_lookup)
             .unwrap_or_else(|| DEFAULT_VERTEX_LOCATION.to_string());
         complete_vertex_anthropic_url(api_base, &project, &location, model, stream)
@@ -430,12 +430,22 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn without_a_project_anywhere_the_call_fails_before_sending() {
+        let error = url(None, &LitellmParams::default(), false, &no_env).unwrap_err();
+
         assert!(matches!(
-            url(None, &LitellmParams::default(), false, &no_env),
-            Err(Error::Auth(_))
+            error,
+            Error::Auth(litellm_auth::Error::MissingSetting {
+                setting: "project",
+                param: "vertex_project",
+                ..
+            })
         ));
+        assert_eq!(
+            error.to_string(),
+            "Missing Vertex AI project - pass vertex_project or set VERTEXAI_PROJECT"
+        );
     }
 
     fn validated(forwarded: &[(&str, &str)]) -> ValidatedEnvironment {
