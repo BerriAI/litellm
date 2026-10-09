@@ -17,7 +17,7 @@
   ],
   "browser": {
     "embedded_horizontal_tabs": true,
-    "standalone_sidebar": "pending",
+    "standalone_sidebar": true,
     "desktop_keyboard_navigation": true,
     "url_refresh": true,
     "agent_switch": true,
@@ -27,6 +27,7 @@
       "document_width": 600,
       "final_tab_reachable": true
     },
-    "live_saved_finding": true
+    "live_saved_finding": true,
+    "evidence_directory": "docs/evidence/lens-embedded-tabs"
   }
 }
