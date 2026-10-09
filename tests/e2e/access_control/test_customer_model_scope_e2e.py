@@ -47,17 +47,19 @@ def _deployment(model_name: str) -> ModelNewBody:
     )
 
 
+def _register(client: AccessControlClient, resources: ResourceManager, name: str) -> str:
+    model_id: Final = client.proxy.register_model(_deployment(name))
+    resources.defer(lambda: client.proxy.delete_model(model_id))
+    return name
+
+
 @pytest.fixture
 def deployments(client: AccessControlClient, resources: ResourceManager) -> ScopedDeployments:
     marker: Final = unique_marker()
-    scoped: Final = ScopedDeployments(
-        allowed_model=f"e2e-custmodel-allowed-{marker}",
-        other_model=f"e2e-custmodel-other-{marker}",
+    return ScopedDeployments(
+        allowed_model=_register(client, resources, f"e2e-custmodel-allowed-{marker}"),
+        other_model=_register(client, resources, f"e2e-custmodel-other-{marker}"),
     )
-    for name in (scoped.allowed_model, scoped.other_model):
-        model_id: Final = client.proxy.register_model(_deployment(name))
-        resources.defer(lambda mid=model_id: client.proxy.delete_model(mid))
-    return scoped
 
 
 class TestCustomerModelScope:
