@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from typing import Annotated, Final, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
@@ -11,9 +11,10 @@ from litellm.proxy.telemetry.runtime import TelemetryRuntime
 from litellm.proxy.telemetry.settings import FLUSH_INTERVAL_SECONDS
 from litellm.proxy.telemetry.store import StoredReport, TelemetryStore, store_read_errors
 from litellm.telemetry.consent import OFF, REQUIRES, TelemetryConsent, parse_consent
-from litellm.telemetry.records import TelemetryGroup
+from litellm.telemetry.records import TelemetryGroup, UIAction, UIEvent
 from litellm.telemetry.report import report_to_json
 from litellm.telemetry.sample import sample_report
+from litellm.telemetry.sink import TelemetrySink
 
 router: Final = APIRouter()
 
@@ -26,6 +27,14 @@ class TelemetryReportsResponse(BaseModel):
     next_after_id: str | None
 
 
+class UIEventBody(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    page: str = Field(max_length=48, pattern=r"^[a-z]+(-[a-z]+)*$")
+    action: UIAction
+    target: str | None = Field(default=None, max_length=48, pattern=r"^([a-z]+_)?tab=[a-z]+(-[a-z]+)*$")
+
+
 def telemetry_store() -> TelemetryStore | None:
     from litellm.proxy.proxy_server import prisma_client, telemetry_runtime
 
@@ -36,6 +45,22 @@ def telemetry_store() -> TelemetryStore | None:
         getattr(prisma_client.db, "writer", prisma_client.db),  # pyright: ignore[reportArgumentType]  # PrismaWrapper forwards raw queries via __getattr__
         telemetry_runtime.settings.retention_days,
     )
+
+
+def telemetry_sink() -> TelemetrySink | None:
+    from litellm.proxy.proxy_server import telemetry_runtime
+
+    return telemetry_runtime.sink
+
+
+@router.post("/telemetry/ui_events", tags=["Telemetry"], status_code=204)
+async def record_ui_event(
+    body: UIEventBody,
+    _user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    sink: Annotated[TelemetrySink | None, Depends(telemetry_sink)],
+) -> None:
+    if sink is not None:
+        sink.record_ui_event(UIEvent(page=body.page, action=body.action, target=body.target))
 
 
 @router.get("/telemetry/reports", tags=["Telemetry"], response_model=TelemetryReportsResponse)
@@ -189,3 +214,24 @@ async def update_telemetry_settings(
         "telemetry: %s set groups to %s", user_api_key_dict.user_id, sorted(g.value for g in consent.groups)
     )
     return await _settings_response(runtime, consent, True, user_api_key_dict)
+
+
+class UIEventsEnabledResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool
+
+
+def telemetry_consent() -> TelemetryConsent:
+    from litellm.proxy.proxy_server import telemetry_runtime
+
+    sink: Final = telemetry_runtime.sink
+    return sink.consent if sink is not None else OFF
+
+
+@router.get("/telemetry/ui_events/enabled", tags=["Telemetry"], response_model=UIEventsEnabledResponse)
+async def ui_events_enabled(
+    _user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    consent: Annotated[TelemetryConsent, Depends(telemetry_consent)],
+) -> UIEventsEnabledResponse:
+    return UIEventsEnabledResponse(enabled=consent.allows(TelemetryGroup.PAGE_NAVIGATION))
