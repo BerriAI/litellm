@@ -533,6 +533,29 @@ async def test_aresponses_websocket_strips_responses_routing_prefix_from_openai_
 
 
 @pytest.mark.asyncio
+async def test_aresponses_websocket_uses_custom_llm_provider_from_kwargs():
+    from unittest.mock import MagicMock
+
+    from litellm.responses.main import _aresponses_websocket
+
+    with patch.object(
+        import_module("litellm.responses.main").base_llm_http_handler, "async_responses_websocket",
+        new_callable=AsyncMock,
+    ) as mock_ws:
+        await _aresponses_websocket(
+            model="model-x",
+            websocket=MagicMock(),
+            api_key="sk-test",
+            custom_llm_provider="openai",
+            litellm_logging_obj=MagicMock(),
+        )
+
+        mock_ws.assert_awaited_once()
+        assert mock_ws.call_args.kwargs["custom_llm_provider"] == "openai"
+        assert mock_ws.call_args.kwargs["model"] == "model-x"
+
+
+@pytest.mark.asyncio
 async def test_aresponses_websocket_keeps_routing_hints_out_of_the_relay_kwargs():  # test-quality-ok: the relay kwargs are the only place a dropped key is observable; the provider socket behind them is the boundary
     from unittest.mock import MagicMock
 
