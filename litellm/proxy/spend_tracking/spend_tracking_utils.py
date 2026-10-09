@@ -829,8 +829,9 @@ def get_logging_payload(
                 request_litellm_params=cast("Mapping[str, object] | None", litellm_params),
             ),
             response=_get_response_for_spend_logs_payload(
-                payload=standard_logging_payload, kwargs=kwargs,
-                request_litellm_params=cast("Mapping[str, object] | None", litellm_params)
+                payload=standard_logging_payload,
+                kwargs=kwargs,
+                request_litellm_params=cast("Mapping[str, object] | None", litellm_params),
             ),
             proxy_server_request=_get_proxy_server_request_for_spend_logs_payload(
                 metadata=metadata,
