@@ -1,3 +1,4 @@
+import itertools
 import json
 import uuid
 from collections.abc import Mapping
@@ -283,7 +284,8 @@ def test_databricks_streaming_json_schema_refs_are_preserved(gateway: Gateway) -
             lines: Final = tuple(line for line in response.iter_lines() if line.startswith("data: "))
         assert lines[-1] == "data: [DONE]", lines
         chunks: Final = tuple(_Chunk.model_validate_json(line.removeprefix("data: ")) for line in lines[:-1])
-        assert "".join(choice.delta.content or "" for chunk in chunks for choice in chunk.choices) == _JSON_CONTENT
+        choices: Final = tuple(itertools.chain.from_iterable(chunk.choices for chunk in chunks))
+        assert "".join(choice.delta.content or "" for choice in choices) == _JSON_CONTENT
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/chat/completions")]
 
 
