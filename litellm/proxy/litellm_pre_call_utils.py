@@ -270,6 +270,7 @@ LITELLM_METADATA_ROUTES: Final = (
     "bedrock",
     "/v1/messages",
     "responses",
+    "vector_stores",
     "files",
 )
 

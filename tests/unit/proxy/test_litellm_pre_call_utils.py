@@ -27,6 +27,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     _get_enforced_params,
     get_metadata_variable_name,
     _match_and_track_policies,
+    metadata_variable_name_for_route,
     _promoted_trace_control_fields,
     _resolve_credential_from_model_config,
     _resolve_provider_from_deployment,
@@ -124,6 +125,20 @@ class TestGetMetadataVariableName:
     def test_returns_litellm_metadata_for_bedrock_converse(self):
         request = self._make_request("/bedrock/model/us.anthropic.claude-sonnet-4-6/converse")
         assert get_metadata_variable_name(request) == "litellm_metadata"
+
+
+@pytest.mark.parametrize(
+    "route, expected",
+    [
+        ("/v1/vector_stores", "litellm_metadata"),
+        ("/vector_stores", "litellm_metadata"),
+        ("/v1/vector_stores/vs_abc", "litellm_metadata"),
+        ("/v1/vector_stores/vs_abc/search", "litellm_metadata"),
+        ("/v1/chat/completions", "metadata"),
+    ],
+)
+def test_metadata_variable_name_for_vector_store_routes(route: str, expected: str) -> None:
+    assert metadata_variable_name_for_route(route) == expected
 
 
 def test_get_enforced_params_for_service_account_settings():
@@ -6448,6 +6463,31 @@ def _make_request_mock(path: str, headers: dict) -> MagicMock:
 
 
 @pytest.mark.asyncio
+async def test_add_litellm_data_to_request_keeps_vector_store_metadata_provider_facing() -> None:
+    request: Final = _make_request_mock("/v1/vector_stores", {"Content-Type": "application/json"})
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        api_key="hashed-key",
+        team_id="team-id",
+        user_id="user-id",
+        org_id="org-id",
+        metadata={},
+        team_metadata={},
+    )
+
+    updated_data: Final = await add_litellm_data_to_request(
+        data={"name": "x", "metadata": {"team": "llmproxy"}},
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+    )
+
+    assert updated_data["metadata"] == {"team": "llmproxy"}
+    assert updated_data["litellm_metadata"]["user_api_key_team_id"] == "team-id"
+    assert updated_data["litellm_metadata"]["user_api_key_user_id"] == "user-id"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "user_agent, request_drop_params, operator_drop_params, expected_drop_params",
     [
@@ -8992,6 +9032,8 @@ def test_body_snapshot_drops_only_the_marker_and_keeps_caller_value(marker: str)
     refresh_proxy_server_request_body_snapshot(caller_data)
 
     assert caller_request["body"][SERVER_STREAMING_CLASSIFICATION_KEY] == "caller-value", caller_request
+
+
 def test_arize_otlp_protocol_on_a_key_logging_entry_reaches_the_destination(monkeypatch):
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.proxy.litellm_pre_call_utils import resolve_tenant_otel_destinations
