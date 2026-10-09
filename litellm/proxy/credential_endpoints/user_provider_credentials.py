@@ -189,6 +189,13 @@ async def invalidate_user_provider_credential_cache(
     except Exception:  # noqa: BLE001  # caller decides whether a Redis outage aborts the disconnect
         verbose_proxy_logger.warning("invalidate_user_provider_credential_cache: Redis tombstone failed")
         return False
+    # async_set_cache swallows client errors internally, so a write that never
+    # landed looks identical to a success. The tombstone is only trusted when the
+    # key reads back as _NOT_CONNECTED; anything else means revoke failed.
+    readback: Final = await _try_cache_get(token_cache, _cache_key(user_id, credential_name))
+    if readback != _NOT_CONNECTED:
+        verbose_proxy_logger.warning("invalidate_user_provider_credential_cache: tombstone not visible after write")
+        return False
     return True
 
 
@@ -207,6 +214,49 @@ async def drop_user_provider_credential_cache(
         await token_cache.async_delete_cache(_cache_key(user_id, credential_name))
     except Exception:  # noqa: BLE001  # a Redis outage must not fail a connect
         verbose_proxy_logger.warning("drop_user_provider_credential_cache: Redis delete failed")
+
+
+@with_service_target("user_provider_connections")
+async def set_user_provider_credential_cache(
+    cache: DualCache,
+    user_id: str,
+    credential_name: str,
+    payload: GithubCopilotUserConnectionPayload,
+) -> bool:
+    """Connect path: overwrite the key with the new connection's ciphertext so a
+    stale set-if-absent fill from a pre-connect read cannot resurrect a
+    not-connected marker. The overwrite is verified by decoding the key back
+    (async_set_cache swallows write errors); on a mismatch the key is deleted,
+    and False means a stale entry survived both attempts."""
+    token_cache: Final = cache.redis_cache
+    if token_cache is None:
+        return True
+    key: Final = _cache_key(user_id, credential_name)
+    try:
+        await token_cache.async_set_cache(
+            key,
+            _encode(payload),
+            ttl=GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS,
+        )
+        readback: object = await _try_cache_get(token_cache, key)
+        if isinstance(readback, str) and decode_user_provider_credential(readback) == payload:
+            return True
+        verbose_proxy_logger.warning(
+            "set_user_provider_credential_cache: Redis overwrite not visible; falling back to delete"
+        )
+    except Exception:  # noqa: BLE001  # a Redis outage must not fail a connect
+        verbose_proxy_logger.warning("set_user_provider_credential_cache: Redis set failed; falling back to delete")
+    try:
+        await token_cache.async_delete_cache(key)
+    except Exception:  # noqa: BLE001  # a Redis outage must not fail a connect
+        verbose_proxy_logger.warning("set_user_provider_credential_cache: Redis delete failed")
+    after_delete: object = await _try_cache_get(token_cache, key)
+    if after_delete is None:
+        return True
+    if isinstance(after_delete, str) and decode_user_provider_credential(after_delete) == payload:
+        return True
+    verbose_proxy_logger.warning("set_user_provider_credential_cache: stale entry survived delete")
+    return False
 
 
 @with_service_target("user_provider_connections")

@@ -1033,3 +1033,52 @@ async def test_shared_streaming_call_still_writes_response_cache(tmp_path, monke
         handler.should_store_result_in_cache(original_function=litellm.acompletion, kwargs=handler.request_kwargs)
         is True
     )
+
+
+def _per_user_router():
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "copilot",
+                "litellm_params": {
+                    "model": "github_copilot/gpt-4.1",
+                    "litellm_credential_name": "copilot-cred",
+                },
+            }
+        ]
+    )
+
+
+def test_per_user_deployment_rejects_a_caller_credential_override(per_user_credential):
+    """Caller kwargs win the litellm_params merge downstream, so the deployment
+    layer is the last place that still sees both names: a different name on a
+    per-user deployment must be refused there even if discovery missed the hop."""
+    router: Final = _per_user_router()
+    deployment: Final = router.get_model_list()[0]
+    kwargs: Final = {"litellm_credential_name": "shared-cred", "metadata": {}}
+    with pytest.raises(litellm.BadRequestError):
+        router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+
+def test_per_user_deployment_allows_the_configured_credential_name(per_user_credential):
+    router: Final = _per_user_router()
+    deployment: Final = router.get_model_list()[0]
+    kwargs: Final = {"litellm_credential_name": "copilot-cred", "metadata": {}}
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+    assert kwargs["litellm_credential_name"] == "copilot-cred"
+    assert "model_info" in kwargs
+
+
+def test_shared_deployment_keeps_caller_credential_override():
+    from litellm.llms.github_copilot.authenticator import Authenticator
+
+    with (
+        patch.object(litellm, "credential_list", [_credential(auth_type="shared")]),
+        patch.object(Authenticator, "get_api_key", return_value="shared-token"),
+    ):
+        router: Final = _per_user_router()
+        deployment: Final = router.get_model_list()[0]
+        kwargs: Final = {"litellm_credential_name": "other-cred", "metadata": {}}
+        router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+        assert kwargs["litellm_credential_name"] == "other-cred"
+        assert "model_info" in kwargs

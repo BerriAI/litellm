@@ -67,10 +67,10 @@ from .user_provider_credentials import (
     decode_user_provider_credential,
     delete_user_provider_credential,
     delete_user_provider_credentials_for_credential,
-    drop_user_provider_credential_cache,
     invalidate_user_provider_credential_cache,
     list_user_provider_credentials,
     list_user_provider_credentials_for_credential,
+    set_user_provider_credential_cache,
     upsert_user_provider_credential,
 )
 
@@ -640,14 +640,24 @@ async def poll_user_connection(
         except litellm.CallerCredentialAuthenticationError:
             return UserConnectionPollResponse(status="no_copilot_seat")
         github_login: Final = await afetch_github_login(github_token)
+        connection_payload: Final = GithubCopilotUserConnectionPayload(
+            access_token=github_token, github_login=github_login
+        )
         await upsert_user_provider_credential(
             prisma_client,
             user_id,
             credential_name,
             _GITHUB_COPILOT_PROVIDER,
-            GithubCopilotUserConnectionPayload(access_token=github_token, github_login=github_login),
+            connection_payload,
         )
-        await drop_user_provider_credential_cache(user_api_key_cache, user_id, credential_name)
+        if not await set_user_provider_credential_cache(
+            user_api_key_cache, user_id, credential_name, connection_payload
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail="GitHub connection saved, but the cache could not be refreshed; "
+                "requests may be rejected for up to 60 seconds",
+            )
         return UserConnectionPollResponse(status="connected", github_login=github_login)
     except litellm.CallerCredentialRateLimitError as e:
         raise HTTPException(status_code=429, detail=str(e))

@@ -665,9 +665,9 @@ def _strip_caller_authorization(
     after the transformations run, so they are rebuilt here without any
     Authorization key; the caller's mappings are left untouched."""
     for key in ("extra_headers", "headers"):
-        value: Final = kwargs.get(key)
+        value = kwargs.get(key)
         if isinstance(value, Mapping):
-            stripped: Final = _without_authorization(value)
+            stripped = _without_authorization(value)
             if len(stripped) != len(value):
                 kwargs[key] = stripped  # rebind-ok: kwargs is the request mutation channel
     optional_params: Final = kwargs.get("optional_params")

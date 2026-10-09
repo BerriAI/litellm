@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import itertools
 import json
 import re
 import time
@@ -7,7 +8,14 @@ from collections import OrderedDict
 from collections.abc import Mapping, MutableMapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Literal,
+    TypeAlias,
+    cast,  # noqa: TID251  # narrows untyped deployment and credential payloads
+)
 
 from fastapi import HTTPException, Request
 from pydantic import TypeAdapter
@@ -286,6 +294,9 @@ LITELLM_TRACE_CONTROL_METADATA_FIELDS: Final = frozenset(
 _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     "weights",
     "_router_weights",
+    "fallback_depth",
+    "_target_order",
+    "attempted_targets",
     "proxy_server_request",
     "standard_logging_object",
     "secret_fields",
@@ -2682,33 +2693,62 @@ async def add_litellm_data_to_request(
     return data
 
 
-def _fallback_edges(
-    llm_router: litellm.Router,
-    model_group: str,
-) -> frozenset[str]:
-    targets: Final[set[str]] = set()  # mutable-ok: accumulates fallback targets
-    for fallback_list in (
-        llm_router.fallbacks,
-        llm_router.context_window_fallbacks,
-        llm_router.content_policy_fallbacks,
-    ):
-        for entry in fallback_list or ():
-            if not isinstance(entry, dict):
-                continue
-            for key in (model_group, "*"):
-                raw = entry.get(key)
-                values = raw if isinstance(raw, list) else ([raw] if raw is not None else [])
-                targets.update(value for value in values if isinstance(value, str))
-    return frozenset(targets)
-
-
 _REQUEST_FALLBACK_KEYS: Final = ("fallbacks", "context_window_fallbacks", "content_policy_fallbacks")
+_FALLBACK_DISCOVERY_LIMIT: Final = 256
+
+
+def _per_user_oauth_configured() -> bool:
+    """Whether any configured credential opted into per-user GitHub OAuth.
+
+    Cheap in-memory precondition for all of the fallback discovery below: with
+    no per-user credential there is nothing to discover, so every code path in
+    this section (traversal, request-list size limit) must stay byte-identical
+    to shared-mode behavior."""
+    from litellm.constants import (
+        GITHUB_COPILOT_AUTH_TYPE_KEY,
+        GITHUB_COPILOT_PER_USER_AUTH_TYPE,
+    )
+
+    return any(
+        isinstance(values := getattr(credential, "credential_values", None), Mapping)
+        and values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE
+        for credential in (litellm.credential_list or ())
+    )
+
+
+def _all_per_user_credential_names() -> tuple[str, ...]:
+    """Every credential name configured for per-user GitHub OAuth, so one DB
+    query can prefetch all of the caller's connections when an auto-router
+    deployment may route to a Copilot group at request time."""
+    from litellm.constants import (
+        GITHUB_COPILOT_AUTH_TYPE_KEY,
+        GITHUB_COPILOT_PER_USER_AUTH_TYPE,
+    )
+
+    return tuple(
+        credential.credential_name
+        for credential in (litellm.credential_list or ())
+        if getattr(credential, "credential_name", None)
+        and isinstance(values := getattr(credential, "credential_values", None), Mapping)
+        and values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE
+    )
+
+
+def _fallback_entry_target_count(entry: object) -> int:
+    """Work units one fallback entry carries, floored so nothing counts as zero:
+    a bare string or any non-dict counts 1; a dict entry counts one unit per
+    key plus one per target in its value lists, so empty lists and scalar
+    values still cost what the router scan costs."""
+    if isinstance(entry, dict):
+        return sum(max(1, len(value)) if isinstance(value, list) else 1 for value in entry.values())
+    return 1
 
 
 def _fallback_lists(
     data: Mapping[str, object],
     llm_router: litellm.Router,
     router_settings: Mapping[str, object] | None,
+    team_router_settings: Mapping[str, object] | None,
 ) -> tuple[Sequence[object], ...]:
     """Every fallback list the router can route this request through: the three
     router-level lists, the same three keys from the request body (which replace
@@ -2727,26 +2767,74 @@ def _fallback_lists(
         entries: object = data.get(key)
         if isinstance(entries, list):
             lists.append(entries)
-    key_fallbacks: object = router_settings.get("fallbacks") if router_settings is not None else None
-    if isinstance(key_fallbacks, list):
-        lists.append(key_fallbacks)
+    for settings in (router_settings, team_router_settings):
+        key_fallbacks: object = settings.get("fallbacks") if settings is not None else None
+        if isinstance(key_fallbacks, list):
+            lists.append(key_fallbacks)
     return tuple(lists)
 
 
+_FallbackIndex: TypeAlias = tuple[Mapping[str, tuple[str, ...]], tuple[object, ...]]
+
+
+def _index_fallback_list(fallback_list: Sequence[object]) -> _FallbackIndex:
+    """Index one fallback list once: an exact ``{source_key: targets}`` map for
+    bare keys (duplicate keys union their targets, a superset of the router's
+    first-wins resolution), plus the entries only the router matcher can score
+    ("*" keys, provider-prefixed keys, bare-string generic targets)."""
+    exact: dict[str, tuple[str, ...]] = {}  # mutable-ok: one entry per bare source key
+    fuzzy: list[object] = []  # mutable-ok: accumulates matcher-only entries
+    for entry in fallback_list:
+        if isinstance(entry, dict) and entry:
+            key = next(iter(entry))
+            raw = entry[key]
+            values = raw if isinstance(raw, list) else ([raw] if raw is not None else [])
+            targets = tuple(name for value in values if (name := _fallback_target_name(value)) is not None)
+            if "*" in key or "/" in key:
+                fuzzy.append(entry)
+            else:
+                exact[key] = exact.get(key, ()) + targets
+        else:
+            fuzzy.append(entry)
+    return exact, tuple(fuzzy)
+
+
+def _fuzzy_entry_matched(entry: object, resolved: object) -> bool:
+    """Whether a fuzzy entry is the one the router matcher returned for a group,
+    so its targets never get expanded a second time."""
+    if isinstance(entry, dict) and entry:
+        value: Final = entry[next(iter(entry))]
+        return value is resolved or value == resolved
+    if isinstance(entry, str):
+        return resolved == [entry]
+    return False
+
+
 def _fallback_edges(
-    fallback_lists: Sequence[Sequence[object]],
+    indexed_lists: Sequence[_FallbackIndex],
     model_group: str,
+    fired_fuzzy: set[tuple[int, int]],  # mutable-ok: records which fuzzy entries already expanded
 ) -> frozenset[str]:
-    """Targets routing would pick for ``model_group`` out of each list, resolved
-    with the router's own matcher so exact, provider-prefixed, stripped and "*"
-    keys plus bare-string entries all count."""
+    """Targets routing would pick for ``model_group``: exact-map hits on the group
+    and its provider-stripped suffix, plus the router matcher run over the fuzzy
+    entries that have not fired yet (tracked in ``fired_fuzzy`` by
+    ``(list_index, entry_index)``), so each entry's targets are expanded once."""
     from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 
+    stripped: Final = model_group.split("/", 1)[1] if "/" in model_group else None
     targets: Final[set[str]] = set()  # mutable-ok: accumulates fallback targets
-    for fallback_list in fallback_lists:
-        resolved: Final = get_fallback_model_group(fallbacks=fallback_list, model_group=model_group)[0]
-        values: Final = resolved if isinstance(resolved, list) else ([resolved] if resolved is not None else [])
+    for list_index, (exact, fuzzy) in enumerate(indexed_lists):
+        targets.update(exact.get(model_group, ()))
+        if stripped is not None:
+            targets.update(exact.get(stripped, ()))
+        pending = tuple(index for index in range(len(fuzzy)) if (list_index, index) not in fired_fuzzy)
+        if not pending:
+            continue
+        resolved = get_fallback_model_group(fallbacks=[fuzzy[index] for index in pending], model_group=model_group)[0]
+        values = resolved if isinstance(resolved, list) else ([resolved] if resolved is not None else [])
         targets.update(name for value in values if (name := _fallback_target_name(value)) is not None)
+        if resolved is not None:
+            fired_fuzzy.update((list_index, index) for index in pending if _fuzzy_entry_matched(fuzzy[index], resolved))
     return frozenset(targets)
 
 
@@ -2765,16 +2853,26 @@ def _fallback_target_groups(
     llm_router: litellm.Router,
     data: Mapping[str, object],
     router_settings: Mapping[str, object] | None,
+    team_router_settings: Mapping[str, object] | None,
     model_group: str,
 ) -> frozenset[str]:
     """Transitive closure over every fallback graph that can route this request:
-    a chain like A -> B -> C must still surface C's per-user credential."""
-    lists: Final = _fallback_lists(data, llm_router, router_settings)
+    a chain like A -> B -> C must still surface C's per-user credential. Every
+    entry the router could match is indexed or matcher-scored, so discovery is
+    a faithful superset of what routing can reach; the only bound is the 400 on
+    caller-supplied fallback lists in the resolver. A fuzzy entry whose targets
+    already expanded once is marked fired in ``fired_fuzzy`` and never matched
+    or expanded again, so total target visits stay O(total targets)."""
+    indexed: Final = tuple(
+        _index_fallback_list(fallback_list)
+        for fallback_list in _fallback_lists(data, llm_router, router_settings, team_router_settings)
+    )
     seen: Final[set[str]] = set()  # mutable-ok: BFS visited set
     frontier: Final[list[str]] = [model_group]  # mutable-ok: BFS work list
+    fired_fuzzy: Final[set[tuple[int, int]]] = set()  # mutable-ok: fired (list, entry) indexes
     while frontier:
         group = frontier.pop()
-        for target in _fallback_edges(lists, group):
+        for target in _fallback_edges(indexed, group, fired_fuzzy):
             if target not in seen and target != model_group:
                 seen.add(target)
                 frontier.append(target)
@@ -2790,12 +2888,13 @@ def _per_user_credential_names_for_groups(
         GITHUB_COPILOT_AUTH_TYPE_KEY,
         GITHUB_COPILOT_PER_USER_AUTH_TYPE,
     )
+    from litellm.router_utils.auto_router_model_naming import classify_strategy_router_model
 
     names: Final[list[str]] = []  # mutable-ok: accumulates one name per per-user deployment
     for group in model_groups:
-        by_name: Final = llm_router.get_model_list(model_name=group, team_id=team_id) or ()
-        deployment_id_match: Final = llm_router.get_deployment(model_id=group)
-        deployments: Final[Sequence[object]] = (
+        by_name = llm_router.get_model_list(model_name=group, team_id=team_id) or ()
+        deployment_id_match = llm_router.get_deployment(model_id=group)
+        deployments: Sequence[object] = (
             *by_name,
             *((deployment_id_match,) if deployment_id_match is not None else ()),
         )
@@ -2805,6 +2904,13 @@ def _per_user_credential_names_for_groups(
                 if isinstance(deployment, Mapping)
                 else getattr(deployment, "litellm_params", None)
             )
+            deployment_model: object = (
+                litellm_params.get("model")
+                if isinstance(litellm_params, Mapping)
+                else getattr(litellm_params, "model", None)
+            )
+            if isinstance(deployment_model, str) and classify_strategy_router_model(deployment_model) is not None:
+                return _all_per_user_credential_names()
             credential_name_obj: object = (
                 litellm_params.get("litellm_credential_name")
                 if isinstance(litellm_params, Mapping)
@@ -2812,15 +2918,39 @@ def _per_user_credential_names_for_groups(
             )
             if not isinstance(credential_name_obj, str) or not credential_name_obj or credential_name_obj in names:
                 continue
-            credential: Final = CredentialAccessor.find_credential(credential_name_obj)
+            credential = CredentialAccessor.find_credential(credential_name_obj)
             if credential is None:
                 continue
-            values: Final = cast(  # cast-ok: credential_values is a plain dict at runtime
+            values = cast(  # cast-ok: credential_values is a plain dict at runtime
                 Mapping[object, object], credential.credential_values
             )
             if values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE:
                 names.append(credential_name_obj)
     return tuple(names)
+
+
+async def _team_router_settings(user_api_key_dict_team_id: str | None) -> Mapping[str, object] | None:
+    """The team's router_settings, which _configured_fallbacks prefers after the
+    key's (hierarchical Key > Team). Mirrors the cached get_team_object lookup the
+    proxy uses so no extra DB read lands on the hot path."""
+    if not user_api_key_dict_team_id:
+        return None
+    try:
+        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+        if prisma_client is None:
+            return None
+        team_obj: Final = await get_team_object(
+            team_id=user_api_key_dict_team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        settings: Final = getattr(team_obj, "router_settings", None)
+        return settings if isinstance(settings, Mapping) else None
+    except Exception:  # noqa: BLE001  # advisory discovery must never break the request
+        return None
 
 
 async def _resolve_user_provider_credentials_for_request(
@@ -2842,7 +2972,53 @@ async def _resolve_user_provider_credentials_for_request(
     model: Final = data.get("model")
     if llm_router is None or not isinstance(model, str):
         return
-    model_groups: Final = frozenset({model} | _fallback_target_groups(llm_router, data, router_settings, model))
+    # With no per-user credential configured there is nothing to discover: no
+    # traversal, no size check, identical behavior to a shared-mode-only proxy.
+    if not _per_user_oauth_configured():
+        return
+    # The one caller-controlled input to discovery is the request body's own
+    # fallback lists, so the size bound lives here instead of on the scan: admin
+    # lists (router, key/team router_settings) are always read in full. The
+    # bound is on aggregate target names, not outer entries, so a single dict
+    # holding thousands of targets is counted honestly.
+    request_fallback_targets: Final = sum(
+        sum(_fallback_entry_target_count(entry) for entry in entries)
+        for key in _REQUEST_FALLBACK_KEYS
+        if isinstance(entries := data.get(key), list)
+    )
+    if request_fallback_targets > _FALLBACK_DISCOVERY_LIMIT:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"fallback lists in the request body cannot exceed {_FALLBACK_DISCOVERY_LIMIT} entries"),
+        )
+    from litellm.router_utils.common_utils import resolve_model_group_alias
+
+    # Discovery must see the group the router actually routes to, so include the
+    # post-alias name from every alias map that may still rewrite data["model"]
+    # after this function (litellm.model_alias_map, router_settings.model_group_alias).
+    requested_groups: Final = frozenset(
+        target
+        for target in (
+            model,
+            litellm.model_alias_map.get(model) if isinstance(litellm.model_alias_map, Mapping) else None,
+            (
+                resolve_model_group_alias(router_settings.get("model_group_alias"), model)
+                if router_settings is not None
+                else None
+            ),
+        )
+        if isinstance(target, str) and target
+    )
+    team_router_settings: Final = await _team_router_settings(user_api_key_dict_team_id=team_id)
+    model_groups: Final = frozenset(
+        itertools.chain.from_iterable(
+            (requested_groups,)
+            + tuple(
+                _fallback_target_groups(llm_router, data, router_settings, team_router_settings, group)
+                for group in requested_groups
+            )
+        )
+    )
     credential_names: Final = _per_user_credential_names_for_groups(llm_router, model_groups, team_id)
     if credential_names and "litellm_credential_name" in data:
         raise HTTPException(

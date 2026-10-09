@@ -53,7 +53,6 @@ interface AddModelFormProps {
   selectedProvider: string | null;
   setSelectedProvider: (provider: string | null) => void;
   providerModels: string[];
-  setProviderModelsFn: (provider: string | null) => void;
   getPlaceholder: (provider: string) => string;
   showAdvancedSettings: boolean;
   setShowAdvancedSettings: (show: boolean) => void;
@@ -77,7 +76,6 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   selectedProvider,
   setSelectedProvider,
   providerModels,
-  setProviderModelsFn,
   getPlaceholder,
   showAdvancedSettings,
   setShowAdvancedSettings,
@@ -184,7 +182,6 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
 
   const applyProviderSelection = (provider: string | null) => {
     setSelectedProvider(provider);
-    setProviderModelsFn(provider);
     form.setValue("model", []);
     form.setValue("model_name", undefined);
   };

@@ -15,6 +15,7 @@ from litellm.proxy.credential_endpoints.user_provider_credentials import (
     drop_user_provider_credential_cache,
     get_user_provider_credential,
     invalidate_user_provider_credential_cache,
+    set_user_provider_credential_cache,
     upsert_user_provider_credential,
 )
 
@@ -285,3 +286,91 @@ async def test_without_redis_no_worker_local_entries_are_kept():
     await invalidate_user_provider_credential_cache(cache_b, "user-a", "copilot-cred")
     assert await aget_user_provider_tokens(prisma_client, cache_a, "user-a", ["copilot-cred"]) == {}
     assert table.find_many.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_connect_overwrites_a_not_connected_tombstone(monkeypatch):
+    """Connect writes the new connection over any cached tombstone so the next
+    read sees the token immediately, no TTL wait."""
+    from litellm.proxy.credential_endpoints import user_provider_credentials as upc
+
+    redis = _fake_redis(monkeypatch)
+    cache = DualCache(redis_cache=redis)
+    await invalidate_user_provider_credential_cache(cache, "user-a", "copilot-cred")
+
+    payload = GithubCopilotUserConnectionPayload(access_token="gho_secret", github_login="octo")
+    assert await set_user_provider_credential_cache(cache, "user-a", "copilot-cred", payload)
+
+    table = MagicMock()
+    table.find_many = AsyncMock(return_value=[])
+    prisma_client = _prisma(table)
+    assert await aget_user_provider_tokens(prisma_client, cache, "user-a", ["copilot-cred"]) == {
+        "copilot-cred": "gho_secret"
+    }
+    table.find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stale_not_connected_fill_cannot_overwrite_a_connect_write(monkeypatch):
+    """A read that fetched "not connected" before the poll saved the row fills
+    with set-if-absent; the connect's plain overwrite must win so the marker
+    never lingers for the TTL."""
+    from litellm.proxy.credential_endpoints import user_provider_credentials as upc
+
+    redis = _fake_redis(monkeypatch)
+    cache = DualCache(redis_cache=redis)
+
+    payload = GithubCopilotUserConnectionPayload(access_token="gho_secret", github_login="octo")
+
+    async def _read_while_connecting(*args, **kwargs):
+        assert await set_user_provider_credential_cache(cache, "user-a", "copilot-cred", payload)
+        return []
+
+    table = MagicMock()
+    table.find_many = AsyncMock(side_effect=_read_while_connecting)
+    prisma_client = _prisma(table)
+
+    await aget_user_provider_tokens(prisma_client, cache, "user-a", ["copilot-cred"])
+    assert await aget_user_provider_tokens(prisma_client, cache, "user-a", ["copilot-cred"]) == {
+        "copilot-cred": "gho_secret"
+    }
+
+
+@pytest.mark.asyncio
+async def test_set_reports_connected_without_redis():
+    """No Redis configured: there is no stale entry to defend against, so the
+    cache refresh succeeds by definition."""
+    payload = GithubCopilotUserConnectionPayload(access_token="gho_secret", github_login="octo")
+    assert await set_user_provider_credential_cache(DualCache(), "user-a", "copilot-cred", payload)
+
+
+@pytest.mark.asyncio
+async def test_set_reports_connected_when_delete_clears_a_dropped_write():
+    """async_set_cache swallows errors: a set that reports success but writes
+    nothing is verified by read-back, and a working delete still resolves the
+    stale entry."""
+    store: dict = {}
+    silent_redis = SimpleNamespace(
+        async_set_cache=AsyncMock(return_value=None),
+        async_get_cache=AsyncMock(side_effect=lambda key: store.get(key)),
+        async_delete_cache=AsyncMock(side_effect=lambda key: store.pop(key, None)),
+    )
+    cache = DualCache(redis_cache=silent_redis)
+    payload = GithubCopilotUserConnectionPayload(access_token="gho_secret", github_login="octo")
+    assert await set_user_provider_credential_cache(cache, "user-a", "copilot-cred", payload)
+
+
+@pytest.mark.asyncio
+async def test_set_reports_failure_when_a_stale_entry_survives_both_attempts():
+    """A write silently dropped while a not-connected marker stays cached means
+    the caller cannot trust the connect: the helper reports failure instead of
+    claiming success."""
+    stale = "stale-value"
+    silent_redis = SimpleNamespace(
+        async_set_cache=AsyncMock(return_value=None),
+        async_get_cache=AsyncMock(return_value=stale),
+        async_delete_cache=AsyncMock(return_value=None),
+    )
+    cache = DualCache(redis_cache=silent_redis)
+    payload = GithubCopilotUserConnectionPayload(access_token="gho_secret", github_login="octo")
+    assert not await set_user_provider_credential_cache(cache, "user-a", "copilot-cred", payload)

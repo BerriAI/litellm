@@ -65,9 +65,9 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         """
         user_session: Final = require_github_copilot_user_session(litellm_params)  # pyright: ignore[reportUnknownArgumentType]  # litellm_params arrives as an untyped request dict
         if user_session is not None:
-            merged_headers: Final = {**get_copilot_default_headers(user_session.token), **headers}
-            pin_session_authorization(merged_headers, user_session.token)
-            return merged_headers
+            session_headers: Final = {**get_copilot_default_headers(user_session.token), **headers}
+            pin_session_authorization(session_headers, user_session.token)
+            return session_headers
         try:
             # Get GitHub Copilot API key via OAuth
             api_key = self.authenticator.get_api_key()
