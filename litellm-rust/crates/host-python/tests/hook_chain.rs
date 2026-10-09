@@ -229,7 +229,11 @@ fn chain(py: Python<'_>, scripts: &Py<PyDict>, asynchronous: bool) -> HookChain 
         asynchronous,
         wire: None,
     };
-    HookChain::new().with(hook("first")).with(hook("second"))
+    HookChain::new().layer(
+        py,
+        |_: Python<'_>, ()| [Hooks::new(hook("first")), Hooks::new(hook("second"))],
+        (),
+    )
 }
 
 fn finish<H, T>(py: Python<'_>, hooks: &mut H, step: HookStep<H, T>) -> PyResult<T> {
@@ -275,7 +279,11 @@ fn transformations_feed_each_other_and_notifications_share_final_values(
     #[case] asynchronous: bool,
 ) {
     Python::attach(|py| {
-        let mut hooks = chain(py, &scripts, asynchronous).with(PreparedPolicy);
+        let mut hooks = chain(py, &scripts, asynchronous).layer(
+            py,
+            |_: Python<'_>, ()| [Hooks::new(PreparedPolicy)],
+            (),
+        );
         let original = PyDict::new(py).unbind();
         let step = hooks
             .prepare_arguments(py, original.clone_ref(py), 0.0)
@@ -352,16 +360,22 @@ fn terminal_failure_does_not_skip_later_hooks(
     #[values("first", "second")] failing_hook: &str,
 ) {
     Python::attach(|py| {
-        let mut hooks = chain(py, &scripts, asynchronous).with(ScriptHooks {
-            object: scripts
-                .bind(py)
-                .get_item("third")
-                .unwrap()
-                .unwrap()
-                .unbind(),
-            asynchronous,
-            wire: None,
-        });
+        let mut hooks = chain(py, &scripts, asynchronous).layer(
+            py,
+            |_: Python<'_>, ()| {
+                [Hooks::new(ScriptHooks {
+                    object: scripts
+                        .bind(py)
+                        .get_item("third")
+                        .unwrap()
+                        .unwrap()
+                        .unbind(),
+                    asynchronous,
+                    wire: None,
+                })]
+            },
+            (),
+        );
         let locals = scripts.bind(py);
         locals
             .get_item(failing_hook)
@@ -618,9 +632,16 @@ fn suspended_notification_cycles_are_collectable(
         let owner = Py::new(
             py,
             HookOwner {
-                hooks: HookChain::new()
-                    .with(hook("first", !first_ready))
-                    .with(hook("second", true)),
+                hooks: HookChain::new().layer(
+                    py,
+                    |_: Python<'_>, ()| {
+                        [
+                            Hooks::new(hook("first", !first_ready)),
+                            Hooks::new(hook("second", true)),
+                        ]
+                    },
+                    (),
+                ),
             },
         )
         .unwrap();
@@ -696,16 +717,22 @@ fn builder_runs_hooks_in_append_order(
     #[values(false, true)] asynchronous: bool,
 ) {
     Python::attach(|py| {
-        let mut hooks = ["first", "second", "third", "fourth"]
-            .into_iter()
-            .take(count)
-            .fold(HookChain::new(), |chain, name| {
-                chain.with(ScriptHooks {
-                    object: scripts.bind(py).get_item(name).unwrap().unwrap().unbind(),
-                    asynchronous,
-                    wire: None,
-                })
-            });
+        let mut hooks = HookChain::new().layer(
+            py,
+            |_: Python<'_>, ()| {
+                ["first", "second", "third", "fourth"]
+                    .into_iter()
+                    .take(count)
+                    .map(|name| {
+                        Hooks::new(ScriptHooks {
+                            object: scripts.bind(py).get_item(name).unwrap().unwrap().unbind(),
+                            asynchronous,
+                            wire: None,
+                        })
+                    })
+            },
+            (),
+        );
         let original = PyDict::new(py).unbind();
         let step = hooks
             .prepare_arguments(py, original.clone_ref(py), 0.0)
@@ -771,16 +798,24 @@ impl NativeHooks for Recorder {
     }
 }
 
-fn native_chain(log: &Arc<Mutex<Vec<String>>>, rejecting: Option<&'static str>) -> HookChain {
-    ["a", "b", "c"]
-        .into_iter()
-        .fold(HookChain::new(), |chain, name| {
-            chain.with_all([Hooks::native(Recorder {
-                name,
-                log: Arc::clone(log),
-                reject: rejecting == Some(name),
-            })])
-        })
+fn native_chain(
+    py: Python<'_>,
+    log: &Arc<Mutex<Vec<String>>>,
+    rejecting: Option<&'static str>,
+) -> HookChain {
+    HookChain::new().layer(
+        py,
+        |_: Python<'_>, ()| {
+            ["a", "b", "c"].map(|name| {
+                Hooks::native(Recorder {
+                    name,
+                    log: Arc::clone(log),
+                    reject: rejecting == Some(name),
+                })
+            })
+        },
+        (),
+    )
 }
 
 fn request_context() -> RequestContext {
@@ -806,7 +841,7 @@ fn native_hooks_rewrite_the_wire_request_in_chain_order() {
     Python::initialize();
     Python::attach(|py| {
         let log = Arc::default();
-        let mut hooks = native_chain(&log, None);
+        let mut hooks = native_chain(py, &log, None);
         let step = hooks
             .before_provider_request(py, wire(), &request_context())
             .unwrap();
@@ -822,7 +857,7 @@ fn native_hook_rejection_raises_and_stops_the_chain() {
     Python::initialize();
     Python::attach(|py| {
         let log = Arc::default();
-        let mut hooks = native_chain(&log, Some("b"));
+        let mut hooks = native_chain(py, &log, Some("b"));
         let Err(error) = hooks.before_provider_request(py, wire(), &request_context()) else {
             panic!("the rejection must surface");
         };
@@ -835,7 +870,7 @@ fn native_hooks_see_events_in_onion_order_and_leave_arguments_alone() {
     Python::initialize();
     Python::attach(|py| {
         let log: Arc<Mutex<Vec<String>>> = Arc::default();
-        let mut hooks = native_chain(&log, None);
+        let mut hooks = native_chain(py, &log, None);
         let arguments = PyDict::new(py).unbind();
         let HookStep::Ready(prepared) = hooks
             .prepare_arguments(py, arguments.clone_ref(py), 0.0)
@@ -868,5 +903,65 @@ fn native_hooks_see_events_in_onion_order_and_leave_arguments_alone() {
                 "a:succeeded"
             ],
         );
+    });
+}
+
+fn recorder(name: &'static str, log: &Arc<Mutex<Vec<String>>>) -> Hooks {
+    Hooks::native(Recorder {
+        name,
+        log: Arc::clone(log),
+        reject: false,
+    })
+}
+
+fn run_native(py: Python<'_>, hooks: &mut HookChain) -> String {
+    let HookStep::Ready(()) = hooks
+        .on_event(py, PythonCallEvent::Started { start_time: 0.0 })
+        .unwrap()
+    else {
+        panic!("native hooks never suspend");
+    };
+    let HookStep::Ready(wire) = hooks
+        .before_provider_request(py, wire(), &request_context())
+        .unwrap()
+    else {
+        panic!("native hooks never suspend");
+    };
+    let response = py.None();
+    let HookStep::Ready(()) = hooks
+        .on_event(
+            py,
+            PythonCallEvent::Succeeded {
+                timing: TIMING,
+                response: &response,
+            },
+        )
+        .unwrap()
+    else {
+        panic!("native hooks never suspend");
+    };
+    wire.url
+}
+
+#[test]
+fn consecutive_layers_append_like_one_layer_holding_both_hooks() {
+    Python::initialize();
+    Python::attach(|py| {
+        let layered: Arc<Mutex<Vec<String>>> = Arc::default();
+        let mut consecutive = HookChain::new()
+            .layer(py, |_: Python<'_>, ()| [recorder("a", &layered)], ())
+            .layer(py, |_: Python<'_>, ()| [recorder("b", &layered)], ());
+        let single: Arc<Mutex<Vec<String>>> = Arc::default();
+        let mut combined = HookChain::new().layer(
+            py,
+            |_: Python<'_>, ()| [recorder("a", &single), recorder("b", &single)],
+            (),
+        );
+
+        assert_eq!(run_native(py, &mut consecutive), "ab");
+        assert_eq!(run_native(py, &mut combined), "ab");
+        let expected = ["a:started", "b:started", "b:succeeded", "a:succeeded"];
+        assert_eq!(*layered.lock().unwrap(), expected);
+        assert_eq!(*single.lock().unwrap(), expected);
     });
 }

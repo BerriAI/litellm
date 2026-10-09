@@ -12,7 +12,7 @@ use litellm_callbacks_legacy_python::{LegacyLogging, PublicCall};
 use litellm_host::call::Operation;
 use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol};
 use litellm_host_python::{
-    HookChain, PythonBinding, PythonCallHooks, PythonHostCalls, effective_py_args,
+    HookChain, Hooks, PythonBinding, PythonCallHooks, PythonHostCalls, effective_py_args,
 };
 use pyo3::{
     prelude::*,
@@ -88,9 +88,11 @@ where
             start(py, arguments, request).map(crate::logger::LoggedMachine::new)
         },
         host,
-        HookChain::new()
-            .with(hooks)
-            .with(crate::preflight::SdkPolicy),
+        HookChain::new().layer(
+            py,
+            |_: Python<'_>, ()| [Hooks::new(hooks), Hooks::new(crate::preflight::SdkPolicy)],
+            (),
+        ),
         arguments,
         crate::lifecycle::call_options(asynchronous),
     )

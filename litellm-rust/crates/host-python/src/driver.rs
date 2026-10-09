@@ -1244,10 +1244,17 @@ mod tests {
                 log: Log(log.0.clone()),
                 script,
             };
-            let hooks = crate::HookChain::new()
-                .with(hook(HookScript::ObserveArguments))
-                .with(hook(rewrite))
-                .with(hook(HookScript::ReplaceResponse));
+            let hooks = crate::HookChain::new().layer(
+                py,
+                |_: Python<'_>, ()| {
+                    [
+                        crate::Hooks::new(hook(HookScript::ObserveArguments)),
+                        crate::Hooks::new(hook(rewrite)),
+                        crate::Hooks::new(hook(HookScript::ReplaceResponse)),
+                    ]
+                },
+                (),
+            );
             let result = run_call(
                 py,
                 move |_, _, request| Ok(success_machine()(request)),
@@ -2081,12 +2088,19 @@ mod tests {
                     classifier_fails: false,
                     pending_reply: None,
                 },
-                crate::HookChain::new()
-                    .with(SyntheticHooks {
-                        log: Log(log.0.clone()),
-                        script: HookScript::RewriteArguments,
-                    })
-                    .with(ArgumentPolicy::Inherit),
+                crate::HookChain::new().layer(
+                    py,
+                    |_: Python<'_>, ()| {
+                        [
+                            crate::Hooks::new(SyntheticHooks {
+                                log: Log(log.0.clone()),
+                                script: HookScript::RewriteArguments,
+                            }),
+                            crate::Hooks::new(ArgumentPolicy::Inherit),
+                        ]
+                    },
+                    (),
+                ),
                 arguments.clone().unbind(),
                 call_options(asynchronous),
             );
@@ -2203,9 +2217,16 @@ mod tests {
                 },
                 HookScript::Plain,
                 |hooks| {
-                    crate::HookChain::new()
-                        .with(hooks)
-                        .with(ArgumentPolicy::Reject(raised.clone_ref(py)))
+                    crate::HookChain::new().layer(
+                        py,
+                        |_: Python<'_>, ()| {
+                            [
+                                crate::Hooks::new(hooks),
+                                crate::Hooks::new(ArgumentPolicy::Reject(raised.clone_ref(py))),
+                            ]
+                        },
+                        (),
+                    )
                 },
                 call_options(asynchronous),
             );
@@ -2246,9 +2267,16 @@ mod tests {
                 },
                 HookScript::Plain,
                 |hooks| {
-                    crate::HookChain::new()
-                        .with(hooks)
-                        .with(ArgumentPolicy::Inherit)
+                    crate::HookChain::new().layer(
+                        py,
+                        |_: Python<'_>, ()| {
+                            [
+                                crate::Hooks::new(hooks),
+                                crate::Hooks::new(ArgumentPolicy::Inherit),
+                            ]
+                        },
+                        (),
+                    )
                 },
                 call_options(asynchronous),
             );

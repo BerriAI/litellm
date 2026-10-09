@@ -44,17 +44,9 @@ impl HookChain {
         Self::default()
     }
 
-    pub fn with(self, hooks: impl PythonCallHooks + 'static) -> Self {
-        self.with_all([Hooks::new(hooks)])
-    }
-
-    pub fn layer<Call>(self, py: Python<'_>, layer: &impl HookLayer<Call>, call: Call) -> Self {
-        self.with_all(layer.layer(py, call))
-    }
-
-    pub fn with_all(mut self, hooks: impl IntoIterator<Item = Hooks>) -> Self {
+    pub fn layer<Call>(mut self, py: Python<'_>, layer: impl HookLayer<Call>, call: Call) -> Self {
         self.hooks
-            .extend(hooks.into_iter().map(|Hooks(hooks)| hooks));
+            .extend(layer.layer(py, call).into_iter().map(|Hooks(hooks)| hooks));
         self
     }
 
