@@ -8,6 +8,7 @@ import unittest
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import fakeredis
 import httpx
 import pytest
 from openai import APIError
@@ -17,6 +18,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._internal_context import current_service_target
 from litellm.caching.caching import DualCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.integrations.SlackAlerting.budget_alert_types import get_budget_alert_type
 from litellm.integrations.SlackAlerting.slack_alerting import DeploymentMetrics, SlackAlerting
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -770,6 +772,85 @@ async def test_budget_alerts_crossed_again(slack_alerting):
             ),
         )
         mock_send_alert.assert_not_awaited()
+
+
+BUDGET_WEBHOOK_URL: Final = "https://budget-webhook.example/alerts"
+
+
+def _accepted_webhook_response() -> MagicMock:
+    response: Final = MagicMock(spec=httpx.Response)
+    response.status_code = 200
+    return response
+
+
+def _webhook_post_answering_after_network_wait() -> AsyncMock:
+    response: Final = _accepted_webhook_response()
+
+    async def _answer(**_: object) -> MagicMock:
+        await asyncio.sleep(0)
+        return response
+
+    return AsyncMock(side_effect=_answer)
+
+
+def _budget_webhook_alerting(webhook_post: AsyncMock, cache: DualCache | None = None) -> SlackAlerting:
+    http_handler: Final = MagicMock(spec=AsyncHTTPHandler, post=webhook_post)
+    slack_alerting: Final = SlackAlerting(
+        alerting=["webhook"], async_http_handler=http_handler, internal_usage_cache=cache
+    )
+    slack_alerting.periodic_started = True
+    return slack_alerting
+
+
+def _cache_sharing_redis(server: fakeredis.FakeServer, monkeypatch: pytest.MonkeyPatch) -> DualCache:
+    redis_cache: Final = RedisCache(host="localhost", port=6379)
+    redis_client: Final = fakeredis.FakeAsyncRedis(server=server)
+    monkeypatch.setattr(redis_cache, "init_async_client", lambda: redis_client)
+    return DualCache(redis_cache=redis_cache)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_budget_alerts_deliver_one_webhook_alert(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WEBHOOK_URL", BUDGET_WEBHOOK_URL)
+    webhook_post: Final = _webhook_post_answering_after_network_wait()
+    slack_alerting: Final = _budget_webhook_alerting(webhook_post)
+
+    await asyncio.gather(*(slack_alerting.budget_alerts(type="soft_budget", user_info=team_info) for _ in range(10)))
+    await slack_alerting.budget_alerts(type="soft_budget", user_info=team_info)
+
+    assert webhook_post.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_budget_alert_workers_sharing_redis_deliver_one_webhook_alert(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WEBHOOK_URL", BUDGET_WEBHOOK_URL)
+    webhook_post: Final = _webhook_post_answering_after_network_wait()
+    server: Final = fakeredis.FakeServer()
+    workers: Final = tuple(
+        _budget_webhook_alerting(webhook_post, _cache_sharing_redis(server, monkeypatch)) for _ in range(2)
+    )
+
+    await asyncio.gather(*(worker.budget_alerts(type="soft_budget", user_info=team_info) for worker in workers * 5))
+
+    assert webhook_post.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_budget_alert_delivery_lets_the_next_check_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WEBHOOK_URL", BUDGET_WEBHOOK_URL)
+    webhook_post: Final = AsyncMock(
+        side_effect=[httpx.ConnectError("webhook unreachable"), _accepted_webhook_response()]
+    )
+    slack_alerting: Final = _budget_webhook_alerting(webhook_post)
+
+    with pytest.raises(httpx.ConnectError):
+        await slack_alerting.budget_alerts(type="soft_budget", user_info=team_info)
+    await slack_alerting.budget_alerts(type="soft_budget", user_info=team_info)
+
+    assert webhook_post.await_count == 2
+
 
 @pytest.mark.asyncio
 async def test_daily_reports_unit_test(slack_alerting):
