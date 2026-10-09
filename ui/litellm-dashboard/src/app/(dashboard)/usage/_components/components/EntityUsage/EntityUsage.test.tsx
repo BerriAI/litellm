@@ -1705,5 +1705,42 @@ describe("EntityUsage", () => {
       });
       expect(screen.getByRole("columnheader", { name: "Tag" })).toBeInTheDocument();
     });
+
+    it("shows the per-user spend panel on the default team tab", async () => {
+      const mockUseTeams = vi.mocked(useTeams);
+      mockUseTeams.mockReturnValue({
+        teams: [{ team_id: "team-alpha" }, { team_id: "team-beta" }],
+        setTeams: vi.fn(),
+      } as unknown as ReturnType<typeof useTeams>);
+
+      render(<EntityUsage {...teamProps} />);
+
+      expect(await screen.findByText("team-user-spend:team-alpha|team-beta")).toBeInTheDocument();
+    });
+
+    it("hides the per-user spend panel with a tag filter and with tag breakdown", async () => {
+      const mockUseTeams = vi.mocked(useTeams);
+      mockUseTeams.mockReturnValue({
+        teams: [{ team_id: "team-alpha" }, { team_id: "team-beta" }],
+        setTeams: vi.fn(),
+      } as unknown as ReturnType<typeof useTeams>);
+
+      render(<EntityUsage {...teamProps} />);
+      expect(await screen.findByText(/^team-user-spend:/)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByText("Tag Multi Select"));
+      await waitFor(() => {
+        expect(screen.queryByText(/^team-user-spend:/)).not.toBeInTheDocument();
+      });
+
+      cleanup();
+      render(<EntityUsage {...teamProps} />);
+      expect(await screen.findByText(/^team-user-spend:/)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("radio", { name: "Tag" }));
+      await waitFor(() => {
+        expect(screen.queryByText(/^team-user-spend:/)).not.toBeInTheDocument();
+      });
+    });
   });
 });

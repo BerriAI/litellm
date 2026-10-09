@@ -358,6 +358,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   };
   const capitalizedEntityLabel = entityType.charAt(0).toUpperCase() + entityType.slice(1);
   const isCrossBreakdown = (entityType === "tag" || entityType === "team") && groupBy !== entityType;
+  const teamTagScoped = entityType === "team" && (selectedTagFilters.length > 0 || groupBy === "tag");
   const breakdownEntityLabel = isCrossBreakdown ? BREAKDOWN_LABELS[groupBy] : capitalizedEntityLabel;
   const breakdownLabelById = useMemo(() => {
     if (entityType !== "tag" || groupBy !== "team") {
@@ -615,7 +616,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         />
       </Panel>
 
-      {entityType === "team" && (
+      {entityType === "team" && !teamTagScoped && (
         <TeamUserSpendCard
           accessToken={accessToken}
           startTime={startTime}
@@ -732,7 +733,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           </AlertDescription>
         </Alert>
       )}
-      {entityType === "team" && (selectedTagFilters.length > 0 || groupBy === "tag") && (
+      {teamTagScoped && (
         <Alert>
           <AlertDescription className="text-inherit">
             These totals only count tagged requests, and a request with several tags counts once per tag, so they
