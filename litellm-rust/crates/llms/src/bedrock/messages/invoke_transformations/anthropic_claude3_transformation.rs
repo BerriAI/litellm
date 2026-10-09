@@ -16,8 +16,12 @@ use litellm_auth_aws::{
     resolve_bedrock_region,
 };
 use litellm_llms_types::formats::messages::{
-    MessagesRequest,
+    ContextEdit, ContextManagement, MessagesOptionalParams, MessagesRequest,
     streaming::{MessagesStreamEvent, MessagesStreamUsage},
+};
+use litellm_llms_types::{
+    providers::anthropic::{BetaProvider, BetaSet},
+    recognized::Recognized,
 };
 use litellm_router_types::LitellmParams;
 use serde_json::{Map, Value};
@@ -47,6 +51,25 @@ const METRICS_USAGE_KEYS: [(&str, &str); 4] = [
 const INVOKE_PATH: &str = "invoke";
 const INVOKE_STREAM_PATH: &str = "invoke-with-response-stream";
 const INVOKE_MODEL_PREFIX: &str = "invoke/";
+pub const BEDROCK_ANTHROPIC_VERSION: &str = "bedrock-2023-05-31";
+const BODY_FIELDS: &[&str] = &[
+    "anthropic_version",
+    "max_tokens",
+    "messages",
+    "anthropic_beta",
+    "system",
+    "stop_sequences",
+    "temperature",
+    "top_p",
+    "top_k",
+    "tools",
+    "tool_choice",
+    "thinking",
+    "metadata",
+    "output_config",
+    "safeguards",
+    "context_management",
+];
 
 const SECRET_NAMES: &[&str] = &[
     AWS_BEARER_TOKEN_BEDROCK,
@@ -97,7 +120,13 @@ fn invoke_url(
         .or_else(|| configured(aws.aws_bedrock_runtime_endpoint.as_deref()))
         .or_else(|| env_lookup(AWS_BEDROCK_RUNTIME_ENDPOINT))
         .unwrap_or_else(|| BEDROCK_RUNTIME_ENDPOINT_TEMPLATE.replace("{region}", &region));
-    format!("{}/model/{model_id}/{path}", endpoint.trim_end_matches('/'))
+    let model_segment: String = url::form_urlencoded::byte_serialize(model_id.as_bytes())
+        .map(|part| if part == "+" { "%20" } else { part })
+        .collect();
+    format!(
+        "{}/model/{model_segment}/{path}",
+        endpoint.trim_end_matches('/')
+    )
 }
 
 impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
@@ -128,12 +157,42 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
 
     fn transform_anthropic_messages_request(
         &self,
-        _request: MessagesRequest,
-        _context: &MessagesTransformContext,
+        request: MessagesRequest,
+        context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
-        Err(Error::Unsupported(
-            "Bedrock invoke messages request shaping",
-        ))
+        let request = crate::base_llm::messages::normalization::normalize_system_role_messages(
+            request,
+            context
+                .thinking
+                .capabilities
+                .supports_mid_conversation_system,
+        );
+        let request = crate::anthropic::messages::transformation::transform_messages_request(
+            request, context,
+        )?;
+        if request.params.tools.as_ref().is_some_and(|tools| {
+            tools.iter().any(|tool| {
+                let Recognized::Unrecognized(tool) = tool else {
+                    return false;
+                };
+                tool.get("type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|kind| kind.starts_with("web_search"))
+            })
+        }) {
+            return Err(Error::Unsupported("Bedrock server-side web search tools"));
+        }
+        let context_management = request
+            .params
+            .context_management
+            .and_then(invoke_context_management);
+        Ok(MessagesRequest {
+            params: MessagesOptionalParams {
+                context_management,
+                ..request.params
+            },
+            ..request
+        })
     }
 
     fn secret_names(&self) -> &'static [&'static str] {
@@ -176,9 +235,83 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         &[("content-type", "application/json")]
     }
 
+    fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
+        crate::anthropic::common_utils::merge_beta_headers(
+            headers,
+            crate::anthropic::messages::transformation::provider_feature_betas(
+                request,
+                BetaProvider::Bedrock,
+            ),
+        )
+    }
+
+    fn wire_body(&self, body: Value, headers: Headers) -> (Value, Headers) {
+        let betas: BetaSet = crate::anthropic::common_utils::existing_betas(&headers)
+            .iter()
+            .filter_map(|beta| beta.on(BetaProvider::Bedrock))
+            .collect();
+        let Value::Object(fields) = body else {
+            return (body, headers);
+        };
+        let body = Value::Object(
+            fields
+                .into_iter()
+                .filter(|(key, _)| {
+                    BODY_FIELDS.contains(&key.as_str())
+                        && key != "anthropic_beta"
+                        && key != "anthropic_version"
+                })
+                .chain([(
+                    "anthropic_version".into(),
+                    Value::String(BEDROCK_ANTHROPIC_VERSION.into()),
+                )])
+                .chain((!betas.is_empty()).then(|| {
+                    (
+                        "anthropic_beta".into(),
+                        Value::Array(
+                            betas
+                                .iter()
+                                .map(|beta| Value::String(beta.as_str().into()))
+                                .collect(),
+                        ),
+                    )
+                }))
+                .collect(),
+        );
+        (
+            body,
+            headers
+                .into_iter()
+                .filter(|(name, _)| !name.eq_ignore_ascii_case("anthropic-beta"))
+                .collect(),
+        )
+    }
+
     fn stream_decoder(&self) -> Option<StreamDecoder> {
         Some(bedrock_anthropic_messages_event_stream)
     }
+}
+
+fn invoke_context_management(
+    context: Recognized<ContextManagement>,
+) -> Option<Recognized<ContextManagement>> {
+    let Recognized::Known(context) = context else {
+        return None;
+    };
+    let edits: Vec<_> = context
+        .edits?
+        .into_iter()
+        .filter(|edit| {
+            matches!(
+                edit,
+                Recognized::Known(ContextEdit::Compact { .. } | ContextEdit::ClearToolUses { .. })
+            )
+        })
+        .collect();
+    (!edits.is_empty()).then_some(Recognized::Known(ContextManagement {
+        edits: Some(edits),
+        ..context
+    }))
 }
 
 fn with_invocation_usage(chunk: Value) -> Value {

@@ -64,21 +64,25 @@ impl MessagesRoute {
             model: request_context.model.clone(),
             provider: request_context.custom_llm_provider.clone(),
         };
+        let requested_stream = body.params.stream == Some(true);
+        let (wire_body, wire_headers) = provider.config().wire_body(
+            serde_json::to_value(&body).map_err(serialize_failure)?,
+            authenticated.headers,
+        );
         let wire = context
             .interceptors
             .before_provider_request(
                 WireRequest {
                     url,
-                    headers: authenticated.headers,
-                    body: provider
-                        .config()
-                        .wire_body(serde_json::to_value(&body).map_err(serialize_failure)?),
+                    headers: wire_headers,
+                    body: wire_body,
                 },
                 request_context,
             )
             .await?;
         let stream = match wire.body.get("stream") {
-            None | Some(Value::Null) => false,
+            None => requested_stream,
+            Some(Value::Null) => false,
             Some(Value::Bool(stream)) => *stream,
             Some(value) => {
                 return Err(Error::InvalidRequest(

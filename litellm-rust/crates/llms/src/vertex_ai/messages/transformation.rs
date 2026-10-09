@@ -139,11 +139,11 @@ impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
     }
 
     /// Vertex addresses the model in the URL and rejects it in the body.
-    fn wire_body(&self, mut body: Value) -> Value {
+    fn wire_body(&self, mut body: Value, headers: Headers) -> (Value, Headers) {
         if let Value::Object(fields) = &mut body {
             fields.remove("model");
         }
-        body
+        (body, headers)
     }
 }
 
@@ -503,7 +503,7 @@ mod tests {
         );
         assert_eq!(body["anthropic_version"], json!("vertex-2023-10-16"));
         assert_eq!(body["model"], json!("claude-sonnet-4-5@20250929"));
-        let wire = VERTEX_ANTHROPIC_MESSAGES_CONFIG.wire_body(body);
+        let (wire, _) = VERTEX_ANTHROPIC_MESSAGES_CONFIG.wire_body(body, Vec::new());
         assert_eq!(wire.get("model"), None);
         assert_eq!(wire["anthropic_version"], json!("vertex-2023-10-16"));
     }

@@ -835,3 +835,58 @@ async fn provider_validation_runs_before_caller_parameter_removal(
     );
     assert!(received(&upstream).await.is_empty());
 }
+
+#[rstest]
+#[case::bearer(true, "Bearer deployment-token", None)]
+#[case::signed(false, "/us-west-2/bedrock/aws4_request", Some("test-session"))]
+#[tokio::test]
+async fn bedrock_invoke_sends_the_versioned_body_with_the_selected_auth(
+    call: MessagesCall,
+    #[case] bearer: bool,
+    #[case] authorization_fragment: &str,
+    #[case] session_token: Option<&str>,
+) {
+    use litellm_auth::AwsParams;
+    use litellm_llms::bedrock::messages::invoke_transformations::anthropic_claude3_transformation::BEDROCK_ANTHROPIC_VERSION;
+    let upstream = upstream([message_response()]).await;
+    let response = run_message(MessagesCall {
+        custom_llm_provider: Some("bedrock".into()),
+        api_base: Some(upstream.uri()),
+        api_key: bearer.then(|| "deployment-token".into()),
+        litellm_params: LitellmParams {
+            aws: AwsParams {
+                aws_access_key_id: Some("test-access".into()),
+                aws_secret_access_key: Some("test-secret".into()),
+                aws_session_token: Some("test-session".into()),
+                aws_region_name: Some("us-west-2".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        extra_headers: headers([(
+            "Anthropic-Beta",
+            "context-management-2025-06-27,unsupported-beta",
+        )]),
+        ..with_fields(call, json!({"stream": false, "unknown_extension": true}))
+    })
+    .await;
+    let sent = only_request(&upstream).await;
+    assert_eq!(sent.url.path(), format!("/model/{MODEL}/invoke"));
+    assert_eq!(
+        sent.json(),
+        json!({
+            "anthropic_version": BEDROCK_ANTHROPIC_VERSION,
+            "anthropic_beta": ["context-management-2025-06-27"],
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "hi"}],
+        })
+    );
+    assert_eq!(sent.header("anthropic-beta"), None);
+    assert_eq!(response, serde_json::from_value(message_body()).unwrap());
+    let authorization = sent.header("authorization").unwrap();
+    assert!(
+        authorization.contains(authorization_fragment),
+        "{authorization}"
+    );
+    assert_eq!(sent.header("x-amz-security-token"), session_token);
+}

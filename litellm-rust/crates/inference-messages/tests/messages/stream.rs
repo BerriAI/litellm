@@ -491,3 +491,35 @@ async fn a_host_on_anthropic_sse_is_relayed_byte_for_byte(call: MessagesCall) {
         .collect();
     assert_eq!(delivered, SSE_BODY.as_bytes());
 }
+
+#[rstest]
+#[tokio::test]
+async fn bedrock_opens_a_stream_when_the_wire_body_has_no_stream_field(call: MessagesCall) {
+    let upstream = upstream([ResponseTemplate::new(200).set_body_bytes(Vec::<u8>::new())]).await;
+    let host = RecordingStreamHost::new(
+        MessagesCall {
+            custom_llm_provider: Some("bedrock".into()),
+            api_base: Some(upstream.uri()),
+            api_key: Some("bearer".into()),
+            ..with_fields(call, json!({"stream": true}))
+        },
+        usize::MAX,
+    );
+    let result = litellm_host_native::in_process::run_hosted(
+        machine(Arc::new(RecordingSecrets::empty()))(host.request().unwrap()),
+        host.runtime(),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(result, MessagesOutput::StreamEnded));
+    assert!(matches!(
+        host.seen.lock().unwrap().as_slice(),
+        [Seen::Open(_)]
+    ));
+    let sent = only_request(&upstream).await;
+    assert_eq!(
+        sent.url.path(),
+        format!("/model/{MODEL}/invoke-with-response-stream")
+    );
+    assert_eq!(sent.json().get("stream"), None);
+}

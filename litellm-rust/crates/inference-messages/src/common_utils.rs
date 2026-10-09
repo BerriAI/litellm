@@ -53,13 +53,19 @@ pub(crate) fn messages_provider(provider: LlmProviders, model: &str) -> Option<M
     match provider {
         LlmProviders::Anthropic => Some(MessagesProvider::Anthropic),
         LlmProviders::AzureAi => Some(MessagesProvider::AzureAi),
-        LlmProviders::Bedrock => Some(MessagesProvider::Bedrock),
+        LlmProviders::Bedrock if bedrock_invoke_model(model) => Some(MessagesProvider::Bedrock),
         LlmProviders::Deepseek => Some(MessagesProvider::Deepseek),
         LlmProviders::VertexAi if model.to_ascii_lowercase().contains("claude") => {
             Some(MessagesProvider::VertexAi)
         }
         _ => None,
     }
+}
+
+fn bedrock_invoke_model(model: &str) -> bool {
+    let route = model.split_once('/').map_or(model, |(prefix, _)| prefix);
+    model.contains("claude")
+        && !matches!(route, "converse" | "mantle" | "claude_platform" | "openai")
 }
 
 pub(super) fn string_headers(
@@ -98,6 +104,10 @@ mod tests {
     #[rstest]
     #[case::openai(LlmProviders::Openai, "gpt-5")]
     #[case::vertex_gemini(LlmProviders::VertexAi, "gemini-2.5-pro")]
+    #[case::bedrock_non_claude(LlmProviders::Bedrock, "native-model")]
+    #[case::bedrock_converse(LlmProviders::Bedrock, "converse/claude-test")]
+    #[case::bedrock_mantle(LlmProviders::Bedrock, "mantle/claude-test")]
+    #[case::bedrock_platform(LlmProviders::Bedrock, "claude_platform/claude-test")]
     fn provider_without_a_messages_config_is_rejected(
         #[case] provider: LlmProviders,
         #[case] model: &str,
