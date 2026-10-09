@@ -100,16 +100,24 @@ forward_bundled() {
 }
 
 deployment_pods() {
-  local selector attempt
+  local deployment selector deployment_uid replica_sets attempt
   local pods="$qa_dir/$1-pods.json" snapshot="$qa_dir/$1-snapshot.json"
   printf '%s: wait for deployment/%s before recording pod identities\n' "$namespace" "$1" >&2
   kubectl -n "$namespace" rollout status "deployment/$1" --timeout=180s >&2 || return
-  selector=$(kubectl -n "$namespace" get deployment "$1" -o json \
-    | jq -r '.spec.selector.matchLabels | to_entries | map("\(.key)=\(.value)") | join(",")')
+  deployment=$(kubectl -n "$namespace" get deployment "$1" -o json) || return
+  selector=$(jq -r '.spec.selector.matchLabels | to_entries | map("\(.key)=\(.value)") | join(",")' <<< "$deployment")
+  deployment_uid=$(jq -er .metadata.uid <<< "$deployment")
   test -n "$selector"
+  replica_sets=$(kubectl -n "$namespace" get replicasets -l "$selector" -o json \
+    | jq -ce --arg uid "$deployment_uid" '[.items[]
+        | select(any(.metadata.ownerReferences[]?; .controller == true and .kind == "Deployment" and .uid == $uid))
+        | .metadata.uid] | if length > 0 then . else error("Deployment ReplicaSet identity is missing") end') || return
   for attempt in $(seq 1 30); do
     kubectl -n "$namespace" get pods -l "$selector" -o json > "$pods" || return
-    if jq -S -e '[.items[] | select(.metadata.deletionTimestamp == null)
+    if jq -S -e --argjson replica_sets "$replica_sets" '[.items[]
+        | select(any(.metadata.ownerReferences[]?; .controller == true and .kind == "ReplicaSet"
+            and (.uid as $owner | $replica_sets | index($owner) != null)))
+        | select(.metadata.deletionTimestamp == null)
         | {uid:.metadata.uid, images:.spec.containers | map({name,image}),
         containers:(.status.containerStatuses // []) | map({name,imageID,restartCount,ready})}] | sort_by(.uid)
       | if length > 0 and all(.[]; .containers | length > 0)
