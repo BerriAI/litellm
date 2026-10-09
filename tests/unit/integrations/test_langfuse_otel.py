@@ -168,6 +168,33 @@ class TestLangfuseOtelIntegration:
 
         assert span.attributes["langfuse.environment"] == "team-a-env"
 
+    @pytest.mark.parametrize(
+        "completion_start_time",
+        [
+            datetime(2026, 10, 9, 12, 0, 0, 250000, tzinfo=timezone.utc),
+            datetime(2026, 10, 9, 12, 0, 0, 250000),
+        ],
+        ids=["aware", "naive_local_time"],
+    )
+    def test_set_langfuse_specific_attributes_completion_start_time(self, completion_start_time):
+        """The first-token time goes out as Langfuse's completion start time, with an explicit offset."""
+        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(
+                MagicMock(), {"completion_start_time": completion_start_time}, {}
+            )
+
+        attributes: Final = {call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list}
+        sent: Final = datetime.fromisoformat(attributes["langfuse.observation.completion_start_time"])
+        assert sent.tzinfo is not None
+        assert sent.timestamp() == completion_start_time.timestamp()
+
+    def test_set_langfuse_specific_attributes_without_completion_start_time(self):
+        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), {}, {})
+
+        keys: Final = {call.args[1] for call in mock_safe_set_attribute.call_args_list}
+        assert "langfuse.observation.completion_start_time" not in keys
+
     def test_extract_langfuse_metadata_basic(self):
         """Ensure metadata is correctly pulled from litellm_params."""
         metadata_in = {"generation_name": "my-gen", "custom": "data"}

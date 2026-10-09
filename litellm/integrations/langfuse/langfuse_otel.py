@@ -253,6 +253,14 @@ class LangfuseOtelLogger(OpenTelemetry):
                 safe_dumps(messages),
             )
 
+        completion_start_time: Final = kwargs.get("completion_start_time")
+        if isinstance(completion_start_time, datetime):
+            safe_set_attribute(
+                span,
+                LangfuseSpanAttributes.OBSERVATION_COMPLETION_START_TIME.value,
+                completion_start_time.astimezone().isoformat(),
+            )
+
         LangfuseOtelLogger._set_observation_output(span=span, response_obj=response_obj)
 
     @staticmethod
