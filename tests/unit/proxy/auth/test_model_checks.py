@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -426,6 +426,59 @@ def test_wildcard_credential_hydration_preserves_deployment_params(
         "api_version": "deployment-version",
         "credential_name": None,
         "has_unexpected_field": False,
+    }
+
+
+def test_get_known_models_from_wildcard_hosted_vllm_lists_models_without_an_api_key(monkeypatch):
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    response = MagicMock()
+    response.json.return_value = {
+        "data": [
+            {"id": "meta-llama/Llama-3.1-8B-Instruct"},
+            {"id": "qwen2.5"},
+            {"id": "openai/foo"},
+        ]
+    }
+    with patch("litellm.module_level_client.get", return_value=response) as mock_get:  # test-quality-ok: required HTTP boundary
+        result = get_known_models_from_wildcard(
+            "hosted_vllm/*",
+            LiteLLM_Params(model="hosted_vllm/*", api_base="http://localhost:8000/v1"),
+        )
+
+    assert mock_get.call_args.kwargs == {"url": "http://localhost:8000/v1/models", "headers": None}
+    assert result == [
+        "hosted_vllm/meta-llama/Llama-3.1-8B-Instruct",
+        "hosted_vllm/qwen2.5",
+        "hosted_vllm/openai/foo",
+    ]
+
+
+def test_get_known_models_from_wildcard_hosted_vllm_forwards_api_key(monkeypatch):
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    response = MagicMock()
+    response.json.return_value = {"data": [{"id": "qwen2.5"}]}
+    with patch("litellm.module_level_client.get", return_value=response) as mock_get:  # test-quality-ok: required HTTP boundary
+        result = get_known_models_from_wildcard(
+            "hosted_vllm/*",
+            LiteLLM_Params(
+                model="hosted_vllm/*",
+                api_base="http://localhost:8000/v1",
+                api_key="test-key",
+            ),
+        )
+
+    assert result == ["hosted_vllm/qwen2.5"]
+    assert mock_get.call_args.kwargs["headers"] == {
+        "x-api-key": "test-key",
+        "Authorization": "Bearer test-key",
     }
 
 
