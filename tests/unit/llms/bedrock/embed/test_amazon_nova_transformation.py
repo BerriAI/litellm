@@ -537,3 +537,20 @@ def test_video_embedding_response_separate_mode():
     assert len(result.data) == 2
     assert result.data[0].embedding == [0.1, 0.2, 0.3]
     assert result.data[1].embedding == [0.4, 0.5, 0.6]
+
+
+def test_async_invoke_requires_output_s3_uri():
+    config = AmazonNovaEmbeddingConfig()
+
+    inference_params = {
+        "embedding_purpose": "GENERIC_INDEX",
+    }
+
+    with pytest.raises(ValueError, match="output_s3_uri is required"):
+        config.transform_request(
+            input="Test text",
+            inference_params=inference_params,
+            async_invoke_route=True,
+            model_id="amazon.nova-2-multimodal-embeddings-v1:0",
+            output_s3_uri=None,
+        )

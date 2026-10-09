@@ -197,3 +197,43 @@ async def test_nvidia_nim_rerank_ranking_endpoint():
 
         # Model name in body should NOT have "ranking/" prefix
         assert request_data["model"] == "nvidia/llama-3.2-nv-rerankqa-1b-v2"
+
+
+def test_completion_nvidia_nim():
+    from openai import OpenAI
+
+    litellm.set_verbose = True
+    model_name = "nvidia_nim/databricks/dbrx-instruct"
+    client = OpenAI(
+        api_key="fake-api-key",
+    )
+
+    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
+        try:
+            completion(
+                model=model_name,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "What's the weather like in Boston today in Fahrenheit?",
+                    }
+                ],
+                presence_penalty=0.5,
+                frequency_penalty=0.1,
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        mock_client.assert_called_once()
+        request_body = mock_client.call_args.kwargs
+
+        assert request_body["messages"] == [
+            {
+                "role": "user",
+                "content": "What's the weather like in Boston today in Fahrenheit?",
+            },
+        ]
+        assert request_body["model"] == "databricks/dbrx-instruct"
+        assert request_body["frequency_penalty"] == 0.1
+        assert request_body["presence_penalty"] == 0.5

@@ -6,6 +6,7 @@ from typing import Final, Literal, cast
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm import get_model_info
@@ -501,3 +502,33 @@ def test_get_model_info_custom_provider():
     get_model_info(
         model="my-custom-llm/my-fake-model"
     )  # 💥 "Exception: This model isn't mapped yet." in v1.56.10
+
+
+def test_get_model_info_huggingface_models(monkeypatch):
+    from litellm import Router
+    from litellm.types.router import ModelGroupInfo
+
+    monkeypatch.setenv("HUGGINGFACE_API_KEY", "hf_abc123")
+
+    with respx.mock(assert_all_called=False) as huggingface:
+        huggingface.get(host="huggingface.co").mock(side_effect=httpx.ConnectError("huggingface.co is unreachable"))
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "meta-llama/Meta-Llama-3-8B-Instruct",
+                    "litellm_params": {
+                        "model": "huggingface/meta-llama/Meta-Llama-3-8B-Instruct",
+                        "api_base": "https://router.huggingface.co/hf-inference/models/meta-llama/Meta-Llama-3-8B-Instruct",
+                        "api_key": os.environ["HUGGINGFACE_API_KEY"],
+                    },
+                }
+            ]
+        )
+        info = litellm.get_model_info("huggingface/meta-llama/Meta-Llama-3-8B-Instruct")
+    assert info is not None
+
+    ModelGroupInfo(
+        model_group="meta-llama/Meta-Llama-3-8B-Instruct",
+        providers=["huggingface"],
+        **info,
+    )
