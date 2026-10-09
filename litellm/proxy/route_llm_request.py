@@ -331,8 +331,9 @@ def _router_serves_model(llm_router: LitellmRouter, data: Mapping[str, object], 
 
 def _router_falls_back_for_model(llm_router: LitellmRouter, data: Mapping[str, object], model_name: str) -> bool:
     """The router reads `fallbacks` from the request kwargs before its own; key and team
-    `router_settings` fill that kwarg at dispatch when the body leaves it out."""
-    override: Final = data.get("router_settings_override")
+    `router_settings` fill that kwarg at dispatch when the body leaves it out, except on
+    the client-credential branch, which dispatches before the override is applied."""
+    override: Final = data.get("router_settings_override") if "api_key" not in data and "api_base" not in data else None
     override_fallbacks: Final[object] = (  # pyright: ignore[reportUnknownVariableType]  # key and team router_settings are untyped JSON
         override.get("fallbacks")  # pyright: ignore[reportUnknownMemberType]  # key and team router_settings are untyped JSON
         if isinstance(override, Mapping)

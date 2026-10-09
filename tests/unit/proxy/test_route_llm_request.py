@@ -1960,6 +1960,27 @@ def test_router_default_applies_to_an_unlisted_model_a_per_request_fallback_answ
     )
 
 
+@pytest.mark.parametrize("client_credential", ["api_key", "api_base"])
+def test_key_router_settings_fallbacks_ignored_when_client_credentials_skip_the_override(
+    client_credential: str,
+) -> None:
+    from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+
+    assert (
+        raise_if_required_body_param_missing(
+            route_type="anthropic_messages",
+            data={
+                "model": "unlisted-model",
+                "messages": [],
+                client_credential: "client-value",
+                "router_settings_override": {"fallbacks": []},
+            },
+            llm_router=_router_with_defaults({"max_tokens": 16}, fallbacks=[{"*": ["served"]}]),
+        )
+        is None
+    )
+
+
 def test_request_body_fallbacks_replace_the_router_fallbacks_for_the_default_check() -> None:
     from litellm.proxy.route_llm_request import (
         ProxyMissingRequiredParamError,
