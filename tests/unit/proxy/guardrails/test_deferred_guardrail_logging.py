@@ -24,19 +24,21 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
-from fastapi import HTTPException
+from fastapi import HTTPException, Request, Response
 
 
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import Choices, Message, ModelResponse, StandardLoggingPayload
 from litellm.utils import Rules, _dispatch_success_logging, function_setup
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy import common_request_processing, proxy_server
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.proxy_server import ProxyConfig
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 from tests.unit.responses.mcp.test_chat_completions_handler import _mcp_auto_execute_request, _Recorder
@@ -682,6 +684,57 @@ async def test_mcp_auto_execute_follow_up_shares_the_outcome_of_a_request_held_f
         (status, False, not blocked),
         (status, True, False),
     ], recorder.calls
+
+
+class _MaskingGuardrail(CustomGuardrail):
+    """A post-call guardrail that, like Lakera's PII masking, answers with a new response."""
+
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="mask", default_on=True, event_hook=GuardrailEventHooks.post_call)
+
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: ModelResponse
+    ) -> ModelResponse:
+        return ModelResponse(choices=[Choices(index=0, message=Message(role="assistant", content="<MASKED>"))])
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_mcp_auto_execute_follow_up_logs_the_answer_the_post_call_guardrails_served(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The follow-up's answer is what the caller got, so when a post-call guardrail replaces it the
+    follow-up is logged with the replacement, not the provider's unmasked answer"""
+    recorder: Final = _Recorder(expected=2)
+    parent, kwargs = _mcp_auto_execute_request(monkeypatch, recorder, stream=False)
+    monkeypatch.setattr(litellm, "callbacks", [_MaskingGuardrail()])
+
+    async def route_request(data: dict[str, object], **_: object) -> object:
+        return litellm.acompletion(**data)
+
+    monkeypatch.setattr(common_request_processing, "route_request", route_request)
+    result: Final = await ProxyBaseLLMRequestProcessing(data=kwargs).base_process_llm_request(
+        request=Request(scope={"type": "http", "headers": []}),
+        fastapi_response=Response(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        route_type="acompletion",
+        proxy_logging_obj=proxy_server.proxy_logging_obj,
+        general_settings={},
+        proxy_config=MagicMock(spec=ProxyConfig),
+        select_data_generator=MagicMock(),
+        is_streaming_request=False,
+        skip_pre_call_logic=True,
+    )
+    await asyncio.wait_for(recorder.done.wait(), timeout=30)
+
+    assert parent.defer_async_logging
+    assert result.choices[0].message.content == "<MASKED>"
+    assert sorted((call.status, call.is_first_call, call.logs_answer) for call in recorder.calls) == [
+        ("success", False, False),
+        ("success", True, False),
+    ], recorder.calls
+    follow_up_logged: Final = parent.deferred_follow_ups[0].model_call_details["standard_logging_object"]["response"]
+    assert follow_up_logged["choices"][0]["message"]["content"] == "<MASKED>"
 
 
 # ---------------------------------------------------------------------------
