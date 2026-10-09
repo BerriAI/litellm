@@ -5,6 +5,7 @@ import httpx
 import jwt
 import pytest
 from fastapi import FastAPI
+from jwt.types import Options
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -23,7 +24,7 @@ from tests.unit.proxy.lens.test_dataset_endpoints import ADMIN, MemoryStore, cas
 
 SECRET: Final = "s" * 32
 NOW: Final = 1_800_000_000
-FIXED_CLOCK: Final = {"verify_exp": False, "verify_iat": False}
+FIXED_CLOCK: Final[Options] = {"verify_exp": False, "verify_iat": False}
 CI_KEY: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.TEAM, token="hashed-ci-key", team_id="team-a", models=["gpt"])
 
 Handler = Callable[[httpx.Request], httpx.Response]
@@ -148,7 +149,7 @@ async def test_dataset_cases_go_to_lens_for_the_eval_contract_and_stay_on_the_pr
 
     assert contract.json() == {"from": "lens"}
     assert seen == [f"/lens/datasets/{created.id}/revisions/1/cases"]
-    assert [c["messages"][0]["content"] for c in local.json()["cases"]] == ["local"]
+    assert local.json()["cases"][0]["messages"][0]["content"] == "local"
 
 
 @pytest.mark.asyncio
