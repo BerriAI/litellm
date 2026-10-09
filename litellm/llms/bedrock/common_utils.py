@@ -896,11 +896,11 @@ def bedrock_runtime_chat_completions_is_default(model: str) -> bool:
 def bedrock_rejects_stop_sequences(model: str) -> bool:
     """Whether AWS refuses stop sequences for this model on every Bedrock route.
 
-    Grok answers ``stopSequences`` on Converse and ``stop`` on native Chat Completions alike with
-    ``This model doesn't support the stopSequences field`` (Grok 4.6 and 4.7 checked live on 2026-10-09),
-    so litellm drops ``stop`` for it instead of forwarding it to a 400.
+    Grok and GPT 5.6 and newer answer ``stopSequences`` on Converse and ``stop`` on native Chat Completions
+    alike with ``This model doesn't support the stopSequences field`` (Grok 4.6 and 4.7, GPT 5.6 and GPT 6.1
+    checked live on 2026-10-09), so litellm drops ``stop`` for them instead of forwarding it to a 400.
     """
-    return _XAI_GROK_MODEL_RE.search(model) is not None
+    return _bedrock_runtime_chat_completions_default_family(model)
 
 
 def bedrock_runtime_chat_completions_serves_tools_with_reasoning(model: str) -> bool:
