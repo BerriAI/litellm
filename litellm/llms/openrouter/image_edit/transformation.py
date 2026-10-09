@@ -41,11 +41,14 @@ Response format:
 """
 
 import base64
+from collections.abc import Mapping, Sequence
 from io import BufferedReader, BytesIO
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.images.utils import ImageEditRequestUtils
@@ -69,6 +72,51 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _ImageUrl(TypedDict, total=False):
+    url: ReadOnly[str | None]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _ImageItem(TypedDict, total=False):
+    image_url: ReadOnly[_ImageUrl]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _Message(TypedDict, total=False):
+    images: ReadOnly[Sequence[_ImageItem]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _Choice(TypedDict, total=False):
+    message: ReadOnly[_Message]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _TokensDetails(TypedDict, total=False):
+    image_tokens: ReadOnly[int]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _Usage(TypedDict, total=False):
+    prompt_tokens: ReadOnly[int]
+    total_tokens: ReadOnly[int]
+    completion_tokens_details: ReadOnly[_TokensDetails]
+    prompt_tokens_details: ReadOnly[_TokensDetails | None]
+    cost: ReadOnly[int | float | str | None]
+    cost_details: ReadOnly[Mapping[str, object] | None]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _ImageEditResponse(TypedDict, total=False):
+    choices: ReadOnly[Sequence[_Choice]]
+    usage: ReadOnly[_Usage | None]
+    model: ReadOnly[object]
+
+
+_IMAGE_EDIT_RESPONSE: Final = TypeAdapter(_ImageEditResponse)
 
 
 class OpenRouterImageEditConfig(BaseImageEditConfig):
@@ -213,7 +261,8 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         model_response.data = []
 
         try:
-            choices: Final = response_json.get("choices", [])
+            validated_json: Final = _IMAGE_EDIT_RESPONSE.validate_python(response_json)
+            choices: Final = validated_json.get("choices", [])
 
             for choice in choices:
                 message = choice.get("message", {})
@@ -252,7 +301,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
                 headers={},
             )
 
-        self._set_usage_and_cost(model_response, response_json, model)
+        self._set_usage_and_cost(model_response, validated_json, model)
         return model_response
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
@@ -303,7 +352,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
     def _set_usage_and_cost(
         self,
         model_response: ImageResponse,
-        response_json: dict,
+        response_json: _ImageEditResponse,
         model: str,
     ) -> None:
         """Extract and set usage and cost information from OpenRouter response."""
