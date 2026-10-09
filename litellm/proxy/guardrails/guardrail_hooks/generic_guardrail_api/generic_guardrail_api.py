@@ -20,6 +20,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
@@ -204,9 +205,14 @@ class GenericGuardrailAPI(CustomGuardrail):
         streaming_end_of_stream_only: bool | None = None,
         streaming_sampling_rate: int | None = None,
         streaming_transform_mode: Literal["block_only", "incremental_diff"] | None = None,
+        async_handler: AsyncHTTPHandler | None = None,
         **kwargs,
-    ):
-        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+    ) -> None:
+        self.async_handler = (
+            async_handler
+            if async_handler is not None
+            else get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        )
         self.headers = headers or {}
         self.extra_headers = extra_headers or []
 
@@ -365,6 +371,8 @@ class GenericGuardrailAPI(CustomGuardrail):
         )
         if rows_to_write_back is not None:
             return_inputs["structured_messages"] = list(rows_to_write_back)
+        if guardrail_response.tool_calls is not None:
+            return_inputs["tool_calls"] = guardrail_response.tool_calls
         if guardrail_response.stream_holdback_chars is not None:
             return_inputs["stream_holdback_chars"] = guardrail_response.stream_holdback_chars
         return return_inputs

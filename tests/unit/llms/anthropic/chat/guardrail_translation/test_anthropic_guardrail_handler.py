@@ -6,19 +6,19 @@ with guardrail transformations, specifically testing edge cases with empty choic
 """
 
 import json
-from typing import Any, Literal, Optional
+from typing import Any, Final, Literal, Optional, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.base_llm.guardrail_translation.base_translation import StreamingScanKey
 from litellm.llms.anthropic.chat.guardrail_translation.handler import (
     AnthropicMessagesHandler,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.llms.base_llm.guardrail_translation.base_translation import StreamingScanKey
+from litellm.types.llms.anthropic import AnthropicResponseContentBlockToolUse
+from litellm.types.utils import AnthropicMessagesResponse, GenericGuardrailAPIInputs
 
 
 class MockPassThroughGuardrail(CustomGuardrail):
@@ -2161,10 +2161,16 @@ class TestAnthropicMessagesScanOnlyToolResults:
 class ToolCallArgumentsMaskingGuardrail(InputsRecordingGuardrail):
     """Masks the canary inside tool-call arguments, in place or through a fresh list of plain dicts."""
 
-    def __init__(self, return_copies: bool = False, replacement_arguments: Optional[str] = None):
+    def __init__(
+        self,
+        return_copies: bool = False,
+        replacement_arguments: str | None = None,
+        replacement_name: str | None = None,
+    ):
         super().__init__()
         self.return_copies = return_copies
         self.replacement_arguments = replacement_arguments
+        self.replacement_name = replacement_name
         self.seen_tool_calls: list[dict[str, object]] = []
 
     async def apply_guardrail(
@@ -2182,6 +2188,9 @@ class ToolCallArgumentsMaskingGuardrail(InputsRecordingGuardrail):
                 **tool_call,
                 "function": {
                     **tool_call["function"],
+                    "name": self.replacement_name
+                    if self.replacement_name is not None
+                    else tool_call["function"]["name"],
                     "arguments": self.replacement_arguments
                     if self.replacement_arguments is not None
                     else tool_call["function"]["arguments"].replace("POISON", "[BLOCKED]"),
@@ -2195,6 +2204,121 @@ class ToolCallArgumentsMaskingGuardrail(InputsRecordingGuardrail):
         for tool_call, masked_tool_call in zip(tool_calls, masked):
             tool_call["function"]["arguments"] = masked_tool_call["function"]["arguments"]
         return outputs
+
+
+class ToolCallResponseShapeGuardrail(InputsRecordingGuardrail):
+    def __init__(self, mode: Literal["omit", "empty"]) -> None:
+        super().__init__()
+        self.mode = mode
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        outputs: Final = await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
+        if self.mode == "omit":
+            outputs.pop("tool_calls", None)
+        else:
+            outputs["tool_calls"] = []
+        return outputs
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_output_writes_masked_tool_call_into_tool_use() -> None:
+    handler: Final = AnthropicMessagesHandler()
+    guardrail: Final = ToolCallArgumentsMaskingGuardrail(return_copies=True, replacement_name="Shell")
+    response: Final = cast(
+        AnthropicMessagesResponse,
+        {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01",
+                    "name": "Bash",
+                    "input": {"cmd": "AWS_ACCESS_KEY_ID=POISON aws sts get-caller-identity"},
+                }
+            ],
+            "stop_reason": "tool_use",
+        },
+    )
+
+    result: Final[AnthropicMessagesResponse] = (
+        await handler.process_output_response(  # pyright: ignore[reportUnknownMemberType]  # legacy request_data
+            response=response,
+            guardrail_to_apply=guardrail,
+        )
+    )
+
+    content: Final = result.get("content")
+    assert isinstance(content, list)
+    tool_use: Final = content[0]
+    assert isinstance(tool_use, dict)
+    assert tool_use == {
+        "type": "tool_use",
+        "id": "toolu_01",
+        "name": "Shell",
+        "input": {"cmd": "AWS_ACCESS_KEY_ID=[BLOCKED] aws sts get-caller-identity"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_output_writes_rewritten_tool_call_into_model_tool_use() -> None:
+    handler: Final = AnthropicMessagesHandler()
+    guardrail: Final = ToolCallArgumentsMaskingGuardrail(return_copies=True, replacement_name="Shell")
+    tool_use: Final = AnthropicResponseContentBlockToolUse(
+        type="tool_use",
+        id="toolu_01",
+        name="Bash",
+        input={"cmd": "AWS_ACCESS_KEY_ID=POISON aws sts get-caller-identity"},
+    )
+    response: Final = cast(AnthropicMessagesResponse, {"content": [tool_use]})
+
+    await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
+
+    assert tool_use.name == "Shell"
+    assert tool_use.input == {"cmd": "AWS_ACCESS_KEY_ID=[BLOCKED] aws sts get-caller-identity"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("mode", "rejects"), [("omit", False), ("empty", True)])
+async def test_non_streaming_output_rejects_only_mismatched_returned_tool_calls(
+    mode: Literal["omit", "empty"], rejects: bool
+) -> None:
+    from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
+
+    response: Final = cast(
+        AnthropicMessagesResponse,
+        {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01",
+                    "name": "Bash",
+                    "input": {"cmd": "AWS_ACCESS_KEY_ID=POISON aws sts get-caller-identity"},
+                }
+            ]
+        },
+    )
+    original: Final = json.loads(json.dumps(response))
+    call: Final = AnthropicMessagesHandler().process_output_response(
+        response=response,
+        guardrail_to_apply=ToolCallResponseShapeGuardrail(mode),
+    )
+
+    if rejects:
+        with pytest.raises(UnappliableRequestRewrite) as excinfo:
+            await call
+        assert excinfo.value.guardrail_name == "scan-only-capture"
+    else:
+        assert await call == original
+    assert response == original
 
 
 class TestAnthropicMessagesTopLevelSystemAndToolUseInputs:
