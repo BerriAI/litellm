@@ -20,7 +20,7 @@ the deployment as a whole costs the primary one statement per interval.
 """
 
 import json
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable
 from datetime import datetime, timezone
 from itertools import chain
 from types import MappingProxyType
@@ -58,18 +58,19 @@ _BUFFERED_ENTRIES: Final = TypeAdapter(tuple[str | bytes, ...])
 _NO_COUNTS: Final[GatewayRequestSnapshot] = MappingProxyType({})
 
 
-def _utc_date() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class GatewayRequestAccumulator:
     """Sink for the request-metrics middleware. ``record`` is sync and never awaits."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, clock: Callable[[], datetime] = _utc_now) -> None:
+        self._clock: Final = clock
         self._counts: dict[GatewayRequestKey, GatewayRequestCounts] = {}  # mutable-ok: bounded fold, drained per flush
 
     def record(self, *, category: BillableCategory, route: str, status_code: int) -> None:
-        key: Final = GatewayRequestKey(date=_utc_date(), category=category.value, route=route)
+        key: Final = GatewayRequestKey(date=self._clock().strftime("%Y-%m-%d"), category=category.value, route=route)
         self._counts[key] = self._counts.get(key, _EMPTY).plus(succeeded=200 <= status_code < 300)
 
     def drain(self) -> GatewayRequestSnapshot:
