@@ -26,30 +26,29 @@ def _message_with_sibling_images(message: MessageBlock) -> MessageBlock:
 
 def _blocks_with_sibling_images(content: Sequence[ContentBlock]) -> Iterator[ContentBlock]:
     for block in content:
-        tool_result: Final = block.get("toolResult")
+        tool_result = block.get("toolResult")
         if tool_result is None:
             yield block
             continue
-        parts: Final = tuple(tool_result.get("content") or ())
-        images: Final = tuple(_images(parts))
+        parts = tuple(tool_result.get("content") or ())
+        images = tuple(_images(parts))
         if not images:
             yield block
             continue
-        kept: Final = tuple(_without_images(parts)) or (ToolResultContentBlock(text=_IMAGE_ONLY_NOTE),)
+        kept = tuple(_without_images(parts)) or (ToolResultContentBlock(text=_IMAGE_ONLY_NOTE),)
         yield ContentBlock(toolResult=_tool_result_without_images(tool_result, kept))
         yield from (ContentBlock(image=image) for image in images)
 
 
 def _images(parts: Sequence[ToolResultContentBlock]) -> Iterator[ImageBlock]:
     for part in parts:
-        image: Final = part.get("image")
-        if image is not None:
-            yield image
+        if "image" in part:
+            yield part["image"]
 
 
 def _without_images(parts: Sequence[ToolResultContentBlock]) -> Iterator[ToolResultContentBlock]:
     for part in parts:
-        if part.get("image") is None:
+        if "image" not in part:
             yield part
 
 
