@@ -8,11 +8,18 @@ the very class of undeclared-dependency bug this guards against.
 
 import argparse
 import importlib.util
+import re
 import sys
 import traceback
 from collections.abc import Callable
+from importlib.metadata import PackageNotFoundError, packages_distributions, requires
+from itertools import chain
+from typing import Final
 
 EXTRAS_ONLY_MODULES = ("fastapi", "uvicorn", "keyring", "mcp", "mcp_types", "httpx2", "httpcore2")
+SDK_DISTRIBUTIONS: Final = frozenset({"litellm", "litellm-core"})
+REQUIREMENT_NAME: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+EXTRA_MARKER: Final = re.compile(r";.*\bextra\s*==")
 
 
 def _require(condition: bool, message: str) -> None:
@@ -20,13 +27,43 @@ def _require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def _canonical(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _base_requirements(distribution: str) -> frozenset[str]:
+    try:
+        declared: Final = requires(distribution) or ()
+    except PackageNotFoundError:
+        return frozenset()
+    return frozenset(
+        _canonical(match.group(0))
+        for requirement in declared
+        if not EXTRA_MARKER.search(requirement) and (match := REQUIREMENT_NAME.match(requirement))
+    )
+
+
+def _base_closure(pending: frozenset[str], reached: frozenset[str] = frozenset()) -> frozenset[str]:
+    if not pending:
+        return reached
+    expanded: Final = reached | pending
+    return _base_closure(frozenset(chain.from_iterable(_base_requirements(name) for name in pending)) - expanded, expanded)
+
+
 def check_environment_is_base_only() -> str:
-    present = tuple(name for name in EXTRAS_ONLY_MODULES if importlib.util.find_spec(name) is not None)
+    from_base: Final = _base_closure(SDK_DISTRIBUTIONS)
+    owners: Final = packages_distributions()
+    installed: Final = tuple(name for name in EXTRAS_ONLY_MODULES if importlib.util.find_spec(name) is not None)
+    inherited: Final = tuple(
+        name for name in installed if from_base & {_canonical(owner) for owner in owners.get(name, ())}
+    )
+    present: Final = tuple(name for name in installed if name not in inherited)
     _require(
         not present,
         f"{', '.join(present)} installed, so this environment is not base-only and the run proves nothing",
     )
-    return f"no extras-only packages present ({', '.join(EXTRAS_ONLY_MODULES)})"
+    from_dependencies: Final = f"; {', '.join(inherited)} come from base dependencies" if inherited else ""
+    return f"no extras-only packages present ({', '.join(EXTRAS_ONLY_MODULES)}){from_dependencies}"
 
 
 def check_import() -> str:
