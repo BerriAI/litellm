@@ -107,6 +107,40 @@ def test_is_multipart():
     assert HttpPassThroughEndpointHelpers.is_multipart(request) is False
 
 
+@pytest.mark.parametrize(
+    ("url", "expected_endpoint_type"),
+    [
+        pytest.param("https://api.anthropic.com/v1/messages", EndpointType.ANTHROPIC, id="anthropic-host"),
+        pytest.param("http://127.0.0.1:8190/v1/messages", EndpointType.ANTHROPIC, id="local-messages-route"),
+        pytest.param(
+            "https://gateway.example.com/anthropic/v1/messages/",
+            EndpointType.ANTHROPIC,
+            id="alternate-host-messages-route",
+        ),
+        pytest.param(
+            "https://gateway.example.com/v1/messages/batches",
+            EndpointType.GENERIC,
+            id="generic-batches-route",
+        ),
+        pytest.param(
+            "https://gateway.example.com/v1/messages/count_tokens",
+            EndpointType.GENERIC,
+            id="generic-count-tokens-route",
+        ),
+        pytest.param("https://gateway.example.com/v1/other", EndpointType.GENERIC, id="generic-route"),
+        pytest.param(
+            "https://vertex.example.com/v1/models/x:streamRawPredict",
+            EndpointType.VERTEX_AI,
+            id="vertex-stream-raw-predict",
+        ),
+    ],
+)
+def test_get_endpoint_type_classifies_anthropic_messages_routes(
+    url: str, expected_endpoint_type: EndpointType
+) -> None:
+    assert HttpPassThroughEndpointHelpers.get_endpoint_type(url) == expected_endpoint_type
+
+
 # Test _build_request_files_from_upload_file
 @pytest.mark.asyncio
 async def test_build_request_files_from_upload_file():
