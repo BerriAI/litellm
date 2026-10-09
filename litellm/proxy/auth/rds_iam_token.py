@@ -5,7 +5,7 @@ from typing import Any, Final
 import httpx
 
 _RDS_HOSTNAME_REGION_PATTERN: Final = re.compile(
-    r"(?:[^.]+\.){2}(?P<region>[a-z]{2}(?:-[a-z]+)+-\d+)\.rds\.amazonaws\.com(?:\.cn)?\.?",
+    r"(?:[^.]+\.)+(?P<region>[a-z]{2}(?:-[a-z]+)+-\d+)\.rds\.amazonaws\.com(?:\.cn)?\.?",
     re.IGNORECASE,
 )
 

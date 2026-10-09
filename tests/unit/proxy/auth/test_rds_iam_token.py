@@ -15,6 +15,7 @@ from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
         ("c.cluster-abc123.eu-central-1.rds.amazonaws.com", "eu-central-1"),
         ("c.cluster-ro-abc.eu-west-2.rds.amazonaws.com", "eu-west-2"),
         ("p.proxy-abc123.us-west-2.rds.amazonaws.com", "us-west-2"),
+        ("ep1.endpoint.proxy-ab0cd1efghij.us-east-2.rds.amazonaws.com", "us-east-2"),
         ("d.abc123.cn-north-1.rds.amazonaws.com.cn", "cn-north-1"),
         ("d.abc123.us-gov-west-1.rds.amazonaws.com", "us-gov-west-1"),
         ("W.ABC123.US-EAST-1.RDS.AMAZONAWS.COM", "us-east-1"),
