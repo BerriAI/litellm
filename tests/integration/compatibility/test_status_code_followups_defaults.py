@@ -14,6 +14,7 @@ import openai
 import pytest
 from integration._support.client import Gateway, gateway_from_environment
 from integration.compatibility._status_code_audit import (
+    UNSET,
     CHAT,
     CHAT_FRAMES,
     ENDPOINT_BODIES,
@@ -49,9 +50,6 @@ pytestmark: Final = pytest.mark.timeout(180)
 @pytest.fixture(autouse=True)
 def _drained_upstream() -> None:
     drain_rig_upstream()
-
-
-_UNSET: Final = object()
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,7 +224,7 @@ def test_model_outside_the_router_with_a_router_default_param(
     ("user_config", "message"),
     (
         pytest.param(None, None, id="null"),
-        pytest.param(_UNSET, None, id="missing"),
+        pytest.param(UNSET, None, id="missing"),
         pytest.param({}, "There are no healthy deployments for this model", id="empty-object"),
         pytest.param("", "Invalid request format: 'str' object has no attribute 'items'", id="empty-string"),
         pytest.param(7, "Invalid request format: 'int' object has no attribute 'items'", id="int"),
@@ -236,7 +234,7 @@ def test_model_outside_the_router_with_a_router_default_param(
 )
 def test_chat_user_config_shapes(rig: _Rig, user_config: object, message: str | None) -> None:
     body: Final[dict[str, JsonValue]] = {"model": "audit-chat", "messages": USER_MESSAGES}
-    if user_config is not _UNSET:
+    if user_config is not UNSET:
         body["user_config"] = user_config  # pyright: ignore[reportArgumentType]  # the sad shapes are deliberately not JSON objects
     response: Final = post(rig.gateway, "/v1/chat/completions", body)
     if message is None:

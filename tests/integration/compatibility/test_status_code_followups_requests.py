@@ -4,6 +4,7 @@ driven through the shared rig proxy with the provider body read back from the sc
 from __future__ import annotations
 
 import asyncio
+import itertools
 import uuid
 from collections.abc import Callable
 from typing import Final
@@ -14,6 +15,7 @@ import pytest
 from integration._support.client import Gateway, Scenario
 from integration._support.upstream import ScenarioHandle
 from integration.compatibility._status_code_audit import (
+    UNSET,
     RESPONSE,
     RESPONSES_FRAMES,
     assembled_text,
@@ -41,7 +43,6 @@ def _drained_upstream() -> None:
     drain_rig_upstream()
 
 
-_UNSET: Final = object()
 _OCR: Final[dict[str, JsonValue]] = {
     "pages": [{"index": 0, "markdown": "scripted page", "images": [], "dimensions": None}],
     "model": "mistral-ocr-latest",
@@ -206,8 +207,8 @@ def _responses_model(scenario: Scenario, response: StoredResponse) -> tuple[str,
         pytest.param(16, 16, id="16"),
         pytest.param(4096, 4096, id="4096"),
         pytest.param(True, 16, id="true"),
-        pytest.param(None, _UNSET, id="null"),
-        pytest.param(_UNSET, _UNSET, id="absent"),
+        pytest.param(None, UNSET, id="null"),
+        pytest.param(UNSET, UNSET, id="absent"),
         pytest.param("8", "8", id="string"),
         pytest.param(0.5, 0.5, id="float"),
     ),
@@ -216,12 +217,12 @@ def test_responses_max_output_tokens_forwarding(gateway: Gateway, sent: object, 
     with gateway.scenario() as scenario:
         model, identity = _responses_model(scenario, json_response(RESPONSE))
         body: Final[dict[str, JsonValue]] = {"model": model, "input": "Say pong", "store": False}
-        if sent is not _UNSET:
+        if sent is not UNSET:
             body["max_output_tokens"] = sent  # pyright: ignore[reportArgumentType]  # the parametrized shapes are JSON values
         response: Final = post(gateway, "/v1/responses", body)
         assert response.status_code == 200, response.text
         outbound: Final = one_outbound(gateway, identity)
-        assert outbound.get("max_output_tokens", _UNSET) == forwarded, outbound
+        assert outbound.get("max_output_tokens", UNSET) == forwarded, outbound
 
 
 _BELOW_MINIMUM: Final = (
@@ -378,8 +379,7 @@ _SUFFIXES: Final = (
 )
 _DAILY_ROUTES: Final = tuple(
     f"/{entity}/daily/activity{suffix}"
-    for entity in _ENTITIES
-    for suffix in _SUFFIXES
+    for entity, suffix in itertools.product(_ENTITIES, _SUFFIXES)
     if f"/{entity}/daily/activity{suffix}" != "/organization/daily/activity"
 ) + ("/user/daily/activity/aggregated/cache_leakage_keys",)
 _DATE_CASES: Final[dict[str, tuple[str, str, int, str | None]]] = {

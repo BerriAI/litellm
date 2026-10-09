@@ -112,6 +112,7 @@ MESSAGE_FRAMES: Final = (
     'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}',
     'event: message_stop\ndata: {"type":"message_stop"}',
 )
+UNSET: Final = object()
 USER_MESSAGES: Final[list[JsonValue]] = [{"role": "user", "content": "Hello"}]
 STREAM_TERMINALS: Final[Mapping[str, str]] = {
     "chat": "data: [DONE]",
@@ -149,7 +150,9 @@ class Upstream:
 
     def __init__(self, url: str) -> None:
         self.url = url.rstrip("/")
-        self.items: list[dict[str, JsonValue]] = []
+        self.items: list[
+            dict[str, JsonValue]
+        ] = []  # mutable-ok: the observation feed is destructive, so drained records are kept for later lookups
 
     def drain(self) -> None:
         with httpx.Client(timeout=10, trust_env=False) as client:
@@ -247,21 +250,25 @@ def stream_finished(endpoint: str, lines: Sequence[str]) -> bool:
     return any(STREAM_TERMINALS[endpoint] in line for line in lines)
 
 
+def _frame_text(frame: Mapping[str, JsonValue]) -> str:
+    """The text one chat, responses or messages delta frame carries, or "" for any other frame."""
+    choices: Final = frame.get("choices")
+    first: Final = choices[0] if isinstance(choices, list) and choices else None
+    chat_delta: Final = first.get("delta") if isinstance(first, dict) else None
+    if isinstance(chat_delta, dict) and isinstance(chat_delta.get("content"), str):
+        return str(chat_delta["content"])
+    delta: Final = frame.get("delta")
+    if frame.get("type") == "response.output_text.delta" and isinstance(delta, str):
+        return delta
+    if frame.get("type") == "content_block_delta" and isinstance(delta, dict) and delta.get("type") == "text_delta":
+        return str(delta.get("text"))
+    return ""
+
+
 def assembled_text(lines: Sequence[str]) -> str:
     """The text a chat, responses or messages stream carried, joined across its delta frames."""
-    pieces: list[str] = []
-    for line in lines:
-        if not line.startswith("data: ") or line == "data: [DONE]":
-            continue
-        frame: dict[str, JsonValue] = JSON_OBJECT.validate_json(line.removeprefix("data: "))
-        choices: JsonValue = frame.get("choices")
-        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
-            delta: JsonValue = choices[0].get("delta")
-            if isinstance(delta, dict) and isinstance(delta.get("content"), str):
-                pieces.append(str(delta["content"]))
-        if frame.get("type") == "response.output_text.delta" and isinstance(frame.get("delta"), str):
-            pieces.append(str(frame["delta"]))
-        inner: JsonValue = frame.get("delta")
-        if frame.get("type") == "content_block_delta" and isinstance(inner, dict) and inner.get("type") == "text_delta":
-            pieces.append(str(inner.get("text")))
-    return "".join(pieces)
+    return "".join(
+        _frame_text(JSON_OBJECT.validate_json(line.removeprefix("data: ")))
+        for line in lines
+        if line.startswith("data: ") and line != "data: [DONE]"
+    )

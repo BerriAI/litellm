@@ -107,23 +107,21 @@ def chaos(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Chaos]:
         stable_identity: Final = f"chaos-stable-{uuid.uuid4().hex}"
         stable_handle: Final = register_scenario(stable_identity, json_response(CHAT))
         model_list: Final[list[JsonValue]] = [
-            {
-                "model_name": _KINDS[kind][2],
-                "litellm_params": {
-                    "model": _KINDS[kind][3],
-                    "api_base": f"{slot.url}/{identity}",
-                    "api_key": identity,
-                },
-            }
-            for kind, identity in identities.items()
-        ]
-        model_list.append(
+            *(
+                {
+                    "model_name": _KINDS[kind][2],
+                    "litellm_params": {
+                        "model": _KINDS[kind][3],
+                        "api_base": f"{slot.url}/{identity}",
+                        "api_key": identity,
+                    },
+                }
+                for kind, identity in identities.items()
+            ),
             {
                 "model_name": "*",
                 "litellm_params": {"model": "openai/*", "api_base": f"{slot.url}/{identities['chat']}", "api_key": "x"},
-            }
-        )
-        model_list.append(
+            },
             {
                 "model_name": "chaos-stable",
                 "litellm_params": {
@@ -131,8 +129,8 @@ def chaos(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Chaos]:
                     "api_base": stable_handle.api_base(),
                     "api_key": stable_identity,
                 },
-            }
-        )
+            },
+        ]
         config: Final = directory / "chaos.yaml"
         config.write_text(
             json.dumps({"model_list": model_list, "router_settings": {"num_retries": 0, "disable_cooldowns": True}}),
@@ -163,11 +161,8 @@ def _call(chaos: _Chaos, kind: str, marker: str, *, key: str | None = None, mode
         **ENDPOINT_BODIES[endpoint],
         **({"stream": True} if stream else {}),
         "model": model_name if model is None else model,
+        **({"input": marker} if endpoint == "responses" else {"messages": [{"role": "user", "content": marker}]}),
     }
-    if endpoint == "responses":
-        body["input"] = marker
-    else:
-        body["messages"] = [{"role": "user", "content": marker}]
     headers: Final = {
         "Authorization": f"Bearer {chaos.burst_key if key is None else key}",
         _MARKER_HEADER: json.dumps({"marker": marker}),
@@ -211,12 +206,11 @@ def _spend_markers(key: str, markers: frozenset[str]) -> Mapping[str, tuple[str,
         'FROM "LiteLLM_SpendLogs" WHERE api_key = %s',
         (sha256(key.encode()).hexdigest(),),
     )
-    statuses: dict[str, list[str]] = {}
-    for row in rows:
-        marker = str(row["marker"])
-        if marker in markers:
-            statuses.setdefault(marker, []).append(str(row["status"]))
-    return {marker: tuple(found) for marker, found in statuses.items()}
+    return {
+        marker: found
+        for marker in markers
+        if (found := tuple(str(row["status"]) for row in rows if str(row["marker"]) == marker))
+    }
 
 
 def _assert_served(outcomes: tuple[_Outcome, ...]) -> None:

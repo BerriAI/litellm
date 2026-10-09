@@ -14,6 +14,7 @@ import openai
 import pytest
 from integration._support.client import Gateway, gateway_from_environment
 from integration.compatibility._status_code_audit import (
+    UNSET,
     CHAT,
     CHAT_FRAMES,
     EMBEDDING,
@@ -46,8 +47,7 @@ def _drained_upstream() -> None:
     drain_rig_upstream()
 
 
-_UNSET: Final = object()
-_MODEL_SHAPES: Final[dict[str, object]] = {"missing": _UNSET, "null": None, "empty": ""}
+_MODEL_SHAPES: Final[dict[str, object]] = {"missing": UNSET, "null": None, "empty": ""}
 _TARGETS: Final[dict[str, str]] = {
     "forwarding": "openai/*",
     "fixed": "openai/gpt-4o-mini",
@@ -101,7 +101,7 @@ def wildcard(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFa
 def _body(endpoint: str, shape: str, *, stream: bool) -> dict[str, JsonValue]:
     body: Final[dict[str, JsonValue]] = {**ENDPOINT_BODIES[endpoint], **({"stream": True} if stream else {})}
     value: Final = _MODEL_SHAPES[shape]
-    if value is not _UNSET:
+    if value is not UNSET:
         body["model"] = value  # pyright: ignore[reportArgumentType]  # None or "" by construction
     return body
 
@@ -224,7 +224,7 @@ def test_forwarding_wildcard_embeddings_without_a_model(wildcard: _Wildcard, sha
         "provider (model 'None/None' or ''), the omission the fix closed for chat/responses/messages; same on base"
     )
     body: Final[dict[str, JsonValue]] = {"input": "Hello"}
-    if _MODEL_SHAPES[shape] is not _UNSET:
+    if _MODEL_SHAPES[shape] is not UNSET:
         body["model"] = _MODEL_SHAPES[shape]  # pyright: ignore[reportArgumentType]  # None or "" by construction
     response: Final = post(wildcard.gateway, "/v1/embeddings", body)
     assert response.status_code == 400, response.text
