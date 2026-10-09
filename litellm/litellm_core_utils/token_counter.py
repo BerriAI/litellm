@@ -856,6 +856,17 @@ def _pdf_page_text_tokens(page: _PdfPage, count_function: TokenCounterFunction) 
     return count_function(page.extract_text() or "")
 
 
+def _price_pdf_pages(pages: Sequence[_PdfPage], count_function: TokenCounterFunction) -> int:
+    rendering_tokens: Final = sum(
+        _anthropic_rendered_page_image_tokens(page.mediabox.width, page.mediabox.height) for page in pages
+    )
+    sampled_pages: Final = tuple(pages[index] for index in _evenly_spaced_page_indices(len(pages)))
+    if not sampled_pages:
+        return rendering_tokens
+    sampled_text_tokens: Final = sum(_pdf_page_text_tokens(page, count_function) for page in sampled_pages)
+    return rendering_tokens + round(sampled_text_tokens * len(pages) / len(sampled_pages))
+
+
 def _count_inline_pdf_tokens(data_url: str, count_function: TokenCounterFunction) -> int | None:
     if not data_url.startswith(PDF_DATA_URL_PREFIX):
         return None
@@ -868,14 +879,7 @@ def _count_inline_pdf_tokens(data_url: str, count_function: TokenCounterFunction
         pages: Final = cast(  # cast-ok: pypdf is an optional extra the type-check env does not install
             Sequence[_PdfPage], PdfReader(io.BytesIO(base64.b64decode(data_url[len(PDF_DATA_URL_PREFIX) :]))).pages
         )
-        rendering_tokens: Final = sum(
-            _anthropic_rendered_page_image_tokens(page.mediabox.width, page.mediabox.height) for page in pages
-        )
-        sampled_pages: Final = tuple(pages[index] for index in _evenly_spaced_page_indices(len(pages)))
-        if not sampled_pages:
-            return rendering_tokens
-        sampled_text_tokens: Final = sum(_pdf_page_text_tokens(page, count_function) for page in sampled_pages)
-        return rendering_tokens + round(sampled_text_tokens * len(pages) / len(sampled_pages))
+        return _price_pdf_pages(pages, count_function)
     except Exception as e:
         verbose_logger.debug("Could not read the PDF document's pages (%s), so it is priced like one image", e)
         return None

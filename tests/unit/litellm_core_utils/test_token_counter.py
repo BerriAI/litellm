@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from concurrent.futures import Future, wait
 from itertools import accumulate, chain
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -34,6 +35,7 @@ from litellm.litellm_core_utils.token_counter import (
     PDF_PAGE_MAX_EXACT_CONTENT_BYTES,
     _count_inline_pdf_tokens,
     _encoding_count,
+    _price_pdf_pages,
     _get_exact_count_function,
     _get_extrapolating_count_function,
     _get_tiktoken_count_function,
@@ -1611,13 +1613,29 @@ def test_pdf_page_rendering_cost_follows_anthropic_image_scaling(fields: dict[st
     assert strip == 328
 
 
+def _fake_pdf_page(content_bytes: int) -> SimpleNamespace:
+    return SimpleNamespace(
+        mediabox=SimpleNamespace(width=612.0, height=792.0),
+        get_contents=lambda: SimpleNamespace(get_data=lambda: b"x" * content_bytes),
+        extract_text=MagicMock(return_value="Revenue grew eleven percent while churn fell to two percent."),
+    )
+
+
 def test_long_pdf_reads_text_from_a_bounded_number_of_pages():
-    count_function: Final = MagicMock(side_effect=len)
-    forty_pages: Final = _pdf_base64(("Revenue grew eleven percent while churn fell to two percent.",) * 40)
+    pages: Final = tuple(_fake_pdf_page(content_bytes=1_000) for _ in range(40))
 
-    _count_inline_pdf_tokens(PDF_DATA_URL_PREFIX + forty_pages, count_function)
+    _price_pdf_pages(pages, len)
 
-    assert count_function.call_count <= EXTRAPOLATION_SAMPLES
+    assert sum(page.extract_text.call_count for page in pages) <= EXTRAPOLATION_SAMPLES
+
+
+def test_dense_pdf_page_is_priced_from_its_size_without_extracting_its_text():
+    page: Final = _fake_pdf_page(content_bytes=2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES)
+
+    priced: Final = _price_pdf_pages((page,), len)
+
+    page.extract_text.assert_not_called()
+    assert priced >= 2 * PDF_PAGE_MAX_EXACT_CONTENT_BYTES
 
 
 def test_dense_pdf_page_is_priced_without_extracting_its_full_text():
