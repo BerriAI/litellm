@@ -1,5 +1,6 @@
 import base64
 import os
+import re
 from collections.abc import Mapping
 from typing import Final, Literal, cast
 
@@ -184,6 +185,28 @@ def decrypt_if_encrypted_with(value: str, signing_key: str) -> str | None:
         return None if decodes_to_nothing else _decrypt_with_signing_key(value=value, signing_key=signing_key)
     except Exception:  # noqa: BLE001  # base64, nacl and AES-GCM each raise their own "not a ciphertext" type
         return None
+
+
+# A legacy nacl ciphertext is base64url(nonce(24) || MAC(16) || plaintext), so it is
+# never shorter than 40 bytes once decoded.
+_NACL_MIN_SEALED_BYTES: Final = 40
+_BASE64URL_PADDED: Final = re.compile(r"[A-Za-z0-9_-]+={0,2}")
+
+
+def is_undecryptable_ciphertext(value: object, signing_key: str | None) -> bool:
+    """True when value has the shape of a stored ciphertext but does not open under signing_key.
+
+    Used to flag values written under another key (e.g. LITELLM_SALT_KEY added after rows were
+    encrypted with the master key). Plaintext such as "gpt-4o" or "os.environ/X" is never flagged.
+    """
+    if not isinstance(value, str) or not signing_key:
+        return False
+    if not value.startswith(V2_GCM_PREFIX):
+        if len(value) % 4 != 0 or _BASE64URL_PADDED.fullmatch(value) is None:
+            return False
+        if len(base64.urlsafe_b64decode(value)) < _NACL_MIN_SEALED_BYTES:
+            return False
+    return decrypt_if_encrypted_with(value=value, signing_key=signing_key) is None
 
 
 def decrypt_value_helper(
