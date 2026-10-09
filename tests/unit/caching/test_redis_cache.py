@@ -1653,17 +1653,3 @@ async def test_async_set_cache_pipeline_logs_cached_values_when_debugging_is_on(
     assert _FormatCountingStr.format_calls == 1
     assert "Value embedding" in capsys.readouterr().out
     assert pipe.sets == [("k1", '"embedding"', timedelta(seconds=60))]
-
-
-@pytest.mark.asyncio
-async def test_async_set_cache_pipeline_stores_integers_wider_than_64_bits(monkeypatch, redis_no_ping):
-    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
-    redis_cache = RedisCache()
-    pipe = _SetRecordingPipeline()
-    client = MagicMock()
-    client.pipeline = MagicMock(return_value=pipe)
-
-    with patch.object(redis_cache, "init_async_client", return_value=client):
-        await redis_cache.async_set_cache_pipeline([("k1", {"n": 2**70})], ttl=60)
-
-    assert pipe.sets == [("k1", '{"n": 1180591620717411303424}', timedelta(seconds=60))]

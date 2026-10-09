@@ -12,7 +12,6 @@ import ast
 import asyncio
 import functools
 import hashlib
-import importlib.util
 import inspect
 import itertools
 import json
@@ -654,20 +653,6 @@ def _redis_circuit_breaker_guard_sync(method: Callable[..., _RedisCallResult]) -
     )
 
 
-_ORJSON_INSTALLED: Final = importlib.util.find_spec("orjson") is not None
-
-
-def _dumps_cache_value(value: object) -> str:
-    if not _ORJSON_INSTALLED:
-        return json.dumps(value)
-    import orjson  # noqa: PLC0415  # orjson only ships with the litellm[proxy] extra
-
-    try:
-        return orjson.dumps(value, option=orjson.OPT_NON_STR_KEYS).decode()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # orjson is absent from the typecheck venv
-    except TypeError:
-        return json.dumps(value)
-
-
 class RedisCache(BaseCache):
     # if users don't provider one, use the default litellm cache
 
@@ -1249,7 +1234,7 @@ class RedisCache(BaseCache):
             cache_key = self.check_and_fix_namespace(key=cache_key)
             if is_debugging_on():
                 print_verbose(f"Set ASYNC Redis Cache PIPELINE: key: {cache_key}\nValue {cache_value}\nttl={ttl}")
-            json_cache_value = _dumps_cache_value(cache_value)
+            json_cache_value = json.dumps(cache_value)
             # Set the value with a TTL if it's provided.
             _td: timedelta | None = None
             if ttl is not None:
