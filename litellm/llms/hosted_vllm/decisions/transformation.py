@@ -1,9 +1,8 @@
 from types import MappingProxyType
 from typing import Final
 
+from litellm.constants import PLACEHOLDER_API_KEY
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
-
-_FAKE_API_KEY: Final = "fake-api-key"
 
 
 class HostedVLLMDecisionsConfig(BaseDecisionsConfig):
@@ -24,4 +23,4 @@ class HostedVLLMDecisionsConfig(BaseDecisionsConfig):
 
     def resolve_api_key(self, api_key: str | None) -> str | None:
         resolved: Final = super().resolve_api_key(api_key)
-        return None if resolved == _FAKE_API_KEY else resolved
+        return None if resolved == PLACEHOLDER_API_KEY else resolved
