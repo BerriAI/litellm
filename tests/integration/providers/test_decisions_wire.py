@@ -69,6 +69,7 @@ class _Provider:
     api_key: str | None
     wraps_result: bool
     cost_map_key: str | None
+    provider_reported_cost: float | None = None
 
 
 _PROVIDERS: Final = (
@@ -89,7 +90,8 @@ _PROVIDERS: Final = (
         "typesafe/jev-1.13",
         _API_KEY,
         False,
-        "openrouter/typesafe/jev-1.13",
+        None,
+        1.5834e-5,
     ),
     _Provider(
         "strands_decider", "strands_decider/systemone-decider", "/v1/systemone", "systemone-decider", None, False, None
@@ -133,17 +135,32 @@ def _number(value: JsonValue) -> float:
     return float(value)
 
 
-def _expected_spend(cost_map_key: str | None) -> float:
-    if cost_map_key is None:
+def _expected_spend(provider: _Provider) -> float:
+    if provider.provider_reported_cost is not None:
+        return provider.provider_reported_cost
+    if provider.cost_map_key is None:
         return 0.0
-    prices: Final = object_value(json.loads(Path("model_prices_and_context_window.json").read_text())[cost_map_key])
+    prices: Final = object_value(
+        json.loads(Path("model_prices_and_context_window.json").read_text())[provider.cost_map_key]
+    )
     return _number(_USAGE["input_tokens"]) * _number(prices["input_cost_per_token"]) + _number(
         _USAGE["output_tokens"]
     ) * _number(prices["output_cost_per_token"])
 
 
+def _usage(provider: _Provider) -> dict[str, JsonValue]:
+    return {
+        **_USAGE,
+        **({"cost": provider.provider_reported_cost} if provider.provider_reported_cost is not None else {}),
+    }
+
+
 def _answer_body(provider: _Provider) -> dict[str, JsonValue]:
-    answer: Final[dict[str, JsonValue]] = {"model": provider.body_model, "answers": _ANSWERS, "usage": _USAGE}
+    answer: Final[dict[str, JsonValue]] = {
+        "model": provider.body_model,
+        "answers": _ANSWERS,
+        "usage": _usage(provider),
+    }
     return {"result": answer, "success": True} if provider.wraps_result else answer
 
 
@@ -226,16 +243,14 @@ def _pass_through_config(directory: Path, pass_through_target: str, native_api_b
 
 
 @pytest.mark.parametrize("provider", _PROVIDERS, ids=lambda provider: provider.name)
-def test_each_provider_gets_its_own_path_key_and_body_and_is_billed_from_the_cost_map(
-    gateway: Gateway, provider: _Provider
-) -> None:
-    expected_spend: Final = _expected_spend(provider.cost_map_key)
+def test_each_provider_gets_its_own_path_key_and_body_and_is_billed(gateway: Gateway, provider: _Provider) -> None:
+    expected_spend: Final = _expected_spend(provider)
     with gateway.scenario() as scenario:
         handle: Final = _register(scenario, _answer_body(provider))
         model: Final = _deployment(scenario, handle, provider)
         response: Final = _decide(gateway, model)
         assert response.status_code == 200, response.text
-        assert response.json() == {"model": provider.body_model, "answers": _ANSWERS, "usage": _USAGE}
+        assert response.json() == {"model": provider.body_model, "answers": _ANSWERS, "usage": _usage(provider)}
         assert response.headers["x-litellm-model-group"] == model
         assert math.isclose(float(response.headers.get("x-litellm-response-cost", "0")), expected_spend, rel_tol=1e-9)
         (call,) = _upstream_calls(gateway, handle)

@@ -105,6 +105,7 @@ from ..common_utils import (
     bedrock_converse_supports_parallel_tool_use_config,
     bedrock_model_accepts_cache_points,
     bedrock_reasoning_effort_disabled,
+    bedrock_rejects_stop_sequences,
     get_anthropic_beta_from_headers,
     get_bedrock_tool_name,
     is_bedrock_application_inference_profile_arn,
@@ -1054,7 +1055,7 @@ class AmazonConverseConfig(BaseConfig):
                 )
             if param == "stream":
                 optional_params["stream"] = value
-            if param == "stop":
+            if param == "stop" and not bedrock_rejects_stop_sequences(model):
                 if isinstance(value, str):
                     if len(value) == 0:  # converse raises error for empty strings
                         continue

@@ -300,6 +300,7 @@ jobs:
               tests/unit/llms/lm_studio
               tests/unit/llms/manus
               tests/unit/llms/meta_llama
+              tests/unit/llms/microsoft_365_copilot
               tests/unit/llms/minimax
               tests/unit/llms/mistral
               tests/unit/llms/modelscope
