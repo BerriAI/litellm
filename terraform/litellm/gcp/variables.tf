@@ -330,6 +330,12 @@ variable "ui_max_instance_request_concurrency" {
 
 # ---------- Cloud SQL ----------
 
+variable "create_read_replica" {
+  description = "Create a Cloud SQL read replica and set DATABASE_URL_READ_REPLICA. Default true. Set false to run writer-only."
+  type        = bool
+  default     = true
+}
+
 variable "db_tier" {
   description = "Cloud SQL tier (machine type) for the writer instance."
   type        = string

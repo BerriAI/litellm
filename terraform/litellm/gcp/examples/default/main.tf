@@ -32,6 +32,7 @@ module "litellm" {
   env        = var.env
 
   create_runtime           = var.create_runtime
+  create_read_replica      = var.create_read_replica
   network_id               = var.network_id
   create_psa_connection    = var.create_psa_connection
   redis_transit_encryption = var.redis_transit_encryption
