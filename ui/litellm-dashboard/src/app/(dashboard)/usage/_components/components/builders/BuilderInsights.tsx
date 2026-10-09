@@ -69,7 +69,7 @@ export default function BuilderInsights() {
 
   return (
     <div className="grid gap-3">
-      <BuilderInsightsDemoBanner />
+      <BuilderInsightsDemoBanner builders={data.builders} />
       {!selectedBuilder && (
         <>
           <div className="grid grid-cols-1 overflow-hidden rounded-xl border bg-card sm:grid-cols-3 sm:divide-x">

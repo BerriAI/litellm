@@ -67,7 +67,7 @@ export function MarkdownFile({
           )}
         </div>
       )}
-      <article className="bg-background">
+      <article className="bg-background px-6 py-5">
         <ReactMarkdown
           components={
             variant === "document"
