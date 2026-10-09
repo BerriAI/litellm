@@ -3205,7 +3205,7 @@ _CACHE_PRICING_FIELDS: Final = (
 )
 
 
-def _resolve_builtin_model_cost_entry(key: str, provider: str | None) -> dict[str, object] | None:
+def _resolve_builtin_model_cost_entry(key: str, provider: str) -> dict[str, object] | None:
     """Best-effort lookup of a built-in ``model_cost`` entry for a custom key
     whose shape ``get_model_info`` cannot resolve (repeated provider prefixes
     like ``bedrock/bedrock/bedrock/us.anthropic.claude-sonnet-4-6`` or region
@@ -3366,7 +3366,6 @@ def register_model(
     ``custom_llm_provider`` scopes the built-in cost-map match to entries for
     that provider, so a deployment id that happens to equal another provider's
     catalog key stays its own provider-less entry instead of merging into it.
-    Per-entry ``litellm_provider`` takes precedence when present.
     """
 
     loaded_model_cost = {}
@@ -3394,10 +3393,7 @@ def register_model(
             model_cost_key = key
         else:
             builtin_model_info = _get_builtin_model_info_for_registration(
-                model=_key_str,
-                custom_llm_provider=(
-                    lookup_provider := (provider if isinstance(provider, str) else None) or custom_llm_provider
-                ),
+                model=_key_str, custom_llm_provider=custom_llm_provider
             )
             if builtin_model_info is not None:
                 existing_model = cast(dict, builtin_model_info)
@@ -3408,7 +3404,7 @@ def register_model(
                 # shadows the very defaults it would have resolved to unregistered.
                 existing_model = dict(match_capability_generalizations(_key_str) or {})
                 model_cost_key = key
-                builtin_entry = _resolve_builtin_model_cost_entry(key=_key_str, provider=lookup_provider)
+                builtin_entry = _resolve_builtin_model_cost_entry(key=_key_str, provider=provider)
                 if builtin_entry is not None:
                     for field in _CACHE_PRICING_FIELDS:
                         if value.get(field) is None and builtin_entry.get(field) is not None:

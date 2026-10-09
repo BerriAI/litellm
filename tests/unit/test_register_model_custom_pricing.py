@@ -1068,3 +1068,37 @@ def test_register_model_scopes_builtin_match_to_the_given_provider():
         assert litellm.model_cost[builtin_key] == builtin_row_before
     finally:
         _restore_model_cost_entries(model_cost_entries)
+
+
+def test_per_request_custom_pricing_scopes_a_colliding_deployment_id_to_its_provider():
+    """A router-originated per-request registration whose deployment id equals
+    another provider's catalog key lands under the id, not the builtin row."""
+    from litellm.main import _register_custom_pricing_for_request
+
+    deployment_id: Final = "baseten/zai-org/glm-5.2"
+    builtin_key: Final = "baseten/zai-org/GLM-5.2"
+    shared_key: Final = "openai/zai-org/GLM-5.2"
+    model_cost_entries: Final = _snapshot_model_cost_entries((deployment_id, builtin_key, shared_key))
+    builtin_row_before: Final = copy.deepcopy(litellm.model_cost[builtin_key])
+    openai_models_before: Final = frozenset(litellm.open_ai_chat_completion_models)
+    try:
+        _register_custom_pricing_for_request(
+            model="zai-org/GLM-5.2",
+            custom_llm_provider="openai",
+            kwargs={
+                "input_cost_per_token": 0.00000096,
+                "output_cost_per_token": 0.00000302,
+                "metadata": {"model_info": {"id": deployment_id}},
+            },
+            model_info={"mode": "chat"},
+        )
+
+        entry: Final = litellm.model_cost[deployment_id]
+        assert entry["input_cost_per_token"] == 0.00000096
+        assert entry["output_cost_per_token"] == 0.00000302
+        assert litellm.model_cost[builtin_key] == builtin_row_before
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.open_ai_chat_completion_models.intersection_update(
+            litellm.open_ai_chat_completion_models & openai_models_before
+        )
