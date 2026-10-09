@@ -45,7 +45,7 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError
 from pydantic_core import PydanticSerializationError, to_jsonable_python
 
 from litellm._logging import verbose_logger
@@ -57,6 +57,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.types.interactions import InteractionsAPIResponse
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import CustomPricingLiteLLMParams
 
 if TYPE_CHECKING:
@@ -73,7 +74,7 @@ _STATUSES_THAT_PRODUCED_OUTPUT: Final = frozenset({"completed", "requires_action
 SettlementOutcome: TypeAlias = Literal["billed", "released", "unsettled"]
 
 
-class BackgroundInteractionCreateContext(BaseModel):
+class BackgroundInteractionCreateContext(LiteLLMBaseModel):
     """
     The part of a create's logging state that billing its settled result needs,
     in a shape any replica can store and rebuild a logging object from. Provider

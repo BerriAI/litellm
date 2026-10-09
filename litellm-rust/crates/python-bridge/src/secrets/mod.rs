@@ -21,10 +21,10 @@ use crate::{coercion::FieldSpec, python_settings::PythonSettings};
 
 const NATIVE: FieldSpec<bool> = FieldSpec::new("native", |field| field.schema_bool());
 
-/// Where a Rust route reads provider secrets from. Python's `get_secret_str` until a
-/// `SecretManagerRule` in `catalog.py` moves the configured system off `PYTHON_ONLY`, then the
-/// native secret manager. A bare extension module without the litellm package reads the process
-/// environment.
+/// Where a Rust route reads provider secrets from. Python's `get_secret_str` when the settings
+/// projection reports no configured secret manager, otherwise the resolved manager: the native
+/// backend when the configured client captures one, the Python callback when it does not. A bare
+/// extension module without the litellm package reads the process environment.
 pub(crate) fn source(py: Python<'_>) -> PyResult<Arc<dyn SecretSource>> {
     let Some(snapshot) = PythonSettings::SecretManager.read_or_unset(py)? else {
         return Ok(Arc::new(EnvironmentSecrets::python_compatible(

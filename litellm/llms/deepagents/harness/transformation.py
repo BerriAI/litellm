@@ -173,7 +173,7 @@ def stream_events(
     ]
 
 
-def tool_call_event(call: Mapping[str, Any]) -> ToolCall:
+def tool_call_event(call: Mapping[str, object]) -> ToolCall:
     native = str(call.get("name") or "")
     args = call.get("args")
     return ToolCall(
@@ -185,7 +185,7 @@ def tool_call_event(call: Mapping[str, Any]) -> ToolCall:
     )
 
 
-def _node_messages(update: Mapping[Any, Any]) -> Iterator[object]:
+def _node_messages(update: Mapping[object, object]) -> Iterator[object]:
     for node, delta in update.items():
         if node not in _EVENT_NODES or not isinstance(delta, Mapping):
             continue
@@ -231,7 +231,7 @@ def interrupts_in(
     return list(items)  # mutable-ok: list return; callers/tests compare to lists
 
 
-def final_ai_text(messages: Sequence[Any]) -> str:
+def final_ai_text(messages: Sequence[object]) -> str:
     for message in reversed(messages):
         if getattr(message, "type", None) == "ai":
             text = content_text(getattr(message, "content", ""))

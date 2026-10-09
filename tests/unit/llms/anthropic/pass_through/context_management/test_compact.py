@@ -1651,10 +1651,10 @@ async def test_summary_model_denied_when_user_over_model_budget():
     import inspect
 
     from litellm.proxy.hooks.model_max_budget_limiter import (
-        _PROXY_VirtualKeyModelMaxBudgetLimiter,
+        PROXY_VirtualKeyModelMaxBudgetLimiter,
     )
 
-    real_params = inspect.signature(_PROXY_VirtualKeyModelMaxBudgetLimiter.is_user_within_model_budget).parameters
+    real_params = inspect.signature(PROXY_VirtualKeyModelMaxBudgetLimiter.is_user_within_model_budget).parameters
     for kwarg in ("user_id", "user_model_max_budget", "model"):
         assert kwarg in real_params, f"compact.py passes {kwarg}=, which the limiter no longer accepts"
 
@@ -1767,7 +1767,7 @@ class _FakeRateLimiter:
         self._raises = raises
         self.read_only_checked = False
 
-    def _create_rate_limit_descriptors(self, **kwargs):
+    def create_rate_limit_descriptors(self, **kwargs):
         return [
             {
                 "key": "api_key",
@@ -1921,12 +1921,12 @@ async def test_summary_model_allowed_while_the_caller_holds_the_keys_only_parall
     caller's own in-flight slot must not trip a ``max_parallel_requests`` gauge."""
     from litellm.caching.caching import DualCache
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
     from litellm.proxy.utils import InternalUsageCache, hash_token
 
     messages = _simple_messages()
     mock_call = AsyncMock(return_value=_make_mock_response("<summary>ok</summary>"))
-    limiter = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+    limiter = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
     auth = UserAPIKeyAuth(
         api_key=hash_token("sk-compact-parallel-slot"), max_parallel_requests=1, models=["all-proxy-models"]
     )
@@ -2061,11 +2061,11 @@ async def test_summary_model_denied_when_team_over_model_budget():
     import inspect
 
     from litellm.proxy.hooks.model_max_budget_limiter import (
-        _PROXY_VirtualKeyModelMaxBudgetLimiter,
+        PROXY_VirtualKeyModelMaxBudgetLimiter,
     )
 
     real_params = inspect.signature(
-        _PROXY_VirtualKeyModelMaxBudgetLimiter.is_team_within_model_budget
+        PROXY_VirtualKeyModelMaxBudgetLimiter.is_team_within_model_budget
     ).parameters
     for kwarg in ("team_id", "team_model_max_budget", "key_model_max_budget", "model"):
         assert kwarg in real_params, f"compact.py passes {kwarg}=, which the limiter does not accept"

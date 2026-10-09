@@ -3,8 +3,8 @@ A2A Protocol Transformation for LiteLLM
 """
 
 import uuid
-from collections.abc import Iterator, Mapping
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import AsyncIterator, Iterator, Mapping
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -72,9 +72,9 @@ class A2AConfig(BaseConfig):
         agent_name: str,
         api_base: str | None,
         api_key: str | None,
-        headers: dict[str, Any] | None,
-        optional_params: dict[str, Any],
-    ) -> tuple[str | None, str | None, dict[str, Any] | None]:
+        headers: dict[str, object] | None,
+        optional_params: dict[str, object],
+    ) -> tuple[str | None, str | None, dict[str, object] | None]:
         """
         Resolve agent configuration from the registry for a registered agent.
 
@@ -376,7 +376,7 @@ class A2AConfig(BaseConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Iterator | Any,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
     ) -> BaseModelResponseIterator:
@@ -397,7 +397,7 @@ class A2AConfig(BaseConfig):
             json_mode=json_mode,
         )
 
-    def _openai_message_to_a2a_message(self, message: dict[str, Any]) -> dict[str, Any]:
+    def _openai_message_to_a2a_message(self, message: Mapping[str, object]) -> dict[str, object]:
         """
         Convert OpenAI message to A2A message format.
 

@@ -34,6 +34,14 @@ def _supplied_logger() -> Logging:
     )
 
 
+def test_native_stream_headers_reach_spend_callbacks() -> None:
+    logger: Final = _supplied_logger()
+    legacy.stream_opened(logger, {"additional_headers": {"llm_provider-request-id": "req_native"}})
+
+    assert logger.stream is True
+    assert logger.model_call_details["response_headers"] == {"llm_provider-request-id": "req_native"}
+
+
 def test_setup_reuses_a_supplied_logger() -> None:
     supplied: Final = _supplied_logger()
     result: Final = setup(
@@ -159,9 +167,7 @@ def test_failure_handler_of_an_internal_call_leaves_the_outer_budget_reservation
     pending.close()
 
 
-CONTRACT_PATH: Final = (
-    Path(__file__).parents[3] / "litellm-rust/crates/callbacks-legacy-python/python_contract.json"
-)
+CONTRACT_PATH: Final = Path(__file__).parents[3] / "litellm-rust/crates/callbacks-legacy-python/python_contract.json"
 
 
 def test_the_rust_contract_matches_the_shim_signatures() -> None:

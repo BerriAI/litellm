@@ -11,6 +11,7 @@ Regression tests for https://github.com/BerriAI/litellm/issues/22040 and for the
 
 import os
 import sys
+from typing import Final
 
 import httpx
 import pytest
@@ -21,10 +22,15 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 import litellm
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.anthropic.count_tokens.token_counter import AnthropicTokenCounter
 from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountTokensConfig,
 )
+from litellm.llms.azure_ai.anthropic.count_tokens.token_counter import (
+    AzureAIAnthropicTokenCounter,
+)
 from litellm.types.llms.anthropic import ANTHROPIC_OAUTH_BETA_HEADER
+from litellm.types.utils import TokenCountResponse
 
 # Fake tokens for testing (not real secrets)
 FAKE_OAUTH_TOKEN = "sk-ant-oat01-fake-token-for-testing-123456789abcdef"
@@ -269,3 +275,80 @@ class TestCountTokensUsesWorkloadIdentity:
         assert result is not None
         assert result.total_tokens == 7
         assert seen["auth_header"] == {"x-api-key": vault_key}
+
+
+@pytest.mark.parametrize(
+    ("counter_type", "api_base", "endpoint", "tokenizer_type"),
+    (
+        (
+            AnthropicTokenCounter,
+            "https://gateway.example",
+            "https://gateway.example/v1/messages/count_tokens",
+            "anthropic_api",
+        ),
+        (
+            AzureAIAnthropicTokenCounter,
+            "https://resource.example",
+            "https://resource.example/anthropic/v1/messages/count_tokens",
+            "azure_ai_anthropic_api",
+        ),
+    ),
+)
+@pytest.mark.parametrize(("status_code", "expected_error"), ((200, False), (401, True)))
+@pytest.mark.asyncio
+async def test_count_token_counters_return_typed_success_and_error_responses(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    api_base: str,
+    endpoint: str,
+    tokenizer_type: str,
+    status_code: int,
+    expected_error: bool,
+    httpx_transport_clients: None,
+) -> None:
+    response_body: Final = {"input_tokens": 17} if status_code == 200 else {"error": {"message": "invalid key"}}
+    router: Final = respx.mock
+
+    with router:
+        count_route: Final = router.post(endpoint).mock(return_value=httpx.Response(status_code, json=response_body))
+        result: Final = await counter_type().count_tokens(
+            model_to_use="claude-test",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "sk-ant-api03-test-key", "api_base": api_base}},
+            request_model="claude-test",
+        )
+        requests: Final = tuple(router.calls)
+
+    assert count_route.called
+    assert len(requests) == 1
+    assert requests[0].request.url == httpx.URL(endpoint)
+    assert isinstance(result, TokenCountResponse)
+    assert result.request_model == "claude-test"
+    assert result.model_used == "claude-test"
+    assert result.tokenizer_type == tokenizer_type
+
+    if expected_error:
+        assert result.error is True
+        assert result.status_code == status_code
+        assert result.total_tokens == 0
+        return
+
+    assert result.error is not True
+    assert result.total_tokens == 17
+
+
+@pytest.mark.parametrize(
+    ("counter_type", "provider"),
+    (
+        (AnthropicTokenCounter, "anthropic"),
+        (AzureAIAnthropicTokenCounter, "azure_ai"),
+    ),
+)
+def test_count_token_counters_select_their_own_provider(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    provider: str,
+) -> None:
+    counter: Final = counter_type()
+
+    assert counter.should_use_token_counting_api(custom_llm_provider=provider) is True
+    assert counter.should_use_token_counting_api(custom_llm_provider="unknown") is False

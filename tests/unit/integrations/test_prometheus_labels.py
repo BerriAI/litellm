@@ -581,9 +581,9 @@ def test_prometheus_label_value_sanitization():
 
 def test_prometheus_label_value_sanitization_unicode_paragraph_separator():
     """Test that U+2029 (Paragraph Separator) is also stripped."""
-    from litellm.types.integrations.prometheus import _sanitize_prometheus_label_value
+    from litellm.types.integrations.prometheus import sanitize_prometheus_label_value
 
-    result = _sanitize_prometheus_label_value("model\u2029name")
+    result = sanitize_prometheus_label_value("model\u2029name")
     assert result == "modelname"
     assert "\u2029" not in result
 
@@ -592,20 +592,20 @@ def test_prometheus_label_value_sanitization_unicode_paragraph_separator():
 
 def test_prometheus_label_value_sanitization_none():
     """Test that None values pass through unchanged."""
-    from litellm.types.integrations.prometheus import _sanitize_prometheus_label_value
+    from litellm.types.integrations.prometheus import sanitize_prometheus_label_value
 
-    assert _sanitize_prometheus_label_value(None) is None
+    assert sanitize_prometheus_label_value(None) is None
 
     print("✅ None values pass through unchanged")
 
 
 def test_prometheus_label_value_sanitization_non_string_types():
     """Test that non-string values (int, bool, etc.) are coerced to str."""
-    from litellm.types.integrations.prometheus import _sanitize_prometheus_label_value
+    from litellm.types.integrations.prometheus import sanitize_prometheus_label_value
 
-    assert _sanitize_prometheus_label_value(200) == "200"
-    assert _sanitize_prometheus_label_value(True) == "True"
-    assert _sanitize_prometheus_label_value(3.14) == "3.14"
+    assert sanitize_prometheus_label_value(200) == "200"
+    assert sanitize_prometheus_label_value(True) == "True"
+    assert sanitize_prometheus_label_value(3.14) == "3.14"
 
     print("✅ Non-string values are coerced to str")
 
@@ -976,6 +976,193 @@ def test_deployment_tpm_rpm_limit_metrics_emit_model_group_from_enum_values():
             assert values == {"example-model-group"}, (
                 f"expected model_group=example-model-group on {metric._name}, got {values}"
             )
+    finally:
+        _clear_prometheus_registry()
+
+
+def test_model_group_in_latency_metrics():
+    """
+    Test that model_group label is present on the end-to-end / per-call
+    latency metrics needed to build model-group latency dashboards. These
+    metrics previously only carried requested_model, litellm_model_name and
+    model_id, none of which identify the model_group a pooled deployment
+    belongs to -- only the proxy-overhead-only latency metrics
+    (litellm_overhead_latency_metric and friends) carried model_group.
+    """
+    model_group_label = UserAPIKeyLabelNames.MODEL_GROUP.value
+
+    metrics_with_model_group = [
+        "litellm_llm_api_latency_metric",
+        "litellm_llm_api_time_to_first_token_metric",
+        "litellm_request_total_latency_metric",
+        "litellm_deployment_latency_per_output_token",
+    ]
+
+    for metric_name in metrics_with_model_group:
+        labels = PrometheusMetricLabels.get_labels(metric_name)
+        assert (
+            model_group_label in labels
+        ), f"Metric {metric_name} should contain model_group label"
+        print(f"✅ {metric_name} contains model_group label")
+
+
+def test_model_group_value_flows_through_latency_metrics_label_factory():
+    """
+    The label being in the allow-list is necessary but not sufficient: the
+    factory must also carry the value from the enum through to the emitted
+    label. This would fail if the label were dropped from a metric's list or
+    if the value plumbing regressed, which the allow-list assertion above
+    cannot catch on its own.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.integrations.prometheus import (
+        PrometheusLogger,
+        UserAPIKeyLabelValues,
+        prometheus_label_factory,
+    )
+
+    prometheus_logger = MagicMock()
+    prometheus_logger._cached_metric_labels = {}
+    prometheus_logger.label_filters = {}
+    prometheus_logger.get_labels_for_metric = (
+        PrometheusLogger.get_labels_for_metric.__get__(prometheus_logger)
+    )
+
+    enum_values = UserAPIKeyLabelValues(
+        model_group="example-model-group",
+        litellm_model_name="gpt-4o-mini",
+        requested_model="example-model-group",
+        status_code="200",
+    )
+
+    for metric_name in [
+        "litellm_llm_api_latency_metric",
+        "litellm_llm_api_time_to_first_token_metric",
+        "litellm_request_total_latency_metric",
+        "litellm_deployment_latency_per_output_token",
+    ]:
+        labels = prometheus_label_factory(
+            supported_enum_labels=prometheus_logger.get_labels_for_metric(
+                metric_name=metric_name
+            ),
+            enum_values=enum_values,
+        )
+        assert (
+            labels.get("model_group") == "example-model-group"
+        ), f"{metric_name} should emit model_group=example-model-group, got {labels.get('model_group')!r}"
+
+
+def test_latency_metrics_emit_model_group_from_set_latency_metrics():
+    """
+    End-to-end emit wiring for _set_latency_metrics.
+
+    The label-list and factory tests above prove the label exists and that
+    the factory carries a value handed to it, but neither drives the real
+    _set_latency_metrics code path, so deleting the production model_group
+    plumbing there would still pass them. This calls it directly with a
+    streaming request (so the time-to-first-token branch also fires) and
+    asserts the real litellm_llm_api_latency_metric,
+    litellm_llm_api_time_to_first_token_metric and
+    litellm_request_total_latency_metric Histogram series actually carry it.
+    """
+    import datetime
+
+    from litellm.integrations.prometheus import PrometheusLogger, UserAPIKeyLabelValues
+
+    _clear_prometheus_registry()
+    try:
+        logger = PrometheusLogger()
+        start_time = datetime.datetime(2024, 1, 1, 0, 0, 0)
+        api_call_start_time = datetime.datetime(2024, 1, 1, 0, 0, 1)
+        completion_start_time = datetime.datetime(2024, 1, 1, 0, 0, 2)
+        end_time = datetime.datetime(2024, 1, 1, 0, 0, 3)
+
+        enum_values = UserAPIKeyLabelValues(
+            model_group="example-model-group",
+            litellm_model_name="gpt-4o-mini",
+            requested_model="example-model-group",
+            status_code="200",
+        )
+
+        logger._set_latency_metrics(
+            kwargs={
+                "start_time": start_time,
+                "end_time": end_time,
+                "api_call_start_time": api_call_start_time,
+                "completion_start_time": completion_start_time,
+                "stream": True,
+                "litellm_params": {"metadata": {}},
+            },
+            model="gpt-4o-mini",
+            user_api_key=None,
+            user_api_key_alias=None,
+            user_api_team=None,
+            user_api_team_alias=None,
+            enum_values=enum_values,
+        )
+
+        for metric in (
+            logger.litellm_llm_api_latency_metric,
+            logger.litellm_llm_api_time_to_first_token_metric,
+            logger.litellm_request_total_latency_metric,
+        ):
+            index = metric._labelnames.index("model_group")
+            values = {sample_key[index] for sample_key in metric._metrics}
+            assert values == {"example-model-group"}, (
+                f"expected model_group=example-model-group on {metric._name}, got {values}"
+            )
+    finally:
+        _clear_prometheus_registry()
+
+
+def test_deployment_latency_per_output_token_emits_model_group_from_enum_values():
+    """
+    End-to-end emit wiring for litellm_deployment_latency_per_output_token.
+
+    Drives set_llm_deployment_success_metrics directly (its only caller) with
+    output_tokens > 0 so the latency-per-token branch fires, and asserts the
+    real Histogram series carries model_group; fails if that label-list
+    addition or the enum_values plumbing is removed.
+    """
+    import datetime
+
+    from litellm.integrations.prometheus import PrometheusLogger, UserAPIKeyLabelValues
+
+    _clear_prometheus_registry()
+    try:
+        logger = PrometheusLogger()
+        start_time = datetime.datetime(2024, 1, 1, 0, 0, 0)
+        end_time = datetime.datetime(2024, 1, 1, 0, 0, 2)
+        enum_values = UserAPIKeyLabelValues(
+            model_group="example-model-group",
+            litellm_model_name="gpt-4o-mini",
+            requested_model="example-model-group",
+            status_code="200",
+        )
+        logger.set_llm_deployment_success_metrics(
+            request_kwargs={
+                "model": "gpt-4o-mini",
+                "litellm_params": {"metadata": {"model_info": {"id": "model-123"}}},
+                "standard_logging_object": {
+                    "model_group": "example-model-group",
+                    "model_id": "model-123",
+                    "api_base": "https://api.openai.com",
+                    "hidden_params": {"additional_headers": None, "litellm_overhead_time_ms": None},
+                },
+            },
+            start_time=start_time,
+            end_time=end_time,
+            enum_values=enum_values,
+            output_tokens=10.0,
+        )
+
+        metric = logger.litellm_deployment_latency_per_output_token
+        index = metric._labelnames.index("model_group")
+        values = {sample_key[index] for sample_key in metric._metrics}
+        assert values == {"example-model-group"}, (
+            f"expected model_group=example-model-group on {metric._name}, got {values}"
+        )
     finally:
         _clear_prometheus_registry()
 

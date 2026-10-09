@@ -51,7 +51,7 @@ set -Eeuo pipefail
 LITELLM_REPO="${LITELLM_REPO:-${HOME}/litellm/litellm}"
 WORKTREE="${LITELLM_WORKTREE:-${HOME}/litellm-cron-worktree}"
 PROXY_PORT="${PROXY_PORT:-4100}"
-PROXY_API_KEY="${PROXY_API_KEY:-sk-cron-matrix}"
+PROXY_API_KEY="${PROXY_API_KEY:-sk-$(openssl rand -hex 16)}"
 DOCS_REPO="${DOCS_REPO:-BerriAI/litellm-docs}"
 DOCS_BRANCH="${DOCS_BRANCH:-main}"
 DOCS_TARGET_PATH="${DOCS_TARGET_PATH:-src/data/compatibility-matrix.json}"
@@ -347,9 +347,8 @@ log "starting proxy on 127.0.0.1:${PROXY_PORT}"
 # exclusively by the pytest run on the same host (the health check and
 # the test env set `LITELLM_PROXY_URL=http://127.0.0.1:...`),
 # so there's no reason to expose it on the container's external interfaces.
-# Without `--host`, `litellm` defaults to 0.0.0.0, which combined with
-# the predictable default `LITELLM_MASTER_KEY=sk-cron-matrix` would
-# allow anything that can reach :${PROXY_PORT} on the host to authenticate
+# Without `--host`, `litellm` defaults to 0.0.0.0, so a predictable proxy key
+# would allow anything that can reach :${PROXY_PORT} on the host to authenticate
 # and burn upstream provider credentials.
 #
 # `setsid` puts the proxy in its own session+pgroup so cleanup() can
@@ -379,13 +378,9 @@ curl -fsS "${HEALTH_URL}" >/dev/null \
 # ---------------------------------------------------------------------------
 
 RESULTS_JSON="${WORKDIR}/compat-results.json"
-# The `_*_unit_tests` ignore is defensive: those harness-only trees are
-# markerless (they run without a proxy) and don't feed matrix cells, so
-# the cron skips them if/when they land in the suite.
 PYTEST_ARGS=(
   tests/e2e/claude_code/
   --confcutdir=tests/e2e/claude_code
-  "--ignore-glob=*_unit_tests*"
 )
 if [[ -n "${PYTEST_K}" ]]; then
   log "PYTEST_K set; narrowing to: ${PYTEST_K}"

@@ -19,6 +19,7 @@ from typing import Final, cast
 
 import httpx
 from openai.types.file_deleted import FileDeleted
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
@@ -46,6 +47,8 @@ from ..common_utils import (
 ANTHROPIC_FILES_API_BASE: Final = "https://api.anthropic.com"
 ANTHROPIC_FILES_BETA_HEADER: Final = "files-api-2025-04-14"
 ANTHROPIC_MESSAGE_BATCH_ID_PREFIX: Final = "msgbatch_"
+
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class AnthropicFilesConfig(BaseFilesConfig):
@@ -211,7 +214,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
             "created_at": "2025-01-01T00:00:00Z"
         }
         """
-        response_json: Final = raw_response.json()
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
         return self._parse_anthropic_file(response_json)
 
     def transform_retrieve_file_request(
@@ -230,7 +233,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> OpenAIFileObject:
-        response_json: Final = raw_response.json()
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
         return self._parse_anthropic_file(response_json)
 
     def transform_delete_file_request(
@@ -249,13 +252,9 @@ class AnthropicFilesConfig(BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> FileDeleted:
-        response_json: Final = raw_response.json()
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
         file_id: Final = response_json.get("id", "")
-        return FileDeleted(
-            id=file_id,
-            deleted=True,
-            object="file",
-        )
+        return FileDeleted.model_validate({"id": file_id, "deleted": True, "object": "file"})
 
     def transform_list_files_request(
         self,

@@ -150,6 +150,89 @@ async def _classifier_user_payload(body: Mapping[str, object], monkeypatch: pyte
     return router.recorded_calls[0]["messages"][1]["content"]
 
 
+@pytest.mark.parametrize(
+    "tiers,config_default,explicit_default,expected",
+    (
+        ({"SIMPLE": "cheap-model", "MEDIUM": "mid-model"}, None, None, "mid-model"),
+        ({"SIMPLE": ["cheap-model"], "MEDIUM": ["mid-model", "strong-model"]}, None, None, "mid-model"),
+        ({"SIMPLE": ["cheap-model"], "MEDIUM": []}, None, None, "cheap-model"),
+        ({"SIMPLE": "cheap-model"}, None, None, "cheap-model"),
+        ({"MEDIUM": "mid-model"}, "cheap-model", None, "cheap-model"),
+        ({"MEDIUM": "mid-model"}, "cheap-model", "strong-model", "strong-model"),
+        ({"MEDIUM": "mid-model"}, None, "strong-model", "strong-model"),
+        ({}, "cheap-model", None, "cheap-model"),
+        ({}, None, "strong-model", "strong-model"),
+    ),
+)
+@pytest.mark.asyncio
+async def test_preview_and_serving_share_default_model_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+    tiers: Mapping[str, object],
+    config_default: str | None,
+    explicit_default: str | None,
+    expected: str,
+):
+    from litellm.router_utils.auto_router_model_naming import validate_complexity_router_config_write
+    from litellm.types.management_endpoints.auto_router_endpoints import ComplexityRouterConfigValidationRequest
+
+    config: Final = {
+        "tiers": tiers,
+        "default_model": config_default,
+        "classifier_type": "llm",
+        "classifier_fallback": "default_model",
+        "classifier_llm_config": {"model": "unconfigured-classifier"},
+    }
+    assert validate_complexity_router_config_write(config) is None
+    verdict: Final = await auto_router_endpoints.validate_complexity_router_config(
+        ComplexityRouterConfigValidationRequest(complexity_router_config=config), ADMIN
+    )
+    assert verdict.valid and verdict.error is None
+    serving: Final = _router()
+    serving.init_complexity_router_deployment(
+        Deployment(
+            model_name="default-parity",
+            litellm_params={
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": config,
+                "complexity_router_default_model": explicit_default,
+            },
+            model_info={"id": "default-parity"},
+        )
+    )
+    strategy: Final = serving.complexity_routers["default-parity"][0].strategy
+    assert strategy.config.default_model == expected
+    decision: Final = await strategy.async_pre_routing_hook(
+        model="default-parity", messages=[{"role": "user", "content": "hello"}], request_kwargs={}
+    )
+    assert decision is not None and decision.model == expected
+    monkeypatch.setattr(proxy_server, "llm_router", serving)
+    preview: Final = await preview_auto_router_routing(
+        http_request=ROUTING_HTTP_REQUEST,
+        data=AutoRouterRoutingTestRequest.model_validate(
+            {"prompt": "hello", "complexity_router_config": config, "default_model": explicit_default}
+        ),
+        user_api_key_dict=ADMIN,
+    )
+    assert preview.routed_model == expected
+    assert preview.routing_decision["cause"] == "default_model_fallback"
+
+
+@pytest.mark.asyncio
+async def test_preview_missing_unresolvable_default_is_a_config_error(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(proxy_server, "llm_router", _router())
+    with pytest.raises(HTTPException) as error:
+        await preview_auto_router_routing(
+            http_request=ROUTING_HTTP_REQUEST,
+            data=_request(
+                "hello", tiers={}, classifier_type="llm", classifier_fallback="default_model",
+                classifier_llm_config={"model": "unconfigured-classifier"},
+            ),
+            user_api_key_dict=ADMIN,
+        )
+    assert error.value.status_code == 400
+    assert "requires a default model" in error.value.detail["error"]
+
+
 @pytest.mark.asyncio
 async def test_simple_prompt_routes_to_the_simple_tier(monkeypatch: pytest.MonkeyPatch):
     response = await _route("what is 2+2", monkeypatch)
@@ -195,12 +278,17 @@ async def test_escalation_keyword_bumps_the_classified_tier(monkeypatch: pytest.
     assert response.routing_decision["escalation_keyword"] == "ultrathink"
 
 
+@pytest.mark.parametrize("default_model,expected,configured", ((None, "mid-model", True), ("never-configured", "never-configured", False)))
 @pytest.mark.asyncio
-async def test_tier_model_missing_from_the_proxy_is_reported(monkeypatch: pytest.MonkeyPatch):
-    response = await _route("what is 2+2", monkeypatch, tiers={**TIERS, "SIMPLE": ["never-configured"]})
+async def test_tier_model_missing_from_the_proxy_is_reported(
+    monkeypatch: pytest.MonkeyPatch, default_model: str | None, expected: str, configured: bool
+):
+    response = await _route(
+        "what is 2+2", monkeypatch, tiers={**TIERS, "SIMPLE": ["never-configured"]}, default_model=default_model
+    )
 
-    assert response.routed_model == "never-configured"
-    assert response.routed_model_configured is False
+    assert response.routed_model == expected
+    assert response.routed_model_configured is configured
 
 
 @pytest.mark.asyncio
@@ -682,6 +770,7 @@ class TestAutoRouterBenchmarks:
         ttl_5m_turns=30,
         ttl_1h_turns=5,
         total_tokens=4000,
+        day_total_tokens=2500,
         spend=10.0,
         saved_spend=30.0,
         savings_estimated_turns=40,
@@ -710,6 +799,7 @@ class TestAutoRouterBenchmarks:
         assert totals.avg_turns_per_session == 10.0
         assert totals.avg_session_seconds == 100.0
         assert totals.avg_tokens_per_session == 1000.0
+        assert totals.total_tokens == 2500
         assert totals.baseline_spend == 40.0
         assert totals.saved_pct == 75.0
         assert totals.savings_estimated_classifier_cost == 0.4
@@ -729,6 +819,20 @@ class TestAutoRouterBenchmarks:
         assert totals.baseline_spend == 5.0
         assert totals.saved_pct == -100.0
         assert totals.classifier_cost == 0.4
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("historical_tokens, expected_total", [(None, None), (0, 2500), (750, 3250)])
+    async def test_daily_token_totals_preserve_missing_coverage_in_any_router(
+        self, historical_tokens: int | None, expected_total: int | None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        historical: Final = self.ROW.model_copy(
+            update={"router_name": "historical-auto", "day_total_tokens": historical_tokens}
+        )
+        response: Final = await self._benchmarks(
+            monkeypatch, rows=[self.ROW.model_dump(), historical.model_dump()], model_list=[]
+        )
+        assert [group.total_tokens for group in response.groups] == [2500, historical_tokens]
+        assert response.totals.total_tokens == expected_total
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("estimated_turns", [0, 4])
@@ -833,6 +937,7 @@ class TestAutoRouterBenchmarks:
         totals = _benchmark_totals(_summed_agg_row([]))
         assert totals.sessions == 0
         assert totals.turns == 0
+        assert totals.total_tokens == 0
         assert totals.saved_pct == 0.0
         assert totals.cache.hit_rate_pct == 0.0
         assert totals.classifier_cost == 0.0
@@ -1076,6 +1181,7 @@ class TestAutoRouterBenchmarks:
             assert idle.cache.same_model.turns == idle.cache.return_to_tier.hits == 0
             assert idle.tier_turns == {}
             assert idle.classifier_cost == 0.0
+            assert idle.total_tokens == 0
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1134,15 +1240,14 @@ class TestAutoRouterBenchmarks:
         assert [group.router_name for group in response.groups] == ["tagged"]
 
     def test_the_listed_kinds_match_the_router_types_traffic_can_record(self):
-        """The one reason semantic is excluded, pinned against both declarations: a kind the
-        rollup can record must be listable, and a kind it cannot must not be."""
         from typing import get_args, get_type_hints
 
         from litellm.router_utils.auto_router_model_naming import StrategyRouterKind
         from litellm.types.utils import StandardLoggingRoutingDecision
 
-        recorded = set(get_args(get_type_hints(StandardLoggingRoutingDecision)["router_type"]))
-        assert set(get_args(StrategyRouterKind)) - {"semantic"} == recorded
+        readonly_router_type: Final = get_type_hints(StandardLoggingRoutingDecision, include_extras=True)["router_type"]
+        recorded: Final = set(get_args(get_args(readonly_router_type)[0]))
+        assert set(get_args(StrategyRouterKind)) == recorded
 
 
 # ---------------------------------------------------------------------------
@@ -3360,7 +3465,7 @@ async def test_member_billable_preview_checks_and_charges_destination_team(
             raise litellm.BudgetExceededError(current_cost=2, max_budget=1)
 
     checks: Final = AsyncMock(side_effect=check_and_tag)
-    monkeypatch.setattr(auth_module, "_run_centralized_common_checks", checks)
+    monkeypatch.setattr(auth_module, "run_centralized_common_checks", checks)
     http_request: Final = Request(
         {
             "type": "http",

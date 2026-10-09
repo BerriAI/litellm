@@ -147,8 +147,8 @@ async def _drive(response_text: str):
         patch("litellm.proxy.proxy_server.llm_router", None),
         patch(f"{_PT_MOD}.pass_through_endpoint_logging", mock_pt_logging),
         patch(f"{_PT_MOD}.get_async_httpx_client", return_value=mock_async_client_obj),
-        patch(f"{_PT_MOD}._read_request_body", new_callable=AsyncMock, return_value={}),
-        patch(f"{_PT_MOD}._safe_get_request_headers", return_value={}),
+        patch(f"{_PT_MOD}.read_request_body", new_callable=AsyncMock, return_value={}),
+        patch(f"{_PT_MOD}.safe_get_request_headers", return_value={}),
         patch(_COLLECT, return_value=["block-demo"]),
     ]
     try:

@@ -20,7 +20,7 @@ from litellm.integrations.otel import (  # noqa: E402
 )
 from litellm.integrations.otel.plumbing import context as ctx_mod  # noqa: E402
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
-from litellm.integrations.otel.emitter import SpanEmitter, span_attribute_limit  # noqa: E402
+from litellm.integrations.otel.emitter import SpanEmitter, attribute_budget, span_attribute_limit  # noqa: E402
 from litellm.integrations.otel.emitter import stamp_error  # noqa: E402
 from litellm.integrations.otel.mappers.utils import MAX_TOOL_DEFINITION_ATTRS_PER_SPAN  # noqa: E402
 from litellm.integrations.otel.model.payloads import (  # noqa: E402
@@ -556,6 +556,113 @@ def test_prompt_turns_are_shed_before_response_choices():
         < len(_indexed_messages(many_choices.attributes, "llm.input_messages"))
         < len(_indexed_messages(long_prompt, "llm.input_messages"))
     )
+
+
+def test_metadata_blob_keeps_the_indexed_messages_it_competes_with():
+    """The promoted ``metadata`` blob rides alongside the indexed messages on a boundary-opened span.
+
+    The live regression shape: the LLM-call span is opened at the request
+    boundary and already carries a few stamped attributes, most of which the
+    mappers re-emit under the same keys. Charging those overwritten keys
+    against the attribute budget reserved slots the fit could never spend, so
+    the new ``metadata`` key displaced a whole middle message group — an
+    eviction invisible to the SDK's dropped-attributes counter because the fit
+    sheds before ``span.set_attribute``. With the budget counting only keys
+    the fit does not overwrite, the metadata key rides and the span keeps the
+    indexed-message count of the metadata-free span (at shedding granularity).
+    """
+    cfg = OpenTelemetryV2Config(
+        exporter="in_memory",
+        legacy_compat=False,
+        mapper_names=["genai", "openinference"],
+        capture_message_content="span_only",
+    )
+    provider, exporter = providers.in_memory_provider(cfg)
+    engine = SpanEmitter(providers.get_tracer(provider, "litellm-test"), cfg)
+
+    def boundary_span(payload):
+        span = engine.start_span(SpanRole.LLM_CALL, "chat gpt-4o")
+        # what the boundary opener stamps before the typed payload exists
+        span.set_attribute(GenAI.REQUEST_MODEL, "gpt-4o")
+        span.set_attribute(LiteLLM.PROVIDER_MODEL, "gpt-4o-2024")
+        span.set_attribute("litellm.metadata.user_api_key_alias", "edge-key")
+        engine.finish_span(
+            SpanRole.LLM_CALL,
+            span,
+            LLMCallSpanData.from_standard_logging_payload(
+                payload, capture_content=True, metadata_keys=("user_api_key_alias",)
+            ),
+        )
+        (finished,) = exporter.get_finished_spans()
+        exporter.clear()
+        return finished
+
+    with_metadata = boundary_span(_conversation_payload(47, metadata={"user_api_key_alias": "edge-key"}))
+    without_metadata = boundary_span(_conversation_payload(47))
+    _assert_core_intact(with_metadata)
+    a = with_metadata.attributes
+
+    assert json.loads(a["metadata"]) == {"user_api_key_alias": "edge-key"}
+    assert "metadata" not in without_metadata.attributes
+    kept = _indexed_messages(a, "llm.input_messages")
+    baseline = _indexed_messages(without_metadata.attributes, "llm.input_messages")
+    assert kept == baseline or kept == baseline[:-1]
+    assert kept[0] == 0 and kept[-1] == 46
+    assert len(a) <= SpanLimits().max_span_attributes
+
+
+def test_preset_message_key_the_fit_sheds_still_never_overflows_the_span():
+    """A pre-set indexed-message key the fit later sheds cannot push the span over its limit.
+
+    The budget treats every mapped key already on the span as an overwrite
+    (free). If the fit then sheds that key, the value stamped earlier simply
+    stays in its slot, so the span holds one entry for it either way and the
+    total never exceeds the limit — the SDK's dropped-attributes counter stays
+    at zero.
+    """
+    cfg = OpenTelemetryV2Config(
+        exporter="in_memory",
+        legacy_compat=False,
+        mapper_names=["genai", "openinference"],
+        capture_message_content="span_only",
+    )
+    provider, exporter = providers.in_memory_provider(cfg)
+    engine = SpanEmitter(providers.get_tracer(provider, "litellm-test"), cfg)
+    span = engine.start_span(SpanRole.LLM_CALL, "chat gpt-4o")
+    span.set_attribute("llm.input_messages.1.message.role", "stale-role")
+    engine.finish_span(
+        SpanRole.LLM_CALL,
+        span,
+        LLMCallSpanData.from_standard_logging_payload(
+            _conversation_payload(60), capture_content=True, metadata_keys=("user_api_key_alias",)
+        ),
+    )
+    (finished,) = exporter.get_finished_spans()
+    _assert_core_intact(finished)
+    assert len(finished.attributes) <= SpanLimits().max_span_attributes
+
+
+def test_attribute_budget_counts_only_keys_the_fit_does_not_overwrite():
+    """Pre-set attributes the mapped set overwrites consume no slot against the span limit.
+
+    A boundary-opened LLM-call span already carries a few stamped attributes,
+    most of which the mappers re-emit under the same keys. Charging those
+    against the budget reserves slots the fit can never spend and sheds
+    indexed message attributes for nothing.
+    """
+    cfg = OpenTelemetryV2Config(exporter="in_memory")
+    provider, _exporter = providers.in_memory_provider(cfg)
+    span = providers.get_tracer(provider, "litellm-test").start_span("s")
+    span.set_attribute("gen_ai.request.model", "gpt-4o")
+    span.set_attribute("litellm.metadata.user_api_key_alias", "edge-key")
+    try:
+        assert attribute_budget(span, 0) == SpanLimits().max_span_attributes - 2
+        assert (
+            attribute_budget(span, 0, frozenset({"gen_ai.request.model"}))
+            == SpanLimits().max_span_attributes - 1
+        )
+    finally:
+        span.end()
 
 
 def test_indexed_messages_respect_a_lower_span_attribute_count_limit(monkeypatch):

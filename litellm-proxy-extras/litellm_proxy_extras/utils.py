@@ -11,7 +11,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Final, Optional, Union
+from typing import TYPE_CHECKING, Final, Optional, Protocol, Union
 from urllib.parse import unquote, urlsplit
 
 from litellm_proxy_extras import prisma_toolchain
@@ -33,6 +33,12 @@ from litellm_proxy_extras.request_log_indexes import ensure_request_log_indexes,
 if TYPE_CHECKING:
     import psycopg
     import psycopg.sql
+
+
+class LensCheckConnect(Protocol):
+    def __call__(
+        self, conninfo: str, *, connect_timeout: int, autocommit: bool
+    ) -> "psycopg.Connection[tuple[object, ...]]": ...
 
 
 def str_to_bool(value: Optional[str]) -> bool:
@@ -243,11 +249,9 @@ def _redact_credentials(text: str) -> str:
     passwords: Final = sorted(_configured_database_passwords(), key=len, reverse=True)
     alternation: Final = "|".join(re.escape(password) for password in passwords)
     password_pattern: Final = (
-        re.compile(rf"(?P<lead>:|password=)(?:{alternation})(?=@|&|$|[\s'\"\]),])", re.IGNORECASE)
-        if passwords
-        else None
+        re.compile(rf"(?<![A-Za-z0-9_])(?:{alternation})(?![A-Za-z0-9_])", re.IGNORECASE) if passwords else None
     )
-    result: Final = password_pattern.sub(rf"\g<lead>{_REDACTED}", text) if password_pattern is not None else text
+    result: Final = password_pattern.sub(_REDACTED, text) if password_pattern is not None else text
     return _secret_shape_redactor()(result)
 
 
@@ -690,7 +694,7 @@ class ProxyExtrasDBManager:
                     )
 
     @staticmethod
-    def raise_if_lens_rename_pending() -> None:
+    def raise_if_lens_rename_pending(connect: LensCheckConnect | None = None) -> None:
         database_url: Final = os.environ.get("DATABASE_URL")
         if not database_url:
             return
@@ -698,8 +702,9 @@ class ProxyExtrasDBManager:
             import psycopg
         except ImportError as exc:
             raise RuntimeError("Install psycopg to verify Lens data safety before prisma db push.") from exc
+        open_connection: Final = connect if connect is not None else psycopg.connect
         try:
-            with psycopg.connect(
+            with open_connection(
                 ProxyExtrasDBManager._strip_prisma_query_params(database_url), connect_timeout=10, autocommit=True
             ) as connection:
                 legacy: Final = connection.execute(
@@ -710,7 +715,8 @@ class ProxyExtrasDBManager:
                 ).fetchone()
         except psycopg.Error as exc:
             raise RuntimeError(
-                "Cannot verify Lens data safety; refusing prisma db push. Check database connectivity and psycopg installation."
+                "Cannot verify Lens data safety; refusing prisma db push. "
+                f"The database check failed: {_redact_credentials(str(exc)).strip()}"
             ) from exc
         if legacy is not None:
             raise RuntimeError(

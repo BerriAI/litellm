@@ -4,7 +4,8 @@ Each guardrail is configured against an owned sink that records the request and 
 ~20s. With `timeout: 1` the outbound call must abort near the bound, so the chat round trip
 completes in seconds instead of waiting on the sink. A control guardrail without `timeout`
 points at a sink path that sleeps ~3s and must wait for the reply, proving unset keeps the
-handler default. All probes are sent concurrently so their waits overlap.
+handler default. Probes are sent eight at a time so their waits overlap without starving the
+proxy's two workers.
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ from integration._support.wire import Reply, Request, wire_server
 SLOW_SECONDS: Final = 20
 FAST_SECONDS: Final = 3
 BOUND_SECONDS: Final = 8
+PROBE_CONCURRENCY: Final = 8
 TOKEN_PATH: Final = "/token"
 TOKEN_REPLY: Final = json.dumps(
     {"access_token": "synthetic-google-token", "expires_in": 3600, "token_type": "Bearer"}
@@ -410,7 +412,7 @@ def outcomes(rig: Rig) -> Mapping[str, Outcome]:
     values: Final = tuple(_provider_values())
     names: Final = (*(value[0] for value in values), "control-generic")
     exchanges: Final = (*(value[4] for value in values), False)
-    with ThreadPoolExecutor(max_workers=len(names)) as pool:
+    with ThreadPoolExecutor(max_workers=PROBE_CONCURRENCY) as pool:
         results: Final = tuple(pool.map(partial(_chat, rig), names, exchanges))
     return MappingProxyType(dict(zip(names, results, strict=True)))
 

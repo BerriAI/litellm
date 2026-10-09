@@ -21,7 +21,7 @@ test_paths:
       Live-provider caching cases in tests/local_testing that remain outside CI. Jobs that
       glob that directory either deselect them (local_testing_part1 and part2 carry `-k "... and
       not caching and not cache"`) or keep only another keyword (langfuse, router, assistants).
-      Separately, test-redis-compat.yml selects two IAM cluster authentication tests in
+      Separately, the CircleCI redis-compat jobs select two IAM cluster authentication tests in
       test_caching.py by node ID. It does not run that file's other tests.
       The gap was eight files and 118 tests when measured 2026-08-20; the five keyless files now
       run in the caching-local shard, leaving live cases in these three. Measured 2026-08-21 with no provider
@@ -34,6 +34,14 @@ test_paths:
       - tests/local_testing/test_caching.py
       - tests/local_testing/test_disk_cache_unit_tests.py
       - tests/local_testing/test_gcs_cache_unit_tests.py
+  - reason: >-
+      Mixed file that no job has ever run in full. Every CircleCI job that globs
+      tests/local_testing deselects it by name ("caching") or keeps only another keyword, so only
+      its router test ran, and that test now lives in tests/unit/router_utils/pre_call_checks.
+      Its two offline tests now live in tests/unit/llms/anthropic/chat, and the five left all need
+      ANTHROPIC_API_KEY or Vertex credentials
+    paths:
+      - tests/local_testing/test_anthropic_prompt_caching.py
   - reason: >-
       The end-to-end suite runs against a deployed proxy from its own in-cluster rig rather than
       from a pull request; it needs a live gateway and provider credentials no PR job holds

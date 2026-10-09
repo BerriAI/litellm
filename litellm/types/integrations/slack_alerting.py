@@ -5,9 +5,10 @@ from datetime import datetime as dt
 from enum import Enum
 from typing import Any, Final, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
 DEFAULT_DIGEST_INTERVAL: Final = 86400  # 24 hours in seconds
@@ -255,7 +256,7 @@ class AlertQueueItem(TypedDict):
     format: NotRequired[ReadOnly[str]]
 
 
-class HangingRequestData(BaseModel):
+class HangingRequestData(LiteLLMBaseModel):
     request_id: str
     model: str
     api_base: str | None = None

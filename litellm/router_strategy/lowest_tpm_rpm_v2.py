@@ -15,7 +15,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
 from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.types.router import RouterErrors
 from litellm.types.utils import LiteLLMPydanticObjectBase, StandardLoggingPayload
@@ -325,7 +325,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             # Update usage
             # ------------
             # update cache
-            parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
+            parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
             ## TPM
             await self.router_cache.async_increment_cache_post_call(
                 key=tpm_key,

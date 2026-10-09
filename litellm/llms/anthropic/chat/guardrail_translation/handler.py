@@ -224,6 +224,11 @@ def _write_back_message_text(message: _WritableMessage, target: MessageTextTarge
 
 
 _TOOL_USE_INPUT_ADAPTER: Final = TypeAdapter(dict[str, object])
+_RELEASED_TOOL_USE_STOP: Final = (
+    b"event: message_delta\n"
+    b'data: {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": null}, '
+    b'"usage": {"output_tokens": 0}}\n\n'
+)
 
 
 def _rewritten_tool_use_input(arguments: str) -> Mapping[str, object] | None:
@@ -317,7 +322,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         if not chunks:
             return None
         try:
-            return AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+            return AnthropicPassthroughLoggingHandler.build_usage_only_response_from_chunks(
                 all_chunks=chunks,
                 model=str((request_data or {}).get("model") or ""),
             )
@@ -628,7 +633,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 anthropic_config: Final = AnthropicConfig()
                 anthropic_tools: Final[list[AllAnthropicToolsValues]] = []
                 for tool in guardrailed_tools:
-                    converted_tool, mcp_server = anthropic_config._map_tool_helper(tool)
+                    converted_tool, mcp_server = anthropic_config.map_tool_helper(tool)
                     if converted_tool is not None:
                         anthropic_tools.append(converted_tool)
                     # Note: MCP servers are handled separately in the main transformation
@@ -1221,7 +1226,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         has_ended: Final = self._check_streaming_has_ended(responses_so_far)
         if has_ended:
             # build the model response from the responses_so_far
-            built_response: Final = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+            built_response: Final = AnthropicPassthroughLoggingHandler.build_complete_streaming_response(
                 all_chunks=responses_so_far,
                 litellm_logging_obj=cast("LiteLLMLoggingObj", litellm_logging_obj),
                 model="",
@@ -1572,6 +1577,12 @@ class AnthropicMessagesHandler(BaseTranslation):
             stream_ended=stream_ended,
             tool_calls_in_flight=bool(tool_use_fingerprints) and not stream_ended,
         )
+
+    def released_stream_as_ended(self, responses_so_far: Sequence[object]) -> tuple[object, ...]:
+        released_key: Final = self.get_streaming_scan_key(responses_so_far)
+        if released_key is None or not released_key.tool_calls_in_flight:
+            return tuple(responses_so_far)
+        return (*responses_so_far, _RELEASED_TOOL_USE_STOP)
 
     @classmethod
     def _streamed_tool_use_fingerprints(cls, responses_so_far: Sequence[object]) -> tuple[str, ...]:

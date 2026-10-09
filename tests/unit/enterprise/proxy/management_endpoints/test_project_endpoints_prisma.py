@@ -1,5 +1,9 @@
 import os
 import traceback
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Final
 from litellm._uuid import uuid
 from unittest import mock
 
@@ -37,8 +41,15 @@ from litellm.proxy._types import (
     DeleteProjectRequest,
     NewTeamRequest,
     UserAPIKeyAuth,
+    LiteLLM_OrganizationMembershipTable,
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
+    Member,
     ProxyException,
 )
+from litellm.proxy.management.teams.authz import TeamAccess
+from litellm.proxy.management.users.service import PrismaOrgRoles
+from tests._master_key import MASTER_KEY
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
@@ -80,7 +91,7 @@ async def test_new_project(prisma_client):
         print("prisma client=", prisma_client)
 
         setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-        setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+        setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 
         await litellm.proxy.proxy_server.prisma_client.connect()
 
@@ -93,7 +104,7 @@ async def test_new_project(prisma_client):
             http_request=Request(scope={"type": "http"}),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key=MASTER_KEY,
                 user_id="1234",
             ),
         )
@@ -115,7 +126,7 @@ async def test_new_project(prisma_client):
             http_request=Request(scope={"type": "http"}),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key=MASTER_KEY,
                 user_id="1234",
             ),
         )
@@ -152,7 +163,7 @@ async def test_update_project(prisma_client):
         print("prisma client=", prisma_client)
 
         setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-        setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+        setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 
         await litellm.proxy.proxy_server.prisma_client.connect()
 
@@ -165,7 +176,7 @@ async def test_update_project(prisma_client):
             http_request=Request(scope={"type": "http"}),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key=MASTER_KEY,
                 user_id="1234",
             ),
         )
@@ -187,7 +198,7 @@ async def test_update_project(prisma_client):
             http_request=Request(scope={"type": "http"}),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key=MASTER_KEY,
                 user_id="1234",
             ),
         )
@@ -215,7 +226,7 @@ async def test_update_project(prisma_client):
             http_request=Request(scope={"type": "http"}),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key=MASTER_KEY,
                 user_id="1234",
             ),
         )
@@ -257,7 +268,7 @@ async def test_delete_project(prisma_client):
         print("prisma client=", prisma_client)
 
         setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-        setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+        setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 
         await litellm.proxy.proxy_server.prisma_client.connect()
 
@@ -270,7 +281,7 @@ async def test_delete_project(prisma_client):
             http_request=Request(scope={"type": "http"}),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key=MASTER_KEY,
                 user_id="1234",
             ),
         )
@@ -288,7 +299,7 @@ async def test_delete_project(prisma_client):
             http_request=Request(scope={"type": "http"}),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key=MASTER_KEY,
                 user_id="1234",
             ),
         )
@@ -304,7 +315,7 @@ async def test_delete_project(prisma_client):
             http_request=Request(scope={"type": "http"}),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key=MASTER_KEY,
                 user_id="1234",
             ),
         )
@@ -322,7 +333,7 @@ async def test_delete_project(prisma_client):
                 project_id=project_id,
                 user_api_key_dict=UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key="sk-1234",
+                    api_key=MASTER_KEY,
                     user_id="1234",
                 ),
             )
@@ -347,7 +358,7 @@ async def test_project_info(prisma_client):
         print("prisma client=", prisma_client)
 
         setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-        setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+        setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 
         await litellm.proxy.proxy_server.prisma_client.connect()
 
@@ -360,7 +371,7 @@ async def test_project_info(prisma_client):
             http_request=Request(scope={"type": "http"}),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key=MASTER_KEY,
                 user_id="1234",
             ),
         )
@@ -382,7 +393,7 @@ async def test_project_info(prisma_client):
             http_request=Request(scope={"type": "http"}),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key=MASTER_KEY,
                 user_id="1234",
             ),
         )
@@ -395,7 +406,7 @@ async def test_project_info(prisma_client):
             project_id=project_id,
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key=MASTER_KEY,
                 user_id="1234",
             ),
         )
@@ -840,7 +851,7 @@ async def test_list_projects_returns_timestamps():
         response = await list_projects(
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key="sk-1234",
+                api_key=MASTER_KEY,
                 user_id="1234",
             ),
         )
@@ -911,7 +922,7 @@ async def test_update_project_invalidates_cached_project_object(monkeypatch):
         http_request=Request(scope={"type": "http"}),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
+            api_key=MASTER_KEY,
             user_id="1234",
         ),
     )
@@ -961,7 +972,7 @@ async def test_delete_project_invalidates_cached_project_object(monkeypatch):
         http_request=Request(scope={"type": "http"}),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
+            api_key=MASTER_KEY,
             user_id="1234",
         ),
     )
@@ -1005,7 +1016,7 @@ async def test_update_project_succeeds_when_cache_eviction_fails(monkeypatch):
         http_request=Request(scope={"type": "http"}),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
+            api_key=MASTER_KEY,
             user_id="1234",
         ),
     )
@@ -1206,7 +1217,7 @@ async def _run_new_project(data: NewProjectRequest) -> None:
     await new_project(
         data=data,
         http_request=Request(scope={"type": "http"}),
-        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="1234"),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key=MASTER_KEY, user_id="1234"),
     )
 
 
@@ -1243,7 +1254,7 @@ async def _run_project_update(project_id: str, **fields) -> None:
         http_request=Request(scope={"type": "http"}),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
+            api_key=MASTER_KEY,
             user_id="1234",
         ),
     )
@@ -1380,3 +1391,208 @@ async def test_new_project_flag_on_access_group_model_returns_400(monkeypatch):
 
     assert "prod-models" in str(exc_info.value)
     assert "expand to multiple models at request time" in str(exc_info.value)
+
+
+_ACCESS_NOW: Final = datetime.now(timezone.utc)
+
+
+@dataclass(frozen=True, slots=True)
+class _ProjectRow:
+    project_id: str
+    team_id: str | None
+
+
+def _membership(user_id: str, org_id: str, role: LitellmUserRoles) -> LiteLLM_OrganizationMembershipTable:
+    return LiteLLM_OrganizationMembershipTable(
+        user_id=user_id, organization_id=org_id, user_role=role.value, created_at=_ACCESS_NOW, updated_at=_ACCESS_NOW
+    )
+
+
+def _user(user_id: str, teams: tuple[str, ...] = (), admin_of: tuple[str, ...] = ()) -> LiteLLM_UserTable:
+    return LiteLLM_UserTable(
+        user_id=user_id,
+        teams=list(teams),
+        organization_memberships=[_membership(user_id, "org-a", LitellmUserRoles.INTERNAL_USER)]
+        + [_membership(user_id, org_id, LitellmUserRoles.ORG_ADMIN) for org_id in admin_of],
+    )
+
+
+_TEAMS: Final = {
+    team.team_id: team
+    for team in (
+        LiteLLM_TeamTable(
+            team_id="team-a1",
+            organization_id="org-a",
+            members_with_roles=[Member(user_id="member", role="user"), Member(user_id="team-admin", role="admin")],
+        ),
+        LiteLLM_TeamTable(team_id="team-a2", organization_id="org-a"),
+        LiteLLM_TeamTable(
+            team_id="team-b1",
+            organization_id="org-b",
+            members_with_roles=[Member(user_id="org-admin-a-member-b1", role="user")],
+        ),
+        LiteLLM_TeamTable(team_id="team-orgless"),
+    )
+}
+_PROJECTS: Final = (
+    _ProjectRow("p-a1", "team-a1"),
+    _ProjectRow("p-a2", "team-a2"),
+    _ProjectRow("p-b1", "team-b1"),
+    _ProjectRow("p-orgless", "team-orgless"),
+    _ProjectRow("p-teamless", None),
+    _ProjectRow("p-deleted-team", "team-deleted"),
+)
+_USERS: Final = {
+    user.user_id: user
+    for user in (
+        _user("member", teams=("team-a1",)),
+        _user("team-admin", teams=("team-a1",)),
+        _user("org-admin-a", admin_of=("org-a",)),
+        _user("org-admin-b", admin_of=("org-b",)),
+        _user("org-admin-a-member-b1", teams=("team-b1",), admin_of=("org-a",)),
+    )
+}
+
+
+def _row_matches(row: object, where: Mapping[str, object]) -> bool:
+    return all(_condition_holds(row, key, condition) for key, condition in where.items())
+
+
+def _condition_holds(row: object, key: str, condition) -> bool:
+    if key == "OR":
+        return any(_row_matches(row, branch) for branch in condition)
+    if key == "litellm_team_table":
+        team = _TEAMS.get(getattr(row, "team_id"))
+        return team is not None and _row_matches(team, condition["is"])
+    value = getattr(row, key)
+    return value in condition["in"] if isinstance(condition, dict) else value == condition
+
+
+class _FakeTeamTable:
+    async def find_unique(self, where: Mapping[str, str], include: object = None) -> LiteLLM_TeamTable | None:
+        return _TEAMS.get(where["team_id"])
+
+
+class _FakeProjectTable:
+    async def find_unique(self, where: Mapping[str, str], include: object = None) -> _ProjectRow | None:
+        return next((p for p in _PROJECTS if p.project_id == where["project_id"]), None)
+
+    async def find_many(self, where: Mapping[str, object] | None = None, include: object = None) -> list[_ProjectRow]:
+        return [p for p in _PROJECTS if where is None or _row_matches(p, where)]
+
+
+class _FakeUserTable:
+    async def find_unique(
+        self, where: Mapping[str, str], include: Mapping[str, bool] | None = None
+    ) -> LiteLLM_UserTable | None:
+        user = _USERS.get(where["user_id"])
+        if user is None or (include or {}).get("organization_memberships"):
+            return user
+        return user.model_copy(update={"organization_memberships": None})
+
+
+@pytest.fixture
+def project_access_db(monkeypatch):
+    db = mock.MagicMock(
+        litellm_teamtable=_FakeTeamTable(), litellm_projecttable=_FakeProjectTable(), litellm_usertable=_FakeUserTable()
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", mock.MagicMock(db=db))
+
+
+async def _team_access_over_cached_users() -> TeamAccess:
+    cache = UserApiKeyCache()
+    for user in _USERS.values():
+        await cache.async_set_cache(key=user.user_id, value=user)
+    return TeamAccess(org_roles=PrismaOrgRoles(None, cache, proxy_logging_obj))
+
+
+def _caller(user_id: str, role: LitellmUserRoles = LitellmUserRoles.INTERNAL_USER) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(user_role=role, api_key="sk-caller", user_id=user_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("user_id", "expected"),
+    [
+        ("member", {"p-a1"}),
+        ("team-admin", {"p-a1"}),
+        ("org-admin-a", {"p-a1", "p-a2"}),
+        ("org-admin-b", {"p-b1"}),
+        ("org-admin-a-member-b1", {"p-a1", "p-a2", "p-b1"}),
+        ("unknown-user", set()),
+    ],
+)
+async def test_list_projects_scopes_to_teams_the_caller_can_view(project_access_db, user_id, expected):
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import list_projects
+
+    projects = await list_projects(user_api_key_dict=_caller(user_id))
+
+    assert {p.project_id for p in projects} == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
+async def test_list_projects_admin_view_sees_every_project(project_access_db, role):
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import list_projects
+
+    projects = await list_projects(user_api_key_dict=_caller("someone", role))
+
+    assert {p.project_id for p in projects} == {p.project_id for p in _PROJECTS}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("user_id", "project_id"),
+    [
+        ("member", "p-a1"),
+        ("team-admin", "p-a1"),
+        ("org-admin-a", "p-a1"),
+        ("org-admin-a", "p-a2"),
+        ("org-admin-a-member-b1", "p-b1"),
+    ],
+)
+async def test_project_info_allows_team_members_and_org_admins_of_the_team_org(project_access_db, user_id, project_id):
+    project = await project_info(
+        project_id=project_id,
+        user_api_key_dict=_caller(user_id),
+        team_access=await _team_access_over_cached_users(),
+    )
+
+    assert project.project_id == project_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("user_id", "project_id"),
+    [
+        ("member", "p-a2"),
+        ("team-admin", "p-b1"),
+        ("org-admin-b", "p-a2"),
+        ("org-admin-a", "p-b1"),
+        ("org-admin-a", "p-orgless"),
+        ("org-admin-a", "p-teamless"),
+        ("member", "p-deleted-team"),
+    ],
+)
+async def test_project_info_denies_callers_who_cannot_view_the_team(project_access_db, user_id, project_id):
+    with pytest.raises(ProxyException) as exc_info:
+        await project_info(
+            project_id=project_id,
+            user_api_key_dict=_caller(user_id),
+            team_access=await _team_access_over_cached_users(),
+        )
+
+    assert str(exc_info.value.code) == "403"
+    assert "You don't have access to this project" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_project_info_missing_project_is_404_even_for_org_admins(project_access_db):
+    with pytest.raises(ProxyException) as exc_info:
+        await project_info(
+            project_id="p-missing",
+            user_api_key_dict=_caller("org-admin-a"),
+            team_access=await _team_access_over_cached_users(),
+        )
+
+    assert str(exc_info.value.code) == "404"

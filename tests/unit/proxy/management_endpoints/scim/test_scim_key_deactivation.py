@@ -73,7 +73,7 @@ async def test_set_user_keys_blocked_flips_state_and_invalidates_cache():
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
+            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
             AsyncMock(side_effect=fake_delete),
         ),
     ):
@@ -104,7 +104,7 @@ async def test_set_user_keys_blocked_noop_when_no_matching_keys():
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
+            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
             AsyncMock(),
         ) as mocked_delete,
     ):
@@ -139,7 +139,7 @@ async def test_set_user_keys_unblocked_skips_admin_blocked_keys():
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
+            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
             AsyncMock(side_effect=fake_delete),
         ),
     ):
@@ -172,7 +172,7 @@ async def test_scim_delete_user_blocks_keys_before_deleting_user():
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
+            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
             AsyncMock(),
         ),
     ):
@@ -220,7 +220,7 @@ async def test_scim_delete_user_clears_fk_referenced_rows_before_user_delete():
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
+            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
             AsyncMock(),
         ),
     ):
@@ -294,7 +294,7 @@ async def test_scim_patch_user_active_false_blocks_keys():
             AsyncMock(return_value=mock_scim_user),
         ),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
+            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
             AsyncMock(),
         ),
     ):
@@ -354,7 +354,7 @@ async def test_scim_patch_user_active_true_unblocks_keys():
             AsyncMock(return_value=mock_scim_user),
         ),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
+            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
             AsyncMock(),
         ),
     ):
@@ -411,7 +411,7 @@ async def test_scim_patch_user_no_active_change_does_not_touch_keys():
             AsyncMock(return_value=mock_scim_user),
         ),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
+            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
             AsyncMock(),
         ),
     ):
@@ -474,7 +474,7 @@ async def test_scim_put_user_omitting_active_preserves_deactivated_state():
             AsyncMock(return_value=mock_scim_user),
         ),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
+            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
             AsyncMock(),
         ),
     ):
@@ -530,7 +530,7 @@ async def test_scim_put_user_explicit_active_false_blocks_keys():
             AsyncMock(return_value=mock_scim_user),
         ),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
+            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
             AsyncMock(),
         ),
     ):

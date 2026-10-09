@@ -205,7 +205,7 @@ class MCPOAuth2TokenCache(InMemoryCache):
 mcp_oauth2_token_cache: Final = MCPOAuth2TokenCache()
 
 
-def _compute_per_user_token_ttl(server: "MCPServer", expires_in: int | None) -> int:
+def compute_per_user_token_ttl(server: "MCPServer", expires_in: int | None) -> int:
     """Compute Redis TTL for a per-user token.
 
     Uses server.token_storage_ttl_seconds when configured, capped at the token's
@@ -221,6 +221,9 @@ def _compute_per_user_token_ttl(server: "MCPServer", expires_in: int | None) -> 
     if lifetime_bound is not None:
         return max(lifetime_bound, 1)
     return MCP_PER_USER_TOKEN_DEFAULT_TTL
+
+
+_compute_per_user_token_ttl: Final = compute_per_user_token_ttl
 
 
 class MCPPerUserTokenCache:

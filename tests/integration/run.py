@@ -13,7 +13,7 @@ from typing import Final
 GROUPS: Final = MappingProxyType(
     {
         "management": ("management", "authorization", "configuration"),
-        "accounting": ("pricing", "spend"),
+        "accounting": ("pricing", "spend", "caching"),
         "database": ("database",),
         "providers": ("providers", "routing", "streaming", "messages_endpoint", "translation"),
         "extensions": ("observability", "compatibility"),
@@ -23,7 +23,9 @@ GROUPS: Final = MappingProxyType(
         "security": ("security",),
     }
 )
-GITHUB_FILES: Final = frozenset({"tests/integration/database/test_roi_observed.py"})
+GITHUB_FILES: Final = frozenset(
+    {"tests/integration/database/test_roi_observed.py", "tests/integration/mcp/test_interactions.py"}
+)
 
 
 @dataclass(frozen=True, slots=True)

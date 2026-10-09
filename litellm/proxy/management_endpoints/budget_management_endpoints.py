@@ -22,8 +22,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-from litellm.proxy.management_endpoints.common_utils import (
-    _user_has_admin_view,
+from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
+    _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    user_api_key_has_admin_view,
     validate_budget_duration,
 )
 from litellm.proxy.utils import jsonify_object
@@ -256,7 +257,7 @@ async def budget_settings(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if not _user_has_admin_view(user_api_key_dict):
+    if not user_api_key_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=400,
             detail={"error": f"{CommonProxyErrors.not_allowed_access.value}, your role={user_api_key_dict.user_role}"},
@@ -317,7 +318,7 @@ async def list_budget(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if not _user_has_admin_view(user_api_key_dict):
+    if not user_api_key_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=400,
             detail={"error": f"{CommonProxyErrors.not_allowed_access.value}, your role={user_api_key_dict.user_role}"},

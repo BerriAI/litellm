@@ -15,15 +15,20 @@ _NEWRELIC_VAR_PREFIX: Final = "newrelic_"
 _LANGFUSE_OTEL_CALLBACK: Final = "langfuse_otel"
 _LANGFUSE_SPAN_SCOPE_VAR: Final = "langfuse_span_scope"
 _ARIZE_CALLBACK: Final = "arize"
+_ARIZE_OTLP_PROTOCOL_VAR: Final = "arize_otlp_protocol"
 _ARIZE_SAMPLING_RATE_VARS: Final[frozenset[str]] = frozenset(
     {"arize_success_sampling_rate", "arize_error_sampling_rate"}
 )
 
 
-def callback_config_error(callback_name: str | None, callback_vars: Mapping[str, str] | None) -> str | None:
+def callback_config_error(
+    callback_name: str | None, callback_vars: Mapping[str, str] | None, callback_type: str | None = None
+) -> str | None:
     if not callback_vars:
         return None
-    arize_error: Final = _arize_sampling_rate_error(callback_name, callback_vars)
+    arize_error: Final = _arize_sampling_rate_error(callback_name, callback_vars) or _arize_otlp_protocol_error(
+        callback_name, callback_vars, callback_type
+    )
     if arize_error is not None:
         return arize_error
     langfuse_error: Final = _langfuse_environment_error(callback_vars) or _langfuse_span_scope_error(
@@ -94,7 +99,9 @@ _VAR_FAMILIES: Final[Mapping[str, str]] = MappingProxyType(
     }
 )
 
-_FAMILY_OPTION_VARS: Final[frozenset[str]] = frozenset({_LANGFUSE_SPAN_SCOPE_VAR, *_ARIZE_SAMPLING_RATE_VARS})
+_FAMILY_OPTION_VARS: Final[frozenset[str]] = frozenset(
+    {_LANGFUSE_SPAN_SCOPE_VAR, _ARIZE_OTLP_PROTOCOL_VAR, *_ARIZE_SAMPLING_RATE_VARS}
+)
 
 
 def _family_of(var: str) -> str | None:
@@ -217,7 +224,10 @@ def _logging_entry_error(entry: object) -> str | None:
     callback_name: Final = entry.get("callback_name")
     if not isinstance(callback_name, str) or not isinstance(entry.get("callback_vars"), Mapping):
         return None
-    return callback_config_error(callback_name, _entry_callback_vars(entry))
+    callback_type_raw: Final = entry.get("callback_type")
+    return callback_config_error(
+        callback_name, _entry_callback_vars(entry), callback_type_raw if isinstance(callback_type_raw, str) else None
+    )
 
 
 def _arize_sampling_rate_error(callback_name: str | None, callback_vars: Mapping[str, str]) -> str | None:
@@ -233,6 +243,30 @@ def _arize_sampling_rate_error(callback_name: str | None, callback_vars: Mapping
             return f"{var} must be a number between 0.0 and 1.0 (inclusive), got {value!r}"
         if not math.isfinite(rate) or not 0.0 <= rate <= 1.0:
             return f"{var} must be a number between 0.0 and 1.0 (inclusive), got {value!r}"
+    return None
+
+
+def _arize_otlp_protocol_error(
+    callback_name: str | None, callback_vars: Mapping[str, str], callback_type: str | None = None
+) -> str | None:
+    value: Final = callback_vars.get(_ARIZE_OTLP_PROTOCOL_VAR)
+    if value is None:
+        return None
+    if callback_name != _ARIZE_CALLBACK:
+        return f"{_ARIZE_OTLP_PROTOCOL_VAR} applies to the {_ARIZE_CALLBACK} callback only, not {callback_name!r}"
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        validate_arize_otlp_protocol_value,
+    )
+
+    try:
+        validate_arize_otlp_protocol_value(value)
+    except ValueError as e:
+        return str(e)
+    if callback_type == "failure":
+        return f"{_ARIZE_OTLP_PROTOCOL_VAR} needs callback_type 'success' or 'success_and_failure'; failure-only Arize callbacks export over the proxy's own Arize transport"
+    if not is_otel_v2_enabled():
+        return "Per-team Arize transport selection requires the proxy to run with LITELLM_OTEL_V2=true."
     return None
 
 

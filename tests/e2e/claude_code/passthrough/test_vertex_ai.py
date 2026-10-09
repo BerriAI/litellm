@@ -26,6 +26,7 @@ Google and every tier fails with a 401.
 
 from __future__ import annotations
 
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from claude_code._passthrough import run_passthrough_cell, vertex_extra_env
 
 VERTEX_MODELS = [
@@ -35,6 +36,15 @@ VERTEX_MODELS = [
 ]
 
 
+@meta(
+    Subject(
+        domain=Domain.PASSTHROUGH,
+        route=Route.PASSTHROUGH,
+        providers=(Provider.VERTEX_AI,),
+        models=tuple(VERTEX_MODELS),
+        mode=Mode.STREAM,
+    )
+)
 def test_passthrough_vertex_ai(compat_result):
     """Drive the `claude` CLI through `{proxy}/vertex_ai` and assert a reply."""
     run_passthrough_cell(

@@ -572,6 +572,11 @@ migrationJob:
   # In that case, pre-install/pre-upgrade hooks run before normal resources, so this defaults to "default".
   serviceAccountName: ""
   annotations: {}
+  jobLabels: {} # Custom labels for the Job metadata
+  jobAnnotations: {} # Custom annotations for the Job metadata
+  podLabels: {} # Custom labels for the Job pod template
+  command: [] # Override container command (defaults to ["python", "litellm/proxy/prisma_migration.py"])
+  args: [] # Override container args
   ttlSecondsAfterFinished: 120
   resources: {}
   #  Unset by default. This job runs the database migration and exits, so it does not
@@ -647,3 +652,72 @@ serviceMonitor:
   namespaceSelector:
     matchNames: []
     # - test-namespace
+
+lens:
+  library: true
+
+lensWorker:
+  retainResources: false
+  mode: ""
+  externalUrl: ""
+  externalServiceName: ""
+  gateway:
+    secretName: ""
+    secretKey: gateway-secret
+  standaloneUrl: ""
+  adminTokenSecret:
+    name: ""
+    key: admin-token
+  extraEnv: []
+  extraEnvFrom: []
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: ghcr.io/berriai/lens
+    tag: "0.1.0-dev.0"
+    digest: ""
+    pullPolicy: IfNotPresent
+  tokenSecret:
+    name: ""
+    key: token
+  serviceTokenSecret:
+    name: ""
+    key: service-token
+  clickhouse:
+    enabled: true
+    image: clickhouse/clickhouse-server:26.9.6.6@sha256:eb4870e7ca7ed70c259eebfcfbee6cf797017f6b5436c2926bbbfe3d4d28486e
+    storage: 20Gi
+    storageClassName: null
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        memory: 2Gi
+  clickhouseDatabase: litellm
+  retentionDays: 14
+  clickhouseSecret:
+    name: ""
+    key: url
+  publicUrl: ""
+  service:
+    port: 4318
+    annotations: {}
+  ingress:
+    enabled: false
+    path: /v1/
+    className: ""
+    host: ""
+    annotations: {}
+    tls: []
+  url: ""
+  tmpSizeLimit: 1Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 2Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}

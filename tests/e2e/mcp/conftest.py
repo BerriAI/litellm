@@ -15,12 +15,9 @@ from typing import Protocol, cast
 
 import pytest
 
+from datadog_mcp import DdLogsReader
 from mcp_client import McpClient, build_client
 from proxy_client import ProxyClient
-
-
-class DdLogsReader(Protocol):
-    def poll_events_for_marker(self, marker: str) -> list[object]: ...
 
 
 class _DdLogsReaderBuilder(Protocol):

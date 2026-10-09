@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable, Mapping, Sequence
-from typing import Final, cast  # noqa: TID251  # narrows caller-owned containers without copying them
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Final, TypeVar, cast  # noqa: TID251  # narrows caller-owned containers without copying them
 
 import litellm
 
@@ -80,3 +82,46 @@ def inference_decline_reason(parameters: tuple[str, ...], kwargs: Mapping[str, o
         if name not in parameters and name not in _INFERENCE_CONTEXT:
             return f"native inference does not implement {name}"
     return None
+
+
+_BAGS: Final = frozenset({inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD})
+
+
+@dataclass(frozen=True, slots=True)
+class NativeCall:
+    """A public call as Python bound it.
+
+    ``base`` is the positional arguments by name plus the signature defaults, with no caller
+    keyword in it. ``kwargs`` is the caller's keyword dict, which callbacks may rewrite before
+    the request is decoded. The call the public function sees is ``kwargs`` laid over ``base``.
+    """
+
+    args: tuple[object, ...]
+    kwargs: Mapping[str, object]
+    base: Mapping[str, object]
+
+    @property
+    def resolved(self) -> Mapping[str, object]:
+        return MappingProxyType({**self.base, **self.kwargs})
+
+
+def _without_bags(legacy: inspect.Signature, named: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType({name: value for name, value in named.items() if legacy.parameters[name].kind not in _BAGS})
+
+
+def native_call(legacy: inspect.Signature, args: tuple[object, ...], kwargs: Mapping[str, object]) -> NativeCall:
+    positional: Final = legacy.bind_partial(*args)
+    positional.apply_defaults()
+    return NativeCall(args=args, kwargs=kwargs, base=_without_bags(legacy, positional.arguments))
+
+
+NativeResultT: Final = TypeVar("NativeResultT")
+
+
+def native_call_hook(
+    hook: Callable[[NativeCall], NativeResultT],
+    call: NativeCall,
+    _args: tuple[object, ...],
+    _kwargs: Mapping[str, object],
+) -> NativeResultT:
+    return hook(call)

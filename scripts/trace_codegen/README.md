@@ -1,9 +1,9 @@
-Run `uv run scripts/generate_trace_types.py` from the repository root to export Rust schemas and regenerate the Python trace contracts. Run the same command with `--check` to compare fresh output with the committed schemas and Python files
+Run `uv run scripts/generate_trace_types.py` from the repository root to regenerate Python HTTP contracts. Run it with `--check` to verify the frozen Lens schemas and compare generated Python with committed files
 
-The script pins datamodel-code-generator in its inline dependency metadata. Rust uses the workspace's locked Schemars version through each owning crate's optional `schema` feature. Neither tool is a Python runtime dependency
+Lens owns the Rust contracts. `scripts/lens_assets/source.json` pins the Lens repository revision and SHA-256 of each schema and development fixture. The gateway consumes these data files offline; it does not compile or maintain a second Rust tracing implementation
 
-Each crate exports its own roots using JSON Schema 2020-12. Request parameters use Schemars' deserialization contract. Trace views and query help use its serialization contract. Lens rows use their ClickHouse deserialization schemas, including quoted numbers and numeric boolean flags
+To update the pin, check out the intended Lens commit and run its `export-traces-schema` binary for the default, `--requests` and `--responses` modes, plus `export-traces-clickhouse-schema`, with the `schema` feature and locked dependencies. Import the consumed roots into the corresponding `scripts/lens_assets/schemas` group and copy fixtures from that same commit. Update the source revision and hashes together, then regenerate and run the gateway trace contract tests
 
-The templates preserve tuple conversion, immutable tuple defaults, and bounded `ReadOnly` TypedDict fields. Pydantic models use the generator's frozen-model option and each schema's extra-field policy. ClickHouse numeric schemas select bounded, normalized Python scalar types through schema metadata consumed by the model template
+The generator pins datamodel-code-generator through its inline dependency metadata. Neither it nor the schema exporter is a runtime dependency. The templates preserve frozen models, tuple conversion and bounded scalars. Request models retain each canonical schema's extra-field policy, including ignored unknown GET parameters and forbidden extra SQL body fields
 
-Edit the owning Rust contract, schema annotation, or generation configuration, then regenerate. Never edit `litellm/rust_bridge/trace/generated/` manually. The SQL response envelope remains handwritten in `queries.py`
+The generated contracts live in `litellm/tracing/generated`. `requests.py` supplies gateway endpoint parameter models, `responses.py` supplies the SQL response, and `queries.py` validates the remote SQL envelope. Public request behavior changes need their own compatibility review

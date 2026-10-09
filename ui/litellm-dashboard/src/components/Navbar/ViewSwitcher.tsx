@@ -10,9 +10,21 @@ import { Check, ChevronsUpDown, LayoutGrid } from "lucide-react";
 import { usePluginMode } from "@/contexts/PluginModeContext";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { uiHref } from "@/utils/uiHref";
+import moyaiHead from "../../../public/assets/moyai/moyai-head.svg";
 
 const GATEWAY = "ai-gateway";
 const CHAT = "chat";
+const MOYAI = "moyai";
+
+function isRoute(pathname: string, href: string): boolean {
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+function activeLabelFor(isChatRoute: boolean, isMoyaiRoute: boolean, pluginLabel: string | undefined): string {
+  if (isChatRoute) return "Chat";
+  if (isMoyaiRoute) return "Moyai";
+  return pluginLabel ?? "AI Gateway";
+}
 
 interface ViewSwitcherItem {
   key: string;
@@ -27,12 +39,14 @@ export default function ViewSwitcher() {
   const pathname = usePathname();
 
   const chatEnabled = Boolean(uiSettings?.values?.enable_chat_ui);
+  const moyaiUrl = (uiSettings?.values?.moyai_url as string | undefined) ?? null;
 
-  const chatHref = uiHref(CHAT);
   const normalizedPathname = (pathname ?? "").replace(/\/+$/, "");
-  const isChatRoute = chatEnabled && (normalizedPathname === chatHref || normalizedPathname.startsWith(`${chatHref}/`));
+  const isChatRoute = chatEnabled && isRoute(normalizedPathname, uiHref(CHAT));
+  const isMoyaiRoute = isRoute(normalizedPathname, uiHref(MOYAI));
+  const isStandaloneRoute = isChatRoute || isMoyaiRoute;
 
-  const activeLabel = isChatRoute ? "Chat" : plugins.find((p) => p.name === mode)?.display_name ?? "AI Gateway";
+  const activeLabel = activeLabelFor(isChatRoute, isMoyaiRoute, plugins.find((p) => p.name === mode)?.display_name);
 
   const modeEntries = [
     { key: GATEWAY, label: "AI Gateway" },
@@ -41,9 +55,7 @@ export default function ViewSwitcher() {
 
   const selectMode = (key: string) => {
     setMode(key);
-    // The chat route lives outside the dashboard SPA shell that reacts to `mode`,
-    // so switching modes from there needs a real navigation, not just state.
-    if (isChatRoute) {
+    if (isStandaloneRoute) {
       window.location.assign(uiHref(""));
     }
   };
@@ -78,11 +90,27 @@ export default function ViewSwitcher() {
       label: (
         <div className="flex items-center justify-between gap-6 py-0.5">
           <span className="font-medium">{e.label}</span>
-          {!isChatRoute && e.key === mode && <Check className="size-4 text-info" />}
+          {!isStandaloneRoute && e.key === mode && <Check className="size-4 text-info" />}
         </div>
       ),
       onClick: () => selectMode(e.key),
     })),
+    {
+      key: MOYAI,
+      label: (
+        <div className="flex items-center justify-between gap-6 py-0.5">
+          <span className="flex items-center gap-2">
+            <img src={moyaiHead.src} alt="" className="h-4 w-auto" />
+            <span className="flex flex-col">
+              <span className="font-medium">Moyai</span>
+              <span className="text-xs leading-snug text-muted-foreground">Cloud Coding Agent</span>
+            </span>
+          </span>
+          {isMoyaiRoute && <Check className="size-4 text-info" />}
+        </div>
+      ),
+      onClick: () => window.location.assign(moyaiUrl ?? uiHref(MOYAI)),
+    },
     chatItem,
   ];
 

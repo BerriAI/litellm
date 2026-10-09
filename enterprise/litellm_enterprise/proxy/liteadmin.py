@@ -15,11 +15,12 @@ from urllib.parse import urlencode, urlsplit
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
 
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.oauth_utils import get_request_base_url
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 
 router: Final = APIRouter()
@@ -34,14 +35,14 @@ _HEADERS: Final = {
 }
 
 
-class LinkDetails(BaseModel):
+class LinkDetails(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
     workspace_id: str = Field(min_length=1, max_length=64)
     slack_user_id: str = Field(min_length=1, max_length=64)
     email: str = Field(min_length=1, max_length=320)
 
 
-class AdminSession(BaseModel):
+class AdminSession(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     user_id: str
     credential: SecretStr

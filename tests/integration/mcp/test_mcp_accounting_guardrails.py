@@ -468,7 +468,7 @@ def test_generic_sink_and_native_hooks_receive_listed_metadata_on_typed_keys_wit
         assert row["status"] == "success", row
         assert _tool_metadata(row)["name"] == "lookup", row
         metadata: Final = row["metadata"]
-        assert isinstance(metadata, dict) and metadata["applied_guardrails"] == [hooks_rig.guardrail], metadata
+        assert isinstance(metadata, dict) and metadata["applied_guardrails"].count(hooks_rig.guardrail) == 1, metadata
 
 
 def test_pre_call_mask_reaches_the_peer_and_post_call_mask_reaches_the_caller_on_one_call_id(

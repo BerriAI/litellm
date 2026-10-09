@@ -268,7 +268,7 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             assert row.spend == 0, f"{case.name}: failure spend was {row.spend}"
             return
         assert response.is_success, f"{case.name}: proxy returned {response.status_code}: {response.text[:400]}"
-        if case.endpoint == "/v1/decisions":
+        if case.endpoint == "/v1/systemone":
             observed: Final = JSON_OBJECT.validate_json(
                 httpx.get(f"{gateway.upstream_url}/__observations", timeout=5, trust_env=False).content
             )
@@ -281,6 +281,8 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
                 {
                     "path": f"/{scenario_id}/v1/decisions",
                     "authorization": "Bearer sk-scripted-provider",
+                    "method": "POST",
+                    "api_key": "",
                     "body": {
                         "model": "pplx-decider-v1-27b",
                         "state": {"source": "cost-tracking"},

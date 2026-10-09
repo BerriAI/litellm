@@ -81,6 +81,7 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
   useAllProxyModels: vi.fn(),
+  useModelAccessGroupNames: vi.fn(() => new Set<string>()),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", async (importOriginal) => ({
@@ -231,7 +232,7 @@ vi.mock("../key_team_helpers/filter_helpers", () => ({
   fetchAllOrganizations: vi.fn().mockResolvedValue([]),
 }));
 
-import { useAllProxyModels } from "@/app/(dashboard)/hooks/models/useModels";
+import { useAllProxyModels, useModelAccessGroupNames } from "@/app/(dashboard)/hooks/models/useModels";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { teamKeys, teamsTableKeys, useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
@@ -242,6 +243,7 @@ import { useAccessGroups } from "@/app/(dashboard)/hooks/accessGroups/useAccessG
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 
 const mockUseAllProxyModels = vi.mocked(useAllProxyModels);
+const mockUseModelAccessGroupNames = vi.mocked(useModelAccessGroupNames);
 const mockUseKeys = vi.mocked(useKeys);
 const mockUseTeam = vi.mocked(useTeam);
 const mockUseOrganization = vi.mocked(useOrganization);
@@ -292,6 +294,7 @@ const createMockTeamData = (overrides = {}) => ({
 });
 
 const seedDefaultMocks = () => {
+  mockUseModelAccessGroupNames.mockReturnValue(new Set());
   mockUseAllProxyModels.mockReturnValue({
     data: { data: [] },
     isLoading: false,
@@ -361,6 +364,35 @@ describe("TeamInfoView", () => {
   });
 
   describe("display and rendering", () => {
+    it("links direct model chips to their matching access-group or model filter", async () => {
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({ models: ["repro-access-group", "gpt-4.1"] }),
+      );
+      mockUseModelAccessGroupNames.mockReturnValue(new Set(["repro-access-group"]));
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      expect(await screen.findByRole("link", { name: "repro-access-group" })).toHaveAttribute(
+        "href",
+        expect.stringMatching(/\?access_group=repro-access-group$/),
+      );
+      expect(screen.getByRole("link", { name: "gpt-4.1" })).toHaveAttribute(
+        "href",
+        expect.stringMatching(/\?model_group=gpt-4\.1$/),
+      );
+
+      await userEvent.setup({ delay: null }).click(screen.getByRole("tab", { name: "Settings" }));
+      const settings = await screen.findByRole("tabpanel", { name: "Settings" });
+      expect(within(settings).getByRole("link", { name: "repro-access-group" })).toHaveAttribute(
+        "href",
+        expect.stringMatching(/\?access_group=repro-access-group$/),
+      );
+      expect(within(settings).getByRole("link", { name: "gpt-4.1" })).toHaveAttribute(
+        "href",
+        expect.stringMatching(/\?model_group=gpt-4\.1$/),
+      );
+    });
+
     it("should render", async () => {
       vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
 
@@ -1407,7 +1439,7 @@ describe("TeamInfoView", () => {
       expect(screen.getByLabelText("Estimated Output Tokens Per Model")).toBeEnabled();
     });
 
-    it("should keep declared keys as ordinary prefilled rows and submit the edited value", async () => {
+    it("should show declared keys as fixed labels and submit the edited value", async () => {
       const user = userEvent.setup({ delay: null });
       vi.mocked(useTeamMetadataSchema).mockReturnValue({
         data: [
@@ -1428,16 +1460,18 @@ describe("TeamInfoView", () => {
       await openSettingsEditor(user);
 
       await waitFor(() => {
-        expect(screen.getAllByPlaceholderText("Key").map((input) => (input as HTMLInputElement).value)).toEqual([
-          "cost_center",
-          "department",
-          "app_name",
+        expect(screen.getAllByTestId("metadata-schema-label").map((label) => label.textContent)).toEqual([
+          "Cost Center",
+          "Application Name",
         ]);
       });
-      expect(screen.getAllByPlaceholderText("Value")[0]).toHaveValue("CC-OLD");
+      expect(screen.getAllByPlaceholderText("Key").map((input) => (input as HTMLInputElement).value)).toEqual([
+        "department",
+      ]);
+      expect(screen.getByLabelText("Cost Center")).toHaveValue("CC-OLD");
 
-      await user.clear(screen.getAllByPlaceholderText("Value")[0]);
-      fireEvent.change(screen.getAllByPlaceholderText("Value")[0], { target: { value: "CC-NEW" } });
+      await user.clear(screen.getByLabelText("Cost Center"));
+      fireEvent.change(screen.getByLabelText("Cost Center"), { target: { value: "CC-NEW" } });
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {
@@ -2118,6 +2152,43 @@ describe("TeamInfoView - which team member fields reach the update payload depen
     expect(JSON.parse(JSON.stringify(payload))).not.toHaveProperty("team_member_budget_duration");
   });
 
+  it("sends a null team_member_budget when Default Budget is cleared, instead of a $0 cap", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    fireEvent.change(await screen.findByLabelText("Default Budget (USD)"), { target: { value: "" } });
+    const payload = await save(user);
+
+    expect(JSON.parse(JSON.stringify(payload))).toMatchObject({
+      team_member_budget: null,
+      team_member_tpm_limit: 11,
+      team_member_rpm_limit: 22,
+    });
+  });
+
+  it("keeps a member default with no dollar cap uncapped when Team Member Settings is saved", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user, { max_budget: null, budget_duration: "30d", tpm_limit: null, rpm_limit: 60 });
+
+    await user.click(screen.getByText("Team Member Settings"));
+    await screen.findByLabelText("Default Budget (USD)");
+    const payload = await save(user);
+
+    expect(JSON.parse(JSON.stringify(payload))).toMatchObject({ team_member_budget: null, team_member_rpm_limit: 60 });
+  });
+
+  it("sends a typed Default Budget as a number", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    fireEvent.change(await screen.findByLabelText("Default Budget (USD)"), { target: { value: "12.5" } });
+    const payload = await save(user);
+
+    expect(payload.team_member_budget).toBe(12.5);
+  });
+
   it("omits object_permission.search_tools while Search Tool Settings is closed", async () => {
     const user = userEvent.setup({ delay: null });
     await openEditor(user);
@@ -2456,7 +2527,7 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     expect(networking.teamUpdateCall).not.toHaveBeenCalled();
   });
 
-  it("carries every typed value to the update payload at the type and shape antd sends today", async () => {
+  it("carries every typed value to the update payload, with numeric fields as numbers", async () => {
     const user = userEvent.setup({ delay: null });
     await openEditor(user);
 
@@ -2479,8 +2550,8 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     const payload = await save(user);
 
     expect(payload.team_alias).toBe("Renamed Team");
-    expect(payload.soft_budget).toBe("9.5");
-    expect(payload.tpm_limit).toBe("555");
+    expect(payload.soft_budget).toBe(9.5);
+    expect(payload.tpm_limit).toBe(555);
     expect((payload.metadata as Record<string, unknown>).soft_budget_alerting_emails).toStrictEqual([
       "a@test.com",
       "b@test.com",

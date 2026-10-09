@@ -24,6 +24,7 @@ from typing import Final, Generic, Literal, NewType, Protocol, TypeVar, cast
 
 import pytest
 import requests
+from e2e_metadata import step
 from pydantic import BaseModel, ConfigDict, Field
 
 URL = NewType("URL", str)
@@ -473,6 +474,7 @@ def get[R: BaseModel](
     return classify(resp, response_type)
 
 
+@step("GET the external URL {url}")
 def get_external[R: BaseModel](
     url: str,
     *,

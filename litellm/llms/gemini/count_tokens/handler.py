@@ -13,7 +13,7 @@ else:
 
 
 class GoogleAIStudioTokenCounter:
-    def _clean_contents_for_gemini_api(self, contents: Any) -> Any:
+    def _clean_contents_for_gemini_api(self, contents: Any) -> object:
         """
         Clean up contents to remove unsupported fields for the Gemini API.
 

@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, field_validator
+from pydantic import ConfigDict, TypeAdapter, ValidationError, field_validator
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -43,6 +43,7 @@ from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     CallTypes,
@@ -67,7 +68,7 @@ ToolCallLike: TypeAlias = (
 )
 
 
-class _ToolCallFunctionSlice(BaseModel):
+class _ToolCallFunctionSlice(LiteLLMBaseModel):
     model_config = ConfigDict(from_attributes=True, extra="ignore")
 
     name: str | None = None
@@ -90,19 +91,19 @@ class _ToolCallFunctionSlice(BaseModel):
         return json.dumps(value) if isinstance(value, (dict, list)) else str(value)
 
 
-class _ToolCallSlice(BaseModel):
+class _ToolCallSlice(LiteLLMBaseModel):
     model_config = ConfigDict(from_attributes=True, extra="ignore")
 
     function: _ToolCallFunctionSlice | None = None
 
 
-class _ResponsesContentPart(BaseModel):
+class _ResponsesContentPart(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     text: str | None = None
 
 
-class _ResponsesInputItem(BaseModel):
+class _ResponsesInputItem(LiteLLMBaseModel):
     """The slice of a raw Responses ``input`` item that decides which ``texts`` it flattens to."""
 
     model_config = ConfigDict(extra="ignore")

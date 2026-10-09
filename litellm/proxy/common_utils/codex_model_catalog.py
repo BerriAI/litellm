@@ -26,9 +26,10 @@ from pathlib import Path
 from types import MappingProxyType, NoneType
 from typing import TYPE_CHECKING, Annotated, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, StringConstraints, TypeAdapter, ValidationError
+from pydantic import ConfigDict, StringConstraints, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -44,7 +45,7 @@ _BODY_PREFIX: Final = '{"models":['
 _BODY_SUFFIX: Final = "]}"
 
 
-class CodexServiceTier(BaseModel):
+class CodexServiceTier(LiteLLMBaseModel):
     """A `ModelServiceTier` as Codex reads it: the slash command is `name` lowercased, and toggling
     it sends `id` as the request's `service_tier`."""
 
@@ -55,7 +56,7 @@ class CodexServiceTier(BaseModel):
     description: str
 
 
-class _ConfiguredTier(BaseModel):
+class _ConfiguredTier(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: _TierId
@@ -66,12 +67,12 @@ class _ConfiguredTier(BaseModel):
 _CONFIGURED_TIERS: Final = TypeAdapter(tuple[_TierId | _ConfiguredTier, ...])
 
 
-class CodexTruncationPolicy(BaseModel):
+class CodexTruncationPolicy(LiteLLMBaseModel):
     mode: Literal["bytes"] = "bytes"
     limit: int = 10_000
 
 
-class CodexFallbackModel(BaseModel):
+class CodexFallbackModel(LiteLLMBaseModel):
     """One `ModelInfo` entry of a Codex model catalog for a model Codex does not know.
 
     Every field that some Codex release since `model_catalog_json` appeared
@@ -103,13 +104,13 @@ class CodexFallbackModel(BaseModel):
     base_instructions: str
 
 
-class CodexStockUpgrade(BaseModel):
+class CodexStockUpgrade(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow")
 
     model: str
 
 
-class CodexStockModel(BaseModel):
+class CodexStockModel(LiteLLMBaseModel):
     """One `ModelInfo` entry as Codex ships it or prints it from `codex debug models`.
 
     Only the fields the listing rewrites are named; everything else that release
@@ -129,7 +130,7 @@ class CodexStockModel(BaseModel):
     default_service_tier: str | None = None
 
 
-class CodexStockCatalog(BaseModel):
+class CodexStockCatalog(LiteLLMBaseModel):
     models: tuple[CodexStockModel, ...]
 
 

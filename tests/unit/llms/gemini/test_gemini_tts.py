@@ -92,17 +92,12 @@ class TestGeminiTTSTransformation:
 
         assert "speechConfig" in result
         assert result["speechConfig"]["languageCode"] == "en-US"
-        assert (
-            result["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"]
-            == "Kore"
-        )
+        assert result["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
 
     def test_map_audio_params_language_code(self):
         config = GoogleAIStudioGeminiConfig()
 
-        result = config._map_audio_params(
-            {"voice": "Kore", "format": "pcm16", "language_code": "de-DE"}
-        )
+        result = config.map_audio_params({"voice": "Kore", "format": "pcm16", "language_code": "de-DE"})
 
         assert result["languageCode"] == "de-DE"
         assert result["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
@@ -110,7 +105,7 @@ class TestGeminiTTSTransformation:
     def test_map_audio_params_no_language_code(self):
         config = GoogleAIStudioGeminiConfig()
 
-        result = config._map_audio_params({"voice": "Kore", "format": "pcm16"})
+        result = config.map_audio_params({"voice": "Kore", "format": "pcm16"})
 
         assert "languageCode" not in result
         assert result["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
@@ -257,26 +252,22 @@ class TestGeminiTTSSpeechConfigInRequestBody:
             ("gemini-2.5-pro-tts", "vertex_ai"),
         ],
     )
-    def test_speechconfig_in_generation_config_transform_request_body(
-        self, model, custom_llm_provider
-    ):
-        """Test that speechConfig is included in generationConfig after _transform_request_body()"""
+    def test_speechconfig_in_generation_config_transform_request_body(self, model, custom_llm_provider):
+        """Test that speechConfig is included in generationConfig after transform_request_body()"""
         from litellm.llms.vertex_ai.gemini.transformation import (
-            _transform_request_body,
+            transform_request_body,
         )
 
         # Simulate optional_params after map_openai_params() has run
         optional_params = {
-            "speechConfig": {
-                "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}
-            },
+            "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}},
             "responseModalities": ["AUDIO"],
         }
 
         messages = [{"role": "user", "content": "Say hello"}]
 
-        # Call _transform_request_body which applies the filtering
-        request_body = _transform_request_body(
+        # Call transform_request_body which applies the filtering
+        request_body = transform_request_body(
             messages=messages,
             model=model,
             optional_params=optional_params,
@@ -308,12 +299,12 @@ class TestGeminiTTSSpeechConfigInRequestBody:
         ],
     )
     def test_speechconfig_end_to_end_mapping(self, model, custom_llm_provider):
-        """Test full pipeline: audio param -> map_openai_params -> _transform_request_body"""
+        """Test full pipeline: audio param -> map_openai_params -> transform_request_body"""
+        from litellm.llms.vertex_ai.gemini.transformation import (
+            transform_request_body,
+        )
         from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
             VertexGeminiConfig,
-        )
-        from litellm.llms.vertex_ai.gemini.transformation import (
-            _transform_request_body,
         )
 
         config = VertexGeminiConfig()
@@ -335,7 +326,7 @@ class TestGeminiTTSSpeechConfigInRequestBody:
         messages = [{"role": "user", "content": "Hello world"}]
 
         # Step 2: Transform to request body (this is where the bug was)
-        request_body = _transform_request_body(
+        request_body = transform_request_body(
             messages=messages,
             model=model,
             optional_params=mapped_params,
@@ -348,7 +339,7 @@ class TestGeminiTTSSpeechConfigInRequestBody:
         assert "generationConfig" in request_body
         generation_config = request_body["generationConfig"]
         assert "speechConfig" in generation_config, (
-            f"speechConfig was filtered out during _transform_request_body() for model={model}, provider={custom_llm_provider}. "
+            f"speechConfig was filtered out during transform_request_body() for model={model}, provider={custom_llm_provider}. "
             "This breaks Gemini TTS - speechConfig must be in GenerationConfig TypedDict."
         )
         assert (
@@ -372,18 +363,16 @@ class TestGeminiTTSSpeechConfigInRequestBody:
         ],
     )
     def test_language_code_end_to_end_mapping(self, model, custom_llm_provider):
+        from litellm.llms.vertex_ai.gemini.transformation import (
+            transform_request_body,
+        )
         from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
             VertexGeminiConfig,
-        )
-        from litellm.llms.vertex_ai.gemini.transformation import (
-            _transform_request_body,
         )
 
         config = VertexGeminiConfig()
 
-        non_default_params = {
-            "audio": {"voice": "Puck", "format": "pcm16", "language_code": "pt-BR"}
-        }
+        non_default_params = {"audio": {"voice": "Puck", "format": "pcm16", "language_code": "pt-BR"}}
         optional_params = {}
 
         mapped_params = config.map_openai_params(
@@ -395,7 +384,7 @@ class TestGeminiTTSSpeechConfigInRequestBody:
 
         assert mapped_params["speechConfig"]["languageCode"] == "pt-BR"
 
-        request_body = _transform_request_body(
+        request_body = transform_request_body(
             messages=[{"role": "user", "content": "Hello world"}],
             model=model,
             optional_params=mapped_params,

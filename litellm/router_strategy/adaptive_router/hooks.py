@@ -135,7 +135,7 @@ def _recent_tool_results(
     return results
 
 
-def _assistant_content_and_tool_calls(response_obj: Any) -> tuple:
+def _assistant_content_and_tool_calls(response_obj: Any) -> tuple[object, Sequence[Mapping[str, object]]]:
     """Return (assistant_text, tool_calls_list) extracted from a ModelResponse-ish object."""
     if response_obj is None:
         return None, []

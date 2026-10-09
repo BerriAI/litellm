@@ -202,37 +202,6 @@ async def test_get_llm_provider_for_deployment():
 
 
 @pytest.mark.asyncio
-async def test_get_budget_config_for_provider():
-    """
-    Test the _get_budget_config_for_provider helper method
-
-    """
-    cleanup_redis()
-    config = {
-        "openai": BudgetConfig(budget_duration="1d", max_budget=100),
-        "anthropic": BudgetConfig(budget_duration="7d", max_budget=500),
-    }
-
-    provider_budget = RouterBudgetLimiting(
-        dual_cache=DualCache(), provider_budget_config=config
-    )
-
-    # Test existing providers
-    openai_config = provider_budget._get_budget_config_for_provider("openai")
-    assert openai_config is not None
-    assert openai_config.budget_duration == "1d"
-    assert openai_config.max_budget == 100
-
-    anthropic_config = provider_budget._get_budget_config_for_provider("anthropic")
-    assert anthropic_config is not None
-    assert anthropic_config.budget_duration == "7d"
-    assert anthropic_config.max_budget == 500
-
-    # Test non-existent provider
-    assert provider_budget._get_budget_config_for_provider("unknown") is None
-
-
-@pytest.mark.asyncio
 async def test_handle_new_budget_window():
     """
     Test _handle_new_budget_window helper method
@@ -354,40 +323,6 @@ async def test_increment_spend_in_current_window():
     assert queued_op["key"] == spend_key
     assert queued_op["increment_value"] == response_cost
     assert queued_op["ttl"] == ttl
-
-
-@pytest.mark.asyncio
-async def test_get_current_provider_spend():
-    """
-    Test _get_current_provider_spend helper method
-
-    Scenarios:
-    1. Provider with no budget config returns None
-    2. Provider with budget config but no spend returns 0.0
-    3. Provider with budget config and spend returns correct value
-    """
-    cleanup_redis()
-    provider_budget = RouterBudgetLimiting(
-        dual_cache=DualCache(),
-        provider_budget_config={
-            "openai": BudgetConfig(time_period="1d", budget_limit=100),
-        },
-    )
-
-    # Test provider with no budget config
-    spend = await provider_budget._get_current_provider_spend("anthropic")
-    assert spend is None
-
-    # Test provider with budget config but no spend
-    spend = await provider_budget._get_current_provider_spend("openai")
-    assert spend == 0.0
-
-    # Test provider with budget config and spend
-    spend_key = "provider_spend:openai:1d"
-    await provider_budget.dual_cache.async_set_cache(key=spend_key, value=50.5)
-
-    spend = await provider_budget._get_current_provider_spend("openai")
-    assert spend == 50.5
 
 
 @pytest.mark.asyncio

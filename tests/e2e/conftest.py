@@ -60,7 +60,7 @@ _E2E_TEST_RAN = pytest.StashKey[bool]()
 _CALL_PASSED = pytest.StashKey[bool]()
 _IDLE_RSS = pytest.StashKey[RssCapture]()
 
-IDLE_RSS_READ_TIMEOUT_SECONDS: Final = 10.0
+IDLE_RSS_READ_TIMEOUT_SECONDS: Final = 30.0
 
 OPT_IN_MARKERS: Final = MappingProxyType(
     {

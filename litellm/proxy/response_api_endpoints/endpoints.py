@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from openai.types.responses import ResponseItemList
 from openai.types.responses.response_create_params import ResponseInputParam
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 from starlette.websockets import WebSocket, WebSocketDisconnect
 from typing_extensions import ReadOnly, TypedDict
 
@@ -30,11 +30,14 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth_websocket,
 )
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing, create_response
-from litellm.proxy.common_utils.http_parsing_utils import (
-    _read_request_body,
-    _safe_set_request_parsed_body,
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _safe_set_request_parsed_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    read_request_body,
+    safe_set_request_parsed_body,
 )
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     REASONING_EFFORT,
     ResponsesAPIOptionalRequestParams,
@@ -47,6 +50,7 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 router: Final = APIRouter()
+_RESPONSES_WS_CONFIG_VALUE_ADAPTER: Final[TypeAdapter[object | None]] = TypeAdapter(object | None)
 
 _ResponseDocSchemas: TypeAlias = dict[int | str, dict[str, object]]  # fastapi's responses kwarg
 
@@ -183,12 +187,12 @@ async def _resolve_cursor_model_variant_before_auth(request: Request) -> None:
     from litellm.proxy.proxy_server import llm_router
 
     try:
-        raw_body: Final = await _read_request_body(request=request)
+        raw_body: Final = await read_request_body(request=request)
     except (json.JSONDecodeError, ProxyException):
         return
     resolved: Final = _resolve_cursor_model_variant(raw_body, llm_router)
     if resolved is not raw_body:
-        _safe_set_request_parsed_body(request=request, parsed_body=resolved)
+        safe_set_request_parsed_body(request=request, parsed_body=resolved)
 
 
 @router.post(
@@ -225,7 +229,7 @@ async def responses_api(
     # Normal request
     curl -X POST http://localhost:4000/v1/responses \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
     -d '{
         "model": "gpt-4o",
         "input": "Tell me about AI"
@@ -234,7 +238,7 @@ async def responses_api(
     # Background request with polling
     curl -X POST http://localhost:4000/v1/responses \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
     -d '{
         "model": "gpt-4o",
         "input": "Tell me about AI",
@@ -243,7 +247,6 @@ async def responses_api(
     ```
     """
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         native_background_mode,
@@ -251,6 +254,7 @@ async def responses_api(
         polling_via_cache_enabled,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         redis_usage_cache,
         select_data_generator,
         user_api_base,
@@ -262,7 +266,7 @@ async def responses_api(
     )
 
     native_data_generator: Final = partial(select_data_generator, responses_stream_errors=True)
-    data = await _read_request_body(request=request)
+    data = await read_request_body(request=request)  # rebind-ok: pre-existing rebinding on a rename-only line
 
     # Check if polling via cache should be used for this request
     from litellm.proxy.response_polling.polling_handler import (
@@ -312,7 +316,7 @@ async def responses_api(
             )
             raise_if_required_body_param_missing(route_type="aresponses", data=data, llm_router=llm_router)
         except Exception as e:
-            raise await processor._handle_llm_api_exception(
+            raise await processor.handle_llm_api_exception(
                 e=e,
                 user_api_key_dict=user_api_key_dict,
                 proxy_logging_obj=proxy_logging_obj,
@@ -389,11 +393,11 @@ async def responses_api(
         if data.get("background") and isinstance(response, ResponsesAPIResponse):
             if response.status in ["queued", "in_progress"]:
                 from litellm_enterprise.proxy.hooks.managed_files import (
-                    _PROXY_LiteLLMManagedFiles,
+                    PROXY_LiteLLMManagedFiles,
                 )
 
                 managed_files_obj: Final = cast(
-                    _PROXY_LiteLLMManagedFiles | None,
+                    PROXY_LiteLLMManagedFiles | None,
                     proxy_logging_obj.get_proxy_hook("managed_files"),
                 )
 
@@ -450,7 +454,7 @@ async def responses_api(
             return await create_response(generator=_blocked_stream(), media_type="text/event-stream", headers={})
         return build_blocked_response(e)
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -517,7 +521,7 @@ async def cursor_chat_completions(
     ```bash
     curl -X POST http://localhost:4000/cursor/chat/completions \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
     -d '{
         "model": "gpt-4o",
         "input": [{"role": "user", "content": "Hello"}]
@@ -546,7 +550,7 @@ async def cursor_chat_completions(
     from litellm.types.llms.openai import ResponsesAPIResponse
     from litellm.types.utils import ModelResponse
 
-    raw_body: Final = await _read_request_body(request=request)
+    raw_body: Final = await read_request_body(request=request)
 
     if _is_chat_completions_body(raw_body):
         # Genuine chat completions body (Cursor sends these for models whose BYOK it
@@ -555,7 +559,7 @@ async def cursor_chat_completions(
         # empty messages stub alongside a real agent-mode input array
         normalized: Final = _normalize_tool_dialect(raw_body, to_chat=True)
         if normalized is not raw_body:
-            _safe_set_request_parsed_body(request=request, parsed_body=normalized)
+            safe_set_request_parsed_body(request=request, parsed_body=normalized)
         return await chat_completion(
             request=request,
             fastapi_response=fastapi_response,
@@ -666,7 +670,7 @@ async def cursor_chat_completions(
         # Streaming responses are already transformed by cursor_select_data_generator
         return response
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -710,19 +714,19 @@ async def get_response(
     ```bash
     # Get polling response
     curl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123 \
-    -H "Authorization: Bearer sk-1234"
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     
     # Get provider response
     curl -X GET http://localhost:4000/v1/responses/resp_abc123 \
-    -H "Authorization: Bearer sk-1234"
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         redis_usage_cache,
         select_data_generator,
         user_api_base,
@@ -759,7 +763,7 @@ async def get_response(
         return state
 
     # Normal provider response flow
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     data["response_id"] = response_id
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -782,7 +786,7 @@ async def get_response(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -825,15 +829,15 @@ async def delete_response(
     
     ```bash
     curl -X DELETE http://localhost:4000/v1/responses/resp_abc123 \
-    -H "Authorization: Bearer sk-1234"
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         redis_usage_cache,
         select_data_generator,
         user_api_base,
@@ -868,7 +872,7 @@ async def delete_response(
             raise HTTPException(status_code=500, detail="Failed to delete polling response")
 
     # Normal provider response flow
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     data["response_id"] = response_id
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -891,7 +895,7 @@ async def delete_response(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -925,11 +929,11 @@ async def get_response_input_items(
 ):
     """List input items for a response."""
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         select_data_generator,
         user_api_base,
         user_max_tokens,
@@ -939,7 +943,7 @@ async def get_response_input_items(
         version,
     )
 
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     data["response_id"] = response_id
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -962,7 +966,7 @@ async def get_response_input_items(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -1000,7 +1004,7 @@ async def compact_response(
     ```bash
     curl -X POST http://localhost:4000/v1/responses/compact \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
     -d '{
         "model": "gpt-4o",
         "input": [{"role": "user", "content": "Hello"}]
@@ -1008,11 +1012,11 @@ async def compact_response(
     ```
     """
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         select_data_generator,
         user_api_base,
         user_max_tokens,
@@ -1022,7 +1026,7 @@ async def compact_response(
         version,
     )
 
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
@@ -1044,7 +1048,7 @@ async def compact_response(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -1152,7 +1156,7 @@ async def responses_input_tokens(
     ```bash
     curl -X POST http://localhost:4000/v1/responses/input_tokens \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
     -d '{
         "model": "gpt-4o",
         "input": "Hello, how are you?"
@@ -1161,7 +1165,7 @@ async def responses_input_tokens(
 
     Returns: `{"object": "response.input_tokens", "input_tokens": <count>}`
     """
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     model_name: Final = data.get("model")
     input_value: Final = data.get("input")
     if not isinstance(model_name, str) or not model_name:
@@ -1231,19 +1235,19 @@ async def cancel_response(
     ```bash
     # Cancel polling response
     curl -X POST http://localhost:4000/v1/responses/litellm_poll_abc123/cancel \
-    -H "Authorization: Bearer sk-1234"
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     
     # Cancel provider response
     curl -X POST http://localhost:4000/v1/responses/resp_abc123/cancel \
-    -H "Authorization: Bearer sk-1234"
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         redis_usage_cache,
         select_data_generator,
         user_api_base,
@@ -1282,7 +1286,7 @@ async def cancel_response(
             raise HTTPException(status_code=500, detail="Failed to cancel polling response")
 
     # Normal provider response flow
-    data: Final = await _read_request_body(request=request)
+    data: Final = await read_request_body(request=request)
     data["response_id"] = response_id
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -1305,12 +1309,27 @@ async def cancel_response(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+
+
+def _resolve_responses_ws_session_limit_seconds() -> float:
+    from litellm.proxy.proxy_server import general_settings
+
+    field: Final = "responses_websocket_session_limit_seconds"
+    raw: Final = _RESPONSES_WS_CONFIG_VALUE_ADAPTER.validate_python(general_settings.get(field))
+    try:
+        return ConfigGeneralSettings.model_validate(
+            {} if raw is None else {field: raw}
+        ).responses_websocket_session_limit_seconds
+    except ValidationError as e:
+        default: Final = DEFAULT_RESPONSES_WEBSOCKET_SESSION_LIMIT_SECONDS
+        verbose_proxy_logger.warning("invalid general_settings.%s=%r (%s); using default %ss", field, raw, e, default)
+        return default
 
 
 async def _read_ws_model_from_first_frame(
@@ -1320,12 +1339,10 @@ async def _read_ws_model_from_first_frame(
     """Read the first WS frame and return (model, raw_message), or None on error.
 
     Sends an appropriate error frame and closes the socket before returning None.
+    The session-duration deadline is enforced by the caller, not here.
     """
     try:
-        first_message: Final = await asyncio.wait_for(websocket.receive_text(), timeout=30)
-    except asyncio.TimeoutError:
-        await websocket.close(code=1008, reason="Timed out waiting for first message")
-        return None
+        first_message: Final = await websocket.receive_text()
     except WebSocketDisconnect:
         return None
     except Exception:
@@ -1396,7 +1413,7 @@ def _extract_model_from_first_ws_event(first_event: object) -> str | None:
     return (nested.get("model") if isinstance(nested, dict) else None) or first_event.get("model")
 
 
-class _ResponseCreateRoutingHints(BaseModel):
+class _ResponseCreateRoutingHints(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     input: str | Sequence[object] | None = None
@@ -1435,8 +1452,8 @@ async def _enforce_responses_ws_first_frame_model_auth(
     llm_router: "Router | None",
 ) -> None:
     from litellm.proxy.auth.user_api_key_auth import (
-        _enforce_key_and_fallback_model_access,
-        _run_centralized_common_checks,
+        enforce_key_and_fallback_model_access,
+        run_centralized_common_checks,
     )
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -1455,7 +1472,7 @@ async def _enforce_responses_ws_first_frame_model_auth(
         return
     if user_custom_auth is not None and not general_settings.get("custom_auth_run_common_checks", False):
         return
-    await _enforce_key_and_fallback_model_access(
+    await enforce_key_and_fallback_model_access(
         valid_token=user_api_key_dict,
         request_data=request_data,
         route=route,
@@ -1463,7 +1480,7 @@ async def _enforce_responses_ws_first_frame_model_auth(
         llm_model_list=llm_model_list,
         llm_router=llm_router,
     )
-    await _run_centralized_common_checks(
+    await run_centralized_common_checks(
         user_api_key_auth_obj=user_api_key_dict,
         request=request,
         request_data=request_data,
@@ -1471,25 +1488,11 @@ async def _enforce_responses_ws_first_frame_model_auth(
     )
 
 
-@router.websocket("/v1/responses")
-@router.websocket("/responses")
-async def responses_websocket_endpoint(
+async def _responses_websocket_session(
     websocket: WebSocket,
-    model: str | None = fastapi.Query(None, description="The model to use for the responses WebSocket session."),
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
-):
-    """
-    Responses API WebSocket mode endpoint.
-
-    Keeps a persistent WebSocket connection for response.create events,
-    enabling lower-latency agentic workflows with many tool-call round trips.
-
-    Follows the OpenAI split: the bearer token is validated at connection time
-    (before accept); the model is resolved either from the ?model= query param
-    or from the first response.create frame, whichever is present.
-
-    See: https://developers.openai.com/api/docs/guides/websocket-mode/
-    """
+    model: str | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,
@@ -1503,16 +1506,6 @@ async def responses_websocket_endpoint(
         version,
     )
     from litellm.proxy.route_llm_request import route_request
-
-    # Accept the WebSocket handshake. Key was already validated by the Depends
-    # above; we can safely accept regardless of whether ?model= was supplied.
-    requested_protocols: Final = [
-        p.strip() for p in (websocket.headers.get("sec-websocket-protocol") or "").split(",") if p.strip()
-    ]
-    accept_kwargs: Final[dict] = {}
-    if requested_protocols:
-        accept_kwargs["subprotocol"] = requested_protocols[0]
-    await websocket.accept(**accept_kwargs)
 
     result: Final = await _read_ws_model_from_first_frame(websocket, query_model=model)
     if result is None:
@@ -1534,7 +1527,7 @@ async def responses_websocket_endpoint(
         "headers": headers_list,
     }
     request: Final = Request(scope=scope)
-    request._url = websocket.url
+    request._url = websocket.url  # pyright: ignore[reportPrivateUsage]  # Starlette WebSocket URL storage
 
     _body_bytes: Final = json.dumps({"model": resolved_model}).encode()
 
@@ -1618,3 +1611,55 @@ async def responses_websocket_endpoint(
             request_data=routed_data,
         )
         await websocket.close(code=1011, reason="Internal server error")
+
+
+@router.websocket("/v1/responses")
+@router.websocket("/responses")
+async def responses_websocket_endpoint(
+    websocket: WebSocket,
+    model: str | None = fastapi.Query(None, description="The model to use for the responses WebSocket session."),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
+):
+    """
+    Responses API WebSocket mode endpoint.
+
+    Keeps a persistent WebSocket connection for response.create events,
+    enabling lower-latency agentic workflows with many tool-call round trips.
+
+    Follows the OpenAI split: the bearer token is validated at connection time
+    (before accept); the model is resolved either from the ?model= query param
+    or from the first response.create frame, whichever is present.
+
+    The session is bounded by a lifetime measured from accept, configured via
+    general_settings.responses_websocket_session_limit_seconds (60-7200,
+    default 3600). There is no separate first-frame deadline, so
+    pre-established connections may sit idle until their first response.create.
+
+    See: https://developers.openai.com/api/docs/guides/websocket-mode/
+    """
+    # Accept the WebSocket handshake. Key was already validated by the Depends
+    # above; we can safely accept regardless of whether ?model= was supplied.
+    requested_protocols: Final = [
+        p.strip() for p in (websocket.headers.get("sec-websocket-protocol") or "").split(",") if p.strip()
+    ]
+    accept_kwargs: Final[dict] = {}
+    if requested_protocols:
+        accept_kwargs["subprotocol"] = requested_protocols[0]
+    await websocket.accept(**accept_kwargs)
+
+    limit_seconds: Final = _resolve_responses_ws_session_limit_seconds()
+    session_task: Final = asyncio.ensure_future(
+        _responses_websocket_session(websocket=websocket, model=model, user_api_key_dict=user_api_key_dict)
+    )
+    try:
+        await asyncio.wait_for(asyncio.shield(session_task), timeout=limit_seconds)
+    except asyncio.TimeoutError:
+        verbose_proxy_logger.info("Responses WebSocket closed: session duration limit reached")
+        session_task.cancel()
+        with contextlib.suppress(Exception):
+            await websocket.close(code=1000, reason="Session duration limit reached")
+    finally:
+        if not session_task.done():
+            session_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await session_task

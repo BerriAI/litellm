@@ -15,6 +15,19 @@ import {
   skipToolMessageToChoice,
   choiceToSkipToolForCreate,
   formatGuardrailMode,
+  formatGuardrailStreamScope,
+  streamScopeByModeFromConfig,
+  streamScopeForMode,
+  streamScopeForUpdate,
+  streamScopePayload,
+  loggingOnlyScopeToChoice,
+  choiceToLoggingOnlyScope,
+  getLoggingOnlyScopeUpdate,
+  getLoggingOnlyScopeOptions,
+  formatLoggingOnlyScope,
+  modeIncludesLoggingOnly,
+  normalizeLoggingOnlyScopeChoice,
+  supportsDirectionalLoggingOnlyScope,
 } from "./guardrail_info_helpers";
 
 describe("guardrail_info_helpers", () => {
@@ -27,6 +40,7 @@ describe("guardrail_info_helpers", () => {
       "PresidioPII",
       "Bedrock",
       "Lakera",
+      "Xecguard",
       "LitellmContentFilter",
       "ToolPermission",
       "BlockCodeExecution",
@@ -239,6 +253,100 @@ describe("guardrail_info_helpers", () => {
     });
   });
 
+  describe("logging-only scope helpers", () => {
+    it("normalizes directional choices only when the provider does not support them", () => {
+      expect(normalizeLoggingOnlyScopeChoice("input", false)).toBe("default");
+      expect(normalizeLoggingOnlyScopeChoice("output", false)).toBe("default");
+      expect(normalizeLoggingOnlyScopeChoice("both", false)).toBe("both");
+      expect(normalizeLoggingOnlyScopeChoice("default", false)).toBe("default");
+      expect(normalizeLoggingOnlyScopeChoice("input", true)).toBe("input");
+      expect(normalizeLoggingOnlyScopeChoice("output", true)).toBe("output");
+    });
+
+    it("maps API scope values to choices and back", () => {
+      expect(loggingOnlyScopeToChoice("input")).toBe("input");
+      expect(loggingOnlyScopeToChoice("output")).toBe("output");
+      expect(loggingOnlyScopeToChoice("both")).toBe("both");
+      expect(loggingOnlyScopeToChoice(undefined)).toBe("default");
+      expect(loggingOnlyScopeToChoice(null)).toBe("default");
+      expect(loggingOnlyScopeToChoice("invalid")).toBe("default");
+
+      expect(choiceToLoggingOnlyScope("default")).toBeNull();
+      expect(choiceToLoggingOnlyScope(undefined)).toBeNull();
+      expect(choiceToLoggingOnlyScope("input")).toBe("input");
+      expect(choiceToLoggingOnlyScope("output")).toBe("output");
+      expect(choiceToLoggingOnlyScope("both")).toBe("both");
+
+      expect(getLoggingOnlyScopeUpdate({ logging_only_scope: "input" }, "input")).toEqual({});
+      expect(getLoggingOnlyScopeUpdate({ logging_only_scope: "input" }, "output")).toEqual({
+        logging_only_scope: "output",
+      });
+      expect(getLoggingOnlyScopeUpdate({ logging_only_scope: "input" }, "default")).toEqual({
+        logging_only_scope: null,
+      });
+    });
+
+    it("formats every scope and falls back to default for missing or unknown values", () => {
+      expect(formatLoggingOnlyScope("input")).toBe("Input only (request)");
+      expect(formatLoggingOnlyScope("output")).toBe("Output only (response)");
+      expect(formatLoggingOnlyScope("both")).toBe("Both (request and response)");
+      expect(formatLoggingOnlyScope(undefined)).toBe("Default (request and response)");
+      expect(formatLoggingOnlyScope(null)).toBe("Default (request and response)");
+      expect(formatLoggingOnlyScope("invalid")).toBe("Default (request and response)");
+    });
+
+    it("detects logging_only in string, array, and tagged mode values", () => {
+      expect(modeIncludesLoggingOnly("logging_only")).toBe(true);
+      expect(modeIncludesLoggingOnly(["pre_call", "logging_only"])).toBe(true);
+      expect(
+        modeIncludesLoggingOnly({
+          tags: { "Service-Type: internal-service": "logging_only" },
+          default: "pre_call",
+        }),
+      ).toBe(true);
+      expect(modeIncludesLoggingOnly("pre_call")).toBe(false);
+    });
+
+    it("filters directional options for unsupported providers and keeps all options otherwise", () => {
+      expect(getLoggingOnlyScopeOptions(false).map((option) => option.value)).toEqual(["default", "both"]);
+      expect(getLoggingOnlyScopeOptions(true).map((option) => option.value)).toEqual([
+        "default",
+        "input",
+        "output",
+        "both",
+      ]);
+
+      expect(
+        supportsDirectionalLoggingOnlyScope(
+          { providers_without_directional_logging_only_scope: ["xecguard"] },
+          "Xecguard",
+        ),
+      ).toBe(false);
+      expect(
+        supportsDirectionalLoggingOnlyScope(
+          { providers_without_directional_logging_only_scope: ["xecguard"] },
+          "xecguard",
+        ),
+      ).toBe(false);
+      expect(
+        supportsDirectionalLoggingOnlyScope(
+          { providers_without_directional_logging_only_scope: ["xecguard"] },
+          "Bedrock",
+        ),
+      ).toBe(true);
+      expect(
+        supportsDirectionalLoggingOnlyScope(
+          { providers_without_directional_logging_only_scope: ["xecguard"] },
+          "unknown-provider",
+        ),
+      ).toBe(true);
+      expect(supportsDirectionalLoggingOnlyScope(null, "Xecguard")).toBe(true);
+      expect(getLoggingOnlyScopeOptions(supportsDirectionalLoggingOnlyScope(null, "Xecguard"))).toEqual(
+        getLoggingOnlyScopeOptions(true),
+      );
+    });
+  });
+
   describe("skipSystemMessageToChoice / choiceToSkipSystemForCreate", () => {
     it("maps API values to form choices and back for create", () => {
       expect(skipSystemMessageToChoice(undefined)).toBe("inherit");
@@ -264,6 +372,58 @@ describe("guardrail_info_helpers", () => {
       expect(choiceToSkipToolForCreate(undefined)).toBeUndefined();
       expect(choiceToSkipToolForCreate("yes")).toBe(true);
       expect(choiceToSkipToolForCreate("no")).toBe(false);
+    });
+  });
+
+  describe("stream_scope helpers", () => {
+    it("treats omitted config as both for every mode", () => {
+      expect(streamScopeForMode(undefined, "pre_call")).toBe("both");
+      expect(streamScopeByModeFromConfig(undefined, ["pre_call", "post_call"])).toEqual({
+        pre_call: "both",
+        post_call: "both",
+      });
+    });
+
+    it("applies a scalar to every selected mode and omits both-only payloads", () => {
+      expect(streamScopeForMode("streaming", "post_call")).toBe("streaming");
+      expect(streamScopePayload(["pre_call", "post_call"], { pre_call: "both", post_call: "both" })).toBeUndefined();
+      expect(streamScopePayload(["pre_call", "post_call"], { pre_call: "streaming", post_call: "streaming" })).toBe(
+        "streaming",
+      );
+    });
+
+    it("keeps a mixed map instead of collapsing it to a scalar", () => {
+      expect(streamScopePayload(["pre_call", "post_call"], { pre_call: "both", post_call: "streaming" })).toEqual({
+        post_call: "streaming",
+      });
+    });
+
+    it("formats scalar and per-mode stream scopes for display", () => {
+      expect(formatGuardrailStreamScope(undefined)).toBe("");
+      expect(formatGuardrailStreamScope("both")).toBe("Streaming and non-streaming");
+      expect(formatGuardrailStreamScope("non_streaming")).toBe("Non-streaming only");
+      expect(formatGuardrailStreamScope({ post_call: "streaming", pre_call: "both" })).toBe(
+        "post_call: Streaming only, pre_call: Streaming and non-streaming",
+      );
+    });
+
+    it("emits both on update only when a prior restriction is cleared", () => {
+      expect(streamScopeForUpdate(["post_call"], { post_call: "streaming" }, undefined)).toBe("streaming");
+      expect(streamScopeForUpdate(["post_call"], { post_call: "both" }, "streaming")).toBe("both");
+      expect(streamScopeForUpdate(["post_call"], { post_call: "both" }, undefined)).toBeUndefined();
+    });
+
+    it("keeps stored restrictions for modes outside the current selection", () => {
+      expect(
+        streamScopeForUpdate(
+          ["pre_call"],
+          { pre_call: "streaming" },
+          { pre_call: "streaming", post_call: "non_streaming" },
+        ),
+      ).toBeUndefined();
+      expect(
+        streamScopeForUpdate(["pre_call"], { pre_call: "both" }, { pre_call: "streaming", post_call: "non_streaming" }),
+      ).toEqual({ post_call: "non_streaming" });
     });
   });
 });

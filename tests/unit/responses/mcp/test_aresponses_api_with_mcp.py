@@ -55,15 +55,15 @@ async def test_mcp_helper_methods():
     ]
 
     # Should return True for MCP tools with litellm_proxy
-    assert LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(mcp_tools) == True
+    assert LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(mcp_tools) == True
 
     # Should return False for other tools
     assert (
-        LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(other_tools) == False
+        LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(other_tools) == False
     )
 
     # Should return False for None
-    assert LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(None) == False
+    assert LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(None) == False
 
     # Test _parse_mcp_tools
     mixed_tools = mcp_tools + other_tools
@@ -78,19 +78,19 @@ async def test_mcp_helper_methods():
     mcp_tools_never = [{"require_approval": "never"}]
     mcp_tools_always = [{"require_approval": "always"}]
 
-    assert LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(mcp_tools_never) == True
+    assert LiteLLM_Proxy_MCP_Handler.should_auto_execute_tools(mcp_tools_never) == True
     assert (
-        LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(mcp_tools_always) == False
+        LiteLLM_Proxy_MCP_Handler.should_auto_execute_tools(mcp_tools_always) == False
     )
 
     # A single approval-required reference must disable auto-execution for the
     # whole request; otherwise a "never" reference alongside an "always" one
     # would let the approval-gated tool run without approval.
     mcp_tools_mixed = [{"require_approval": "never"}, {"require_approval": "always"}]
-    assert LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(mcp_tools_mixed) == False
+    assert LiteLLM_Proxy_MCP_Handler.should_auto_execute_tools(mcp_tools_mixed) == False
     mcp_tools_manual = [{"require_approval": "never"}, {"require_approval": "manual"}]
-    assert LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(mcp_tools_manual) == False
-    assert LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools([]) == False
+    assert LiteLLM_Proxy_MCP_Handler.should_auto_execute_tools(mcp_tools_manual) == False
+    assert LiteLLM_Proxy_MCP_Handler.should_auto_execute_tools([]) == False
 
     print("✓ MCP helper methods test passed!")
 
@@ -165,7 +165,7 @@ async def test_mcp_output_elements_addition():
     ]
 
     # Test adding output elements
-    updated_response = LiteLLM_Proxy_MCP_Handler._add_mcp_output_elements_to_response(
+    updated_response = LiteLLM_Proxy_MCP_Handler.add_mcp_output_elements_to_response(
         response=mock_response,
         mcp_tools_fetched=mock_mcp_tools,
         tool_results=mock_tool_results,
@@ -227,7 +227,7 @@ async def test_aresponses_api_with_mcp_mock_integration():
     )
 
     # Test 1: Verify MCP tools are detected correctly
-    should_use_mcp = LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(
+    should_use_mcp = LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(
         cast(Any, mcp_tools)
     )
     assert (
@@ -235,7 +235,7 @@ async def test_aresponses_api_with_mcp_mock_integration():
     ), "Should detect MCP tools with litellm_proxy server_url"
 
     # Test 2: Verify auto-execution detection works
-    should_auto_execute = LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(
+    should_auto_execute = LiteLLM_Proxy_MCP_Handler.should_auto_execute_tools(
         cast(Any, mcp_tools)
     )
     assert (
@@ -330,7 +330,7 @@ async def test_aresponses_api_with_mcp_passes_mcp_server_auth_headers_to_process
     with (
         patch.object(
             LiteLLM_Proxy_MCP_Handler,
-            "_process_mcp_tools_without_openai_transform",
+            "process_mcp_tools_without_openai_transform",
             mock_process,
         ),
         patch(
@@ -733,7 +733,7 @@ async def test_streaming_mcp_events_validation():
         ) as mock_get_tools,
         patch.object(
             LiteLLM_Proxy_MCP_Handler,
-            "_execute_tool_calls",
+            "execute_tool_calls",
             new_callable=AsyncMock,
         ) as mock_execute_tools,
         patch(
@@ -869,7 +869,7 @@ async def test_mcp_parameter_preparation_helpers():
     }
 
     # Test Case 1: Auto-execute scenario (should disable streaming)
-    initial_params_auto = LiteLLM_Proxy_MCP_Handler._prepare_initial_call_params(
+    initial_params_auto = LiteLLM_Proxy_MCP_Handler.prepare_initial_call_params(
         call_params=base_call_params, should_auto_execute=True
     )
 
@@ -885,7 +885,7 @@ async def test_mcp_parameter_preparation_helpers():
     print("✅ _prepare_initial_call_params (auto-execute) works correctly")
 
     # Test Case 2: No auto-execute scenario (should preserve streaming)
-    initial_params_no_auto = LiteLLM_Proxy_MCP_Handler._prepare_initial_call_params(
+    initial_params_no_auto = LiteLLM_Proxy_MCP_Handler.prepare_initial_call_params(
         call_params=base_call_params, should_auto_execute=False
     )
 
@@ -899,7 +899,7 @@ async def test_mcp_parameter_preparation_helpers():
     print("✅ _prepare_initial_call_params (no auto-execute) works correctly")
 
     # Test _prepare_follow_up_call_params
-    follow_up_params = LiteLLM_Proxy_MCP_Handler._prepare_follow_up_call_params(
+    follow_up_params = LiteLLM_Proxy_MCP_Handler.prepare_follow_up_call_params(
         call_params=base_call_params, original_stream_setting=True
     )
 
@@ -1010,7 +1010,7 @@ async def test_mcp_tool_execution_events_creation():
     ]
 
     # Create tool execution events
-    execution_events = LiteLLM_Proxy_MCP_Handler._create_tool_execution_events(
+    execution_events = LiteLLM_Proxy_MCP_Handler.create_tool_execution_events(
         tool_calls=mock_tool_calls, tool_results=mock_tool_results
     )
 
@@ -1036,7 +1036,7 @@ async def test_mcp_tool_execution_events_creation():
     print("Tool execution events have proper structure")
 
     # Test with empty inputs
-    empty_events = LiteLLM_Proxy_MCP_Handler._create_tool_execution_events(
+    empty_events = LiteLLM_Proxy_MCP_Handler.create_tool_execution_events(
         tool_calls=[], tool_results=[]
     )
 

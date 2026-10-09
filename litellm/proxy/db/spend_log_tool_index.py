@@ -15,15 +15,18 @@ from __future__ import annotations
 
 import asyncio
 import random
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import groupby
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
+
+from typing_extensions import LiteralString
 
 from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_BYTES, SPEND_LOG_WRITE_BATCH_MAX_ROWS
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
 from litellm.proxy.db.db_span import db_span
+from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL, rollup_lock_timeout_setting
 from litellm.proxy.db.spend_log_batching import spend_log_write_batches
 from litellm.repositories.table_repositories import SpendLogToolIndexRepository
 
@@ -99,6 +102,27 @@ def build_tool_usage_transaction(
     )
 
 
+class _ToolRollupTable(Protocol):
+    def upsert(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> None: ...
+
+
+class _ToolRollupBatch(Protocol):
+    litellm_dailytoolspend: _ToolRollupTable
+
+    def execute_raw(self, query: LiteralString, *args: object) -> None: ...
+
+
+class _ToolRollupBatchManager(Protocol):
+    async def __aenter__(self) -> _ToolRollupBatch: ...
+
+    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+
+
+def _tool_rollup_batch(prisma_client: PrismaClient) -> _ToolRollupBatchManager:
+    batch: Final[_ToolRollupBatchManager] = prisma_client.db.batch_()
+    return batch
+
+
 async def flush_tool_usage_transactions(
     prisma_client: PrismaClient,
     transactions: Sequence[ToolUsageTransaction],
@@ -140,8 +164,9 @@ async def flush_tool_usage_transactions(
                     await index_table.create_many(data=statement_rows, skip_duplicates=True)
             async with (
                 db_span("commit_daily_tool_spend", "LiteLLM_DailyToolSpend"),
-                prisma_client.db.batch_() as batcher,
+                _tool_rollup_batch(prisma_client) as batcher,
             ):
+                batcher.execute_raw(ROLLUP_LOCK_TIMEOUT_SQL, rollup_lock_timeout_setting())
                 for (date_key, tool_name), grouped in groupby(per_tool_day, key=lambda entry: (entry[0], entry[1])):
                     entries = tuple(grouped)
                     spend = sum(entry[2] for entry in entries)

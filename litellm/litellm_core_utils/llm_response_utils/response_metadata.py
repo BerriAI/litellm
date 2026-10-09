@@ -125,7 +125,7 @@ class ResponseMetadata:
             "litellm_call_id": getattr(logging_obj, "litellm_call_id", None),
             "api_base": get_api_base(model=model or "", optional_params=kwargs),
             "model_id": model_id,
-            "response_cost": logging_obj._response_cost_calculator(
+            "response_cost": logging_obj.response_cost_calculator(
                 result=self.result, litellm_model_name=model, router_model_id=model_id
             ),
             "additional_headers": process_response_headers(

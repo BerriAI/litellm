@@ -34,7 +34,7 @@ from litellm.proxy.management_endpoints.mcp_management_endpoints import (
     does_mcp_server_exist,
 )
 
-TEST_MASTER_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-1234")
+TEST_MASTER_KEY = os.environ["LITELLM_MASTER_KEY"]
 
 
 def generate_mcpserver_record(

@@ -100,7 +100,7 @@ def _video_resolution_to_cost_field_suffix(resolution: str) -> str | None:
     return safe
 
 
-def _video_output_cost_per_second(
+def video_output_cost_per_second(
     model_info: Mapping[str, Any],
     video_resolution: str | None,
 ) -> float | None:
@@ -123,6 +123,9 @@ def _video_output_cost_per_second(
     if out is not None:
         return float(out)
     return None
+
+
+_video_output_cost_per_second = video_output_cost_per_second
 
 
 def video_generation_cost(
@@ -162,7 +165,7 @@ def video_generation_cost(
         )
         return video_cost_per_second * duration_seconds
 
-    output_cost_per_second: Final = _video_output_cost_per_second(model_info, video_resolution)
+    output_cost_per_second: Final = video_output_cost_per_second(model_info, video_resolution)
     if output_cost_per_second is not None:
         verbose_logger.debug(
             "For model=%s - output_cost_per_second: %s; duration: %s", model, output_cost_per_second, duration_seconds

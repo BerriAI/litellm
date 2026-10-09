@@ -84,6 +84,7 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
   useAllProxyModels: vi.fn(() => ({ data: { data: [] }, isLoading: false })),
+  useModelAccessGroupNames: vi.fn(() => new Set<string>()),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({

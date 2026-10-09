@@ -1,10 +1,11 @@
 from typing import TYPE_CHECKING, Final, Literal
 
-from pydantic import BaseModel, field_validator
+from pydantic import field_validator
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.types.guardrails import SupportedGuardrailIntegrations
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from .straiker import StraikerGuardrail
 
@@ -12,7 +13,7 @@ if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
 
-class _V3Routing(BaseModel):
+class _V3Routing(LiteLLMBaseModel):
     api_version: Literal["v1", "v3"] | None = None
     agent_ref: str | None = None
     client: str | None = None

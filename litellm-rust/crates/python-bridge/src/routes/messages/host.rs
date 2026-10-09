@@ -2,13 +2,15 @@ use crate::cache::{CacheCall, Cached, PythonCache, Selection};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
-use litellm_core::messages::{
-    Error, MessagesCall, MessagesShaping, messages_body,
+use litellm_host_python::{InvokeError, PythonBinding, from_py, present, to_py};
+use litellm_http::transport::Error as TransportError;
+use litellm_inference_messages::{
+    Error, MessagesCall, MessagesSettings, MessagesShaping, litellm_params, messages_body,
     route::{Messages, MessagesStreamHead},
 };
-use litellm_host_python::{InvokeError, PythonBinding, from_py, lookup, to_py};
-use litellm_http::transport::Error as TransportError;
+use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
 use litellm_llms_types::headers::ProviderSpecificHeaders;
+use litellm_router_types::LitellmParams;
 use pyo3::{
     exceptions::{PyException, PyValueError},
     gc::{PyTraverseError, PyVisit},
@@ -19,7 +21,8 @@ use serde_json::{Map, Value};
 
 use crate::{
     errors::{RustUpstreamError, route_error_to_pyerr},
-    marshal::{optional_timeout, python_timeout_seconds},
+    marshal::{optional_timeout, project_optional_fields, public_response, python_timeout_seconds},
+    python_settings::missing_module,
 };
 
 const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.messages.route_host";
@@ -62,6 +65,33 @@ fn merge_headers(
     (!merged.is_empty()).then_some(merged)
 }
 
+/// Reads `litellm.<name>`, the module global a param spec names, the way
+/// `VertexBase.get_vertex_ai_project` reads `litellm.vertex_project`.
+fn module_global<'py>(py: Python<'py>, name: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
+    let module = match py.import("litellm") {
+        Ok(module) => module,
+        Err(error) if missing_module(py, &error, "litellm")? => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let value = module.getattr(name)?;
+    Ok((!value.is_none()).then_some(value))
+}
+
+/// The caller's litellm params, read from the kwargs by the names the typed params declare,
+/// so a key the configs do not read is never converted; a spec whose spellings the call all
+/// leaves out falls back to the module global it names, which stays the host's concern.
+fn project_litellm_params<'py>(
+    argument: impl Fn(&str) -> PyResult<Option<Bound<'py, PyAny>>>,
+    global: impl Fn(&str) -> PyResult<Option<Bound<'py, PyAny>>>,
+) -> PyResult<Result<LitellmParams, Error>> {
+    let fields = project_optional_fields(LitellmParams::fields(), &argument)?;
+    let globals = LitellmParams::specs()
+        .filter(|spec| !spec.wire.iter().any(|name| fields.contains_key(*name)))
+        .filter_map(|spec| spec.module_global);
+    let folded = project_optional_fields(globals, &global)?;
+    Ok(litellm_params(fields.into_iter().chain(folded).collect()))
+}
+
 fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
     match error {
         Error::Transport(TransportError::Http { status, body }) => {
@@ -88,12 +118,12 @@ fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
 /// The Python side of the Messages route: projects the prepared arguments and builds the
 /// public response, chunks and exceptions.
 pub(super) struct MessagesPythonHost {
-    request: Py<PyAny>,
+    request: Py<PyDict>,
     cache: PythonCache,
 }
 
 impl MessagesPythonHost {
-    pub(super) fn new(request: Py<PyAny>, asynchronous: bool) -> Self {
+    pub(super) fn new(request: Py<PyDict>, asynchronous: bool) -> Self {
         Self {
             request,
             cache: PythonCache::new(asynchronous),
@@ -106,23 +136,14 @@ impl MessagesPythonHost {
         arguments: &Bound<'_, PyDict>,
     ) -> PyResult<Result<MessagesCall, Error>> {
         let request = self.request.bind(py);
-        let argument = |name: &str| -> PyResult<Option<Bound<'_, PyAny>>> {
-            Ok(lookup(arguments, request, name)?.filter(|value| !value.is_none()))
-        };
+        let argument = |name: &str| present(arguments, request, name);
         let string = |name: &str| -> PyResult<Option<String>> {
             argument(name)?.map(|value| value.extract()).transpose()
         };
         let model = string("model")?.ok_or_else(|| PyValueError::new_err("model is required"))?;
         let messages =
             argument("messages")?.ok_or_else(|| PyValueError::new_err("messages is required"))?;
-        let fields = BODY_FIELDS
-            .iter()
-            .filter_map(|name| match argument(name) {
-                Ok(Some(value)) => Some(from_py(&value).map(|value| ((*name).to_string(), value))),
-                Ok(None) => None,
-                Err(error) => Some(Err(error)),
-            })
-            .collect::<PyResult<Vec<(String, Value)>>>()?;
+        let fields = project_optional_fields(BODY_FIELDS, argument)?;
         let body = [
             ("model".to_string(), Value::String(model.clone())),
             ("messages".to_string(), from_py(&messages)?),
@@ -140,15 +161,19 @@ impl MessagesPythonHost {
         let api_base = string("api_base")?;
         let extra_headers = self.merged_headers(py, arguments)?;
         let provider_specific_header = self.provider_specific_header(py, arguments)?;
-        Ok(messages_body(body).map(|body| MessagesCall {
-            body,
-            api_key,
-            api_base,
-            extra_headers,
-            provider_specific_header,
-            custom_llm_provider,
-            timeout: optional_timeout(timeout),
-            shaping,
+        let litellm_params = project_litellm_params(argument, |name| module_global(py, name))?;
+        Ok(messages_body(body).and_then(|body| {
+            Ok(MessagesCall {
+                body,
+                api_key,
+                api_base,
+                extra_headers,
+                provider_specific_header,
+                custom_llm_provider,
+                litellm_params: litellm_params?,
+                timeout: optional_timeout(timeout),
+                shaping,
+            })
         }))
     }
 
@@ -159,8 +184,7 @@ impl MessagesPythonHost {
     ) -> PyResult<Option<Map<String, Value>>> {
         let request = self.request.bind(py);
         let mapping = |name: &str| -> PyResult<Option<Map<String, Value>>> {
-            lookup(arguments, request, name)?
-                .filter(|value| !value.is_none())
+            present(arguments, request, name)?
                 .map(|value| from_py(&value))
                 .transpose()
         };
@@ -175,8 +199,7 @@ impl MessagesPythonHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> PyResult<Option<ProviderSpecificHeaders>> {
-        lookup(arguments, self.request.bind(py), "provider_specific_header")?
-            .filter(|value| !value.is_none())
+        present(arguments, self.request.bind(py), "provider_specific_header")?
             .map(|value| from_py(&value))
             .transpose()
     }
@@ -188,21 +211,27 @@ impl MessagesPythonHost {
         custom_llm_provider: Option<&str>,
         arguments: &Bound<'_, PyDict>,
     ) -> PyResult<MessagesShaping> {
-        let projected = py.import(ROUTE_HOST_MODULE)?.getattr("shaping")?.call1((
-            model,
-            custom_llm_provider,
-            arguments,
-        ))?;
-        from_py(&projected)
+        let module = py.import(ROUTE_HOST_MODULE)?;
+        let capabilities: MessagesModelCapabilities = from_py(
+            &py.import("litellm.rust_bridge.model_capabilities")?
+                .getattr("anthropic_model_capabilities")?
+                .call1((model, custom_llm_provider))?,
+        )?;
+        let settings: MessagesSettings =
+            from_py(&module.getattr("settings")?.call1((arguments,))?)?;
+        Ok(MessagesShaping {
+            capabilities,
+            settings,
+        })
     }
 
     fn provider(&self, py: Python<'_>) -> String {
         self.request
             .bind(py)
-            .getattr("custom_llm_provider")
-            .and_then(|value| value.extract::<Option<String>>())
+            .get_item("custom_llm_provider")
             .ok()
             .flatten()
+            .and_then(|value| value.extract::<Option<String>>().ok().flatten())
             .unwrap_or_else(|| "anthropic".into())
     }
 
@@ -249,10 +278,7 @@ impl PythonBinding for MessagesPythonHost {
         py: Python<'_>,
         response: Box<litellm_llms_types::formats::messages::MessagesResponse>,
     ) -> PyResult<Py<PyAny>> {
-        py.import(ROUTE_HOST_MODULE)?
-            .getattr("response")?
-            .call1((to_py(py, response.as_ref())?,))
-            .map(Bound::unbind)
+        public_response(py, ROUTE_HOST_MODULE, response.as_ref())
     }
 
     fn encode_stream_head(
@@ -356,6 +382,106 @@ mod tests {
             merge_headers(forwarded.map(map), extra_headers.map(map)),
             expected.map(map)
         );
+    }
+
+    #[rstest]
+    #[case::model_and_credentials_are_projected(
+        json!({"model": "m", "api_key": "k", "api_base": "b", "api_version": "v", "timeout": 5, "messages": []}),
+        Ok(json!({"model": "m", "api_key": "k", "api_base": "b", "api_version": "v"})),
+    )]
+    #[case::aws_keys_are_projected(
+        json!({"model": "m", "aws_region_name": "eu-central-1", "aws_access_key_id": "AKIA", "messages": [{"role": "user"}]}),
+        Ok(json!({"model": "m", "aws_region_name": "eu-central-1", "aws_access_key_id": "AKIA"})),
+    )]
+    #[case::vertex_keys_are_projected_in_both_spellings(
+        json!({"model": "m", "vertex_project": "p", "vertex_ai_location": "us-east5", "vertex_credentials": {"type": "service_account"}}),
+        Ok(json!({"model": "m", "vertex_project": "p", "vertex_ai_location": "us-east5", "vertex_credentials": {"type": "service_account"}})),
+    )]
+    #[case::an_explicit_none_is_absent(json!({"model": "m", "aws_region_name": null}), Ok(json!({"model": "m"})))]
+    #[case::a_wrong_type_is_a_request_error(json!({"model": "m", "aws_region_name": 7}), Err(()))]
+    #[case::a_missing_model_is_a_request_error(json!({"aws_region_name": "eu-central-1"}), Err(()))]
+    fn litellm_params_are_projected_by_their_declared_names(
+        #[case] kwargs: Value,
+        #[case] expected: Result<Value, ()>,
+    ) {
+        assert_projection(kwargs, json!({}), expected);
+    }
+
+    #[rstest]
+    #[case::global_fills_a_missing_vertex_project(
+        json!({"model": "m"}),
+        json!({"vertex_project": "from-global", "vertex_location": "us-east5"}),
+        Ok(json!({"model": "m", "vertex_project": "from-global", "vertex_location": "us-east5"})),
+    )]
+    #[case::the_call_wins_over_the_global(
+        json!({"model": "m", "vertex_project": "from-call"}),
+        json!({"vertex_project": "from-global"}),
+        Ok(json!({"model": "m", "vertex_project": "from-call"})),
+    )]
+    #[case::an_explicit_none_in_the_call_still_falls_back(
+        json!({"model": "m", "vertex_project": null}),
+        json!({"vertex_project": "from-global"}),
+        Ok(json!({"model": "m", "vertex_project": "from-global"})),
+    )]
+    #[case::a_global_of_the_wrong_type_is_a_request_error(
+        json!({"model": "m"}),
+        json!({"vertex_location": 5}),
+        Err(()),
+    )]
+    fn module_globals_fill_the_litellm_params_the_call_leaves_out(
+        #[case] kwargs: Value,
+        #[case] globals: Value,
+        #[case] expected: Result<Value, ()>,
+    ) {
+        assert_projection(kwargs, globals, expected);
+    }
+
+    #[rstest]
+    #[case::a_global_without_a_spec_is_never_read(
+        json!({"model": "m"}),
+        json!({"aws_region_name": "eu-central-1", "api_key": "k"}),
+        Ok(json!({"model": "m"})),
+    )]
+    #[case::only_the_spec_named_global_is_read(
+        json!({"model": "m"}),
+        json!({"vertex_ai_project": "legacy-global", "vertex_project": "from-global"}),
+        Ok(json!({"model": "m", "vertex_project": "from-global"})),
+    )]
+    fn only_the_globals_the_specs_name_are_consulted(
+        #[case] kwargs: Value,
+        #[case] globals: Value,
+        #[case] expected: Result<Value, ()>,
+    ) {
+        assert_projection(kwargs, globals, expected);
+    }
+
+    fn assert_projection(kwargs: Value, globals: Value, expected: Result<Value, ()>) {
+        Python::initialize();
+        Python::attach(|py| {
+            let dict = |value: &Value| {
+                to_py(py, value)
+                    .unwrap()
+                    .into_bound(py)
+                    .cast_into::<PyDict>()
+                    .unwrap()
+            };
+            let kwargs = dict(&kwargs);
+            let globals = dict(&globals);
+            let bound = PyDict::new(py);
+            let projected = project_litellm_params(
+                |name| present(&kwargs, &bound, name),
+                |name| present(&globals, &bound, name),
+            )
+            .unwrap();
+            match (projected, expected) {
+                (Ok(projected), Ok(fields)) => assert_eq!(
+                    projected,
+                    litellm_params(serde_json::from_value(fields).unwrap()).unwrap()
+                ),
+                (Err(error), Err(())) => assert!(matches!(error, Error::InvalidRequest(_))),
+                (projected, expected) => panic!("got {projected:?}, expected {expected:?}"),
+            }
+        });
     }
 
     #[rstest]

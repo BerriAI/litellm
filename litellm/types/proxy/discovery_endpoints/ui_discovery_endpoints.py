@@ -1,9 +1,10 @@
-from pydantic import BaseModel
+from pydantic import Field
 
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 
 
-class UiDiscoveryEndpoints(BaseModel):
+class UiDiscoveryEndpoints(LiteLLMBaseModel):
     server_root_path: str
     proxy_base_url: str | None
     auto_redirect_to_sso: bool
@@ -12,4 +13,4 @@ class UiDiscoveryEndpoints(BaseModel):
     hide_default_credentials_hint: bool = False
     is_control_plane: bool = False
     mcp_stdio_enabled: bool = False
-    workers: list[WorkerRegistryEntry] = []
+    workers: list[WorkerRegistryEntry] = Field(default=[])

@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Check, ChevronDown, ChevronUp, Copy, X } from "lucide-react";
+import { type ReactNode, useState } from "react";
+import { ArrowLeft, Check, ChevronDown, ChevronUp, Copy, X } from "lucide-react";
 import moment from "moment";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,6 +29,12 @@ interface DrawerHeaderProps {
   environment: string;
   isSidebarCollapsed: boolean;
   onToggleSidebar: () => void;
+  backTo?: DrawerBackTo;
+}
+
+export interface DrawerBackTo {
+  label: string;
+  icon: ReactNode;
 }
 
 /**
@@ -45,6 +51,7 @@ export function DrawerHeader({
   environment,
   isSidebarCollapsed,
   onToggleSidebar,
+  backTo,
 }: DrawerHeaderProps) {
   const provider = log.custom_llm_provider || "";
   const providerInfo = provider ? getProviderLogoAndName(provider) : null;
@@ -64,6 +71,13 @@ export function DrawerHeader({
         top: 0,
       }}
     >
+      {backTo && (
+        <Button variant="outline" size="sm" onClick={onClose} className="mb-3 max-w-full">
+          <ArrowLeft data-icon="inline-start" />
+          {backTo.icon}
+          <span className="truncate">Back to {backTo.label}</span>
+        </Button>
+      )}
       {/* Row 0: Model + Provider with Logo */}
       <div className="flex items-center gap-2" style={{ marginBottom: SPACING_MEDIUM }}>
         {showToggleWithProvider && <SidebarToggle isCollapsed onToggle={onToggleSidebar} />}

@@ -104,3 +104,57 @@ describe("InspectorTable tree", () => {
     expect(screen.getByText("Open: b1")).toBeInTheDocument();
   });
 });
+
+const SKELETON_COLUMNS: ColumnDef<Node>[] = [
+  { id: "name", header: "Name", meta: { renderSkeleton: () => <span data-testid="custom-skeleton" /> } },
+  { id: "size", header: "Size", meta: { numeric: true } },
+];
+
+function SkeletonTree({ visibility }: { visibility: Record<string, boolean> }) {
+  const tableOptions: TableOptions<Node> = {
+    data: TREE,
+    columns: SKELETON_COLUMNS,
+    getRowId: (node) => node.id,
+    state: { columnVisibility: visibility },
+    getCoreRowModel: getCoreRowModel(),
+  };
+  const table = useReactTable(tableOptions);
+  return (
+    <Inspector.Root
+      items={[]}
+      itemKey={(node: Node) => node.id}
+      selected={null}
+      onSelectedChange={() => {}}
+      noun="node"
+      storageKey="inspector-skeleton-test"
+    >
+      <InspectorTable.Root table={table}>
+        <InspectorTable.Grid aria-label="Nodes">
+          <InspectorTable.Header />
+          <InspectorTable.Body<Node>
+            rowHeight={() => 36}
+            after={<InspectorTable.SkeletonRow index={0} data-testid="skeleton-row" />}
+          >
+            {(row) => <InspectorTable.Row row={row} item={row.original} />}
+          </InspectorTable.Body>
+        </InspectorTable.Grid>
+      </InspectorTable.Root>
+    </Inspector.Root>
+  );
+}
+
+describe("InspectorTable.SkeletonRow", () => {
+  it("renders one hidden cell per visible leaf column and honors renderSkeleton", () => {
+    render(<SkeletonTree visibility={{}} />);
+    const [row] = screen.getAllByTestId("skeleton-row");
+    expect(row).toHaveAttribute("aria-hidden", "true");
+    expect(within(row).getAllByRole("cell", { hidden: true })).toHaveLength(2);
+    expect(screen.getAllByTestId("custom-skeleton")).toHaveLength(1);
+  });
+
+  it("follows column visibility", () => {
+    render(<SkeletonTree visibility={{ size: false }} />);
+    const [row] = screen.getAllByTestId("skeleton-row");
+    expect(within(row).getAllByRole("cell", { hidden: true })).toHaveLength(1);
+  });
+});

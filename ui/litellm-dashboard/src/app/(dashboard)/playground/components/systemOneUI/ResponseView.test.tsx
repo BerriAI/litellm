@@ -59,6 +59,26 @@ describe("ResponseView", () => {
     expect(screen.getByRole("meter", { name: "1 probability" })).toHaveAttribute("aria-valuetext", "0%");
   });
 
+  it("renders structured decision score legends without coercing objects to strings", () => {
+    const response: SystemOneResponse = {
+      answers: {
+        severity: {
+          type: "score",
+          score: 0,
+          probabilities: { "0": 1 },
+          legend: { "0": { description: "Low severity" } },
+        },
+      },
+      usage: null,
+    };
+    render(<ResponseView response={response} isLoading={false} />);
+    expect(screen.getByRole("meter", { name: '0: {"description":"Low severity"} probability' })).toHaveAttribute(
+      "aria-valuenow",
+      "100",
+    );
+    expect(screen.queryByText(/\[object Object\]/)).not.toBeInTheDocument();
+  });
+
   it("shows an inline error message", () => {
     render(<ResponseView error="Upstream request failed" isLoading={false} />);
 

@@ -2,6 +2,13 @@ import React, { useState, useRef, useEffect } from "react";
 import { CheckCircle2, ChevronRight, Code, ExternalLink, PlayCircle, Save, Users, XCircle } from "lucide-react";
 import { createGuardrailCall, updateGuardrailCall, testCustomCodeGuardrail } from "@/components/networking";
 import { toast } from "@/lib/toast";
+import { loggingOnlyScopeToChoice } from "../guardrail_info_helpers";
+import type { LoggingOnlyScope, LoggingOnlyScopeChoice } from "../guardrail_info_helpers";
+import {
+  CustomCodeLoggingOnlyScopeSelect,
+  getCustomCodeLoggingOnlyScopeCreate,
+  getCustomCodeLoggingOnlyScopeUpdate,
+} from "./CustomCodeLoggingOnlyScope";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -30,154 +37,33 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-
-// Code templates
-const CODE_TEMPLATES = {
-  empty: {
-    name: "Empty Template",
-    code: `async def apply_guardrail(inputs, request_data, input_type):
-    # inputs: {texts, images, tools, tool_calls, structured_messages, model}
-    # request_data: {model, user_id, team_id, end_user_id, metadata}
-    # input_type: "request" or "response"
-    return allow()`,
-  },
-  blockSSN: {
-    name: "Block SSN",
-    code: `def apply_guardrail(inputs, request_data, input_type):
-    for text in inputs["texts"]:
-        if regex_match(text, r"\\d{3}-\\d{2}-\\d{4}"):
-            return block("SSN detected")
-    return allow()`,
-  },
-  redactEmail: {
-    name: "Redact Emails",
-    code: `def apply_guardrail(inputs, request_data, input_type):
-    pattern = r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
-    modified = []
-    for text in inputs["texts"]:
-        modified.append(regex_replace(text, pattern, "[EMAIL REDACTED]"))
-    return modify(texts=modified)`,
-  },
-  blockSQL: {
-    name: "Block SQL Injection",
-    code: `def apply_guardrail(inputs, request_data, input_type):
-    if input_type != "request":
-        return allow()
-    for text in inputs["texts"]:
-        if contains_code_language(text, ["sql"]):
-            return block("SQL code not allowed")
-    return allow()`,
-  },
-  validateJSON: {
-    name: "Validate JSON",
-    code: `def apply_guardrail(inputs, request_data, input_type):
-    if input_type != "response":
-        return allow()
-    
-    schema = {"type": "object", "required": ["name", "value"]}
-    
-    for text in inputs["texts"]:
-        obj = json_parse(text)
-        if obj is None:
-            return block("Invalid JSON response")
-        if not json_schema_valid(obj, schema):
-            return block("Response missing required fields")
-    return allow()`,
-  },
-  externalAPI: {
-    name: "External API Check (async)",
-    code: `async def apply_guardrail(inputs, request_data, input_type):
-    # Call an external moderation API (async for non-blocking)
-    for text in inputs["texts"]:
-        response = await http_post(
-            "https://api.example.com/moderate",
-            body={"text": text, "user_id": request_data["user_id"]},
-            headers={"Authorization": "Bearer YOUR_API_KEY"},
-            timeout=10
-        )
-        
-        if not response["success"]:
-            # API call failed, allow by default or block
-            return allow()
-        
-        if response["body"].get("flagged"):
-            return block(response["body"].get("reason", "Content flagged"))
-    
-    return allow()`,
-  },
-};
-
-// Available primitives organized by category
-const PRIMITIVES = {
-  "Return Values": [
-    { name: "allow()", desc: "Let request/response through" },
-    { name: "block(reason)", desc: "Reject with message" },
-    { name: "flag(reason, metadata={})", desc: "Let through, record a non-blocking violation" },
-    { name: "modify(texts=[], images=[], tool_calls=[])", desc: "Transform content" },
-  ],
-  "HTTP Requests (async)": [
-    { name: "await http_request(url, method, headers, body)", desc: "Make async HTTP request" },
-    { name: "await http_get(url, headers)", desc: "Async GET request" },
-    { name: "await http_post(url, body, headers)", desc: "Async POST request" },
-  ],
-  "Regex Functions": [
-    { name: "regex_match(text, pattern)", desc: "Returns True if pattern found" },
-    { name: "regex_replace(text, pattern, replacement)", desc: "Replace all matches" },
-    { name: "regex_find_all(text, pattern)", desc: "Return list of matches" },
-  ],
-  "JSON Functions": [
-    { name: "json_parse(text)", desc: "Parse JSON string, returns None on error" },
-    { name: "json_stringify(obj)", desc: "Convert to JSON string" },
-    { name: "json_schema_valid(obj, schema)", desc: "Validate against JSON schema" },
-  ],
-  "URL Functions": [
-    { name: "extract_urls(text)", desc: "Extract all URLs from text" },
-    { name: "is_valid_url(url)", desc: "Check if URL is valid" },
-    { name: "all_urls_valid(text)", desc: "Check all URLs in text are valid" },
-  ],
-  "Code Detection": [
-    { name: "detect_code(text)", desc: "Returns True if code detected" },
-    { name: "detect_code_languages(text)", desc: "Returns list of detected languages" },
-    { name: 'contains_code_language(text, ["sql"])', desc: "Check for specific languages" },
-  ],
-  "Text Utilities": [
-    { name: "contains(text, substring)", desc: "Check if substring exists" },
-    { name: "contains_any(text, [substr1, substr2])", desc: "Check if any substring exists" },
-    { name: "word_count(text)", desc: "Count words" },
-    { name: "char_count(text)", desc: "Count characters" },
-    { name: "lower(text) / upper(text) / trim(text)", desc: "String transforms" },
-  ],
-};
-
-const MODE_OPTIONS = [
-  { value: "pre_call", label: "pre_call (Request)" },
-  { value: "post_call", label: "post_call (Response)" },
-  { value: "during_call", label: "during_call (Parallel)" },
-  { value: "logging_only", label: "logging_only" },
-  { value: "pre_mcp_call", label: "pre_mcp_call (Before MCP Tool Call)" },
-  { value: "post_mcp_call", label: "post_mcp_call (After MCP Tool Call)" },
-  { value: "during_mcp_call", label: "during_mcp_call (During MCP Tool Call)" },
-];
-
-const TEMPLATE_ITEMS = Object.entries(CODE_TEMPLATES).map(([key, template]) => ({
-  value: key,
-  label: template.name,
-}));
-
-type ModeOption = (typeof MODE_OPTIONS)[number];
-
-const MODE_OPTION_BY_VALUE: Record<string, ModeOption> = Object.fromEntries(
-  MODE_OPTIONS.map((option) => [option.value, option]),
-);
+import { StreamScopeFields } from "../StreamScopeFields";
+import {
+  formatGuardrailMode,
+  streamScopeByModeFromConfig,
+  streamScopeForUpdate,
+  streamScopePayload,
+  type GuardrailStreamScope,
+} from "../guardrail_info_helpers";
+import {
+  CODE_TEMPLATES,
+  MODE_OPTION_BY_VALUE,
+  MODE_OPTIONS,
+  PRIMITIVES,
+  TEMPLATE_ITEMS,
+  type ModeOption,
+} from "./custom_code_catalog";
 
 // Data for editing an existing guardrail
+
 export interface EditGuardrailData {
   guardrail_id: string;
   guardrail_name: string;
   litellm_params: {
-    mode?: string | string[];
+    mode?: string | string[] | Record<string, unknown>;
     default_on?: boolean;
     custom_code?: string;
+    logging_only_scope?: LoggingOnlyScope | null;
     [key: string]: any;
   };
 }
@@ -196,6 +82,8 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
   const isEditMode = !!editData;
   const [guardrailName, setGuardrailName] = useState("");
   const [mode, setMode] = useState<string[]>(["pre_call"]);
+  const [streamScopeByMode, setStreamScopeByMode] = useState<Record<string, GuardrailStreamScope>>({});
+  const [loggingOnlyScopeChoice, setLoggingOnlyScopeChoice] = useState<LoggingOnlyScopeChoice>("default");
   const [defaultOn, setDefaultOn] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState<string>("empty");
   const [code, setCode] = useState(CODE_TEMPLATES.empty.code);
@@ -306,11 +194,14 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
     setCode(CODE_TEMPLATES[templateKey as keyof typeof CODE_TEMPLATES].code);
   };
 
-  // Normalize mode from API (string or string[]) to string[]
-  const normalizeMode = (m: string | string[] | undefined): string[] => {
+  // Normalize mode from API (string or string[]) to string[].
+  // A tag-scoped mode dict ({ tags, default }) is managed outside this editor, so it
+  // contributes no editable modes and is displayed read-only instead.
+  const normalizeMode = (m: string | string[] | Record<string, unknown> | undefined): string[] => {
     if (m === undefined || m === null) return ["pre_call"];
     if (Array.isArray(m)) return m.length ? m : ["pre_call"];
-    return [m];
+    if (typeof m === "string") return [m];
+    return [];
   };
 
   // Reset form when modal opens or editData changes
@@ -320,6 +211,13 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         // Edit mode: populate with existing data
         setGuardrailName(editData.guardrail_name || "");
         setMode(normalizeMode(editData.litellm_params?.mode));
+        setStreamScopeByMode(
+          streamScopeByModeFromConfig(
+            editData.litellm_params?.stream_scope,
+            normalizeMode(editData.litellm_params?.mode),
+          ),
+        );
+        setLoggingOnlyScopeChoice(loggingOnlyScopeToChoice(editData.litellm_params?.logging_only_scope));
         setDefaultOn(editData.litellm_params?.default_on || false);
         setCode(editData.litellm_params?.custom_code || CODE_TEMPLATES.empty.code);
         setSelectedTemplate(""); // No template selected in edit mode
@@ -327,6 +225,8 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         // Create mode: reset to defaults
         setGuardrailName("");
         setMode(["pre_call"]);
+        setStreamScopeByMode({});
+        setLoggingOnlyScopeChoice("default");
         setDefaultOn(false);
         setSelectedTemplate("empty");
         setCode(CODE_TEMPLATES.empty.code);
@@ -384,6 +284,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         const updateData: any = {
           litellm_params: {
             custom_code: code,
+            ...getCustomCodeLoggingOnlyScopeUpdate(mode, editData.litellm_params, loggingOnlyScopeChoice),
           },
         };
 
@@ -399,11 +300,21 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         if (defaultOn !== editData.litellm_params?.default_on) {
           updateData.litellm_params.default_on = defaultOn;
         }
+        const nextStreamScope = streamScopeForUpdate(
+          mode,
+          streamScopeByMode,
+          editData.litellm_params?.stream_scope,
+          existingMode,
+        );
+        if (nextStreamScope !== undefined) {
+          updateData.litellm_params.stream_scope = nextStreamScope;
+        }
 
         await updateGuardrailCall(accessToken, editData.guardrail_id, updateData);
         toast.success("Custom code guardrail updated successfully");
       } else {
         // Create new guardrail
+        const streamScope = streamScopePayload(mode, streamScopeByMode);
         const guardrailData = {
           guardrail_name: guardrailName,
           litellm_params: {
@@ -411,6 +322,8 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
             mode: mode,
             default_on: defaultOn,
             custom_code: code,
+            ...(streamScope !== undefined ? { stream_scope: streamScope } : {}),
+            ...getCustomCodeLoggingOnlyScopeCreate(mode, loggingOnlyScopeChoice),
           },
           guardrail_info: {},
         };
@@ -498,6 +411,11 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
 
   const lineCount = code.split("\n").length;
   const selectedModeOptions = mode.map((value) => MODE_OPTION_BY_VALUE[value]).filter(Boolean);
+  const rawEditMode = editData?.litellm_params?.mode;
+  const tagScopedModeLabel =
+    rawEditMode !== null && typeof rawEditMode === "object" && !Array.isArray(rawEditMode)
+      ? formatGuardrailMode(rawEditMode) || "-"
+      : null;
 
   return (
     <Dialog open={visible} onOpenChange={(open) => !open && onClose()}>
@@ -520,33 +438,42 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
             />
           </div>
           <div className="w-[280px]">
-            <label className="mb-1 block text-xs font-medium text-muted-foreground">Mode (can select multiple)</label>
-            <Combobox
-              items={MODE_OPTIONS}
-              value={selectedModeOptions}
-              onValueChange={(options: ModeOption[]) => setMode(options.map((option) => option.value))}
-              multiple
-            >
-              <ComboboxChips render={<div ref={anchor} />} className="w-full">
-                {selectedModeOptions.map((option) => (
-                  <ComboboxChip key={option.value} aria-label={option.label}>
-                    {option.label}
-                  </ComboboxChip>
-                ))}
-                <ComboboxChipsInput placeholder={mode.length === 0 ? "Select modes" : undefined} />
-              </ComboboxChips>
-              <ComboboxContent anchor={anchor}>
-                <ComboboxEmpty>No matching modes</ComboboxEmpty>
-                <ComboboxList>
-                  {(option: ModeOption) => (
-                    <ComboboxItem key={option.value} value={option}>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">
+              {tagScopedModeLabel ? "Mode (tag-scoped, read-only)" : "Mode (can select multiple)"}
+            </label>
+            {tagScopedModeLabel ? (
+              <Input value={tagScopedModeLabel} disabled aria-label="Mode (tag-scoped)" />
+            ) : (
+              <Combobox
+                items={MODE_OPTIONS}
+                value={selectedModeOptions}
+                onValueChange={(options: ModeOption[]) => setMode(options.map((option) => option.value))}
+                multiple
+              >
+                <ComboboxChips render={<div ref={anchor} />} className="w-full">
+                  {selectedModeOptions.map((option) => (
+                    <ComboboxChip key={option.value} aria-label={option.label}>
                       {option.label}
-                    </ComboboxItem>
-                  )}
-                </ComboboxList>
-              </ComboboxContent>
-            </Combobox>
+                    </ComboboxChip>
+                  ))}
+                  <ComboboxChipsInput placeholder={mode.length === 0 ? "Select modes" : undefined} />
+                </ComboboxChips>
+                <ComboboxContent anchor={anchor}>
+                  <ComboboxEmpty>No matching modes</ComboboxEmpty>
+                  <ComboboxList>
+                    {(option: ModeOption) => (
+                      <ComboboxItem key={option.value} value={option}>
+                        {option.label}
+                      </ComboboxItem>
+                    )}
+                  </ComboboxList>
+                </ComboboxContent>
+              </Combobox>
+            )}
           </div>
+          {mode.includes("logging_only") && (
+            <CustomCodeLoggingOnlyScopeSelect value={loggingOnlyScopeChoice} onChange={setLoggingOnlyScopeChoice} />
+          )}
           <div className="w-[180px]">
             <label className="mb-1 block text-xs font-medium text-muted-foreground">Template</label>
             <Select
@@ -584,6 +511,11 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
             <Switch checked={defaultOn} onCheckedChange={setDefaultOn} aria-label="Default On" />
           </div>
         </div>
+        {mode.length > 0 && (
+          <div className="border-b border-border py-4">
+            <StreamScopeFields modes={mode} value={streamScopeByMode} onChange={setStreamScopeByMode} />
+          </div>
+        )}
 
         {/* Main Content */}
         <div className="mt-4 flex gap-6">

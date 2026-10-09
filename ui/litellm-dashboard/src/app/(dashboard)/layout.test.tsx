@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { usePathname } from "next/navigation";
 import { AuthProvider } from "@/contexts/AuthContext";
 import Layout from "./layout";
@@ -19,12 +19,17 @@ vi.mock("@/components/liteadmin/LiteAdmin", () => ({
 }));
 
 vi.mock("@/components/DashboardHeader", () => ({
-  DashboardHeader: () => <div data-testid="dashboard-header" />,
+  DashboardHeader: ({ navigationTrigger }: { navigationTrigger?: React.ReactNode }) => (
+    <div data-testid="dashboard-header">{navigationTrigger}</div>
+  ),
 }));
 
 vi.mock("@/app/(dashboard)/components/SidebarProvider", () => ({
-  default: ({ sidebarCollapsed }: { sidebarCollapsed: boolean }) => (
-    <div data-testid="sidebar" data-collapsed={String(sidebarCollapsed)} />
+  default: ({ sidebarCollapsed, onToggleCollapsed }: { sidebarCollapsed: boolean; onToggleCollapsed: () => void }) => (
+    <div data-testid="sidebar" data-collapsed={String(sidebarCollapsed)}>
+      <button onClick={onToggleCollapsed}>Close navigation</button>
+      <a href="#settings">Settings</a>
+    </div>
   ),
 }));
 
@@ -87,6 +92,47 @@ describe("(dashboard) Layout", () => {
     pendingUiConfig = createDeferred();
     searchParamsValue = new URLSearchParams();
     vi.mocked(usePathname).mockReturnValue("/ui/guardrails");
+  });
+
+  it("starts mobile navigation closed, opens a modal drawer and closes it after choosing a page", async () => {
+    render(
+      <AuthProvider>
+        <Layout>
+          <p>Gateway content</p>
+        </Layout>
+      </AuthProvider>,
+    );
+    pendingUiConfig.resolve();
+
+    const trigger = await screen.findByRole("button", { name: "Open navigation" });
+    expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument();
+
+    fireEvent.click(trigger);
+    const navigation = await screen.findByRole("dialog", { name: "Navigation" });
+    expect(within(navigation).getByRole("button", { name: "Close navigation" })).toBeInTheDocument();
+    fireEvent.click(within(navigation).getByRole("link", { name: "Settings" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument());
+  });
+
+  it("closes the mobile drawer when navigation changes outside the drawer", async () => {
+    const dashboard = () => (
+      <AuthProvider>
+        <Layout>
+          <p>Gateway content</p>
+        </Layout>
+      </AuthProvider>
+    );
+    const { rerender } = render(dashboard());
+    pendingUiConfig.resolve();
+    fireEvent.click(await screen.findByRole("button", { name: "Open navigation" }));
+    expect(await screen.findByRole("dialog", { name: "Navigation" })).toBeInTheDocument();
+
+    vi.mocked(usePathname).mockReturnValue("/ui/api-keys");
+    rerender(dashboard());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument());
+    vi.mocked(usePathname).mockReturnValue("/ui/guardrails");
+    rerender(dashboard());
+    expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument();
   });
 
   it("collapses the sidebar on Logs for a full-screen view and expands it again after leaving", async () => {

@@ -22,7 +22,12 @@ from typing import Final, TypeVar
 
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
-from litellm.proxy.db.log_db_metrics import _is_exception_related_to_db, claim_db_io, db_io_claimed
+from litellm.proxy.db.log_db_metrics import (  # noqa: F401  # legacy module exports
+    _is_exception_related_to_db,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    claim_db_io,
+    db_io_claimed,
+    is_exception_related_to_db,
+)
 
 _T = TypeVar("_T")
 
@@ -75,7 +80,7 @@ async def db_span(call_type: str, table: str | None, operation: str | None = Non
         try:
             yield
         except Exception as e:
-            if service_logging is not None and _is_exception_related_to_db(e):
+            if service_logging is not None and is_exception_related_to_db(e):
                 await _emit_failure(service_logging, call_type, event_metadata, start_time, e)
             raise
     if service_logging is None or not witness.touched:

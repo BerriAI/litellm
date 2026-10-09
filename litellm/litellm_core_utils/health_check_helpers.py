@@ -3,7 +3,7 @@ Helper functions for health check calls.
 """
 
 import base64
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Final, Literal
 
 from litellm.llms.base_llm.ocr.transformation import DocumentType
@@ -56,6 +56,21 @@ def get_image_file_for_health_check() -> bytes:
     return base64.b64decode(TEST_IMAGE_BASE64)
 
 
+def _decisions_health_check_questions(model: str, custom_llm_provider: str) -> Mapping[str, Mapping[str, object]]:
+    import litellm
+    from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
+    from litellm.utils import ProviderConfigManager
+
+    provider: Final = next((member for member in litellm.LlmProviders if member.value == custom_llm_provider), None)
+    config: Final = (
+        None
+        if provider is None
+        else ProviderConfigManager.get_provider_decisions_config(model=model, provider=provider)
+    )
+    questions: Final = BaseDecisionsConfig.health_check_questions if config is None else config.health_check_questions
+    return {name: dict(question) for name, question in questions.items()}
+
+
 def _ocr_health_check_document(model: str, custom_llm_provider: str) -> DocumentType:
     native: Final = NATIVE_OCR_HEALTH_CHECK_DOCUMENT.load()
     if native is None:
@@ -96,7 +111,7 @@ class HealthCheckHelpers:
         return {}
 
     @staticmethod
-    def _update_model_params_with_health_check_tracking_information(
+    def update_model_params_with_health_check_tracking_information(
         model_params: dict,
     ) -> dict:
         """
@@ -119,6 +134,10 @@ class HealthCheckHelpers:
             _metadata_variable_name=_metadata_variable_name,
         )
         return model_params
+
+    _update_model_params_with_health_check_tracking_information = (
+        update_model_params_with_health_check_tracking_information
+    )
 
     @staticmethod
     def _get_metadata_for_health_check_call():
@@ -219,7 +238,7 @@ class HealthCheckHelpers:
             get_audio_file_for_health_check,
         )
         from litellm.litellm_core_utils.health_check_utils import DECISIONS_CALL_PARAMS, _filter_model_params
-        from litellm.realtime_api.main import _realtime_health_check
+        from litellm.realtime_api.main import realtime_health_check
 
         return {
             "chat": lambda: litellm.acompletion(
@@ -264,7 +283,7 @@ class HealthCheckHelpers:
                 query=prompt or "",
                 documents=["my sample text"],
             ),
-            "realtime": lambda: _realtime_health_check(
+            "realtime": lambda: realtime_health_check(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 api_base=model_params.get("api_base", None),
@@ -296,7 +315,9 @@ class HealthCheckHelpers:
                 **DECISIONS_CALL_PARAMS.validate_python(
                     {
                         "state": prompt or "health check",
-                        "questions": {"reachable": {"type": "noul", "instructions": "Is the service reachable?"}},
+                        "questions": _decisions_health_check_questions(
+                            model=model, custom_llm_provider=custom_llm_provider
+                        ),
                         **_filter_model_params(model_params=model_params),
                     }
                 )

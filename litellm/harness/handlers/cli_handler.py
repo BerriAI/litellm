@@ -13,7 +13,7 @@ import asyncio
 import os
 from collections import deque
 from collections.abc import AsyncIterator, Sequence
-from typing import Any, Final
+from typing import Final
 
 from litellm._logging import verbose_logger
 from litellm.constants import HARNESS_STDERR_TAIL_LINES, HARNESS_STREAM_READ_CHUNK_BYTES
@@ -125,7 +125,7 @@ class CLIHarnessHandler(BaseHarnessHandler):
         self._proc = proc
         tail: Final[deque[str]] = deque(maxlen=HARNESS_STDERR_TAIL_LINES)  # mutable-ok: bounded stderr ring buffer
         stderr_task = asyncio.ensure_future(drain_stderr(proc.stderr, tail))
-        state: Any = self.config.create_stream_state()
+        state: Final[object] = self.config.create_stream_state()
         exit_code: int | None = None
         try:
             await send_stdin(proc, request.stdin)

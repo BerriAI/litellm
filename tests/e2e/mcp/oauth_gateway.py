@@ -21,6 +21,7 @@ from typing import Final
 import psycopg
 from e2e_config import INHERITED_ENV_PREFIXES, available_port
 from e2e_http import NoBody
+from e2e_metadata import step
 from idp import Keycloak, stop_process_group
 from proxy_client import ProxyClient, build_proxy_client
 from psycopg.rows import class_row
@@ -37,6 +38,7 @@ class CredentialRow:
     credential_b64: str = field(repr=False)
 
 
+@step("Read the user's stored OAuth credential for the MCP server from the database and decrypt it")
 def stored_oauth(user_id: str, server_id: str) -> StoredOAuth:
     """Read the encrypted credential because management APIs omit the plaintext token."""
     from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
@@ -108,6 +110,7 @@ class OAuthGateway:
     _log_path: Path
     _child: subprocess.Popen[bytes] | None = field(default=None, init=False, repr=False)
 
+    @step("Start the separate LiteLLM proxy and wait for /health/liveliness")
     def start(self) -> None:
         with self._log_path.open("ab") as log:
             self._child = subprocess.Popen(
@@ -126,11 +129,13 @@ class OAuthGateway:
             time.sleep(0.5)
         raise AssertionError("owned OAuth gateway did not become ready")
 
+    @step("Stop the separate LiteLLM proxy")
     def stop(self) -> None:
         if self._child is not None:
             stop_process_group(self._child)
             assert self._child.poll() is not None, "old gateway process is still alive"
 
+    @step("Restart the separate LiteLLM proxy process so its in-memory caches start empty")
     def restart(self) -> None:
         assert self._child is not None
         previous: Final = self._child.pid
@@ -139,6 +144,7 @@ class OAuthGateway:
         assert self._child.pid != previous, "gateway restart did not create a new process"
 
 
+@step("Start a separate LiteLLM proxy from source with JWT auth against Keycloak")
 def owned_gateway(idp: Keycloak, directory: Path, cleanup: ExitStack) -> OAuthGateway:
     for name in ("DATABASE_URL", "LITELLM_LICENSE", "LITELLM_SALT_KEY", "LITELLM_MASTER_KEY"):
         assert os.environ.get(name), f"{name} is required for the owned OAuth gateway"

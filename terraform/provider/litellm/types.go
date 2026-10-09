@@ -131,6 +131,7 @@ type ModelInfo struct {
 type Key struct {
 	Key                      string                 `json:"key,omitempty"`
 	TokenID                  string                 `json:"token_id,omitempty"`
+	KeyType                  string                 `json:"key_type,omitempty"`
 	Models                   []string               `json:"models"`
 	Spend                    float64                `json:"spend,omitempty"`
 	MaxBudget                *float64               `json:"max_budget,omitempty"`

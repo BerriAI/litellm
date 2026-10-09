@@ -26,6 +26,7 @@ import httpx2
 import pytest
 from e2e_config import PROXY_BASE_URL, REQUEST_TIMEOUT
 from e2e_http import AuthHeaders, NoBody, unwrap
+from e2e_metadata import step
 from idp import Identity
 from mcp import ClientSession
 from mcp.client.auth import OAuthClientProvider
@@ -318,6 +319,7 @@ async def _list_and_call(
 class ChatMcpClient:
     proxy: ProxyClient
 
+    @step("Register the MCP server with the alias {body.alias}")
     def create_server(self, body: McpServerCreateBody) -> McpServerInfo:
         return unwrap(
             self.proxy.transport.post(
@@ -328,6 +330,7 @@ class ChatMcpClient:
             )
         )
 
+    @step("Read the MCP server back from /v1/mcp/server")
     def server_info(self, server_id: str) -> McpServerInfo:
         return unwrap(
             self.proxy.transport.get(
@@ -338,6 +341,7 @@ class ChatMcpClient:
             )
         )
 
+    @step("Delete the MCP server")
     def delete_server(self, server_id: str) -> None:
         _ = self.proxy.transport.delete(
             f"/v1/mcp/server/{server_id}",
@@ -346,6 +350,7 @@ class ChatMcpClient:
             response_type=NoBody,
         )
 
+    @step("Sign the key's user in to the MCP server {alias} through the OAuth consent flow")
     def seed_user_token(self, alias: str, key: str, storage_state_path: str) -> tuple[str, ...]:
         """Drive the interactive authorize dance for `key`'s user so the gateway
         stores their upstream token, retried to the shared deadline since the
@@ -367,6 +372,7 @@ class ChatMcpClient:
             f"last error: {last_error!r}"
         )
 
+    @step("List the tools on the MCP server {alias} and call {tool} over the MCP protocol")
     def list_and_call(
         self,
         alias: str,
@@ -394,6 +400,7 @@ class ChatMcpClient:
             )
         )
 
+    @step("List the users with a stored OAuth token for the MCP server")
     def server_user_credentials(self, server_id: str) -> tuple[McpServerUserCredentialRow, ...]:
         return unwrap(
             self.proxy.transport.get(
@@ -404,6 +411,7 @@ class ChatMcpClient:
             )
         ).root
 
+    @step("Revoke the user's stored OAuth token for the MCP server")
     def revoke_user_token(self, server_id: str, headers: AuthHeaders) -> None:
         _ = unwrap(
             self.proxy.transport.delete(
@@ -414,6 +422,7 @@ class ChatMcpClient:
             )
         )
 
+    @step("Send a /chat/completions request to {body.model} with an MCP server attached as a tool")
     def chat_with_mcp(self, headers: AuthHeaders, body: ChatBody) -> ChatResponse:
         """POST /chat/completions carrying the LiteLLM key in `headers` (either
         ingress form) with an MCP server attached in `body.tools`. The gateway
