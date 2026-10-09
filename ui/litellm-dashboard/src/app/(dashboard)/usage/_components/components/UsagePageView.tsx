@@ -66,6 +66,7 @@ import { useTagSummary } from "@/app/(dashboard)/hooks/tags/useTagSummary";
 import { Panel } from "./overview/Primitives";
 import UsageOverview from "./overview/UsageOverview";
 import BuilderInsights from "./builders/BuilderInsights";
+import { useBuilderInsightsRoute } from "./builders/builderInsightsRoute";
 
 interface UsagePageProps {
   teams: Team[];
@@ -97,6 +98,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const isOrgAdmin = useIsOrgAdmin();
   const canViewOrganizationUsage = hasCapability(userRole, "viewOrganizationUsage", isOrgAdmin);
   const canViewAgentUsage = hasCapability(userRole, "viewAgentUsage");
+  const { builderId, closeBuilder } = useBuilderInsightsRoute();
 
   // For admins: null means global view (all users), a string means filter by that user
   // For non-admins: always set to their own user ID
@@ -106,13 +108,22 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
   const [isAiChatOpen, setIsAiChatOpen] = useState(false);
-  const [selectedUsageView, setUsageView] = useState<UsageOption>("global");
+  const [selectedUsageView, setUsageView] = useState<UsageOption>(() => (builderId !== null ? "builders" : "global"));
+  const activeUsageView = selectedUsageView === "builders" && !isAdmin ? "global" : selectedUsageView;
+  const requestedUsageView = isAdmin && builderId !== null ? "builders" : activeUsageView;
   // Org-admin membership is read from the server, so unlike the other usage
   // views this one can be revoked while the page is open. Derive the view in
   // render rather than storing it, so the fallback lands on the same paint and
   // the selector never holds a value it no longer offers.
   const usageView: UsageOption =
-    selectedUsageView === "organization" && !canViewOrganizationUsage ? "global" : selectedUsageView;
+    requestedUsageView === "organization" && !canViewOrganizationUsage ? "global" : requestedUsageView;
+  const handleUsageViewChange = useCallback(
+    (value: UsageOption) => {
+      if (value !== "builders" && builderId !== null) closeBuilder();
+      setUsageView(value);
+    },
+    [builderId, closeBuilder],
+  );
 
   const [showCredentialBanner, setShowCredentialBanner] = useState(true);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
@@ -320,7 +331,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       <header className="mb-3 flex w-full flex-wrap items-center justify-between gap-3 border-b pb-3">
         <UsageViewSelect
           value={usageView}
-          onChange={(value) => setUsageView(value)}
+          onChange={handleUsageViewChange}
           userRole={userRole}
           canViewTagUsage={canViewTagUsage}
           isOrgAdmin={isOrgAdmin}
