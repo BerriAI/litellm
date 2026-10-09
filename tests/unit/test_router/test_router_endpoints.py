@@ -1,5 +1,6 @@
 import asyncio
 import os
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import litellm
@@ -140,8 +141,10 @@ async def test_aspeech_sets_deployment_metadata():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("include_litellm_metadata", [True, False])
-async def test_avector_store_create_keeps_caller_metadata(include_litellm_metadata):
-    router = Router(
+async def test_avector_store_create_keeps_caller_metadata(
+    include_litellm_metadata: bool,
+) -> None:
+    router: Final = Router(
         model_list=[
             {
                 "model_name": "gpt-5",
@@ -153,26 +156,26 @@ async def test_avector_store_create_keeps_caller_metadata(include_litellm_metada
             }
         ]
     )
-    metadata = {"team": "llmproxy"}
-    request_kwargs = {
+    metadata: Final = {"team": "llmproxy"}
+    request_kwargs: Final = {
         "name": "x",
         "metadata": metadata,
         **({"litellm_metadata": {}} if include_litellm_metadata else {}),
     }
-    mock_response = MagicMock()
+    mock_response: Final = MagicMock()
 
     with patch(
         "litellm.vector_stores.acreate",
         new_callable=AsyncMock,
         return_value=mock_response,
     ) as mock_acreate:
-        response = await router.avector_store_create(model="gpt-5", **request_kwargs)
+        response: Final = await router.avector_store_create(model="gpt-5", **request_kwargs)
 
     assert response is mock_response
     assert mock_acreate.await_args is not None
     assert mock_acreate.await_args.kwargs["metadata"] == {"team": "llmproxy"}
     if include_litellm_metadata:
-        litellm_metadata = mock_acreate.await_args.kwargs["litellm_metadata"]
+        litellm_metadata: Final = mock_acreate.await_args.kwargs["litellm_metadata"]
         assert litellm_metadata["deployment"] == "openai/gpt-5"
         assert litellm_metadata["model_info"]["id"] is not None
 
