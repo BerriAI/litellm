@@ -41,10 +41,11 @@
     "clsx": "^2.1.1",
     "date-fns": "^4.4.0",
     "dayjs": "1.11.19",
+    "es-toolkit": "1.49.0",
     "jwt-decode": "4.0.0",
     "lucide-react": "0.513.0",
     "moment": "2.31.0",
-    "next": "16.3.6",
+    "next": "16.3.8",
     "next-themes": "^0.4.6",
     "nuqs": "^2.9.4",
     "openai": "6.49.0",
@@ -118,7 +119,7 @@
     "axios": "1.13.6",
     "postcss": "8.5.23",
     "esbuild": "0.28.1",
-    "sharp": "^0.35.4"
+    "sharp": "^0.35.5"
   },
   "engines": {
     "node": ">=24.14.1",

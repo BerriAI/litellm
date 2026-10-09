@@ -117,7 +117,16 @@ import type { ComplexityRouterConfigPayload } from "./add_model/build_complexity
 import type { AutoRouterPresetsResponse } from "@/lib/autorouter_presets";
 import type { VectorStoreIndex } from "@/app/(dashboard)/vector-stores/_components/IndexesTab";
 import type { RoutingDecision } from "./logs/detail/RoutingDecisionCard";
-import type { SpanDetail, SpanErrorPage, Trace, TracePage } from "./lens/traces/types";
+import type {
+  SpanDetail,
+  SpanErrorPage,
+  SpanErrorQuery,
+  SpanQuery,
+  Trace,
+  TraceDetailQuery,
+  TraceListQuery,
+  TracePage,
+} from "./lens/traces/types";
 import {
   createApiClient,
   deriveErrorMessage,
@@ -309,6 +318,8 @@ export interface Organization {
 
 export interface CredentialItem {
   credential_name: string;
+  display_name?: string | null;
+  source?: "db" | "config";
   credential_values: any;
   credential_info: {
     custom_llm_provider?: string;
@@ -544,9 +555,10 @@ export const getOpenAPISchema = async () => {
   return jsonData;
 };
 
-export const modelCostMap = async () => {
+export const modelCostMap = async (catalogOnly = false) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/public/litellm_model_cost_map` : `/public/litellm_model_cost_map`;
+    const path = catalogOnly ? "/public/litellm_model_cost_map?catalog_only=true" : "/public/litellm_model_cost_map";
+    const url = proxyBaseUrl ? `${proxyBaseUrl}${path}` : path;
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -1082,6 +1094,8 @@ export interface UserInfoV2Response {
   user_role: string | null;
   spend: number;
   max_budget: number | null;
+  tpm_limit?: number | null;
+  rpm_limit?: number | null;
   models: string[];
   budget_duration: string | null;
   budget_reset_at: string | null;
@@ -1968,7 +1982,7 @@ export const agentTraceListCall = async ({
   endMs: number;
   cursor?: string | null;
 }): Promise<TracePage> => {
-  const query = { start_ms: startMs, end_ms: endMs, cursor: cursor ?? undefined };
+  const query = { start_ms: startMs, end_ms: endMs, cursor: cursor ?? undefined } satisfies TraceListQuery;
   return apiClient.get<TracePage>(`/v1/traces`, { accessToken, query });
 };
 
@@ -1983,7 +1997,7 @@ export const agentTraceCall = async (
 ): Promise<Trace> =>
   apiClient.get<Trace>(`/v1/traces/${encodeURIComponent(traceId)}`, {
     accessToken,
-    query: { trace_ref: traceRef || undefined, cursor: cursor ?? undefined, page_size: 200 },
+    query: { trace_ref: traceRef || undefined, cursor: cursor ?? undefined, page_size: 200 } satisfies TraceDetailQuery,
   });
 
 export const agentTraceSpanCall = async (
@@ -1994,7 +2008,7 @@ export const agentTraceSpanCall = async (
 ): Promise<SpanDetail> =>
   apiClient.get<SpanDetail>(`/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(spanId)}`, {
     accessToken,
-    query: { trace_ref: traceRef || undefined },
+    query: { trace_ref: traceRef || undefined } satisfies SpanQuery,
   });
 
 export const agentTraceSpanErrorCall = async (
@@ -2005,7 +2019,7 @@ export const agentTraceSpanErrorCall = async (
 ): Promise<SpanErrorPage> =>
   apiClient.get<SpanErrorPage>(`/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(spanId)}/error`, {
     accessToken,
-    query: { trace_ref: options.traceRef || undefined, cursor: options.cursor || undefined },
+    query: { trace_ref: options.traceRef || undefined, cursor: options.cursor || undefined } satisfies SpanErrorQuery,
   });
 
 export const adminSpendLogsCall = async (accessToken: string) => {
@@ -7038,6 +7052,13 @@ export const updateUiSettings = async (accessToken: string, settings: Record<str
   }
   const data = await response.json();
   return data;
+};
+
+export const startMoyaiQuickConnect = async (accessToken: string, moyaiUrl: string, returnTo: string) => {
+  return apiClient.post<{ connect_url: string }>("/moyai/connect/start", {
+    accessToken,
+    body: { moyai_url: moyaiUrl, return_to: returnTo },
+  });
 };
 
 export type UserBannerSeverity = "info" | "warning" | "error";

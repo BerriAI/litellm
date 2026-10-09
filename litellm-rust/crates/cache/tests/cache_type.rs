@@ -1,5 +1,6 @@
 use litellm_cache::CacheType;
 use rstest::rstest;
+use strum::VariantArray;
 
 #[rstest]
 #[case(CacheType::Local, "local")]
@@ -15,16 +16,16 @@ fn every_python_cache_type_has_one_round_trip_identity(
     #[case] cache_type: CacheType,
     #[case] name: &str,
 ) {
-    assert_eq!(cache_type.as_python_name(), name);
-    assert_eq!(CacheType::from_python_name(name), Some(cache_type));
+    assert_eq!(<&'static str>::from(cache_type), name);
+    assert_eq!(name.parse::<CacheType>().ok(), Some(cache_type));
     assert_eq!(
         serde_json::to_value(cache_type).unwrap(),
         serde_json::Value::from(name)
     );
     assert_eq!(
-        CacheType::ALL
+        CacheType::VARIANTS
             .iter()
-            .filter(|candidate| candidate.as_python_name() == name)
+            .filter(|candidate| <&'static str>::from(**candidate) == name)
             .count(),
         1
     );
@@ -33,7 +34,10 @@ fn every_python_cache_type_has_one_round_trip_identity(
 #[rstest]
 fn python_cache_types_are_listed_in_python_order() {
     assert_eq!(
-        CacheType::ALL.map(CacheType::as_python_name),
+        CacheType::VARIANTS
+            .iter()
+            .map(|cache_type| <&'static str>::from(*cache_type))
+            .collect::<Vec<_>>(),
         [
             "local",
             "redis",
@@ -52,5 +56,5 @@ fn python_cache_types_are_listed_in_python_order() {
 #[case::unknown("memcached")]
 #[case::case_sensitive("Redis")]
 fn unknown_python_names_have_no_cache_type(#[case] name: &str) {
-    assert_eq!(CacheType::from_python_name(name), None);
+    assert!(name.parse::<CacheType>().is_err());
 }

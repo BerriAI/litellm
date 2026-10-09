@@ -142,6 +142,7 @@ class SourceReader:
             id=execution.trace_id,
             trace_ref=execution.trace_ref,
             record_team=execution.team_id,
+            start_time=execution.start_time,
             cursor=cursor,
             offset=offset + 1,
         )
@@ -155,6 +156,8 @@ class SourceReader:
                     parent_span_id=row.parent_span_id,
                     name=row.name,
                     kind=row.kind,
+                    start_time=row.start_time,
+                    end_time=row.end_time,
                     content=row.content,
                     truncated=bool(row.truncated),
                 )
@@ -173,6 +176,7 @@ class SourceReader:
             id=execution.trace_id,
             trace_ref=execution.trace_ref,
             record_team=execution.team_id,
+            start_time=execution.start_time,
             span=evidence.span_id,
             quote=evidence.quote,
         )

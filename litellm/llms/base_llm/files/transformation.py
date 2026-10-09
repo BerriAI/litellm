@@ -6,7 +6,6 @@ import httpx
 from openai.types.file_deleted import FileDeleted
 
 from litellm.files.types import FileContentStreamingResult
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.files import TwoStepFileUploadConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -23,16 +22,19 @@ from ..chat.transformation import BaseConfig
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+    from litellm.proxy._types import UserAPIKeyAuth as _UserAPIKeyAuth
     from litellm.router import Router as _Router
     from litellm.types.llms.openai import HttpxBinaryResponseContent
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
     Span = Any
     Router = _Router
+    UserAPIKeyAuth = _UserAPIKeyAuth
 else:
     LiteLLMLoggingObj = Any
     Span = Any
     Router = Any
+    UserAPIKeyAuth = Any
 
 
 class BaseFileUploadStream(ABC):
@@ -132,6 +134,9 @@ class BaseFilesConfig(BaseConfig):
         litellm_params: dict,
     ) -> OpenAIFileObject:
         """Transform file retrieve response into OpenAI format."""
+
+    def is_retrieve_file_response_successful(self, response: httpx.Response) -> bool:
+        return not httpx.codes.is_error(response.status_code)
 
     @abstractmethod
     def transform_delete_file_request(

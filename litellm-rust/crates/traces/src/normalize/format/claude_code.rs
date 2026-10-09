@@ -6,8 +6,8 @@ use super::{Extraction, Format, SpanFacts};
 use crate::{
     Error,
     normalize::{
-        CLAUDE_CODE_AGENT, CLAUDE_CODE_SCOPE, CallEvidence, CallKey, ObservationType, RoleEvidence,
-        SpanContext, attr, present, tokens,
+        CLAUDE_CODE_AGENT, CLAUDE_CODE_EVENTS_SCOPE, CLAUDE_CODE_SCOPE, CallEvidence,
+        ObservationType, RoleEvidence, SpanContext, attr, present, tokens,
     },
     otlp::DecodedEvent,
 };
@@ -15,10 +15,23 @@ use crate::{
 /// Claude Code's built-in tracing, identified by its instrumentation scope.
 pub(crate) struct ClaudeCode;
 
+#[derive(Debug, PartialEq, Eq, strum::EnumString)]
 enum SpanType {
+    #[strum(serialize = "assistant_response")]
+    AssistantResponse,
+    #[strum(serialize = "tool_result")]
+    ToolResult,
+    #[strum(serialize = "api_request_body")]
+    ApiRequestBody,
+    #[strum(serialize = "compaction")]
+    Compaction,
+    #[strum(serialize = "interaction")]
     Interaction,
+    #[strum(serialize = "llm_request")]
     LlmRequest,
+    #[strum(serialize = "tool")]
     Tool,
+    #[strum(disabled)]
     Other,
 }
 
@@ -29,12 +42,7 @@ fn span_type(name: &str, attributes: &BTreeMap<String, String>) -> SpanType {
     } else {
         kind
     };
-    match kind {
-        "interaction" => SpanType::Interaction,
-        "llm_request" => SpanType::LlmRequest,
-        "tool" => SpanType::Tool,
-        _ => SpanType::Other,
-    }
+    kind.parse().unwrap_or(SpanType::Other)
 }
 
 /// `agent:custom:search_agent` -> `search_agent`: the subagent a request ran for.
@@ -147,6 +155,43 @@ fn llm_output(attributes: &BTreeMap<String, String>) -> String {
     }
 }
 
+fn exported_tool_results(attributes: &BTreeMap<String, String>) -> String {
+    let Ok(body) = serde_json::from_str::<Value>(attr(attributes, "body")) else {
+        return json!({"warning": "Claude's API body export is missing or truncated. Some tool results may be unavailable."}).to_string();
+    };
+    let message = body
+        .get("messages")
+        .and_then(Value::as_array)
+        .and_then(|messages| {
+            messages
+                .iter()
+                .rev()
+                .find(|message| message.get("role").and_then(Value::as_str) != Some("system"))
+        })
+        .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"));
+    let Some(content) = message.and_then(|message| message.get("content")) else {
+        return json!({"warning": "Claude's API body export has an unexpected message shape. Some tool results may be unavailable."}).to_string();
+    };
+    if !content.is_array() && !content.is_string() {
+        return json!({"warning": "Claude's API body export has an unexpected content shape. Some tool results may be unavailable."}).to_string();
+    }
+    let results: Vec<Value> = content.as_array()
+        .into_iter()
+        .flatten()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
+        .map(|block| {
+            let content = match block.get("content") {
+                Some(Value::String(text)) => text.clone(),
+                Some(Value::Array(blocks)) => blocks.iter().map(|block| {
+                    block.get("text").and_then(Value::as_str).unwrap_or("[Non-text tool output omitted by Claude export]")
+                }).collect::<Vec<_>>().join("\n"),
+                _ => String::new(),
+            };
+            json!({"id": block.get("tool_use_id"), "content": content, "is_error": block.get("is_error").and_then(Value::as_bool).unwrap_or(false)})
+        }).collect();
+    json!({"tool_results": results}).to_string()
+}
+
 fn input_tokens(attributes: &BTreeMap<String, String>) -> Result<u32, Error> {
     ["input_tokens", "cache_read_tokens", "cache_creation_tokens"]
         .into_iter()
@@ -159,7 +204,7 @@ fn input_tokens(attributes: &BTreeMap<String, String>) -> Result<u32, Error> {
 
 impl Format for ClaudeCode {
     fn matches(&self, context: &SpanContext<'_>) -> bool {
-        context.scope == CLAUDE_CODE_SCOPE
+        matches!(context.scope, CLAUDE_CODE_SCOPE | CLAUDE_CODE_EVENTS_SCOPE)
     }
 
     fn extract(&self, context: &SpanContext<'_>) -> Result<Extraction, Error> {
@@ -172,6 +217,48 @@ impl Format for ClaudeCode {
             ..SpanFacts::default()
         };
         let (facts, consumed): (SpanFacts, Vec<&'static str>) = match kind {
+            SpanType::AssistantResponse => (
+                SpanFacts {
+                    role: Some(RoleEvidence::Declared(ObservationType::Chain)),
+                    agent_name: Some(subagent(attributes).unwrap_or(CLAUDE_CODE_AGENT).to_owned()),
+                    model: present(attributes, &["model"]),
+                    output: json!({"role": "assistant", "content": attr(attributes, "response")})
+                        .to_string(),
+                    ..base
+                },
+                vec!["response"],
+            ),
+            SpanType::ToolResult => (
+                SpanFacts {
+                    input: tool_input(attributes),
+                    tool_call_id: present(attributes, &["tool_use_id"]),
+                    ..base
+                },
+                if tool_arguments(attributes).is_some() {
+                    vec!["tool_input"]
+                } else {
+                    Vec::new()
+                },
+            ),
+            SpanType::Compaction => (
+                SpanFacts {
+                    role: Some(RoleEvidence::Declared(ObservationType::Chain)),
+                    output: json!({"role": "system", "content": if attr(attributes, "success") == "true" {
+                        "Context compacted"
+                    } else {
+                        "Context compaction failed"
+                    }}).to_string(),
+                    ..base
+                },
+                Vec::new(),
+            ),
+            SpanType::ApiRequestBody => (
+                SpanFacts {
+                    output: exported_tool_results(attributes),
+                    ..base
+                },
+                vec!["body"],
+            ),
             SpanType::Interaction => (
                 SpanFacts {
                     role: Some(RoleEvidence::Declared(ObservationType::Agent)),
@@ -191,7 +278,7 @@ impl Format for ClaudeCode {
                     output: llm_output(attributes),
                     calls: present(attributes, &["gen_ai.response.id", "request_id"])
                         .map_or(CallEvidence::Unknown, |id| {
-                            CallEvidence::complete(CallKey::ProviderResponse(id))
+                            CallEvidence::complete(crate::normalize::claude_call_key(id))
                         }),
                     ..base
                 },
@@ -231,7 +318,7 @@ mod tests {
     use rstest::rstest;
     use serde_json::Value;
 
-    use super::CLAUDE_CODE_SCOPE;
+    use super::{CLAUDE_CODE_SCOPE, SpanType, span_type};
     use crate::{
         Error,
         normalize::{Normalization, NormalizedSpan, ObservationType},
@@ -266,6 +353,49 @@ mod tests {
             .iter()
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
             .collect()
+    }
+
+    #[rstest]
+    #[case::assistant_response("assistant_response", SpanType::AssistantResponse)]
+    #[case::tool_result("tool_result", SpanType::ToolResult)]
+    #[case::api_request_body("api_request_body", SpanType::ApiRequestBody)]
+    #[case::compaction("compaction", SpanType::Compaction)]
+    #[case::interaction("interaction", SpanType::Interaction)]
+    #[case::llm_request("llm_request", SpanType::LlmRequest)]
+    #[case::tool("tool", SpanType::Tool)]
+    #[case::unknown("surprise", SpanType::Other)]
+    fn span_type_maps_each_recorded_kind(#[case] kind: &str, #[case] expected: SpanType) {
+        assert_eq!(
+            span_type("anything", &attributes(&[("span.type", kind)])),
+            expected
+        );
+    }
+
+    #[rstest]
+    fn notification_prompts_keep_user_provenance_and_compaction_is_system() {
+        let prompt_text =
+            "<task-notification><summary>Agent Reader completed</summary></task-notification>";
+        let notification = normalize(
+            "claude_code.interaction",
+            &attributes(&[("user_prompt", prompt_text)]),
+            &[],
+        )
+        .unwrap();
+        let prompt: Value = serde_json::from_str(&notification.input).unwrap();
+        assert_eq!(
+            prompt[0],
+            serde_json::json!({"role":"user","content":prompt_text})
+        );
+        let compaction = normalize(
+            "claude_code.compaction",
+            &attributes(&[("success", "true")]),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&compaction.output).unwrap(),
+            serde_json::json!({"role":"system","content":"Context compacted"})
+        );
     }
 
     #[rstest]
