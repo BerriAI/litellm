@@ -118,7 +118,15 @@ function TeamAdminEditableFieldsForm({
             {supportedFields.map((name) => {
               const checkboxId = `team-admin-editable-${name}`;
               return (
-                <label key={name} htmlFor={checkboxId} className="flex cursor-pointer items-center gap-2">
+                <label
+                  key={name}
+                  htmlFor={checkboxId}
+                  className={
+                    setInConfig
+                      ? "flex cursor-not-allowed items-center gap-2 text-muted-foreground"
+                      : "flex cursor-pointer items-center gap-2 text-foreground"
+                  }
+                >
                   <Checkbox
                     id={checkboxId}
                     checked={field.value.includes(name)}
@@ -129,7 +137,7 @@ function TeamAdminEditableFieldsForm({
                       )
                     }
                   />
-                  <span className="text-sm text-foreground">{teamAdminFieldLabel(name)}</span>
+                  <span className="text-sm">{teamAdminFieldLabel(name)}</span>
                 </label>
               );
             })}
