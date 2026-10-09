@@ -12,6 +12,14 @@ use super::*;
 #[rstest]
 #[case::anthropic_key("anthropic", Some("sk-ant"), &[], ("x-api-key", "sk-ant"), &["authorization"])]
 #[case::azure_key("azure_ai", Some("sk-azure"), &[], ("x-api-key", "sk-azure"), &["authorization"])]
+#[case::deepseek_key("deepseek", Some("sk-deepseek"), &[], ("x-api-key", "sk-deepseek"), &["authorization"])]
+#[case::deepseek_forwards_caller_authorization(
+    "deepseek",
+    Some("sk-deepseek"),
+    &[("Authorization", "Bearer caller")],
+    ("authorization", "Bearer caller"),
+    &["x-api-key"]
+)]
 #[case::caller_x_api_key_wins(
     "azure_ai",
     Some("rust-fallback-key"),
@@ -79,6 +87,7 @@ async fn credentials_become_exactly_one_auth_header(
 #[rstest]
 #[case::anthropic("anthropic")]
 #[case::azure_ai("azure_ai")]
+#[case::deepseek("deepseek")]
 #[tokio::test]
 async fn a_call_without_credentials_fails_before_sending(
     call: MessagesCall,
@@ -115,6 +124,8 @@ async fn a_call_without_credentials_fails_before_sending(
     "/v1/messages"
 )]
 #[case::azure_ai(MODEL, Some("azure_ai"), "", "/anthropic/v1/messages")]
+#[case::deepseek(MODEL, Some("deepseek"), "", "/anthropic/v1/messages")]
+#[case::deepseek_openai_compatible_base(MODEL, Some("deepseek"), "/beta", "/anthropic/v1/messages")]
 #[case::provider_from_model_prefix("anthropic/claude-sonnet-4-5", None, "", "/v1/messages")]
 #[tokio::test]
 async fn each_provider_posts_to_its_messages_endpoint(
@@ -350,6 +361,7 @@ async fn an_oauth_key_sends_the_browser_access_header_and_the_oauth_beta(call: M
 #[rstest]
 #[case::anthropic("anthropic")]
 #[case::azure_ai("azure_ai")]
+#[case::deepseek("deepseek")]
 #[tokio::test]
 async fn caller_protocol_headers_win_over_the_defaults(call: MessagesCall, #[case] provider: &str) {
     let upstream = upstream([message_response()]).await;
@@ -579,6 +591,7 @@ async fn replayed_history_is_cleaned_before_sending(
 #[rstest]
 #[case::anthropic("anthropic")]
 #[case::azure("azure_ai")]
+#[case::deepseek("deepseek")]
 #[tokio::test]
 async fn metadata_is_reduced_to_the_user_id(call: MessagesCall, #[case] provider: &str) {
     let upstream = upstream([message_response()]).await;
@@ -598,6 +611,42 @@ async fn metadata_is_reduced_to_the_user_id(call: MessagesCall, #[case] provider
     assert_eq!(
         only_request(&upstream).await.json()["metadata"],
         json!({"user_id": "u-1"})
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn deepseek_sends_neither_billing_blocks_nor_the_custom_tool_discriminator(
+    call: MessagesCall,
+) {
+    let upstream = upstream([message_response()]).await;
+
+    run_message(with_fields(
+        MessagesCall {
+            custom_llm_provider: Some("deepseek".into()),
+            litellm_params: Default::default(),
+            api_key: Some("sk".into()),
+            api_base: Some(upstream.uri()),
+            ..call
+        },
+        json!({
+            "system": [
+                {"type": "text", "text": "x-anthropic-billing-header: cc_version=1"},
+                {"type": "text", "text": "be terse"}
+            ],
+            "tools": [{"type": "custom", "name": "get_weather", "input_schema": {"type": "object"}}]
+        }),
+    ))
+    .await;
+
+    let body = only_request(&upstream).await.json();
+    assert_eq!(
+        body["system"],
+        json!([{"type": "text", "text": "be terse"}])
+    );
+    assert_eq!(
+        body["tools"],
+        json!([{"name": "get_weather", "input_schema": {"type": "object"}}])
     );
 }
 

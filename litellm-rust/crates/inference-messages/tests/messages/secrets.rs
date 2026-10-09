@@ -18,6 +18,13 @@ use super::*;
     "/anthropic/v1/messages",
     &["AZURE_API_KEY", "AZURE_API_BASE"]
 )]
+#[case::deepseek(
+    "deepseek",
+    "DEEPSEEK_API_KEY",
+    "DEEPSEEK_API_BASE",
+    "/anthropic/v1/messages",
+    &["DEEPSEEK_API_KEY", "DEEPSEEK_ANTHROPIC_API_BASE", "DEEPSEEK_API_BASE"]
+)]
 #[tokio::test]
 async fn the_credential_and_base_come_from_the_secret_source(
     call: MessagesCall,
