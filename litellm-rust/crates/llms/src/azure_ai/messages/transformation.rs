@@ -1,9 +1,7 @@
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_http::request::{has_bearer_auth, has_header};
-use litellm_llms_types::formats::messages::{
-    CacheControl, ContentBlock, Message, MessageContent, MessagesOptionalParams, MessagesRequest,
-    SystemPrompt,
-};
+use litellm_llms_types::formats::messages::MessagesRequest;
+use litellm_router_types::LitellmParams;
 
 use crate::{
     Error,
@@ -20,7 +18,7 @@ use crate::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
         messages::{
             context::MessagesTransformContext,
-            normalization::fold_system_role_messages,
+            normalization::{fold_system_role_messages, strip_cache_control_scope},
             transformation::{BaseMessagesConfig, MESSAGES_PATH_SUFFIX},
         },
     },
@@ -47,6 +45,8 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         &self,
         api_base: Option<&str>,
         _model: &str,
+        _litellm_params: &LitellmParams,
+        _stream: bool,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         complete_azure_anthropic_url(api_base, env_lookup)
@@ -57,20 +57,8 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         request: MessagesRequest,
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
-        let request = fold_system_role_messages(request);
         transform_messages_request(
-            MessagesRequest {
-                messages: request
-                    .messages
-                    .into_iter()
-                    .map(strip_scope_from_message)
-                    .collect(),
-                params: MessagesOptionalParams {
-                    system: request.params.system.map(strip_scope_from_system),
-                    ..request.params
-                },
-                ..request
-            },
+            strip_cache_control_scope(fold_system_role_messages(request)),
             context,
         )
     }
@@ -86,6 +74,7 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         headers: Headers,
         api_key: Option<&str>,
         _model: &str,
+        _litellm_params: &LitellmParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
         if has_header(&headers, API_KEY_PLACEMENT.header_name()) || has_bearer_auth(&headers) {
@@ -127,37 +116,6 @@ pub fn complete_azure_anthropic_url(
         None => format!("{api_base}{ANTHROPIC_PATH_SEGMENT}"),
     };
     Ok(format!("{with_anthropic}{MESSAGES_PATH_SUFFIX}"))
-}
-
-fn strip_scope_from_block(block: ContentBlock) -> ContentBlock {
-    ContentBlock {
-        cache_control: block.cache_control.map(|cache_control| CacheControl {
-            scope: None,
-            ..cache_control
-        }),
-        ..block
-    }
-}
-
-fn strip_scope_from_system(system: SystemPrompt) -> SystemPrompt {
-    match system {
-        SystemPrompt::Blocks(blocks) => {
-            SystemPrompt::Blocks(blocks.into_iter().map(strip_scope_from_block).collect())
-        }
-        text => text,
-    }
-}
-
-fn strip_scope_from_message(message: Message) -> Message {
-    Message {
-        content: match message.content {
-            MessageContent::Blocks(blocks) => {
-                MessageContent::Blocks(blocks.into_iter().map(strip_scope_from_block).collect())
-            }
-            text => text,
-        },
-        ..message
-    }
 }
 
 #[cfg(test)]
@@ -268,6 +226,7 @@ mod tests {
                     .collect(),
                 api_key,
                 "claude",
+                &LitellmParams::default(),
                 &|_| None,
             )
             .unwrap()
@@ -607,9 +566,16 @@ mod tests {
             Vec::new(),
             None,
             "claude",
+            &LitellmParams::default(),
             &record,
         );
-        let _ = AZURE_ANTHROPIC_MESSAGES_CONFIG.get_complete_url(None, "claude", &record);
+        let _ = AZURE_ANTHROPIC_MESSAGES_CONFIG.get_complete_url(
+            None,
+            "claude",
+            &LitellmParams::default(),
+            false,
+            &record,
+        );
         let requested = requested.into_inner();
         assert!(!requested.is_empty());
         let undeclared: Vec<&String> = requested

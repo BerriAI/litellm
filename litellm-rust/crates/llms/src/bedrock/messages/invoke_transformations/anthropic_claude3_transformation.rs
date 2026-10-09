@@ -19,6 +19,7 @@ use litellm_llms_types::formats::messages::{
     MessagesRequest,
     streaming::{MessagesStreamEvent, MessagesStreamUsage},
 };
+use litellm_router_types::LitellmParams;
 use serde_json::{Map, Value};
 
 use crate::{
@@ -74,13 +75,20 @@ fn bearer_token(
 fn invoke_url(
     api_base: Option<&str>,
     model: &str,
+    aws: &AwsParams,
+    stream: bool,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-    path: &str,
 ) -> String {
     let (model_id, model_region) =
         bedrock_model_id_and_region(model.strip_prefix(INVOKE_MODEL_PREFIX).unwrap_or(model));
-    let region = resolve_bedrock_region(model_region.as_deref(), &AwsParams::default(), env_lookup);
+    let region = resolve_bedrock_region(model_region.as_deref(), aws, env_lookup);
+    let path = if stream {
+        INVOKE_STREAM_PATH
+    } else {
+        INVOKE_PATH
+    };
     let endpoint = api_base
+        .or(aws.aws_bedrock_runtime_endpoint.as_deref())
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
@@ -102,18 +110,17 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         &self,
         api_base: Option<&str>,
         model: &str,
+        litellm_params: &LitellmParams,
+        stream: bool,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
-        Ok(invoke_url(api_base, model, env_lookup, INVOKE_PATH))
-    }
-
-    fn complete_stream_url(
-        &self,
-        api_base: Option<&str>,
-        model: &str,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        Ok(invoke_url(api_base, model, env_lookup, INVOKE_STREAM_PATH))
+        Ok(invoke_url(
+            api_base,
+            model,
+            &litellm_params.aws,
+            stream,
+            env_lookup,
+        ))
     }
 
     fn transform_anthropic_messages_request(
@@ -137,6 +144,7 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         headers: Headers,
         api_key: Option<&str>,
         model: &str,
+        litellm_params: &LitellmParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
         if let Some(token) = bearer_token(api_key, env_lookup) {
@@ -150,13 +158,13 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         }
         let (_, model_region) =
             bedrock_model_id_and_region(model.strip_prefix(INVOKE_MODEL_PREFIX).unwrap_or(model));
-        let params = AwsParams::default();
+        let params = &litellm_params.aws;
         Ok(ValidatedEnvironment {
             headers,
             auth: AuthScheme::AwsSigV4 {
-                region: resolve_bedrock_region(model_region.as_deref(), &params, env_lookup),
+                region: resolve_bedrock_region(model_region.as_deref(), params, env_lookup),
                 service: BEDROCK_SERVICE,
-                credentials: Box::new(AwsCredentialSource::from_params(&params, env_lookup)),
+                credentials: Box::new(AwsCredentialSource::from_params(params, env_lookup)),
             },
         })
     }
@@ -503,19 +511,122 @@ mod tests {
         assert_eq!(sse, expected);
     }
 
-    #[test]
-    fn config_uses_the_streaming_url_only_for_streams() {
-        let env = |_: &str| -> Option<String> { None };
-        let config = AmazonAnthropicClaudeMessagesConfig;
+    fn in_region(region: &str) -> LitellmParams {
+        LitellmParams {
+            aws: AwsParams {
+                aws_region_name: Some(region.into()),
+                ..AwsParams::default()
+            },
+            ..LitellmParams::default()
+        }
+    }
 
+    fn with_runtime_endpoint(endpoint: &str) -> LitellmParams {
+        LitellmParams {
+            aws: AwsParams {
+                aws_bedrock_runtime_endpoint: Some(endpoint.into()),
+                ..in_region("us-west-2").aws
+            },
+            ..LitellmParams::default()
+        }
+    }
+
+    #[rstest]
+    #[case::invoke_in_the_params_region(
+        None,
+        in_region("us-west-2"),
+        false,
+        None,
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-3/invoke"
+    )]
+    #[case::stream_in_the_params_region(
+        None,
+        in_region("us-west-2"),
+        true,
+        None,
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-3/invoke-with-response-stream"
+    )]
+    #[case::api_base_outranks_the_params_endpoint(
+        Some("https://base.test/"),
+        with_runtime_endpoint("https://params.test"),
+        false,
+        None,
+        "https://base.test/model/anthropic.claude-3/invoke"
+    )]
+    #[case::params_endpoint_outranks_the_environment(
+        None,
+        with_runtime_endpoint("https://params.test"),
+        false,
+        Some("https://env.test"),
+        "https://params.test/model/anthropic.claude-3/invoke"
+    )]
+    #[case::environment_outranks_the_region_template(
+        None,
+        in_region("us-west-2"),
+        false,
+        Some("https://env.test"),
+        "https://env.test/model/anthropic.claude-3/invoke"
+    )]
+    fn url_follows_python_endpoint_precedence_and_the_stream_path(
+        #[case] api_base: Option<&str>,
+        #[case] litellm_params: LitellmParams,
+        #[case] stream: bool,
+        #[case] env_endpoint: Option<&str>,
+        #[case] expected: &str,
+    ) {
+        let env = |name: &str| {
+            (name == AWS_BEDROCK_RUNTIME_ENDPOINT)
+                .then_some(env_endpoint)
+                .flatten()
+                .map(str::to_string)
+        };
         assert_eq!(
-            config
-                .get_complete_url(None, "anthropic.claude-3", &env)
+            AmazonAnthropicClaudeMessagesConfig
+                .get_complete_url(
+                    api_base,
+                    "anthropic.claude-3",
+                    &litellm_params,
+                    stream,
+                    &env
+                )
                 .unwrap(),
-            config
-                .complete_stream_url(None, "anthropic.claude-3", &env)
-                .unwrap()
-                .replace(INVOKE_STREAM_PATH, INVOKE_PATH)
+            expected
+        );
+    }
+
+    #[test]
+    fn sigv4_scope_and_credentials_come_from_the_litellm_params() {
+        let litellm_params = LitellmParams {
+            aws: AwsParams {
+                aws_access_key_id: Some("AKIAPARAMS".into()),
+                aws_secret_access_key: Some("params-secret".into()),
+                ..in_region("eu-central-1").aws
+            },
+            ..LitellmParams::default()
+        };
+        let validated = AmazonAnthropicClaudeMessagesConfig
+            .validate_environment(
+                Vec::new(),
+                None,
+                "anthropic.claude-3",
+                &litellm_params,
+                &|_| None,
+            )
+            .unwrap();
+        let AuthScheme::AwsSigV4 {
+            region,
+            credentials,
+            ..
+        } = validated.auth
+        else {
+            panic!("expected SigV4, got {:?}", validated.auth);
+        };
+        let AwsCredentialSource::HostSupplied(credentials) = *credentials else {
+            panic!("expected the params' static keys, got {credentials:?}");
+        };
+        assert_eq!(
+            (region.as_str(), credentials.access_key_id()),
+            ("eu-central-1", "AKIAPARAMS")
         );
     }
 
@@ -538,6 +649,7 @@ mod tests {
                 vec![("authorization".into(), "Bearer forwarded".into())],
                 api_key,
                 "anthropic.claude-3",
+                &LitellmParams::default(),
                 &env,
             )
             .unwrap();

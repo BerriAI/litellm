@@ -5,7 +5,8 @@ use bytes::Bytes;
 use litellm_host_python::{InvokeError, PythonBinding, from_py, present, to_py};
 use litellm_http::transport::Error as TransportError;
 use litellm_inference_messages::{
-    Error, MessagesCall, MessagesSettings, MessagesShaping, messages_body,
+    Error, LitellmParams, MessagesCall, MessagesSettings, MessagesShaping, litellm_params,
+    messages_body,
     route::{Messages, MessagesStreamHead},
 };
 use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
@@ -21,6 +22,7 @@ use serde_json::{Map, Value};
 use crate::{
     errors::{RustUpstreamError, route_error_to_pyerr},
     marshal::{optional_timeout, project_optional_fields, public_response, python_timeout_seconds},
+    python_settings::missing_module,
 };
 
 const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.messages.route_host";
@@ -61,6 +63,39 @@ fn merge_headers(
         .chain(extra_headers.into_iter().flatten())
         .collect();
     (!merged.is_empty()).then_some(merged)
+}
+
+/// The litellm params Python falls back to module globals for when a call does not name
+/// them, the way `VertexBase.safe_get_vertex_ai_project` reads `litellm.vertex_project`.
+const MODULE_GLOBALS: [&str; 2] = ["vertex_project", "vertex_location"];
+
+fn module_global<'py>(py: Python<'py>, name: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
+    if !MODULE_GLOBALS.contains(&name) {
+        return Ok(None);
+    }
+    let module = match py.import("litellm") {
+        Ok(module) => module,
+        Err(error) if missing_module(py, &error, "litellm")? => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let value = module.getattr(name)?;
+    Ok((!value.is_none()).then_some(value))
+}
+
+/// The caller's litellm params, read from the kwargs by the names the typed params declare,
+/// so a key the configs do not read is never converted; a name the call leaves out falls
+/// back to its module global, which is the host's concern and never reaches Rust by name.
+fn project_litellm_params<'py>(
+    argument: impl Fn(&str) -> PyResult<Option<Bound<'py, PyAny>>>,
+    global: impl Fn(&str) -> PyResult<Option<Bound<'py, PyAny>>>,
+) -> PyResult<Result<LitellmParams, Error>> {
+    Ok(litellm_params(project_optional_fields(
+        LitellmParams::fields(),
+        |name| match argument(name)? {
+            Some(value) => Ok(Some(value)),
+            None => global(name),
+        },
+    )?))
 }
 
 fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
@@ -132,15 +167,19 @@ impl MessagesPythonHost {
         let api_base = string("api_base")?;
         let extra_headers = self.merged_headers(py, arguments)?;
         let provider_specific_header = self.provider_specific_header(py, arguments)?;
-        Ok(messages_body(body).map(|body| MessagesCall {
-            body,
-            api_key,
-            api_base,
-            extra_headers,
-            provider_specific_header,
-            custom_llm_provider,
-            timeout: optional_timeout(timeout),
-            shaping,
+        let litellm_params = project_litellm_params(argument, |name| module_global(py, name))?;
+        Ok(messages_body(body).and_then(|body| {
+            Ok(MessagesCall {
+                body,
+                api_key,
+                api_base,
+                extra_headers,
+                provider_specific_header,
+                custom_llm_provider,
+                litellm_params: litellm_params?,
+                timeout: optional_timeout(timeout),
+                shaping,
+            })
         }))
     }
 
@@ -349,6 +388,96 @@ mod tests {
             merge_headers(forwarded.map(map), extra_headers.map(map)),
             expected.map(map)
         );
+    }
+
+    #[rstest]
+    #[case::model_and_credentials_are_projected(
+        json!({"model": "m", "api_key": "k", "api_base": "b", "api_version": "v", "timeout": 5, "messages": []}),
+        Ok(json!({"model": "m", "api_key": "k", "api_base": "b", "api_version": "v"})),
+    )]
+    #[case::aws_keys_are_projected(
+        json!({"model": "m", "aws_region_name": "eu-central-1", "aws_access_key_id": "AKIA", "messages": [{"role": "user"}]}),
+        Ok(json!({"model": "m", "aws_region_name": "eu-central-1", "aws_access_key_id": "AKIA"})),
+    )]
+    #[case::vertex_keys_are_projected_in_both_spellings(
+        json!({"model": "m", "vertex_project": "p", "vertex_ai_location": "us-east5", "vertex_credentials": {"type": "service_account"}}),
+        Ok(json!({"model": "m", "vertex_project": "p", "vertex_ai_location": "us-east5", "vertex_credentials": {"type": "service_account"}})),
+    )]
+    #[case::an_explicit_none_is_absent(json!({"model": "m", "aws_region_name": null}), Ok(json!({"model": "m"})))]
+    #[case::a_wrong_type_is_a_request_error(json!({"model": "m", "aws_region_name": 7}), Err(()))]
+    #[case::a_missing_model_is_a_request_error(json!({"aws_region_name": "eu-central-1"}), Err(()))]
+    fn litellm_params_are_projected_by_their_declared_names(
+        #[case] kwargs: Value,
+        #[case] expected: Result<Value, ()>,
+    ) {
+        assert_projection(kwargs, json!({}), expected);
+    }
+
+    #[rstest]
+    #[case::global_fills_a_missing_vertex_project(
+        json!({"model": "m"}),
+        json!({"vertex_project": "from-global", "vertex_location": "us-east5"}),
+        Ok(json!({"model": "m", "vertex_project": "from-global", "vertex_location": "us-east5"})),
+    )]
+    #[case::the_call_wins_over_the_global(
+        json!({"model": "m", "vertex_project": "from-call"}),
+        json!({"vertex_project": "from-global"}),
+        Ok(json!({"model": "m", "vertex_project": "from-call"})),
+    )]
+    #[case::an_explicit_none_in_the_call_still_falls_back(
+        json!({"model": "m", "vertex_project": null}),
+        json!({"vertex_project": "from-global"}),
+        Ok(json!({"model": "m", "vertex_project": "from-global"})),
+    )]
+    #[case::a_global_of_the_wrong_type_is_a_request_error(
+        json!({"model": "m"}),
+        json!({"vertex_location": 5}),
+        Err(()),
+    )]
+    fn module_globals_fill_the_litellm_params_the_call_leaves_out(
+        #[case] kwargs: Value,
+        #[case] globals: Value,
+        #[case] expected: Result<Value, ()>,
+    ) {
+        assert_projection(kwargs, globals, expected);
+    }
+
+    #[test]
+    fn only_the_names_python_reads_from_globals_are_consulted() {
+        Python::initialize();
+        Python::attach(|py| {
+            assert_eq!(MODULE_GLOBALS, ["vertex_project", "vertex_location"]);
+            assert!(module_global(py, "aws_region_name").unwrap().is_none());
+        });
+    }
+
+    fn assert_projection(kwargs: Value, globals: Value, expected: Result<Value, ()>) {
+        Python::initialize();
+        Python::attach(|py| {
+            let dict = |value: &Value| {
+                to_py(py, value)
+                    .unwrap()
+                    .into_bound(py)
+                    .cast_into::<PyDict>()
+                    .unwrap()
+            };
+            let kwargs = dict(&kwargs);
+            let globals = dict(&globals);
+            let bound = PyDict::new(py);
+            let projected = project_litellm_params(
+                |name| present(&kwargs, &bound, name),
+                |name| present(&globals, &bound, name),
+            )
+            .unwrap();
+            match (projected, expected) {
+                (Ok(projected), Ok(fields)) => assert_eq!(
+                    projected,
+                    litellm_params(serde_json::from_value(fields).unwrap()).unwrap()
+                ),
+                (Err(error), Err(())) => assert!(matches!(error, Error::InvalidRequest(_))),
+                (projected, expected) => panic!("got {projected:?}, expected {expected:?}"),
+            }
+        });
     }
 
     #[rstest]

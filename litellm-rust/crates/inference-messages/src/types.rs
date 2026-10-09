@@ -7,6 +7,7 @@ use litellm_llms_types::{
     formats::messages::{MessagesRequest, MessagesResponse},
     headers::ProviderSpecificHeaders,
 };
+use litellm_router_types::LitellmParams;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -17,6 +18,7 @@ pub struct MessagesCall {
     pub api_key: Option<String>,
     pub api_base: Option<String>,
     pub custom_llm_provider: Option<String>,
+    pub litellm_params: LitellmParams,
     pub extra_headers: Option<Map<String, Value>>,
     pub provider_specific_header: Option<ProviderSpecificHeaders>,
     pub timeout: Option<Duration>,
@@ -25,6 +27,14 @@ pub struct MessagesCall {
 
 pub fn messages_body(body: Map<String, Value>) -> Result<MessagesRequest, Error> {
     serde_json::from_value(Value::Object(body)).map_err(invalid_request)
+}
+
+/// The caller's litellm params, projected by a host from the keys [`LitellmParams::fields`]
+/// names. A key present with a value of the wrong type is a request error, as it is for
+/// Python's `GenericLiteLLMParams(**kwargs)`.
+pub fn litellm_params(fields: Map<String, Value>) -> Result<LitellmParams, Error> {
+    serde_json::from_value(Value::Object(fields))
+        .map_err(|err| Error::InvalidRequest(format!("invalid litellm params: {err}").into()))
 }
 
 pub(super) fn invalid_request(err: serde_json::Error) -> Error {

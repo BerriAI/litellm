@@ -4082,6 +4082,7 @@ dependencies = [
  "litellm-inference-testing",
  "litellm-llms",
  "litellm-llms-types",
+ "litellm-router-types",
  "litellm-secrets",
  "litellm-tracing",
  "reqwest 0.12.28",
@@ -4241,6 +4242,7 @@ dependencies = [
  "litellm-http",
  "litellm-llms-types",
  "litellm-python-compat",
+ "litellm-router-types",
  "litellm-secrets",
  "reqwest 0.12.28",
  "rstest",
@@ -4362,6 +4364,7 @@ dependencies = [
  "litellm-config",
  "litellm-inference",
  "litellm-inference-messages",
+ "litellm-router-types",
  "rstest",
 ]
 
