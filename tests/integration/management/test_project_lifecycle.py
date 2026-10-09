@@ -1311,6 +1311,43 @@ def test_key_regenerate_rejects_outsider_moving_own_key_into_foreign_team_projec
         assert chat.status_code == 200, chat.text
 
 
+@pytest.mark.parametrize("route", ["path", "body"])
+def test_key_regenerate_rejects_team_admin_moving_team_key_into_foreign_team_project(
+    ownership_gateway: Gateway, route: str
+) -> None:
+    with ownership_gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        team_a: Final = scenario.team(models=[model])
+        team_b: Final = scenario.team(models=[model])
+        project_b: Final = scenario.project(team_b, models=[model])
+        team_a_admin: Final = scenario.member(team_a, "admin")
+        caller: Final = scenario.key(user_id=team_a_admin)
+        generated: Final = ownership_gateway.request("POST", "/key/generate", {"team_id": team_a, "models": [model]})
+        assert generated.status_code == 200, generated.text
+        target: Final = string_value(JSON_OBJECT.validate_json(generated.content)["key"])
+        scenario.cleanups.callback(delete_key_if_present, ownership_gateway, target)
+        before: Final = _key_rows(target)
+        assert len(before) == 1
+        assert before[0]["team_id"] == team_a
+
+        response: Final = _regenerate_as(
+            ownership_gateway, route, target, caller, {"team_id": team_b, "project_id": project_b}
+        )
+        _discard_unexpected_key(ownership_gateway, response)
+
+        assert response.status_code == 403, response.text
+        assert _key_rows(target) == before
+        assert _deleted_key_rows(target) == []
+        assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE project_id = %s', (project_b,)) == []
+        chat: Final = ownership_gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": "rejected team key regeneration keeps the key"}]},
+            key=target,
+        )
+        assert chat.status_code == 200, chat.text
+
+
 @pytest.mark.parametrize(("route", "role"), [("path", "user"), ("body", "admin")])
 def test_key_regenerate_lets_project_team_member_move_own_key_into_project(
     ownership_gateway: Gateway, route: str, role: str
@@ -1373,7 +1410,7 @@ def test_key_generation_rejects_missing_project_without_writing_key(ownership_ga
             {"team_id": team, "project_id": missing_project_id, "models": [model]},
         )
 
-        assert service_account_generation.status_code == 500, service_account_generation.text
+        assert service_account_generation.status_code == 404, service_account_generation.text
         assert (
             read_rows(
                 'SELECT token FROM "LiteLLM_VerificationToken" WHERE project_id = %s',
@@ -1404,8 +1441,10 @@ def test_key_regenerate_routes_reject_missing_project_without_changing_key(owner
         )
 
         for response in responses:
-            assert response.status_code == 500, response.text
+            assert response.status_code == 404, response.text
             assert _key_rows(key) == before
+            assert _deleted_key_rows(key) == []
+            assert _deprecated_key_rows(key) == []
             assert (
                 read_rows(
                     'SELECT token FROM "LiteLLM_VerificationToken" WHERE project_id = %s',

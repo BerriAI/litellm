@@ -56,7 +56,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     _check_project_key_limits,
     _check_team_key_limits,
     _common_key_generation_helper,
-    KeyProjectTeamMismatchError,
+    KeyProjectBindingError,
     _effective_key_after_update,
     _effective_key_for_generate,
     _enforce_custom_key_policy,
@@ -1868,7 +1868,7 @@ async def test_rejected_key_generation_deletes_created_budget_and_default_permis
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
 
-    with pytest.raises(KeyProjectTeamMismatchError) as exc:
+    with pytest.raises(KeyProjectBindingError) as exc:
         await _common_key_generation_helper(
             data=GenerateKeyRequest(
                 budget_id="caller-budget-id",
@@ -21120,37 +21120,6 @@ async def test_key_generation_default_budget_does_not_reject_project_budget(monk
     assert response.team_id == "team-a"
 
 
-@pytest.mark.parametrize(
-    "request_fields",
-    [{"key_alias": "renamed"}, {"team_id": _OWNERSHIP_KEY_TEAM}],
-)
-@pytest.mark.asyncio
-async def test_key_update_allows_legacy_project_mismatch_when_team_is_unchanged(  # test-quality-ok: the validator returns nothing, so finishing without the 400 is the contract for an unchanged team
-    monkeypatch: pytest.MonkeyPatch,
-    request_fields: dict[str, str],
-) -> None:
-    user_api_key_cache: Final = await _cache_with_project(_OWNED_PROJECT, [], team_id=_OWNERSHIP_PROJECT_TEAM)
-    mock_prisma_client: Final = _configure_key_endpoints(monkeypatch, user_api_key_cache)
-    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
-        return_value=LiteLLM_TeamTable(team_id=_OWNERSHIP_KEY_TEAM)
-    )
-    existing_key_row: Final = LiteLLM_VerificationToken(
-        token="hashed-key",
-        team_id=_OWNERSHIP_KEY_TEAM,
-        project_id=_OWNED_PROJECT,
-    )
-
-    await _validate_update_key_data(
-        data=UpdateKeyRequest(key="sk-key", **request_fields),
-        existing_key_row=existing_key_row,
-        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin"),
-        llm_router=None,
-        premium_user=True,
-        prisma_client=mock_prisma_client,
-        user_api_key_cache=user_api_key_cache,
-    )
-
-
 @pytest.mark.asyncio
 async def test_key_update_rejects_team_change_for_project_bound_key(monkeypatch: pytest.MonkeyPatch) -> None:
     existing_key_row: Final = LiteLLM_VerificationToken(
@@ -21737,19 +21706,19 @@ async def test_regenerate_output_estimate_admin_error_precedes_project_ownership
 
 
 @pytest.mark.asyncio
-async def test_key_project_team_validation_allows_missing_project() -> None:
+async def test_key_project_team_validation_rejects_missing_project() -> None:
     prisma_client: Final = MagicMock()
     prisma_client.writer_db.litellm_projecttable.find_unique = AsyncMock(return_value=None)
 
-    await _check_key_project_team(
-        project_id=_OWNED_PROJECT,
-        key_team_id="team-a",
-        prisma_client=prisma_client,
-    )
+    with pytest.raises(KeyProjectBindingError) as error:
+        await _check_key_project_team(
+            project_id=_OWNED_PROJECT,
+            key_team_id="team-a",
+            prisma_client=prisma_client,
+        )
 
-    prisma_client.writer_db.litellm_projecttable.find_unique.assert_awaited_once_with(
-        where={"project_id": _OWNED_PROJECT}
-    )
+    assert error.value.status_code == 404
+    assert error.value.detail == {"error": f"Project not found, project_id={_OWNED_PROJECT}"}
 
 
 @pytest.mark.asyncio

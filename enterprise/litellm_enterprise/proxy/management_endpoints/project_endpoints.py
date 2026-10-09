@@ -856,14 +856,14 @@ async def update_project(
                     }
                 )
                 if mismatched_key_count > 0:
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "error": (
-                                f"Project {data.project_id} has {mismatched_key_count} key(s) that do not belong to "
-                                f"team {data.team_id}. Detach or delete them before moving the project."
-                            )
-                        },
+                    raise ProxyException(
+                        message=(
+                            f"Project {data.project_id} has {mismatched_key_count} key(s) that do not belong to "
+                            f"team {data.team_id}. Detach or delete them before moving the project."
+                        ),
+                        type="bad_request",
+                        code=400,
+                        param="team_id",
                     )
 
         if budget_updates and existing_project.budget_id:

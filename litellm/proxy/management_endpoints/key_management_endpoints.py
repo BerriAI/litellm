@@ -291,6 +291,10 @@ def _writer_project_table(
     )
 
 
+class KeyProjectBindingError(HTTPException):
+    pass
+
+
 def _deleted_verification_token_table(
     prisma_client: PrismaClient,
 ) -> "TableActions[prisma_models.LiteLLM_DeletedVerificationToken]":
@@ -1602,7 +1606,7 @@ async def _common_key_generation_helper(
         response = await generate_key_helper_fn(
             request_type="key", **data_json, table_name="key", llm_router=llm_router
         )
-    except KeyProjectTeamMismatchError:
+    except KeyProjectBindingError:
         if prisma_client is not None:
             if created_object_permission_id is not None:
                 await ObjectPermissionRepository(prisma_client).table.delete(
@@ -1879,14 +1883,17 @@ async def _check_key_project_team(
 ) -> str | None:
     project_record: Final = await _writer_project_table(prisma_client).find_unique(where={"project_id": project_id})
     if project_record is None:
-        return None
+        raise KeyProjectBindingError(
+            status_code=404,
+            detail={"error": f"Project not found, project_id={project_id}"},
+        )
 
     project_obj: Final = LiteLLM_ProjectTable.model_validate(record_to_dict(project_record))
 
     if project_obj.team_id is None or project_obj.team_id == key_team_id:
         return project_obj.team_id
 
-    raise KeyProjectTeamMismatchError(
+    raise KeyProjectBindingError(
         status_code=400,
         detail={
             "error": (
@@ -1896,10 +1903,6 @@ async def _check_key_project_team(
             )
         },
     )
-
-
-class KeyProjectTeamMismatchError(HTTPException):
-    pass
 
 
 async def _check_key_project_team_on_mutation(
