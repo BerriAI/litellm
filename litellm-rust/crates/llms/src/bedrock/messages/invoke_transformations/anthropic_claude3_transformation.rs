@@ -87,11 +87,14 @@ fn invoke_url(
     } else {
         INVOKE_PATH
     };
-    let endpoint = api_base
-        .or(aws.aws_bedrock_runtime_endpoint.as_deref())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
+    let configured = |value: Option<&str>| {
+        value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let endpoint = configured(api_base)
+        .or_else(|| configured(aws.aws_bedrock_runtime_endpoint.as_deref()))
         .or_else(|| env_lookup(AWS_BEDROCK_RUNTIME_ENDPOINT))
         .unwrap_or_else(|| BEDROCK_RUNTIME_ENDPOINT_TEMPLATE.replace("{region}", &region));
     format!("{}/model/{model_id}/{path}", endpoint.trim_end_matches('/'))
@@ -552,6 +555,13 @@ mod tests {
         false,
         None,
         "https://base.test/model/anthropic.claude-3/invoke"
+    )]
+    #[case::a_blank_api_base_does_not_hide_the_params_endpoint(
+        Some("  "),
+        with_runtime_endpoint("https://params.test"),
+        false,
+        Some("https://env.test"),
+        "https://params.test/model/anthropic.claude-3/invoke"
     )]
     #[case::params_endpoint_outranks_the_environment(
         None,
