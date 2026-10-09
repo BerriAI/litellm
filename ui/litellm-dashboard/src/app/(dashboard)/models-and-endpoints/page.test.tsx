@@ -21,7 +21,7 @@ vi.mock("./detailNavigation", () => ({
   useModelDetailRouting: () => ({ ...detailState, close: vi.fn(), openModel: vi.fn(), openTeam: vi.fn() }),
 }));
 
-vi.mock("@/components/molecules/cost_optimization_feedback_banner", () => ({ default: () => null }));
+vi.mock("@/components/molecules/DecisionModelsBanner", () => ({ default: () => null }));
 vi.mock("@/components/model_info_view", () => ({
   default: ({ modelId }: { modelId: string }) => <div data-testid="model-info">model:{modelId}</div>,
 }));
