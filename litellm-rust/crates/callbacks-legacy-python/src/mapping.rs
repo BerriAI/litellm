@@ -205,6 +205,7 @@ python_callbacks! {
     ],
 }
 
+#[cfg(test)]
 impl Dispatch {
     fn contract_entry(self) -> String {
         match self {
