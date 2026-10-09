@@ -9,16 +9,17 @@ pub(crate) mod token_counter;
 pub(crate) mod traces;
 
 use litellm_callbacks_legacy_python::PublicCall;
-use litellm_host::call::Operation;
-use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol};
-use litellm_host_python::{HookChain, PythonBinding, PythonHostCalls, effective_py_args};
+use litellm_host::{
+    call::{HostedCompletion, Operation},
+    machine::Machine,
+    protocol::Protocol,
+};
+use litellm_host_python::{HookChain, PythonBinding, PythonHostCalls};
 use pyo3::{
     prelude::*,
     types::{PyDict, PyMapping, PyTuple},
 };
 
-/// The public call as Python bound it: `base` holds the positional arguments by name plus
-/// the signature defaults, `kwargs` the caller's keyword dict.
 #[derive(FromPyObject)]
 pub(crate) struct NativeCall<'py> {
     #[pyo3(attribute)]
@@ -27,13 +28,8 @@ pub(crate) struct NativeCall<'py> {
     kwargs: Bound<'py, PyDict>,
     #[pyo3(attribute, from_py_with = mapping_dict)]
     base: Bound<'py, PyDict>,
-}
-
-impl<'py> NativeCall<'py> {
-    /// The call before any hook ran, for the reads that admit or decline it.
-    fn resolved(&self) -> PyResult<Bound<'py, PyDict>> {
-        effective_py_args(&self.base, &self.kwargs)
-    }
+    #[pyo3(attribute, from_py_with = mapping_dict)]
+    resolved: Bound<'py, PyDict>,
 }
 
 fn mapping_dict<'py>(value: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> {
@@ -44,6 +40,34 @@ fn mapping_dict<'py>(value: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> 
     let dict = PyDict::new(value.py());
     dict.update(mapping)?;
     Ok(dict)
+}
+
+fn map_failure(
+    py: Python<'_>,
+    module: &str,
+    error: PyErr,
+    request: &Bound<'_, PyDict>,
+    provider: Option<&str>,
+) -> PyErr {
+    if !error.is_instance_of::<pyo3::exceptions::PyException>(py) {
+        return error;
+    }
+    let mapped = py
+        .import(module)
+        .and_then(|module| module.getattr("map_failure"))
+        .and_then(|map| match provider {
+            Some(provider) => map.call1((error.value(py), request, provider)),
+            None => map.call1((error.value(py), request)),
+        })
+        .and_then(|mapped| {
+            mapped
+                .extract::<Py<pyo3::exceptions::PyBaseException>>()
+                .map_err(PyErr::from)
+        });
+    match mapped {
+        Ok(mapped) => PyErr::from_value(mapped.into_bound(py).into_any()),
+        Err(_) => error,
+    }
 }
 
 fn call_hooks(
@@ -120,6 +144,7 @@ mod tests {
             .unwrap();
         attributes.set_item("kwargs", &fields).unwrap();
         attributes.set_item("base", PyDict::new(py)).unwrap();
+        attributes.set_item("resolved", &fields).unwrap();
         py.import("types")
             .unwrap()
             .getattr("SimpleNamespace")

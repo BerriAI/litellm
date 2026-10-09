@@ -1,5 +1,5 @@
 use litellm_host::hooks::CallHooks;
-use litellm_host_python::{HookStep, PythonOwned, PythonRuntime};
+use litellm_host_python::{HookStep, PythonOwned, PythonRuntime, present};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
@@ -74,10 +74,7 @@ fn inherit_credentials<'py>(
     arguments: &Bound<'py, PyDict>,
     credential_list: impl FnOnce() -> PyResult<Bound<'py, PyList>>,
 ) -> PyResult<()> {
-    let Some(requested) = arguments
-        .get_item("litellm_credential_name")?
-        .filter(|value| !value.is_none())
-    else {
+    let Some(requested) = present(arguments, "litellm_credential_name")? else {
         return Ok(());
     };
     if !requested.is_truthy()? {

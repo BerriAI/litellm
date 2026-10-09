@@ -16,6 +16,7 @@ from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import CallTypes, ModelResponse
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
+from tests.test_litellm_rust.support.isolation import rebound
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.requests import MESSAGES, MESSAGES_MODEL, MESSAGES_RESPONSE, request_body
 
@@ -28,7 +29,7 @@ NativeResult: TypeAlias = (
     | Coroutine[object, object, ModelResponse]
     | Coroutine[object, object, ResponsesAPIResponse]
 )
-RESPONSES_MODEL: Final = "openai/gpt-6-sol"
+RESPONSES_MODEL: Final = "openai/gpt-6.1-sol"
 RESPONSES_RESPONSE: Final[dict[str, JsonValue]] = {
     "id": "resp_native",
     "object": "response",
@@ -381,3 +382,53 @@ async def test_native_chat_uses_bound_positional_parameters(
     body: Final = _OBJECT.validate_python(recording_server.requests[0].body)
     assert body["temperature"] == arguments[3]
     assert body["max_tokens"] == supplied["max_tokens"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True))
+async def test_native_inference_declines_streams_before_callbacks(
+    route: Route, asynchronous: bool, recording_server: RecordingServer
+) -> None:
+    recorder: Final = RecordingLogger()
+    recording_server.expected_requests = 0
+
+    with pytest.raises(_native.RustBridgeDeclined):
+        native_call(route, asynchronous, recording_server, {"stream": True, "callbacks": [recorder]})
+
+    assert not recording_server.requests
+    assert not recorder.events
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True))
+async def test_projection_failure_uses_the_public_error_and_rewritten_model(
+    route: Route, asynchronous: bool, recording_server: RecordingServer
+) -> None:
+    recorder: Final = RecordingLogger()
+    recording_server.expected_requests = 0
+    expected_model: Final = MESSAGES_MODEL if route == "chat" else RESPONSES_MODEL
+
+    class Prepare(CustomLogger):
+        async def async_pre_call_deployment_hook(
+            self, kwargs: dict[str, object], call_type: CallTypes | None
+        ) -> dict[str, object]:
+            return {**kwargs, "model": expected_model}
+
+    with rebound(litellm, "callbacks", [Prepare()]):
+        with pytest.raises(litellm.APIError) as caught:
+            await execute(
+                route,
+                asynchronous,
+                recording_server,
+                {
+                    "model": f"{expected_model.partition('/')[0]}/initial-request" if asynchronous else expected_model,
+                    "temperature": object(),
+                    "callbacks": [recorder],
+                },
+            )
+
+    assert not recording_server.requests
+    failure: Final = await recorder.wait_for_async("async_log_failure_event" if asynchronous else "log_failure_event")
+    assert len(failure) == 1
+    assert _OBJECT.validate_python(failure[0].kwargs)["exception"] is caught.value
+    assert caught.value.model == expected_model.partition("/")[2]
