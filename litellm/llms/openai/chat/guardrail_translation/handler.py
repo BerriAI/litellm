@@ -478,7 +478,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             )
 
             # Step 3: Map guardrail responses back to original response structure
-            content_responses: Final = guardrailed_texts[: len(text_task_mappings)]
+            content_responses: Final = (
+                guardrailed_texts[: len(text_task_mappings)] if commentary_choice_indices else guardrailed_texts
+            )
             if content_responses:
                 await self._apply_guardrail_responses_to_output_texts(
                     response=response,
@@ -486,7 +488,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     task_mappings=text_task_mappings,
                 )
 
-            commentary_responses: Final = guardrailed_texts[len(text_task_mappings) :]
+            commentary_responses: Final = (
+                guardrailed_texts[len(text_task_mappings) :] if commentary_choice_indices else ()
+            )
             if commentary_responses and commentary_choice_indices:
                 await self._apply_guardrail_responses_to_output_commentary(
                     response=response,
@@ -653,10 +657,12 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             # For each choice, replace the combined text across all chunks
             await self._apply_guardrail_responses_to_output_streaming(
                 responses=responses_so_far,
-                guardrailed_texts=guardrailed_texts[: len(task_mappings)],
+                guardrailed_texts=guardrailed_texts[: len(task_mappings)]
+                if commentary_choice_indices
+                else guardrailed_texts,
                 task_mappings=task_mappings,
             )
-            commentary_responses: Final = guardrailed_texts[len(task_mappings) :]
+            commentary_responses: Final = guardrailed_texts[len(task_mappings) :] if commentary_choice_indices else ()
             if commentary_responses and commentary_choice_indices:
                 await self._apply_guardrail_responses_to_output_streaming_commentary(
                     responses=responses_so_far,

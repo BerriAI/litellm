@@ -670,7 +670,7 @@ class TestAzureOpenAIChatCompletions:
         _assert_weather_tool_call(response)
 
     @pytest.mark.covers(
-        "llm.chat_completions.azure_openai.tool_use_bridged.nonstream.single_choice",
+        "llm.chat_completions.azure_openai.tool_use.nonstream.single_choice",
         exercised_on=["chat_completions"],
     )
     @meta(
