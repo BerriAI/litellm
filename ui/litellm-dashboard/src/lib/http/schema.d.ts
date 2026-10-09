@@ -37048,6 +37048,11 @@ export interface components {
              */
             advisory_system_message?: string | null;
             /**
+             * Affinity Salt
+             * @description Salt mixed into the x-headroom-affinity digest, which routes related calls to the same pod so its cache can be reused. Set this to vary or rotate the digest across deployments. Falls back to a fixed default.
+             */
+            affinity_salt?: string | null;
+            /**
              * Akto Account Id
              * @description Akto account ID for multi-tenant deployments. Env: AKTO_ACCOUNT_ID. Default: '1000000'.
              */
