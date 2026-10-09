@@ -4,7 +4,9 @@ Unit tests for Bedrock Guardrails
 
 import json
 import asyncio
-from typing import Final
+from itertools import chain, repeat
+from collections.abc import AsyncIterator, Iterator, Sequence
+from typing import Final, Literal
 from datetime import datetime, timezone
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -27,8 +29,10 @@ from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockContentItem,
+    BedrockGuardrailResponse,
     BedrockTextContent,
 )
 from litellm.types.utils import CallTypes, ModelResponse
@@ -6039,6 +6043,279 @@ async def test_responses_api_failed_stream_scans_delta_text_before_replay():
     assert "Hello world" in scan_payloads[0]
     assert len(yielded) == len(stream_events)
     assert all(emitted is original for emitted, original in zip(yielded, stream_events))
+
+
+_ANONYMIZED_WORLD: Final[BedrockGuardrailResponse] = {
+    "action": "GUARDRAIL_INTERVENED",
+    "outputs": [{"text": "Hello {NAME}"}],
+    "assessments": [{"sensitiveInformationPolicy": {"piiEntities": [{"type": "NAME", "action": "ANONYMIZED"}]}}],
+}
+_CLEAN_VERDICT: Final[BedrockGuardrailResponse] = {"action": "NONE", "assessments": [], "outputs": []}
+
+
+class _ScriptedBedrockGuardrail(BedrockGuardrail):
+    """A BedrockGuardrail whose ApplyGuardrail calls return the scripted verdicts in order."""
+
+    def __init__(self, verdicts: Iterator[BedrockGuardrailResponse], **params: object) -> None:
+        super().__init__(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT", **params)
+        self._verdicts: Final = verdicts
+        self.scan_count = 0
+
+    async def make_bedrock_api_request(
+        self,
+        source: Literal["INPUT", "OUTPUT"],
+        messages: list[AllMessageValues] | None = None,
+        response: litellm.ModelResponse | None = None,
+        request_data: dict[str, object] | None = None,
+        logging_event_type: GuardrailEventHooks | None = None,
+    ) -> BedrockGuardrailResponse:
+        self.scan_count += 1
+        return next(self._verdicts)
+
+
+def _post_call_guardrail(
+    name: str, verdicts: Iterator[BedrockGuardrailResponse], **params: object
+) -> _ScriptedBedrockGuardrail:
+    return _ScriptedBedrockGuardrail(
+        verdicts, guardrail_name=name, event_hook=GuardrailEventHooks.post_call, default_on=True, **params
+    )
+
+
+async def _release_responses_stream(guardrail: BedrockGuardrail, events: Sequence[object]) -> list[object]:
+    async def provider_stream() -> AsyncIterator[object]:
+        for event in events:
+            yield event
+
+    return [
+        chunk
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/responses"),
+            response=provider_stream(),
+            request_data={"model": "gpt-4o", "input": "hi"},
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_responses_api_stream_releases_bedrock_masked_text_in_deltas_and_envelope():
+    guardrail: Final = _post_call_guardrail("bedrock-responses-mask", repeat(_ANONYMIZED_WORLD))
+
+    *deltas, completed = await _release_responses_stream(guardrail, _responses_stream_events())
+
+    assert "".join(delta.delta for delta in deltas) == "Hello {NAME}", deltas
+    assert completed.response.id == "resp_lit6457", completed
+    assert completed.response.output[0]["content"][0]["text"] == "Hello {NAME}", completed
+
+
+@pytest.mark.asyncio
+async def test_responses_api_stream_rebuilt_from_a_whole_response_masks_its_added_events():
+    from litellm.responses.streaming_iterator import build_synthetic_response_events
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    guardrail: Final = _post_call_guardrail("bedrock-responses-cached", repeat(_ANONYMIZED_WORLD))
+    whole_response: Final = ResponsesAPIResponse(
+        id="resp_cached",
+        created_at=1234567890,
+        model="gpt-4o",
+        object="response",
+        status="completed",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_cached",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Hello world", "annotations": []}],
+            }
+        ],
+    )
+    events: Final = build_synthetic_response_events(transformed=whole_response, logging_obj=None, chunk_size=5)
+
+    released: Final = await _release_responses_stream(guardrail, events)
+
+    dumped: Final = [event.model_dump_json() for event in released]
+    assert {"response.content_part.added", "response.output_item.added"} <= {event.type for event in released}
+    assert not [event for event in dumped if "world" in event or "worl" in event], dumped
+    assert guardrail.scan_count == 1
+
+
+@pytest.mark.asyncio
+async def test_responses_api_stream_leaves_empty_added_events_empty_when_masking():
+    from litellm.types.llms.openai import (
+        BaseLiteLLMOpenAIResponseObject,
+        ContentPartAddedEvent,
+        OutputItemAddedEvent,
+        ResponsesAPIStreamEvents,
+    )
+
+    guardrail: Final = _post_call_guardrail("bedrock-responses-live-shape", repeat(_ANONYMIZED_WORLD))
+    item_added: Final = OutputItemAddedEvent(
+        type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+        output_index=0,
+        item=BaseLiteLLMOpenAIResponseObject(
+            **{"type": "message", "id": "msg_lit6457", "status": "in_progress", "role": "assistant", "content": []}
+        ),
+    )
+    part_added: Final = ContentPartAddedEvent(
+        type=ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
+        item_id="msg_lit6457",
+        output_index=0,
+        content_index=0,
+        part=BaseLiteLLMOpenAIResponseObject(**{"type": "output_text", "text": "", "annotations": []}),
+    )
+
+    released: Final = await _release_responses_stream(guardrail, [item_added, part_added, *_responses_stream_events()])
+
+    assert released[0].item.content == [] and released[1].part.text == "", released[:2]
+    assert "".join(event.delta for event in released[2:-1]) == "Hello {NAME}", released
+
+
+@pytest.mark.asyncio
+async def test_windowed_stream_ends_as_blocked_when_bedrock_anonymizes_a_later_window():
+    guardrail: Final = _post_call_guardrail(
+        "bedrock-windowed-mask",
+        chain([_CLEAN_VERDICT], repeat(_ANONYMIZED_WORLD)),
+        streaming_buffer_release_on_scan=True,
+        streaming_sampling_rate=1,
+    )
+
+    first, rest = await _stream_first_chunk_in_its_own_task(guardrail)
+
+    assert first.choices[0].delta.content == "Hello"
+    assert len(rest) == 1 and isinstance(rest[0], bytes), rest
+    error: Final = json.loads(rest[0].decode().removeprefix("data: "))["error"]
+    assert error["message"] == "Violated guardrail policy", error
+    assert " world" not in rest[0].decode()
+
+
+async def _stream_first_chunk_in_its_own_task(guardrail: BedrockGuardrail) -> tuple[object, list[object]]:
+    async def provider_stream() -> AsyncIterator[litellm.ModelResponseStream]:
+        yield _chat_chunk("Hello", None)
+        yield _chat_chunk(" world", None)
+        yield _chat_chunk("", "stop")
+
+    stream: Final = guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/chat/completions"),
+        response=provider_stream(),
+        request_data={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
+    )
+    first: Final = await asyncio.ensure_future(stream.__anext__())
+    return first, [chunk async for chunk in stream]
+
+
+@pytest.mark.asyncio
+async def test_windowed_stream_with_disable_exception_on_block_ends_with_the_masked_text():
+    guardrail: Final = _post_call_guardrail(
+        "bedrock-windowed-mask-message",
+        chain([_CLEAN_VERDICT], repeat(_ANONYMIZED_WORLD)),
+        disable_exception_on_block=True,
+        streaming_buffer_release_on_scan=True,
+        streaming_sampling_rate=1,
+    )
+
+    first, rest = await _stream_first_chunk_in_its_own_task(guardrail)
+
+    frames: Final = [json.loads(frame.decode().removeprefix("data: ")) for frame in rest]
+    assert first.choices[0].delta.content == "Hello"
+    assert [frame["choices"][0]["delta"].get("content") for frame in frames] == ["Hello {NAME}", None], frames
+    assert frames[-1]["choices"][0]["finish_reason"] == "content_filter", frames
+
+
+@pytest.mark.asyncio
+async def test_live_stream_ends_as_blocked_when_bedrock_anonymizes_a_sampled_scan():
+    guardrail: Final = _post_call_guardrail(
+        "bedrock-live-mask",
+        repeat(_ANONYMIZED_WORLD),
+        streaming_buffer_until_moderated=False,
+        streaming_sampling_rate=2,
+    )
+
+    first, rest = await _stream_first_chunk_in_its_own_task(guardrail)
+
+    assert first.choices[0].delta.content == "Hello"
+    assert len(rest) == 1 and isinstance(rest[0], bytes), rest
+    assert json.loads(rest[0].decode().removeprefix("data: "))["error"]["message"] == "Violated guardrail policy"
+
+
+@pytest.mark.asyncio
+async def test_latest_only_responses_stream_masks_the_latest_output_text_in_place():
+    from litellm.types.llms.openai import ResponseCompletedEvent, ResponsesAPIResponse, ResponsesAPIStreamEvents
+
+    guardrail: Final = _post_call_guardrail(
+        "bedrock-responses-latest-only",
+        repeat({**_ANONYMIZED_WORLD, "outputs": [{"text": "second {NAME}"}]}),
+        experimental_use_latest_role_message_only=True,
+    )
+    message: Final = {"type": "message", "status": "completed", "role": "assistant"}
+    completed: Final = ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=ResponsesAPIResponse(
+            id="resp_latest_only",
+            created_at=1234567890,
+            model="gpt-4o",
+            object="response",
+            status="completed",
+            output=[
+                {**message, "id": "msg_1", "content": [{"type": "output_text", "text": "first part"}]},
+                {**message, "id": "msg_2", "content": [{"type": "output_text", "text": "second world"}]},
+            ],
+        ),
+    )
+
+    (released,) = await _release_responses_stream(guardrail, [completed])
+
+    texts: Final = [item["content"][0]["text"] for item in released.response.output]
+    assert texts == ["first part", "second {NAME}"], texts
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="Task.cancelling() is 3.11+")
+async def test_live_stream_disconnect_scan_records_no_failure_for_an_anonymized_verdict():
+    guardrail: Final = _post_call_guardrail(
+        "bedrock-live-disconnect", repeat(_ANONYMIZED_WORLD), streaming_buffer_until_moderated=False
+    )
+    request_data: Final = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}], "metadata": {}}
+
+    async def provider_stream() -> AsyncIterator[litellm.ModelResponseStream]:
+        yield _chat_chunk("Hello", None)
+        yield _chat_chunk(" world", None)
+        await asyncio.Event().wait()
+
+    stream: Final = guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/chat/completions"),
+        response=provider_stream(),
+        request_data=request_data,
+    )
+    released: Final = [await stream.__anext__(), await stream.__anext__()]
+    pending: Final = asyncio.ensure_future(stream.__anext__())
+    await asyncio.sleep(0)
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+
+    statuses: Final = [
+        entry.get("guardrail_status")
+        for entry in request_data["metadata"].get("standard_logging_guardrail_information") or []
+    ]
+    assert [chunk.choices[0].delta.content for chunk in released] == ["Hello", " world"]
+    assert guardrail.scan_count == 1
+    assert statuses == ["success"], request_data["metadata"]["standard_logging_guardrail_information"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_returns_masked_response_text_outside_an_incremental_stream_step():
+    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import _UNDELIVERABLE_STREAM_REWRITE
+
+    guardrail: Final = _ScriptedBedrockGuardrail(repeat(_ANONYMIZED_WORLD))
+    token: Final = _UNDELIVERABLE_STREAM_REWRITE.set(_ScriptedBedrockGuardrail(repeat(_CLEAN_VERDICT)))
+    try:
+        result: Final = await guardrail.apply_guardrail(
+            inputs={"texts": ["Hello world"]}, request_data={}, input_type="response"
+        )
+    finally:
+        _UNDELIVERABLE_STREAM_REWRITE.reset(token)
+
+    assert result["texts"] == ["Hello {NAME}"]
 
 
 @pytest.mark.asyncio

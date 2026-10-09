@@ -11,16 +11,17 @@ import sys
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import asyncio
 import contextlib
+import contextvars
 import copy
 import json
 import re
 import sys
 import time
-from collections.abc import AsyncGenerator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from datetime import datetime, timezone
 from itertools import accumulate, groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, Optional, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, Optional, TypeVar, cast
 
 import httpx
 from fastapi import HTTPException
@@ -228,6 +229,42 @@ def _is_responses_api_route(request_route: str | None) -> bool:
         return False
     call_types: Final = get_call_types_for_route(request_route)
     return call_types is not None and any(call_type in _RESPONSES_API_CALL_TYPES for call_type in call_types)
+
+
+_ChunkT = TypeVar("_ChunkT")  # rebind-ok: a TypeVar cannot be declared Final
+
+# The guardrail whose current streaming scan runs on chunks released before the stream ends,
+# where an OUTPUT rewrite cannot replace text the client already holds or will be sent unscanned.
+_UNDELIVERABLE_STREAM_REWRITE: Final[contextvars.ContextVar["BedrockGuardrail | None"]] = contextvars.ContextVar(
+    "bedrock_undeliverable_stream_rewrite", default=None
+)
+
+
+class _UndeliverableRewriteSteps(AsyncIterator[_ChunkT]):
+    """Steps ``stream`` with ``guardrail`` set in ``_UNDELIVERABLE_STREAM_REWRITE`` for the length of
+    each step, so every scan a step runs sees it whichever task awaits that step."""
+
+    def __init__(self, guardrail: "BedrockGuardrail", stream: AsyncGenerator[_ChunkT, None]) -> None:
+        self._guardrail: Final = guardrail
+        self._stream: Final = stream
+
+    def __aiter__(self) -> "_UndeliverableRewriteSteps[_ChunkT]":
+        return self
+
+    async def __anext__(self) -> _ChunkT:
+        token: Final = _UNDELIVERABLE_STREAM_REWRITE.set(self._guardrail)
+        try:
+            return await self._stream.__anext__()
+        finally:
+            _UNDELIVERABLE_STREAM_REWRITE.reset(token)
+
+    async def aclose(self) -> None:
+        await self._stream.aclose()
+
+
+def _current_task_is_cancelling() -> bool:
+    task: Final = asyncio.current_task()
+    return task is not None and sys.version_info >= (3, 11) and task.cancelling() > 0
 
 
 class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
@@ -664,7 +701,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             filter_result: Final = self._prepare_guardrail_messages_for_role(messages=mock_messages)
             return ApplyGuardrailMessageSelection(
                 filtered_messages=filter_result.payload_messages or mock_messages,
-                scanned_slice=None,
+                scanned_slice=(filter_result.target_indices[0], 1)
+                if input_type == "response" and filter_result.target_indices
+                else None,
                 scanned_role_subset=False,
             )
 
@@ -2749,12 +2788,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
 
             async with contextlib.aclosing(
-                UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    response=response,
-                    request_data=request_data,
-                    guardrail_to_apply=self,
-                    buffer_until_moderated_default=False,
+                _UndeliverableRewriteSteps(
+                    self,
+                    UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        response=response,
+                        request_data=request_data,
+                        guardrail_to_apply=self,
+                        buffer_until_moderated_default=False,
+                    ),
                 )
             ) as guarded:
                 async for streamed_chunk in guarded:
@@ -2763,7 +2805,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         # Responses-API events are neither chat-completions chunks nor raw
         # Anthropic SSE, so the assembly below cannot scan them; the unified
-        # guardrail's translation layer can, with buffering semantics kept.
+        # guardrail's translation layer can, holding the whole stream so a
+        # masked OUTPUT is written into the events it releases.
         if _is_responses_api_route(user_api_key_dict.request_route):
             from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
                 UnifiedLLMGuardrails,
@@ -2774,7 +2817,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 response=response,
                 request_data=request_data,
                 guardrail_to_apply=self,
-                buffer_until_moderated_default=True,
+                hold_and_deliver_rewrites=True,
             ):
                 yield translated_chunk
             return
@@ -3189,6 +3232,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     return incremental_result
 
             masked_texts = []
+            bedrock_response: BedrockGuardrailResponse | None = None  # rebind-ok: set by the scan below, if any
 
             selection: Final = self._select_messages_for_apply_guardrail(
                 texts=texts,
@@ -3271,6 +3315,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 scanned_slice=scanned_slice,
                 scanned_role_subset=scanned_role_subset,
             )
+
+            if (
+                bedrock_response is not None
+                and input_type == "response"
+                and _UNDELIVERABLE_STREAM_REWRITE.get() is self
+                and masked_texts != list(texts)
+                and not _current_task_is_cancelling()
+            ):
+                raise self._get_http_exception_for_blocked_guardrail(  # pyright: ignore[reportUnknownMemberType]  # its request_data parameter is the untyped proxy payload dict
+                    bedrock_response, request_data
+                )
 
             verbose_proxy_logger.debug("Bedrock Guardrail: Successfully applied guardrail")
 

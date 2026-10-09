@@ -11,7 +11,8 @@ released unchanged after moderation passes.
 """
 
 import json
-from typing import Any, AsyncGenerator, List, Literal, Optional
+from collections.abc import AsyncIterator, Mapping
+from typing import Any, AsyncGenerator, Final, List, Literal, Optional
 
 import pytest
 
@@ -19,6 +20,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.guardrail_translation.base_translation import StreamingScanKey
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
@@ -571,3 +573,47 @@ async def test_buffered_mode_disabled_for_content_rewriting_guardrail():
     assert guardrail.streaming_buffer_until_moderated is True  # request asked for buffering
     assert ORIGINAL_MARKER in raw
     assert BLOCK_MESSAGE not in raw
+
+
+class _MarkerMaskingGuardrail(_CountingPassingGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.scan_count += 1
+        return {**inputs, "texts": [text.replace(ORIGINAL_MARKER, "[MASKED]") for text in inputs.get("texts") or []]}
+
+
+@pytest.mark.asyncio
+async def test_hold_and_deliver_rewrites_releases_masked_responses_events_after_one_scan():
+    guardrail: Final = _MarkerMaskingGuardrail(
+        guardrail_name="masker", event_hook="post_call", mask_response_content=True
+    )
+    guardrail.streaming_buffer_until_moderated = False
+    guardrail.streaming_buffer_release_on_scan = True
+    guardrail.streaming_sampling_rate = 1
+    yielded_before_scan: Final[list[int]] = []
+
+    async def events() -> AsyncIterator[dict[str, object]]:
+        for event in _responses_message_stream_events(["one ", ORIGINAL_MARKER]):
+            yielded_before_scan.append(guardrail.scan_count)
+            yield event
+
+    collected: Final = [
+        chunk
+        async for chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/responses"),
+            response=events(),
+            request_data={"input": "hi", "metadata": {"guardrails": ["masker"]}},
+            guardrail_to_apply=guardrail,
+            hold_and_deliver_rewrites=True,
+        )
+    ]
+
+    assert guardrail.scan_count == 1 and set(yielded_before_scan) == {0}
+    assert ORIGINAL_MARKER not in json.dumps(collected), collected
+    deltas: Final = "".join(event["delta"] for event in collected if event["type"] == "response.output_text.delta")
+    assert deltas == "one [MASKED]", collected
