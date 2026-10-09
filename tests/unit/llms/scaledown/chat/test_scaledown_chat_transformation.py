@@ -411,20 +411,67 @@ def test_score_criteria_within_two_to_ten_is_accepted(config, levels):
     assert body["questions"]["q"]["criteria"] == criteria
 
 
-def test_extract_response_preserves_wrapped_values_and_reports_input_tokens(config):
+def test_extract_content_is_the_clean_fields_and_raw_payload_is_kept(config):
     payload = {
         "entities": [],
-        "structured_result": {"invoice": {"vendor": {"_value": "Northwind", "_span_anchor": "Invoice from Northwind"}}},
+        "structured_result": {
+            "invoice": {
+                "vendor": "Northwind",
+                "vendor_span_anchor": "Invoice from Northwind",
+                "customer": {"_value": "Ada Lovelace", "_span_anchor": "to Ada Lovelace"},
+                "amount": 500,
+            }
+        },
         "input_tokens": 171,
     }
 
     response = _transform_response(config, "scaledown/extract", payload)
 
-    assert json.loads(response.choices[0].message.content) == payload
+    assert json.loads(response.choices[0].message.content) == {
+        "invoice": {"vendor": "Northwind", "customer": "Ada Lovelace", "amount": 500}
+    }
     assert response.model == "scaledown/extract"
     assert response.usage.prompt_tokens == 171
     assert response.usage.completion_tokens == 0
     assert response._hidden_params["scaledown_response"] == payload
+
+
+def test_extract_schema_follows_local_refs(config):
+    schema = {
+        "type": "object",
+        "$defs": {
+            "Address": {"type": "object", "properties": {"city": {"type": "string", "description": "city name"}}}
+        },
+        "properties": {"address": {"$ref": "#/$defs/Address"}, "name": {"type": "string"}},
+    }
+
+    body = config.transform_request(
+        model="scaledown/extract",
+        messages=[{"role": "user", "content": "text"}],
+        optional_params={"response_format": {"type": "json_schema", "json_schema": {"name": "n", "schema": schema}}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert body["entities"] == {"address": {"city": "city name"}, "name": "name"}
+
+
+def test_self_referencing_schema_does_not_recurse_forever(config):
+    schema = {
+        "type": "object",
+        "$defs": {"Node": {"type": "object", "properties": {"child": {"$ref": "#/$defs/Node"}}}},
+        "properties": {"root": {"$ref": "#/$defs/Node"}},
+    }
+
+    body = config.transform_request(
+        model="scaledown/extract",
+        messages=[{"role": "user", "content": "text"}],
+        optional_params={"response_format": {"type": "json_schema", "json_schema": {"name": "n", "schema": schema}}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert "root" in body["entities"]
 
 
 def test_summarize_response_is_the_native_payload(config):
@@ -711,7 +758,8 @@ def test_completion_extract_converts_response_format_to_entities():
         "text": "Acme Corp invoiced $500.",
         "entities": {"vendor": "company name"},
     }
-    assert json.loads(response.choices[0].message.content) == extract_result
+    assert json.loads(response.choices[0].message.content) == {"vendor": "Acme Corp"}
+    assert response._hidden_params["scaledown_response"] == extract_result
 
 
 @respx.mock
