@@ -183,7 +183,9 @@ def _make_managed_files_instance():
     )
 
     mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
     mock_prisma = MagicMock()
+    mock_prisma.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
 
     instance = PROXY_LiteLLMManagedFiles(
         internal_usage_cache=mock_cache,
@@ -1384,9 +1386,11 @@ def _make_real_managed_files_instance():
     )
 
     mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
     mock_cache.async_set_cache = AsyncMock()
 
     mock_prisma = MagicMock()
+    mock_prisma.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
     mock_prisma.db.litellm_managedfiletable.upsert = AsyncMock()
     mock_prisma.db.litellm_managedfiletable.create = AsyncMock(
         side_effect=AssertionError(
