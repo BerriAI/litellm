@@ -547,8 +547,6 @@ def test_get_api_key_from_custom_header_different_casing():
     )
 
 
-
-
 @pytest.mark.parametrize(
     "user_role, auth_user_id, requested_user_id, expected_result",
     [
@@ -1869,7 +1867,10 @@ async def test_user_api_key_auth_websocket_logs_a_model_access_denial_as_one_war
     proxy_records: Final = [record for record in caplog.records if record.name == verbose_proxy_logger.name]
     assert [record.getMessage() for record in proxy_records if record.exc_info is not None] == []
     assert [record.getMessage() for record in proxy_records if record.levelno == logging.WARNING] == [
-        "key not allowed to access model. This key can only access models=['gpt-5.4-mini']. Tried to access gpt-5.4"
+        # Server-side denial context from can_key_call_model (key identity stays out of the
+        # client-facing exception), followed by the request-path denial warning.
+        "Model access denied: key_alias=None key_name=None user_id=None requested_model=gpt-5.4 allowed_models=['gpt-5.4-mini']",
+        "key not allowed to access model. This key can only access models=['gpt-5.4-mini']. Tried to access gpt-5.4",
     ]
 
 
