@@ -232,23 +232,28 @@ class ByteDanceVideoConfig(BaseVideoConfig):
 
         task_id: Final[str] = response_data.get("id", "")
 
-        video_data: _VideoParams = {
-            "id": task_id,
-            "object": "video",
-            "status": "queued",
-            "created_at": response_data.get("created_at", 0),
-        }
-
+        # Extract optional fields from request_data
+        req_model: str | None = None
+        req_size: str | None = None
+        req_seconds: str | None = None
         if request_data:
             if "model" in request_data:
-                video_data["model"] = request_data["model"]
+                req_model = str(request_data["model"])
             ratio = request_data.get("ratio")
             if isinstance(ratio, str) and ":" in ratio:
-                video_data["size"] = ratio.replace(":", "x")
+                req_size = ratio.replace(":", "x")
             if "duration" in request_data:
-                video_data["seconds"] = str(request_data["duration"])
+                req_seconds = str(request_data["duration"])
 
-        video_obj: Final = VideoObject(**video_data)  # pyright: ignore[reportCallIssue]  # dynamic dict → dataclass
+        video_obj: Final = VideoObject(
+            id=task_id,
+            object="video",
+            status="queued",
+            created_at=response_data.get("created_at", 0),
+            model=req_model,
+            size=req_size,
+            seconds=req_seconds,
+        )
 
         if custom_llm_provider and video_obj.id:
             video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, model)
@@ -289,36 +294,28 @@ class ByteDanceVideoConfig(BaseVideoConfig):
     ) -> VideoObject:
         response_data: Final = raw_response.json()
 
-        video_data: _VideoParams = {
-            "id": response_data.get("id", ""),
-            "object": "video",
-            "status": self._map_seedance_status(response_data.get("status", "queued")),
-            "created_at": response_data.get("created_at", 0),
-        }
+        raw_status: Final[str] = response_data.get("status", "queued")
+        is_terminal: Final = raw_status in ("succeeded", "failed", "cancelled", "expired")
 
-        if "updated_at" in response_data and response_data.get("status") in (
-            "succeeded",
-            "failed",
-            "cancelled",
-            "expired",
-        ):
-            video_data["completed_at"] = response_data["updated_at"]
-
-        if "duration" in response_data:
-            video_data["seconds"] = str(response_data["duration"])
-
+        resp_size: str | None = None
         if "ratio" in response_data:
             ratio = response_data["ratio"]
             if isinstance(ratio, str) and ":" in ratio:
-                video_data["size"] = ratio.replace(":", "x")
+                resp_size = ratio.replace(":", "x")
 
-        if "model" in response_data:
-            video_data["model"] = response_data["model"]
+        error_payload = response_data.get("error")
 
-        if response_data.get("error"):
-            video_data["error"] = response_data["error"]
-
-        video_obj: Final = VideoObject(**video_data)  # pyright: ignore[reportCallIssue]  # dynamic dict → dataclass
+        video_obj: Final = VideoObject(
+            id=response_data.get("id", ""),
+            object="video",
+            status=self._map_seedance_status(raw_status),
+            created_at=response_data.get("created_at", 0),
+            completed_at=response_data.get("updated_at") if is_terminal else None,
+            seconds=str(response_data["duration"]) if "duration" in response_data else None,
+            size=resp_size,
+            model=response_data.get("model"),
+            error=error_payload if error_payload else None,
+        )
 
         if custom_llm_provider and video_obj.id:
             video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, None)
@@ -457,7 +454,7 @@ class ByteDanceVideoConfig(BaseVideoConfig):
             object="video",
             status="failed",
             created_at=response_data.get("created_at", 0),
-        )  # pyright: ignore[reportCallIssue]  # dynamic dict → dataclass
+        )
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         from ...base_llm.chat.transformation import BaseLLMException
