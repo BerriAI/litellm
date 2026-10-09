@@ -47231,6 +47231,7 @@
         "supports_tool_choice": true
     },
     "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo": {
+        "deprecation_date": "2026-10-22",
         "input_cost_per_token": 1.04e-06,
         "litellm_provider": "together_ai",
         "max_input_tokens": 131072,
@@ -47387,6 +47388,7 @@
     },
     "together_ai/deepseek-ai/DeepSeek-V4-Flash-0731": {
         "cache_read_input_token_cost": 3e-08,
+        "deprecation_date": "2026-10-22",
         "input_cost_per_token": 1.4e-07,
         "litellm_provider": "together_ai",
         "max_input_tokens": 1048576,
