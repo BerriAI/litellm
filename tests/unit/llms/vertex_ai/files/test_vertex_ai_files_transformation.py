@@ -1186,10 +1186,21 @@ class TestConfiguredBucketNameResolution:
         assert config._get_configured_bucket_name({"gcs_bucket_name": "new", "bucket_name": "legacy"}) == "new"
 
     def test_should_fall_back_to_env(self, config, monkeypatch):
+        monkeypatch.delenv("GCS_BATCH_BUCKET_NAME", raising=False)
         monkeypatch.setenv("GCS_BUCKET_NAME", "env-bucket")
         assert config._get_configured_bucket_name({}) == "env-bucket"
 
+    def test_should_prefer_batch_env_over_logging_env(self, config, monkeypatch):
+        monkeypatch.setenv("GCS_BATCH_BUCKET_NAME", "batch-bucket")
+        monkeypatch.setenv("GCS_BUCKET_NAME", "logging-bucket")
+        assert config._get_configured_bucket_name({}) == "batch-bucket"
+
+    def test_should_prefer_litellm_params_over_batch_env(self, config, monkeypatch):
+        monkeypatch.setenv("GCS_BATCH_BUCKET_NAME", "batch-bucket")
+        assert config._get_configured_bucket_name({"gcs_bucket_name": "per-model-bucket"}) == "per-model-bucket"
+
     def test_should_raise_when_no_bucket_anywhere(self, config, monkeypatch):
+        monkeypatch.delenv("GCS_BATCH_BUCKET_NAME", raising=False)
         monkeypatch.delenv("GCS_BUCKET_NAME", raising=False)
         with pytest.raises(ValueError, match="GCS bucket_name is required"):
             config._get_configured_bucket_name({})
@@ -1277,6 +1288,33 @@ class TestVertexEmbeddingsBatchInputTranslation:
         (row,) = _wrap_entries([_embeddings_entry()])
 
         assert set(row["request"]) == {"content"}
+
+    def test_should_translate_a_file_block_with_video_metadata(self) -> None:
+        (row,) = _wrap_entries(
+            [
+                _embeddings_entry(
+                    body={
+                        "model": "gemini-embedding-2",
+                        "input": [
+                            {
+                                "type": "file",
+                                "file": {
+                                    "file_id": "gs://my-bucket/clip.mp4",
+                                    "video_metadata": {"start_offset": "3s", "end_offset": "6s"},
+                                },
+                            }
+                        ],
+                    }
+                )
+            ]
+        )
+
+        assert row["request"]["content"]["parts"] == [
+            {
+                "file_data": {"mime_type": "video/mp4", "file_uri": "gs://my-bucket/clip.mp4"},
+                "video_metadata": {"startOffset": "3s", "endOffset": "6s"},
+            }
+        ]
 
     def test_should_translate_multimodal_gcs_input(self):
         (row,) = _wrap_entries(

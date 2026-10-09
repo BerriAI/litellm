@@ -73,7 +73,7 @@ class AzureAnthropicConfig(AnthropicConfig):
                 litellm_params_obj.api_key = api_key
 
         # Use Azure authentication logic
-        headers = BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
+        headers = BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
 
         # Get tools and other anthropic-specific setup
         tools: Final = optional_params.get("tools")

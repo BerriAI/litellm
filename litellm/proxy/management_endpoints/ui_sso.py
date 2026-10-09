@@ -41,9 +41,10 @@ if TYPE_CHECKING:
 import jwt
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching.dual_cache import DualCache
@@ -89,8 +90,9 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
-from litellm.proxy.auth.auth_utils import (
-    _get_request_ip_address,
+from litellm.proxy.auth.auth_utils import (  # noqa: F401  # legacy module exports
+    _get_request_ip_address,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    get_request_ip_address,
     has_user_setup_sso,
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
@@ -99,6 +101,7 @@ from litellm.proxy.auth.team_grants import TeamModelAliasTable
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.admin_ui_utils import (
     admin_ui_disabled,
+    is_admin_ui_disabled,
     show_missing_vars_in_env,
 )
 from litellm.proxy.common_utils.html_forms.default_credentials_hint import should_hide_default_credentials_hint
@@ -106,7 +109,7 @@ from litellm.proxy.common_utils.html_forms.jwt_display_template import (
     jwt_display_template,
 )
 from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
@@ -114,6 +117,8 @@ from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
 )
 from litellm.proxy.management_endpoints.sso.saml_sso import SAMLAuthHandler
 from litellm.proxy.management_endpoints.sso_helper_utils import (
+    CLI_SSO_SESSIONS_TARGET,
+    SSO_SESSIONS_TARGET,
     check_is_admin_only_access,
     has_admin_ui_access,
 )
@@ -134,7 +139,8 @@ from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import SSOConfigRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
-from litellm.secret_managers.main import get_secret_bool, get_secret_str, str_to_bool
+from litellm.secret_managers.main import get_secret_bool, get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.ui_sso import *  # noqa: F403
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
@@ -214,14 +220,14 @@ def _team_detail_db(repo: TeamRepository) -> "TableActions[_TeamDetailRow]":
 _SSO_TOKEN_CLAIMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
-class _TeamRowGrants(BaseModel):
+class _TeamRowGrants(LiteLLMBaseModel):
     team_id: str
     team_alias: str | None = None
     models: tuple[str, ...] = ()
     litellm_model_table: TeamModelAliasTable | None = None
 
 
-class CliSsoTeamDetail(BaseModel):
+class CliSsoTeamDetail(LiteLLMBaseModel):
     """The per-team snapshot cached in the CLI SSO flow and echoed to the CLI on poll."""
 
     team_id: str | None = None
@@ -313,11 +319,12 @@ def _cli_sso_start_response_body(
 
 
 def _get_cli_sso_start_rate_limit_cache_key(request: Request, use_x_forwarded_for: bool | None = False) -> str:
-    client_ip: Final = _get_request_ip_address(request=request, use_x_forwarded_for=use_x_forwarded_for) or "unknown"
+    client_ip: Final = get_request_ip_address(request=request, use_x_forwarded_for=use_x_forwarded_for) or "unknown"
     client_ip_hash: Final = _hash_cli_sso_secret(client_ip)
     return f"{_CLI_SSO_START_RATE_LIMIT_CACHE_KEY_PREFIX}:{client_ip_hash}"
 
 
+@with_service_target(CLI_SSO_SESSIONS_TARGET)
 def _check_cli_sso_start_rate_limit(
     request: Request,
     cache: DualCache,
@@ -338,6 +345,7 @@ def _check_cli_sso_start_rate_limit(
         )
 
 
+@with_service_target(CLI_SSO_SESSIONS_TARGET)
 def _read_cli_sso_flow(cache: DualCache, cache_key: str) -> object:
     redis_cache: Final = cache.redis_cache
     if redis_cache is None:
@@ -384,6 +392,7 @@ def _get_cli_sso_flow_or_raise(login_id: str | None, cache: DualCache) -> dict:
     return flow
 
 
+@with_service_target(CLI_SSO_SESSIONS_TARGET)
 def _set_cli_sso_flow(login_id: str, cache: DualCache, flow: dict) -> None:
     cache_key: Final = _get_cli_sso_flow_cache_key(login_id)
     redis_cache: Final = cache.redis_cache
@@ -1023,11 +1032,10 @@ async def google_login(
     generic_client_id: Final = os.getenv("GENERIC_CLIENT_ID", None)
 
     ####### Check if UI is disabled #######
-    _disable_ui_flag: Final = os.getenv("DISABLE_ADMIN_UI")
-    if _disable_ui_flag is not None:
-        is_disabled: Final = str_to_bool(value=_disable_ui_flag)
-        if is_disabled:
-            return admin_ui_disabled()
+    admin_ui_is_disabled: Final = is_admin_ui_disabled()
+    is_cli_sso_login: Final = source == LITELLM_CLI_SOURCE_IDENTIFIER
+    if admin_ui_is_disabled and not is_cli_sso_login:
+        return admin_ui_disabled()
 
     ####### Check if user is a Enterprise / Premium User #######
     if (
@@ -1049,11 +1057,11 @@ async def google_login(
         sso_callback_route="sso/callback",
     )
 
-    if source == LITELLM_CLI_SOURCE_IDENTIFIER:
+    if is_cli_sso_login:
         _get_cli_sso_flow_or_raise(login_id=key, cache=cli_sso_session_cache)
 
     # Store CLI login handle in state for OAuth flow
-    cli_state: Final[str | None] = SSOAuthenticationHandler._get_cli_state(
+    cli_state: Final[str | None] = SSOAuthenticationHandler.get_cli_state(
         source=source,
         key=key,
         user_code=(user_code if _cli_sso_verification_uri_complete_enabled() else None),
@@ -1108,6 +1116,9 @@ async def google_login(
         if sso_redirect is not None:
             _persist_return_to_cookie(sso_redirect, return_to, request)
         return sso_redirect
+
+    if admin_ui_is_disabled:
+        return admin_ui_disabled()
 
     from fastapi.responses import HTMLResponse
 
@@ -1526,9 +1537,7 @@ async def get_generic_sso_response(
             if generic_include_token_claims
             else response
         )
-        received_response = {  # mutable-ok: preserve the existing dict return contract
-            key: value for key, value in claims.items() if key not in _OAUTH_TOKEN_FIELDS
-        }
+        received_response = {key: value for key, value in claims.items() if key not in _OAUTH_TOKEN_FIELDS}
         return generic_response_convertor(
             response=claims,
             jwt_handler=jwt_handler,
@@ -1618,7 +1627,7 @@ async def get_generic_sso_response(
                     param="code",
                     code=status.HTTP_400_BAD_REQUEST,
                 )
-            combined_response: Final = await SSOAuthenticationHandler._pkce_token_exchange(
+            combined_response: Final = await SSOAuthenticationHandler.pkce_token_exchange(
                 authorization_code=authorization_code,
                 code_verifier=code_verifier,
                 client_id=generic_client_id,
@@ -1656,7 +1665,7 @@ async def get_generic_sso_response(
         # successfully.  Deleting earlier would consume the verifier on a transient
         # failure, forcing the user to restart the entire OAuth flow from scratch.
         if pkce_cache_key:
-            await SSOAuthenticationHandler._delete_pkce_verifier(pkce_cache_key)
+            await SSOAuthenticationHandler.delete_pkce_verifier(pkce_cache_key)
 
     except Exception as e:
         _handle_generic_sso_error(
@@ -1669,7 +1678,7 @@ async def get_generic_sso_response(
     return result or {}, received_response, access_token_payload, sso_assertion
 
 
-RetentionCheck: TypeAlias = Callable[[], Awaitable[bool]]  # mutable-ok: Callable parameter syntax
+RetentionCheck: TypeAlias = Callable[[], Awaitable[bool]]
 
 
 async def warn_if_id_jag_assertion_uncaptured(
@@ -1855,10 +1864,36 @@ def _should_use_role_from_sso_response(sso_role: str | None) -> bool:
     return True
 
 
+class _SsoUserNames(Protocol):
+    id: str | None
+    display_name: str | None
+    first_name: str | None
+    last_name: str | None
+
+
+def _get_sso_user_alias(result: _SsoUserNames | Mapping[str, object] | None) -> str | None:
+    """Display name the IdP sent for the user, falling back to the joined first/last name."""
+    if result is None:
+        return None
+    if isinstance(result, Mapping):
+        raw_names: tuple[object, ...] = tuple(
+            result.get(key) for key in ("id", "display_name", "first_name", "last_name")
+        )
+    else:
+        raw_names = (result.id, result.display_name, result.first_name, result.last_name)
+    user_id, display_name, first_name, last_name = (
+        name.strip() or None if isinstance(name, str) else None for name in raw_names
+    )
+    if display_name and display_name != user_id:
+        return display_name
+    return " ".join(part for part in (first_name, last_name) if part) or None
+
+
 def _build_sso_user_update_data(
-    result: Union["CustomOpenID", OpenID, dict] | None,
+    result: Union["CustomOpenID", OpenID, Mapping[str, object]] | None,
     user_email: str | None,
     user_id: str | None,
+    existing_user_alias: str | None = None,
 ) -> dict[str, object]:
     """
     Build the update data dictionary for SSO user upsert.
@@ -1867,14 +1902,19 @@ def _build_sso_user_update_data(
         result: The SSO response containing user information
         user_email: The user's email from SSO
         user_id: The user's ID for logging purposes
+        existing_user_alias: The user's current alias in the DB; only an empty alias is filled from SSO
 
     Returns:
-        dict: Update data containing user_email and optionally user_role if valid
+        dict: Update data containing user_email, user_alias when newly available, and user_role if valid
     """
-    update_data: Final[dict[str, object]] = {"user_email": normalize_email(user_email)}
+    sso_user_alias: Final = None if existing_user_alias else _get_sso_user_alias(result)
+    update_data: Final[dict[str, object]] = {
+        "user_email": normalize_email(user_email),
+        **({"user_alias": sso_user_alias} if sso_user_alias is not None else {}),
+    }
 
     # Get SSO role from result and include if valid
-    sso_role: Final = getattr(result, "user_role", None)
+    sso_role: Final = result.user_role if isinstance(result, CustomOpenID) else None
     if sso_role is not None:
         # Convert enum to string if needed
         sso_role_str: Final = sso_role.value if isinstance(sso_role, LitellmUserRoles) else sso_role
@@ -1887,6 +1927,7 @@ def _build_sso_user_update_data(
     return update_data
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _sync_user_role_from_jwt_role_map(
     jwt_handler: JWTHandler | None,
     received_response: dict | None,
@@ -2122,8 +2163,7 @@ async def saml_login(request: Request, return_to: str | None = None):
     """SP-initiated SAML login. Redirects the user to the configured IdP."""
     from litellm.proxy.proxy_server import user_api_key_cache
 
-    _disable_ui_flag: Final = os.getenv("DISABLE_ADMIN_UI")
-    if _disable_ui_flag is not None and str_to_bool(value=_disable_ui_flag):
+    if is_admin_ui_disabled():
         return admin_ui_disabled()
 
     return await SAMLAuthHandler.build_login_redirect(request=request, cache=user_api_key_cache, relay_state=return_to)
@@ -2150,8 +2190,7 @@ async def saml_callback(request: Request):
         user_api_key_cache,
     )
 
-    _disable_ui_flag: Final = os.getenv("DISABLE_ADMIN_UI")
-    if _disable_ui_flag is not None and str_to_bool(value=_disable_ui_flag):
+    if is_admin_ui_disabled():
         return admin_ui_disabled()
 
     if prisma_client is None:
@@ -2176,7 +2215,7 @@ async def saml_callback(request: Request):
     relay_state: Final = post_data.get("RelayState")
     cp_return_to: Final[str | None] = (
         relay_state
-        if isinstance(relay_state, str) and SSOAuthenticationHandler._validate_return_to(relay_state)
+        if isinstance(relay_state, str) and SSOAuthenticationHandler.validate_return_to(relay_state)
         else None
     )
 
@@ -2313,6 +2352,11 @@ async def _complete_cli_sso_callback_session(
             status_code=500,
             detail="Could not resolve team model grants for this login. Please try again",
         )
+    from litellm.proxy.management_endpoints.sso.agent_subject_enrollment import enroll_microsoft_subject
+
+    await enroll_microsoft_subject(
+        request.scope.get("litellm_microsoft_interactive_subject"), user_info.user_id, prisma_client
+    )
     resolved_teams: Final = _cli_sso_session_teams(team_details)
     attribution_metadata: Final = build_cli_sso_attribution_metadata(result=result)
     if attribution_metadata:
@@ -2390,7 +2434,7 @@ async def cli_sso_callback(
     result_non_none: Final[OpenID | dict] = cast(OpenID | dict, result)
 
     try:
-        parsed_openid_result: Final = SSOAuthenticationHandler._get_user_email_and_id_from_result(
+        parsed_openid_result: Final = SSOAuthenticationHandler.get_user_email_and_id_from_result(
             result=result_non_none,
             generic_client_id=os.getenv("GENERIC_CLIENT_ID", None),
         )
@@ -2430,6 +2474,7 @@ async def cli_sso_callback(
 
 
 @router.get("/sso/cli/poll/{key_id}", tags=["experimental"], include_in_schema=False)
+@with_service_target(CLI_SSO_SESSIONS_TARGET)
 async def cli_poll_key(
     key_id: str,
     team_id: str | None = None,
@@ -2613,6 +2658,7 @@ async def insert_sso_user(
     new_user_request: Final = NewUserRequest(
         user_id=user_defined_values["user_id"],
         user_email=normalize_email(user_defined_values["user_email"]),
+        user_alias=_get_sso_user_alias(result_openid),
         user_role=user_defined_values["user_role"],
         max_budget=user_defined_values["max_budget"],
         budget_duration=user_defined_values["budget_duration"],
@@ -2762,7 +2808,8 @@ def _is_same_origin_return_path(return_to: str) -> bool:
     return not any(ord(ch) < 0x20 or ch in (" ", "\x7f") for ch in return_to)
 
 
-async def _sso_return_to_redirect(
+@with_service_target(SSO_SESSIONS_TARGET)
+async def sso_return_to_redirect(
     return_to: str | None,
     jwt_token: str,
     redis_usage_cache,
@@ -2790,7 +2837,7 @@ async def _sso_return_to_redirect(
         redirect_response.delete_cookie("litellm_cp_return_to")
         return redirect_response
 
-    if SSOAuthenticationHandler._validate_return_to(return_to):
+    if SSOAuthenticationHandler.validate_return_to(return_to):
         code: Final = secrets.token_urlsafe(32)
         cache_key: Final = f"login_code:{code}"
         cache_value: Final = {"token": jwt_token, "redirect_url": return_to}
@@ -2807,6 +2854,9 @@ async def _sso_return_to_redirect(
         return redirect_response
 
     return None
+
+
+_sso_return_to_redirect: Final = sso_return_to_redirect
 
 
 def set_session_token_cookie(response: Response, request: Request, jwt_token: str) -> None:
@@ -2838,7 +2888,7 @@ def _persist_return_to_cookie(response: Response, return_to: str | None, request
     if return_to is None:
         return
     try:
-        safe: Final = _is_same_origin_return_path(return_to) or SSOAuthenticationHandler._validate_return_to(return_to)
+        safe: Final = _is_same_origin_return_path(return_to) or SSOAuthenticationHandler.validate_return_to(return_to)
     except HTTPException:
         return  # a non-matching absolute return_to is ignored, never blocks sign-in
     if safe:
@@ -2858,7 +2908,7 @@ class SSOAuthenticationHandler:
     """
 
     @staticmethod
-    def _validate_return_to(return_to: str) -> bool:
+    def validate_return_to(return_to: str) -> bool:
         """
         Validate that return_to matches the configured control_plane_url origin.
 
@@ -2887,6 +2937,8 @@ class SSOAuthenticationHandler:
             )
 
         return True
+
+    _validate_return_to = validate_return_to
 
     @staticmethod
     async def get_sso_login_redirect(
@@ -3025,6 +3077,7 @@ class SSOAuthenticationHandler:
         )
 
     @staticmethod
+    @with_service_target(SSO_SESSIONS_TARGET)
     async def get_generic_sso_redirect_response(
         generic_sso: Any,
         state: str | None = None,
@@ -3246,6 +3299,7 @@ class SSOAuthenticationHandler:
                     result=result,
                     user_email=user_email,
                     user_id=user_id,
+                    existing_user_alias=user_info.user_alias if isinstance(user_info, LiteLLM_UserTable) else None,
                 )
 
                 await _user_meta_db(UserRepository(prisma_client)).update_many(
@@ -3277,7 +3331,7 @@ class SSOAuthenticationHandler:
         if user_info is None:
             verbose_proxy_logger.debug("User not found in LiteLLM DB, skipping team member addition")
             return
-        sso_teams: Final = getattr(result, "team_ids", [])
+        sso_teams: Final = result.team_ids if isinstance(result, CustomOpenID) else []
         await add_missing_team_member(user_info=user_info, sso_teams=sso_teams)
 
     @staticmethod
@@ -3403,7 +3457,7 @@ class SSOAuthenticationHandler:
         return team_request
 
     @staticmethod
-    def _get_cli_state(
+    def get_cli_state(
         source: str | None,
         key: str | None,
         existing_key: str | None = None,
@@ -3429,8 +3483,10 @@ class SSOAuthenticationHandler:
         else:
             return None
 
+    _get_cli_state = get_cli_state
+
     @staticmethod
-    def _get_user_email_and_id_from_result(
+    def get_user_email_and_id_from_result(
         result: OpenID | dict | None,
         generic_client_id: str | None = None,
     ) -> ParsedOpenIDResult:
@@ -3487,6 +3543,8 @@ class SSOAuthenticationHandler:
             user_role=user_role,
         )
 
+    _get_user_email_and_id_from_result = get_user_email_and_id_from_result
+
     @staticmethod
     async def get_redirect_response_from_openid(
         result: OpenID | dict | CustomOpenID,
@@ -3516,7 +3574,7 @@ class SSOAuthenticationHandler:
         prisma_client: Final = get_prisma_client_or_throw("Prisma client is None, connect a database to your proxy")
 
         # User is Authe'd in - generate key for the UI to access Proxy
-        parsed_openid_result: Final = SSOAuthenticationHandler._get_user_email_and_id_from_result(
+        parsed_openid_result: Final = SSOAuthenticationHandler.get_user_email_and_id_from_result(
             result=result, generic_client_id=generic_client_id
         )
         user_email: Final = parsed_openid_result.get("user_email")
@@ -3631,6 +3689,12 @@ class SSOAuthenticationHandler:
                     },
                 )
 
+        from litellm.proxy.management_endpoints.sso.agent_subject_enrollment import enroll_microsoft_subject
+
+        await enroll_microsoft_subject(
+            request.scope.get("litellm_microsoft_interactive_subject"), user_id, prisma_client
+        )
+
         if isinstance(user_id, str) and user_id:
             await retain_sso_identity_assertion_for_ema(user_id=user_id, assertion=sso_assertion)
             await warn_if_id_jag_assertion_uncaptured(sso_assertion)
@@ -3675,7 +3739,7 @@ class SSOAuthenticationHandler:
         # Post-SSO return_to handling (the same-origin DCR round-trip and the control-plane
         # cross-origin code exchange) lives in one shared helper so this method stays inside the
         # complexity budget. None falls through to the dashboard redirect below.
-        return_to_redirect: Final = await _sso_return_to_redirect(
+        return_to_redirect: Final = await sso_return_to_redirect(
             return_to=return_to,
             jwt_token=jwt_token,
             redis_usage_cache=redis_usage_cache,
@@ -3693,6 +3757,7 @@ class SSOAuthenticationHandler:
         return redirect_response
 
     @staticmethod
+    @with_service_target(SSO_SESSIONS_TARGET)
     async def prepare_token_exchange_parameters(
         request: Request,
         generic_include_client_id: bool,
@@ -3807,7 +3872,7 @@ class SSOAuthenticationHandler:
         strict_cache_miss: Final = os.getenv("PKCE_STRICT_CACHE_MISS", "false").lower() == "true"
         if strict_cache_miss:
             if empty_value_in_dict:
-                await SSOAuthenticationHandler._delete_pkce_verifier(cache_key)
+                await SSOAuthenticationHandler.delete_pkce_verifier(cache_key)
                 raise ProxyException(
                     message=(
                         f"PKCE verifier for state '{state}' was found in cache but "
@@ -3818,7 +3883,7 @@ class SSOAuthenticationHandler:
                     code=status.HTTP_401_UNAUTHORIZED,
                 )
             elif cached_data is not None:
-                await SSOAuthenticationHandler._delete_pkce_verifier(cache_key)
+                await SSOAuthenticationHandler.delete_pkce_verifier(cache_key)
                 verbose_proxy_logger.error(
                     "PKCE verifier for state '%s' has an unrecognized format (type=%s); "
                     "treating as a cache miss. Investigate the cached value — it may be "
@@ -3861,7 +3926,7 @@ class SSOAuthenticationHandler:
                 )
         else:
             if cached_data is not None:
-                await SSOAuthenticationHandler._delete_pkce_verifier(cache_key)
+                await SSOAuthenticationHandler.delete_pkce_verifier(cache_key)
             verbose_proxy_logger.warning(
                 "PKCE is enabled but verifier not found in cache for state '%s' "
                 "(cache type: %s, raw data present: %s). "
@@ -3872,7 +3937,8 @@ class SSOAuthenticationHandler:
             )
 
     @staticmethod
-    async def _delete_pkce_verifier(cache_key: str) -> None:
+    @with_service_target(SSO_SESSIONS_TARGET)
+    async def delete_pkce_verifier(cache_key: str) -> None:
         """Delete a single-use PKCE verifier from cache after a successful exchange.
 
         Failure is non-fatal: a leftover verifier is a minor security concern
@@ -3891,6 +3957,8 @@ class SSOAuthenticationHandler:
                 cache_key,
                 exc,
             )
+
+    _delete_pkce_verifier = delete_pkce_verifier
 
     @staticmethod
     def generate_pkce_params() -> tuple[str, str]:
@@ -3976,7 +4044,7 @@ class SSOAuthenticationHandler:
         return token_response
 
     @staticmethod
-    async def _pkce_token_exchange(
+    async def pkce_token_exchange(
         authorization_code: str,
         code_verifier: str,
         client_id: str,
@@ -4101,6 +4169,8 @@ class SSOAuthenticationHandler:
                 merged.pop(field, None)
             # Case 3: field absent from token_response — leave userinfo value as-is.
         return merged
+
+    _pkce_token_exchange = pkce_token_exchange
 
     @staticmethod
     async def _get_pkce_userinfo(
@@ -4300,6 +4370,22 @@ class MicrosoftSSOHandler:
             original_msft_result["app_roles"] = app_roles
             return original_msft_result or {}
 
+        from litellm.proxy.management_endpoints.sso.agent_subject_enrollment import microsoft_interactive_subject
+
+        request.scope["litellm_microsoft_interactive_subject"] = microsoft_interactive_subject(
+            microsoft_tenant,
+            original_msft_result,
+            MappingProxyType(
+                {
+                    name: os.getenv(name)
+                    for name in (
+                        "MICROSOFT_AUTHORIZATION_ENDPOINT",
+                        "MICROSOFT_TOKEN_ENDPOINT",
+                        "MICROSOFT_USERINFO_ENDPOINT",
+                    )
+                }
+            ),
+        )
         result: Final = MicrosoftSSOHandler.openid_from_response(
             response=original_msft_result,
             team_ids=user_team_ids,
@@ -4618,6 +4704,13 @@ class GoogleSSOHandler:
         return result or {}
 
 
+def _raise_if_sso_debug_disabled() -> None:
+    """The debug routes run the browser-redirect SSO flow, so they cannot carry a
+    bearer credential; an explicit opt-in flag is the only way to gate them."""
+    if get_secret_bool("ENABLE_SSO_DEBUG") is not True:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
+
 @router.get("/sso/debug/login", tags=["experimental"], include_in_schema=False)
 async def debug_sso_login(request: Request):
     """
@@ -4625,6 +4718,8 @@ async def debug_sso_login(request: Request):
     PROXY_BASE_URL should be the your deployed proxy endpoint, e.g. PROXY_BASE_URL="https://litellm-production-7002.up.railway.app/"
     Example:
     """
+    _raise_if_sso_debug_disabled()
+
     from litellm.proxy.proxy_server import premium_user
 
     microsoft_client_id: Final = os.getenv("MICROSOFT_CLIENT_ID", None)
@@ -4670,6 +4765,8 @@ async def debug_sso_callback(request: Request):
     """
     Returns the OpenID object returned by the SSO provider
     """
+    _raise_if_sso_debug_disabled()
+
     import json
 
     from fastapi.responses import HTMLResponse

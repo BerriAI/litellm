@@ -28,19 +28,29 @@ import {
   readRecord,
   requiredRule,
   type GuardrailFormValues,
+  LoggingOnlyScopeField,
   SkipMessageSelect,
 } from "./GuardrailFormField";
 import ContentFilterManager, { formatContentFilterDataForAPI } from "./content_filter/ContentFilterManager";
 import CustomCodeModal, { EditGuardrailData } from "./custom_code/CustomCodeModal";
+import { GuardrailModeCard } from "./GuardrailModeDisplay";
+import { GuardrailReadOnlyDetails } from "./GuardrailReadOnlyDetails";
 import {
-  formatGuardrailMode,
+  getLoggingOnlyScopeUpdate,
   getGuardrailLogoAndName,
   guardrail_provider_map,
+  loggingOnlyScopeToChoice,
   skipSystemMessageToChoice,
   skipToolMessageToChoice,
+  streamScopeByModeFromConfig,
+  streamScopeForUpdate,
+  supportsDirectionalLoggingOnlyScope,
+  toModeArray,
   type SkipSystemMessageChoice,
   type SkipToolMessageChoice,
+  type GuardrailStreamScope,
 } from "./guardrail_info_helpers";
+import { GuardrailStreamScopeCaption, StreamScopeFormField } from "./StreamScopeFields";
 import GuardrailOptionalParams from "./guardrail_optional_params";
 import GuardrailProviderFields from "./guardrail_provider_fields";
 import PiiConfiguration from "./pii_configuration";
@@ -81,6 +91,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
       entities: string[];
     }>;
     supported_modes: string[];
+    providers_without_directional_logging_only_scope?: string[];
     content_filter_settings?: {
       prebuilt_patterns: Array<{
         name: string;
@@ -109,6 +120,8 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
   const [toolPermissionConfig, setToolPermissionConfig] = useState<ToolPermissionConfig>(emptyToolPermissionConfig);
   const [toolPermissionDirty, setToolPermissionDirty] = useState(false);
   const [customCodeModalVisible, setCustomCodeModalVisible] = useState(false);
+  const guardrailProvider = guardrailData?.litellm_params?.guardrail ?? null;
+  const directionalScopeSupported = supportsDirectionalLoggingOnlyScope(guardrailSettings, guardrailProvider);
 
   // Content Filter data ref (managed by ContentFilterManager)
   const contentFilterDataRef = React.useRef<{
@@ -219,6 +232,8 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
     if (!guardrailData) return;
     form.setValue("guardrail_name", guardrailData.guardrail_name);
     form.setValue("default_on", guardrailData.litellm_params?.default_on);
+    const storedLoggingOnlyScope = guardrailData.litellm_params?.logging_only_scope;
+    form.setValue("logging_only_scope_choice", loggingOnlyScopeToChoice(storedLoggingOnlyScope));
     form.setValue(
       "skip_system_message_choice",
       skipSystemMessageToChoice(guardrailData.litellm_params?.skip_system_message_in_guardrail),
@@ -226,6 +241,13 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
     form.setValue(
       "skip_tool_message_choice",
       skipToolMessageToChoice(guardrailData.litellm_params?.skip_tool_message_in_guardrail),
+    );
+    form.setValue(
+      "stream_scope_by_mode",
+      streamScopeByModeFromConfig(
+        guardrailData.litellm_params?.stream_scope,
+        toModeArray(guardrailData.litellm_params?.mode),
+      ),
     );
     form.setValue(
       "guardrail_info",
@@ -282,7 +304,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
 
       // Prepare update data object - only include changed fields
       const updateData: any = {
-        litellm_params: {},
+        litellm_params: getLoggingOnlyScopeUpdate(guardrailData.litellm_params, values.logging_only_scope_choice),
       };
 
       // Only include guardrail_name if it has changed
@@ -293,6 +315,16 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
       // Only include default_on if it has changed
       if (values.default_on !== guardrailData.litellm_params?.default_on) {
         updateData.litellm_params.default_on = values.default_on;
+      }
+
+      const modes = toModeArray(guardrailData.litellm_params?.mode);
+      const nextStreamScope = streamScopeForUpdate(
+        modes,
+        (values.stream_scope_by_mode as Record<string, GuardrailStreamScope> | undefined) ?? {},
+        guardrailData.litellm_params?.stream_scope,
+      );
+      if (nextStreamScope !== undefined) {
+        updateData.litellm_params.stream_scope = nextStreamScope;
       }
 
       const prevSkipChoice = skipSystemMessageToChoice(guardrailData.litellm_params?.skip_system_message_in_guardrail);
@@ -556,17 +588,8 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                 </div>
               </Card>
 
-              <Card className="block p-6">
-                <p>Mode</p>
-                <div className="mt-2">
-                  <h3 className="text-lg font-medium">
-                    {formatGuardrailMode(guardrailData.litellm_params?.mode) || "-"}
-                  </h3>
-                  <Badge variant={guardrailData.litellm_params?.default_on ? "secondary" : "outline"}>
-                    {guardrailData.litellm_params?.default_on ? "Default On" : "Default Off"}
-                  </Badge>
-                </div>
-              </Card>
+              <GuardrailModeCard litellmParams={guardrailData.litellm_params} />
+              <GuardrailStreamScopeCaption raw={guardrailData.litellm_params?.stream_scope} />
 
               <Card className="block p-6">
                 <p>Created At</p>
@@ -724,6 +747,11 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                           )}
                         </GuardrailField>
 
+                        <StreamScopeFormField
+                          control={form.control}
+                          modes={toModeArray(guardrailData.litellm_params?.mode)}
+                        />
+
                         <GuardrailField
                           control={form.control}
                           name="skip_system_message_choice"
@@ -745,6 +773,11 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                         >
                           {(fieldControl) => <SkipMessageSelect control={fieldControl} />}
                         </GuardrailField>
+                        <LoggingOnlyScopeField
+                          control={form.control}
+                          mode={guardrailData.litellm_params?.mode}
+                          directionalScopeSupported={directionalScopeSupported}
+                        />
                         {guardrailData.litellm_params?.guardrail === "presidio" && (
                           <>
                             <SectionHeading>PII Protection</SectionHeading>
@@ -843,56 +876,19 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                     </form>
                   </TooltipProvider>
                 ) : (
-                  <div className="space-y-4">
-                    <div>
-                      <p className="font-medium">Guardrail ID</p>
-                      <div className="font-mono">{guardrailData.guardrail_id}</div>
-                    </div>
-                    <div>
-                      <p className="font-medium">Guardrail Name</p>
-                      <div>{guardrailData.guardrail_name || "Unnamed Guardrail"}</div>
-                    </div>
-                    <div>
-                      <p className="font-medium">Provider</p>
-                      <div>{displayName}</div>
-                    </div>
-                    <div>
-                      <p className="font-medium">Mode</p>
-                      <div>{formatGuardrailMode(guardrailData.litellm_params?.mode) || "-"}</div>
-                    </div>
-                    <div>
-                      <p className="font-medium">Default On</p>
-                      <Badge variant={guardrailData.litellm_params?.default_on ? "secondary" : "outline"}>
-                        {guardrailData.litellm_params?.default_on ? "Yes" : "No"}
-                      </Badge>
-                    </div>
-
-                    {guardrailData.litellm_params?.pii_entities_config &&
-                      Object.keys(guardrailData.litellm_params.pii_entities_config).length > 0 && (
-                        <div>
-                          <p className="font-medium">PII Protection</p>
-                          <div className="mt-2">
-                            <Badge variant="secondary">
-                              {Object.keys(guardrailData.litellm_params.pii_entities_config).length} PII entities
-                              configured
-                            </Badge>
-                          </div>
-                        </div>
-                      )}
-
-                    <div>
-                      <p className="font-medium">Created At</p>
-                      <div>{formatDate(guardrailData.created_at)}</div>
-                    </div>
-                    <div>
-                      <p className="font-medium">Last Updated</p>
-                      <div>{formatDate(guardrailData.updated_at)}</div>
-                    </div>
-
-                    {guardrailData.litellm_params?.guardrail === "tool_permission" && (
-                      <ToolPermissionRulesEditor value={toolPermissionConfig} disabled />
-                    )}
-                  </div>
+                  <GuardrailReadOnlyDetails
+                    guardrailId={guardrailData.guardrail_id}
+                    guardrailName={guardrailData.guardrail_name}
+                    displayName={displayName}
+                    litellmParams={guardrailData.litellm_params}
+                    streamScope={guardrailData.litellm_params?.stream_scope}
+                    defaultOn={guardrailData.litellm_params?.default_on}
+                    piiEntityCount={Object.keys(guardrailData.litellm_params?.pii_entities_config || {}).length}
+                    createdAt={formatDate(guardrailData.created_at)}
+                    updatedAt={formatDate(guardrailData.updated_at)}
+                    showToolPermission={guardrailData.litellm_params?.guardrail === "tool_permission"}
+                    toolPermissionConfig={toolPermissionConfig}
+                  />
                 )}
               </Card>
             </TabsContent>

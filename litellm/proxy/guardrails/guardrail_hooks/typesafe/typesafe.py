@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal
 import httpx
 from fastapi import HTTPException
 from httpx import Response as HttpxResponse
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.compression.compress import get_protected_indices
@@ -33,6 +33,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy.guardrails.guardrail_hooks.content_text import content_to_text
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks, Mode
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -84,14 +85,14 @@ def _safe_response_text(response: HttpxResponse | None, limit: int = 500) -> str
     return (text or "")[:limit]
 
 
-class _JevNoulAnswer(BaseModel):
+class _JevNoulAnswer(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, allow_inf_nan=False)
 
     type: Literal["noul"]
     noul: Annotated[float, Field(ge=0.0, le=1.0)]
 
 
-class _JevSystemOneResponse(BaseModel):
+class _JevSystemOneResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     answers: Mapping[str, _JevNoulAnswer]
@@ -126,7 +127,7 @@ def _tool_call_entry(tool_call: object) -> dict[str, object] | None:
         return None
     function = _as_str_object_dict(parsed_call.get("function"))
     fn = function if function is not None else parsed_call
-    return {"name": fn.get("name"), "arguments": fn.get("arguments")}  # mutable-ok: serialized to JSON
+    return {"name": fn.get("name"), "arguments": fn.get("arguments")}
 
 
 def _tool_call_entries(assistant_message: Mapping[str, object]) -> tuple[dict[str, object], ...]:
@@ -161,6 +162,7 @@ class TypeSafeGuardrail(CustomGuardrail):
         event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None = None,
         default_on: bool = False,
         async_handler: AsyncHTTPHandler | None = None,
+        timeout: float | None = None,
     ) -> None:
         raw_api_base: Final = (api_base or get_secret_str("TYPESAFE_API_BASE") or DEFAULT_API_BASE).rstrip("/")
         self.typesafe_api_base = raw_api_base
@@ -188,6 +190,7 @@ class TypeSafeGuardrail(CustomGuardrail):
             guardrail_name=guardrail_name,
             event_hook=event_hook,
             default_on=default_on,
+            timeout=timeout,
         )
 
     def _handle_failure(self, error: str, log_detail: dict[str, object]) -> None:
@@ -200,7 +203,7 @@ class TypeSafeGuardrail(CustomGuardrail):
             )
             return
         verbose_proxy_logger.error("TypeSafe: %s. detail=%s", error, log_detail)
-        raise HTTPException(status_code=502, detail={"error": error})  # mutable-ok: FastAPI wants a dict detail
+        raise HTTPException(status_code=502, detail={"error": error})
 
     def _candidate_exchanges(self, messages: Sequence[dict[str, object]]) -> tuple[tuple[int, ...], ...]:
         """Completed tool exchanges eligible for evaluation: unprotected, and long enough to be worth a call."""
@@ -237,8 +240,8 @@ class TypeSafeGuardrail(CustomGuardrail):
         system: Final = "\n\n".join(
             content_to_text(message.get("content")) for message in messages if message.get("role") == "system"
         )
-        tool_exchanges: Final = {  # mutable-ok: accumulated once, serialized to JSON
-            f"e{ordinal}": {  # mutable-ok: serialized to JSON
+        tool_exchanges: Final = {
+            f"e{ordinal}": {
                 "tool_calls": _tool_call_entries(messages[group[0]]),
                 "result": _truncate_for_state(
                     self._exchange_tool_text(messages, group), self.max_result_chars_in_state
@@ -246,7 +249,7 @@ class TypeSafeGuardrail(CustomGuardrail):
             }
             for ordinal, group in enumerate(candidates)
         }
-        return {"task": task, "system": system, "tool_exchanges": tool_exchanges}  # mutable-ok: serialized to JSON
+        return {"task": task, "system": system, "tool_exchanges": tool_exchanges}
 
     async def _call_systemone(
         self, state: dict[str, object], question_ids: Sequence[str]
@@ -255,8 +258,8 @@ class TypeSafeGuardrail(CustomGuardrail):
         payload: Final[dict[str, object]] = {  # mutable-ok: serialized to JSON by httpx
             "model": self.jev_model,
             "state": state,
-            "questions": {  # mutable-ok: serialized to JSON
-                question_id: {  # mutable-ok: serialized to JSON
+            "questions": {
+                question_id: {
                     "type": "noul",
                     "instructions": _question_instructions(question_id),
                 }
@@ -267,31 +270,31 @@ class TypeSafeGuardrail(CustomGuardrail):
             raw_response: HttpxResponse = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler.post is untyped
                 url=f"{self.typesafe_api_base}/v1/systemone",
                 json=payload,
-                headers={  # mutable-ok: httpx header contract is a dict
+                headers={
                     "Authorization": f"Bearer {self.typesafe_api_key}",
                     "Content-Type": "application/json",
                 },
-                timeout=_JEV_TIMEOUT_SECONDS,
+                timeout=self.timeout if self.timeout is not None else _JEV_TIMEOUT_SECONDS,
             )
         except asyncio.CancelledError:
             raise
         except Exception as e:
             detail: Final[dict[str, object]] = (
-                {  # mutable-ok: log detail record
+                {
                     "error_type": type(e).__name__,
                     "detail": str(e),
                     "status_code": e.response.status_code,
                     "body": _safe_response_text(e.response),
                 }
                 if isinstance(e, httpx.HTTPStatusError)
-                else {"error_type": type(e).__name__, "detail": str(e)}  # mutable-ok: log detail record
+                else {"error_type": type(e).__name__, "detail": str(e)}
             )
             self._handle_failure("TypeSafe evaluation service request failed", detail)
             return None
         if not 200 <= raw_response.status_code < 300:
             self._handle_failure(
                 "TypeSafe evaluation service returned an error",
-                {  # mutable-ok: log detail record
+                {
                     "status_code": raw_response.status_code,
                     "body": _safe_response_text(raw_response),
                 },
@@ -302,7 +305,7 @@ class TypeSafeGuardrail(CustomGuardrail):
         except (ValueError, httpx.DecodingError, RecursionError):
             self._handle_failure(
                 "TypeSafe evaluation service returned an unreadable response",
-                {"body": _safe_response_text(raw_response)},  # mutable-ok: log detail record
+                {"body": _safe_response_text(raw_response)},
             )
             return None
         try:
@@ -310,7 +313,7 @@ class TypeSafeGuardrail(CustomGuardrail):
         except ValidationError:
             self._handle_failure(
                 "TypeSafe evaluation service returned unexpected response shape",
-                {"body": _safe_response_text(raw_response)},  # mutable-ok: log detail record
+                {"body": _safe_response_text(raw_response)},
             )
             return None
 
@@ -346,7 +349,7 @@ class TypeSafeGuardrail(CustomGuardrail):
         end_time: Final = time.monotonic()
         if response is None:
             self.add_standard_logging_guardrail_information_to_request_data(  # pyright: ignore[reportUnknownMemberType]  # untyped base helper
-                guardrail_json_response={  # mutable-ok: must stay JSON-serializable for shared logging
+                guardrail_json_response={
                     "error": "TypeSafe evaluation unavailable; request forwarded uncompacted",
                     "model": self.jev_model,
                 },
@@ -374,10 +377,8 @@ class TypeSafeGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("TypeSafe: all evaluated exchanges still relevant; request unchanged")
             return inputs
 
-        compacted_messages: Final = [  # mutable-ok: structured_messages contract is a list of dicts
-            {**message, "content": DROPPED_RESULT_TEXT}  # mutable-ok: JSON message row
-            if index in dropped_tool_indices
-            else message
+        compacted_messages: Final = [
+            {**message, "content": DROPPED_RESULT_TEXT} if index in dropped_tool_indices else message
             for index, message in enumerate(messages)
         ]
         chars_removed: Final = sum(
@@ -392,7 +393,7 @@ class TypeSafeGuardrail(CustomGuardrail):
             chars_removed,
         )
         self.add_standard_logging_guardrail_information_to_request_data(  # pyright: ignore[reportUnknownMemberType]  # untyped base helper
-            guardrail_json_response={  # mutable-ok: must stay JSON-serializable for shared logging
+            guardrail_json_response={
                 "exchanges_evaluated": len(candidates),
                 "exchanges_dropped": exchanges_dropped,
                 "chars_removed": chars_removed,
@@ -405,7 +406,7 @@ class TypeSafeGuardrail(CustomGuardrail):
             end_time=end_time,
             duration=end_time - start_time,
         )
-        return {**inputs, "structured_messages": compacted_messages}  # pyright: ignore[reportReturnType]  # mutable-ok: inputs protocol is a plain dict  # plain dicts satisfy AllMessageValues at runtime
+        return {**inputs, "structured_messages": compacted_messages}  # pyright: ignore[reportReturnType]  # plain dicts satisfy AllMessageValues at runtime
 
     @staticmethod
     def get_config_model() -> type[TypeSafeGuardrailConfigModel] | None:

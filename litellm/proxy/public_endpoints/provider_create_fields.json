@@ -1016,6 +1016,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "CORTECS",
+    "provider_display_name": "Cortecs",
+    "litellm_provider": "cortecs",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.cortecs.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "cortecs/gpt-6-sol"
+  },
+  {
     "provider": "CUSTOM",
     "provider_display_name": "Custom",
     "litellm_provider": "custom",
@@ -2856,6 +2884,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "PRISM",
+    "provider_display_name": "Prism",
+    "litellm_provider": "prism",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.prisminference.com/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "prism/deepseek-v4.1-flash"
+  },
+  {
     "provider": "RECRAFT",
     "provider_display_name": "Recraft",
     "litellm_provider": "recraft",
@@ -2968,6 +3024,62 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "REKA",
+    "provider_display_name": "Reka",
+    "litellm_provider": "reka",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.reka.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "reka/reka-flash"
+  },
+  {
+    "provider": "Sail",
+    "provider_display_name": "Sail",
+    "litellm_provider": "sail",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "Sail API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "sail/openai/gpt-oss-120b"
+  },
+  {
     "provider": "Sambanova",
     "provider_display_name": "Sambanova",
     "litellm_provider": "sambanova",
@@ -3078,6 +3190,62 @@
     "default_model_placeholder": "soniox/stt-async-v5"
   },
   {
+    "provider": "StrandsDecider",
+    "provider_display_name": "Strands Decider",
+    "litellm_provider": "strands_decider",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "http://localhost:8000",
+        "tooltip": "URL of your self-hosted Strands Decider server",
+        "required": true,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "strands_decider/strands-decider-2B-hobson-v19"
+  },
+  {
+    "provider": "Tencent",
+    "provider_display_name": "Tencent",
+    "litellm_provider": "tencent",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://tokenhub-intl.tencentcloudmaas.com/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "tencent/deepseek-v4-pro"
+  },
+  {
     "provider": "TEXT_COMPLETION_CODESTRAL",
     "provider_display_name": "Text-Completion-Codestral",
     "litellm_provider": "text-completion-codestral",
@@ -3178,6 +3346,34 @@
       }
     ],
     "default_model_placeholder": "gpt-3.5-turbo"
+  },
+  {
+    "provider": "TypeSafe",
+    "provider_display_name": "TypeSafe",
+    "litellm_provider": "typesafe",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.typesafe.ai",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "typesafe/jev-latest"
   },
   {
     "provider": "V0",
@@ -3387,7 +3583,7 @@
   },
   {
     "provider": "Voyage",
-    "provider_display_name": "Voyage AI",
+    "provider_display_name": "VoyageAI by MongoDB",
     "litellm_provider": "voyage",
     "credential_fields": [
       {

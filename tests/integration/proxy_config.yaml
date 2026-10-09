@@ -1,8 +1,356 @@
-model_list: []
+model_list:
+  - model_name: anthropic/claude-haiku-4-5
+    litellm_params:
+      model: anthropic/claude-haiku-4-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-anthropic-key
+  - model_name: anthropic/claude-sonnet-5
+    litellm_params:
+      model: anthropic/claude-sonnet-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-anthropic-key
+  - model_name: anthropic/claude-opus-4-8
+    litellm_params:
+      model: anthropic/claude-opus-4-8
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-anthropic-key
+  - model_name: anthropic/claude-sonnet-5-5
+    litellm_params:
+      model: anthropic/claude-sonnet-5-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-anthropic-key
+  - model_name: anthropic/claude-opus-5-5
+    litellm_params:
+      model: anthropic/claude-opus-5-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-anthropic-key
+  - model_name: anthropic/claude-sonnet-4-6
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-anthropic-key
+  - model_name: gemini/gemini-3.5-flash
+    litellm_params:
+      model: gemini/gemini-3.5-flash
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-gemini-key
+  - model_name: gemini/gemini-3.8-flash
+    litellm_params:
+      model: gemini/gemini-3.8-flash
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-gemini-key
+  - model_name: gemini/gemini-3.1-pro-preview
+    litellm_params:
+      model: gemini/gemini-3.1-pro-preview
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-gemini-key
+  - model_name: azure_ai/claude-haiku-4-5
+    litellm_params:
+      model: azure_ai/claude-haiku-4-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-azure-ai-key
+  - model_name: azure_ai/claude-sonnet-4-6
+    litellm_params:
+      model: azure_ai/claude-sonnet-4-6
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-azure-ai-key
+  - model_name: azure_ai/claude-sonnet-5
+    litellm_params:
+      model: azure_ai/claude-sonnet-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-azure-ai-key
+  - model_name: azure_ai/claude-opus-4-8
+    litellm_params:
+      model: azure_ai/claude-opus-4-8
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-azure-ai-key
+  - model_name: azure_ai/claude-sonnet-5-5
+    litellm_params:
+      model: azure_ai/claude-sonnet-5-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-azure-ai-key
+  - model_name: azure_ai/claude-opus-5-5
+    litellm_params:
+      model: azure_ai/claude-opus-5-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-azure-ai-key
+  - model_name: bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0
+    litellm_params:
+      model: bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
+  - model_name: bedrock/converse/us.anthropic.claude-sonnet-4-6
+    litellm_params:
+      model: bedrock/converse/us.anthropic.claude-sonnet-4-6
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
+  - model_name: bedrock/converse/us.anthropic.claude-sonnet-5
+    litellm_params:
+      model: bedrock/converse/us.anthropic.claude-sonnet-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
+  - model_name: bedrock/converse/us.anthropic.claude-opus-4-8
+    litellm_params:
+      model: bedrock/converse/us.anthropic.claude-opus-4-8
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
+  - model_name: bedrock/converse/us.anthropic.claude-sonnet-5-5
+    litellm_params:
+      model: bedrock/converse/us.anthropic.claude-sonnet-5-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
+  - model_name: bedrock/converse/us.anthropic.claude-opus-5-5
+    litellm_params:
+      model: bedrock/converse/us.anthropic.claude-opus-5-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
+  - model_name: openai/gpt-5.4
+    litellm_params:
+      model: openai/gpt-5.4
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-openai-key
+  - model_name: openai/gpt-5.6-sol
+    litellm_params:
+      model: openai/gpt-5.6-sol
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-openai-key
+  - model_name: openai/gpt-5.6-luna
+    litellm_params:
+      model: openai/gpt-5.6-luna
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-openai-key
+  - model_name: openai/gpt-6-luna
+    litellm_params:
+      model: openai/gpt-6-luna
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-openai-key
+  - model_name: openai/gpt-6.1-sol
+    litellm_params:
+      model: openai/gpt-6.1-sol
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-openai-key
+  - model_name: openai/responses/gpt-5.6-sol
+    litellm_params:
+      model: openai/responses/gpt-5.6-sol
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-openai-key
+  - model_name: openai/responses/gpt-6.1-sol
+    litellm_params:
+      model: openai/responses/gpt-6.1-sol
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-openai-key
+  - model_name: azure/gpt-5.4
+    litellm_params:
+      model: azure/gpt-5.4
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-azure-key
+      api_version: "2025-04-01-preview"
+  - model_name: azure/gpt-5.6-sol
+    litellm_params:
+      model: azure/gpt-5.6-sol
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-azure-key
+      api_version: "2025-04-01-preview"
+  - model_name: azure/gpt-5.6-luna
+    litellm_params:
+      model: azure/gpt-5.6-luna
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-azure-key
+      api_version: "2025-04-01-preview"
+  - model_name: azure/gpt-6-luna
+    litellm_params:
+      model: azure/gpt-6-luna
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-azure-key
+      api_version: "2025-04-01-preview"
+  - model_name: azure/gpt-6.1-sol
+    litellm_params:
+      model: azure/gpt-6.1-sol
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-azure-key
+      api_version: "2025-04-01-preview"
+  - model_name: bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0
+    litellm_params:
+      model: bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
+  - model_name: bedrock/invoke/us.anthropic.claude-sonnet-4-6
+    litellm_params:
+      model: bedrock/invoke/us.anthropic.claude-sonnet-4-6
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
+  - model_name: bedrock/invoke/us.anthropic.claude-sonnet-5
+    litellm_params:
+      model: bedrock/invoke/us.anthropic.claude-sonnet-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
+  - model_name: bedrock/invoke/us.anthropic.claude-opus-4-8
+    litellm_params:
+      model: bedrock/invoke/us.anthropic.claude-opus-4-8
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
+  - model_name: bedrock/invoke/us.anthropic.claude-sonnet-5-5
+    litellm_params:
+      model: bedrock/invoke/us.anthropic.claude-sonnet-5-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
+  - model_name: bedrock/invoke/us.anthropic.claude-opus-5-5
+    litellm_params:
+      model: bedrock/invoke/us.anthropic.claude-opus-5-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
+  - model_name: vertex_ai/claude-haiku-4-5@20251001
+    litellm_params:
+      model: vertex_ai/claude-haiku-4-5@20251001
+      api_base: http://127.0.0.1:8191
+      vertex_project: synthetic-vertex-project
+      vertex_location: global
+      vertex_credentials: '{"type": "external_account", "audience": "synthetic-vertex-audience", "subject_token_type": "urn:ietf:params:oauth:token-type:jwt", "token_url": "http://127.0.0.1:8190/_oauth/token", "credential_source": {"url": "http://127.0.0.1:8190/health"}}'
+  - model_name: vertex_ai/claude-sonnet-4-6@default
+    litellm_params:
+      model: vertex_ai/claude-sonnet-4-6@default
+      api_base: http://127.0.0.1:8191
+      vertex_project: synthetic-vertex-project
+      vertex_location: global
+      vertex_credentials: '{"type": "external_account", "audience": "synthetic-vertex-audience", "subject_token_type": "urn:ietf:params:oauth:token-type:jwt", "token_url": "http://127.0.0.1:8190/_oauth/token", "credential_source": {"url": "http://127.0.0.1:8190/health"}}'
+  - model_name: vertex_ai/claude-sonnet-5@default
+    litellm_params:
+      model: vertex_ai/claude-sonnet-5@default
+      api_base: http://127.0.0.1:8191
+      vertex_project: synthetic-vertex-project
+      vertex_location: global
+      vertex_credentials: '{"type": "external_account", "audience": "synthetic-vertex-audience", "subject_token_type": "urn:ietf:params:oauth:token-type:jwt", "token_url": "http://127.0.0.1:8190/_oauth/token", "credential_source": {"url": "http://127.0.0.1:8190/health"}}'
+  - model_name: vertex_ai/claude-opus-4-8@default
+    litellm_params:
+      model: vertex_ai/claude-opus-4-8@default
+      api_base: http://127.0.0.1:8191
+      vertex_project: synthetic-vertex-project
+      vertex_location: global
+      vertex_credentials: '{"type": "external_account", "audience": "synthetic-vertex-audience", "subject_token_type": "urn:ietf:params:oauth:token-type:jwt", "token_url": "http://127.0.0.1:8190/_oauth/token", "credential_source": {"url": "http://127.0.0.1:8190/health"}}'
+  - model_name: vertex_ai/claude-sonnet-5-5@default
+    litellm_params:
+      model: vertex_ai/claude-sonnet-5-5@default
+      api_base: http://127.0.0.1:8191
+      vertex_project: synthetic-vertex-project
+      vertex_location: global
+      vertex_credentials: '{"type": "external_account", "audience": "synthetic-vertex-audience", "subject_token_type": "urn:ietf:params:oauth:token-type:jwt", "token_url": "http://127.0.0.1:8190/_oauth/token", "credential_source": {"url": "http://127.0.0.1:8190/health"}}'
+  - model_name: vertex_ai/claude-opus-5-5@default
+    litellm_params:
+      model: vertex_ai/claude-opus-5-5@default
+      api_base: http://127.0.0.1:8191
+      vertex_project: synthetic-vertex-project
+      vertex_location: global
+      vertex_credentials: '{"type": "external_account", "audience": "synthetic-vertex-audience", "subject_token_type": "urn:ietf:params:oauth:token-type:jwt", "token_url": "http://127.0.0.1:8190/_oauth/token", "credential_source": {"url": "http://127.0.0.1:8190/health"}}'
+  - model_name: vertex_ai/gemini-3.5-flash
+    litellm_params:
+      model: vertex_ai/gemini-3.5-flash
+      api_base: http://127.0.0.1:8191
+      vertex_project: synthetic-vertex-project
+      vertex_location: global
+      vertex_credentials: '{"type": "external_account", "audience": "synthetic-vertex-audience", "subject_token_type": "urn:ietf:params:oauth:token-type:jwt", "token_url": "http://127.0.0.1:8190/_oauth/token", "credential_source": {"url": "http://127.0.0.1:8190/health"}}'
+  - model_name: vertex_ai/gemini-3.8-flash
+    litellm_params:
+      model: vertex_ai/gemini-3.8-flash
+      api_base: http://127.0.0.1:8191
+      vertex_project: synthetic-vertex-project
+      vertex_location: global
+      vertex_credentials: '{"type": "external_account", "audience": "synthetic-vertex-audience", "subject_token_type": "urn:ietf:params:oauth:token-type:jwt", "token_url": "http://127.0.0.1:8190/_oauth/token", "credential_source": {"url": "http://127.0.0.1:8190/health"}}'
+  - model_name: vertex_ai/gemini-3.1-pro-preview
+    litellm_params:
+      model: vertex_ai/gemini-3.1-pro-preview
+      api_base: http://127.0.0.1:8191
+      vertex_project: synthetic-vertex-project
+      vertex_location: global
+      vertex_credentials: '{"type": "external_account", "audience": "synthetic-vertex-audience", "subject_token_type": "urn:ietf:params:oauth:token-type:jwt", "token_url": "http://127.0.0.1:8190/_oauth/token", "credential_source": {"url": "http://127.0.0.1:8190/health"}}'
+  - model_name: bedrock_mantle/anthropic.claude-haiku-4-5
+    litellm_params:
+      model: bedrock_mantle/anthropic.claude-haiku-4-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-mantle-key
+      aws_region_name: us-east-1
+  - model_name: bedrock_mantle/anthropic.claude-sonnet-5
+    litellm_params:
+      model: bedrock_mantle/anthropic.claude-sonnet-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-mantle-key
+      aws_region_name: us-east-1
+  - model_name: bedrock_mantle/anthropic.claude-opus-5-5
+    litellm_params:
+      model: bedrock_mantle/anthropic.claude-opus-5-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-mantle-key
+      aws_region_name: us-east-1
+  - model_name: bedrock_mantle/openai.gpt-5.4
+    litellm_params:
+      model: bedrock_mantle/openai.gpt-5.4
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-mantle-key
+      aws_region_name: us-east-1
+  - model_name: bedrock_mantle/openai.gpt-5.6-sol
+    litellm_params:
+      model: bedrock_mantle/openai.gpt-5.6-sol
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-mantle-key
+      aws_region_name: us-east-1
+  - model_name: bedrock_mantle/openai.gpt-5.6-luna
+    litellm_params:
+      model: bedrock_mantle/openai.gpt-5.6-luna
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-mantle-key
+      aws_region_name: us-east-1
+  - model_name: bedrock_mantle/openai.gpt-6-luna
+    litellm_params:
+      model: bedrock_mantle/openai.gpt-6-luna
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-mantle-key
+      aws_region_name: us-east-1
+  - model_name: bedrock_mantle/openai.gpt-6.1-sol
+    litellm_params:
+      model: bedrock_mantle/openai.gpt-6.1-sol
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-mantle-key
+      aws_region_name: us-east-1
+  - model_name: perplexity/pplx-decider-v1-27b
+    litellm_params:
+      model: perplexity/pplx-decider-v1-27b
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-perplexity-key
+  - model_name: typesafe/jev-1.13.0
+    litellm_params:
+      model: typesafe/jev-1.13.0
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-typesafe-key
+  - model_name: openrouter/typesafe/jev-1.13
+    litellm_params:
+      model: openrouter/typesafe/jev-1.13
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-openrouter-key
+  - model_name: cloudflare/@cf/cloudflare/clef
+    litellm_params:
+      model: cloudflare/@cf/cloudflare/clef
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-cloudflare-key
+  - model_name: strands_decider/strands-decider-2B-hobson-v19
+    litellm_params:
+      model: strands_decider/strands-decider-2B-hobson-v19
+      api_base: http://127.0.0.1:8191
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_url: os.environ/DATABASE_URL
   store_model_in_db: true
+  disable_model_info_refresh: true
   disable_spend_logs: false
   proxy_batch_write_at: 1
   proxy_batch_polling_interval: 1
@@ -23,3 +371,5 @@ vector_store_registry:
       api_base: os.environ/INTEGRATION_UPSTREAM_URL
       api_key: integration-provider-key
       vector_store_description: declared in tests/integration/proxy_config.yaml
+environment_variables:
+  PERPLEXITYAI_API_KEY: synthetic-decisions-env-key

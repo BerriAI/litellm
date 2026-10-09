@@ -12,7 +12,7 @@ mod vault;
 use std::sync::Arc;
 
 pub(crate) use error::python_error;
-use litellm_secrets::source::SecretSource;
+use litellm_secrets::source::{EnvironmentSecrets, SecretSource};
 use pyo3::prelude::*;
 use python::PythonSecrets;
 use resolved::ResolvedSecrets;
@@ -21,13 +21,24 @@ use crate::{coercion::FieldSpec, python_settings::PythonSettings};
 
 const NATIVE: FieldSpec<bool> = FieldSpec::new("native", |field| field.schema_bool());
 
-/// Where a Rust route reads provider secrets from. Python's `get_secret_str` until a
-/// `SecretManagerRule` in `catalog.py` moves the configured system off `PYTHON_ONLY`, then the
-/// native secret manager.
+/// Where a Rust route reads provider secrets from. Python's `get_secret_str` when the settings
+/// projection reports no configured secret manager, otherwise the resolved manager: the native
+/// backend when the configured client captures one, the Python callback when it does not. A bare
+/// extension module without the litellm package reads the process environment.
 pub(crate) fn source(py: Python<'_>) -> PyResult<Arc<dyn SecretSource>> {
-    if PythonSettings::SecretManager.read(py)?.read(&NATIVE)? {
+    let Some(snapshot) = PythonSettings::SecretManager.read_or_unset(py)? else {
+        return Ok(Arc::new(EnvironmentSecrets::python_compatible(
+            crate::http::host_client(py, litellm_http::ClientVariant::Provider)?,
+        )));
+    };
+    if snapshot.read(&NATIVE)? {
         let context = litellm_host_python::PythonContext::capture(py)?;
-        return Ok(Arc::new(ResolvedSecrets::new(config::read(py)?, context)));
+        let client = crate::http::host_client(py, litellm_http::ClientVariant::Provider)?;
+        return Ok(Arc::new(ResolvedSecrets::new(
+            config::read(py)?,
+            context,
+            client,
+        )));
     }
     Ok(Arc::new(PythonSecrets::new(py)?))
 }

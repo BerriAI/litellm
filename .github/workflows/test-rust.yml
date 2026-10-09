@@ -5,6 +5,10 @@ on:
     paths:
       - "litellm-rust/**"
       - "litellm/rust_bridge/**"
+      - "scripts/generate_trace_types.py"
+      - "scripts/generate_lens_contract.py"
+      - "litellm/proxy/lens/**"
+      - "scripts/trace_codegen/**"
       - "tests/test_litellm_rust/**"
       - "litellm/integrations/custom_logger.py"
       - "litellm/litellm_core_utils/litellm_logging.py"
@@ -14,7 +18,6 @@ on:
       - "litellm/ocr/**"
       - "litellm/llms/base_llm/ocr/**"
       - "litellm/llms/custom_httpx/llm_http_handler.py"
-      - "tests/test_litellm/ocr/**"
       - "tests/test_litellm/conftest.py"
       - "Makefile"
       - ".cargo/**"
@@ -24,7 +27,7 @@ on:
       - ".github/actions/setup-uv-with-retries/**"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
-      - "tests/test_litellm/rust_bridge/native_route_wheel_test.py"
+      - "tests/unit/rust_bridge/native_route_wheel_test.py"
       - ".github/workflows/test-rust.yml"
   pull_request:
     branches:
@@ -33,6 +36,10 @@ on:
     paths:
       - "litellm-rust/**"
       - "litellm/rust_bridge/**"
+      - "scripts/generate_trace_types.py"
+      - "scripts/generate_lens_contract.py"
+      - "litellm/proxy/lens/**"
+      - "scripts/trace_codegen/**"
       - "tests/test_litellm_rust/**"
       - "litellm/integrations/custom_logger.py"
       - "litellm/litellm_core_utils/litellm_logging.py"
@@ -42,7 +49,6 @@ on:
       - "litellm/ocr/**"
       - "litellm/llms/base_llm/ocr/**"
       - "litellm/llms/custom_httpx/llm_http_handler.py"
-      - "tests/test_litellm/ocr/**"
       - "tests/test_litellm/conftest.py"
       - "Makefile"
       - ".cargo/**"
@@ -52,7 +58,7 @@ on:
       - ".github/actions/setup-uv-with-retries/**"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
-      - "tests/test_litellm/rust_bridge/native_route_wheel_test.py"
+      - "tests/unit/rust_bridge/native_route_wheel_test.py"
       - ".github/workflows/test-rust.yml"
 
 permissions:
@@ -85,12 +91,16 @@ jobs:
         with:
           workspaces: litellm-rust
           cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo clippy --workspace --all-targets --locked --features litellm-traces/schema,litellm-traces-clickhouse/schema -- -D warnings
 
   rust-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    # Trim debuginfo to keep the job's target dir within the runner's disk
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     defaults:
       run:
         working-directory: litellm-rust
@@ -123,8 +133,17 @@ jobs:
         with:
           workspaces: litellm-rust
           cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - run: cargo nextest run --workspace --locked
+      - name: Check generated trace contracts
+        working-directory: .
+        run: uv run scripts/generate_trace_types.py --check
+
+      - name: Check generated Lens contracts
+        working-directory: .
+        run: uv run scripts/generate_lens_contract.py --check
+
+      - run: cargo nextest run --workspace --locked --features litellm-traces/schema,litellm-traces-clickhouse/schema
 
       - run: cargo test --workspace --doc --locked
 
@@ -164,6 +183,7 @@ jobs:
         with:
           workspaces: litellm-rust
           cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - run: uv build --wheel --out-dir dist
 
@@ -171,7 +191,7 @@ jobs:
         env:
           RELEASE_WHEEL_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - run: python tests/test_litellm/rust_bridge/native_route_wheel_test.py dist/*.whl
+      - run: python tests/unit/rust_bridge/native_route_wheel_test.py dist/*.whl
 
       - name: Run pytest tests/test_litellm_rust with the compiled extension
         run: make test-rust-extension

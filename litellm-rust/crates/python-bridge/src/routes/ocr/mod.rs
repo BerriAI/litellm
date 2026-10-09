@@ -3,25 +3,20 @@ mod errors;
 mod host;
 mod project;
 
-use std::sync::LazyLock;
-
 use host::OcrPythonHost;
-use litellm_auth_gcp::VertexAuth;
-use litellm_callbacks_legacy_python::{LegacySurface, PublicCall, run_legacy_call};
-use litellm_core::ocr::{provider_config, route::ocr_machine};
+use litellm_callbacks_legacy_python::LoggingOperation;
 use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_host_python::to_py;
-use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
-use pyo3::{
-    prelude::*,
-    types::{PyDict, PyTuple},
-};
+use litellm_inference_ocr::provider_config;
+use litellm_llms::base_llm::ocr::settings::OcrSettings;
+use pyo3::prelude::*;
+
+use super::NativeCall;
 
 use crate::{
     coercion::FieldSpec,
     http,
     python_settings::{PythonSettings, Snapshot},
-    secrets,
 };
 
 const VERTEX_PROJECT: FieldSpec<Option<String>> =
@@ -33,43 +28,28 @@ const ENABLE_AZURE_AD_TOKEN_REFRESH: FieldSpec<bool> =
         Ok(field.exact_true())
     });
 
-const SURFACE: LegacySurface = LegacySurface {
-    call_type: "ocr",
-    input_description: "OCR document processing",
-    stream: None,
-};
-
-const ASYNC_SURFACE: LegacySurface = LegacySurface {
-    call_type: "aocr",
-    ..SURFACE
-};
-
-static VERTEX_AUTH: LazyLock<VertexAuth> = LazyLock::new(VertexAuth::default);
-
-fn run_ocr(
-    py: Python<'_>,
-    request: Bound<'_, PyAny>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Bound<'_, PyDict>,
-    asynchronous: bool,
-) -> PyResult<Py<PyAny>> {
-    let secrets = secrets::source(py)?;
-    let config = http::call_config(py, &kwargs, asynchronous)?;
-    let client = OcrClient::new(
-        http::pool(),
-        &config,
-        http::url_policy(py)?,
-        VERTEX_AUTH.clone(),
-        ocr_settings(py)?,
-        secrets,
-    )
-    .map_err(http::client_error)?;
-    run_legacy_call(
+fn run_ocr(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyResult<Py<PyAny>> {
+    let (arguments, hooks) =
+        crate::routes::call_hooks(py, LoggingOperation::Ocr, &call, asynchronous)?;
+    crate::routes::run_public_call(
         py,
-        if asynchronous { ASYNC_SURFACE } else { SURFACE },
-        PublicCall::capture(&request, &args, &kwargs)?,
-        crate::logger::LoggedMachine::new(ocr_machine(client)),
-        OcrPythonHost::new(request.unbind()),
+        arguments,
+        move |py, arguments, request| {
+            let config = http::call_config(py, arguments, asynchronous)?;
+            let client = litellm_llms::base_llm::ocr::handler::OcrClient::new(
+                &http::resources().pool,
+                &config,
+                http::url_policy(py)?,
+                http::resources().auth.clone(),
+                ocr_settings(py)?,
+                crate::secrets::source(py)?,
+            )
+            .map_err(http::client_error)?;
+            let route = litellm_inference_ocr::OcrRoute::new(client);
+            Ok(route.machine(request, None))
+        },
+        OcrPythonHost::new(call.resolved()?.unbind()),
+        hooks,
         asynchronous,
     )
 }
@@ -88,23 +68,13 @@ fn project_provider_defaults(snapshot: &Snapshot<'_>) -> PyResult<OcrSettings> {
 }
 
 #[pyfunction]
-pub(crate) fn ocr(
-    py: Python<'_>,
-    request: Bound<'_, PyAny>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Bound<'_, PyDict>,
-) -> PyResult<Py<PyAny>> {
-    run_ocr(py, request, args, kwargs, false)
+pub(crate) fn ocr(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
+    run_ocr(py, call, false)
 }
 
 #[pyfunction]
-pub(crate) fn aocr(
-    py: Python<'_>,
-    request: Bound<'_, PyAny>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Bound<'_, PyDict>,
-) -> PyResult<Py<PyAny>> {
-    run_ocr(py, request, args, kwargs, true)
+pub(crate) fn aocr(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
+    run_ocr(py, call, true)
 }
 
 #[pyfunction]
@@ -137,7 +107,7 @@ mod tests {
 
     use crate::python_settings::PythonSettings;
 
-    #[test]
+    #[rstest::rstest]
     fn provider_defaults_distinguish_falsey_values_and_exact_true() {
         Python::initialize();
         Python::attach(|py| {

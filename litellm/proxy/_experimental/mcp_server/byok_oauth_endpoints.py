@@ -25,6 +25,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy._experimental.mcp_server.catalog import public_catalog_operation
 from litellm.proxy._experimental.mcp_server.db import store_user_credential
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     BYOK_RESOURCE_METADATA_PATH,
@@ -82,10 +83,13 @@ def _oauth_token_error(code: str, status: int = 400) -> JSONResponse:
     return JSONResponse(status_code=status, content={"error": code}, headers=TOKEN_NO_CACHE_HEADERS)
 
 
-def _user_id_from_session_cookie(request: Request) -> str | None:
+def user_id_from_session_cookie(request: Request) -> str | None:
     """Return user_id from the UI ``token`` cookie, or None if missing/invalid."""
     user_id, _ = _session_identity_from_cookie(request)
     return user_id
+
+
+_user_id_from_session_cookie: Final = user_id_from_session_cookie
 
 
 def _session_identity_from_cookie(request: Request) -> tuple[str | None, str | None]:
@@ -169,6 +173,42 @@ async def _session_key_is_live(session_key: str | None) -> bool:
     except Exception:
         return False
     return True
+
+
+async def get_authenticated_browser_user_id(request: Request) -> str | None:
+    from datetime import datetime, timezone
+
+    from pydantic import TypeAdapter, ValidationError
+
+    from litellm.proxy._types import hash_token
+    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_key_object
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    user_id, session_key = _session_identity_from_cookie(request)
+    if not user_id or not session_key or prisma_client is None:
+        return None
+    try:
+        auth: Final = (
+            await get_key_object(
+                hash_token(session_key),
+                prisma_client,
+                user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                check_db_only=True,
+            )
+            if session_key.startswith("sk-")
+            else ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(session_key)
+        )
+    except Exception:
+        return None
+    if auth is None or auth.user_id != user_id or auth.blocked or auth.expires is None:
+        return None
+    try:
+        expiration: Final = TypeAdapter(datetime).validate_python(auth.expires)
+    except ValidationError:
+        return None
+    expires: Final = expiration.replace(tzinfo=timezone.utc) if expiration.tzinfo is None else expiration
+    return user_id if expires > datetime.now(timezone.utc) else None
 
 
 async def _byok_session_auth(request: Request) -> UserAPIKeyAuth:
@@ -506,7 +546,7 @@ def _build_authorize_html(
     <button class="close-btn" type="button" onclick="doCancel()" title="Close">&times;</button>
 
     <div class="logos">
-      <img src="/ui/assets/logos/litellm_logo.jpg" class="logo-img" alt="LiteLLM">
+      <img src="/get_image?variant=monogram" class="logo-img" alt="LiteLLM">
       <span class="logo-arrow">&#8594;</span>
       <div class="logo logo-s">{server_initial}</div>
     </div>
@@ -702,6 +742,7 @@ async def byok_protected_resource_metadata(request: Request) -> JSONResponse:
 
 
 @router.get("/v1/mcp/oauth/authorize", include_in_schema=False)
+@public_catalog_operation
 async def byok_authorize_get(
     request: Request,
     client_id: str | None = None,
@@ -742,7 +783,7 @@ async def byok_authorize_get(
                 global_mcp_server_manager,
             )
 
-            registry: Final = global_mcp_server_manager.get_registry()
+            registry: Final = await global_mcp_server_manager.catalog.list()
             if server_id in registry:
                 srv: Final = registry[server_id]
                 server_name = srv.server_name or srv.name

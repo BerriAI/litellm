@@ -5,6 +5,7 @@ from fastapi import Request
 from litellm_enterprise.proxy.auth.user_api_key_auth import enterprise_custom_auth
 
 from litellm.proxy._types import UserAPIKeyAuth
+from tests._master_key import MASTER_KEY
 
 
 @pytest.mark.asyncio
@@ -21,9 +22,7 @@ async def test_enterprise_custom_auth_mode_on():
     mock_user_auth = AsyncMock(return_value={"user_id": "test-user"})
     request = MagicMock(spec=Request)
 
-    with patch(
-        "litellm_enterprise.proxy.proxy_server.custom_auth_settings", {"mode": "on"}
-    ):
+    with patch("litellm_enterprise.proxy.proxy_server.custom_auth_settings", {"mode": "on"}):
         result = await enterprise_custom_auth(request, "test-api-key", mock_user_auth)
         assert result == {"user_id": "test-user"}
         mock_user_auth.assert_called_once_with(request, "test-api-key")
@@ -35,9 +34,7 @@ async def test_enterprise_custom_auth_mode_auto_with_error():
     mock_user_auth = AsyncMock(side_effect=Exception("Auth failed"))
     request = MagicMock(spec=Request)
 
-    with patch(
-        "litellm_enterprise.proxy.proxy_server.custom_auth_settings", {"mode": "auto"}
-    ):
+    with patch("litellm_enterprise.proxy.proxy_server.custom_auth_settings", {"mode": "auto"}):
         result = await enterprise_custom_auth(request, "test-api-key", mock_user_auth)
         assert result is None
         mock_user_auth.assert_called_once_with(request, "test-api-key")
@@ -56,13 +53,11 @@ async def test_enterprise_custom_auth_returns_string():
             "litellm.proxy.auth.user_api_key_auth.enterprise_custom_auth",
             mock_user_auth,
         ),
-        patch("litellm.proxy.proxy_server.master_key", "sk-1234"),
+        patch("litellm.proxy.proxy_server.master_key", MASTER_KEY),
         patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
     ):
         # Verify the key is correctly handled in _user_api_key_auth_builder
-        with patch(
-            "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key"
-        ) as mock_get_key_object:
+        with patch("litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key") as mock_get_key_object:
             mock_get_key_object.return_value = UserAPIKeyAuth(
                 token="sk-test-key",
                 user_role="internal_user",
@@ -71,10 +66,10 @@ async def test_enterprise_custom_auth_returns_string():
             )
 
             # Call _user_api_key_auth_builder with the returned key
-            from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+            from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
 
             try:
-                auth_obj = await _user_api_key_auth_builder(
+                auth_obj = await user_api_key_auth_builder(
                     request=request,
                     api_key="my-custom-key",
                     azure_api_key_header="",

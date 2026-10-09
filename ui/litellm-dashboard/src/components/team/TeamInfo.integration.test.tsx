@@ -75,9 +75,11 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
   useAllProxyModels: vi.fn(),
+  useModelAccessGroupNames: vi.fn(() => new Set<string>()),
 }));
 
-vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/app/(dashboard)/hooks/teams/useTeams")>()),
   useTeam: vi.fn(),
 }));
 
