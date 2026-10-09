@@ -113,9 +113,10 @@ async def prepare_object_permission_upsert(
         existing_mcp_tool_permissions=existing_fields.get("mcp_tool_permissions"),
         prisma_client=prisma_client,
     )
+    # Omitted request fields become None; preserve stored grants and Prisma column defaults.
     merged: Final[dict[str, object]] = {
         **existing_fields,
-        **new_object_permission,
+        **{field: value for field, value in new_object_permission.items() if value is not None},
         "object_permission_id": object_permission_id,
     }
     record: Final[dict[str, object]] = {
