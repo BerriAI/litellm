@@ -5,7 +5,7 @@ use std::{
 
 use litellm_http::{HttpSettings, Resolution};
 use litellm_inference_messages::{
-    Error, MessagesCall, MessagesShaping,
+    Error, MessagesCall, MessagesSettings, MessagesShaping,
     route::{Messages, MessagesMachine, MessagesOutput},
 };
 use litellm_inference_testing::RecordingSecrets;

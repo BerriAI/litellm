@@ -3,6 +3,7 @@ import json
 import random
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
@@ -12,6 +13,7 @@ from pydantic import JsonValue, TypeAdapter
 from typing_extensions import LiteralString
 
 from litellm.proxy.db.prisma_client import PrismaWrapper
+from litellm.proxy.lens.ingestion import IngestionKey
 from litellm.proxy.lens.models import (
     Job,
     Lens,
@@ -24,7 +26,7 @@ from litellm.proxy.lens.models import (
     Worker,
 )
 from litellm.proxy.lens.reviews import criteria_key
-from litellm.proxy.lens.state import apply_progress, current_job, replace_job
+from litellm.proxy.lens.state import apply_progress, current_job, due_at, replace_job
 from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
@@ -39,6 +41,18 @@ class Database(Protocol):
 
 class Row(LiteLLMBaseModel):
     data: JsonValue
+    due_at: datetime | None = None
+
+
+class DueRow(LiteLLMBaseModel):
+    data: JsonValue
+    due_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class DueLens:
+    lens: Lens
+    due_at: datetime
 
 
 class FindingRun(LiteLLMBaseModel):
@@ -47,6 +61,26 @@ class FindingRun(LiteLLMBaseModel):
 
 
 _ROWS: Final = TypeAdapter(tuple[Row, ...])
+_DUE_ROWS: Final = TypeAdapter(tuple[DueRow, ...])
+_DUE_QUERY: Final[LiteralString] = """SELECT data, due_at FROM "LiteLLM_Lens"
+WHERE due_at IS NOT NULL AND due_at <= ($4::timestamptz AT TIME ZONE 'UTC')
+AND ($1::boolean OR (
+    COALESCE((data->'scope'->>'all_teams')::boolean, false) IS NOT TRUE
+    AND COALESCE(data->'scope'->>'team_id', '')=$2
+    AND ($2 <> '' OR COALESCE(data->'scope'->>'api_key_hash', '')=$3)
+))
+ORDER BY due_at, id
+LIMIT $5"""
+_DUE_AFTER_QUERY: Final[LiteralString] = """SELECT data, due_at FROM "LiteLLM_Lens"
+WHERE due_at IS NOT NULL AND due_at <= ($4::timestamptz AT TIME ZONE 'UTC')
+AND (due_at, id) > ($6::timestamp, $7)
+AND ($1::boolean OR (
+    COALESCE((data->'scope'->>'all_teams')::boolean, false) IS NOT TRUE
+    AND COALESCE(data->'scope'->>'team_id', '')=$2
+    AND ($2 <> '' OR COALESCE(data->'scope'->>'api_key_hash', '')=$3)
+))
+ORDER BY due_at, id
+LIMIT $5"""
 UPDATE_ATTEMPTS: Final = 40
 UPDATE_BACKOFF_SECONDS: Final = 0.02
 
@@ -55,6 +89,29 @@ class LensRepository:
     def __init__(self, db: Database, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> None:
         self.db: Final = db
         self.sleep: Final = sleep
+
+    async def ingestion_keys(self) -> tuple[IngestionKey, ...]:
+        rows: Final = _ROWS.validate_python(
+            await self.db.query_raw('SELECT data FROM "LiteLLM_LensIngestionKey" ORDER BY id LIMIT 10001')
+        )
+        if len(rows) > 10000:
+            raise HTTPException(503, "Lens ingestion key limit exceeded")
+        return tuple(IngestionKey.model_validate(row.data) for row in rows)
+
+    async def save_ingestion_key(self, key: IngestionKey) -> None:
+        async with self.db.transaction() as db:
+            await db.execute_raw('LOCK TABLE "LiteLLM_LensIngestionKey" IN EXCLUSIVE MODE')
+            inserted: Final = await db.execute_raw(
+                'INSERT INTO "LiteLLM_LensIngestionKey" (id,data) SELECT $1,$2::jsonb '
+                'WHERE (SELECT count(*) FROM "LiteLLM_LensIngestionKey") < 10000',
+                key.id,
+                key.model_dump_json(),
+            )
+            if not inserted:
+                raise HTTPException(409, "Revoke an unused ingestion key before creating another")
+
+    async def revoke_ingestion_key(self, key_id: str) -> None:
+        await self.db.execute_raw('DELETE FROM "LiteLLM_LensIngestionKey" WHERE id=$1', key_id)
 
     async def finding_runs(self, lens_id: str, finding_ids: tuple[str, ...]) -> tuple[FindingRun, ...]:
         if not finding_ids:
@@ -146,6 +203,30 @@ class LensRepository:
         rows: Final = _ROWS.validate_python(await self.db.query_raw('SELECT data FROM "LiteLLM_Lens" ORDER BY id'))
         return tuple(Lens.model_validate(row.data) for row in rows)
 
+    async def due(self, scope: Scope, now: datetime, limit: int, after: DueLens | None = None) -> tuple[DueLens, ...]:
+        query: Final[LiteralString] = _DUE_QUERY if after is None else _DUE_AFTER_QUERY
+        parameters: Final[tuple[object, ...]] = (
+            (
+                scope.all_teams,
+                scope.team_id,
+                scope.api_key_hash,
+                now.isoformat(),
+                limit,
+            )
+            if after is None
+            else (
+                scope.all_teams,
+                scope.team_id,
+                scope.api_key_hash,
+                now.isoformat(),
+                limit,
+                after.due_at,
+                after.lens.id,
+            )
+        )
+        rows: Final = _DUE_ROWS.validate_python(await self.db.query_raw(query, *parameters), from_attributes=True)
+        return tuple(DueLens(lens=Lens.model_validate(row.data), due_at=row.due_at) for row in rows)
+
     async def get(self, lens_id: str) -> Lens | None:
         rows: Final = _ROWS.validate_python(
             await self.db.query_raw(
@@ -157,11 +238,24 @@ class LensRepository:
 
     async def create(self, lens: Lens) -> Lens:
         await self.db.execute_raw(
-            'INSERT INTO "LiteLLM_Lens" (id, version, data) VALUES ($1,0,$2::jsonb)',
+            """INSERT INTO "LiteLLM_Lens" (id, version, data, due_at)
+            VALUES ($1,0,$2::jsonb,($3::text::timestamptz AT TIME ZONE 'UTC'))""",
             lens.id,
             lens.model_dump_json(),
+            scheduled_at.isoformat() if (scheduled_at := due_at(lens)) else None,
         )
         return lens
+
+    async def sync_due(self, lens: Lens) -> None:
+        await self.db.execute_raw(
+            """UPDATE "LiteLLM_Lens"
+            SET due_at=($3::text::timestamptz AT TIME ZONE 'UTC')
+            WHERE id=$1 AND version=$2
+              AND due_at IS DISTINCT FROM ($3::text::timestamptz AT TIME ZONE 'UTC')""",
+            lens.id,
+            lens.version,
+            scheduled_at.isoformat() if (scheduled_at := due_at(lens)) else None,
+        )
 
     async def update(
         self,
@@ -193,7 +287,8 @@ class LensRepository:
                 """WITH previous AS MATERIALIZED (
                 SELECT data FROM "LiteLLM_Lens" WHERE id=$2 AND version=$3 FOR UPDATE
             ), updated AS (
-                UPDATE "LiteLLM_Lens" SET data=$1::jsonb, version=version+1
+                UPDATE "LiteLLM_Lens" SET data=$1::jsonb, version=version+1,
+                    due_at=($4::text::timestamptz AT TIME ZONE 'UTC')
                 WHERE id=$2 AND version=$3 AND EXISTS (SELECT 1 FROM previous) RETURNING id
             )
             , archived AS (INSERT INTO "LiteLLM_LensRun" (id, lens_id, created_at, data)
@@ -207,6 +302,7 @@ class LensRepository:
                 updated.model_dump_json(),
                 lens_id,
                 previous.version,
+                scheduled_at.isoformat() if (scheduled_at := due_at(updated)) else None,
             )
         )
         return bool(rows and rows[0].data == 1), updated
@@ -333,6 +429,19 @@ class LensRepository:
         await self.db.execute_raw(
             'UPDATE "LiteLLM_LensWorker" SET data=$1::jsonb WHERE id=$2', worker.model_dump_json(), worker.id
         )
+
+    async def configure_service_worker(self, worker: Worker, token_hash: str) -> Worker:
+        rows: Final = _ROWS.validate_python(
+            await self.db.query_raw(
+                'INSERT INTO "LiteLLM_LensWorker" AS existing (id,token_hash,data) VALUES ($1,$2,$3::jsonb) '
+                "ON CONFLICT (token_hash) DO UPDATE "
+                "SET data=jsonb_set(EXCLUDED.data, '{id}', to_jsonb(existing.id)) RETURNING data",
+                worker.id,
+                token_hash,
+                worker.model_dump_json(),
+            )
+        )
+        return Worker.model_validate(rows[0].data)
 
     async def set_worker_billing(self, worker_id: str, key_id: str) -> Worker | None:
         rows: Final = _ROWS.validate_python(

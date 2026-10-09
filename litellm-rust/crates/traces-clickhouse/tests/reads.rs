@@ -3,9 +3,7 @@ use std::collections::BTreeMap;
 use litellm_http::Client;
 use litellm_traces::query::named::ReadAccessParams;
 use litellm_traces_cache::{ReadError, TraceReader};
-use litellm_traces_clickhouse::{
-    ClickHouseTraces, Connection, InsertTable, QueryScope, insert_rows,
-};
+use litellm_traces_clickhouse::{ClickHouseTraces, Connection, InsertTable, insert_rows};
 use rstest::rstest;
 use serde_json::json;
 
@@ -83,10 +81,7 @@ async fn list_costs_match_each_run_when_response_ids_are_reused(
             .collect(),
     )
     .await?;
-    let connection = fixture
-        .readers
-        .connection(client, &QueryScope::All, "fixture-secret")
-        .await?;
+    let connection = Connection::reader(&fixture.database.url, DATABASE)?;
     let (reader, store) = make_reader(client, connection);
     let access = ReadAccessParams {
         all_teams: false,
@@ -212,10 +207,7 @@ async fn large_runs_remain_complete_under_default_reader_limits(
             .collect::<Vec<_>>();
         insert_rows(client, &writer, DATABASE, InsertTable::SpendLogs, costs).await?;
     }
-    let connection = fixture
-        .readers
-        .connection(client, &QueryScope::All, "fixture-secret")
-        .await?;
+    let connection = Connection::reader(&fixture.database.url, DATABASE)?;
     let (reader, store) = make_reader(client, connection);
     let access = ReadAccessParams {
         all_teams: false,
@@ -365,10 +357,7 @@ async fn cursor_pages_keep_a_tenant_scoped_snapshot_when_more_spans_arrive(
 ) -> TestResult {
     let fixture = seeded_database?;
     let client = &fixture.database.client;
-    let connection = fixture
-        .readers
-        .connection(client, &QueryScope::All, "fixture-secret")
-        .await?;
+    let connection = Connection::reader(&fixture.database.url, DATABASE)?;
     let (reader, store) = make_reader(client, connection.clone());
     let access = ReadAccessParams {
         all_teams: true,
@@ -528,10 +517,7 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
 ) -> TestResult {
     let fixture = seeded_database?;
     let client = &fixture.database.client;
-    let connection = fixture
-        .readers
-        .connection(client, &QueryScope::All, "fixture-secret")
-        .await?;
+    let connection = Connection::reader(&fixture.database.url, DATABASE)?;
     let (reader, store) = make_reader(client, connection.clone());
     let access = ReadAccessParams {
         all_teams: true,
@@ -557,10 +543,7 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
             ("TraceId".into(), json!(run.trace_id)),
             ("SpanId".into(), json!("oversized-child")),
             ("ParentSpanId".into(), json!("0101010101010101")),
-            (
-                "SpanName".into(),
-                json!("x".repeat(litellm_storage_clickhouse::READ_LIMITS.response_bytes + 1)),
-            ),
+            ("SpanName".into(), json!("x".repeat(16 * 1024 * 1024 + 1))),
             ("ObservationType".into(), json!("tool")),
             ("TeamId".into(), json!("team-a")),
             ("ApiKeyHash".into(), json!("key-a")),
@@ -600,9 +583,17 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
 }
 
 #[rstest]
+#[case::same_key("same-key", Some(0.25))]
+#[case::other_key("other-key", None)]
+#[case::foreign_team("foreign-team", None)]
+#[case::call_id_other_key("call-id-other-key", None)]
+#[case::call_id_foreign_team("call-id-foreign-team", None)]
+#[case::transport_only("transport-only", None)]
 #[tokio::test]
 async fn assigned_call_ids_require_shared_ownership_through_detail_and_batch_reads(
     #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+    #[case] id: &str,
+    #[case] expected: Option<f64>,
 ) -> TestResult {
     let fixture = migrated_database?;
     let client = &fixture.database.client;
@@ -691,10 +682,7 @@ async fn assigned_call_ids_require_shared_ownership_through_detail_and_batch_rea
             .collect(),
     )
     .await?;
-    let connection = fixture
-        .readers
-        .connection(client, &QueryScope::All, "fixture-secret")
-        .await?;
+    let connection = Connection::reader(&fixture.database.url, DATABASE)?;
     let (reader, store) = make_reader(client, connection);
     let access = ReadAccessParams {
         all_teams: false,
@@ -705,20 +693,18 @@ async fn assigned_call_ids_require_shared_ownership_through_detail_and_batch_rea
         .list_traces(&store, &access, 0, 2_000_000_000_000, None, 50)
         .await?;
     assert_eq!(page.data.len(), cases.len());
-    for (id, _, _, _, expected) in cases {
-        let summary = page
-            .data
-            .iter()
-            .find(|summary| summary.trace_id == id)
-            .ok_or("missing run")?;
-        let detail = reader
-            .get_trace(&store, &access, id, &summary.trace_ref)
-            .await?
-            .ok_or("missing trace")?;
-        assert_eq!(detail.summary.spend, expected, "{id}");
-        assert_eq!(summary.spend, expected, "{id}");
-        assert_eq!(summary.priced_calls, u64::from(expected.is_some()), "{id}");
-    }
+    let summary = page
+        .data
+        .iter()
+        .find(|summary| summary.trace_id == id)
+        .ok_or("missing run")?;
+    let detail = reader
+        .get_trace(&store, &access, id, &summary.trace_ref)
+        .await?
+        .ok_or("missing trace")?;
+    assert_eq!(detail.summary.spend, expected, "{id}");
+    assert_eq!(summary.spend, expected, "{id}");
+    assert_eq!(summary.priced_calls, u64::from(expected.is_some()), "{id}");
     Ok(())
 }
 
@@ -809,10 +795,7 @@ async fn native_cost_correlation_survives_session_grouping_and_excludes_other_ow
             .collect(),
     )
     .await?;
-    let connection = fixture
-        .readers
-        .connection(client, &QueryScope::All, "fixture-secret")
-        .await?;
+    let connection = Connection::reader(&fixture.database.url, DATABASE)?;
     let (reader, store) = make_reader(client, connection);
     let access = ReadAccessParams {
         all_teams: true,

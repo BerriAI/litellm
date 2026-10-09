@@ -9,9 +9,9 @@ from litellm.caching.caching_handler import create_cache_write_task, is_response
 from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
     AnthropicMessagesStreamingResponse,
     BaseAnthropicMessagesStreamingIterator,
-    _is_message_stop_chunk,
-    _is_provider_error_chunk,
     aclose_if_supported,
+    is_message_stop_chunk,
+    is_provider_error_chunk,
 )
 from litellm.types.caching import CACHED_STREAM_EVENTS_KEY
 
@@ -45,7 +45,7 @@ class AnthropicMessagesStreamCacheWriter:
         self.collected_chunks: list[bytes] = []  # mutable-ok: rebuilding a tuple per SSE chunk is quadratic
         self.persisted = False
         self._hidden_params: dict[str, object] = dict(  # mutable-ok: callers stamp cache_key in here
-            stream._hidden_params if isinstance(stream, AnthropicMessagesStreamingResponse) else _EMPTY_MAPPING
+            stream.hidden_params if isinstance(stream, AnthropicMessagesStreamingResponse) else _EMPTY_MAPPING
         )
 
     @property
@@ -90,11 +90,11 @@ class AnthropicMessagesStreamCacheWriter:
         if self.persisted or cache is None:
             return
         collected_stream: Final = b"".join(self.collected_chunks)
-        if not _is_message_stop_chunk(collected_stream) or _is_provider_error_chunk(collected_stream):
+        if not is_message_stop_chunk(collected_stream) or is_provider_error_chunk(collected_stream):
             return
         self.persisted = True
 
-        if not self.caching_handler._should_store_result_in_cache(
+        if not self.caching_handler.should_store_result_in_cache(
             original_function=self.caching_handler.original_function,
             kwargs=self.caching_handler.request_kwargs,
         ):

@@ -9,14 +9,24 @@ import {
   apiClient,
   getProxyBaseUrl,
 } from "../../networking";
+import type { AgentSummary } from "../agents/agentRollup";
 import type {
   SpanDetail,
+  SpanQuery,
+  TraceDetailQuery,
   SpanErrorPage,
   Trace,
   TraceListQuery,
   TracePage,
   TraceFindingCount,
   TraceFindingsRequest,
+  TraceSignals,
+  FeedbackQuery,
+  TraceFeedback,
+  TraceFeedbackRequest,
+  TraceFeedbackSummary,
+  TraceAgentList,
+  TraceAgentsQuery,
 } from "./types";
 
 export interface TraceWindow {
@@ -35,7 +45,11 @@ export interface TracesApi {
   readonly live: boolean;
   handoff(traceId: string, spanId?: string | null, traceRef?: string): TraceHandoff;
   list(window: TraceWindow): Promise<TracePage>;
+  agents(window: TraceWindow): Promise<AgentSummary[]>;
   findings(traces: TraceFindingsRequest["traces"]): Promise<TraceFindingCount[]>;
+  signals(traces: TraceFindingsRequest["traces"]): Promise<TraceSignals[]>;
+  feedbackSummary(traces: TraceFeedbackRequest["traces"]): Promise<TraceFeedbackSummary[]>;
+  feedback(traceId: string, traceRef?: string): Promise<TraceFeedback>;
   anyRecorded(): Promise<boolean>;
   trace(traceId: string, traceRef?: string, cursor?: string | null): Promise<Trace>;
   span(traceId: string, spanId: string, traceRef?: string): Promise<SpanDetail>;
@@ -48,9 +62,23 @@ export interface TracesApi {
 
 /** A one-liner Claude Code / Codex can run to read the trace. */
 export const agentHandoffText = (traceId: string, spanId?: string | null, traceRef?: string): string => {
-  const url = `${getProxyBaseUrl().replace(/\/$/, "")}/v1/traces/${traceId}?format=md${spanId ? `&span_id=${spanId}` : ""}${traceRef ? `&trace_ref=${traceRef}` : ""}`;
+  const base = `${getProxyBaseUrl().replace(/\/$/, "")}/v1/traces/${encodeURIComponent(traceId)}`;
+  const path = spanId ? `${base}/spans/${encodeURIComponent(spanId)}` : base;
+  const query = spanId
+    ? ({ trace_ref: traceRef } satisfies SpanQuery)
+    : ({ trace_ref: traceRef, page_size: 200 } satisfies TraceDetailQuery);
+  const params = new URLSearchParams(
+    Object.entries(query)
+      .filter(([, value]) => value !== undefined)
+      .map(([key, value]) => [key, String(value)]),
+  ).toString();
+  const url = params ? `${path}?${params}` : path;
+  const quotedUrl = "'" + url.replaceAll("'", "'\"'\"'") + "'";
   const what = spanId ? "this step of a LiteLLM agent trace" : "this LiteLLM agent trace";
-  return `Read ${what}, explain what happened, and investigate any issues:\ncurl -s -H "Authorization: Bearer $LITELLM_API_KEY" "${url}"`;
+  const guidance = spanId
+    ? "The JSON response contains this step's captured input, output, and attributes. Report missing content and capture warnings explicitly."
+    : `The JSON response contains span summaries. Follow next_cursor by adding cursor to this URL until it is null, preserving trace_ref and page_size. Fetch captured content at ${base}/spans/{span_id}, using the same trace_ref. Report missing content and capture warnings explicitly.`;
+  return `Read ${what}, explain what happened, and investigate any issues:\ncurl --fail-with-body -sS -H "Authorization: Bearer $LITELLM_API_KEY" ${quotedUrl}\n${guidance}`;
 };
 
 export function liveTracesApi(accessToken: string): TracesApi {
@@ -61,10 +89,32 @@ export function liveTracesApi(accessToken: string): TracesApi {
       copied: "Command copied",
     }),
     list: (window) => agentTraceListCall({ accessToken, ...window }),
+    agents: async ({ startMs, endMs }) => {
+      const page = await apiClient.get<TraceAgentList>("/v1/traces/agents", {
+        accessToken,
+        query: { start_ms: startMs, end_ms: endMs } satisfies TraceAgentsQuery,
+      });
+      return page.agents ?? [];
+    },
     findings: (traces) =>
       apiClient.post<TraceFindingCount[]>("/lens/traces/findings", {
         accessToken,
         body: { traces } satisfies TraceFindingsRequest,
+      }),
+    signals: (traces) =>
+      apiClient.post<TraceSignals[]>("/lens/traces/signals", {
+        accessToken,
+        body: { traces } satisfies TraceFindingsRequest,
+      }),
+    feedbackSummary: (traces) =>
+      apiClient.post<TraceFeedbackSummary[]>("/lens/feedback/summary", {
+        accessToken,
+        body: { traces } satisfies TraceFeedbackRequest,
+      }),
+    feedback: (traceId, traceRef) =>
+      apiClient.get<TraceFeedback>("/lens/feedback", {
+        accessToken,
+        query: { trace_id: traceId, trace_ref: traceRef ?? "" } satisfies FeedbackQuery,
       }),
     anyRecorded: async () => {
       const page = await apiClient.get<TracePage>("/v1/traces", {

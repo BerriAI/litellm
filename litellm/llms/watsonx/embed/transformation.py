@@ -16,7 +16,7 @@ from litellm.types.llms.openai import AllEmbeddingInputValues
 from litellm.types.llms.watsonx import WatsonXAIEndpoint
 from litellm.types.utils import EmbeddingResponse, Usage
 
-from ..common_utils import IBMWatsonXMixin, _get_api_params
+from ..common_utils import IBMWatsonXMixin, get_api_params
 
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _TOKEN_COUNT: Final = TypeAdapter(int)
@@ -42,7 +42,7 @@ class IBMWatsonXEmbeddingConfig(IBMWatsonXMixin, BaseEmbeddingConfig):
         optional_params: dict,
         headers: dict,
     ) -> dict:
-        watsonx_api_params: Final = _get_api_params(params=optional_params, model=model)
+        watsonx_api_params: Final = get_api_params(params=optional_params, model=model)
         watsonx_auth_payload: Final = self._prepare_payload(
             model=model,
             api_params=watsonx_api_params,

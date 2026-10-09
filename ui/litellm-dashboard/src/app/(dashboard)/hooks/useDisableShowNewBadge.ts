@@ -31,5 +31,5 @@ function getSnapshot() {
 }
 
 export function useDisableShowNewBadge() {
-  return useSyncExternalStore(subscribe, getSnapshot);
+  return useSyncExternalStore(subscribe, getSnapshot, () => false);
 }

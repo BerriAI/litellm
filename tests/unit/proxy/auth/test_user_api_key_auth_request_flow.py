@@ -45,7 +45,7 @@ from litellm.proxy.auth.auth_checks import (
     TeamNotFoundError,
     UserNotFoundError,
     get_key_object,
-    _cache_key_object,
+    cache_key_object,
     jwt_key_mapping_cache_key,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -59,9 +59,9 @@ from litellm.proxy.auth.user_api_key_auth import (
     _reserve_budget_after_common_checks,
     _route_requires_auth_despite_public,
     _routing_selector_matches_claim,
-    _run_centralized_common_checks,
+    run_centralized_common_checks,
     _run_post_custom_auth_checks,
-    _user_api_key_auth_builder,
+    user_api_key_auth_builder,
     get_api_key,
     user_api_key_auth,
     user_api_key_auth_websocket_for_model,
@@ -311,7 +311,7 @@ async def test_should_not_reuse_cached_key_object_for_request_state():
         },
     )
 
-    await _cache_key_object(
+    await cache_key_object(
         hashed_token="cached-token",
         user_api_key_obj=cached_key,
         user_api_key_cache=key_cache,
@@ -528,7 +528,7 @@ async def test_user_custom_auth_skips_post_custom_auth_checks_by_default():
     import litellm
     import litellm.proxy.proxy_server as _proxy_server_mod
     from litellm.proxy._types import LitellmUserRoles
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
 
     trusted_token = UserAPIKeyAuth(
         api_key="sk-custom-auth-trusted",
@@ -553,7 +553,7 @@ async def test_user_custom_auth_skips_post_custom_auth_checks_by_default():
             request = Request(scope={"type": "http"})
             request._url = URL(url="/chat/completions")
 
-            result = await _user_api_key_auth_builder(
+            result = await user_api_key_auth_builder(
                 request=request,
                 api_key="Bearer sk-custom-auth-trusted",
                 azure_api_key_header="",
@@ -586,7 +586,7 @@ async def test_user_custom_auth_runs_post_custom_auth_checks_when_opt_in():
     import litellm
     import litellm.proxy.proxy_server as _proxy_server_mod
     from litellm.proxy._types import LitellmUserRoles
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
 
     trusted_token = UserAPIKeyAuth(
         api_key="sk-custom-auth-trusted",
@@ -612,7 +612,7 @@ async def test_user_custom_auth_runs_post_custom_auth_checks_when_opt_in():
             request = Request(scope={"type": "http"})
             request._url = URL(url="/chat/completions")
 
-            await _user_api_key_auth_builder(
+            await user_api_key_auth_builder(
                 request=request,
                 api_key="Bearer sk-custom-auth-trusted",
                 azure_api_key_header="",
@@ -643,7 +643,7 @@ async def test_enterprise_custom_auth_skips_post_custom_auth_checks_by_default()
     import litellm
     import litellm.proxy.proxy_server as _proxy_server_mod
     from litellm.proxy._types import LitellmUserRoles
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
 
     trusted_token = UserAPIKeyAuth(
         api_key="sk-enterprise-custom-auth-trusted",
@@ -674,7 +674,7 @@ async def test_enterprise_custom_auth_skips_post_custom_auth_checks_by_default()
             request = Request(scope={"type": "http"})
             request._url = URL(url="/chat/completions")
 
-            result = await _user_api_key_auth_builder(
+            result = await user_api_key_auth_builder(
                 request=request,
                 api_key="Bearer sk-enterprise-custom-auth-trusted",
                 azure_api_key_header="",
@@ -706,7 +706,7 @@ async def test_enterprise_custom_auth_runs_post_custom_auth_checks_when_opt_in()
     import litellm
     import litellm.proxy.proxy_server as _proxy_server_mod
     from litellm.proxy._types import LitellmUserRoles
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
 
     trusted_token = UserAPIKeyAuth(
         api_key="sk-enterprise-custom-auth-trusted",
@@ -738,7 +738,7 @@ async def test_enterprise_custom_auth_runs_post_custom_auth_checks_when_opt_in()
             request = Request(scope={"type": "http"})
             request._url = URL(url="/chat/completions")
 
-            await _user_api_key_auth_builder(
+            await user_api_key_auth_builder(
                 request=request,
                 api_key="Bearer sk-enterprise-custom-auth-trusted",
                 azure_api_key_header="",
@@ -1158,7 +1158,7 @@ async def test_proxy_admin_expired_key_from_cache():
         ProxyException,
         UserAPIKeyAuth,
     )
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
     from litellm.proxy.proxy_server import hash_token
 
     # Create an expired PROXY_ADMIN key
@@ -1196,7 +1196,7 @@ async def test_proxy_admin_expired_key_from_cache():
             new_callable=AsyncMock,
         ) as mock_get_key_object,
         patch(
-            "litellm.proxy.auth.user_api_key_auth._delete_cache_key_object",
+            "litellm.proxy.auth.user_api_key_auth.delete_cache_key_object",
             new_callable=AsyncMock,
         ) as mock_delete_cache,
     ):
@@ -1232,7 +1232,7 @@ async def test_proxy_admin_expired_key_from_cache():
             # Call the auth builder - should raise ProxyException for expired key
             # Note: api_key needs "Bearer " prefix for get_api_key() to process it correctly
             with pytest.raises(ProxyException) as exc_info:
-                await _user_api_key_auth_builder(
+                await user_api_key_auth_builder(
                     request=request,
                     api_key=f"Bearer {api_key}",  # Add Bearer prefix
                     azure_api_key_header="",
@@ -1281,7 +1281,7 @@ async def test_scim_deactivated_user_key_is_rejected():
     from fastapi import Request
     from starlette.datastructures import URL
 
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
     from litellm.proxy.proxy_server import hash_token
 
     api_key = "sk-scim-deactivated-user-key"
@@ -1346,7 +1346,7 @@ async def test_scim_deactivated_user_key_is_rejected():
             ),
         ):
             with pytest.raises(ProxyException) as exc_info:
-                await _user_api_key_auth_builder(
+                await user_api_key_auth_builder(
                     request=request,
                     api_key=f"Bearer {api_key}",
                     azure_api_key_header="",
@@ -1371,7 +1371,7 @@ async def test_cached_proxy_admin_key_sets_via_virtual_key_marker():
     from fastapi import Request
     from starlette.datastructures import URL
 
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
     from litellm.proxy.proxy_server import hash_token
 
     api_key = "sk-cached-admin-marker-test"
@@ -1424,7 +1424,7 @@ async def test_cached_proxy_admin_key_sets_via_virtual_key_marker():
             new_callable=AsyncMock,
             return_value=cached_token,
         ):
-            result = await _user_api_key_auth_builder(
+            result = await user_api_key_auth_builder(
                 request=request,
                 api_key=f"Bearer {api_key}",
                 azure_api_key_header="",
@@ -1452,7 +1452,7 @@ async def test_master_key_auth_sets_via_virtual_key_marker():
     from starlette.datastructures import URL
 
     from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
 
     master_key = "sk-master-key"
 
@@ -1490,7 +1490,7 @@ async def test_master_key_auth_sets_via_virtual_key_marker():
         request = Request(scope={"type": "http"})
         request._url = URL(url="/chat/completions")
 
-        result = await _user_api_key_auth_builder(
+        result = await user_api_key_auth_builder(
             request=request,
             api_key=f"Bearer {master_key}",
             azure_api_key_header="",
@@ -1516,7 +1516,7 @@ async def test_db_virtual_key_auth_sets_via_virtual_key_marker():
     from fastapi import Request
     from starlette.datastructures import URL
 
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
     from litellm.proxy.proxy_server import hash_token
 
     api_key = "sk-via-virtual-key-marker-test"
@@ -1576,7 +1576,7 @@ async def test_db_virtual_key_auth_sets_via_virtual_key_marker():
                 return_value=None,
             ),
         ):
-            result = await _user_api_key_auth_builder(
+            result = await user_api_key_auth_builder(
                 request=request,
                 api_key=f"Bearer {api_key}",
                 azure_api_key_header="",
@@ -1601,7 +1601,7 @@ async def test_auth_prefetches_referenced_objects_only_after_the_key_may_call_th
     from fastapi import Request
     from starlette.datastructures import URL
 
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
     from litellm.proxy.proxy_server import hash_token
 
     api_key = "sk-prefetch-order-test"
@@ -1649,7 +1649,7 @@ async def test_auth_prefetches_referenced_objects_only_after_the_key_may_call_th
                 return_value=valid_token,
             ),
             patch(  # test-quality-ok: the observable is whether the prefetch runs before or after this check
-                "litellm.proxy.auth.user_api_key_auth._enforce_key_and_fallback_model_access",
+                "litellm.proxy.auth.user_api_key_auth.enforce_key_and_fallback_model_access",
                 new_callable=AsyncMock,
                 side_effect=None if model_allowed else denied,
             ),
@@ -1660,7 +1660,7 @@ async def test_auth_prefetches_referenced_objects_only_after_the_key_may_call_th
                 "litellm.proxy.auth.user_api_key_auth.get_user_object", new_callable=AsyncMock, return_value=None
             ),
         ):
-            call = _user_api_key_auth_builder(
+            call = user_api_key_auth_builder(
                 request=request,
                 api_key=f"Bearer {api_key}",
                 azure_api_key_header="",
@@ -1868,7 +1868,7 @@ async def test_standard_jwt_auth_propagates_user_email():
             return_value=mock_jwt_result,
         ),
     ):
-        result = await _user_api_key_auth_builder(
+        result = await user_api_key_auth_builder(
             request=mock_request,
             api_key=jwt_token,
             azure_api_key_header="",
@@ -1938,7 +1938,7 @@ async def test_jwt_auth_propagates_agent_id_to_user_api_key_auth(is_proxy_admin:
             return_value=mock_jwt_result,
         ),
     ):
-        result = await _user_api_key_auth_builder(
+        result = await user_api_key_auth_builder(
             request=mock_request,
             api_key=jwt_token,
             azure_api_key_header="",
@@ -2452,7 +2452,7 @@ async def test_auto_register_map_existing_key_first_request_runs_key_checks(
             return_value=reused_key,
         ),
     ):
-        call = _user_api_key_auth_builder(
+        call = user_api_key_auth_builder(
             request=mock_request,
             api_key=jwt_token,
             azure_api_key_header="",
@@ -2562,7 +2562,7 @@ async def test_auto_register_first_request_propagates_user_email(active: bool) -
     ):
         if not active:
             with pytest.raises(ProxyException, match="deactivated via SCIM") as exc:
-                await _user_api_key_auth_builder(
+                await user_api_key_auth_builder(
                     request=mock_request,
                     api_key=jwt_token,
                     azure_api_key_header="",
@@ -2574,7 +2574,7 @@ async def test_auto_register_first_request_propagates_user_email(active: bool) -
             assert int(exc.value.code) == 401
             auto_register.assert_not_awaited()
             return
-        result = await _user_api_key_auth_builder(
+        result = await user_api_key_auth_builder(
             request=mock_request,
             api_key=jwt_token,
             azure_api_key_header="",
@@ -2791,7 +2791,7 @@ async def test_jwt_auto_register_forwards_bound_agent_id():
             auto_register,
         ),
     ):
-        result = await _user_api_key_auth_builder(
+        result = await user_api_key_auth_builder(
             request=mock_request,
             api_key=jwt_token,
             azure_api_key_header="",
@@ -3107,7 +3107,7 @@ class TestJWTOAuth2Coexistence:
                 return_value=auto_registered_key,
             ) as mock_auto_register,
         ):
-            result = await _user_api_key_auth_builder(
+            result = await user_api_key_auth_builder(
                 request=mock_request,
                 api_key=jwt_token,
                 azure_api_key_header="",
@@ -3187,7 +3187,7 @@ class TestJWTOAuth2Coexistence:
                 return_value=backfilled_user,
             ) as mock_get_user_object,
         ):
-            result = await _user_api_key_auth_builder(
+            result = await user_api_key_auth_builder(
                 request=mock_request,
                 api_key=jwt_token,
                 azure_api_key_header="",
@@ -3262,7 +3262,7 @@ class TestJWTOAuth2Coexistence:
                 return_value=other_owner,
             ) as mock_get_user_object,
         ):
-            result = await _user_api_key_auth_builder(
+            result = await user_api_key_auth_builder(
                 request=mock_request,
                 api_key=jwt_token,
                 azure_api_key_header="",
@@ -3333,7 +3333,7 @@ class TestJWTOAuth2Coexistence:
                 side_effect=Exception("can't reach database server"),
             ),
         ):
-            result = await _user_api_key_auth_builder(
+            result = await user_api_key_auth_builder(
                 request=mock_request,
                 api_key=jwt_token,
                 azure_api_key_header="",
@@ -4050,7 +4050,7 @@ async def test_user_api_key_auth_builder_no_blocking_calls():
     from starlette.requests import Request
 
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
 
     _blocking_methods = [
         "set_cache",
@@ -4142,7 +4142,7 @@ async def test_user_api_key_auth_builder_no_blocking_calls():
                     return_value=None,
                 )
             )
-            await _user_api_key_auth_builder(
+            await user_api_key_auth_builder(
                 request=request,
                 api_key=f"Bearer {api_key}",
                 azure_api_key_header="",
@@ -4184,7 +4184,7 @@ async def test_team_metadata_refreshed_from_team_object_during_auth():
         LitellmUserRoles,
         UserAPIKeyAuth,
     )
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
 
     api_key = "sk-test-team-metadata-refresh"
 
@@ -4252,7 +4252,7 @@ async def test_team_metadata_refreshed_from_team_object_during_auth():
                 return_value=fresh_team_obj,
             ),
         ):
-            result = await _user_api_key_auth_builder(
+            result = await user_api_key_auth_builder(
                 request=request,
                 api_key=f"Bearer {api_key}",
                 azure_api_key_header="",
@@ -4297,7 +4297,7 @@ async def test_auth_flow_never_persists_fallback_team_object_lit_4391():
     from fastapi import HTTPException
 
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
 
     api_key = "sk-test-lit-4391-no-team-writeback"
     valid_token = UserAPIKeyAuth(
@@ -4358,7 +4358,7 @@ async def test_auth_flow_never_persists_fallback_team_object_lit_4391():
                 ),
             ),
         ):
-            result = await _user_api_key_auth_builder(
+            result = await user_api_key_auth_builder(
                 request=request,
                 api_key=f"Bearer {api_key}",
                 azure_api_key_header="",
@@ -4400,7 +4400,7 @@ async def test_auth_flow_fallback_team_resolves_object_permission_by_id():
         LitellmUserRoles,
         UserAPIKeyAuth,
     )
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
 
     api_key = "sk-test-fallback-team-object-permission"
     valid_token = UserAPIKeyAuth(
@@ -4471,7 +4471,7 @@ async def test_auth_flow_fallback_team_resolves_object_permission_by_id():
                 return_value=restricted_object_permission,
             ) as mock_get_object_permission,
         ):
-            result = await _user_api_key_auth_builder(
+            result = await user_api_key_auth_builder(
                 request=request,
                 api_key=f"Bearer {api_key}",
                 azure_api_key_header="",
@@ -4501,7 +4501,7 @@ async def test_auth_flow_fallback_team_object_permission_none_when_unreadable():
     from fastapi import HTTPException
 
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
 
     api_key = "sk-test-fallback-team-object-permission-unreadable"
     valid_token = UserAPIKeyAuth(
@@ -4566,7 +4566,7 @@ async def test_auth_flow_fallback_team_object_permission_none_when_unreadable():
                 return_value=None,
             ),
         ):
-            result = await _user_api_key_auth_builder(
+            result = await user_api_key_auth_builder(
                 request=request,
                 api_key=f"Bearer {api_key}",
                 azure_api_key_header="",
@@ -4631,7 +4631,7 @@ async def test_centralized_common_checks_runs_for_standard_auth():
             "litellm.proxy.auth.user_api_key_auth.common_checks",
             new_callable=AsyncMock,
         ) as mock_checks:
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data={"model": "gpt-4o"},
@@ -4690,7 +4690,7 @@ async def test_centralized_common_checks_routes_header_tags_to_litellm_metadata(
                 new_callable=AsyncMock,
             ),
         ):
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data=request_data,
@@ -4744,7 +4744,7 @@ async def test_centralized_common_checks_carries_team_and_user_budget_state_on_t
             "litellm.proxy.auth.user_api_key_auth.common_checks",
             new_callable=AsyncMock,
         ):
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data={"model": "gpt-5.4-mini"},
@@ -4817,7 +4817,7 @@ async def _run_centralized_checks_with_key_end_user_budget(
                 new_callable=AsyncMock,
             ) as mock_reserve,
         ):
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data={"model": "gpt-5.4-mini", "user": request_user or token.end_user_id},
@@ -4998,7 +4998,7 @@ async def test_centralized_common_checks_enforces_team_model_max_budget_from_the
                 new_callable=AsyncMock,
             ),
         ):
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data={"model": "gpt-4o"},
@@ -5034,7 +5034,7 @@ async def test_centralized_common_checks_skipped_for_custom_auth_without_flag():
             "litellm.proxy.auth.user_api_key_auth.common_checks",
             new_callable=AsyncMock,
         ) as mock_checks:
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data={"model": "gpt-4o"},
@@ -5131,7 +5131,7 @@ async def test_centralized_checks_enforce_token_end_user_budget_against_row_spen
             ),
             pytest.raises(litellm.BudgetExceededError) as exc_info,
         ):
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=_chat_request(),
                 request_data={
@@ -5167,7 +5167,7 @@ async def test_centralized_checks_skip_end_user_lookup_without_a_token_budget():
                 return_value=0.6,
             ),
         ):
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=_chat_request(),
                 request_data={
@@ -5201,7 +5201,7 @@ async def test_centralized_common_checks_runs_for_custom_auth_with_flag():
             "litellm.proxy.auth.user_api_key_auth.common_checks",
             new_callable=AsyncMock,
         ) as mock_checks:
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data={"model": "gpt-4o"},
@@ -5242,7 +5242,7 @@ async def test_centralized_common_checks_runs_for_oauth2_fallback_token():
             ),
         ):
             with pytest.raises(ProxyException) as exc:
-                await _run_centralized_common_checks(
+                await run_centralized_common_checks(
                     user_api_key_auth_obj=token,
                     request=request,
                     request_data={"model": "gpt-4"},
@@ -5292,7 +5292,7 @@ async def test_centralized_common_checks_tolerates_db_errors_when_fetching_conte
                 new_callable=AsyncMock,
             ) as mock_checks,
         ):
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data={"model": "gpt-4o"},
@@ -5350,7 +5350,7 @@ async def test_team_key_vector_store_access_when_team_cannot_be_resolved(
         "litellm.proxy.auth.user_api_key_auth.get_team_object", AsyncMock(side_effect=team_lookup_error)
     )
 
-    checks: Final = _run_centralized_common_checks(
+    checks: Final = run_centralized_common_checks(
         user_api_key_auth_obj=token,
         request=request,
         request_data={
@@ -5434,7 +5434,7 @@ async def test_keyless_team_member_vector_store_access_uses_only_the_resolved_te
         ),
     )
 
-    checks: Final = _run_centralized_common_checks(
+    checks: Final = run_centralized_common_checks(
         user_api_key_auth_obj=token,
         request=request,
         request_data={
@@ -5501,7 +5501,7 @@ async def test_keyless_proxy_admin_keeps_personal_vector_store_grants_under_deny
         ),
     )
 
-    checks: Final = _run_centralized_common_checks(
+    checks: Final = run_centralized_common_checks(
         user_api_key_auth_obj=token,
         request=request,
         request_data={
@@ -5561,7 +5561,7 @@ async def test_centralized_common_checks_propagates_end_user_budget_error():
             ) as mock_checks,
         ):
             with pytest.raises(litellm.BudgetExceededError):
-                await _run_centralized_common_checks(
+                await run_centralized_common_checks(
                     user_api_key_auth_obj=token,
                     request=request,
                     request_data={"user": "alice", "model": "gpt-4o"},
@@ -5624,7 +5624,7 @@ async def test_centralized_common_checks_reserves_request_end_user_budget():
         ):
             assert token.end_user_id is None
 
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data=request_data,
@@ -5674,7 +5674,7 @@ async def test_centralized_common_checks_short_circuits_when_master_key_unset():
             "litellm.proxy.auth.user_api_key_auth.common_checks",
             new_callable=AsyncMock,
         ) as mock_checks:
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data={},
@@ -5710,7 +5710,7 @@ async def test_centralized_common_checks_skips_public_routes():
             "litellm.proxy.auth.user_api_key_auth.common_checks",
             new_callable=AsyncMock,
         ) as mock_checks:
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data={},
@@ -5756,7 +5756,7 @@ async def test_centralized_common_checks_skips_passthrough_endpoint_with_auth_fa
             "litellm.proxy.auth.user_api_key_auth.common_checks",
             new_callable=AsyncMock,
         ) as mock_checks:
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data={},
@@ -5800,7 +5800,7 @@ async def test_centralized_common_checks_runs_for_passthrough_endpoint_with_auth
             "litellm.proxy.auth.user_api_key_auth.common_checks",
             new_callable=AsyncMock,
         ) as mock_checks:
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data={},
@@ -5859,7 +5859,7 @@ async def test_centralized_common_checks_master_key_admin_overrides_db_user_role
                 new_callable=AsyncMock,
             ) as mock_checks,
         ):
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data={"team_id": "t1", "max_budget": 10},
@@ -5910,7 +5910,7 @@ async def test_centralized_common_checks_http_exception_without_team_id():
         ):
             # Should NOT raise AssertionError from _team_obj_from_token;
             # should proceed with team_object=None.
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data={"model": "gpt-4o"},
@@ -5999,7 +5999,7 @@ async def test_centralized_common_checks_team_404_does_not_zero_other_contexts()
                 new_callable=AsyncMock,
             ) as mock_checks,
         ):
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data={"user": "alice", "model": "gpt-4o"},
@@ -6057,7 +6057,7 @@ async def test_centralized_common_checks_unresolvable_team_without_grant_is_refu
             side_effect=team_read_failure,
         ):
             with pytest.raises(HTTPException) as exc_info:
-                await _run_centralized_common_checks(
+                await run_centralized_common_checks(
                     user_api_key_auth_obj=token,
                     request=request,
                     request_data={"model": "gpt-4.1"},
@@ -6111,7 +6111,7 @@ async def test_centralized_common_checks_absent_team_refused_despite_db_unavaila
             side_effect=team_absent,
         ):
             with pytest.raises(HTTPException) as exc_info:
-                await _run_centralized_common_checks(
+                await run_centralized_common_checks(
                     user_api_key_auth_obj=token,
                     request=request,
                     request_data={"model": "gpt-4.1"},
@@ -6164,7 +6164,7 @@ async def test_centralized_common_checks_unreadable_team_keeps_db_unavailable_op
                 _capturing_common_checks,
             ),
         ):
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data={"model": "gpt-4.1"},
@@ -6215,7 +6215,7 @@ async def test_centralized_common_checks_unresolvable_team_with_grant_enforces_i
             side_effect=HTTPException(status_code=404, detail={"error": "team unreadable"}),
         ):
             if is_granted:
-                await _run_centralized_common_checks(
+                await run_centralized_common_checks(
                     user_api_key_auth_obj=token,
                     request=request,
                     request_data={"model": requested_model},
@@ -6223,7 +6223,7 @@ async def test_centralized_common_checks_unresolvable_team_with_grant_enforces_i
                 )
             else:
                 with pytest.raises(ProxyException) as exc_info:
-                    await _run_centralized_common_checks(
+                    await run_centralized_common_checks(
                         user_api_key_auth_obj=token,
                         request=request,
                         request_data={"model": requested_model},
@@ -6283,7 +6283,7 @@ async def test_centralized_common_checks_ui_sentinel_team_vouches_despite_absent
                 _capturing_common_checks,
             ),
         ):
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data={},
@@ -6344,7 +6344,7 @@ async def test_centralized_common_checks_ui_sentinel_team_skips_db_lookup():
                 _capturing_common_checks,
             ),
         ):
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data={},
@@ -6371,7 +6371,7 @@ async def test_builder_ui_sentinel_team_never_hits_get_team_object():  # test-qu
     from starlette.datastructures import URL
 
     from litellm.proxy._types import UI_TEAM_ID
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
     from litellm.proxy.proxy_server import hash_token
 
     api_key = "sk-test-ui-session-key"
@@ -6419,7 +6419,7 @@ async def test_builder_ui_sentinel_team_never_hits_get_team_object():  # test-qu
                 new_callable=AsyncMock,
             ) as mock_get_team_object,
         ):
-            result = await _user_api_key_auth_builder(
+            result = await user_api_key_auth_builder(
                 request=request,
                 api_key=f"Bearer {api_key}",
                 azure_api_key_header="",
@@ -6503,7 +6503,7 @@ async def test_centralized_common_checks_user_http_exception_isolates_to_user_on
                 new_callable=AsyncMock,
             ) as mock_checks,
         ):
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data={"user": "alice", "model": "gpt-4o"},
@@ -6567,7 +6567,7 @@ async def test_centralized_common_checks_backfills_org_id_from_team(key_org_id, 
                 side_effect=lambda **kw: org_id_seen_by_common_checks.append(kw["valid_token"].org_id),
             ) as mock_checks,
         ):
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data={"model": "gpt-4o"},
@@ -6713,14 +6713,14 @@ async def test_centralized_common_checks_inherits_org_identity(
 
             if expect_lookup_error:
                 with pytest.raises(ConnectionRefusedError, match="db unavailable"):
-                    await _run_centralized_common_checks(
+                    await run_centralized_common_checks(
                         user_api_key_auth_obj=token,
                         request=request,
                         request_data={"model": "gpt-4o"},
                         route="/chat/completions",
                     )
             else:
-                await _run_centralized_common_checks(
+                await run_centralized_common_checks(
                     user_api_key_auth_obj=token,
                     request=request,
                     request_data={"model": "gpt-4o"},
@@ -6809,7 +6809,7 @@ async def test_cli_session_token_org_backfilled_from_team(monkeypatch):
                 new_callable=AsyncMock,
             ),
         ):
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data={"model": "gpt-4o"},
@@ -6851,7 +6851,7 @@ async def test_centralized_common_checks_org_backfill_survives_team_fetch_failur
                 new_callable=AsyncMock,
             ) as mock_checks,
         ):
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data={"model": "gpt-4o"},
@@ -6878,7 +6878,7 @@ async def test_master_key_auth_substitutes_alias_for_api_key():
     from starlette.datastructures import URL
 
     from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
     from litellm.proxy.utils import hash_token
 
     import litellm.proxy.proxy_server as _proxy_server_mod
@@ -6893,7 +6893,7 @@ async def test_master_key_auth_substitutes_alias_for_api_key():
         request = Request(scope={"type": "http"})
         request._url = URL(url="/chat/completions")
 
-        result = await _user_api_key_auth_builder(
+        result = await user_api_key_auth_builder(
             request=request,
             api_key=f"Bearer {master_key}",
             azure_api_key_header="",
@@ -6951,12 +6951,12 @@ async def test_user_api_key_auth_sets_end_user_id_when_builder_skips_it():
         # auth state machine; we only care about the wrapper's safety net.
         with (
             patch(
-                "litellm.proxy.auth.user_api_key_auth._user_api_key_auth_builder",
+                "litellm.proxy.auth.user_api_key_auth.user_api_key_auth_builder",
                 new_callable=AsyncMock,
                 return_value=builder_token,
             ),
             patch(
-                "litellm.proxy.auth.user_api_key_auth._run_centralized_common_checks",
+                "litellm.proxy.auth.user_api_key_auth.run_centralized_common_checks",
                 new_callable=AsyncMock,
             ),
             patch(
@@ -7004,12 +7004,12 @@ async def test_user_api_key_auth_does_not_overwrite_end_user_id_set_by_builder()
             setattr(_proxy_server_mod, k, v)
         with (
             patch(
-                "litellm.proxy.auth.user_api_key_auth._user_api_key_auth_builder",
+                "litellm.proxy.auth.user_api_key_auth.user_api_key_auth_builder",
                 new_callable=AsyncMock,
                 return_value=builder_token,
             ),
             patch(
-                "litellm.proxy.auth.user_api_key_auth._run_centralized_common_checks",
+                "litellm.proxy.auth.user_api_key_auth.run_centralized_common_checks",
                 new_callable=AsyncMock,
             ),
             patch(
@@ -7060,12 +7060,12 @@ async def test_user_api_key_auth_authenticates_before_raising_malformed_body_err
             setattr(_proxy_server_mod, k, v)
         with (
             patch(
-                "litellm.proxy.auth.user_api_key_auth._user_api_key_auth_builder",
+                "litellm.proxy.auth.user_api_key_auth.user_api_key_auth_builder",
                 new_callable=AsyncMock,
                 return_value=builder_token,
             ) as mock_builder,
             patch(
-                "litellm.proxy.auth.user_api_key_auth._run_centralized_common_checks",
+                "litellm.proxy.auth.user_api_key_auth.run_centralized_common_checks",
                 new_callable=AsyncMock,
             ) as mock_common_checks,
             patch(
@@ -7121,7 +7121,7 @@ async def _run_auth_with_malformed_body(post_call_failure_hook):
             setattr(_proxy_server_mod, k, v)
         with (
             patch(
-                "litellm.proxy.auth.user_api_key_auth._user_api_key_auth_builder",
+                "litellm.proxy.auth.user_api_key_auth.user_api_key_auth_builder",
                 new_callable=AsyncMock,
                 return_value=builder_token,
             ),
@@ -7193,7 +7193,7 @@ async def test_user_api_key_auth_malformed_body_with_rejected_key_still_returns_
             setattr(_proxy_server_mod, k, v)
         with (
             patch(
-                "litellm.proxy.auth.user_api_key_auth._user_api_key_auth_builder",
+                "litellm.proxy.auth.user_api_key_auth.user_api_key_auth_builder",
                 new_callable=AsyncMock,
                 side_effect=ProxyException(
                     message="Authentication Error, invalid key",
@@ -7246,7 +7246,7 @@ async def test_user_api_key_auth_does_not_double_log_a_malformed_body_from_a_rej
             setattr(_proxy_server_mod, k, v)
         with (
             patch(
-                "litellm.proxy.auth.user_api_key_auth._user_api_key_auth_builder",
+                "litellm.proxy.auth.user_api_key_auth.user_api_key_auth_builder",
                 new_callable=AsyncMock,
                 side_effect=ProxyException(
                     message="Authentication Error, invalid key",
@@ -7298,7 +7298,7 @@ async def _run_builder_with_key_lookup(get_key_object_mock):
     from starlette.datastructures import URL
 
     import litellm.proxy.proxy_server as _proxy_server_mod
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
 
     attrs = _proxy_attrs_for_db_lookup()
     originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
@@ -7316,7 +7316,7 @@ async def _run_builder_with_key_lookup(get_key_object_mock):
                 "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
             ),
         ):
-            return await _user_api_key_auth_builder(
+            return await user_api_key_auth_builder(
                 request=request,
                 api_key="Bearer sk-db-lookup-test",
                 azure_api_key_header="",
@@ -7628,7 +7628,7 @@ async def test_non_admin_cli_session_token_reaches_production_auth_path(monkeypa
                 side_effect=__import__("fastapi").HTTPException(status_code=404),
             ),
         ):
-            result = await _user_api_key_auth_builder(
+            result = await user_api_key_auth_builder(
                 request=request,
                 api_key=f"Bearer {cli_token}",
                 azure_api_key_header="",
@@ -7715,7 +7715,7 @@ async def _authenticate_session_token_against_db(
                 AsyncMock(return_value=membership_row),
             ),
         ):
-            await _user_api_key_auth_builder(
+            await user_api_key_auth_builder(
                 request=request,
                 api_key=f"Bearer {cli_token}",
                 azure_api_key_header="",
@@ -7925,7 +7925,7 @@ async def test_auth_does_not_rewrite_cached_key_object_back_into_cache():
     from starlette.datastructures import URL
 
     import litellm.proxy.proxy_server as _proxy_server_mod
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.proxy_server import hash_token
 
@@ -7969,10 +7969,10 @@ async def test_auth_does_not_rewrite_cached_key_object_back_into_cache():
         request = Request(scope={"type": "http"})
         request._url = URL(url="/chat/completions")
         with patch(
-            "litellm.proxy.auth.resolvers.store._fetch_key_object_from_db_with_reconnect",
+            "litellm.proxy.auth.resolvers.store.fetch_key_object_from_db_with_reconnect",
             fetch_from_db,
         ):
-            result = await _user_api_key_auth_builder(
+            result = await user_api_key_auth_builder(
                 request=request,
                 api_key=f"Bearer {api_key}",
                 azure_api_key_header="",
@@ -8388,7 +8388,7 @@ async def test_global_proxy_spend_reads_resettable_proxy_budget_row():
     loaded from the MonthlyGlobalSpend view, whose window is hardcoded to a
     trailing 30 days and never resets on the configured duration."""
     from litellm.proxy.auth.user_api_key_auth import (
-        _fetch_global_spend_with_event_coordination,
+        fetch_global_spend_with_event_coordination,
     )
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
@@ -8400,7 +8400,7 @@ async def test_global_proxy_spend_reads_resettable_proxy_budget_row():
         side_effect=AssertionError("global spend must not be loaded from the fixed-30d MonthlyGlobalSpend view")
     )
 
-    result = await _fetch_global_spend_with_event_coordination(
+    result = await fetch_global_spend_with_event_coordination(
         cache_key="default_user_id:spend",
         user_api_key_cache=UserApiKeyCache(),
         prisma_client=prisma_client,
@@ -8415,14 +8415,14 @@ async def test_global_proxy_spend_none_when_proxy_budget_row_missing():
     """Before the startup upsert creates the aggregate row, enforcement must
     see None (no cap applied) rather than raising."""
     from litellm.proxy.auth.user_api_key_auth import (
-        _fetch_global_spend_with_event_coordination,
+        fetch_global_spend_with_event_coordination,
     )
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     prisma_client = MagicMock()
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
 
-    result = await _fetch_global_spend_with_event_coordination(
+    result = await fetch_global_spend_with_event_coordination(
         cache_key="default_user_id:spend",
         user_api_key_cache=UserApiKeyCache(),
         prisma_client=prisma_client,
@@ -8463,7 +8463,7 @@ async def test_temp_budget_increase_applied_for_cached_key():
     )
 
     user_api_key_cache = DualCache()
-    await _cache_key_object(
+    await cache_key_object(
         hashed_token=hashed_token,
         user_api_key_obj=cached_key,
         user_api_key_cache=user_api_key_cache,
@@ -8487,13 +8487,13 @@ async def test_temp_budget_increase_applied_for_cached_key():
         patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj),
         patch(
-            "litellm.proxy.auth.user_api_key_auth._virtual_key_max_budget_alert_check",
+            "litellm.proxy.auth.user_api_key_auth.virtual_key_max_budget_alert_check",
             new_callable=AsyncMock,
         ),
     ):
         results = tuple(
             [
-                await _user_api_key_auth_builder(
+                await user_api_key_auth_builder(
                     request=mock_request,
                     api_key=f"Bearer {api_key}",
                     azure_api_key_header="",
@@ -8535,7 +8535,7 @@ async def test_cached_key_team_member_budget_blocks_at_exact_cap(team_member_spe
     max_budget = 2.4
 
     user_api_key_cache = DualCache()
-    await _cache_key_object(
+    await cache_key_object(
         hashed_token=hashed_token,
         user_api_key_obj=UserAPIKeyAuth(
             token=hashed_token,
@@ -8577,7 +8577,7 @@ async def test_cached_key_team_member_budget_blocks_at_exact_cap(team_member_spe
     proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     async def _auth():
-        return await _user_api_key_auth_builder(
+        return await user_api_key_auth_builder(
             request=mock_request,
             api_key=f"Bearer {api_key}",
             azure_api_key_header="",
@@ -8637,7 +8637,7 @@ async def test_cached_key_team_member_budget_honours_temp_increase(expiry_offset
     team_member_spend = 2.5
 
     user_api_key_cache = DualCache()
-    await _cache_key_object(
+    await cache_key_object(
         hashed_token=hashed_token,
         user_api_key_obj=UserAPIKeyAuth(
             token=hashed_token,
@@ -8683,7 +8683,7 @@ async def test_cached_key_team_member_budget_honours_temp_increase(expiry_offset
     proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     async def _auth():
-        return await _user_api_key_auth_builder(
+        return await user_api_key_auth_builder(
             request=mock_request,
             api_key=f"Bearer {api_key}",
             azure_api_key_header="",
@@ -8726,7 +8726,7 @@ async def _authenticate_and_authorize(mock_request, api_key):
     from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request
 
     request_data = {"model": "claude-sonnet-5", "messages": [{"role": "user", "content": "hi"}]}
-    auth_obj = await _user_api_key_auth_builder(
+    auth_obj = await user_api_key_auth_builder(
         request=mock_request,
         api_key=f"Bearer {api_key}",
         azure_api_key_header="",
@@ -8773,7 +8773,7 @@ async def test_cached_key_team_member_budget_emails_configured_thresholds(
     alert_emails = {"50": [], "100": ["finance@example.com"]}
 
     user_api_key_cache = DualCache()
-    await _cache_key_object(
+    await cache_key_object(
         hashed_token=hashed_token,
         user_api_key_obj=UserAPIKeyAuth(
             token=hashed_token,
@@ -8900,7 +8900,7 @@ async def _proxy_exception_for_key(
         patch("litellm.proxy.proxy_server.jwt_handler", jwt_handler),
     ):
         with pytest.raises(ProxyException) as exc_info:
-            await _user_api_key_auth_builder(
+            await user_api_key_auth_builder(
                 request=mock_request,
                 api_key=f"Bearer {api_key}",
                 azure_api_key_header="",
@@ -9208,7 +9208,7 @@ async def test_jwt_builder_returns_every_team_grant_the_key_path_gets(is_proxy_a
             new_callable=AsyncMock,
             return_value=builder_result,
         ):
-            token = await _user_api_key_auth_builder(
+            token = await user_api_key_auth_builder(
                 request=request,
                 api_key="Bearer header.payload.signature",
                 azure_api_key_header="",
@@ -9243,7 +9243,7 @@ async def test_jwt_builder_returns_every_team_grant_the_key_path_gets(is_proxy_a
 )
 async def test_claude_view_normalizes_before_model_access(monkeypatch, route):
     from starlette.requests import Request
-    from litellm.proxy.auth.user_api_key_auth import _enforce_key_and_fallback_model_access
+    from litellm.proxy.auth.user_api_key_auth import enforce_key_and_fallback_model_access
 
     source = "foo[1m]"
     encoded = "claude-router-" + source.encode().hex() + "[1m]"
@@ -9254,7 +9254,7 @@ async def test_claude_view_normalizes_before_model_access(monkeypatch, route):
     data = {"model": encoded, "messages": [{"role": "user", "content": "hi"}]}
     request = Request({"type": "http", "method": "POST", "path": route, "headers": [], "query_string": b""})
     token = UserAPIKeyAuth(models=[source])
-    await _enforce_key_and_fallback_model_access(
+    await enforce_key_and_fallback_model_access(
         valid_token=token,
         request_data=data,
         route=route,
@@ -9267,7 +9267,7 @@ async def test_claude_view_normalizes_before_model_access(monkeypatch, route):
     assert json.loads(await request.body())["model"] == source
     assert request.scope["parsed_body"][1]["model"] == source
     with pytest.raises(ProxyException):
-        await _enforce_key_and_fallback_model_access(
+        await enforce_key_and_fallback_model_access(
             valid_token=UserAPIKeyAuth(models=["other"]),
             request_data=data,
             route=route,
@@ -9668,7 +9668,7 @@ async def test_auth_flow_enters_virtual_key_mapping_when_only_an_issuer_configur
             side_effect=AssertionError("standard JWT auth must not run for a mapped virtual key"),
         ),
     ):
-        result = await _user_api_key_auth_builder(
+        result = await user_api_key_auth_builder(
             request=mock_request,
             api_key=jwt_token,
             azure_api_key_header="",
@@ -9712,9 +9712,9 @@ def _alias_request(route: str, data: dict, content_type: str = "application/json
 
 
 async def _enforce_alias_access(token: UserAPIKeyAuth, data: dict, route: str, request, router: litellm.Router):
-    from litellm.proxy.auth.user_api_key_auth import _enforce_key_and_fallback_model_access
+    from litellm.proxy.auth.user_api_key_auth import enforce_key_and_fallback_model_access
 
-    await _enforce_key_and_fallback_model_access(
+    await enforce_key_and_fallback_model_access(
         valid_token=token,
         request_data=data,
         route=route,
@@ -9783,18 +9783,18 @@ async def test_router_settings_model_group_alias_leaves_form_bodies_alone(monkey
 @pytest.mark.asyncio
 async def test_router_settings_model_group_alias_rewrite_keeps_query_params_out_of_body(monkeypatch):
     """LIT-3054: auth merges query params into its own copy of the body; the rewrite must not forward them."""
-    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body, populate_request_with_path_params
+    from litellm.proxy.common_utils.http_parsing_utils import read_request_body, populate_request_with_path_params
 
     router = _alias_router()
     monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
     body = {"model": "AgentX-LLM", "messages": [{"role": "user", "content": "hi"}]}
     request = _alias_request("/v1/chat/completions", body)
     request.scope["query_string"] = b"api-version=2024-10-21&stream=true"
-    data = populate_request_with_path_params(request_data=await _read_request_body(request), request=request)
+    data = populate_request_with_path_params(request_data=await read_request_body(request), request=request)
     assert data["api-version"] == "2024-10-21"
     token = _alias_token(monkeypatch, "key", {"AgentX-LLM": "claude-haiku"}, ["claude-haiku"])
     await _enforce_alias_access(token, data, "/v1/chat/completions", request, router)
-    downstream = await _read_request_body(request)
+    downstream = await read_request_body(request)
     assert downstream == {**body, "model": "claude-haiku"}
     assert json.loads(await request.body()) == downstream
     assert await request.json() == downstream
@@ -10003,7 +10003,7 @@ async def test_admission_and_budget_reservation_read_the_key_spend_counter_with_
             ),
             spend_counter_batch_scope(redis),
         ):
-            await _run_centralized_common_checks(
+            await run_centralized_common_checks(
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data={"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "hi"}]},
@@ -10242,7 +10242,7 @@ async def test_managed_jwt_cannot_be_downgraded_into_virtual_key_mapping(monkeyp
         monkeypatch.setattr(proxy_server, name, value)
     for _ in range(2):
         with pytest.raises(ProxyException) as failure:
-            await _user_api_key_auth_builder(
+            await user_api_key_auth_builder(
                 request=_alias_request("/v1/chat/completions", {}), api_key="Bearer verified.jwt.token",
                 azure_api_key_header="", anthropic_api_key_header=None, google_ai_studio_api_key_header=None,
                 azure_apim_header=None, request_data={},
@@ -10271,7 +10271,7 @@ async def test_virtual_key_cannot_enter_checks_as_an_identity_managed_actor(monk
     client.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=target)
     monkeypatch.setattr(proxy_server, "prisma_client", client)
     checks: Final = AsyncMock()
-    monkeypatch.setattr(auth_module, "_run_centralized_common_checks", checks)
+    monkeypatch.setattr(auth_module, "run_centralized_common_checks", checks)
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock(return_value=None)))
     data: Final = {"model": "allowed", "messages": [{"role": "user", "content": "hello"}]}
     request: Final = _alias_request("/v1/chat/completions", data)
@@ -10324,7 +10324,7 @@ async def test_custom_auth_grants_reach_managed_targets_without_a_virtual_key_ro
     monkeypatch.setattr(module, "enterprise_custom_auth", custom if enterprise else None)
     monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
     monkeypatch.setattr(litellm, "enable_post_custom_auth_checks", False, raising=False)
-    admitted: Final = await _user_api_key_auth_builder(
+    admitted: Final = await user_api_key_auth_builder(
         request=_alias_request("/a2a/target/message/send", {}), api_key=f"Bearer {credential}",
         azure_api_key_header="", anthropic_api_key_header=None, google_ai_studio_api_key_header=None,
         azure_apim_header=None, request_data={},
@@ -10346,7 +10346,7 @@ async def test_enterprise_custom_auth_key_return_stays_a_proxy_validated_key(mon
         monkeypatch.setattr(proxy_server, name, value)
     module: Final = importlib.import_module("litellm.proxy.auth.user_api_key_auth")
     monkeypatch.setattr(module, "enterprise_custom_auth", custom)
-    admitted: Final = await _user_api_key_auth_builder(
+    admitted: Final = await user_api_key_auth_builder(
         request=_alias_request("/v1/chat/completions", {}), api_key="Bearer external-credential",
         azure_api_key_header="", anthropic_api_key_header=None, google_ai_studio_api_key_header=None,
         azure_apim_header=None, request_data={},

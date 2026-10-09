@@ -209,7 +209,7 @@ def test_initialize_presidio_forwards_analyze_chunk_size_bytes():
     """
     import litellm
     from litellm.proxy.guardrails.guardrail_hooks.presidio import (
-        _OPTIONAL_PresidioPIIMasking,
+        OPTIONAL_PresidioPIIMasking,
     )
 
     test_guardrail = {
@@ -229,7 +229,7 @@ def test_initialize_presidio_forwards_analyze_chunk_size_bytes():
     initialized = [
         callback
         for callback in litellm.callbacks
-        if isinstance(callback, _OPTIONAL_PresidioPIIMasking) and callback.guardrail_name == "test_presidio_chunk_size"
+        if isinstance(callback, OPTIONAL_PresidioPIIMasking) and callback.guardrail_name == "test_presidio_chunk_size"
     ]
     assert initialized, "presidio guardrail was not registered as a callback"
     assert initialized[-1].presidio_analyze_chunk_size_bytes == 250_000

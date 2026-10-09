@@ -211,14 +211,16 @@ impl TraceReader {
                     .await
                     .map_err(|error| Miss::Read(map_store_error(error)))?;
                 let spend_rows = spend(store, access, &rows).await;
-                let freshness = Freshness::of(&rows, spend_rows.is_some(), snapshot_ms);
                 resolve_trace(
                     trace_id,
                     trace_ref,
                     &rows,
                     spend_rows.as_deref().unwrap_or_default(),
                 )
-                .map(|trace| (trace, freshness))
+                .map(|trace| {
+                    let freshness = Freshness::of(&rows, &trace, snapshot_ms);
+                    (trace, freshness)
+                })
                 .ok_or(Miss::Absent)
             })
             .await
@@ -325,6 +327,7 @@ fn page<E>(
     let create_page = |count: usize| {
         let end = position.offset.saturating_add(count).min(spans.len());
         Trace {
+            gateway_spend_pending: snapshot.trace().gateway_spend_pending,
             summary: snapshot.trace().summary.clone(),
             agents: snapshot.trace().agents.clone(),
             spans: spans[position.offset..end].to_vec(),

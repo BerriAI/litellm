@@ -3,6 +3,7 @@ Agent tracing endpoints. Thin wrappers over `TraceReceiver`: auth -> tenant/scop
 
 POST /v1/traces                              OTLP/HTTP trace export (protobuf or JSON)
 GET  /v1/traces                              TracePage
+GET  /v1/traces/agents                       TraceAgentList
 GET  /v1/traces/{trace_id}                   Trace
 GET  /v1/traces/{trace_id}/spans/{span_id}   SpanDetail
 """
@@ -20,7 +21,11 @@ from pydantic import ConfigDict
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import OTLP_RETRY_AFTER_SECONDS, TRACE_READ_RETRY_AFTER_SECONDS
+from litellm.constants import (
+    DEFAULT_AGENT_TRACING_RETENTION_DAYS,
+    OTLP_RETRY_AFTER_SECONDS,
+    TRACE_READ_RETRY_AFTER_SECONDS,
+)
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.authorization import AllRows, ReadScope, resolve_trace_read_scope
 from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
@@ -48,8 +53,9 @@ from litellm.rust_bridge.trace.generated.types import (
     TraceScope,
 )
 from litellm.rust_bridge.trace.storage import ClickHouseStorage, Tenant
-from litellm.tracing import TraceReceiver, TracingPayloadTooLargeError
-from litellm.tracing.otlp_http import InvalidOTLPPayloadError, encode_otlp_response
+from litellm.tracing import TraceReceiver
+from litellm.tracing.otlp_http import encode_otlp_response
+from litellm.tracing.types import TraceAgentList
 from litellm.types.llms.base import LiteLLMBaseModel
 
 router = APIRouter(tags=["agent tracing"])
@@ -125,30 +131,12 @@ def _otlp_error(content_type: str | None, status_code: int, message: str, retry:
 
 @router.post("/v1/logs", include_in_schema=False)
 @router.post("/v1/traces", include_in_schema=False)
-async def ingest_otlp_traces(
-    request: Request,
-    context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
-) -> Response:
-    content_type: Final = request.headers.get("content-type")
-    try:
-        tracing, tenant = context.writer()
-        await tracing.ingest(
-            body=request.stream(),
-            content_type=content_type,
-            content_encoding=request.headers.get("content-encoding"),
-            tenant=tenant,
-            logs=request.url.path.endswith("/v1/logs"),
-        )
-    except TracingPayloadTooLargeError as e:
-        return _otlp_error(content_type, 413, str(e))
-    except InvalidOTLPPayloadError as error:
-        return _otlp_error(content_type, 400, str(error))
-    except RuntimeError:
-        return _otlp_error(content_type, 503, "Trace ingestion is temporarily unavailable", retry=True)
-    except HTTPException as error:
-        return _otlp_error(content_type, error.status_code, str(error.detail))
-    body, media_type = encode_otlp_response(content_type)
-    return Response(content=body, media_type=media_type)
+async def ingest_otlp_traces(request: Request) -> Response:
+    return _otlp_error(
+        request.headers.get("content-type"),
+        410,
+        "Send traces and logs directly to the Lens endpoint shown in Lens setup.",
+    )
 
 
 class TraceReadFailure(LiteLLMBaseModel):
@@ -209,6 +197,34 @@ async def list_agent_traces(
             cursor=request.cursor,
         )
     except (TraceChanged, ValueError, OverflowError, RuntimeError) as error:
+        raise read_failure(error) from error
+
+
+class TraceAgentListRequest(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    start_ms: int | None = None
+    end_ms: int | None = None
+
+
+@router.get("/v1/traces/agents", response_model=TraceAgentList)
+async def list_trace_agents(
+    context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
+    now_ms: Annotated[int, Depends(current_time_ms)],
+    request: Annotated[TraceAgentListRequest, Query()],
+) -> TraceAgentList:
+    try:
+        tracing, scope = context.reader()
+        return await tracing.list_agents(
+            scope=scope,
+            start_ms=(
+                request.start_ms
+                if request.start_ms is not None
+                else now_ms - DEFAULT_AGENT_TRACING_RETENTION_DAYS * MS_PER_DAY
+            ),
+            end_ms=request.end_ms if request.end_ms is not None else now_ms,
+        )
+    except (ValueError, OverflowError, RuntimeError) as error:
         raise read_failure(error) from error
 
 

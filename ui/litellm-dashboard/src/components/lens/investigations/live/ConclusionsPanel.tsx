@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 
 import { cn } from "@/lib/cva.config";
 
@@ -22,7 +22,7 @@ function useFlashing(groups: readonly Conclusion[]): ReadonlySet<string> {
   return flashing;
 }
 
-export function ConclusionsPanel({
+export const ConclusionsPanel = memo(function ConclusionsPanel({
   groups,
   total,
   scope,
@@ -102,4 +102,4 @@ export function ConclusionsPanel({
       {scope && <p className="text-xs text-muted-foreground">{scope}</p>}
     </div>
   );
-}
+});

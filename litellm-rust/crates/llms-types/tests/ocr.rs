@@ -1,4 +1,4 @@
-use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrPage};
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrBoundingBox, OcrDocument, OcrPage};
 use rstest::rstest;
 use serde_json::{Map, Value, json};
 
@@ -101,4 +101,40 @@ fn response_serialization_preserves_extensions_and_native_presence(
     let decoded: LiteLLMOcrResponse = serde_json::from_value(serialized.clone()).unwrap();
     assert_eq!(decoded.provider_native_response, native);
     assert_eq!(decoded.into_json(), serialized);
+}
+
+#[rstest]
+fn bounding_box_exposes_corner_coordinates_and_keeps_extensions() {
+    let wire = json!({"top_left_x":1,"top_left_y":2.5,"bottom_right_x":30,"bottom_right_y":40,"future":true});
+    let bounds: OcrBoundingBox = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(bounds.top_left_x, Some(1.into()));
+    assert_eq!(
+        bounds
+            .top_left_y
+            .as_ref()
+            .and_then(serde_json::Number::as_f64),
+        Some(2.5)
+    );
+    assert_eq!(bounds.bottom_right_x, Some(30.into()));
+    assert_eq!(bounds.bottom_right_y, Some(40.into()));
+    assert_eq!(Value::Object(bounds.extra.clone()), json!({"future":true}));
+    assert_eq!(serde_json::to_value(bounds).unwrap(), wire);
+}
+
+#[rstest]
+fn partial_bounding_box_omits_null_corners() {
+    let bounds: OcrBoundingBox =
+        serde_json::from_value(json!({"top_left_x":null,"bottom_right_y":4})).unwrap();
+    assert!(bounds.top_left_x.is_none());
+    assert_eq!(
+        serde_json::to_value(bounds).unwrap(),
+        json!({"bottom_right_y":4})
+    );
+}
+
+#[rstest]
+#[case::string_corner(json!({"top_left_x":"1"}))]
+#[case::array_corner(json!({"bottom_right_y":[4]}))]
+fn bounding_box_rejects_non_numeric_corners(#[case] wire: Value) {
+    assert!(serde_json::from_value::<OcrBoundingBox>(wire).is_err());
 }

@@ -37,6 +37,15 @@ def current_job(lens: Lens) -> Job | None:
     return next((job for job in lens.jobs if job.status in ("queued", "running")), None)
 
 
+def due_at(lens: Lens) -> datetime | None:
+    job: Final = current_job(lens)
+    if job is None:
+        return lens.next_run_at if lens.settings.enabled else None
+    if job.status == "queued":
+        return job.created_at
+    return job.lease_until or job.created_at
+
+
 def replace_job(lens: Lens, job: Job) -> Lens:
     return lens.model_copy(
         update=MappingProxyType({"jobs": tuple(job if old.id == job.id else old for old in lens.jobs)})

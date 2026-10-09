@@ -503,6 +503,25 @@ fn existing_formats_win_over_new_formats(span: Span, #[case] kind: &str) {
 }
 
 #[rstest]
+fn input_preview_is_the_first_user_message(span: Span) {
+    let conversation = json!([
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "initial question"},
+        {"role": "assistant", "content": "answer"},
+        {"role": "user", "content": "follow up"},
+    ])
+    .to_string();
+    let decoded = decode(
+        span,
+        "custom",
+        &[("gen_ai.input.messages", &conversation)],
+        vec![],
+    )
+    .unwrap();
+    assert_eq!(decoded.normalized.input_preview, "initial question");
+}
+
+#[rstest]
 #[case::messages(&[("gen_ai.input.messages", r#"[{"role":"user","content":"modern"}]"#)], "modern")]
 #[case::indexed(&[("gen_ai.prompt.0.role", "user"), ("gen_ai.prompt.0.content", "indexed")], "indexed")]
 #[case::events(&[], "event")]

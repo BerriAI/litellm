@@ -9,10 +9,9 @@ use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_host_python::to_py;
 use litellm_inference_ocr::provider_config;
 use litellm_llms::base_llm::ocr::settings::OcrSettings;
-use pyo3::{
-    prelude::*,
-    types::{PyDict, PyTuple},
-};
+use pyo3::prelude::*;
+
+use super::NativeCall;
 
 use crate::{
     coercion::FieldSpec,
@@ -29,21 +28,9 @@ const ENABLE_AZURE_AD_TOKEN_REFRESH: FieldSpec<bool> =
         Ok(field.exact_true())
     });
 
-fn run_ocr(
-    py: Python<'_>,
-    request: Bound<'_, PyAny>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Bound<'_, PyDict>,
-    asynchronous: bool,
-) -> PyResult<Py<PyAny>> {
-    let (arguments, hooks) = crate::routes::call_hooks(
-        py,
-        LoggingOperation::Ocr,
-        &request,
-        &args,
-        &kwargs,
-        asynchronous,
-    )?;
+fn run_ocr(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyResult<Py<PyAny>> {
+    let (arguments, hooks) =
+        crate::routes::call_hooks(py, LoggingOperation::Ocr, &call, asynchronous)?;
     crate::routes::run_public_call(
         py,
         arguments,
@@ -61,7 +48,7 @@ fn run_ocr(
             let route = litellm_inference_ocr::OcrRoute::new(client);
             Ok(route.machine(request, None))
         },
-        OcrPythonHost::new(request.unbind()),
+        OcrPythonHost::new(call.resolved()?.unbind()),
         hooks,
         asynchronous,
     )
@@ -81,23 +68,13 @@ fn project_provider_defaults(snapshot: &Snapshot<'_>) -> PyResult<OcrSettings> {
 }
 
 #[pyfunction]
-pub(crate) fn ocr(
-    py: Python<'_>,
-    request: Bound<'_, PyAny>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Bound<'_, PyDict>,
-) -> PyResult<Py<PyAny>> {
-    run_ocr(py, request, args, kwargs, false)
+pub(crate) fn ocr(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
+    run_ocr(py, call, false)
 }
 
 #[pyfunction]
-pub(crate) fn aocr(
-    py: Python<'_>,
-    request: Bound<'_, PyAny>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Bound<'_, PyDict>,
-) -> PyResult<Py<PyAny>> {
-    run_ocr(py, request, args, kwargs, true)
+pub(crate) fn aocr(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
+    run_ocr(py, call, true)
 }
 
 #[pyfunction]

@@ -1,16 +1,15 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight } from "lucide-react";
-import { Inspector } from "@/components/shared/Inspector";
+import { Inspector, useInspector } from "@/components/shared/Inspector";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useNow } from "@/hooks/useNow";
-import { cn } from "@/lib/cva.config";
 import { formatActivityTimestamp } from "@/utils/activityTimestamp";
 import { useLensApi } from "../data/LensServices";
 import { useLensUpdate } from "../data/mutations";
 import { lensQueries } from "../data/queries";
 import { agoLabel } from "../model/format";
+import { findingFrequency, percentLabel } from "../model/frequency";
 import {
   ALL_AGENTS,
   filterInbox,
@@ -18,7 +17,7 @@ import {
   inboxAgents,
   inboxFinding,
   inboxRows,
-  sampledExecutions,
+  inboxSampledRuns,
   type InboxRow,
   type Priority,
 } from "../model/inbox";
@@ -28,23 +27,14 @@ import { FINDING_PANEL_WIDTH_KEY } from "../storage";
 import { EvidenceView } from "./Evidence";
 import { FindingDetails } from "./FindingDetails";
 import { InvestigationError, InvestigationsLoading } from "./InvestigationStates";
+import { PRIORITY_LABEL, PRIORITY_ORDER, PriorityDot } from "./PriorityMark";
 
-const PRIORITY_DOT = { high: "bg-destructive", medium: "bg-warning", low: "bg-muted-foreground/50" } as const;
 const PRIORITIES: { value: Priority | "all"; label: string }[] = [
   { value: "all", label: "All priorities" },
   { value: "high", label: "High" },
   { value: "medium", label: "Medium" },
   { value: "low", label: "Low" },
 ];
-
-function InvestigationCell({ sources }: Pick<InboxRow, "sources">) {
-  const names = [...new Set(sources.map(({ lens }) => lens.settings.name))].join(", ");
-  return (
-    <td className="hidden truncate px-3 text-muted-foreground lg:table-cell" title={names}>
-      {names}
-    </td>
-  );
-}
 
 function FilterSelect<T extends string>({
   label,
@@ -59,7 +49,11 @@ function FilterSelect<T extends string>({
 }) {
   return (
     <Select items={items} value={value} onValueChange={(next: T | null) => next !== null && onChange(next)}>
-      <SelectTrigger size="sm" className="h-7 min-w-32 text-xs" aria-label={label}>
+      <SelectTrigger
+        size="sm"
+        className="h-7 min-w-0 flex-1 border-transparent bg-muted/60 text-xs shadow-none hover:bg-muted"
+        aria-label={label}
+      >
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
@@ -70,6 +64,67 @@ function FilterSelect<T extends string>({
         ))}
       </SelectContent>
     </Select>
+  );
+}
+
+function FindingRow({ row, now }: { row: InboxRow; now: number }) {
+  const frequency = findingFrequency(inboxFinding(row).occurrences, inboxSampledRuns(row));
+  const percent = percentLabel(frequency.affected, frequency.total);
+  return (
+    <Inspector.Row
+      item={row}
+      render={
+        <div
+          role="row"
+          tabIndex={0}
+          aria-label={row.title}
+          className="mx-2 block cursor-pointer space-y-1 rounded-md px-2 py-2 transition-[background-color] duration-150 outline-none hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring/50 data-[state=selected]:bg-muted"
+        />
+      }
+    >
+      <div role="gridcell" className="line-clamp-2 text-xs leading-snug text-pretty text-foreground">
+        {row.title}
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs text-muted-foreground">
+        <span className="tabular-nums" title={formatActivityTimestamp(row.lastSeen)}>
+          {agoLabel(Date.parse(row.lastSeen), now)}
+        </span>
+        <span
+          className="whitespace-nowrap text-foreground/75 tabular-nums"
+          title={`${row.runs} affected ${row.runs === 1 ? "trace" : "traces"} across ${row.sources.map(({ lens }) => lens.settings.name).join(", ")}`}
+        >
+          {percent ? `${percent} affected` : `${row.runs} ${row.runs === 1 ? "trace" : "traces"}`}
+        </span>
+      </div>
+    </Inspector.Row>
+  );
+}
+
+function FindingList({ rows, now }: { rows: readonly InboxRow[]; now: number }) {
+  const groups = PRIORITY_ORDER.map((priority) => ({
+    priority,
+    rows: rows.filter((row) => row.priority === priority),
+  })).filter((group) => group.rows.length > 0);
+  return (
+    <div role="grid" aria-label="Findings" className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-2">
+      {groups.map((group) => (
+        <div role="rowgroup" key={group.priority} aria-label={`${PRIORITY_LABEL[group.priority]} priority findings`}>
+          <div
+            role="row"
+            className="sticky top-0 z-raised flex items-center gap-2 bg-background/95 px-4 pt-3 pb-1.5 text-xs font-medium text-muted-foreground backdrop-blur"
+          >
+            <PriorityDot priority={group.priority} />
+            <span role="columnheader">{PRIORITY_LABEL[group.priority]} priority</span>
+            <span className="ml-auto tabular-nums">{group.rows.length}</span>
+          </div>
+          <div className="space-y-0.5">
+            {group.rows.map((row) => (
+              <FindingRow key={row.key} row={row} now={now} />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -84,6 +139,7 @@ function InboxDetail({
   busy: boolean;
   onReview: (row: InboxRow, status: Finding["status"], reason: string) => void;
 }) {
+  const { close } = useInspector<InboxRow>();
   const { evidence, setEvidence } = useEvidenceRoute();
   const owner =
     row.sources.find(({ finding }) => finding.evidence.some((quote) => quote.execution_id === evidence?.id)) ??
@@ -95,11 +151,12 @@ function InboxDetail({
           key={row.key}
           finding={inboxFinding(row)}
           agents={row.agents}
-          sampledRuns={row.sources.flatMap(({ lens }) => sampledExecutions(lens))}
+          sampledRuns={inboxSampledRuns(row)}
           readOnly={readOnly}
           busy={busy}
           onOpenEvidence={setEvidence}
           onReview={(status, reason) => onReview(row, status, reason)}
+          onClose={close}
         />
       </div>
       {evidence && (
@@ -151,7 +208,7 @@ export function FindingsView({ readOnly = false }: { readOnly?: boolean }) {
       noun="finding"
       storageKey={FINDING_PANEL_WIDTH_KEY}
     >
-      <section aria-label="Findings" className="flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-background">
         {(list.error || update.error) && (
           <InvestigationError
             message={(list.error ?? update.error)!.message}
@@ -161,92 +218,48 @@ export function FindingsView({ readOnly = false }: { readOnly?: boolean }) {
             }}
           />
         )}
-        <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-2 border-b px-3 py-1.5">
-          <FilterSelect label="Filter by agent" value={filters.agent} items={agents} onChange={filters.setAgent} />
-          <FilterSelect
-            label="Filter by priority"
-            value={filters.priority}
-            items={PRIORITIES}
-            onChange={filters.setPriority}
-          />
-        </div>
-        <div className="min-h-0 flex-1 overflow-auto">
-          <table aria-label="Findings" className="w-full table-fixed border-collapse text-left text-xs">
-            <thead className="sticky top-0 z-sticky bg-muted/40 backdrop-blur">
-              <tr className="h-8 border-b text-xs tracking-wider text-muted-foreground uppercase">
-                <th className="w-20 px-3 font-medium">Priority</th>
-                <th className="px-3 font-medium">Finding</th>
-                <th className="hidden w-48 px-3 font-medium lg:table-cell">Investigation</th>
-                <th className="hidden w-40 px-3 font-medium md:table-cell">Agent</th>
-                <th className="hidden w-16 px-3 text-right font-medium sm:table-cell">Traces</th>
-                <th className="hidden w-24 px-3 font-medium lg:table-cell">Last seen</th>
-                <th className="w-7">
-                  <span className="sr-only">Details</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <Inspector.Row
-                  key={row.key}
-                  item={row}
-                  render={
-                    <tr
-                      tabIndex={0}
-                      aria-label={row.title}
-                      className="h-9 cursor-pointer border-b border-border/60 hover:bg-trace-row-hover focus-visible:outline-2 focus-visible:outline-ring data-[state=selected]:bg-trace-row-selected"
-                    />
-                  }
-                >
-                  <td className="px-3">
-                    <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-                      <span aria-hidden="true" className={cn("size-1.5 rounded-full", PRIORITY_DOT[row.priority])} />
-                      {row.priority}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 sm:py-0" title={row.suggestion || undefined}>
-                    <span className="line-clamp-2 text-foreground sm:block sm:truncate">{row.title}</span>
-                    <span className="mt-1 block text-xs text-muted-foreground md:hidden">
-                      {row.agents.join(", ")} · {row.runs} {row.runs === 1 ? "trace" : "traces"}
-                    </span>
-                  </td>
-                  <InvestigationCell sources={row.sources} />
-                  <td
-                    className="hidden truncate px-3 text-muted-foreground md:table-cell"
-                    title={row.agents.join(", ")}
-                  >
-                    {row.agents.join(", ")}
-                  </td>
-                  <td className="hidden px-3 text-right font-mono tabular-nums sm:table-cell">{row.runs}</td>
-                  <td
-                    className="hidden px-3 tabular-nums text-muted-foreground lg:table-cell"
-                    title={formatActivityTimestamp(row.lastSeen)}
-                  >
-                    {agoLabel(Date.parse(row.lastSeen), now)}
-                  </td>
-                  <td>
-                    <ChevronRight aria-hidden="true" className="size-3 text-muted-foreground/60" />
-                  </td>
-                </Inspector.Row>
-              ))}
-            </tbody>
-          </table>
-          {!rows.length && !list.error && (
-            <p className="px-4 py-16 text-center text-xs text-muted-foreground">
-              {all.length
-                ? "No findings match these filters."
-                : "No open findings yet. New problems show up here as soon as an investigation spots them."}
-            </p>
+        <div className="flex min-h-0 flex-1">
+          <section
+            aria-label="Findings list"
+            className={`flex min-h-0 w-full flex-col border-r md:w-[22rem] md:shrink-0 lg:w-[28rem] ${selected ? "hidden md:flex" : "flex"}`}
+          >
+            <div className="flex shrink-0 items-center gap-2 px-3 py-2">
+              <FilterSelect label="Filter by agent" value={filters.agent} items={agents} onChange={filters.setAgent} />
+              <FilterSelect
+                label="Filter by priority"
+                value={filters.priority}
+                items={PRIORITIES}
+                onChange={filters.setPriority}
+              />
+            </div>
+            <FindingList rows={rows} now={now} />
+            {!rows.length && !list.error && (
+              <p className="px-4 py-16 text-center text-xs text-muted-foreground">
+                {all.length
+                  ? "No findings match these filters."
+                  : "No open findings yet. New problems show up here as soon as an investigation spots them."}
+              </p>
+            )}
+            <footer className="flex h-8 shrink-0 items-center border-t px-3 text-xs text-muted-foreground">
+              {rows.length} {rows.length === 1 ? "finding" : "findings"}
+              {rows.length !== all.length && ` of ${all.length}`}
+            </footer>
+          </section>
+          {selected ? (
+            <aside
+              aria-label="Finding details"
+              data-testid="finding-panel"
+              className="flex min-h-0 min-w-0 flex-1 flex-col"
+            >
+              <InboxDetail row={selected} readOnly={readOnly} busy={update.isPending} onReview={review} />
+            </aside>
+          ) : (
+            <div className="hidden min-w-0 flex-1 items-center justify-center p-8 text-sm text-muted-foreground md:flex">
+              {rows.length ? "Select a finding to see how often it happens and where." : null}
+            </div>
           )}
         </div>
-        <footer className="flex h-8 shrink-0 items-center border-t bg-muted/30 px-3 text-xs text-muted-foreground">
-          {rows.length} {rows.length === 1 ? "finding" : "findings"}
-          {rows.length !== all.length && ` of ${all.length}`}
-        </footer>
-      </section>
-      <Inspector.Panel label="Finding details" testId="finding-panel">
-        {(row: InboxRow) => <InboxDetail row={row} readOnly={readOnly} busy={update.isPending} onReview={review} />}
-      </Inspector.Panel>
+      </div>
     </Inspector.Root>
   );
 }

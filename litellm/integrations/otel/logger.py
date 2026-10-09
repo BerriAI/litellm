@@ -54,6 +54,7 @@ from litellm.integrations.otel.model.spans import SpanRole, span_role_for_servic
 from litellm.integrations.otel.model.utils import to_ns
 from litellm.integrations.otel.plumbing.context import (
     active_phase,
+    active_phase_span,
     is_recordable_span,
     mcp_message_transport_span,
     post_response_root,
@@ -581,6 +582,7 @@ class OpenTelemetryV2(CustomLogger):
             request_purpose=call.purpose,
             trace=call.trace,
             session_id=call.session_id,
+            metadata_keys=tuple(self.config.baggage_metadata_keys),
         )
         end_time_ns: Final = to_ns(end_time)
         if carrier is not None and carrier.span is not None:
@@ -784,6 +786,11 @@ class OpenTelemetryV2(CustomLogger):
         span: Final = request_root_span() or get_current_span()
         if is_recordable_span(span):
             span.add_event(name, attributes)
+
+    def set_phase_attributes(self, attributes: Mapping[str, str | int | float | bool]) -> None:
+        span: Final = active_phase_span()
+        if span is not None and is_recordable_span(span):
+            span.set_attributes(attributes)
 
     async def async_pre_call_hook(
         self,
@@ -1047,6 +1054,12 @@ def phase_event(name: str, attributes: Mapping[str, str | int] | None = None) ->
     logger: Final = _registered_v2_logger()
     if logger is not None:
         logger.add_phase_event(name, attributes)
+
+
+def phase_attributes(attributes: Mapping[str, str | int | float | bool]) -> None:
+    logger: Final = _registered_v2_logger()
+    if logger is not None:
+        logger.set_phase_attributes(attributes)
 
 
 def build_otel_v2_logger(

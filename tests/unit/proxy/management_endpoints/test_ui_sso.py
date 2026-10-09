@@ -2270,7 +2270,7 @@ class TestUISSO_FunctionsExistence:
         assert SSOAuthenticationHandler is not None
 
         # Check that the new _get_cli_state method exists
-        assert hasattr(SSOAuthenticationHandler, "_get_cli_state")
+        assert hasattr(SSOAuthenticationHandler, "get_cli_state")
         assert callable(SSOAuthenticationHandler._get_cli_state)
 
 
@@ -3028,7 +3028,7 @@ class TestCLIKeyRegenerationFlow:
                     return_value="https://proxy.example.com/sso/callback",
                 ),
                 patch(
-                    "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler._get_cli_state",
+                    "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.get_cli_state",
                     return_value=None,
                 ) as mock_get_cli_state,
             ):
@@ -8161,7 +8161,7 @@ class TestPKCEStateCookieBinding:
             ),
             patch.object(
                 SSOAuthenticationHandler,
-                "_pkce_token_exchange",
+                "pkce_token_exchange",
                 AsyncMock(
                     return_value={
                         "access_token": "tok",
@@ -8173,7 +8173,7 @@ class TestPKCEStateCookieBinding:
             ),
             patch.object(
                 SSOAuthenticationHandler,
-                "_delete_pkce_verifier",
+                "delete_pkce_verifier",
                 AsyncMock(),
             ),
             patch("fastapi_sso.sso.base.DiscoveryDocument"),
@@ -8824,7 +8824,7 @@ async def test_pkce_arm_captures_sso_assertion():
         ),
         patch.object(
             SSOAuthenticationHandler,
-            "_pkce_token_exchange",
+            "pkce_token_exchange",
             AsyncMock(
                 return_value={
                     "access_token": "tok",
@@ -8835,7 +8835,7 @@ async def test_pkce_arm_captures_sso_assertion():
                 }
             ),
         ),
-        patch.object(SSOAuthenticationHandler, "_delete_pkce_verifier", AsyncMock()),
+        patch.object(SSOAuthenticationHandler, "delete_pkce_verifier", AsyncMock()),
         patch("fastapi_sso.sso.base.DiscoveryDocument"),
         patch("fastapi_sso.sso.generic.create_provider", return_value=MagicMock()),
         patch.dict(

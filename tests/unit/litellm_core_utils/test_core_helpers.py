@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.core_helpers import (
     budget_reservation_from_metadata,
     drop_params_env_flag,
     drop_params_flag,
+    get_parent_otel_span_from_kwargs,
     get_or_create_metadata_bucket,
     get_provider_response_headers_from_hidden_params,
     map_finish_reason,
@@ -25,6 +26,24 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import ImageResponse, TranscriptionResponse
+
+
+def test_parent_otel_span_reads_dict_like_metadata_by_index():
+    from typing import cast
+
+    span = object()
+
+    class Metadata:
+        def __contains__(self, key: object) -> bool:
+            return key == "litellm_parent_otel_span"
+
+        def __getitem__(self, key: str) -> object:
+            assert key == "litellm_parent_otel_span"
+            return span
+
+    result = get_parent_otel_span_from_kwargs({"metadata": cast(object, Metadata())})
+
+    assert result is span
 
 
 @pytest.mark.parametrize("header", ("request-id", "x-request-id", "llm_provider-request-id"))

@@ -7,7 +7,7 @@
 
 import asyncio
 import contextvars
-from collections.abc import AsyncIterator, Coroutine, Iterator
+from collections.abc import AsyncIterator, Coroutine, Iterator, Sequence
 from functools import partial
 from typing import Any, Final, cast
 
@@ -15,9 +15,6 @@ import litellm
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.common_utils import (
-    flatten_unencrypted_web_search_results_in_anthropic_messages,
-    sanitize_tool_use_ids_in_anthropic_messages,
-    strip_empty_content_blocks_from_anthropic_messages,
     strip_provider_specific_fields_from_anthropic_messages,
 )
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -26,6 +23,7 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.anthropic_messages.anthropic_request import AnthropicMetadata
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -36,9 +34,8 @@ from litellm.utils import ProviderConfigManager, client
 
 from ..adapters.handler import LiteLLMMessagesToCompletionTransformationHandler
 from ..responses_adapters.handler import LiteLLMMessagesToResponsesAPIHandler
-from ..utils import is_reasoning_auto_summary_enabled
 from .interceptors import get_messages_interceptors
-from .utils import AnthropicMessagesRequestUtils, mock_response
+from .utils import AnthropicMessagesRequestUtils, mock_response, prepare_native_messages
 
 __all__ = ("anthropic_messages", "anthropic_messages_handler")
 
@@ -251,28 +248,7 @@ async def anthropic_messages(
 
     Runs the empty-content-block sanitizer before any backend dispatch.
     """
-    # Anthropic's API rejects requests containing empty / whitespace-only
-    # text content blocks ("messages: text content blocks must be
-    # non-empty") and empty thinking blocks ("each thinking block must
-    # contain thinking").  Multi-turn tool-use clients (e.g. Claude Code)
-    # routinely loop assistant responses that contain such blocks — an empty
-    # text block alongside tool_use, or an empty thinking block from a turn
-    # a non-Anthropic reasoning model served through the bridge — back as
-    # conversation history, which then causes the next /v1/messages call to
-    # 400.  /v1/chat/completions already handles this in
-    # anthropic_messages_pt; sanitize the native Anthropic Messages path
-    # here for the same guarantee.  See #22930.
-    messages = strip_empty_content_blocks_from_anthropic_messages(messages)
-    # Replay of cross-provider tool history (e.g. kimi -> Anthropic) may carry
-    # ids like ``functions.Bash:0`` that violate Anthropic's id pattern.
-    messages = sanitize_tool_use_ids_in_anthropic_messages(messages)
-    messages = flatten_unencrypted_web_search_results_in_anthropic_messages(messages)
-
-    from litellm.integrations.anthropic_cache_control_hook import (
-        AnthropicCacheControlHook,
-    )
-
-    messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(
+    messages, system = prepare_native_messages(
         messages, system, kwargs, model=model, custom_llm_provider=custom_llm_provider, tools=tools, api_base=api_base
     )
 
@@ -454,23 +430,15 @@ def anthropic_messages_handler(
     """
     from litellm.types.utils import LlmProviders
 
-    # Sanitize empty text blocks so the sync entry point
-    # (litellm.messages.create -> anthropic_messages_handler) gets the same
-    # protection as the async wrapper. The async wrapper already sanitized and
-    # does not reassign messages before dispatch, so it sets
-    # ``_litellm_messages_presanitized`` to skip this redundant second
-    # full-messages scan. Pop it so it never leaks into provider params.
-    if not kwargs.pop("_litellm_messages_presanitized", False):
-        messages = strip_empty_content_blocks_from_anthropic_messages(messages)
-        messages = sanitize_tool_use_ids_in_anthropic_messages(messages)
-        messages = flatten_unencrypted_web_search_results_in_anthropic_messages(messages)
-
-    from litellm.integrations.anthropic_cache_control_hook import (
-        AnthropicCacheControlHook,
-    )
-
-    messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(
-        messages, system, kwargs, model=model, custom_llm_provider=custom_llm_provider, tools=tools, api_base=api_base
+    messages, system = prepare_native_messages(
+        messages,
+        system,
+        kwargs,
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        tools=tools,
+        api_base=api_base,
+        presanitized=bool(kwargs.pop("_litellm_messages_presanitized", False)),
     )
 
     metadata = validate_anthropic_api_metadata(metadata)
@@ -500,6 +468,7 @@ def anthropic_messages_handler(
         custom_llm_provider=custom_llm_provider,
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
+        litellm_params=litellm_params,
     )
 
     # Store agentic loop params in logging object for agentic hooks
@@ -538,7 +507,7 @@ def anthropic_messages_handler(
             LiteLLM_Proxy_MCP_Handler,
         )
 
-        if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools=tools):
+        if LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(tools=tools):
             return anthropic_messages_with_mcp(
                 max_tokens=max_tokens,
                 messages=messages,
@@ -546,7 +515,9 @@ def anthropic_messages_handler(
                 metadata=metadata,
                 stop_sequences=stop_sequences,
                 stream=stream,
-                system=system,
+                system=cast(  # cast-ok: anthropic accepts list system blocks; handler signature is narrower
+                    "str | None", system
+                ),
                 temperature=temperature,
                 thinking=thinking,
                 tool_choice=tool_choice,
@@ -590,11 +561,15 @@ def anthropic_messages_handler(
                 metadata=metadata,
                 stop_sequences=stop_sequences,
                 stream=stream,
-                system=system,
+                system=cast(  # cast-ok: anthropic accepts list system blocks; handler signature is narrower
+                    "str | None", system
+                ),
                 temperature=temperature,
                 thinking=thinking,
                 tool_choice=tool_choice,
-                tools=tools,
+                tools=cast(  # cast-ok: dict tools already fit the handler's union
+                    "list[AllAnthropicToolsValues | dict[str, object]] | None", tools
+                ),
                 top_k=top_k,
                 top_p=top_p,
                 _is_async=is_async,
@@ -616,11 +591,13 @@ def anthropic_messages_handler(
             metadata=metadata,
             stop_sequences=stop_sequences,
             stream=stream,
-            system=system,
+            system=cast(  # cast-ok: anthropic accepts list system blocks; handler signature is narrower
+                "str | None", system
+            ),
             temperature=temperature,
             thinking=thinking,
             tool_choice=tool_choice,
-            tools=tools,
+            tools=cast("list[dict[str, object]] | None", tools),  # cast-ok: dict tools fit the adapter's declared union
             top_k=top_k,
             top_p=top_p,
             _is_async=is_async,
@@ -645,14 +622,6 @@ def anthropic_messages_handler(
             custom_llm_provider=custom_llm_provider,
         )
     )
-    if is_reasoning_auto_summary_enabled():
-        thinking_param: Final = anthropic_messages_optional_request_params.get("thinking")
-        if isinstance(thinking_param, dict) and thinking_param.get("type") != "disabled":
-            anthropic_messages_optional_request_params["thinking"] = {
-                **thinking_param,
-                "display": "summarized",
-            }
-
     resolved_api_base: Final = (
         dynamic_api_base
         if dynamic_api_base is not None and anthropic_messages_provider_config.uses_get_llm_provider_api_base()
@@ -660,7 +629,12 @@ def anthropic_messages_handler(
     )
     return base_llm_http_handler.anthropic_messages_handler(
         model=model,
-        messages=strip_provider_specific_fields_from_anthropic_messages(messages),
+        messages=cast(  # cast-ok: anthropic messages are dicts at runtime
+            "list[dict[str, object]]",
+            strip_provider_specific_fields_from_anthropic_messages(
+                cast(Sequence[object], messages)  # cast-ok: anthropic payloads arrive as untyped dicts
+            ),
+        ),
         anthropic_messages_provider_config=anthropic_messages_provider_config,
         anthropic_messages_optional_request_params=dict(anthropic_messages_optional_request_params),
         _is_async=is_async,

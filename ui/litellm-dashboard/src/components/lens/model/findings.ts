@@ -36,6 +36,19 @@ export function briefMarkdown(title: string, brief: IssueBrief): string {
   ].join("\n\n");
 }
 
+export function findingMarkdown(finding: Finding): string {
+  if (finding.brief) return briefMarkdown(finding.title, finding.brief);
+  const quotes = finding.evidence.map((e) => `> ${e.quote.replaceAll("\n", "\n> ")}`);
+  return [
+    `# ${finding.title}`,
+    `## Summary\n${finding.description}`,
+    finding.suggestion && `## Suggested fix\n${finding.suggestion}`,
+    quotes.length > 0 && `## Evidence\n${quotes.join("\n\n")}`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 export function mergeFeedback(findings: Finding[], current: Finding[]): Finding[] {
   return findings.map((finding) => {
     const feedback = current.find((item) => item.id === finding.id);

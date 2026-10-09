@@ -186,8 +186,61 @@ def test_async_log_success_event_emits_llm_call_span():
     assert span.attributes[GenAI.OPERATION_NAME] == "chat"
     assert span.attributes[GenAI.REQUEST_MODEL] == "gpt-4o"
     assert span.attributes[LiteLLM.CALL_ID] == "call_1"
+    assert not any(key.startswith("litellm.routing.") for key in span.attributes)
     # Success leaves status UNSET (semconv default), not forced OK.
     assert span.status.status_code is StatusCode.UNSET
+
+
+@pytest.mark.parametrize("fail", [False, True])
+@pytest.mark.parametrize("legacy_compat", [False, True])
+def test_routing_diagnostics_reach_llm_spans_without_promoting_prompt_text(fail: bool, legacy_compat: bool) -> None:
+    logger, exporter = _logger(legacy_compat=legacy_compat)
+    decision: Final = {
+        "router_model_name": "auto-router",
+        "router_type": "complexity",
+        "router_config_id": "definition-1",
+        "router_config_updated_at": "2026-10-06T00:00:00Z",
+        "router_config_fingerprint": "definition-hash",
+        "routed_model": "answer",
+        "cause": "heuristic",
+        "score": 0.25,
+        "classifier_cost": 0.001,
+        "classifier_failure_reason": "timeout",
+        "classifier_error_type": "TimeoutError",
+        "escalated": False,
+    }
+    payload: Final = _payload(
+        metadata={
+            "routing_decision": {
+                **decision,
+                "signals": ["private prompt"],
+                "matched_keyword": "private prompt",
+                "escalation_keyword": "private prompt",
+                "classifier_crux": "private prompt",
+                "tier_litellm_params": {"api_key": "private key"},
+                "classifier_probabilities": {"easy": 0.25},
+                "unknown_field": "private config",
+                "tier_label": {"invalid": "scalar field"},
+            }
+        },
+        status="failure" if fail else "success",
+    )
+    _emit_llm(logger, _kwargs(payload), fail=fail)
+    (span,) = exporter.get_finished_spans()
+    actual: Final = {key: value for key, value in span.attributes.items() if key.startswith("litellm.routing.")}
+    assert actual == {f"litellm.routing.{key}": value for key, value in decision.items()}
+    assert isinstance(actual["litellm.routing.score"], float)
+    assert actual["litellm.routing.escalated"] is False
+
+
+@pytest.mark.parametrize("decision", ["custom", 42, ["custom"]])
+def test_malformed_routing_metadata_preserves_the_completed_llm_span(decision: object) -> None:
+    logger, exporter = _logger()
+    _emit_llm(logger, _kwargs(_payload(metadata={"routing_decision": decision})))
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes[GenAI.REQUEST_MODEL] == "gpt-4o"
+    assert span.attributes[LiteLLM.CALL_ID] == "call_1"
+    assert not any(key.startswith("litellm.routing.") for key in span.attributes)
 
 
 def test_llm_call_span_carries_the_callers_conversation_id():
@@ -1154,6 +1207,29 @@ def test_phase_event_lands_on_root_span_even_inside_active_phase_span():
     ]
     assert dict(root_events[2].attributes or {}) == {"litellm.deployment.attempt": 1}
     assert by_name["auth /chat/completions"].events == ()
+
+
+def test_routing_attributes_stay_on_the_active_phase_while_retry_events_stay_on_root() -> None:
+    logger, exporter = _logger()
+    root: Final = logger.tracer.start_span("request", kind=SpanKind.SERVER)
+    set_request_root_span(root)
+    with trace.use_span(root, end_on_exit=True):
+        logger.set_phase_attributes({"litellm.routing.cause": "outside phase"})
+        with logger.start_phase_span("route auto-router"):
+            logger.set_phase_attributes({"litellm.routing.router_config_id": "definition-1"})
+            with logger.tracer.start_as_current_span("classifier transport"):
+                logger.set_phase_attributes({"litellm.routing.cause": "heuristic"})
+                logger.add_phase_event("litellm.request.retry", {"error.type": "TimeoutError"})
+        logger.set_phase_attributes({"litellm.routing.cause": "after phase"})
+    by_name: Final = {span.name: span for span in exporter.get_finished_spans()}
+    route: Final = by_name["route auto-router"]
+    assert route.attributes["litellm.routing.router_config_id"] == "definition-1"
+    assert route.attributes["litellm.routing.cause"] == "heuristic"
+    assert route.parent.span_id == root.get_span_context().span_id
+    assert route.events == ()
+    assert "litellm.routing.cause" not in by_name["request"].attributes
+    assert "litellm.routing.cause" not in by_name["classifier transport"].attributes
+    assert by_name["request"].events[0].attributes["error.type"] == "TimeoutError"
 
 
 def test_live_llm_span_anchors_to_root_with_no_active_span():

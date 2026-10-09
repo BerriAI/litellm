@@ -30,9 +30,19 @@ const teamAdminSettingsSchema = z.object({
 
 const INPUT_STEP: Readonly<Record<TeamAdminSettingsField, number>> = { tpm_limit: 1, rpm_limit: 1, max_budget: 0.01 };
 
+const MAX_BUDGET_KEEP_OR_LOWER_HINT = "You can keep or lower this budget. Ask a proxy admin to raise it.";
+const MAX_BUDGET_RAISE_HINT =
+  "You can raise this budget. Raises are capped by your organization's budget when the team belongs to one.";
+
+const fieldHint = (name: TeamAdminSettingsField, mayRaiseMaxBudget: boolean): string | undefined => {
+  if (name !== "max_budget") return undefined;
+  return mayRaiseMaxBudget ? MAX_BUDGET_RAISE_HINT : MAX_BUDGET_KEEP_OR_LOWER_HINT;
+};
+
 interface TeamAdminSettingsFormProps {
   initialValues: TeamAdminSettingsValues;
   editableFields: ReadonlySet<string>;
+  mayRaiseMaxBudget: boolean;
   isSaving: boolean;
   onCancel: () => void;
   onSave: (changes: TeamAdminSettingsChanges) => Promise<void>;
@@ -41,6 +51,7 @@ interface TeamAdminSettingsFormProps {
 export default function TeamAdminSettingsForm({
   initialValues,
   editableFields,
+  mayRaiseMaxBudget,
   isSaving,
   onCancel,
   onSave,
@@ -57,7 +68,13 @@ export default function TeamAdminSettingsForm({
           A proxy admin chose which settings team admins can change. Ask a proxy admin to change anything else.
         </p>
         {TEAM_ADMIN_SETTINGS_FIELDS.filter((name) => editableFields.has(name)).map((name) => (
-          <FormField key={name} control={form.control} name={name} label={teamAdminFieldLabel(name)}>
+          <FormField
+            key={name}
+            control={form.control}
+            name={name}
+            label={teamAdminFieldLabel(name)}
+            description={fieldHint(name, mayRaiseMaxBudget)}
+          >
             {({ ref, value, ...field }) => (
               <NumericalInput {...field} ref={ref} value={value ?? ""} step={INPUT_STEP[name]} />
             )}

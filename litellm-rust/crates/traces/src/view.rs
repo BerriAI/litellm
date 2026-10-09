@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use crate::ui::UiContent;
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum SpanStatus {
@@ -16,7 +16,7 @@ pub enum SpanStatus {
     Unset,
 }
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::response_type)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Span {
     pub span_id: String,
@@ -41,7 +41,7 @@ pub struct Span {
     pub spend_match: Option<SpendMatch>,
 }
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::response_type)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum SpendMatch {
@@ -53,7 +53,7 @@ pub enum SpendMatch {
 }
 
 /// One distinct agent in a trace: 200 invocations of `researcher` are one node.
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::response_type)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentNode {
     pub name: String,
@@ -66,7 +66,35 @@ pub struct AgentNode {
     pub priced_calls: u64,
 }
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum RunSourceType {
+    Slack,
+    Teams,
+    Discord,
+    Linear,
+    Github,
+    Jira,
+    #[serde(other)]
+    Custom,
+}
+
+/// The conversation that started the run, from the `agent.source.*` span attributes.
+#[macro_rules_attribute::apply(crate::response_type)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunSource {
+    #[serde(rename = "type")]
+    pub kind: RunSourceType,
+    pub url: String,
+    pub title: String,
+    /// Who started the conversation, e.g. the Slack user's email.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
+    pub user: String,
+}
+
+#[macro_rules_attribute::apply(crate::response_type)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct TraceSummary {
     #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
@@ -95,11 +123,17 @@ pub struct TraceSummary {
     pub models: Vec<String>,
     pub spend: Option<f64>,
     pub priced_calls: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
+    pub source: Option<RunSource>,
 }
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::response_type)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Trace {
+    /// Read-cache metadata from gateway resolution; display estimates must not clear it.
+    #[serde(skip)]
+    pub gateway_spend_pending: bool,
     pub summary: TraceSummary,
     pub agents: Vec<AgentNode>,
     pub spans: Vec<Span>,
@@ -107,14 +141,14 @@ pub struct Trace {
     pub next_cursor: Option<String>,
 }
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::response_type)]
 #[derive(Debug, PartialEq)]
 pub struct TracePage {
     pub data: Vec<TraceSummary>,
     pub next_cursor: Option<String>,
 }
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::response_type)]
 #[derive(Debug, PartialEq)]
 pub struct SpanDetail {
     pub span_id: String,
@@ -125,7 +159,7 @@ pub struct SpanDetail {
     pub attributes: BTreeMap<String, String>,
 }
 
-#[macro_rules_attribute::apply(response_type)]
+#[macro_rules_attribute::apply(crate::response_type)]
 #[derive(Debug, PartialEq)]
 pub struct SpanErrorPage {
     pub span_id: String,

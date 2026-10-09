@@ -23,6 +23,7 @@ import pytest
 
 from e2e_config import unique_marker
 from e2e_http import Result, StreamingResponse, Success, unwrap
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from management_client import MODEL_ACCESS_DENIED_MARKER, ManagementClient
 from models import (
@@ -188,6 +189,7 @@ def _assert_chat_rejected_everywhere(client: ManagementClient, key: str, model: 
 
 
 class TestKeyLifecycle:
+    @meta(Subject(domain=Domain.MANAGEMENT, route=Route.KEY_MANAGEMENT))
     def test_create_echoes_every_field_written(
         self, client: ManagementClient, resources: ResourceManager, mock_deployment: str
     ) -> None:
@@ -206,6 +208,7 @@ class TestKeyLifecycle:
         ):
             assert observed == wanted, f"/key/generate echoed {field}={observed!r}, sent {wanted!r}"
 
+    @meta(Subject(domain=Domain.MANAGEMENT, route=Route.KEY_MANAGEMENT))
     def test_read_reflects_the_create_on_every_replica(
         self, client: ManagementClient, resources: ResourceManager, mock_deployment: str
     ) -> None:
@@ -221,6 +224,7 @@ class TestKeyLifecycle:
             )
 
     @pytest.mark.covers("mgmt.key.update.preserves_unrelated_fields")
+    @meta(Subject(domain=Domain.MANAGEMENT, route=Route.KEY_MANAGEMENT))
     def test_partial_update_changes_only_the_named_field(
         self, client: ManagementClient, resources: ResourceManager, mock_deployment: str
     ) -> None:
@@ -238,6 +242,7 @@ class TestKeyLifecycle:
             )
 
     @pytest.mark.covers("mgmt.key.update.clear_persists")
+    @meta(Subject(domain=Domain.MANAGEMENT, route=Route.KEY_MANAGEMENT))
     def test_explicit_null_clears_the_budget_and_its_reset_time(
         self, client: ManagementClient, resources: ResourceManager, mock_deployment: str
     ) -> None:
@@ -258,6 +263,14 @@ class TestKeyLifecycle:
                 info, created.written.model_copy(update={"max_budget": None, "budget_duration": None}), replica
             )
 
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            providers=(Provider.OPENAI,),
+            models=(BACKING_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_key_serves_its_model_and_is_denied_others(
         self, client: ManagementClient, resources: ResourceManager, mock_deployment: str
     ) -> None:
@@ -274,6 +287,15 @@ class TestKeyLifecycle:
             f"403 body must be a model-access denial, got: {denied.body[:300]}"
         )
 
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.KEY_MANAGEMENT,
+            providers=(Provider.OPENAI,),
+            models=(BACKING_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_delete_revokes_info_and_chat_on_every_replica(
         self, client: ManagementClient, resources: ResourceManager, mock_deployment: str
     ) -> None:

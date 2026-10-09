@@ -147,7 +147,7 @@ def test_search_uses_registry_credentials():
     litellm.vector_store_registry = registry
     try:
         logger = MagicMock()
-        logger._response_cost_calculator.return_value = 0
+        logger.response_cost_calculator.return_value = 0
 
         # Mock the search response
         mock_search_response = {
@@ -300,7 +300,7 @@ def _database_listing_index_rows(rows: Sequence[object]) -> SimpleNamespace:
     ],
 )
 async def test_vector_store_index_rows_from_the_db_are_returned_as_indexes(row: object) -> None:
-    indexes: Final = await VectorStoreIndexRegistry._get_vector_store_indexes_from_db(
+    indexes: Final = await VectorStoreIndexRegistry.get_vector_store_indexes_from_db(
         _database_listing_index_rows([row])
     )
 
@@ -309,7 +309,7 @@ async def test_vector_store_index_rows_from_the_db_are_returned_as_indexes(row: 
 
 @pytest.mark.asyncio
 async def test_vector_store_index_row_without_optional_columns_gets_empty_defaults() -> None:
-    indexes: Final = await VectorStoreIndexRegistry._get_vector_store_indexes_from_db(
+    indexes: Final = await VectorStoreIndexRegistry.get_vector_store_indexes_from_db(
         _database_listing_index_rows([{"id": "idx-1", "index_name": "team-docs", "litellm_params": _INDEX_PARAMS}])
     )
 
@@ -342,4 +342,4 @@ async def test_vector_store_index_row_without_optional_columns_gets_empty_defaul
 )
 async def test_malformed_vector_store_index_row_from_the_db_raises_a_validation_error(row: object) -> None:
     with pytest.raises(ValidationError):
-        await VectorStoreIndexRegistry._get_vector_store_indexes_from_db(_database_listing_index_rows([row]))
+        await VectorStoreIndexRegistry.get_vector_store_indexes_from_db(_database_listing_index_rows([row]))

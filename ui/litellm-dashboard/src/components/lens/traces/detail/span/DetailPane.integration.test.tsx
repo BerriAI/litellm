@@ -345,14 +345,14 @@ describe("DetailPane", () => {
     expect(pane).toHaveTextContent("TimeoutError('slow')");
   });
 
-  it("'Copy step' copies a curl for just this span as Markdown", async () => {
+  it("'Copy step' copies a curl for this span's captured content", async () => {
     const user = userEvent.setup();
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     renderPane(spanRow(llm));
     await user.click(screen.getByRole("button", { name: "Copy step" }));
     await waitFor(() => expect(writeText).toHaveBeenCalled());
-    expect(writeText.mock.calls[0][0]).toContain("http://proxy.test/v1/traces/t1?format=md&span_id=llm1");
+    expect(writeText.mock.calls[0][0]).toContain("http://proxy.test/v1/traces/t1/spans/llm1");
   });
 
   it("renders the assistant tool call as a card and expands a long argument on click", async () => {

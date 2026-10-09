@@ -36,6 +36,9 @@
     "span": {
       "type": "string"
     },
+    "start_time": {
+      "type": "string"
+    },
     "team": {
       "type": "string"
     },
@@ -50,6 +53,7 @@
     "source",
     "id",
     "record_team",
+    "start_time",
     "trace_ref",
     "span",
     "quote"

@@ -20,7 +20,10 @@ from typing import Final, Protocol
 
 from pydantic import TypeAdapter
 
-from litellm.proxy.auth.auth_checks import _delete_cache_access_object
+from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
+    _delete_cache_access_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    delete_cache_access_object,
+)
 from litellm.proxy.db.db_span import db_span
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -99,7 +102,7 @@ async def invalidate_access_group_cache(access_group_id: str) -> None:
     """
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
-    await _delete_cache_access_object(
+    await delete_cache_access_object(
         access_group_id=access_group_id,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,

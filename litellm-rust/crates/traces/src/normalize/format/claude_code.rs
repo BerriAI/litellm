@@ -15,14 +15,23 @@ use crate::{
 /// Claude Code's built-in tracing, identified by its instrumentation scope.
 pub(crate) struct ClaudeCode;
 
+#[derive(Debug, PartialEq, Eq, strum::EnumString)]
 enum SpanType {
+    #[strum(serialize = "assistant_response")]
     AssistantResponse,
+    #[strum(serialize = "tool_result")]
     ToolResult,
+    #[strum(serialize = "api_request_body")]
     ApiRequestBody,
+    #[strum(serialize = "compaction")]
     Compaction,
+    #[strum(serialize = "interaction")]
     Interaction,
+    #[strum(serialize = "llm_request")]
     LlmRequest,
+    #[strum(serialize = "tool")]
     Tool,
+    #[strum(disabled)]
     Other,
 }
 
@@ -33,16 +42,7 @@ fn span_type(name: &str, attributes: &BTreeMap<String, String>) -> SpanType {
     } else {
         kind
     };
-    match kind {
-        "assistant_response" => SpanType::AssistantResponse,
-        "tool_result" => SpanType::ToolResult,
-        "api_request_body" => SpanType::ApiRequestBody,
-        "compaction" => SpanType::Compaction,
-        "interaction" => SpanType::Interaction,
-        "llm_request" => SpanType::LlmRequest,
-        "tool" => SpanType::Tool,
-        _ => SpanType::Other,
-    }
+    kind.parse().unwrap_or(SpanType::Other)
 }
 
 /// `agent:custom:search_agent` -> `search_agent`: the subagent a request ran for.
@@ -159,10 +159,23 @@ fn exported_tool_results(attributes: &BTreeMap<String, String>) -> String {
     let Ok(body) = serde_json::from_str::<Value>(attr(attributes, "body")) else {
         return json!({"warning": "Claude's API body export is missing or truncated. Some tool results may be unavailable."}).to_string();
     };
-    let results: Vec<Value> = body.get("messages").and_then(Value::as_array)
-        .and_then(|messages| messages.last())
-        .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
-        .and_then(|message| message.get("content").and_then(Value::as_array))
+    let message = body
+        .get("messages")
+        .and_then(Value::as_array)
+        .and_then(|messages| {
+            messages
+                .iter()
+                .rev()
+                .find(|message| message.get("role").and_then(Value::as_str) != Some("system"))
+        })
+        .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"));
+    let Some(content) = message.and_then(|message| message.get("content")) else {
+        return json!({"warning": "Claude's API body export has an unexpected message shape. Some tool results may be unavailable."}).to_string();
+    };
+    if !content.is_array() && !content.is_string() {
+        return json!({"warning": "Claude's API body export has an unexpected content shape. Some tool results may be unavailable."}).to_string();
+    }
+    let results: Vec<Value> = content.as_array()
         .into_iter()
         .flatten()
         .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
@@ -305,7 +318,7 @@ mod tests {
     use rstest::rstest;
     use serde_json::Value;
 
-    use super::CLAUDE_CODE_SCOPE;
+    use super::{CLAUDE_CODE_SCOPE, SpanType, span_type};
     use crate::{
         Error,
         normalize::{Normalization, NormalizedSpan, ObservationType},
@@ -340,6 +353,22 @@ mod tests {
             .iter()
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
             .collect()
+    }
+
+    #[rstest]
+    #[case::assistant_response("assistant_response", SpanType::AssistantResponse)]
+    #[case::tool_result("tool_result", SpanType::ToolResult)]
+    #[case::api_request_body("api_request_body", SpanType::ApiRequestBody)]
+    #[case::compaction("compaction", SpanType::Compaction)]
+    #[case::interaction("interaction", SpanType::Interaction)]
+    #[case::llm_request("llm_request", SpanType::LlmRequest)]
+    #[case::tool("tool", SpanType::Tool)]
+    #[case::unknown("surprise", SpanType::Other)]
+    fn span_type_maps_each_recorded_kind(#[case] kind: &str, #[case] expected: SpanType) {
+        assert_eq!(
+            span_type("anything", &attributes(&[("span.type", kind)])),
+            expected
+        );
     }
 
     #[rstest]

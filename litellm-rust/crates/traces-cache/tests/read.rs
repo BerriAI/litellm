@@ -286,6 +286,10 @@ fn span(index: usize) -> TraceSpansRow {
         call_keys: Vec::new(),
         call_evidence: None,
         tool_call_id: String::new(),
+        source_type: String::new(),
+        source_url: String::new(),
+        source_title: String::new(),
+        source_user: String::new(),
         team_id: "team".into(),
         api_key_hash: "key".into(),
         user_id: "user".into(),
@@ -536,6 +540,110 @@ fn spend_row(response_id: &str, cost: f64) -> SpendByResponseIdsRow {
 }
 
 #[rstest]
+#[case::missing(&[], None, 0, false, 0.5, None)]
+#[case::partial(&[Some(0.25)], Some(0.25), 1, false, 0.5, None)]
+#[case::delayed_zero(&[Some(0.25)], Some(0.25), 1, false, 0.0, None)]
+#[case::null_amount(&[Some(0.25), None], Some(0.25), 1, false, 0.5, None)]
+#[case::complete_zero(&[Some(0.25), Some(0.0)], Some(0.25), 2, true, 0.5, None)]
+#[case::no_call_id(&[Some(0.25)], Some(0.25), 1, true, 0.5, Some(CallEvidenceKind::Unknown))]
+#[case::incomplete_identity(&[Some(0.25)], Some(0.25), 1, true, 0.5, Some(CallEvidenceKind::Partial))]
+#[tokio::test]
+async fn gateway_cost_refreshes_until_every_model_call_is_priced(
+    #[case] initial_costs: &[Option<f64>],
+    #[case] initial_total: Option<f64>,
+    #[case] initial_priced: u64,
+    #[case] settled: bool,
+    #[case] final_second: f64,
+    #[case] terminal: Option<CallEvidenceKind>,
+) {
+    let rows: Vec<_> = std::iter::once(span(0))
+        .chain((1..=2).map(|index| TraceSpansRow {
+            kind: ObservationType::Llm,
+            call_keys: vec![CallKey::ProviderResponse(format!("response-{index}"))],
+            call_evidence: Some(if index == 2 {
+                terminal.unwrap_or(CallEvidenceKind::Complete)
+            } else {
+                CallEvidenceKind::Complete
+            }),
+            ..span(index)
+        }))
+        .collect();
+    let store = FakeStore::with_spans("ref", rows.clone());
+    store.set_list_runs(vec![run("trace", "ref")]);
+    store.set_run_spans(rows);
+    store.state.lock().unwrap().spend = initial_costs
+        .iter()
+        .enumerate()
+        .map(|(index, cost)| SpendByResponseIdsRow {
+            spend: *cost,
+            ..spend_row(&format!("response-{}", index + 1), 0.0)
+        })
+        .collect();
+    let reader = TraceReader::new(usize::MAX);
+    let access = access();
+    let detail = reader
+        .get_trace_page(&store, &access, "trace", "ref", None, 1)
+        .await
+        .unwrap()
+        .unwrap();
+    let list = reader
+        .list_traces(&store, &access, 0, i64::MAX, None, 2)
+        .await
+        .unwrap();
+    assert_eq!(detail.summary.spend, initial_total);
+    assert_eq!(detail.summary.priced_calls, initial_priced);
+    assert_eq!(list.data[0].spend, initial_total);
+    assert_eq!(list.data[0].priced_calls, initial_priced);
+
+    store.state.lock().unwrap().spend = vec![
+        spend_row("response-1", 0.25),
+        spend_row("response-2", final_second),
+    ];
+    tokio::time::sleep(LIVE_TTL + Duration::from_millis(200)).await;
+    let refreshed = reader
+        .get_trace(&store, &access, "trace", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    let listed = reader
+        .list_traces(&store, &access, 0, i64::MAX, None, 2)
+        .await
+        .unwrap();
+    let expected = if settled {
+        initial_total
+    } else {
+        Some(0.25 + final_second)
+    };
+    assert_eq!(refreshed.summary.spend, expected);
+    assert_eq!(listed.data[0].spend, expected);
+    let expected_priced = if settled { initial_priced } else { 2 };
+    assert_eq!(refreshed.summary.priced_calls, expected_priced);
+    assert_eq!(listed.data[0].priced_calls, expected_priced);
+    assert_eq!(
+        store.calls(Operation::TraceSpans),
+        if settled { 1 } else { 2 }
+    );
+    assert_eq!(
+        store.calls(Operation::RunSpans),
+        if settled { 1 } else { 2 }
+    );
+    let pinned = reader
+        .get_trace_page(
+            &store,
+            &access,
+            "trace",
+            "ref",
+            detail.next_cursor.as_deref(),
+            1,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(pinned.summary.spend, initial_total);
+    assert_eq!(pinned.summary.priced_calls, initial_priced);
+}
+
+#[rstest]
 #[tokio::test]
 async fn failed_batch_spend_lookup_falls_back_to_each_run_instead_of_losing_every_cost() {
     let mut first = span(0);
@@ -704,6 +812,54 @@ async fn failed_reads_are_not_cached() {
         .unwrap();
     assert_eq!(trace.spans.len(), 1);
     assert_eq!(store.calls(Operation::TraceSpans), 2);
+}
+
+#[rstest]
+#[case::claude_code("claude-code")]
+#[case::claude_agent_sdk("claude-agent-sdk")]
+#[tokio::test]
+async fn resumed_native_sessions_refresh_after_live_ttl(#[case] framework: &str) {
+    let original = TraceSpansRow {
+        framework: framework.into(),
+        ..span(0)
+    };
+    let store = FakeStore::with_spans("ref", vec![original.clone()]);
+    let reader = TraceReader::new(usize::MAX);
+    let access = access();
+    let first = reader
+        .get_trace(&store, &access, "trace", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.spans.len(), 1);
+
+    store.state.lock().unwrap().trace_spans.insert(
+        "ref".into(),
+        vec![
+            original,
+            TraceSpansRow {
+                start_ns: now_ns(),
+                ..span(1)
+            },
+        ],
+    );
+    let cached = reader
+        .get_trace(&store, &access, "trace", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(cached.spans.len(), 1);
+    assert_eq!(store.calls(Operation::TraceSpans), 1);
+
+    tokio::time::sleep(LIVE_TTL + Duration::from_millis(200)).await;
+    let resumed = reader
+        .get_trace(&store, &access, "trace", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(resumed.spans.len(), 2);
+    assert_eq!(store.calls(Operation::TraceSpans), 2);
+    assert_eq!(first.spans.len(), 1);
 }
 
 #[rstest]

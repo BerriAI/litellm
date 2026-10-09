@@ -9,8 +9,10 @@ repository.workspace = true
 litellm-auth-types.workspace = true
 serde.workspace = true
 serde_yaml_ng = "0.10.0"
+strum.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true
+serde_json.workspace = true
 tempfile.workspace = true

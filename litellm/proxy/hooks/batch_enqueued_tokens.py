@@ -148,12 +148,12 @@ def resolve_batch_enqueued_token_scopes(
 
 def canonical_provider_batch_id(batch_id: str) -> str:
     from litellm.proxy.openai_files_endpoints.common_utils import (
-        _is_base64_encoded_unified_file_id,  # pyright: ignore[reportPrivateUsage]  # canonical unified-id decoder has no public wrapper
         get_batch_id_from_unified_batch_id,
         get_original_file_id,
+        is_base64_encoded_unified_file_id,  # pyright: ignore[reportPrivateUsage]  # canonical unified-id decoder has no public wrapper
     )
 
-    decoded: Final = _is_base64_encoded_unified_file_id(batch_id)
+    decoded: Final = is_base64_encoded_unified_file_id(batch_id)
     if isinstance(decoded, str):
         if "llm_batch_id" in decoded or "generic_response_id" in decoded:
             return get_batch_id_from_unified_batch_id(decoded)

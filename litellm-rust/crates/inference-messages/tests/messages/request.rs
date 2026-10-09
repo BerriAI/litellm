@@ -239,7 +239,10 @@ async fn additional_drop_params_remove_fields_before_sending(call: MessagesCall)
         api_key: Some("sk".into()),
         api_base: Some(upstream.uri()),
         shaping: MessagesShaping {
-            additional_drop_params: vec!["temperature".into()],
+            settings: MessagesSettings {
+                additional_drop_params: vec!["temperature".into()],
+                ..MessagesSettings::default()
+            },
             ..MessagesShaping::default()
         },
         ..with_fields(call, json!({"temperature": 0.5, "top_k": 3}))
@@ -390,8 +393,10 @@ async fn unsupported_params_are_dropped_under_drop_params_and_rejected_without_i
                 api_base: Some(upstream.uri()),
                 shaping: MessagesShaping {
                     capabilities,
-                    drop_params,
-                    ..MessagesShaping::default()
+                    settings: MessagesSettings {
+                        drop_params,
+                        ..MessagesSettings::default()
+                    },
                 },
                 body: call.body.clone(),
                 custom_llm_provider: call.custom_llm_provider.clone(),
@@ -436,13 +441,15 @@ async fn reasoning_auto_summary_marks_active_thinking_on_the_wire(
             api_key: Some("sk".into()),
             api_base: Some(upstream.uri()),
             shaping: MessagesShaping {
+                settings: MessagesSettings {
+                    reasoning_auto_summary: true,
+                    ..MessagesSettings::default()
+                },
                 capabilities: MessagesModelCapabilities {
                     supports_reasoning: true,
                     supports_adaptive_thinking: true,
                     ..MessagesModelCapabilities::default()
                 },
-                reasoning_auto_summary: true,
-                ..MessagesShaping::default()
             },
             ..call
         },
@@ -634,7 +641,10 @@ async fn system_message_folding_is_selected_by_the_provider(
             api_key: Some("sk-azure".into()),
             api_base: Some(upstream.uri()),
             shaping: MessagesShaping {
-                additional_drop_params: drop_params.iter().map(ToString::to_string).collect(),
+                settings: MessagesSettings {
+                    additional_drop_params: drop_params.iter().map(ToString::to_string).collect(),
+                    ..call.shaping.settings
+                },
                 ..call.shaping
             },
             ..call
@@ -695,7 +705,10 @@ async fn provider_validation_runs_before_caller_parameter_removal(
             api_key: Some("sk-test".into()),
             api_base: Some(upstream.uri()),
             shaping: MessagesShaping {
-                additional_drop_params: vec!["metadata".into()],
+                settings: MessagesSettings {
+                    additional_drop_params: vec!["metadata".into()],
+                    ..call.shaping.settings
+                },
                 ..call.shaping
             },
             ..call

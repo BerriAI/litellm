@@ -683,4 +683,20 @@ describe("coding sessions", () => {
     details.set("reply", { ...detail("reply", [], "Hello"), attributes: { "event.name": "assistant_response" } });
     expect(conversationWarnings(details, true)).toEqual([]);
   });
+
+  it("still warns about missing replies when only a tool recorded output", () => {
+    const details = new Map([
+      ["llm", { ...detail("llm", [], []), output: "", attributes: { "span.type": "llm_request" } }],
+      ["read", { ...detail("read", {}, "file contents"), output: "file contents" }],
+    ]);
+    expect(conversationWarnings(details, true, new Set(["read"]))).toHaveLength(1);
+  });
+
+  it("does not warn about missing replies when another model call recorded the answer", () => {
+    const details = new Map([
+      ["llm", { ...detail("llm", [], []), output: "", attributes: { "span.type": "llm_request" } }],
+      ["answer", detail("answer", [], [answer])],
+    ]);
+    expect(conversationWarnings(details, true)).toEqual([]);
+  });
 });

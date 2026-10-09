@@ -82,7 +82,7 @@ fn assert_invariants(span: &DecodedSpan) {
     }
     assert!(normalized.input_preview.chars().count() <= 240);
     if let Ok(Value::Array(messages)) = serde_json::from_str(&normalized.input) {
-        let user = messages.iter().rev().find_map(|message| {
+        let user = messages.iter().find_map(|message| {
             (message.get("role")?.as_str()? == "user")
                 .then(|| {
                     message

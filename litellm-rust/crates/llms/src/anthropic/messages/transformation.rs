@@ -270,7 +270,7 @@ fn drop_unsupported_params(
 
 fn speed_text(speed: &Recognized<Speed>) -> String {
     match speed {
-        Recognized::Known(speed) => speed.as_str().to_string(),
+        Recognized::Known(speed) => <&'static str>::from(*speed).to_string(),
         Recognized::Unrecognized(Value::String(text)) => text.clone(),
         Recognized::Unrecognized(other) => other.to_string(),
     }

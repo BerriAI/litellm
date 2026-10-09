@@ -422,7 +422,7 @@ class BingGroundingSearchConfig(BaseSearchConfig):
         )
         if get_secret_str(CONNECTION_ID_ENV):
             return response
-        response._hidden_params["additional_headers"] = {_RESPONSE_COST_HEADER: 0.0}
+        response.hidden_params["additional_headers"] = {_RESPONSE_COST_HEADER: 0.0}
         return response
 
     def get_error_class(

@@ -13,11 +13,11 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_gemini_tool_call_result,
 )
 from litellm.llms.vertex_ai.gemini.transformation import (
-    _gemini_convert_messages_with_history,
-    _transform_request_body,
-    check_if_part_exists_in_parts,
-    _get_highest_media_resolution,
     _extract_max_media_resolution_from_messages,
+    _get_highest_media_resolution,
+    check_if_part_exists_in_parts,
+    gemini_convert_messages_with_history,
+    transform_request_body,
 )
 from litellm.types.llms.vertex_ai import BlobType, ContentType, PartType
 from litellm.types.utils import Message
@@ -121,7 +121,7 @@ def test_cached_content_respects_modify_params_for_cache_incompatible_fields():
     try:
         # With modify_params=False (default), keep fields even with cachedContent.
         litellm.modify_params = False
-        result = _transform_request_body(
+        result = transform_request_body(
             messages=list(messages),
             model="gemini-2.5-pro",
             optional_params=dict(optional_params),
@@ -137,7 +137,7 @@ def test_cached_content_respects_modify_params_for_cache_incompatible_fields():
 
         # With modify_params=True, drop cache-incompatible fields.
         litellm.modify_params = True
-        result_modify_true = _transform_request_body(
+        result_modify_true = transform_request_body(
             messages=list(messages),
             model="gemini-2.5-pro",
             optional_params=dict(optional_params),
@@ -152,7 +152,7 @@ def test_cached_content_respects_modify_params_for_cache_incompatible_fields():
         assert "contents" in result_modify_true
 
         # Without cache, fields are always included.
-        result_no_cache = _transform_request_body(
+        result_no_cache = transform_request_body(
             messages=list(messages),
             model="gemini-2.5-pro",
             optional_params=dict(optional_params),
@@ -174,7 +174,7 @@ def test_google_genai_excludes_labels():
     optional_params = {"labels": {"project": "test", "team": "ai"}}
     litellm_params = {}
 
-    result = _transform_request_body(
+    result = transform_request_body(
         messages=messages,
         model="gemini-2.5-pro",
         optional_params=optional_params,
@@ -194,7 +194,7 @@ def test_vertex_ai_includes_labels():
     optional_params = {"labels": {"project": "test", "team": "ai"}}
     litellm_params = {}
 
-    result = _transform_request_body(
+    result = transform_request_body(
         messages=messages,
         model="gemini-2.5-pro",
         optional_params=optional_params,
@@ -214,7 +214,7 @@ def test_service_tier_forwarded_to_vertex_ai():
     optional_params = {"service_tier": "flex"}
     litellm_params = {}
 
-    result = _transform_request_body(
+    result = transform_request_body(
         messages=messages,
         model="gemini-2.5-pro",
         optional_params=optional_params,
@@ -244,7 +244,7 @@ def test_extra_body_cache_not_forwarded_to_vertex_ai():
     }
     litellm_params = {}
 
-    result = _transform_request_body(
+    result = transform_request_body(
         messages=messages,
         model="gemini-2.5-pro",
         optional_params=optional_params,
@@ -282,7 +282,7 @@ def test_extra_body_tags_not_forwarded_to_vertex_ai():
     }
     litellm_params = {}
 
-    result = _transform_request_body(
+    result = transform_request_body(
         messages=messages,
         model="gemini-2.5-pro",
         optional_params=optional_params,
@@ -309,7 +309,7 @@ def test_extra_body_google_maps_rewrites_json_response_format():
         },
     }
 
-    result = _transform_request_body(
+    result = transform_request_body(
         messages=messages,
         model="gemini-2.5-pro",
         optional_params=optional_params,
@@ -347,7 +347,7 @@ def test_extra_body_generation_config_cannot_restore_google_maps_json_mime_type(
         },
     }
 
-    result = _transform_request_body(
+    result = transform_request_body(
         messages=messages,
         model="gemini-2.5-pro",
         optional_params=optional_params,
@@ -374,14 +374,10 @@ def test_metadata_to_labels_vertex_only():
     """Test that metadata->labels conversion only happens for Vertex AI"""
     messages = [{"role": "user", "content": "test"}]
     optional_params = {}
-    litellm_params = {
-        "metadata": {
-            "requester_metadata": {"user": "john_doe", "project": "test-project"}
-        }
-    }
+    litellm_params = {"metadata": {"requester_metadata": {"user": "john_doe", "project": "test-project"}}}
 
     # Google GenAI/AI Studio should not include labels from metadata
-    result = _transform_request_body(
+    result = transform_request_body(
         messages=messages,
         model="gemini-2.5-pro",
         optional_params=optional_params.copy(),
@@ -392,7 +388,7 @@ def test_metadata_to_labels_vertex_only():
     assert "labels" not in result
 
     # Vertex AI should include labels from metadata
-    result = _transform_request_body(
+    result = transform_request_body(
         messages=messages,
         model="gemini-2.5-pro",
         optional_params=optional_params.copy(),
@@ -409,7 +405,7 @@ def test_empty_content_handling():
     # Test with empty content in user message
     messages = [{"content": "", "role": "user"}]
 
-    contents = _gemini_convert_messages_with_history(messages=messages)
+    contents = gemini_convert_messages_with_history(messages=messages)
 
     # Verify that the content was properly transformed
     assert len(contents) == 1
@@ -822,12 +818,12 @@ def _parallel_tool_calls_signed_via_id(*signatures):
     OpenAI-format client echoes back on the next turn.
     """
     from litellm.litellm_core_utils.prompt_templates.factory import (
-        _encode_tool_call_id_with_signature,
+        encode_tool_call_id_with_signature,
     )
 
     return [
         {
-            "id": _encode_tool_call_id_with_signature(f"call_{idx}", signature),
+            "id": encode_tool_call_id_with_signature(f"call_{idx}", signature),
             "type": "function",
             "function": {"name": f"tool_{idx}", "arguments": '{"location": "Paris"}'},
             "index": idx,
@@ -1032,7 +1028,7 @@ def test_real_signature_forwarded_to_gemini_2_5_without_placeholder_siblings():
 def test_parallel_tool_call_history_replayed_through_full_message_conversion():
     """End to end through the message-history converter, the path a real /chat/completions replay takes."""
     from litellm.llms.vertex_ai.gemini.transformation import (
-        _gemini_convert_messages_with_history,
+        gemini_convert_messages_with_history,
     )
 
     messages = [
@@ -1040,15 +1036,11 @@ def test_parallel_tool_call_history_replayed_through_full_message_conversion():
         {
             "role": "assistant",
             "content": None,
-            "tool_calls": _parallel_tool_calls_signed_via_id(
-                REAL_THOUGHT_SIGNATURE, None, None
-            ),
+            "tool_calls": _parallel_tool_calls_signed_via_id(REAL_THOUGHT_SIGNATURE, None, None),
         },
     ]
 
-    contents = _gemini_convert_messages_with_history(
-        messages=messages, model="gemini-3-pro-preview"
-    )
+    contents = gemini_convert_messages_with_history(messages=messages, model="gemini-3-pro-preview")
 
     model_parts = contents[1]["parts"]
     assert len(model_parts) == 3
@@ -1070,7 +1062,7 @@ def test_natively_signed_parallel_turn_never_carries_a_placeholder(model):
     import json
 
     from litellm.llms.vertex_ai.gemini.transformation import (
-        _gemini_convert_messages_with_history,
+        gemini_convert_messages_with_history,
     )
 
     messages = [
@@ -1078,13 +1070,11 @@ def test_natively_signed_parallel_turn_never_carries_a_placeholder(model):
         {
             "role": "assistant",
             "content": None,
-            "tool_calls": _parallel_tool_calls_signed_via_id(
-                REAL_THOUGHT_SIGNATURE, None, None
-            ),
+            "tool_calls": _parallel_tool_calls_signed_via_id(REAL_THOUGHT_SIGNATURE, None, None),
         },
     ]
 
-    contents = _gemini_convert_messages_with_history(messages=messages, model=model)
+    contents = gemini_convert_messages_with_history(messages=messages, model=model)
 
     model_parts = contents[1]["parts"]
     assert len(model_parts) == 3
@@ -1138,7 +1128,7 @@ def test_signed_text_part_survives_alongside_unsigned_parallel_tool_calls():
     """Text-part and function-call signatures are collected by separate code paths, so scoping the
     placeholder must not disturb a real signature that arrived on the text part."""
     from litellm.llms.vertex_ai.gemini.transformation import (
-        _gemini_convert_messages_with_history,
+        gemini_convert_messages_with_history,
     )
 
     msg = {
@@ -1148,9 +1138,7 @@ def test_signed_text_part_survives_alongside_unsigned_parallel_tool_calls():
         "tool_calls": _parallel_tool_calls(None, None, None),
     }
 
-    parts = _gemini_convert_messages_with_history(
-        messages=[msg], model="gemini-3-pro-preview"
-    )[0]["parts"]
+    parts = gemini_convert_messages_with_history(messages=[msg], model="gemini-3-pro-preview")[0]["parts"]
 
     assert parts[0]["text"] == "Checking all three cities."
     assert parts[0]["thoughtSignature"] == "real_25_signature"
@@ -1305,7 +1293,7 @@ class TestMediaResolution:
             }
         ]
 
-        result = _transform_request_body(
+        result = transform_request_body(
             messages=messages,
             model="gemini-2.5-flash",
             optional_params={},
@@ -1336,7 +1324,7 @@ class TestMediaResolution:
             }
         ]
 
-        result = _transform_request_body(
+        result = transform_request_body(
             messages=messages,
             model="gemini-2.5-flash",
             optional_params={},
@@ -1367,7 +1355,7 @@ class TestMediaResolution:
             }
         ]
 
-        result = _transform_request_body(
+        result = transform_request_body(
             messages=messages,
             model="gemini-3-pro-preview",
             optional_params={},
@@ -1396,7 +1384,7 @@ class TestMediaResolution:
             }
         ]
 
-        result = _transform_request_body(
+        result = transform_request_body(
             messages=messages,
             model="gemini-2.5-flash",
             optional_params={},
@@ -1472,7 +1460,7 @@ class TestMediaResolution:
             }
         ]
 
-        result = _transform_request_body(
+        result = transform_request_body(
             messages=messages,
             model="gemini-1.5-pro",
             optional_params={},
@@ -1517,9 +1505,7 @@ class TestVideoMetadataAllGeminiModels:
     def test_video_metadata_fps_gemini_2_5_flash(self):
         """Gemini 2.5 Flash: fps in video_metadata should be forwarded (Issue #25474)"""
         messages = self._make_video_messages({"fps": 5})
-        contents = _gemini_convert_messages_with_history(
-            messages=messages, model="gemini-2.5-flash"
-        )
+        contents = gemini_convert_messages_with_history(messages=messages, model="gemini-2.5-flash")
         file_part = self._get_file_part(contents)
         assert "video_metadata" in file_part
         assert file_part["video_metadata"]["fps"] == 5
@@ -1527,21 +1513,15 @@ class TestVideoMetadataAllGeminiModels:
     def test_video_metadata_fps_gemini_2_5_pro(self):
         """Gemini 2.5 Pro: fps in video_metadata should be forwarded (Issue #25474)"""
         messages = self._make_video_messages({"fps": 10})
-        contents = _gemini_convert_messages_with_history(
-            messages=messages, model="gemini-2.5-pro"
-        )
+        contents = gemini_convert_messages_with_history(messages=messages, model="gemini-2.5-pro")
         file_part = self._get_file_part(contents)
         assert "video_metadata" in file_part
         assert file_part["video_metadata"]["fps"] == 10
 
     def test_video_metadata_offsets_gemini_2_5_flash(self):
         """Gemini 2.5 Flash: start_offset/end_offset converted to camelCase (Issue #25474)"""
-        messages = self._make_video_messages(
-            {"start_offset": "5s", "end_offset": "30s"}
-        )
-        contents = _gemini_convert_messages_with_history(
-            messages=messages, model="gemini-2.5-flash"
-        )
+        messages = self._make_video_messages({"start_offset": "5s", "end_offset": "30s"})
+        contents = gemini_convert_messages_with_history(messages=messages, model="gemini-2.5-flash")
         file_part = self._get_file_part(contents)
         assert "video_metadata" in file_part
         vm = file_part["video_metadata"]
@@ -1550,12 +1530,8 @@ class TestVideoMetadataAllGeminiModels:
 
     def test_video_metadata_all_fields_gemini_2_5_flash(self):
         """Gemini 2.5 Flash: all video_metadata fields forwarded correctly (Issue #25474)"""
-        messages = self._make_video_messages(
-            {"fps": 5, "start_offset": "10s", "end_offset": "60s"}
-        )
-        contents = _gemini_convert_messages_with_history(
-            messages=messages, model="gemini-2.5-flash"
-        )
+        messages = self._make_video_messages({"fps": 5, "start_offset": "10s", "end_offset": "60s"})
+        contents = gemini_convert_messages_with_history(messages=messages, model="gemini-2.5-flash")
         file_part = self._get_file_part(contents)
         assert "video_metadata" in file_part
         vm = file_part["video_metadata"]
@@ -1566,9 +1542,7 @@ class TestVideoMetadataAllGeminiModels:
     def test_video_metadata_gemini_1_5_pro(self):
         """Gemini 1.5 Pro: video_metadata should also be forwarded (Issue #25474)"""
         messages = self._make_video_messages({"fps": 2})
-        contents = _gemini_convert_messages_with_history(
-            messages=messages, model="gemini-1.5-pro"
-        )
+        contents = gemini_convert_messages_with_history(messages=messages, model="gemini-1.5-pro")
         file_part = self._get_file_part(contents)
         assert "video_metadata" in file_part
         assert file_part["video_metadata"]["fps"] == 2
@@ -1663,7 +1637,7 @@ def test_gemini_history_nests_multimodal_tool_response_parts():
         },
     ]
 
-    contents = _gemini_convert_messages_with_history(messages=messages)
+    contents = gemini_convert_messages_with_history(messages=messages)
 
     tool_response_parts = contents[-1]["parts"]
     assert len(tool_response_parts) == 1
@@ -2122,7 +2096,7 @@ def test_assistant_message_with_images_field():
     ]
 
     # Convert messages to Gemini format
-    contents = _gemini_convert_messages_with_history(messages=messages)
+    contents = gemini_convert_messages_with_history(messages=messages)
 
     # Verify structure
     assert len(contents) == 2, f"Expected 2 content blocks, got {len(contents)}"
@@ -2192,19 +2166,15 @@ def test_assistant_message_with_multiple_images():
     ]
 
     # Convert messages to Gemini format
-    contents = _gemini_convert_messages_with_history(messages=messages)
+    contents = gemini_convert_messages_with_history(messages=messages)
 
     # Verify assistant message has 3 parts (1 text + 2 images)
     assert contents[1]["role"] == "model"
-    assert (
-        len(contents[1]["parts"]) == 3
-    ), f"Expected 3 parts (text + 2 images), got {len(contents[1]['parts'])}"
+    assert len(contents[1]["parts"]) == 3, f"Expected 3 parts (text + 2 images), got {len(contents[1]['parts'])}"
 
     # Count inline_data parts
     inline_data_parts = [part for part in contents[1]["parts"] if "inline_data" in part]
-    assert (
-        len(inline_data_parts) == 2
-    ), f"Expected 2 inline_data parts, got {len(inline_data_parts)}"
+    assert len(inline_data_parts) == 2, f"Expected 2 inline_data parts, got {len(inline_data_parts)}"
 
     # Verify first image
     assert inline_data_parts[0]["inline_data"]["mime_type"] == "image/png"
@@ -2241,7 +2211,7 @@ def test_assistant_message_with_images_using_message_object():
     messages = [user_message, assistant_message]
 
     # Convert messages to Gemini format
-    contents = _gemini_convert_messages_with_history(messages=messages)
+    contents = gemini_convert_messages_with_history(messages=messages)
 
     # Verify assistant message has both text and image
     assert contents[1]["role"] == "model"
@@ -2283,7 +2253,7 @@ def test_assistant_message_with_images_in_conversation_history():
     ]
 
     # Convert messages to Gemini format
-    contents = _gemini_convert_messages_with_history(messages=messages)
+    contents = gemini_convert_messages_with_history(messages=messages)
 
     # Verify structure: user -> model (with image) -> user
     assert len(contents) == 3
@@ -2331,7 +2301,7 @@ def test_function_response_has_user_role():
         },
     ]
 
-    contents = _gemini_convert_messages_with_history(messages=messages)
+    contents = gemini_convert_messages_with_history(messages=messages)
 
     # Expect: user -> model (functionCall) -> user (functionResponse)
     assert len(contents) == 3
@@ -2401,7 +2371,7 @@ def test_multi_turn_function_calling_roles():
         },
     ]
 
-    contents = _gemini_convert_messages_with_history(messages=messages)
+    contents = gemini_convert_messages_with_history(messages=messages)
 
     # Every content block must have a valid role
     for i, content in enumerate(contents):
@@ -2415,18 +2385,18 @@ def test_multi_turn_function_calling_roles():
     for i, content in enumerate(contents):
         for part in content["parts"]:
             if "function_response" in part:
-                assert (
-                    content["role"] == "user"
-                ), f"Content block {i} with function_response has role='{content['role']}', expected 'user'"
+                assert content["role"] == "user", (
+                    f"Content block {i} with function_response has role='{content['role']}', expected 'user'"
+                )
 
 
 def test_gemini_thought_signature_preservation_real_response():
     """Test that thought signatures are preserved on the text part if originally there, without dropping or duplicating (real response case)."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        gemini_convert_messages_with_history,
+    )
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
-    )
-    from litellm.llms.vertex_ai.gemini.transformation import (
-        _gemini_convert_messages_with_history,
     )
 
     real_candidate = {
@@ -2470,11 +2440,9 @@ def test_gemini_thought_signature_preservation_real_response():
     if functions is not None:
         msg["function_call"] = functions
     if thought_signatures is not None:
-        msg["provider_specific_fields"] = {
-            "thought_signatures": thought_signatures
-        }
+        msg["provider_specific_fields"] = {"thought_signatures": thought_signatures}
 
-    converted_real = _gemini_convert_messages_with_history(
+    converted_real = gemini_convert_messages_with_history(
         messages=[msg],
         model="gemini-2.5-pro",
     )
@@ -2494,28 +2462,24 @@ def test_gemini_thought_signature_preservation_real_response():
 def test_gemini_thought_signature_deduplication_assumed_response():
     """Test that thought signatures are deduplicated and not attached to the text part if already present in the tool call (assumed response case)."""
     from litellm.llms.vertex_ai.gemini.transformation import (
-        _gemini_convert_messages_with_history,
+        gemini_convert_messages_with_history,
     )
 
     pr_assumed_msg = {
         "role": "assistant",
         "content": "I will list the directory.",
-        "provider_specific_fields": {
-            "thought_signatures": ["mock_signature_63k"]
-        },
+        "provider_specific_fields": {"thought_signatures": ["mock_signature_63k"]},
         "tool_calls": [
             {
                 "id": "call_1",
                 "type": "function",
                 "function": {"name": "list_files", "arguments": "{}"},
-                "provider_specific_fields": {
-                    "thought_signature": "mock_signature_63k"
-                },
+                "provider_specific_fields": {"thought_signature": "mock_signature_63k"},
             }
         ],
     }
 
-    converted_pr = _gemini_convert_messages_with_history(
+    converted_pr = gemini_convert_messages_with_history(
         messages=[pr_assumed_msg],
         model="gemini-2.5-pro",
     )
@@ -2533,18 +2497,16 @@ def test_gemini_thought_signature_deduplication_assumed_response():
 def test_gemini_thought_signature_pure_text():
     """Test that thought signatures are preserved on the text part for responses with no tool calls."""
     from litellm.llms.vertex_ai.gemini.transformation import (
-        _gemini_convert_messages_with_history,
+        gemini_convert_messages_with_history,
     )
 
     msg = {
         "role": "assistant",
         "content": "Hello, I am a model.",
-        "provider_specific_fields": {
-            "thought_signatures": ["pure_text_signature"]
-        },
+        "provider_specific_fields": {"thought_signatures": ["pure_text_signature"]},
     }
 
-    converted = _gemini_convert_messages_with_history(
+    converted = gemini_convert_messages_with_history(
         messages=[msg],
         model="gemini-2.5-pro",
     )
@@ -2560,28 +2522,24 @@ def test_gemini_thought_signature_pure_text():
 def test_gemini_thought_signature_pure_tool_call():
     """Test that thought signatures are preserved on the tool call for responses with no intermediate text."""
     from litellm.llms.vertex_ai.gemini.transformation import (
-        _gemini_convert_messages_with_history,
+        gemini_convert_messages_with_history,
     )
 
     msg = {
         "role": "assistant",
         "content": None,
-        "provider_specific_fields": {
-            "thought_signatures": ["pure_tool_signature"]
-        },
+        "provider_specific_fields": {"thought_signatures": ["pure_tool_signature"]},
         "tool_calls": [
             {
                 "id": "call_1",
                 "type": "function",
                 "function": {"name": "list_files", "arguments": "{}"},
-                "provider_specific_fields": {
-                    "thought_signature": "pure_tool_signature"
-                },
+                "provider_specific_fields": {"thought_signature": "pure_tool_signature"},
             }
         ],
     }
 
-    converted = _gemini_convert_messages_with_history(
+    converted = gemini_convert_messages_with_history(
         messages=[msg],
         model="gemini-2.5-pro",
     )
@@ -2597,15 +2555,13 @@ def test_gemini_thought_signature_pure_tool_call():
 def test_gemini_distinct_text_and_tool_signatures_are_both_preserved():
     """A text-part signature that differs from the tool-call signature must stay on the text part."""
     from litellm.llms.vertex_ai.gemini.transformation import (
-        _gemini_convert_messages_with_history,
+        gemini_convert_messages_with_history,
     )
 
     msg = {
         "role": "assistant",
         "content": "Some analysis.",
-        "provider_specific_fields": {
-            "thought_signatures": ["text_signature", "tool_signature"]
-        },
+        "provider_specific_fields": {"thought_signatures": ["text_signature", "tool_signature"]},
         "tool_calls": [
             {
                 "id": "call_1",
@@ -2616,9 +2572,7 @@ def test_gemini_distinct_text_and_tool_signatures_are_both_preserved():
         ],
     }
 
-    parts = _gemini_convert_messages_with_history(
-        messages=[msg], model="gemini-2.5-pro"
-    )[0]["parts"]
+    parts = gemini_convert_messages_with_history(messages=[msg], model="gemini-2.5-pro")[0]["parts"]
 
     assert parts[0]["text"] == "Some analysis."
     assert parts[0]["thoughtSignature"] == "text_signature"
@@ -2633,7 +2587,7 @@ def test_gemini_25_text_signature_survives_replay_to_gemini_3():
         _get_dummy_thought_signature,
     )
     from litellm.llms.vertex_ai.gemini.transformation import (
-        _gemini_convert_messages_with_history,
+        gemini_convert_messages_with_history,
     )
 
     msg = {
@@ -2649,9 +2603,7 @@ def test_gemini_25_text_signature_survives_replay_to_gemini_3():
         ],
     }
 
-    parts = _gemini_convert_messages_with_history(messages=[msg], model="gemini-3-pro")[
-        0
-    ]["parts"]
+    parts = gemini_convert_messages_with_history(messages=[msg], model="gemini-3-pro")[0]["parts"]
 
     assert parts[0]["text"] == "I will list the directory."
     assert parts[0]["thoughtSignature"] == "real_25_signature"
@@ -2663,7 +2615,7 @@ def test_gemini_function_call_signature_round_trip_no_duplicate():
     """End to end: a gemini-3-style response (unsigned text + signed functionCall) parsed and
     re-serialized sends the signature exactly once, on the function-call part."""
     from litellm.llms.vertex_ai.gemini.transformation import (
-        _gemini_convert_messages_with_history,
+        gemini_convert_messages_with_history,
     )
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
@@ -2693,9 +2645,7 @@ def test_gemini_function_call_signature_round_trip_no_duplicate():
         "provider_specific_fields": {"thought_signatures": thought_signatures},
     }
 
-    parts = _gemini_convert_messages_with_history(messages=[msg], model="gemini-3-pro")[
-        0
-    ]["parts"]
+    parts = gemini_convert_messages_with_history(messages=[msg], model="gemini-3-pro")[0]["parts"]
 
     signatures = [p["thoughtSignature"] for p in parts if "thoughtSignature" in p]
     assert signatures == ["signature_from_function_call"]
@@ -2706,7 +2656,7 @@ def test_gemini_function_call_signature_round_trip_no_duplicate():
 def test_gemini_server_side_tool_signature_not_duplicated_on_text():
     """A signature already re-injected on a server-side toolCall part is not attached to the text part again."""
     from litellm.llms.vertex_ai.gemini.transformation import (
-        _gemini_convert_messages_with_history,
+        gemini_convert_messages_with_history,
     )
 
     msg = {
@@ -2726,9 +2676,7 @@ def test_gemini_server_side_tool_signature_not_duplicated_on_text():
         },
     }
 
-    parts = _gemini_convert_messages_with_history(
-        messages=[msg], model="gemini-2.5-pro"
-    )[0]["parts"]
+    parts = gemini_convert_messages_with_history(messages=[msg], model="gemini-2.5-pro")[0]["parts"]
 
     text_part = next(p for p in parts if "text" in p)
     assert "thoughtSignature" not in text_part
@@ -2793,7 +2741,7 @@ def test_thinking_block_signature_is_not_forwarded_to_gemini() -> None:
         {"role": "user", "content": "And of Spain?"},
     ]
 
-    parts: Final = _parts_of(_gemini_convert_messages_with_history(messages=messages, model="gemini-3.8-flash"))
+    parts: Final = _parts_of(gemini_convert_messages_with_history(messages=messages, model="gemini-3.8-flash"))
 
     assert all("thoughtSignature" not in part for part in parts)
     assert [part for part in parts if part.get("text") == thinking] == [{"thought": True, "text": thinking}]
@@ -2820,7 +2768,7 @@ def test_anthropic_messages_history_replays_to_gemini_without_claude_signature()
     chat_messages: Final = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
         messages=anthropic_messages
     )
-    parts: Final = _parts_of(_gemini_convert_messages_with_history(messages=chat_messages, model="gemini-3.8-flash"))
+    parts: Final = _parts_of(gemini_convert_messages_with_history(messages=chat_messages, model="gemini-3.8-flash"))
 
     signatures: Final = [part["thoughtSignature"] for part in parts if "thoughtSignature" in part]
     assert signatures == [_get_dummy_thought_signature()]

@@ -197,7 +197,10 @@ async def test_team_route_requires_a_worker_with_matching_model_access(lens_data
     )
     try:
         wrong_team: Final = await endpoints.register_worker(endpoints.WorkerName(analysis_key_id=key_b), admin)
-        assert await endpoints.claim_candidate(lens, wrong_team.worker, datetime.now(timezone.utc)) is None
+        assert (
+            await endpoints.claim_candidate(lens, wrong_team.worker, datetime.now(timezone.utc), endpoints.repository())
+            is None
+        )
         for operation in (
             endpoints.create_lens(settings, admin),
             endpoints.run_lens(lens.id, RunRequest(), admin),
@@ -212,7 +215,9 @@ async def test_team_route_requires_a_worker_with_matching_model_access(lens_data
         assert edited.settings.context == "Use sources"
         right_team: Final = await endpoints.register_worker(endpoints.WorkerName(analysis_key_id=key_a), admin)
         await endpoints.validate_workers(settings, lens.scope)
-        claim: Final = await endpoints.claim_candidate(lens, right_team.worker, datetime.now(timezone.utc))
+        claim: Final = await endpoints.claim_candidate(
+            lens, right_team.worker, datetime.now(timezone.utc), endpoints.repository()
+        )
         assert claim is not None and claim.job.worker_id == right_team.worker.id
     finally:
         await lens_database.db.execute_raw(
@@ -257,7 +262,10 @@ async def test_scan_lifecycle_persists_results_and_revokes_worker(lens_database:
         assert lens.id in tuple(e.id for e in listing.lenses)
         assert worker.id in tuple(w.id for w in listing.workers)
         claims: Final = await asyncio.gather(
-            *(endpoints.claim_candidate(lens, worker, datetime.now(timezone.utc)) for _ in range(8))
+            *(
+                endpoints.claim_candidate(lens, worker, datetime.now(timezone.utc), endpoints.repository())
+                for _ in range(8)
+            )
         )
         winners: Final = tuple(claim for claim in claims if claim is not None)
         assert len(winners) == 1
@@ -265,7 +273,10 @@ async def test_scan_lifecycle_persists_results_and_revokes_worker(lens_database:
         assert claimed.job.worker_id == worker.id
         assert (
             await endpoints.claim_candidate(
-                await endpoints.get_lens(lens.id, worker.scope), worker, datetime.now(timezone.utc)
+                await endpoints.get_lens(lens.id, worker.scope),
+                worker,
+                datetime.now(timezone.utc),
+                endpoints.repository(),
             )
             is None
         )
@@ -350,10 +361,10 @@ async def test_scan_lifecycle_persists_results_and_revokes_worker(lens_database:
         await endpoints.repository().save_worker(legacy)
         authenticated_legacy: Final = await endpoints.worker_auth(credentials)
         assert authenticated_legacy.analysis_key_id is None
-        with pytest.raises(HTTPException) as needs_billing:
+        assert (
             await endpoints.claim(authenticated_legacy, protocol_version=PROTOCOL_VERSION, worker_release=release_tag())
-        assert needs_billing.value.status_code == 409
-        assert "Assign an analysis key" in needs_billing.value.detail
+            is None
+        )
         assert await endpoints.heartbeat(lens.id, claimed.job.id, authenticated_legacy)
         finished: Final = await endpoints.result(
             lens.id, claimed.job.id, Result(coverage=Coverage(screened=2)), authenticated_legacy, storage=None
@@ -420,7 +431,9 @@ async def test_failed_model_requests_release_lens_budget_reservations(lens_datab
     registration: Final = await endpoints.register_worker(endpoints.WorkerName(analysis_key_id=key_id), admin)
     worker: Final = registration.worker
     try:
-        claimed: Final = await endpoints.claim_candidate(lens, worker, datetime.now(timezone.utc))
+        claimed: Final = await endpoints.claim_candidate(
+            lens, worker, datetime.now(timezone.utc), endpoints.repository()
+        )
         assert claimed is not None
         for _ in range(3):
             with pytest.raises(HTTPException) as failed:

@@ -33,7 +33,7 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import (
     _handle_group_membership_changes,
     _handle_team_membership_changes,
     _parse_member_entries,
-    _premium_user_check,
+    premium_user_check,
     _process_group_patch_operations,
     _recompute_scim_member_roles,
     _resolve_group_member_ids,
@@ -493,7 +493,7 @@ async def test_scim_create_user_respects_default_role_set_via_ui(mocker, monkeyp
 def scim_test_client():
     """An in-process SCIM application with authorization dependencies bypassed."""
     app = FastAPI()
-    app.dependency_overrides[_premium_user_check] = lambda: None
+    app.dependency_overrides[premium_user_check] = lambda: None
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
     app.include_router(scim_router)
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")

@@ -4500,10 +4500,11 @@ wheels = [
 
 [[package]]
 name = "litellm"
-version = "1.105.0"
+version = "1.106.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
+    { name = "async-timeout", marker = "python_full_version < '3.11'" },
     { name = "boto3" },
     { name = "click" },
     { name = "fastuuid" },
@@ -4757,6 +4758,7 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.14.2,<4.0" },
     { name = "anthropic", extras = ["vertex"], marker = "extra == 'proxy-runtime'", specifier = ">=0.84.0,<1.0" },
     { name = "apscheduler", marker = "extra == 'proxy'", specifier = ">=3.11.2,<4.0" },
+    { name = "async-timeout", marker = "python_full_version < '3.11'", specifier = ">=4.0.3,<6.0" },
     { name = "audioread", marker = "extra == 'stt-nvidia-riva'", specifier = ">=3.0.1" },
     { name = "aurelio-sdk", marker = "python_full_version < '3.14' and extra == 'semantic-router'", specifier = ">=0.0.19,<1.0" },
     { name = "aws-sdk-bedrock-runtime", extras = ["awscrt"], marker = "python_full_version >= '3.12' and extra == 'bedrock-realtime'", specifier = ">=0.10.0,<0.12.0" },
@@ -4994,12 +4996,12 @@ provides-extras = ["test"]
 
 [[package]]
 name = "litellm-enterprise"
-version = "0.1.73"
+version = "0.1.76"
 source = { editable = "enterprise" }
 
 [[package]]
 name = "litellm-proxy-extras"
-version = "0.4.105"
+version = "0.4.108"
 source = { editable = "litellm-proxy-extras" }
 dependencies = [
     { name = "psycopg" },

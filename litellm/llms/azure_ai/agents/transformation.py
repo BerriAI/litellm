@@ -184,6 +184,13 @@ class AzureAIAgentsConfig(BaseConfig):
         # Extract from model name using the static method
         return self.get_agent_id_from_model(model)
 
+    def get_agent_id(
+        self,
+        model: str,
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+    ) -> str:
+        return self._get_agent_id(model, optional_params)
+
     def transform_request(
         self,
         model: str,

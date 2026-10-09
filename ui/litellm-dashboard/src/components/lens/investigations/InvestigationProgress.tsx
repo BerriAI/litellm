@@ -1,5 +1,6 @@
 "use client";
 
+import { useNow } from "@/hooks/useNow";
 import {
   analysisElapsed,
   analysisFraction,
@@ -13,9 +14,11 @@ import { type Job } from "../model/types";
 import { QueueReasonText } from "./QueueReasonText";
 import { useQueueReason, type QueueContext } from "./useQueueReason";
 
-export function InvestigationProgress({ job, now, queue }: { job: Job; now: number; queue?: QueueContext }) {
+export function InvestigationProgress({ job, queue }: { job: Job; queue?: QueueContext }) {
+  const now = useNow(1000);
   const reason = useQueueReason(job, queue);
   const progress = analysisProgress(job);
+  const stages = analysisStages(job);
   const percent = Math.round(analysisFraction(progress) * 100);
   const { secondsLeft } = analysisPace(useProgressSamples(progress), now);
   const queued = progress.step < 0;
@@ -28,10 +31,12 @@ export function InvestigationProgress({ job, now, queue }: { job: Job; now: numb
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={percent}
-          aria-valuetext={`${progress.title}: ${progress.detail}`}
+          aria-valuetext={`${percent}% overall. ${progress.title}: ${progress.detail}`}
+          title={`Overall progress: ${stages.map((stage) => `${stage.label} ${stage.weight * 100}%`).join(", ")}`}
           className="text-2xl font-semibold"
         >
           {queued ? "–" : `${percent}%`}
+          {!queued && <span className="ml-1.5 text-xs font-normal text-muted-foreground">overall</span>}
         </span>
         <span className="text-xs text-muted-foreground">
           {analysisElapsed(job.created_at, now)} elapsed
@@ -39,7 +44,7 @@ export function InvestigationProgress({ job, now, queue }: { job: Job; now: numb
         </span>
       </div>
       <ol aria-label="Analysis stages" className="flex gap-1">
-        {analysisStages(job).map((stage) => (
+        {stages.map((stage) => (
           <li
             key={stage.label}
             data-state={stage.state}

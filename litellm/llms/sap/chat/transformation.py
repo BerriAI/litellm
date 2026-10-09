@@ -90,7 +90,7 @@ def _fold_message_cache_control(
     return base
 
 
-def _message_role_mapping(role: str) -> type[ChatMessage]:  # returns the SAP message model class, not an instance
+def _message_role_mapping(role: str) -> type[ChatMessage]:
     return {
         "user": SAPUserMessage,
         "assistant": SAPAssistantMessage,

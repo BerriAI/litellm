@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Final
 
 from dotenv import load_dotenv
+from e2e_metadata import step
 from fixture_mode import deterministic_marker, parse_fixture_mode, registration_owner
 from provider_edge import provider_edge_api_base
 from pydantic import TypeAdapter
@@ -308,6 +309,7 @@ def available_port() -> int:
         return TypeAdapter(tuple[str, int]).validate_python(listener.getsockname())[1]
 
 
+@step("Wait for the last control-plane write to reach every proxy replica")
 def settle_propagation(written_at: float) -> None:
     """Block until PROPAGATION_TIMEOUT has elapsed since `written_at`, a
     `time.monotonic()` stamp taken the moment a control-plane write returned.

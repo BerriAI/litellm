@@ -26,6 +26,8 @@ function useLensServices(): LensServices {
 
 export const useLensApi = (): LensApi => useLensServices().lens;
 
+export const useOptionalLensApi = (): LensApi | null => useContext(LensServicesContext)?.lens ?? null;
+
 export const useLensAccessToken = (): string => useLensServices().accessToken;
 
 export function useLiveLensServices(accessToken: string): LensServices {

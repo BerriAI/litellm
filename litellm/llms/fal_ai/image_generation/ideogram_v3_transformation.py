@@ -1,9 +1,10 @@
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
 from litellm.types.utils import ImageObject, ImageResponse
 
@@ -189,7 +190,10 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
                     )
                 )
 
-        if hasattr(model_response, "_hidden_params") and "seed" in response_object:
-            model_response._hidden_params["seed"] = response_object["seed"]
+        if hasattr(model_response, HIDDEN_PARAMS_ATTR) and "seed" in response_object:
+            hidden_params: Final = cast(  # cast-ok: preserve mapping operations on dynamic response metadata
+                dict[str, object], getattr(model_response, HIDDEN_PARAMS_ATTR)
+            )
+            hidden_params["seed"] = response_object["seed"]
 
         return model_response

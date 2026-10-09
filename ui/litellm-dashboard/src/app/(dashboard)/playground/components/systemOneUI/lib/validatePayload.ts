@@ -54,7 +54,7 @@ export function validateSystemOnePayload(
     return invalid("syntax", `Invalid JSON syntax: ${json.message}`);
   }
 
-  const schema = endpoint === "/v1/decisions" ? decisionsRequestSchema : systemOneRequestSchema;
+  const schema = endpoint === "/v1/systemone" ? decisionsRequestSchema : systemOneRequestSchema;
   const result = schema.safeParse(json.value);
   if (!result.success) {
     return {

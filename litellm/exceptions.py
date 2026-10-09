@@ -172,6 +172,12 @@ class AuthenticationError(openai.AuthenticationError):
         return _message
 
 
+class CallerCredentialAuthenticationError(AuthenticationError):
+    """401 raised when the CALLING user's own stored provider credential is
+    missing or rejected (e.g. a per-user OAuth connection). Scoped to one
+    caller's credential, so routers must not cool down the shared deployment."""
+
+
 # raise when invalid models passed, example gpt-8
 class NotFoundError(openai.NotFoundError):
     def __init__(
@@ -531,6 +537,12 @@ class RateLimitError(openai.RateLimitError):
         return _message
 
 
+class CallerCredentialRateLimitError(RateLimitError):
+    """429 raised when a per-user credential exchange is rate limited by the
+    provider (e.g. GitHub's token endpoint). Scoped to one caller's
+    credential, so routers must not cool down the shared deployment."""
+
+
 # sub class of rate limit error - meant to give more granularity for error handling context window exceeded errors
 class ContextWindowExceededError(BadRequestError):
     def __init__(
@@ -571,6 +583,54 @@ class ContextWindowExceededError(BadRequestError):
         if self.max_retries:
             _message += f", LiteLLM Max Retries: {self.max_retries}"
         return _message
+
+
+class PaymentRequiredError(BadRequestError):
+    def __init__(
+        self,
+        message: str,
+        model: str,
+        llm_provider: str,
+        response: httpx.Response | None = None,
+        litellm_debug_info: str | None = None,
+    ) -> None:
+        response_is_valid: Final = (
+            response is not None
+            and isinstance(response, httpx.Response)
+            and hasattr(response, "_request")
+            and getattr(response, "_request", None) is not None
+        )
+        response_for_parent: Final = (
+            response
+            if response_is_valid
+            else httpx.Response(
+                status_code=402,
+                request=httpx.Request(method="GET", url="https://litellm.ai"),
+            )
+        )
+        super().__init__(
+            message=message,
+            model=model,
+            llm_provider=llm_provider,
+            response=response_for_parent,
+            litellm_debug_info=litellm_debug_info,
+        )
+        self.status_code = 402
+        self.message = f"litellm.PaymentRequiredError: {message}"
+
+    def __str__(self) -> str:
+        return (
+            self.message
+            + (f" LiteLLM Retried: {self.num_retries} times" if self.num_retries else "")
+            + (f", LiteLLM Max Retries: {self.max_retries}" if self.max_retries else "")
+        )
+
+    def __repr__(self) -> str:
+        return (
+            self.message
+            + (f" LiteLLM Retried: {self.num_retries} times" if self.num_retries else "")
+            + (f", LiteLLM Max Retries: {self.max_retries}" if self.max_retries else "")
+        )
 
 
 # sub class of bad request error - meant to help us catch guardrails-related errors on proxy.
@@ -977,6 +1037,7 @@ LITELLM_EXCEPTION_TYPES: Final = [
     PermissionDeniedError,
     RateLimitError,
     ContextWindowExceededError,
+    PaymentRequiredError,
     RejectedRequestError,
     ContentPolicyViolationError,
     InternalServerError,

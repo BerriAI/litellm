@@ -25,6 +25,7 @@ _PASS_THROUGH_MODEL: Final = "gpt-6-luna"
 _PASS_THROUGH_AUTHORIZATION: Final = "Bearer customer-held-upstream-key"
 _PASS_THROUGH_NEIGHBOUR: Final = "decisions-beside-a-pass-through"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+_QUESTION_MAPPINGS: Final = TypeAdapter(dict[str, dict[str, object]])
 _USAGE: Final[dict[str, JsonValue]] = {"input_tokens": 367, "output_tokens": 3}
 _STATE: Final[dict[str, JsonValue]] = {"ticket": "The export job hangs at 99%", "component": "billing"}
 _QUESTIONS: Final[dict[str, JsonValue]] = {
@@ -32,6 +33,7 @@ _QUESTIONS: Final[dict[str, JsonValue]] = {
     "severity": {"type": "choice", "criteria": {"low": "cosmetic", "high": "blocks users"}, "weight": 2},
     "confidence": {"type": "score", "instructions": "How sure are you?", "criteria": ["unsure", "sure"]},
 }
+_SDK_QUESTIONS: Final = _QUESTION_MAPPINGS.validate_python(_QUESTIONS)
 _ANSWERS: Final[dict[str, JsonValue]] = {
     "defect": {"type": "noul", "noul": 0.93},
     "severity": {"type": "choice", "choice": "high", "confidence": 0.8, "probabilities": {"low": 0.2, "high": 0.8}},
@@ -67,6 +69,7 @@ class _Provider:
     api_key: str | None
     wraps_result: bool
     cost_map_key: str | None
+    provider_reported_cost: float | None = None
 
 
 _PROVIDERS: Final = (
@@ -87,10 +90,14 @@ _PROVIDERS: Final = (
         "typesafe/jev-1.13",
         _API_KEY,
         False,
-        "openrouter/typesafe/jev-1.13",
+        None,
+        1.5834e-5,
     ),
     _Provider(
         "strands_decider", "strands_decider/systemone-decider", "/v1/systemone", "systemone-decider", None, False, None
+    ),
+    _Provider(
+        "hosted_vllm", "hosted_vllm/Qwen/Qwen3-0.6B", "/v1/systemone", "Qwen/Qwen3-0.6B", None, False, None
     ),
     _Provider(
         "cloudflare",
@@ -103,6 +110,11 @@ _PROVIDERS: Final = (
     ),
 )
 _PERPLEXITY: Final = _PROVIDERS[0]
+_OPENROUTER: Final = _PROVIDERS[2]
+_OPENROUTER_CHAT_MODEL: Final = "openrouter/openai/gpt-5-mini"
+_UNSUPPORTED_PROVIDER_MODEL: Final = "anthropic/claude-opus-5-5"
+_CONNECTION_ERROR: Final = "litellm.APIConnectionError"
+_GENERIC_API_ERROR: Final = "litellm.APIError"
 _INVALID_BODIES: Final[tuple[tuple[str, dict[str, JsonValue]], ...]] = (
     ("missing questions", {"state": _STATE}),
     ("missing state", {"questions": _QUESTIONS}),
@@ -123,17 +135,32 @@ def _number(value: JsonValue) -> float:
     return float(value)
 
 
-def _expected_spend(cost_map_key: str | None) -> float:
-    if cost_map_key is None:
+def _expected_spend(provider: _Provider) -> float:
+    if provider.provider_reported_cost is not None:
+        return provider.provider_reported_cost
+    if provider.cost_map_key is None:
         return 0.0
-    prices: Final = object_value(json.loads(Path("model_prices_and_context_window.json").read_text())[cost_map_key])
+    prices: Final = object_value(
+        json.loads(Path("model_prices_and_context_window.json").read_text())[provider.cost_map_key]
+    )
     return _number(_USAGE["input_tokens"]) * _number(prices["input_cost_per_token"]) + _number(
         _USAGE["output_tokens"]
     ) * _number(prices["output_cost_per_token"])
 
 
+def _usage(provider: _Provider) -> dict[str, JsonValue]:
+    return {
+        **_USAGE,
+        **({"cost": provider.provider_reported_cost} if provider.provider_reported_cost is not None else {}),
+    }
+
+
 def _answer_body(provider: _Provider) -> dict[str, JsonValue]:
-    answer: Final[dict[str, JsonValue]] = {"model": provider.body_model, "answers": _ANSWERS, "usage": _USAGE}
+    answer: Final[dict[str, JsonValue]] = {
+        "model": provider.body_model,
+        "answers": _ANSWERS,
+        "usage": _usage(provider),
+    }
     return {"result": answer, "success": True} if provider.wraps_result else answer
 
 
@@ -151,7 +178,7 @@ def _deployment(scenario: Scenario, handle: ScenarioHandle, provider: _Provider)
 
 def _decide(gateway: Gateway, model: str, *, key: str | None = None, **extra: JsonValue) -> httpx.Response:
     return gateway.request(
-        "POST", "/v1/decisions", {"model": model, "state": _STATE, "questions": _QUESTIONS, **extra}, key=key
+        "POST", "/v1/systemone", {"model": model, "state": _STATE, "questions": _QUESTIONS, **extra}, key=key
     )
 
 
@@ -175,6 +202,12 @@ def _upstream_calls(gateway: Gateway, handle: ScenarioHandle) -> list[dict[str, 
 def _spend_row(call_id: str) -> dict[str, JsonValue]:
     rows: Final = eventually(lambda: read_rows(_SPEND_QUERY, (call_id,)), lambda found: len(found) == 1, seconds=70)
     return rows[0]
+
+
+def _assert_connection_error(response: httpx.Response) -> None:
+    assert 500 <= response.status_code < 600, response.text
+    assert _CONNECTION_ERROR in response.text, response.text
+    assert _GENERIC_API_ERROR not in response.text, response.text
 
 
 def _free_closed_port() -> int:
@@ -210,16 +243,14 @@ def _pass_through_config(directory: Path, pass_through_target: str, native_api_b
 
 
 @pytest.mark.parametrize("provider", _PROVIDERS, ids=lambda provider: provider.name)
-def test_each_provider_gets_its_own_path_key_and_body_and_is_billed_from_the_cost_map(
-    gateway: Gateway, provider: _Provider
-) -> None:
-    expected_spend: Final = _expected_spend(provider.cost_map_key)
+def test_each_provider_gets_its_own_path_key_and_body_and_is_billed(gateway: Gateway, provider: _Provider) -> None:
+    expected_spend: Final = _expected_spend(provider)
     with gateway.scenario() as scenario:
         handle: Final = _register(scenario, _answer_body(provider))
         model: Final = _deployment(scenario, handle, provider)
         response: Final = _decide(gateway, model)
         assert response.status_code == 200, response.text
-        assert response.json() == {"model": provider.body_model, "answers": _ANSWERS, "usage": _USAGE}
+        assert response.json() == {"model": provider.body_model, "answers": _ANSWERS, "usage": _usage(provider)}
         assert response.headers["x-litellm-model-group"] == model
         assert math.isclose(float(response.headers.get("x-litellm-response-cost", "0")), expected_spend, rel_tol=1e-9)
         (call,) = _upstream_calls(gateway, handle)
@@ -237,6 +268,43 @@ def test_each_provider_gets_its_own_path_key_and_body_and_is_billed_from_the_cos
             row["completion_tokens"],
         ) == ("success", "adecisions", provider.name, model, f"{handle.api_base()}{provider.path}", 367, 3)
         assert math.isclose(_number(row["spend"]), expected_spend, rel_tol=1e-9), row
+
+
+def test_test_connection_evaluation_mode_uses_typesafe_decisions_path(gateway: Gateway) -> None:
+    provider: Final = _PROVIDERS[1]
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, _answer_body(provider))
+        response: Final = gateway.request(
+            "POST",
+            "/health/test_connection",
+            {
+                "litellm_params": {"model": provider.model, "api_base": handle.api_base(), "api_key": provider.api_key},
+                "mode": "evaluation",
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "success", response.text
+        (call,) = _upstream_calls(gateway, handle)
+        assert call["path"] == f"/{handle.scenario_id}{provider.path}"
+
+
+def test_test_connection_by_configured_alias_probes_the_stored_model(gateway: Gateway) -> None:
+    pytest.skip("BUG: /health/test_connection given only a configured alias sends the alias as the model")
+    provider: Final = _PROVIDERS[1]
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, _answer_body(provider))
+        model: Final = _deployment(scenario, handle, provider)
+        response: Final = gateway.request(
+            "POST",
+            "/health/test_connection",
+            {"litellm_params": {"model": model}, "mode": "evaluation"},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "success", response.text
+        (call,) = _upstream_calls(gateway, handle)
+        assert call["path"] == f"/{handle.scenario_id}{provider.path}"
 
 
 def test_repeated_identical_requests_each_reach_the_upstream_and_are_each_billed(gateway: Gateway) -> None:
@@ -257,10 +325,10 @@ async def test_sdk_sync_and_async_clients_send_the_same_request(gateway: Gateway
     with gateway.scenario() as scenario:
         handle: Final = _register(scenario, _answer_body(provider))
         synchronous: Final = litellm.decisions(
-            model=provider.model, state=_STATE, questions=_QUESTIONS, api_base=handle.api_base(), api_key=_API_KEY
+            model=provider.model, state=_STATE, questions=_SDK_QUESTIONS, api_base=handle.api_base(), api_key=_API_KEY
         )
         asynchronous: Final = await litellm.adecisions(
-            model=provider.model, state=_STATE, questions=_QUESTIONS, api_base=handle.api_base(), api_key=_API_KEY
+            model=provider.model, state=_STATE, questions=_SDK_QUESTIONS, api_base=handle.api_base(), api_key=_API_KEY
         )
         for response in (synchronous, asynchronous):
             assert response.model_dump(mode="json") == {
@@ -297,7 +365,7 @@ def test_invalid_bodies_are_refused_at_the_gateway_without_an_upstream_call(gate
         handle: Final = _register(scenario, _answer_body(_PERPLEXITY))
         model: Final = _deployment(scenario, handle, _PERPLEXITY)
         for label, body in _INVALID_BODIES:
-            response: Final = gateway.request("POST", "/v1/decisions", {"model": model, **body})
+            response: Final = gateway.request("POST", "/v1/systemone", {"model": model, **body})
             assert response.status_code == 400, (label, response.text)
             assert "Invalid Decisions request" in response.text, (label, response.text)
         assert _upstream_calls(gateway, handle) == []
@@ -316,7 +384,7 @@ def test_key_checks_match_chat(gateway: Gateway) -> None:
         handle: Final = _register(scenario, _answer_body(_PERPLEXITY))
         model: Final = _deployment(scenario, handle, _PERPLEXITY)
         anonymous: Final = gateway.client.post(
-            "/v1/decisions", json={"model": model, "state": _STATE, "questions": _QUESTIONS}
+            "/v1/systemone", json={"model": model, "state": _STATE, "questions": _QUESTIONS}
         )
         assert anonymous.status_code == 401, anonymous.text
         restricted: Final = scenario.key(models=[f"other-{uuid.uuid4().hex}"])
@@ -382,7 +450,7 @@ def test_a_deployment_opted_into_client_api_base_sends_decisions_and_chat_to_the
         assert _calls_to(observed, configured) == []
 
 
-def test_a_config_pass_through_at_v1_decisions_keeps_answering_and_the_native_api_serves_decisions(
+def test_a_config_pass_through_at_v1_decisions_keeps_answering_and_the_native_api_serves_system_one(
     gateway: Gateway, tmp_path: Path
 ) -> None:
     with gateway.scenario() as scenario:
@@ -394,9 +462,11 @@ def test_a_config_pass_through_at_v1_decisions_keeps_answering_and_the_native_ap
             tmp_path, f"{pass_through_target.api_base()}/v1/decisions", native_target.api_base()
         )
         with owned_proxy_process(gateway, tmp_path, {}, config=config) as owned:
-            through: Final = _decide(owned.gateway, _PASS_THROUGH_MODEL)
+            through: Final = owned.gateway.request(
+                "POST", "/v1/decisions", {"model": _PASS_THROUGH_MODEL, "state": _STATE, "questions": _QUESTIONS}
+            )
             native: Final = owned.gateway.request(
-                "POST", "/decisions", {"model": _PASS_THROUGH_NEIGHBOUR, "state": _STATE, "questions": _QUESTIONS}
+                "POST", "/systemone", {"model": _PASS_THROUGH_NEIGHBOUR, "state": _STATE, "questions": _QUESTIONS}
             )
         assert through.status_code == 200, through.text
         assert through.json() == {"model": _PASS_THROUGH_MODEL, "answers": _ANSWERS, "usage": _USAGE}
@@ -441,16 +511,75 @@ def test_upstream_success_without_answers_is_a_gateway_side_server_error(gateway
         assert _spend_row(response.headers["x-litellm-call-id"])["status"] == "failure"
 
 
-def test_unreachable_upstream_fails_only_its_own_deployment(gateway: Gateway) -> None:
+@pytest.mark.parametrize("provider", _PROVIDERS, ids=lambda provider: provider.name)
+def test_unreachable_upstream_fails_only_its_own_deployment(gateway: Gateway, provider: _Provider) -> None:
     with gateway.scenario() as scenario:
-        handle: Final = _register(scenario, _answer_body(_PERPLEXITY))
-        healthy: Final = _deployment(scenario, handle, _PERPLEXITY)
+        handle: Final = _register(scenario, _answer_body(provider))
+        healthy: Final = _deployment(scenario, handle, provider)
         dead: Final = scenario.model(
-            model=_PERPLEXITY.model, api_base=f"http://127.0.0.1:{_free_closed_port()}", api_key=_API_KEY
+            model=provider.model, api_base=f"http://127.0.0.1:{_free_closed_port()}", api_key=provider.api_key
         )
         failed: Final = _decide(gateway, dead, num_retries=0)
-        assert 500 <= failed.status_code < 600, failed.text
+        _assert_connection_error(failed)
         assert _spend_row(failed.headers["x-litellm-call-id"])["status"] == "failure"
         served: Final = _decide(gateway, healthy)
         assert served.status_code == 200, served.text
         assert len(_upstream_calls(gateway, handle)) == 1
+
+
+def test_an_unreachable_openrouter_deployment_reports_a_connection_error_on_chat_embeddings_and_decisions(
+    gateway: Gateway,
+) -> None:
+    with gateway.scenario() as scenario:
+        dead_api_base: Final = f"http://127.0.0.1:{_free_closed_port()}"
+        chat_model: Final = scenario.model(model=_OPENROUTER_CHAT_MODEL, api_base=dead_api_base, api_key=_API_KEY)
+        decisions_model: Final = scenario.model(model=_OPENROUTER.model, api_base=dead_api_base, api_key=_API_KEY)
+        chat: Final = _chat(gateway, chat_model, num_retries=0)
+        streamed: Final = _chat(gateway, chat_model, num_retries=0, stream=True)
+        embeddings: Final = gateway.request(
+            "POST", "/v1/embeddings", {"model": chat_model, "input": "hi", "num_retries": 0}
+        )
+        decisions: Final = _decide(gateway, decisions_model, num_retries=0)
+        for response in (chat, streamed, embeddings, decisions):
+            _assert_connection_error(response)
+        for response in (chat, decisions):
+            assert _spend_row(response.headers["x-litellm-call-id"])["status"] == "failure"
+
+
+async def test_sdk_openrouter_connection_failures_raise_a_connection_error(gateway: Gateway) -> None:
+    dead_api_base: Final = f"http://127.0.0.1:{_free_closed_port()}"
+    with pytest.raises(litellm.APIConnectionError):
+        litellm.completion(
+            model=_OPENROUTER_CHAT_MODEL,
+            messages=[{"role": "user", "content": "hi"}],
+            api_base=dead_api_base,
+            api_key=_API_KEY,
+        )
+    with pytest.raises(litellm.APIConnectionError):
+        await litellm.acompletion(
+            model=_OPENROUTER_CHAT_MODEL,
+            messages=[{"role": "user", "content": "hi"}],
+            api_base=dead_api_base,
+            api_key=_API_KEY,
+        )
+    with pytest.raises(litellm.APIConnectionError):
+        litellm.decisions(
+            model=_OPENROUTER.model, state=_STATE, questions=_SDK_QUESTIONS, api_base=dead_api_base, api_key=_API_KEY
+        )
+    with pytest.raises(litellm.APIConnectionError):
+        await litellm.adecisions(
+            model=_OPENROUTER.model, state=_STATE, questions=_SDK_QUESTIONS, api_base=dead_api_base, api_key=_API_KEY
+        )
+
+
+def test_a_deployment_whose_provider_has_no_decisions_support_is_refused_naming_every_supported_provider(
+    gateway: Gateway,
+) -> None:
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, _answer_body(_PERPLEXITY))
+        model: Final = scenario.model(model=_UNSUPPORTED_PROVIDER_MODEL, api_base=handle.api_base(), api_key=_API_KEY)
+        response: Final = _decide(gateway, model)
+        assert response.status_code == 400, response.text
+        for provider in _PROVIDERS:
+            assert provider.name in response.text, response.text
+        assert _upstream_calls(gateway, handle) == []

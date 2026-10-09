@@ -18,7 +18,10 @@ export const requestPath = (input: RequestInfo | URL): string =>
 
 /** Reads a stubbed fetch call the same way whether a client passed a URL and init or a Request. */
 export async function readRequest(input: RequestInfo | URL, init?: RequestInit): Promise<StubbedRequest> {
-  const request = input instanceof Request ? input : new Request(new URL(String(input), "http://localhost"), init);
+  const request =
+    input instanceof Request
+      ? input
+      : new Request(new URL(String(input), "http://localhost"), { ...init, signal: undefined });
   const url = new URL(request.url);
   const text = await request.clone().text();
   return {

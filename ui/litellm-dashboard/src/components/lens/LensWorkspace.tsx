@@ -11,6 +11,7 @@ import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { LensServicesProvider, useLensAccessToken, useLensApi, useLiveLensServices } from "./data/LensServices";
 import { isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
 import { InvestigationsView } from "./investigations/InvestigationsView";
+import { DatasetsView } from "./datasets/DatasetsView";
 import { LensSettings } from "./settings/LensSettings";
 import { createLensDemo } from "./data/demo/createLensDemo";
 import { lensQueries } from "./data/queries";
@@ -23,6 +24,7 @@ import { LensGettingStarted } from "./onboarding/LensGettingStarted";
 import { useLensReadiness, type LensReadiness } from "./hooks/useLensReadiness";
 import { OnboardingProvider, type Onboarding } from "./onboarding/OnboardingContext";
 import { traceRefOf, useOpenTraceRouting, type TraceRef } from "@/components/lens/traces/routing";
+import { AgentBreadcrumb, useLensAgents } from "./agents/AgentScoped";
 
 type WorkspaceProps = { accessToken: string; userRole: string; readOnly: boolean };
 
@@ -84,6 +86,7 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
   const { dialog, openDialog } = useDialogRoute();
   const { issueKey } = useIssueRoute();
   const { trace, openTrace } = useOpenTraceRouting();
+  const agents = useLensAgents(accessToken);
   const canViewInvestigations = isProxyAdminTierRole(userRole);
   const isAdmin = isProxyAdminRole(userRole);
   const canConfigure = canViewInvestigations && !readOnly;
@@ -154,10 +157,13 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
           className="@container/lens-frame min-h-0 flex-1 gap-0"
         >
           <header className="grid shrink-0 grid-cols-[1fr_auto] items-center gap-x-4 gap-y-2 border-b pb-2 @min-[42rem]/lens-frame:grid-cols-[auto_1fr_auto]">
-            <h1 className="flex items-center gap-1.5 text-sm font-semibold">
-              <Aperture aria-hidden="true" className="size-4" strokeWidth={2} />
-              Lens
-            </h1>
+            <div className="flex min-w-0 items-center gap-2">
+              <h1 className="flex items-center gap-1.5 text-sm font-semibold">
+                <Aperture aria-hidden="true" className="size-4" strokeWidth={2} />
+                Lens
+              </h1>
+              <AgentBreadcrumb agents={agents} />
+            </div>
             <div className="col-span-2 row-start-2 min-w-0 @min-[42rem]/lens-frame:col-span-1 @min-[42rem]/lens-frame:col-start-2 @min-[42rem]/lens-frame:row-start-1">
               <LensModeSwitch activity={activity} workers={workers} />
             </div>
@@ -195,6 +201,7 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
                     readOnly={readOnly}
                     canMintTracingKey={isAdmin}
                     canViewFindings={canViewInvestigations}
+                    onSetUpSignals={canConfigure ? showSettings : undefined}
                   />
                 </TabsContent>
                 <TabsContent value="findings" className={PANEL}>
@@ -212,6 +219,9 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
                       Investigations require proxy administrator access. You can still view your traces.
                     </p>
                   )}
+                </TabsContent>
+                <TabsContent value="datasets" className={PANEL}>
+                  <DatasetsPanel canView={canViewInvestigations} isAdmin={isAdmin} readOnly={readOnly} />
                 </TabsContent>
               </>
             )}
@@ -237,6 +247,12 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
   );
 }
 
+function DatasetsPanel({ canView, isAdmin, readOnly }: { canView: boolean; isAdmin: boolean; readOnly: boolean }) {
+  if (!canView)
+    return <p className="py-6 text-sm text-muted-foreground">Datasets require proxy administrator access.</p>;
+  return <DatasetsView readOnly={readOnly || !isAdmin} />;
+}
+
 function needsSetup(
   state: LensReadiness,
   location: {
@@ -249,7 +265,7 @@ function needsSetup(
     issueKey: string | null;
   },
 ) {
-  if (location.tab === "settings") return false;
+  if (location.tab === "settings" || location.tab === "datasets") return false;
   if (location.requested) return true;
   const selected = location.tab === "traces" ? location.trace : location.lensId || location.dialog || location.issueKey;
   if (!state.missingTraces || selected) return false;

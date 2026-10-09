@@ -3,7 +3,8 @@ use std::collections::BTreeMap;
 use litellm_storage_clickhouse::fetch;
 use litellm_traces::query::named as contracts;
 use litellm_traces_clickhouse::{
-    QueryScope,
+    Connection, InsertTable, Parameter, QueryScope, ReadQuery, execute_named_read, execute_read,
+    insert_rows,
     query::named::{ListTraces, ListTracesParams, TraceSpans, TraceSpansParams},
     query_help, query_sql,
 };
@@ -18,11 +19,119 @@ mod support;
 use fixtures::{SeededDatabase, insert_export, migrated_database, seeded_database};
 use support::TestResult;
 
+#[rstest]
+#[tokio::test]
+async fn lens_sample_keeps_spans_before_window_start_and_excludes_old_only_traces(
+    #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+) -> TestResult {
+    let fixture = migrated_database?;
+    let start_ms = time::OffsetDateTime::now_utc().unix_timestamp() * 1000 - 86_400_000;
+    let end_ms = start_ms + 86_460_000;
+    let rows = [
+        (
+            "late-root",
+            "trace-with-slack",
+            start_ms - 2 * 86_400_000,
+            "",
+        ),
+        (
+            "in-window",
+            "trace-with-slack",
+            start_ms + 1_000,
+            "late-root",
+        ),
+        ("old-span", "trace-too-old", start_ms - 8 * 86_400_000, ""),
+    ]
+    .into_iter()
+    .map(|(span_id, trace_id, timestamp_ms, parent_span_id)| {
+        BTreeMap::from([
+            (
+                "Timestamp".into(),
+                serde_json::json!(timestamp_ms * 1_000_000),
+            ),
+            ("Duration".into(), serde_json::json!(1_000_000)),
+            ("TraceId".into(), serde_json::json!(trace_id)),
+            ("SpanId".into(), serde_json::json!(span_id)),
+            ("ParentSpanId".into(), serde_json::json!(parent_span_id)),
+            ("SpanName".into(), serde_json::json!(span_id)),
+            ("ObservationType".into(), serde_json::json!("agent")),
+            ("TeamId".into(), serde_json::json!("team-lens")),
+            ("ApiKeyHash".into(), serde_json::json!("")),
+        ])
+    })
+    .collect();
+    let writer = Connection::writer(&fixture.database.url)?;
+    insert_rows(
+        &fixture.database.client,
+        &writer,
+        fixtures::DATABASE,
+        InsertTable::OtelTraces,
+        rows,
+    )
+    .await?;
+    let connection =
+        Connection::configured(&fixture.database.url, fixtures::DATABASE, "default", "")?;
+    let parameters = BTreeMap::from([
+        ("source".into(), Parameter::Text("traces".into())),
+        ("all_teams".into(), Parameter::Integer(0)),
+        ("team".into(), Parameter::Text("team-lens".into())),
+        ("key_hash".into(), Parameter::Text(String::new())),
+        ("start".into(), Parameter::Unsigned(start_ms as u64)),
+        ("end".into(), Parameter::Unsigned(end_ms as u64)),
+        ("agent_name".into(), Parameter::Text(String::new())),
+        ("service".into(), Parameter::Text(String::new())),
+        ("filter_keys".into(), Parameter::Strings(Vec::new())),
+        ("filter_values".into(), Parameter::Strings(Vec::new())),
+        ("selected_team".into(), Parameter::Text(String::new())),
+        ("execution_ids".into(), Parameter::Strings(Vec::new())),
+        ("sample_cap".into(), Parameter::Unsigned(0)),
+        ("sample_percent".into(), Parameter::Integer(100)),
+        ("preview".into(), Parameter::Integer(0)),
+        ("after".into(), Parameter::Text(String::new())),
+        ("limit".into(), Parameter::Unsigned(10_000)),
+        ("offset".into(), Parameter::Unsigned(0)),
+    ]);
+    let body = execute_named_read(
+        &fixture.database.client,
+        &connection,
+        ReadQuery::Sample,
+        &parameters,
+    )
+    .await?;
+    let result: serde_json::Value = serde_json::from_str(&body)?;
+    let executions = result["data"].as_array().ok_or("sample rows")?;
+    let trace = executions
+        .iter()
+        .find(|row| row["trace_id"] == "trace-with-slack")
+        .ok_or("sampled trace missing")?;
+    let original_start = execute_read(
+        &fixture.database.client,
+        &connection,
+        "SELECT toString(fromUnixTimestamp64Nano({timestamp:Int64})) AS start_time FORMAT JSON",
+        &BTreeMap::from([(
+            "timestamp".into(),
+            Parameter::Integer((start_ms - 2 * 86_400_000) * 1_000_000),
+        )]),
+    )
+    .await?;
+    let original_start: serde_json::Value = serde_json::from_str(&original_start)?;
+    assert_eq!(trace["span_count"].as_u64(), Some(2));
+    assert_eq!(trace["start_time"], original_start["data"][0]["start_time"]);
+    assert!(
+        !executions
+            .iter()
+            .any(|row| row["trace_id"] == "trace-too-old")
+    );
+    Ok(())
+}
+
 #[derive(Clone, Copy, strum::AsRefStr)]
-#[strum(serialize_all = "snake_case")]
 enum ScopeCase {
+    #[strum(serialize = "admin")]
     Admin,
+    #[strum(serialize = "team")]
     Team,
+    #[strum(serialize = "other_team")]
     OtherTeam,
 }
 
