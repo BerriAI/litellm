@@ -9,6 +9,7 @@ from litellm._version import version as litellm_version
 from litellm.proxy.client.health import HealthManagementClient
 
 from .commands.agents import agent_commands
+from .commands.alias import alias, alias_commands, unalias, unalias_commands
 from .commands.auth import (
     CliContextObj,
     auth_group,
@@ -165,6 +166,13 @@ cli.add_command(users)
 # Add a top-level command per coding agent (claude, codex, opencode, ...)
 for agent_command in agent_commands():
     cli.add_command(agent_command)
+# Add alias/unalias (make the bare `claude` a user already types run `lite claude`)
+cli.add_command(alias)
+cli.add_command(unalias)
+for alias_command in alias_commands():
+    alias.add_command(alias_command)
+for unalias_command in unalias_commands():
+    unalias.add_command(unalias_command)
 # Add the up/down commands (route Claude Code through the local LiteLLM proxy)
 cli.add_command(up)
 cli.add_command(down)
