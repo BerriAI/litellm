@@ -12,7 +12,7 @@ last resort; this makes it rare.
 
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from itertools import accumulate
 from typing import (
     Final,
@@ -138,19 +138,19 @@ def _escaped_width(char: str) -> int:
 def _as_mapping(value: object) -> Mapping[object, object] | None:
     """``value`` as a plain mapping, or None."""
     if isinstance(value, Mapping):
-        return cast(Mapping[object, object], value)
+        return cast(Mapping[object, object], value)  # cast-ok: isinstance-checked above; preserves the payload identity
     return None
 
 
-def _as_object_list(value: object) -> list[object] | None:
+def _as_object_list(value: object) -> Sequence[object] | None:
     """``value`` as a list, or None."""
     if isinstance(value, list):
-        return cast(list[object], value)
+        return cast("Sequence[object]", value)  # cast-ok: isinstance-checked above; read-only view for iteration
     return None
 
 
 def _as_object_tuple(value: object) -> tuple[object, ...] | None:
     """``value`` as a tuple, or None."""
     if isinstance(value, tuple):
-        return cast(tuple[object, ...], value)
+        return cast(tuple[object, ...], value)  # cast-ok: isinstance-checked above; preserves the payload identity
     return None
