@@ -2687,6 +2687,33 @@ _REQUEST_FALLBACK_KEYS: Final = ("fallbacks", "context_window_fallbacks", "conte
 _FALLBACK_DISCOVERY_LIMIT: Final = 256
 
 
+def _per_user_oauth_configured() -> bool:
+    """Whether any configured credential opted into per-user GitHub OAuth.
+
+    Cheap in-memory precondition for all of the fallback discovery below: with
+    no per-user credential there is nothing to discover, so every code path in
+    this section (traversal, request-list size limit) must stay byte-identical
+    to shared-mode behavior."""
+    from litellm.constants import (
+        GITHUB_COPILOT_AUTH_TYPE_KEY,
+        GITHUB_COPILOT_PER_USER_AUTH_TYPE,
+    )
+
+    return any(
+        isinstance(values := getattr(credential, "credential_values", None), Mapping)
+        and values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE
+        for credential in (litellm.credential_list or ())
+    )
+
+
+def _fallback_entry_target_count(entry: object) -> int:
+    """Nested target names one fallback entry carries: a bare string counts 1,
+    a dict entry the sum of its value-list lengths."""
+    if isinstance(entry, dict):
+        return sum(len(value) for value in entry.values() if isinstance(value, list))
+    return 1
+
+
 def _fallback_lists(
     data: Mapping[str, object],
     llm_router: litellm.Router,
@@ -2742,24 +2769,44 @@ def _index_fallback_list(fallback_list: Sequence[object]) -> _FallbackIndex:
     return exact, tuple(fuzzy)
 
 
+def _fuzzy_entry_matched(entry: object, resolved: object) -> bool:
+    """Whether a fuzzy entry is the one the router matcher returned for a group,
+    so its targets never get expanded a second time."""
+    if isinstance(entry, dict) and entry:
+        value: Final = entry[next(iter(entry))]
+        return value is resolved or value == resolved
+    if isinstance(entry, str):
+        return resolved == [entry]
+    return False
+
+
 def _fallback_edges(
     indexed_lists: Sequence[_FallbackIndex],
     model_group: str,
+    fired_fuzzy: set[tuple[int, int]],  # mutable-ok: records which fuzzy entries already expanded
 ) -> frozenset[str]:
     """Targets routing would pick for ``model_group``: exact-map hits on the group
-    and its provider-stripped suffix, plus the router matcher run over the small
-    fuzzy subset instead of every entry."""
+    and its provider-stripped suffix, plus the router matcher run over the fuzzy
+    entries that have not fired yet (tracked in ``fired_fuzzy`` by
+    ``(list_index, entry_index)``), so each entry's targets are expanded once."""
     from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 
     stripped: Final = model_group.split("/", 1)[1] if "/" in model_group else None
     targets: Final[set[str]] = set()  # mutable-ok: accumulates fallback targets
-    for exact, fuzzy in indexed_lists:
+    for list_index, (exact, fuzzy) in enumerate(indexed_lists):
         targets.update(exact.get(model_group, ()))
         if stripped is not None:
             targets.update(exact.get(stripped, ()))
-        resolved: Final = get_fallback_model_group(fallbacks=list(fuzzy), model_group=model_group)[0]
+        pending: Final = tuple(index for index in range(len(fuzzy)) if (list_index, index) not in fired_fuzzy)
+        if not pending:
+            continue
+        resolved: Final = get_fallback_model_group(
+            fallbacks=[fuzzy[index] for index in pending], model_group=model_group
+        )[0]
         values: Final = resolved if isinstance(resolved, list) else ([resolved] if resolved is not None else [])
         targets.update(name for value in values if (name := _fallback_target_name(value)) is not None)
+        if resolved is not None:
+            fired_fuzzy.update((list_index, index) for index in pending if _fuzzy_entry_matched(fuzzy[index], resolved))
     return frozenset(targets)
 
 
@@ -2785,16 +2832,19 @@ def _fallback_target_groups(
     a chain like A -> B -> C must still surface C's per-user credential. Every
     entry the router could match is indexed or matcher-scored, so discovery is
     a faithful superset of what routing can reach; the only bound is the 400 on
-    caller-supplied fallback lists in the resolver."""
+    caller-supplied fallback lists in the resolver. A fuzzy entry whose targets
+    already expanded once is marked fired in ``fired_fuzzy`` and never matched
+    or expanded again, so total target visits stay O(total targets)."""
     indexed: Final = tuple(
         _index_fallback_list(fallback_list)
         for fallback_list in _fallback_lists(data, llm_router, router_settings, team_router_settings)
     )
     seen: Final[set[str]] = set()  # mutable-ok: BFS visited set
     frontier: Final[list[str]] = [model_group]  # mutable-ok: BFS work list
+    fired_fuzzy: Final[set[tuple[int, int]]] = set()  # mutable-ok: fired (list, entry) indexes
     while frontier:
         group = frontier.pop()
-        for target in _fallback_edges(indexed, group):
+        for target in _fallback_edges(indexed, group, fired_fuzzy):
             if target not in seen and target != model_group:
                 seen.add(target)
                 frontier.append(target)
@@ -2886,13 +2936,21 @@ async def _resolve_user_provider_credentials_for_request(
     model: Final = data.get("model")
     if llm_router is None or not isinstance(model, str):
         return
+    # With no per-user credential configured there is nothing to discover: no
+    # traversal, no size check, identical behavior to a shared-mode-only proxy.
+    if not _per_user_oauth_configured():
+        return
     # The one caller-controlled input to discovery is the request body's own
     # fallback lists, so the size bound lives here instead of on the scan: admin
-    # lists (router, key/team router_settings) are always read in full.
-    request_fallback_entries: Final = sum(
-        len(entries) for key in _REQUEST_FALLBACK_KEYS if isinstance(entries := data.get(key), list)
+    # lists (router, key/team router_settings) are always read in full. The
+    # bound is on aggregate target names, not outer entries, so a single dict
+    # holding thousands of targets is counted honestly.
+    request_fallback_targets: Final = sum(
+        sum(_fallback_entry_target_count(entry) for entry in entries)
+        for key in _REQUEST_FALLBACK_KEYS
+        if isinstance(entries := data.get(key), list)
     )
-    if request_fallback_entries > _FALLBACK_DISCOVERY_LIMIT:
+    if request_fallback_targets > _FALLBACK_DISCOVERY_LIMIT:
         raise HTTPException(
             status_code=400,
             detail=(f"fallback lists in the request body cannot exceed {_FALLBACK_DISCOVERY_LIMIT} entries"),

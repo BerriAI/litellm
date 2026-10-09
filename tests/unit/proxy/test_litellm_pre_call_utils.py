@@ -9238,28 +9238,28 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         self._env(monkeypatch)
-        entries_seen: list[int] = []
-        real_matcher = feh.get_fallback_model_group
+        entries_seen: Final[list[int]] = []
+        real_matcher: Final = feh.get_fallback_model_group
 
         def _spy(fallbacks, model_group):
             entries_seen.append(len(fallbacks))
             return real_matcher(fallbacks=fallbacks, model_group=model_group)
 
         monkeypatch.setattr(feh, "get_fallback_model_group", _spy)
-        router = MagicMock()
+        router: Final = MagicMock()
         router.fallbacks = [{"unmatched-%d" % i: ["x"]} for i in range(30_000)] + [{"*": ["generic-x"]}]
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
         router.get_model_list = MagicMock(return_value=[])
         router.get_deployment = MagicMock(return_value=None)
-        data = {"model": "gpt-4o", "secret_fields": {}}
+        data: Final = {"model": "gpt-4o", "secret_fields": {}}
         await _resolve_user_provider_credentials_for_request(
             data=data,
             authenticated_user_id="user-a",
             team_id=None,
             llm_router=router,
         )
-        total = sum(entries_seen)
+        total: Final = sum(entries_seen)
         assert total <= 8, (
             f"matcher must only see the 1 wildcard entry, got {total} entries across {len(entries_seen)} calls"
         )
@@ -9271,8 +9271,8 @@ class TestResolveUserProviderCredentials:
         a later duplicate points elsewhere."""
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
-        table = self._env(monkeypatch)
-        router = MagicMock()
+        table: Final = self._env(monkeypatch)
+        router: Final = MagicMock()
         router.fallbacks = [{"gpt-4o": ["copilot-chat"]}, {"gpt-4o": ["other-chat"]}]
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
@@ -9292,7 +9292,7 @@ class TestResolveUserProviderCredentials:
             )
         )
         router.get_deployment = MagicMock(return_value=None)
-        data = {"model": "gpt-4o", "secret_fields": {}}
+        data: Final = {"model": "gpt-4o", "secret_fields": {}}
         await _resolve_user_provider_credentials_for_request(
             data=data,
             authenticated_user_id="user-a",
@@ -9309,9 +9309,9 @@ class TestResolveUserProviderCredentials:
         capped."""
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
-        table = self._env(monkeypatch)
-        router = MagicMock()
-        entries = [{"azure/unmatched-%d" % i: ["x"]} for i in range(300)]
+        table: Final = self._env(monkeypatch)
+        router: Final = MagicMock()
+        entries: Final = [{"azure/unmatched-%d" % i: ["x"]} for i in range(300)]
         entries.insert(290, {"*": ["copilot-chat"]})
         router.fallbacks = entries
         router.context_window_fallbacks = []
@@ -9332,7 +9332,7 @@ class TestResolveUserProviderCredentials:
             )
         )
         router.get_deployment = MagicMock(return_value=None)
-        data = {"model": "gpt-4o", "secret_fields": {}}
+        data: Final = {"model": "gpt-4o", "secret_fields": {}}
         await _resolve_user_provider_credentials_for_request(
             data=data,
             authenticated_user_id="user-a",
@@ -9351,13 +9351,13 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         self._env(monkeypatch)
-        router = MagicMock()
+        router: Final = MagicMock()
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
-        data = {
+        data: Final = {
             "model": "gpt-4o",
-            "fallbacks": [{"unmatched-%d" % i: ["x"]} for i in range(257)],
+            "fallbacks": [{"gpt-4o": ["target-%d" % i for i in range(257)]}],
             "secret_fields": {},
         }
         with pytest.raises(HTTPException) as exc:
@@ -9374,15 +9374,15 @@ class TestResolveUserProviderCredentials:
         from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
 
         self._env(monkeypatch)
-        router = MagicMock()
+        router: Final = MagicMock()
         router.fallbacks = []
         router.context_window_fallbacks = []
         router.content_policy_fallbacks = []
         router.get_model_list = MagicMock(return_value=[])
         router.get_deployment = MagicMock(return_value=None)
-        data = {
+        data: Final = {
             "model": "gpt-4o",
-            "fallbacks": [{"unmatched-%d" % i: ["x"]} for i in range(256)],
+            "fallbacks": [{"gpt-4o": ["target-%d" % i for i in range(256)]}],
             "secret_fields": {},
         }
         await _resolve_user_provider_credentials_for_request(
@@ -9392,6 +9392,97 @@ class TestResolveUserProviderCredentials:
             llm_router=router,
         )
         assert data["secret_fields"] == {}
+
+    @pytest.mark.asyncio
+    async def test_shared_only_credentials_skip_discovery_and_the_limit(self, monkeypatch):
+        """With no per-user credential configured the request's fallback lists
+        are never scanned and the size limit never fires: a proxy that never
+        opted into per-user OAuth keeps byte-identical behavior."""
+        import litellm.router_utils.fallback_event_handlers as feh
+        from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
+
+        self._env(monkeypatch)
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [CredentialItem(credential_name="shared-cred", credential_values={"api_key": "k"}, credential_info={})],
+        )
+        matcher_calls: Final[list[object]] = []
+        real_matcher: Final = feh.get_fallback_model_group
+
+        def _spy(fallbacks, model_group):
+            matcher_calls.append(model_group)
+            return real_matcher(fallbacks=fallbacks, model_group=model_group)
+
+        monkeypatch.setattr(feh, "get_fallback_model_group", _spy)
+        router: Final = MagicMock()
+        router.fallbacks = [{"gpt-4o": ["copilot-chat"]}]
+        router.context_window_fallbacks = []
+        router.content_policy_fallbacks = []
+        router.get_model_list = MagicMock(return_value=[])
+        router.get_deployment = MagicMock(return_value=None)
+        data: Final = {
+            "model": "gpt-4o",
+            "fallbacks": [{"unmatched-%d" % i: ["x"]} for i in range(1000)],
+            "secret_fields": {},
+        }
+        await _resolve_user_provider_credentials_for_request(
+            data=data,
+            authenticated_user_id="user-a",
+            team_id=None,
+            llm_router=router,
+        )
+        assert matcher_calls == []
+        router.get_model_list.assert_not_called()
+        assert data["secret_fields"] == {}
+
+    @pytest.mark.asyncio
+    async def test_wildcard_targets_expand_once_not_per_group(self, monkeypatch):
+        """An admin ``{"*": [5000 targets]}`` chain must expand the entry once:
+        without fired-entry tracking each discovered group would re-expand the
+        same 5000 targets."""
+        from litellm.proxy import litellm_pre_call_utils as lpc
+        from litellm.proxy.litellm_pre_call_utils import _resolve_user_provider_credentials_for_request
+
+        self._env(monkeypatch)
+        target_visits: Final[list[int]] = []
+        real_edges: Final = lpc._fallback_edges
+
+        def _counting_edges(indexed_lists, model_group, fired_fuzzy):
+            result: Final = real_edges(indexed_lists, model_group, fired_fuzzy)
+            target_visits.append(len(result))
+            return result
+
+        monkeypatch.setattr(lpc, "_fallback_edges", _counting_edges)
+        router: Final = MagicMock()
+        router.fallbacks = [{"*": ["target-%d" % i for i in range(4999)] + ["copilot-chat"]}]
+        router.context_window_fallbacks = []
+        router.content_policy_fallbacks = []
+        router.get_model_list = MagicMock(
+            side_effect=lambda model_name=None, team_id=None: (
+                [
+                    {
+                        "model_name": "copilot-chat",
+                        "litellm_params": {
+                            "model": "github_copilot/gpt-4o",
+                            "litellm_credential_name": "copilot-cred",
+                        },
+                    }
+                ]
+                if model_name == "copilot-chat"
+                else []
+            )
+        )
+        router.get_deployment = MagicMock(return_value=None)
+        data: Final = {"model": "gpt-4o", "secret_fields": {}}
+        await _resolve_user_provider_credentials_for_request(
+            data=data,
+            authenticated_user_id="user-a",
+            team_id=None,
+            llm_router=router,
+        )
+        total: Final = sum(target_visits)
+        assert total <= 5100, f"targets must expand once, got {total} visits"
 
     @pytest.mark.asyncio
     async def test_model_alias_map_target_loads_per_user_tokens(self, monkeypatch):

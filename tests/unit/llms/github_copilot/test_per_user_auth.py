@@ -1053,7 +1053,7 @@ def test_per_user_deployment_rejects_a_caller_credential_override(per_user_crede
     """Caller kwargs win the litellm_params merge downstream, so the deployment
     layer is the last place that still sees both names: a different name on a
     per-user deployment must be refused there even if discovery missed the hop."""
-    router = _per_user_router()
+    router: Final = _per_user_router()
     deployment: Final = router.get_model_list()[0]
     kwargs: Final = {"litellm_credential_name": "shared-cred", "metadata": {}}
     with pytest.raises(litellm.BadRequestError):
@@ -1061,7 +1061,7 @@ def test_per_user_deployment_rejects_a_caller_credential_override(per_user_crede
 
 
 def test_per_user_deployment_allows_the_configured_credential_name(per_user_credential):
-    router = _per_user_router()
+    router: Final = _per_user_router()
     deployment: Final = router.get_model_list()[0]
     kwargs: Final = {"litellm_credential_name": "copilot-cred", "metadata": {}}
     router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
@@ -1076,7 +1076,7 @@ def test_shared_deployment_keeps_caller_credential_override():
         patch.object(litellm, "credential_list", [_credential(auth_type="shared")]),
         patch.object(Authenticator, "get_api_key", return_value="shared-token"),
     ):
-        router = _per_user_router()
+        router: Final = _per_user_router()
         deployment: Final = router.get_model_list()[0]
         kwargs: Final = {"litellm_credential_name": "other-cred", "metadata": {}}
         router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
