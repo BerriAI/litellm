@@ -1,6 +1,7 @@
 """Bedrock Runtime Chat Completions: the default for GPT 5.6 and newer, ``bedrock/chat_completions/<model>`` for the rest."""
 
 import json
+import re
 
 import httpx
 import pytest
@@ -1540,3 +1541,74 @@ def test_reasoning_tag_split_is_read_from_the_cost_map(
     )
     assert chunk.choices[0].delta.content == expected_content
     assert _reasoning_of(chunk) == expected_reasoning
+
+
+def _tool_call(tool_call_id, name):
+    return {"id": tool_call_id, "type": "function", "function": {"name": name, "arguments": "{}"}}
+
+
+def test_positional_tool_call_ids_are_minted_unique_per_response(local_cost_map, fake_aws_env):
+    reply = _chat_completion_json(
+        None,
+        "global.xai.grok-4.7",
+        tool_calls=[_tool_call("call_0", "read_a"), _tool_call("call_1", "read_b")],
+    )
+    _, client = _recording_client(json=reply)
+    responses = [
+        litellm.completion(
+            model="bedrock/chat_completions/global.xai.grok-4.7",
+            messages=[{"role": "user", "content": "hello"}],
+            client=client,
+        )
+        for _ in range(2)
+    ]
+
+    ids = [tool_call.id for response in responses for tool_call in response.choices[0].message.tool_calls]
+    assert len(set(ids)) == 4
+    assert all(re.fullmatch(r"call_[0-9a-f]{32}", tool_call_id) for tool_call_id in ids)
+    assert [tool_call.function.name for tool_call in responses[0].choices[0].message.tool_calls] == ["read_a", "read_b"]
+
+
+def test_provider_unique_tool_call_ids_pass_through(local_cost_map, fake_aws_env):
+    reply = _chat_completion_json(
+        None, "openai.gpt-oss-20b-1:0", tool_calls=[_tool_call("chatcmpl-tool-90090f0c1c521528", "read_a")]
+    )
+    _, client = _recording_client(json=reply)
+    response = litellm.completion(
+        model="bedrock/chat_completions/openai.gpt-oss-20b-1:0",
+        messages=[{"role": "user", "content": "hello"}],
+        client=client,
+    )
+
+    assert response.choices[0].message.tool_calls[0].id == "chatcmpl-tool-90090f0c1c521528"
+
+
+def _streamed_tool_call_ids(tool_call_deltas):
+    handler = BedrockRuntimeChatCompletionsStreamingHandler(streaming_response=iter(()), sync_stream=True)
+    return [
+        tool_call.id
+        for delta in tool_call_deltas
+        for tool_call in handler.chunk_parser(_stream_chunk({"tool_calls": [delta]})).choices[0].delta.tool_calls
+    ]
+
+
+def test_streamed_positional_tool_call_ids_are_minted_once_per_tool_call(local_cost_map):
+    deltas = [
+        {"index": 0, **_tool_call("call_0", "read_a")},
+        {"index": 0, "function": {"arguments": '{"x":1}'}},
+        {"index": 0, "id": "call_0", "function": {"arguments": "}"}},
+        {"index": 1, **_tool_call("call_1", "read_b")},
+    ]
+    first_stream = _streamed_tool_call_ids(deltas)
+    second_stream = _streamed_tool_call_ids(deltas)
+
+    assert first_stream[0] == first_stream[2]
+    assert first_stream[1] is None
+    assert len({first_stream[0], first_stream[3], second_stream[0], second_stream[3]}) == 4
+    assert all(re.fullmatch(r"call_[0-9a-f]{32}", first_stream[i]) for i in (0, 3))
+
+
+def test_streamed_provider_unique_tool_call_ids_pass_through(local_cost_map):
+    assert _streamed_tool_call_ids([{"index": 0, **_tool_call("chatcmpl-tool-8c9232df5019ff4f", "read_a")}]) == [
+        "chatcmpl-tool-8c9232df5019ff4f"
+    ]

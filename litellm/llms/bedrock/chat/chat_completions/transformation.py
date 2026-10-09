@@ -15,6 +15,8 @@ Converse-only feature (``bedrock_request_needs_converse`` in ``common_utils``) i
 still served by Converse.
 """
 
+import re
+import uuid
 from collections.abc import AsyncIterator, Iterator, Mapping
 from dataclasses import dataclass, replace
 from types import MappingProxyType
@@ -51,6 +53,7 @@ if TYPE_CHECKING:
 
 REASONING_OPEN_TAG: Final = "<reasoning>"
 REASONING_CLOSE_TAG: Final = "</reasoning>"
+POSITIONAL_TOOL_CALL_ID: Final = re.compile(r"call_\d+")
 
 _PARAMS_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _PARAMS_LIST_ADAPTER: Final = TypeAdapter(list[str])
@@ -191,6 +194,14 @@ class ReasoningTagSplitter:
         return drained, "", self.pending
 
 
+def is_positional_tool_call_id(tool_call_id: str | None) -> bool:
+    return tool_call_id is not None and POSITIONAL_TOOL_CALL_ID.fullmatch(tool_call_id) is not None
+
+
+def mint_tool_call_id() -> str:
+    return f"call_{uuid.uuid4().hex}"
+
+
 def _split_streamed_content(
     splitter: ReasoningTagSplitter, content: str | None, finished: bool
 ) -> tuple[ReasoningTagSplitter, str, str]:
@@ -229,9 +240,23 @@ class BedrockRuntimeChatCompletionsStreamingHandler(OpenAIChatCompletionStreamin
     ) -> None:
         super().__init__(streaming_response=streaming_response, sync_stream=sync_stream, json_mode=json_mode)
         self._splitters: Mapping[int, ReasoningTagSplitter] = MappingProxyType({})
+        self._minted_tool_call_ids: Mapping[tuple[int, int], str] = MappingProxyType({})
+
+    def _minted_tool_call_id(self, choice_index: int, tool_call_index: int) -> str:
+        key: Final = (choice_index, tool_call_index)
+        minted: Final = self._minted_tool_call_ids.get(key) or mint_tool_call_id()
+        self._minted_tool_call_ids = MappingProxyType({**self._minted_tool_call_ids, key: minted})
+        return minted
+
+    def _mint_unique_tool_call_ids(self, parsed: ModelResponseStream) -> None:
+        for choice in parsed.choices:
+            for tool_call in choice.delta.tool_calls or ():
+                if is_positional_tool_call_id(tool_call.id):
+                    tool_call.id = self._minted_tool_call_id(choice.index, tool_call.index)
 
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:  # mutable-ok: BaseModelResponseIterator signature
         parsed: Final = super().chunk_parser(chunk)
+        self._mint_unique_tool_call_ids(parsed)
         if not bedrock_runtime_chat_completions_serves_reasoning_inline(parsed.model or ""):
             return parsed
         for choice in parsed.choices:
@@ -483,6 +508,10 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
             json_mode=json_mode,
         )
         set_provider_response_headers_in_hidden_params(response, raw_response.headers)
+        for choice in response.choices:
+            for tool_call in choice.message.tool_calls or ():
+                if is_positional_tool_call_id(tool_call.id):
+                    tool_call.id = mint_tool_call_id()
         if not bedrock_runtime_chat_completions_serves_reasoning_inline(model):
             return response
         for choice in response.choices:
