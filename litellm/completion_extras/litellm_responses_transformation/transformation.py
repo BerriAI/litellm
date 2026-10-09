@@ -25,10 +25,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 import litellm
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
-from litellm.integrations.anthropic_cache_control_hook import (
-    supports_openai_prompt_cache_breakpoint,
-    supports_prompt_cache_breakpoint_for_provider,
-)
+from litellm.integrations.anthropic_cache_control_hook import supports_openai_prompt_cache_breakpoint
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     responses_reasoning_items_from_thinking_blocks,
@@ -178,9 +175,13 @@ def _without_audio_input_parts(input_items: list[object]) -> list[object]:
     return [_without_audio_input_parts_in_item(item) for item in input_items]
 
 
-def _supports_audio_input(model: str, litellm_params: Mapping[str, object]) -> bool:
+def _served_provider(litellm_params: Mapping[str, object]) -> str | None:
     custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
-    provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
+    return custom_llm_provider if isinstance(custom_llm_provider, str) else None
+
+
+def _supports_audio_input(model: str, litellm_params: Mapping[str, object]) -> bool:
+    provider: Final = _served_provider(litellm_params)
     base_model: Final = litellm_params.get("base_model")
     return litellm.supports_audio_input(model=model, custom_llm_provider=provider) or (
         isinstance(base_model, str)
@@ -745,11 +746,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         litellm_logging_obj: "LiteLLMLoggingObj",
         client: object | None = None,
     ) -> dict:
+        provider: Final = _served_provider(litellm_params)
         base_model: Final = litellm_params.get("base_model")
-        custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
-        supports_prompt_cache_breakpoint: Final = supports_prompt_cache_breakpoint_for_provider(
-            model, custom_llm_provider if isinstance(custom_llm_provider, str) else None
-        ) or (isinstance(base_model, str) and bool(base_model) and supports_openai_prompt_cache_breakpoint(base_model))
+        supports_prompt_cache_breakpoint: Final = supports_openai_prompt_cache_breakpoint(model, provider) or (
+            isinstance(base_model, str)
+            and bool(base_model)
+            and supports_openai_prompt_cache_breakpoint(base_model, provider)
+        )
         converted_input_items, converted_instructions = self.convert_chat_completion_messages_to_responses_api(
             messages,
             drop_params=bool(litellm_params.get("drop_params") or litellm.drop_params),
