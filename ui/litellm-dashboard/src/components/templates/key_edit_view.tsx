@@ -336,9 +336,6 @@ export function KeyEditView({
     if (selectedTeam?.organization_id) {
       setSelectedOrganizationId(selectedTeam.organization_id);
       form.setValue("organization_id", selectedTeam.organization_id);
-    } else if (!teamId) {
-      setSelectedOrganizationId(null);
-      form.setValue("organization_id", null);
     }
   };
 
@@ -364,7 +361,9 @@ export function KeyEditView({
     const selectedTeamOutsideFilter = teams?.find((t) => t.team_id === selectedTeamId && !visibleTeams?.includes(t));
     return [...(selectedTeamOutsideFilter ? [selectedTeamOutsideFilter] : []), ...(visibleTeams ?? [])].map(
       ({ team_id, team_alias }: { team_id: string; team_alias?: string | null }) =>
-        team_alias ? { label: team_alias, value: team_id, sublabel: team_id } : { label: team_id, value: team_id },
+        team_alias && team_alias !== team_id
+          ? { label: team_alias, value: team_id, sublabel: team_id }
+          : { label: team_id, value: team_id },
     );
   };
 

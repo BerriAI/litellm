@@ -2479,7 +2479,10 @@ describe("KeyEditView", () => {
       renderWithProviders(
         <KeyEditView
           keyData={{ ...MOCK_KEY_DATA, team_id: null }}
-          teams={[{ team_id: "team-3", team_alias: null }]}
+          teams={[
+            { team_id: "team-3", team_alias: null },
+            { team_id: "team-4", team_alias: "team-4" },
+          ]}
           onCancel={() => {}}
           onSubmit={async () => {}}
           accessToken=""
@@ -2491,15 +2494,16 @@ describe("KeyEditView", () => {
 
       await userEvent.click(screen.getByRole("combobox", { name: "Team" }));
 
-      expect(await screen.findByRole("option")).toHaveTextContent(/^team-3$/);
+      const options = await screen.findAllByRole("option");
+      expect(options.map((option) => option.textContent)).toEqual(["team-3", "team-4"]);
     });
 
-    it("clears the team in the update payload", async () => {
+    it("clears the team in the update payload and keeps the organization", async () => {
       const onSubmitMock = vi.fn().mockResolvedValue(undefined);
       renderWithProviders(
         <KeyEditView
-          keyData={{ ...MOCK_KEY_DATA, team_id: "team-1" }}
-          teams={[{ team_id: "team-1", team_alias: "Alpha" }]}
+          keyData={{ ...MOCK_KEY_DATA, organization_id: "org-1", team_id: "team-1" }}
+          teams={[{ team_id: "team-1", team_alias: "Alpha", organization_id: "org-1" }]}
           onCancel={() => {}}
           onSubmit={onSubmitMock}
           accessToken=""
@@ -2509,12 +2513,17 @@ describe("KeyEditView", () => {
         />,
       );
 
-      expect(screen.getByRole("combobox", { name: "Team" })).toHaveValue("Alpha");
-      await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+      const teamCombobox = screen.getByRole("combobox", { name: "Team" });
+      expect(teamCombobox).toHaveValue("Alpha");
+      const [, teamClearButton] = screen.getAllByRole("button", { name: "Clear" });
+      await userEvent.click(teamClearButton);
       await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {
-        expect(onSubmitMock).toHaveBeenCalledWith(expect.objectContaining({ team_id: null }), expect.any(Array));
+        expect(onSubmitMock).toHaveBeenCalledWith(
+          expect.objectContaining({ team_id: null, organization_id: "org-1" }),
+          expect.any(Array),
+        );
       });
     });
 
