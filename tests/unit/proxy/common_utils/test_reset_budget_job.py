@@ -3954,8 +3954,36 @@ async def test_reset_budget_endusers_cascade_failure_is_all_or_nothing():
     proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_not_called()
 
 
+class _FrozenClock(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return _FROZEN_NOW if tz is None else _FROZEN_NOW.astimezone(tz)
+
+    @classmethod
+    def utcnow(cls):
+        return _FROZEN_NOW.replace(tzinfo=None)
+
+
+_FROZEN_NOW: Final = _FrozenClock(2024, 6, 15, 10, 30, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def frozen_reset_clock(monkeypatch: pytest.MonkeyPatch) -> datetime:
+    from litellm.proxy.common_utils import timezone_utils
+
+    monkeypatch.setattr(reset_budget_job_module, "datetime", _FrozenClock)
+    monkeypatch.setattr(timezone_utils, "datetime", _FrozenClock)
+    return _FROZEN_NOW
+
+
+async def _await_tasks_spawned_by(operation: Awaitable[None]) -> None:
+    already_running: Final = asyncio.all_tasks()
+    await operation
+    await asyncio.gather(*(asyncio.all_tasks() - already_running - {asyncio.current_task()}))
+
+
 @pytest.mark.asyncio
-async def test_reset_budget_endusers_are_zeroed_with_the_budget_window_advance():
+async def test_reset_budget_endusers_are_zeroed_with_the_budget_window_advance(frozen_reset_clock):
     endusers = [_attrify({"user_id": f"user{i}", "spend": 20.0 + i, "budget_id": "budget1"}) for i in range(1, 7)]
 
     budget1 = LiteLLM_BudgetTableFull(
@@ -3963,7 +3991,7 @@ async def test_reset_budget_endusers_are_zeroed_with_the_budget_window_advance()
             "budget_id": "budget1",
             "max_budget": 65.0,
             "budget_duration": "2d",
-            "created_at": datetime.now(timezone.utc) - timedelta(days=3),
+            "created_at": frozen_reset_clock - timedelta(days=3),
         }
     )
 
@@ -3988,8 +4016,7 @@ async def test_reset_budget_endusers_are_zeroed_with_the_budget_window_advance()
 
     job = ResetBudgetJob(proxy_logging_obj, prisma_client)
 
-    await job.reset_budget_for_litellm_budget_table()
-    await asyncio.sleep(0.1)
+    await _await_tasks_spawned_by(job.reset_budget_for_litellm_budget_table())
 
     assert prisma_client.db.batch_.call_count == 1, "the cascade must be one transaction"
 
@@ -4001,30 +4028,26 @@ async def test_reset_budget_endusers_are_zeroed_with_the_budget_window_advance()
     budget_writes = [c for c in batch_calls if c["table"] == "budget"]
     assert len(budget_writes) == 1
     assert budget_writes[0]["where"] == {"budget_id": "budget1"}
-    assert budget_writes[0]["data"]["budget_reset_at"] > datetime.now(timezone.utc)
+    assert budget_writes[0]["data"]["budget_reset_at"] > frozen_reset_clock
 
     proxy_logging_obj.service_logging_obj.async_service_failure_hook.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_reset_budget_continues_other_categories_on_failure():
-    key1 = {"id": "key1", "spend": 10.0, "budget_duration": 60}
-    key2 = {"id": "key2", "spend": 15.0, "budget_duration": 60}
-    user1 = {
-        "id": "user1",
-        "spend": 20.0,
-        "budget_duration": 120,
-    }
-    user2 = {"id": "user2", "spend": 25.0, "budget_duration": 120}
-    team1 = {"id": "team1", "spend": 30.0, "budget_duration": 180}
-    team2 = {"id": "team2", "spend": 35.0, "budget_duration": 180}
+async def test_reset_budget_continues_other_categories_on_failure(frozen_reset_clock):
+    key1 = {"id": "key1", "spend": 10.0, "budget_duration": "60s"}
+    key2 = {"id": "key2", "spend": 15.0, "budget_duration": "60s"}
+    user1 = {"id": "user1", "spend": 20.0, "budget_duration": 120}
+    user2 = {"id": "user2", "spend": 25.0, "budget_duration": "120s"}
+    team1 = {"id": "team1", "spend": 30.0, "budget_duration": "180s"}
+    team2 = {"id": "team2", "spend": 35.0, "budget_duration": "180s"}
     enduser1 = {"user_id": "user1", "spend": 25.0, "budget_id": "budget1"}
     budget1 = LiteLLM_BudgetTableFull(
         **{
             "budget_id": "budget1",
             "max_budget": 65.0,
             "budget_duration": "2d",
-            "created_at": datetime.now(timezone.utc) - timedelta(days=3),
+            "created_at": frozen_reset_clock - timedelta(days=3),
         }
     )
 
@@ -4070,30 +4093,7 @@ async def test_reset_budget_continues_other_categories_on_failure():
 
     job = ResetBudgetJob(proxy_logging_obj, prisma_client)
 
-    async def fake_reset_key(key, current_time, reset_settings=None):
-        key["spend"] = 0.0
-        key["budget_reset_at"] = (current_time + timedelta(seconds=key["budget_duration"])).isoformat()
-        return key
-
-    async def fake_reset_user(user, current_time, reset_settings=None):
-        if user["id"] == "user1":
-            raise Exception("Simulated failure for user1")
-        user["spend"] = 0.0
-        user["budget_reset_at"] = (current_time + timedelta(seconds=user["budget_duration"])).isoformat()
-        return user
-
-    async def fake_reset_team(team, current_time, reset_settings=None):
-        team["spend"] = 0.0
-        team["budget_reset_at"] = (current_time + timedelta(seconds=team["budget_duration"])).isoformat()
-        return team
-
-    with (
-        patch.object(ResetBudgetJob, "_reset_budget_for_key", side_effect=fake_reset_key),
-        patch.object(ResetBudgetJob, "_reset_budget_for_user", side_effect=fake_reset_user),
-        patch.object(ResetBudgetJob, "_reset_budget_for_team", side_effect=fake_reset_team),
-    ):
-        await job.reset_budget()
-        await asyncio.sleep(0.1)
+    await _await_tasks_spawned_by(job.reset_budget())
 
     called_tables = {call.kwargs.get("table_name") for call in prisma_client.get_data.await_args_list}
     assert called_tables == {"key", "user", "team", "budget"}
@@ -4117,6 +4117,7 @@ async def test_reset_budget_continues_other_categories_on_failure():
     for c in key_writes + user_writes + team_writes:
         assert set(c["data"].keys()) == {"spend", "budget_reset_at"}
         assert c["data"]["spend"] == {"decrement": pre_reset_spend[next(iter(c["where"].values()))]}
+
 
 @pytest.mark.asyncio
 async def test_reset_budget_teams_partial_failure():
