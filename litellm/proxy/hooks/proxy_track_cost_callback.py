@@ -143,7 +143,9 @@ class _ProxyDBLogger(CustomLogger):
             start_time,
             end_time,
             store_bodies=should_store_prompts_and_responses_in_spend_logs(
-                cast("Mapping[str, object] | None", kwargs.get("litellm_params"))
+                cast(  # cast-ok: kwargs mapping asserted for basedpyright; no runtime effect
+                    "Mapping[str, object] | None", kwargs.get("litellm_params")
+                )
             ),
         )
         if isinstance(event, SpendEventBuildError):
