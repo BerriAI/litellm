@@ -11589,8 +11589,7 @@ async def test_passthrough_probes_bind_each_token_to_its_authorized_server(allow
     assert result is None
     assert tuple(
         (str(call.request.url), call.request.headers["Authorization"])
-        for route in (first, second)
-        for call in route.calls
+        for call in (*first.calls, *second.calls)
     ) == (
         (("http://first/mcp", "Bearer first-token"), ("http://second/mcp", "Bearer second-token"))
         if allowed and header_shape != "non_authorization"
