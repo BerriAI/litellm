@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, fmt, ops::Deref};
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 pub type Value = serde_yaml_ng::Value;
 pub type AdditionalFields = BTreeMap<String, Value>;
@@ -40,39 +40,14 @@ impl fmt::Debug for Object {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
-#[serde(untagged)]
-pub enum NumberOrString {
-    Number(f64),
-    String(String),
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum Flag {
-    Boolean(bool),
-    String(String),
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(untagged)]
-pub enum OneOrMany<T> {
-    Many(Box<[T]>),
-    One(T),
-}
-
-impl<T> OneOrMany<T> {
-    pub fn len(&self) -> usize {
-        match self {
-            Self::Many(values) => values.len(),
-            Self::One(_) => 1,
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        match self {
-            Self::Many(values) => values.is_empty(),
-            Self::One(_) => false,
-        }
-    }
+/// Python's callback shorthand: one entry or a list of them, kept as the values written.
+pub(crate) fn one_or_many<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<Value>>, D::Error> {
+    Ok(
+        Option::<Value>::deserialize(deserializer)?.map(|value| match value {
+            Value::Sequence(values) => values,
+            one => vec![one],
+        }),
+    )
 }

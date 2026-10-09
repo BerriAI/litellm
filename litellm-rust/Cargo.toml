@@ -11,6 +11,7 @@ repository = "https://github.com/BerriAI/litellm"
 [workspace.dependencies]
 litellm-config = { path = "crates/config" }
 litellm-router = { path = "crates/router" }
+litellm-router-types = { path = "crates/router-types" }
 litellm-tracing = { path = "crates/tracing" }
 litellm-spend-clickhouse = { path = "crates/spend-clickhouse" }
 litellm-storage-clickhouse = { path = "crates/storage-clickhouse" }

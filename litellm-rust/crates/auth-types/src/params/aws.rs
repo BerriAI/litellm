@@ -2,6 +2,7 @@ use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use veil::Redact;
 
 use super::ParamSpec;
 
@@ -19,13 +20,15 @@ const fn spec(
 }
 
 /// The `aws_*` fields of Python's `GenericLiteLLMParams`.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Redact, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AwsParams {
     #[serde(default)]
     pub aws_access_key_id: Option<String>,
     #[serde(default)]
+    #[redact(with = "[REDACTED]")]
     pub aws_secret_access_key: Option<String>,
     #[serde(default)]
+    #[redact(with = "[REDACTED]")]
     pub aws_session_token: Option<String>,
     #[serde(default)]
     pub aws_region_name: Option<String>,
@@ -36,10 +39,12 @@ pub struct AwsParams {
     #[serde(default)]
     pub aws_role_name: Option<String>,
     #[serde(default)]
+    #[redact(with = "[REDACTED]")]
     pub aws_web_identity_token: Option<String>,
     #[serde(default)]
     pub aws_sts_endpoint: Option<String>,
     #[serde(default)]
+    #[redact(with = "[REDACTED]")]
     pub aws_external_id: Option<String>,
     #[serde(default)]
     pub aws_bedrock_runtime_endpoint: Option<String>,
