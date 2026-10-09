@@ -480,6 +480,47 @@ class TestOpenTelemetryCostBreakdown(unittest.TestCase):
         assert ("gen_ai.cost.original_cost", 0.004) not in call_args_list
 
 
+class TestOpenTelemetryZeroValuedRequestParams(unittest.TestCase):
+    def test_zero_valued_sampling_params_reach_the_span(self):
+        """A sampling param the caller set to 0 still has to reach the span.
+
+        temperature=0 is what you send for deterministic output, so dropping it
+        hides the single most common setting from the trace. The semconv path
+        already records these, so the legacy path has to agree.
+        """
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {"max_tokens": 0, "temperature": 0, "top_p": 0},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+            },
+        }
+
+        response_obj = {
+            "id": "test-response-id",
+            "model": "gpt-4",
+            "choices": [],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        from litellm.proxy._types import SpanAttributes
+
+        recorded = dict(call[0] for call in mock_span.set_attribute.call_args_list if len(call[0]) == 2)
+
+        assert recorded.get(SpanAttributes.LLM_REQUEST_TEMPERATURE.value) == 0
+        assert recorded.get(SpanAttributes.LLM_REQUEST_TOP_P.value) == 0
+        assert recorded.get(SpanAttributes.LLM_REQUEST_MAX_TOKENS.value) == 0
+
+
 class TestOpenTelemetryProviderInitialization(unittest.TestCase):
     """Test suite for verifying provider initialization respects existing providers"""
 
