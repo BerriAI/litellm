@@ -400,22 +400,26 @@ def test_transform_messages_sanitizes_empty_content():
     assert result[1]["content"] == "Hi"
 
 
+def test_transform_request_preserves_unity_model_service_name():
+    config = DatabricksConfig()
+    result = config.transform_request(
+        model="system.ai.kimi-k3",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["model"] == "system.ai.kimi-k3"
+
+
 @pytest.mark.parametrize(
-    "model,messages,optional_params,expected_model,expected_content",
+    "model,messages,optional_params,expected_content",
     [
-        pytest.param(
-            "system.ai.kimi-k3",
-            [{"role": "user", "content": "hello"}],
-            {},
-            "system.ai.kimi-k3",
-            "hello",
-            id="unity-model-service-name",
-        ),
         pytest.param(
             "databricks-meta-llama-3-3-70b-instruct",
             [{"role": "user", "content": [{"type": "text", "text": "Reply in JSON"}]}],
             {"response_format": {"type": "json_object"}},
-            "databricks-meta-llama-3-3-70b-instruct",
             "Reply in JSON",
             id="user",
         ),
@@ -423,7 +427,6 @@ def test_transform_messages_sanitizes_empty_content():
             "databricks-meta-llama-3-3-70b-instruct",
             [{"role": "system", "content": [{"type": "text", "text": "Reply in JSON"}]}],
             {"response_format": {"type": "json_object"}},
-            "databricks-meta-llama-3-3-70b-instruct",
             "Reply in JSON",
             id="system",
         ),
@@ -431,7 +434,6 @@ def test_transform_messages_sanitizes_empty_content():
             "databricks-meta-llama-3-3-70b-instruct",
             [{"role": "assistant", "content": [{"type": "text", "text": "Reply in JSON"}]}],
             {"response_format": {"type": "json_object"}},
-            "databricks-meta-llama-3-3-70b-instruct",
             "Reply in JSON",
             id="assistant",
         ),
@@ -445,7 +447,6 @@ def test_transform_messages_sanitizes_empty_content():
                 }
             ],
             {"response_format": {"type": "json_object"}},
-            "databricks-meta-llama-3-3-70b-instruct",
             "Reply in JSON",
             id="tool",
         ),
@@ -458,7 +459,6 @@ def test_transform_messages_sanitizes_empty_content():
                 }
             ],
             {"response_format": {"type": "json_object"}},
-            "databricks-meta-llama-3-3-70b-instruct",
             [{"type": "text", "text": "Reply in JSON", "cache_control": {"type": "ephemeral"}}],
             id="cache-control",
         ),
@@ -466,7 +466,6 @@ def test_transform_messages_sanitizes_empty_content():
             "databricks-meta-llama-3-3-70b-instruct",
             [{"role": "user", "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]}],
             {"response_format": {"type": "json_object"}},
-            "databricks-meta-llama-3-3-70b-instruct",
             [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}],
             id="multiple-text-blocks",
         ),
@@ -482,7 +481,6 @@ def test_transform_messages_sanitizes_empty_content():
                 }
             ],
             {"response_format": {"type": "json_object"}},
-            "databricks-meta-llama-3-3-70b-instruct",
             [
                 {"type": "text", "text": "Reply in JSON"},
                 {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
@@ -493,7 +491,6 @@ def test_transform_messages_sanitizes_empty_content():
             "databricks-meta-llama-3-3-70b-instruct",
             [{"role": "user", "content": "Reply in JSON"}],
             {"response_format": {"type": "json_object"}},
-            "databricks-meta-llama-3-3-70b-instruct",
             "Reply in JSON",
             id="plain-string",
         ),
@@ -501,7 +498,6 @@ def test_transform_messages_sanitizes_empty_content():
             "databricks-claude-sonnet-5",
             [{"role": "user", "content": [{"type": "text", "text": "Reply in JSON"}]}],
             {"response_format": {"type": "json_object"}},
-            "databricks-claude-sonnet-5",
             [{"type": "text", "text": "Reply in JSON"}],
             id="claude",
         ),
@@ -511,11 +507,11 @@ def test_transform_request_collapses_single_plain_text_block_for_non_claude_mode
     model: str,
     messages: list[AllMessageValues],
     optional_params: dict[str, object],
-    expected_model: str,
     expected_content: object,
 ) -> None:
+    config: Final[DatabricksConfig] = DatabricksConfig()
     result: Final[dict[str, object]] = TypeAdapter(dict[str, object]).validate_python(
-        DatabricksConfig().transform_request(
+        config.transform_request(  # pyright: ignore[reportUnknownMemberType]  # inherited hook has no return annotation
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -527,7 +523,6 @@ def test_transform_request_collapses_single_plain_text_block_for_non_claude_mode
         result["messages"]
     )
 
-    assert result["model"] == expected_model
     assert outgoing_messages[0]["content"] == expected_content
 
 

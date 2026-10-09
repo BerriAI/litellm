@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequenc
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 import httpx
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel
 
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
@@ -68,36 +68,22 @@ def _is_bare_assistant_message(message_dict: Mapping[str, object]) -> bool:
     )
 
 
-_CONTENT_BLOCKS_ADAPTER: Final = TypeAdapter(list[object])
-_CONTENT_BLOCK_ADAPTER: Final = TypeAdapter(dict[object, object])
-
-
 def _collapse_single_text_block(message: AllMessageValues) -> AllMessageValues:
-    message_values: Final[Mapping[str, object]] = dict(message)
-    content: Final[object] = message_values.get("content")
-    if not isinstance(content, list):
-        return message
-
-    content_blocks: Final[Sequence[object]] = _CONTENT_BLOCKS_ADAPTER.validate_python(
-        message_values.get("content"), strict=True
+    message_values: Final[Mapping[str, object]] = cast(  # cast-ok: AllMessageValues are TypedDict mappings
+        Mapping[str, object], message
     )
-    if len(content_blocks) != 1:
-        return message
-
-    block: Final[object] = content_blocks[0]
-    if not isinstance(block, dict):
-        return message
-
-    text_block: Final[Mapping[object, object]] = _CONTENT_BLOCK_ADAPTER.validate_python(content_blocks[0], strict=True)
-    if set(text_block) != {"type", "text"}:
-        return message
-
-    block_type: Final[object] = text_block["type"]
-    text: Final[object] = text_block["text"]
-    if block_type != "text" or not isinstance(text, str):
-        return message
-
-    return cast(AllMessageValues, {**message, "content": text})  # cast-ok: replacement preserves role-specific fields
+    content: Final[object] = message_values.get("content")
+    match cast(list[object], content):  # cast-ok: the list pattern checks content at runtime
+        case [{"type": "text", "text": str() as text} as block] if (
+            isinstance(block, dict)
+            and len(
+                cast(Mapping[str, object], block)  # cast-ok: structural patterns leave dict keys and values unknown
+            )
+            == 2
+        ):
+            return cast(AllMessageValues, {**message, "content": text})  # cast-ok: role fields are preserved
+        case _:
+            return message
 
 
 def _sanitize_empty_content(message_dict: dict[str, object]) -> None:
@@ -479,7 +465,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         Databricks does not support:
         - 'name' in user message.
         - litellm's internal `thinking_blocks` / `reasoning_content` on assistant messages.
-        - single plain text content blocks for non-Claude models.
+        - reading list content for non-Claude json_object "json" checks, so a single plain text block is sent as a string.
         """
         new_messages = []
         for idx, message in enumerate(messages):
