@@ -102,7 +102,6 @@ async def test_eval_writes_reach_lens_with_a_signed_identity_for_the_calling_key
             "team_id": "team-a",
             "org_id": None,
             "token": "hashed-ci-key",
-            "models": ["gpt"],
             "log_team_ids": ["team-a"],
         },
     }

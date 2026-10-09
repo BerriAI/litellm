@@ -78,7 +78,6 @@ def gateway_identity(auth: UserAPIKeyAuth, secret: str, now: int) -> str | None:
                 "team_id": auth.team_id,
                 "org_id": auth.org_id,
                 "token": auth.token,
-                "models": list(auth.models),
                 "log_team_ids": [auth.team_id] if auth.team_id else [],
             },
         },
