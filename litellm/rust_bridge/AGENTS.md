@@ -2,7 +2,7 @@
 
 This package owns native rollout and fallback selection, Python public API compatibility, settings projection and the Python bindings supplied to the Rust bridge. Rust core owns provider execution; `litellm-host-python` owns CPython runtime mechanics; `callbacks-legacy-python` owns legacy callback sharing and dispatch policy
 
-`host/` holds the Python modules Rust imports by name to read Python-owned state (provider resolution, model capabilities, legacy callbacks); its AGENTS.md states that contract
+`host/` holds the Python modules Rust imports by name to read Python-owned state (provider resolution, model capabilities, settings, caches, diagnostics, legacy callbacks); its AGENTS.md states that contract
 
 `lifecycle.py` owns generic inline execution and stream iteration. `streams.py` supplies the product binding and public stream wrappers through the bridge rather than let the generic Rust host import this package by name. Keep one driver implementing `start`, `resume_value`, `resume_error` and idempotent `close`; do not create a second implementation
 
