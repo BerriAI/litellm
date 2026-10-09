@@ -17,6 +17,7 @@ vi.mock("@/components/networking", () => ({
   modelHubPublicModelsCall: vi.fn(),
   modelHubCall: vi.fn(),
   getConfigFieldSetting: vi.fn(),
+  getGlobalLitellmHeaderName: vi.fn(() => "X-Litellm-Key"),
   getProxyBaseUrl: vi.fn(() => "http://localhost:4000"),
   getAgentsList: vi.fn(),
   fetchMCPServers: vi.fn(),
@@ -257,6 +258,7 @@ describe("ModelHubTable", () => {
       const dialog = await openDetails({ model_group: "jev-latest", providers: ["typesafe"], mode: "evaluation" });
 
       expect(dialog).toHaveTextContent('"http://localhost:4000/v1/systemone"');
+      expect(dialog).toHaveTextContent('headers={"X-Litellm-Key": "Bearer your_api_key"}');
       expect(dialog).not.toHaveTextContent("chat.completions");
       expect(screen.getByRole("link", { name: "How to call decision models" })).toHaveAttribute(
         "href",

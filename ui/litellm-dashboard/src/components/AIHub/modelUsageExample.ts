@@ -19,11 +19,11 @@ response = client.chat.completions.create(
 
 print(response.choices[0].message.content)`;
 
-const systemOneExample = (baseUrl: string, model: string): string => `import requests
+const systemOneExample = (baseUrl: string, model: string, keyHeaderName: string): string => `import requests
 
 response = requests.post(
     ${JSON.stringify(`${baseUrl}/v1/systemone`)},  # Your LiteLLM Proxy URL
-    headers={"Authorization": "Bearer your_api_key"},
+    headers={${JSON.stringify(keyHeaderName)}: "Bearer your_api_key"},
     json={
         "model": ${JSON.stringify(model)},
         "state": "I was charged twice for my subscription this month.",
@@ -38,5 +38,10 @@ response = requests.post(
 
 print(response.json()["answers"])`;
 
-export const modelUsageExample = (mode: string | null | undefined, baseUrl: string, model: string): string =>
-  isDecisionMode(mode) ? systemOneExample(baseUrl, model) : chatCompletionsExample(baseUrl, model);
+export const modelUsageExample = (
+  mode: string | null | undefined,
+  baseUrl: string,
+  model: string,
+  keyHeaderName: string,
+): string =>
+  isDecisionMode(mode) ? systemOneExample(baseUrl, model, keyHeaderName) : chatCompletionsExample(baseUrl, model);

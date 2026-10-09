@@ -16,6 +16,7 @@ import {
   fetchMCPServers,
   getAgentsList,
   getConfigFieldSetting,
+  getGlobalLitellmHeaderName,
   getProxyBaseUrl,
   getUiConfig,
   modelHubCall,
@@ -793,7 +794,12 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                   </p>
                 )}
                 <SyntaxHighlighter language="python" className="text-sm" style={syntaxTheme}>
-                  {modelUsageExample(selectedModel.mode, getProxyBaseUrl(), selectedModel.model_group)}
+                  {modelUsageExample(
+                    selectedModel.mode,
+                    getProxyBaseUrl(),
+                    selectedModel.model_group,
+                    getGlobalLitellmHeaderName(),
+                  )}
                 </SyntaxHighlighter>
               </div>
             </div>
