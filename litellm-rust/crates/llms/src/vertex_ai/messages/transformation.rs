@@ -366,7 +366,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn a_location_that_could_name_another_host_is_rejected() {
         assert!(matches!(
             url(
@@ -463,7 +463,7 @@ mod tests {
             .unwrap()
     }
 
-    #[test]
+    #[rstest]
     fn the_credential_is_a_google_access_token_for_the_configured_project() {
         assert!(matches!(
             validated(&[]).auth,
@@ -471,7 +471,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[rstest]
     fn a_forwarded_bearer_is_sent_as_is() {
         assert!(matches!(
             validated(&[("Authorization", "Bearer caller")]).auth,
@@ -479,7 +479,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[rstest]
     fn default_headers_carry_no_anthropic_version() {
         assert_eq!(
             VERTEX_ANTHROPIC_MESSAGES_CONFIG.default_headers(),
@@ -497,7 +497,7 @@ mod tests {
         .unwrap()
     }
 
-    #[test]
+    #[rstest]
     fn the_body_carries_the_vertex_version_and_the_wire_drops_the_model() {
         let body = transformed(
             json!({
