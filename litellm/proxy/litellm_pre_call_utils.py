@@ -2117,6 +2117,7 @@ async def add_litellm_data_to_request(
     proxy_config: ProxyConfig,
     general_settings: dict[str, Any] | None = None,
     version: str | None = None,
+    user_api_base: str | None = None,
 ):
     """
     Adds LiteLLM-specific data to the request.
@@ -2127,6 +2128,7 @@ async def add_litellm_data_to_request(
         user_api_key_dict (UserAPIKeyAuth): The user API key dictionary.
         general_settings (Optional[Dict[str, Any]], optional): General settings. Defaults to None.
         version (Optional[str], optional): Version. Defaults to None.
+        user_api_base (Optional[str], optional): CLI --api_base the caller applies after this returns. Defaults to None.
 
     Returns:
         dict: The modified data dictionary.
@@ -2643,7 +2645,7 @@ async def add_litellm_data_to_request(
         _forwarded_api_key_scope_for(
             llm_router,
             _headers["x-api-key"],
-            STR_KEYED_MAPPING.validate_python(data),
+            STR_KEYED_MAPPING.validate_python({**data, "api_base": user_api_base} if user_api_base else data),
             user_api_key_dict.team_id,
         )
         if _forwarded_client_api_key

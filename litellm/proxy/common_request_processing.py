@@ -2062,6 +2062,7 @@ class ProxyBaseLLMRequestProcessing:
             user_api_key_dict=user_api_key_dict,
             version=version,
             proxy_config=proxy_config,
+            user_api_base=user_api_base,
         )
         if not general_settings.get("expose_fallback_errors_to_caller"):
             self.data.pop("include_fallback_errors", None)

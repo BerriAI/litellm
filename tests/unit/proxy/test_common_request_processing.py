@@ -2047,6 +2047,64 @@ class TestProxyBaseLLMRequestProcessing:
 
 
 @pytest.mark.asyncio
+async def test_cli_api_base_keeps_forwarded_x_api_key_on_first_hop_and_drops_it_on_bedrock_fallback(
+    monkeypatch,
+) -> None:
+    cli_api_base: Final = "https://cli-gateway.example/anthropic"
+    client_key: Final = "sk-ant-api03-client-key"
+    router: Final = Router(
+        model_list=[
+            {"model_name": "claude", "litellm_params": {"model": "anthropic/claude-haiku-4-5"}},
+            {
+                "model_name": "claude-bedrock",
+                "litellm_params": {"model": "bedrock/global.anthropic.claude-haiku-4-5-20251001-v1:0"},
+            },
+        ]
+    )
+    request: Final = MagicMock(spec=Request)
+    request.url = MagicMock()
+    request.url.path = "/v1/messages"
+    request.url.__str__.return_value = "http://localhost/v1/messages"
+    request.method = "POST"
+    request.query_params = {}
+    request.headers = {"x-litellm-api-key": "Bearer sk-virtual-key", "x-api-key": client_key}
+    request.client = MagicMock()
+    request.client.host = "127.0.0.1"
+    proxy_logging_obj: Final = MagicMock(spec=ProxyLogging)
+    proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type, **_: data)
+    proxy_config: Final = MagicMock(spec=ProxyConfig)
+    proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+
+    data, _ = await ProxyBaseLLMRequestProcessing(
+        data={"model": "claude", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 8}
+    ).common_processing_pre_call_logic(
+        request=request,
+        general_settings={"forward_llm_provider_auth_headers": True},
+        user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hashed-key"),
+        proxy_logging_obj=proxy_logging_obj,
+        proxy_config=proxy_config,
+        route_type="anthropic_messages",
+        user_api_base=cli_api_base,
+        llm_router=router,
+    )
+    first_hop: Final = copy.deepcopy(data)
+    fallback_hop: Final = copy.deepcopy(data)
+    for model_group, hop in (("claude", first_hop), ("claude-bedrock", fallback_hop)):
+        hop["litellm_metadata"]["model_group"] = model_group
+        router._update_kwargs_with_deployment(
+            deployment=router.get_model_list(model_name=model_group)[0],
+            kwargs=hop,
+            function_name="_ageneric_api_call_with_fallbacks",
+        )
+
+    assert first_hop["api_base"] == cli_api_base
+    assert first_hop["api_key"] == client_key
+    assert "api_key" not in fallback_hop
+
+
+@pytest.mark.asyncio
 class TestCommonRequestProcessingHelpers:
     async def consume_stream(self, streaming_response: StreamingResponse) -> list:
         content = []
