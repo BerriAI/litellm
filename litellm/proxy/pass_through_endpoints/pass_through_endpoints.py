@@ -2416,6 +2416,9 @@ async def websocket_passthrough_request(
     cost_per_request: float | None = None,
     accept_websocket: bool = True,
     setup_model_rewriter: Callable[[str], str] | None = None,
+    initial_client_frame: str | bytes | None = None,
+    model: str | None = None,
+    custom_llm_provider: str | None = None,
 ):
     """
     WebSocket passthrough request handler.
@@ -2429,6 +2432,9 @@ async def websocket_passthrough_request(
         endpoint: The endpoint path (for logging purposes)
         cost_per_request: Optional field - cost per request to the target endpoint
         setup_model_rewriter: Optional rewrite of the setup frame's model before it reaches the upstream
+        initial_client_frame: A client frame the route already read, sent upstream before any other
+        model: The model the route already authorized the session for, logged instead of "unknown"
+        custom_llm_provider: The provider that model is priced under
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.proxy_server import proxy_config, proxy_logging_obj
@@ -2464,8 +2470,9 @@ async def websocket_passthrough_request(
         proxy_config=proxy_config,
         route_description="websocket_passthrough",
     )
+    logged_model: Final = model if model is not None else "unknown"
     logging_obj: Final = Logging(
-        model="unknown",
+        model=logged_model,
         messages=[{"role": "user", "content": "WebSocket connection"}],
         stream=True,  # WebSockets are inherently streaming
         call_type="pass_through_endpoint",
@@ -2507,7 +2514,7 @@ async def websocket_passthrough_request(
     # Initialize kwargs for logging using the same pattern as HTTP passthrough
     kwargs: Final = HttpPassThroughEndpointHelpers.init_kwargs_for_pass_through_endpoint(
         user_api_key_dict=user_api_key_dict,
-        _parsed_body={},  # WebSocket doesn't have a traditional request body
+        _parsed_body={"model": model} if model is not None else {},
         passthrough_logging_payload=passthrough_logging_payload,
         litellm_call_id=litellm_call_id,
         request=dummy_request,
@@ -2516,13 +2523,18 @@ async def websocket_passthrough_request(
 
     # Update logging environment variables
     logging_obj.update_environment_variables(
-        model="unknown",
+        model=logged_model,
         user="unknown",
         optional_params={},
         litellm_params=dict(kwargs.get("litellm_params", {})),
         call_type="pass_through_endpoint",
     )
     logging_obj.model_call_details["litellm_call_id"] = litellm_call_id
+    if model is not None:
+        kwargs["model"] = model
+    if custom_llm_provider is not None:
+        kwargs["custom_llm_provider"] = custom_llm_provider
+        logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
 
     # Pre-call logging
     logging_obj.pre_call(
@@ -2554,6 +2566,8 @@ async def websocket_passthrough_request(
             verbose_proxy_logger.info(
                 "WebSocket passthrough (%s): Upstream connection established successfully", endpoint
             )
+            if initial_client_frame is not None:
+                await upstream_ws.send(initial_client_frame)
 
             async def forward_client_to_upstream() -> None:
                 """Forward messages from client to upstream WebSocket"""

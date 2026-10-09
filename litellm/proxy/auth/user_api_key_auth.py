@@ -676,7 +676,9 @@ async def user_api_key_auth_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
     return await user_api_key_auth_websocket_for_model(websocket, model=websocket.query_params.get("model"))
 
 
-async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str | None) -> UserAPIKeyAuth:
+async def user_api_key_auth_websocket_for_model(
+    websocket: WebSocket, model: str | None, presented_api_key: str | None = None
+) -> UserAPIKeyAuth:
     ws_scope: Final = websocket.scope or {}
     scope_headers: Final = list(ws_scope.get("headers") or [])
     # ``get_request_route`` falls back to ``request.url.path`` when
@@ -705,9 +707,9 @@ async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str
     request.body = return_body
 
     authorization: Final = websocket.headers.get("authorization")
-    # If no Authorization header, try the api-key header
+    # If no Authorization header, try the key the route resolved, then the api-key header
     if not authorization:
-        api_key = websocket.headers.get("api-key")
+        api_key = presented_api_key or websocket.headers.get("api-key")
         if not api_key:
             # Try extracting from WebSocket subprotocol (browser clients)
             for protocol in websocket.headers.get("sec-websocket-protocol", "").split(","):

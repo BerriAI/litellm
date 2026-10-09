@@ -368,6 +368,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
         start_time: datetime,
         end_time: datetime,
         request_body: dict,
+        custom_llm_provider: str = "vertex_ai",
         **kwargs,
     ) -> PassThroughEndpointLoggingTypedDict:
         """
@@ -380,6 +381,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
             start_time: Request start time
             end_time: Request end time
             request_body: The original request body
+            custom_llm_provider: The provider the session is billed under, ``gemini`` for Google AI Studio Live
             **kwargs: Additional keyword arguments
 
         Returns:
@@ -391,7 +393,6 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
             model: Final = (
                 requested_model if isinstance(requested_model, str) else "gemini-2.0-flash-live-preview-04-09"
             )
-            custom_llm_provider: Final = kwargs.get("custom_llm_provider", "vertex_ai")
             verbose_proxy_logger.debug(
                 "Vertex AI Live API model: %s, custom_llm_provider: %s", model, custom_llm_provider
             )
