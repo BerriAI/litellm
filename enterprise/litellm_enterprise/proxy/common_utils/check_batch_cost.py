@@ -732,6 +732,7 @@ class CheckBatchCost:
         another pod claimed it. Raises on results-fetch or cost-computation
         failures so the caller can leave the job unprocessed and retry it on a
         later poll.
+
         """
         from litellm.batches.batch_utils import (
             count_error_file_failed_requests,
@@ -815,15 +816,14 @@ class CheckBatchCost:
             custom_llm_provider=custom_llm_provider,
         )
 
-        # CheckBatchCost bypasses async_post_call_success_hook, so convert raw
-        # output/error file IDs to managed base64 IDs before the DB write here.
-        managed_files_hook = self.proxy_logging_obj.get_proxy_hook("managed_files")
-        if managed_files_hook is not None:
+        from litellm.proxy.openai_files_endpoints.common_utils import ManagedBatchOutputFileWriter
+
+        managed_files_hook: Final = self.proxy_logging_obj.get_proxy_hook("managed_files")
+        if isinstance(managed_files_hook, ManagedBatchOutputFileWriter):
+            managed_file_writer: Final = managed_files_hook
             from litellm.proxy._types import UserAPIKeyAuth
 
-            managed_file_model_name = self._get_managed_file_model_name(
-                job=job, deployment_info=deployment_info
-            )
+            managed_file_model_name = self._get_managed_file_model_name(job=job, deployment_info=deployment_info)
             _minimal_auth = UserAPIKeyAuth(
                 user_id=job.created_by or "default-user-id",
                 team_id=getattr(job, "team_id", None),
@@ -832,17 +832,19 @@ class CheckBatchCost:
                 _raw_file_id = cast(str | None, getattr(response, _file_attr, None))
                 if _raw_file_id and not _is_base64_encoded_unified_file_id(_raw_file_id):
                     try:
-                        _unified_file_id = managed_files_hook.get_unified_output_file_id(
+                        _unified_file_id = managed_file_writer.get_unified_output_file_id(
                             output_file_id=_raw_file_id,
                             model_id=model_id,
                             model_name=managed_file_model_name,
                         )
-                        await managed_files_hook.store_unified_file_id(
-                            file_id=_unified_file_id,
-                            file_object=None,
+                        await managed_file_writer.store_batch_output_file(
+                            unified_file_id=_unified_file_id,
+                            provider_file_id=_raw_file_id,
+                            model_id=model_id,
+                            model_name=managed_file_model_name,
+                            owner=_minimal_auth,
                             litellm_parent_otel_span=None,
-                            model_mappings={model_id: _raw_file_id},
-                            user_api_key_dict=_minimal_auth,
+                            size_bytes=len(content_bytes) if _file_attr == "output_file_id" else None,
                         )
                         setattr(response, _file_attr, _unified_file_id)
                         verbose_proxy_logger.info(
