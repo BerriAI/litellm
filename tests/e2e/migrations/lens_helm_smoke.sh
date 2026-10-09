@@ -146,7 +146,7 @@ spec:
     spec:
       containers:
         - name: postgres
-          image: postgres:16
+          image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
           env:
             - {name: POSTGRES_DB, value: litellm}
             - {name: POSTGRES_USER, value: litellm}
