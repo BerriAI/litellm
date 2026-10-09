@@ -10,7 +10,6 @@ from litellm.types.videos.utils import encode_video_id_with_provider
 
 
 class TestByteDanceVideoTransformation:
-
     def setup_method(self):
         self.config = ByteDanceVideoConfig()
         self.mock_logging_obj = Mock()
@@ -159,9 +158,7 @@ class TestByteDanceVideoTransformation:
         assert result.usage["video_resolution"] == "1080p"
 
     def test_transform_video_status_retrieve_request_url(self):
-        video_id = encode_video_id_with_provider(
-            "task-abc-123", "bytedance", "dreamina-seedance-2-0-260128"
-        )
+        video_id = encode_video_id_with_provider("task-abc-123", "bytedance", "dreamina-seedance-2-0-260128")
 
         url, params = self.config.transform_video_status_retrieve_request(
             video_id=video_id,
@@ -291,9 +288,7 @@ class TestByteDanceVideoTransformation:
             self.config._extract_video_url_from_response(response_data)
 
     def test_transform_video_delete_request(self):
-        video_id = encode_video_id_with_provider(
-            "task-abc-123", "bytedance", "dreamina-seedance-2-0-260128"
-        )
+        video_id = encode_video_id_with_provider("task-abc-123", "bytedance", "dreamina-seedance-2-0-260128")
 
         url, data = self.config.transform_video_delete_request(
             video_id=video_id,
@@ -372,9 +367,7 @@ class TestByteDanceVideoTransformation:
         assert status_obj.seconds == "5"
         assert status_obj.completed_at == 1719000060
 
-        url = self.config._extract_video_url_from_response(
-            mock_status_response.json()
-        )
+        url = self.config._extract_video_url_from_response(mock_status_response.json())
         assert url == "https://cdn.example.com/output.mp4"
 
     def test_get_complete_url_default(self):
@@ -395,7 +388,15 @@ class TestByteDanceVideoTransformation:
 
     def test_get_supported_openai_params_includes_new_params(self):
         supported = self.config.get_supported_openai_params("dreamina-seedance-2-0-260128")
-        for param in ("last_frame", "reference_images", "resolution", "seed", "generate_audio", "watermark", "return_last_frame"):
+        for param in (
+            "last_frame",
+            "reference_images",
+            "resolution",
+            "seed",
+            "generate_audio",
+            "watermark",
+            "return_last_frame",
+        ):
             assert param in supported, f"{param} missing from supported params"
 
     def test_map_openai_params_resolution(self):
@@ -640,10 +641,6 @@ class TestByteDanceVideoTransformation:
 
     def test_unsupported_operations_raise(self):
         with pytest.raises(NotImplementedError):
-            self.config.transform_video_remix_request(
-                "vid", "prompt", "base", GenericLiteLLMParams(), {}
-            )
+            self.config.transform_video_remix_request("vid", "prompt", "base", GenericLiteLLMParams(), {})
         with pytest.raises(NotImplementedError):
-            self.config.transform_video_list_request(
-                "base", GenericLiteLLMParams(), {}
-            )
+            self.config.transform_video_list_request("base", GenericLiteLLMParams(), {})

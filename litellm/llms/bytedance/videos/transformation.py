@@ -11,8 +11,8 @@ from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
@@ -454,9 +454,7 @@ class ByteDanceVideoConfig(BaseVideoConfig):
             created_at=response_data.get("created_at", 0),
         )  # type: ignore[arg-type]
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: dict | httpx.Headers
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         from ...base_llm.chat.transformation import BaseLLMException
 
         raise BaseLLMException(
