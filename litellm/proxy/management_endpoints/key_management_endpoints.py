@@ -7098,7 +7098,7 @@ def _build_key_filter_conditions(
         *(({"project_id": project_id},) if project_id else ()),
         *(({"access_group_ids": {"hasSome": [access_group_id]}},) if access_group_id else ()),
         *(({"agent_id": agent_id},) if agent_id and isinstance(agent_id, str) else ()),
-        *((_build_key_tag_where(tag),) if tag and isinstance(tag, str) else ()),
+        *((_build_key_tag_where(tag),) if tag and isinstance(tag, str) else ()),  # pyright: ignore[reportUnnecessaryIsInstance]  # direct list_keys() callers leave tag as the Query default
         *(
             (_build_expires_where_clause(expires_filter, now),)
             if expires_filter is not None and expires_filter in VALID_EXPIRES_FILTER_VALUES
