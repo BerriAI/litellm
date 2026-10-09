@@ -21,6 +21,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.llms.anthropic.pass_through.utils import proxy_general_settings, proxy_spend_attribution_metadata
 from litellm.types.llms.anthropic import (
     AppliedEdit,
     CompactionBlock,
@@ -57,37 +58,6 @@ from ..constants import (
 )
 from ..errors import AnthropicContextManagementError
 from ..result import PolyfillResult
-
-# Auth metadata fields propagated from the parent request to the summary call
-# so the summary's spend is attributed to the same scopes. The list mirrors the
-# fields populated by
-# ``LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata``.
-# The three ``*_model_max_budget`` fields
-# are what ``_PROXY_VirtualKeyModelMaxBudgetLimiter`` reads post-call to update
-# the per-model spend caches, so without them the summary spend would never
-# count against the caller's model budget. ``user_api_key_end_user_id`` /
-# ``user_api_key_project_id`` are the scope identifiers the post-call spend hook
-# and rate limiter key their counters on, and ``user_api_end_user_max_budget``
-# is the end-user budget the cost callback enforces — without these the summary
-# tokens escape the caller's end-user/project budgets and counters.
-_PROPAGATED_METADATA_KEYS: Final = (
-    "user_api_key",
-    "user_api_key_alias",
-    "user_api_key_team_id",
-    "user_api_key_team_alias",
-    "user_api_key_user_id",
-    "user_api_key_user_email",
-    "user_api_key_org_id",
-    "user_api_key_project_id",
-    "user_api_key_end_user_id",
-    "user_api_end_user_max_budget",
-    "user_api_key_model_max_budget",
-    "user_api_key_team_model_max_budget",
-    "user_api_key_user_model_max_budget",
-    "user_api_key_end_user_model_max_budget",
-    "litellm_call_id",
-    "litellm_parent_otel_span",
-)
 
 _SUMMARY_TAG_RE: Final = re.compile(r"<summary>(.*?)</summary>", re.IGNORECASE | re.DOTALL)
 
@@ -169,11 +139,7 @@ class _ShouldRateLimit(Protocol):
 
 def _read_summary_model_setting() -> str | None:
     """Look up the configured summarization model from proxy general_settings."""
-    try:
-        from litellm.proxy.proxy_server import general_settings
-    except Exception:
-        return None
-    value: Final = general_settings.get(COMPACT_SUMMARY_MODEL_SETTING_KEY)
+    value: Final = proxy_general_settings().get(COMPACT_SUMMARY_MODEL_SETTING_KEY)
     return value if isinstance(value, str) and value else None
 
 
@@ -184,11 +150,7 @@ def _read_summary_max_tokens_setting() -> int:
     missing or invalid (non-positive int, wrong type). Operators tune this
     when the default doesn't fit their chosen summary model's output budget.
     """
-    try:
-        from litellm.proxy.proxy_server import general_settings
-    except Exception:
-        return COMPACT_SUMMARY_MAX_TOKENS
-    value: Final = general_settings.get(COMPACT_SUMMARY_MAX_TOKENS_SETTING_KEY)
+    value: Final = proxy_general_settings().get(COMPACT_SUMMARY_MAX_TOKENS_SETTING_KEY)
     if isinstance(value, int) and value > 0:
         return value
     return COMPACT_SUMMARY_MAX_TOKENS
@@ -762,26 +724,6 @@ def _build_summary_prompt(edit_spec: Mapping[str, object], tools: Sequence[Mappi
     return prompt
 
 
-def _propagate_metadata(
-    parent_litellm_metadata: Mapping[str, object] | None,
-) -> dict[str, object]:
-    """Extract the parent request's auth/spend-attribution fields for the summary subcall.
-
-    The proxy attaches ``user_api_key``, ``user_api_key_team_id`` etc. to
-    ``data["litellm_metadata"]`` (see
-    ``LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata``).
-    Without these on the summary subrequest, the router's post-call hooks
-    cannot attribute summary tokens to the caller's key/team budget.
-    """
-    if not parent_litellm_metadata:
-        return {}
-    propagated: Final[dict[str, object]] = {}
-    for key in _PROPAGATED_METADATA_KEYS:
-        if key in parent_litellm_metadata:
-            propagated[key] = parent_litellm_metadata[key]
-    return propagated
-
-
 def _count_effective_tokens(
     model: str,
     effective_messages: Sequence[dict[str, object]],
@@ -1307,7 +1249,7 @@ async def apply_compact_20260112(
 
     prompt: Final = _build_summary_prompt(edit_spec, tools)
     summary_messages: Final = _build_summary_messages(effective_messages, prompt, system=augmented_system)
-    propagated_metadata: Final = _propagate_metadata(litellm_metadata)
+    propagated_metadata: Final = proxy_spend_attribution_metadata(litellm_metadata)
     allowed_model_region: Final = getattr(user_api_key_auth, "allowed_model_region", None)
 
     try:

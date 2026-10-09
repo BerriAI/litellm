@@ -19,6 +19,10 @@ from litellm.llms.anthropic.pass_through.context_management import (
     PolyfillResult,
     apply_context_management,
 )
+from litellm.llms.anthropic.pass_through.safeguards import (
+    build_safeguards_evaluator,
+    with_safeguard_results,
+)
 from litellm.llms.anthropic.pass_through.utils import (
     is_reasoning_auto_summary_enabled,
     litellm_logging_obj_from_kwargs,
@@ -66,6 +70,10 @@ def _proxy_router_fallback() -> "Router | None":
     except Exception:
         return None
     return _proxy_router
+
+
+def _router_or_proxy_fallback(requested: "Router | None") -> "Router | None":
+    return requested if requested is not None else _proxy_router_fallback()
 
 
 def _extract_proxy_litellm_metadata(
@@ -621,10 +629,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         """Handle non-Anthropic models asynchronously using the adapter"""
         context_management: Final = kwargs.pop("context_management", None)
         additional_drop_params: Final[list[str] | None] = kwargs.get("additional_drop_params", None)
-        requested_router: Final[Router | None] = kwargs.pop("litellm_router", None)
-        litellm_router: Final[Router | None] = (
-            requested_router if requested_router is not None else _proxy_router_fallback()
-        )
+        litellm_router: Final[Router | None] = _router_or_proxy_fallback(kwargs.pop("litellm_router", None))
 
         proxy_litellm_metadata, user_api_key_auth = _extract_proxy_litellm_metadata(kwargs)
 
@@ -642,6 +647,13 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         effective_messages: Final = polyfill_result.messages if polyfill_result is not None else messages
         effective_system: Final = polyfill_result.system if polyfill_result is not None else system
+        safeguards_evaluator: Final = build_safeguards_evaluator(
+            safeguards=kwargs.get("safeguards"),
+            messages=effective_messages,
+            litellm_metadata=proxy_litellm_metadata,
+            user_api_key_auth=user_api_key_auth,
+            llm_router=litellm_router,
+        )
 
         (
             completion_kwargs,
@@ -674,6 +686,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 polyfill_result=polyfill_result,
                 is_async=True,
                 litellm_logging_obj=litellm_logging_obj_from_kwargs(kwargs),
+                safeguards_evaluator=safeguards_evaluator,
             )
             if transformed_stream is not None:
                 return transformed_stream
@@ -685,7 +698,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 polyfill_result=polyfill_result,
             )
             if anthropic_response is not None:
-                return anthropic_response
+                return await with_safeguard_results(anthropic_response, safeguards_evaluator)
             raise ValueError("Failed to transform response to Anthropic format")
 
     @staticmethod

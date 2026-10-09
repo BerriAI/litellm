@@ -47,6 +47,51 @@ def prompt_cache_key_from_user_id(user_id: object) -> str | None:
         return None
 
 
+PROXY_SPEND_ATTRIBUTION_METADATA_KEYS: Final = (
+    "user_api_key",
+    "user_api_key_alias",
+    "user_api_key_team_id",
+    "user_api_key_team_alias",
+    "user_api_key_user_id",
+    "user_api_key_user_email",
+    "user_api_key_org_id",
+    "user_api_key_project_id",
+    "user_api_key_end_user_id",
+    "user_api_end_user_max_budget",
+    "user_api_key_model_max_budget",
+    "user_api_key_team_model_max_budget",
+    "user_api_key_user_model_max_budget",
+    "user_api_key_end_user_model_max_budget",
+    "litellm_call_id",
+    "litellm_parent_otel_span",
+)
+
+
+_NO_SETTINGS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def proxy_general_settings() -> Mapping[str, object]:
+    """The running proxy's ``general_settings``; empty for SDK callers and before the proxy config loads."""
+    try:
+        from litellm.proxy.proxy_server import general_settings
+    except ImportError:
+        return _NO_SETTINGS
+    return general_settings or _NO_SETTINGS
+
+
+def proxy_spend_attribution_metadata(
+    parent_litellm_metadata: Mapping[str, object] | None,
+) -> dict[str, object]:  # mutable-ok: the router writes model_group and fallback keys into the metadata it is handed
+    """The parent request's auth and budget fields, so a sub-call bills the same key, team, and end user."""
+    if not parent_litellm_metadata:
+        return {}
+    return {
+        key: parent_litellm_metadata[key]
+        for key in PROXY_SPEND_ATTRIBUTION_METADATA_KEYS
+        if key in parent_litellm_metadata
+    }
+
+
 def litellm_logging_obj_from_kwargs(kwargs: Mapping[str, object]) -> "LiteLLMLoggingObject | None":
     """The logging object the bridged call logs through, when the caller supplied one."""
     from litellm.litellm_core_utils.litellm_logging import Logging
