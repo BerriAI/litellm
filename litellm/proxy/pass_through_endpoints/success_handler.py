@@ -112,7 +112,6 @@ class PassThroughEndpointLogging:
             "/v0/repositories",
         ]
 
-        # Vertex AI and Google AI Studio Live API WebSockets, with the provider each one bills under
         self.TRACKED_LIVE_API_ROUTES = MappingProxyType(
             {"/vertex_ai/live": "vertex_ai", "/gemini/ws/google.ai.generativelanguage.": "gemini"}
         )
