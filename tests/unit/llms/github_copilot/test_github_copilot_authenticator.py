@@ -49,6 +49,80 @@ class TestGitHubCopilotAuthenticator:
             assert auth.api_key_file.endswith("/api-key.json")
             mock_makedirs.assert_called_once()
 
+    def test_disabled_shared_login_ignores_existing_tokens(self, tmp_path):
+        token_dir = tmp_path / "tokens"
+        token_dir.mkdir()
+        access_token_file = token_dir / "access-token"
+        access_token_file.write_text("valid-access-token")
+        api_key_info = {
+            "token": "valid-api-key",
+            "expires_at": 4102444800,
+            "endpoints": {"api": "https://api.githubcopilot.com"},
+        }
+        api_key_file = token_dir / "api-key.json"
+        api_key_file.write_text(json.dumps(api_key_info))
+
+        with patch.dict(os.environ, {"GITHUB_COPILOT_TOKEN_DIR": str(token_dir)}):
+            auth = Authenticator(shared_login_allowed=lambda: False)
+
+        with pytest.raises(GetAPIKeyError) as api_key_error:
+            auth.get_api_key()
+        with pytest.raises(GetAPIKeyError) as access_token_error:
+            auth.get_access_token()
+
+        expected_message = (
+            "GitHub Copilot shared device login is disabled on the LiteLLM proxy. Create an LLM credential with Auth "
+            "Type 'Per-user GitHub OAuth' and reference it from the deployment with litellm_credential_name"
+        )
+        assert str(api_key_error.value) == expected_message
+        assert api_key_error.value.status_code == 401
+        assert str(access_token_error.value) == expected_message
+        assert access_token_error.value.status_code == 401
+        assert api_key_file.read_text() == json.dumps(api_key_info)
+        assert access_token_file.read_text() == "valid-access-token"
+
+    def test_disabled_shared_login_does_not_create_token_dir(self, tmp_path):
+        token_dir = tmp_path / "not-created"
+
+        with patch.dict(os.environ, {"GITHUB_COPILOT_TOKEN_DIR": str(token_dir)}):
+            Authenticator(shared_login_allowed=lambda: False)
+
+        assert not token_dir.exists()
+
+    def test_shared_login_predicate_is_checked_after_initialization(self, tmp_path):
+        token_dir = tmp_path / "tokens"
+        token_dir.mkdir()
+        api_key_info = {
+            "token": "valid-api-key",
+            "expires_at": 4102444800,
+            "endpoints": {"api": "https://api.githubcopilot.com"},
+        }
+        (token_dir / "api-key.json").write_text(json.dumps(api_key_info))
+        login_allowed = iter((True, False, False))
+
+        with patch.dict(os.environ, {"GITHUB_COPILOT_TOKEN_DIR": str(token_dir)}):
+            auth = Authenticator(shared_login_allowed=lambda: next(login_allowed))
+
+        with pytest.raises(GetAPIKeyError, match="GitHub Copilot shared device login is disabled"):
+            auth.get_api_key()
+        assert auth.get_api_base() is None
+
+    def test_shared_login_enabled_keeps_reading_existing_tokens(self, tmp_path):
+        token_dir = tmp_path / "tokens"
+        token_dir.mkdir()
+        api_key_info = {
+            "token": "valid-api-key",
+            "expires_at": 4102444800,
+            "endpoints": {"api": "https://api.githubcopilot.com"},
+        }
+        (token_dir / "api-key.json").write_text(json.dumps(api_key_info))
+
+        with patch.dict(os.environ, {"GITHUB_COPILOT_TOKEN_DIR": str(token_dir)}):
+            auth = Authenticator(shared_login_allowed=lambda: True)
+
+        assert auth.get_api_key() == "valid-api-key"
+        assert auth.get_api_base() == "https://api.githubcopilot.com"
+
     def test_ensure_token_dir(self):
         """Test that the token directory is created if it doesn't exist."""
         with (
@@ -135,9 +209,7 @@ class TestGitHubCopilotAuthenticator:
     def test_get_api_key_from_file(self, authenticator):
         """Test retrieving an API key from a file."""
         future_time = (datetime.now() + timedelta(hours=1)).timestamp()
-        mock_api_key_data = json.dumps(
-            {"token": "mock-api-key", "expires_at": future_time}
-        )
+        mock_api_key_data = json.dumps({"token": "mock-api-key", "expires_at": future_time})
 
         with patch("builtins.open", mock_open(read_data=mock_api_key_data)):
             api_key = authenticator.get_api_key()
@@ -146,9 +218,7 @@ class TestGitHubCopilotAuthenticator:
     def test_get_api_key_expired(self, authenticator):
         """Test refreshing an expired API key."""
         past_time = (datetime.now() - timedelta(hours=1)).timestamp()
-        mock_expired_data = json.dumps(
-            {"token": "expired-api-key", "expires_at": past_time}
-        )
+        mock_expired_data = json.dumps({"token": "expired-api-key", "expires_at": past_time})
         mock_new_data = {
             "token": "new-api-key",
             "expires_at": (datetime.now() + timedelta(hours=1)).timestamp(),
@@ -246,20 +316,14 @@ class TestGitHubCopilotAuthenticator:
         mock_token = "mock-access-token"
 
         with (
-            patch.object(
-                authenticator, "_get_device_code", return_value=mock_device_code_data
-            ),
-            patch.object(
-                authenticator, "_poll_for_access_token", return_value=mock_token
-            ),
+            patch.object(authenticator, "_get_device_code", return_value=mock_device_code_data),
+            patch.object(authenticator, "_poll_for_access_token", return_value=mock_token),
             patch("builtins.print") as mock_print,
         ):
             result = authenticator._login()
             assert result == mock_token
             authenticator._get_device_code.assert_called_once()
-            authenticator._poll_for_access_token.assert_called_once_with(
-                "mock-device-code"
-            )
+            authenticator._poll_for_access_token.assert_called_once_with("mock-device-code")
             mock_print.assert_called_once()
 
     def test_get_api_base_from_file(self, authenticator):

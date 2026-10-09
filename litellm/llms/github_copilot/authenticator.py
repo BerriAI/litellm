@@ -1,6 +1,8 @@
 import json
 import os
+import threading
 import time
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any, Final
 
@@ -25,6 +27,16 @@ DEFAULT_GITHUB_CLIENT_ID: Final = "Iv1.b507a08c87ecfe98"
 DEFAULT_GITHUB_DEVICE_CODE_URL: Final = "https://github.com/login/device/code"
 DEFAULT_GITHUB_ACCESS_TOKEN_URL: Final = "https://github.com/login/oauth/access_token"
 DEFAULT_GITHUB_API_KEY_URL: Final = "https://api.github.com/copilot_internal/v2/token"
+_SHARED_LOGIN_ALLOWED: Final = threading.Event()
+_SHARED_LOGIN_ALLOWED.set()
+_SHARED_LOGIN_DISABLED_MESSAGE: Final = (
+    "GitHub Copilot shared device login is disabled on the LiteLLM proxy. Create an LLM credential with Auth Type "
+    "'Per-user GitHub OAuth' and reference it from the deployment with litellm_credential_name"
+)
+
+
+def disable_github_copilot_shared_login() -> None:
+    _SHARED_LOGIN_ALLOWED.clear()
 
 
 @with_config(ConfigDict(extra="allow", strict=True))
@@ -62,8 +74,9 @@ def github_api_headers(
 
 
 class Authenticator:
-    def __init__(self) -> None:
+    def __init__(self, shared_login_allowed: Callable[[], bool] = _SHARED_LOGIN_ALLOWED.is_set) -> None:
         """Initialize the GitHub Copilot authenticator with configurable token paths."""
+        self._shared_login_allowed = shared_login_allowed
         # Token storage paths
         self.token_dir = os.getenv(
             "GITHUB_COPILOT_TOKEN_DIR",
@@ -74,7 +87,15 @@ class Authenticator:
             os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "access-token"),
         )
         self.api_key_file = os.path.join(self.token_dir, os.getenv("GITHUB_COPILOT_API_KEY_FILE", "api-key.json"))
-        self._ensure_token_dir()
+        if self._shared_login_allowed():
+            self._ensure_token_dir()
+
+    def _raise_if_shared_login_disabled(self) -> None:
+        if not self.is_shared_login_allowed():
+            raise GetAPIKeyError(message=_SHARED_LOGIN_DISABLED_MESSAGE, status_code=401)
+
+    def is_shared_login_allowed(self) -> bool:
+        return self._shared_login_allowed()
 
     def get_access_token(self) -> str:
         """
@@ -86,6 +107,7 @@ class Authenticator:
         Raises:
             GetAccessTokenError: If unable to obtain an access token after retries.
         """
+        self._raise_if_shared_login_disabled()
         try:
             with open(self.access_token_file, "r") as f:
                 access_token = f.read().strip()
@@ -100,8 +122,7 @@ class Authenticator:
                     "GitHub Copilot device-code login needs a human and cannot run inside a running event loop "
                     "or a worker thread (for example the LiteLLM proxy). Log in once outside the proxy with "
                     '`python -c "from litellm.llms.github_copilot.authenticator import Authenticator; '
-                    'Authenticator().get_access_token()"` and mount the resulting access-token file into '
-                    "the proxy, or set GITHUB_COPILOT_TOKEN_DIR to a directory that already holds it."
+                    'Authenticator().get_access_token()"`.'
                 ),
                 status_code=401,
             )
@@ -135,6 +156,7 @@ class Authenticator:
         Raises:
             GetAPIKeyError: If unable to obtain an API key.
         """
+        self._raise_if_shared_login_disabled()
         try:
             with open(self.api_key_file, "r") as f:
                 api_key_info = json.load(f)
@@ -184,6 +206,8 @@ class Authenticator:
         Returns:
             Optional[str]: The GitHub Copilot API endpoint, or None if not found.
         """
+        if not self._shared_login_allowed():
+            return None
         try:
             with open(self.api_key_file, "r") as f:
                 api_key_info: Final = json.load(f)

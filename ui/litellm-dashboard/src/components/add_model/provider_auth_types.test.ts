@@ -79,12 +79,13 @@ describe("provider auth types", () => {
     expect(hiddenAuthFieldKeys(authTypes, "first")).toEqual(["second_key", "third_key"]);
   });
 
-  it("defaults GitHub Copilot to shared device login and recognises a stored per-user credential", () => {
+  it("uses per-user OAuth as the only GitHub Copilot auth type and default", () => {
     const authTypes = authTypesFor("GITHUB_COPILOT");
 
-    expect(inferAuthTypeId(authTypes, { api_key: "" })).toBe("shared_device_login");
+    expect(authTypes).toHaveLength(1);
+    expect(inferAuthTypeId(authTypes, {})).toBe("per_user_oauth");
+    expect(inferAuthTypeId(authTypes, { api_key: "" })).toBe("per_user_oauth");
     expect(inferAuthTypeId(authTypes, { github_copilot_auth_type: "per_user_oauth" })).toBe("per_user_oauth");
     expect(hiddenAuthFieldKeys(authTypes, "per_user_oauth")).toEqual(["api_base", "api_key"]);
-    expect(hiddenAuthFieldKeys(authTypes, "shared_device_login")).toEqual(["github_copilot_auth_type"]);
   });
 });

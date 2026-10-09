@@ -50,6 +50,8 @@ class GithubCopilotConfig(OpenAIConfig):
         custom_llm_provider: str,
     ) -> tuple[str | None, str | None, str]:
         dynamic_api_base: Final = self.api_base_without_login(api_base)
+        if not self.authenticator.is_shared_login_allowed():
+            return dynamic_api_base, api_key, custom_llm_provider
         try:
             dynamic_api_key: Final = self.authenticator.get_api_key()
         except GetAPIKeyError as e:
@@ -95,13 +97,17 @@ class GithubCopilotConfig(OpenAIConfig):
 
         return transformed_messages
 
-    def _copilot_headers(self, session_token: str | None) -> Mapping[str, str]:
+    def _copilot_headers(self, session_token: str | None, model: str) -> Mapping[str, str]:
         if session_token is not None:
             return get_copilot_default_headers(session_token)
         try:
             return get_copilot_default_headers(self.authenticator.get_api_key())
-        except GetAPIKeyError:
-            return {}
+        except GetAPIKeyError as exc:
+            raise AuthenticationError(
+                model=model,
+                llm_provider="github_copilot",
+                message=str(exc),
+            )
 
     def validate_environment(
         self,
@@ -121,7 +127,7 @@ class GithubCopilotConfig(OpenAIConfig):
             cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
         )
         session_token: Final = user_session.token if user_session is not None else None
-        validated_headers: Final = {**self._copilot_headers(session_token), **parent_headers}
+        validated_headers: Final = {**self._copilot_headers(session_token, model), **parent_headers}
         if session_token is not None:
             # the caller's stored session token wins unconditionally, even over a
             # caller-supplied api_key or the parent's placeholder Authorization

@@ -701,7 +701,7 @@ describe("AddModelForm", () => {
       vi.mocked(modelCreateCall).mockClear();
       const props = await renderAsAdmin(Providers.GITHUB_COPILOT);
 
-      await chooseSelectOption(user, screen.getByRole("combobox", { name: "Auth Type:" }), "Per-user GitHub OAuth");
+      expect(await screen.findByRole("combobox", { name: "Auth Type:" })).toHaveTextContent("Per-user GitHub OAuth");
       await user.click(screen.getByRole("button", { name: "Create credential" }));
       const dialog = await screen.findByRole("dialog");
       const providerSelect = within(dialog).getByPlaceholderText("Select a provider");
@@ -745,42 +745,6 @@ describe("AddModelForm", () => {
       const modelParams = vi.mocked(modelCreateCall).mock.calls[0][1].litellm_params;
       expect(modelParams).toMatchObject({ litellm_credential_name: "github-per-user" });
       expect(modelParams).not.toHaveProperty("github_copilot_auth_type");
-    });
-
-    it("keeps shared GitHub device login inline when adding a model", async () => {
-      const user = userEvent.setup();
-      vi.mocked(credentialCreateCall).mockClear();
-      vi.mocked(modelCreateCall).mockClear();
-      const props = await renderAsAdmin(Providers.GITHUB_COPILOT);
-
-      expect(await screen.findByRole("combobox", { name: "Auth Type:" })).toHaveTextContent("Shared device login");
-      expect(screen.queryByRole("button", { name: "Create credential" })).not.toBeInTheDocument();
-      fireEvent.change(screen.getByLabelText("API Key"), { target: { value: "shared-device-token" } });
-      props.handleOk.mockImplementation(async () => {
-        await handleAddModelSubmit(
-          {
-            api_key: "shared-device-token",
-            custom_llm_provider: Providers.GITHUB_COPILOT,
-            model_mappings: [
-              {
-                public_name: "copilot-model",
-                litellm_model: "github_copilot/chat",
-              },
-            ],
-          },
-          "test-access-token",
-          { resetFields: vi.fn() },
-        );
-        return true;
-      });
-
-      await user.click(screen.getByRole("button", { name: "Add Model" }));
-
-      await waitFor(() => expect(modelCreateCall).toHaveBeenCalledOnce());
-      expect(credentialCreateCall).not.toHaveBeenCalled();
-      expect(vi.mocked(modelCreateCall).mock.calls[0][1].litellm_params).toMatchObject({
-        api_key: "shared-device-token",
-      });
     });
   });
 

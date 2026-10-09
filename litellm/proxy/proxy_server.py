@@ -1337,6 +1337,9 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         shared_aiohttp_session
     import json
 
+    from litellm.llms.github_copilot.authenticator import disable_github_copilot_shared_login
+
+    disable_github_copilot_shared_login()
     init_verbose_loggers()
 
     prometheus_multiproc_dir: Final = os.environ.get("PROMETHEUS_MULTIPROC_DIR")

@@ -69,7 +69,7 @@ from litellm.constants import (
     NADIR_DEFAULT_API_BASE,
     OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS,
 )
-from litellm.exceptions import LiteLLMUnknownProvider
+from litellm.exceptions import AuthenticationError, LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
 from litellm.litellm_core_utils.audio_utils.utils import (
@@ -2602,6 +2602,23 @@ def _complete_hosted_vllm(ctx: CompletionDispatchContext) -> _CompletionDispatch
     return response
 
 
+def _get_github_copilot_shared_api_key(
+    get_api_key: Callable[[], str],
+    model: str,
+    custom_llm_provider: str,
+) -> str:
+    from litellm.llms.github_copilot.common_utils import GetAPIKeyError
+
+    try:
+        return get_api_key()
+    except GetAPIKeyError as exc:
+        raise AuthenticationError(
+            model=model,
+            llm_provider=custom_llm_provider,
+            message=str(exc),
+        )
+
+
 def _complete_custom_openai(
     ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
@@ -2654,18 +2671,22 @@ def _complete_custom_openai(
     # Add GitHub Copilot headers (same as /responses endpoint does)
     if custom_llm_provider == "github_copilot":
         from litellm.llms.github_copilot.authenticator import Authenticator
-        from litellm.llms.github_copilot.common_utils import (
-            get_copilot_default_headers,
-            pin_session_authorization,
-        )
+        from litellm.llms.github_copilot.common_utils import get_copilot_default_headers, pin_session_authorization
         from litellm.llms.github_copilot.per_user_auth import (
             require_github_copilot_user_session,
         )
 
         user_session: Final = require_github_copilot_user_session(litellm_params)
-        copilot_headers: Final = get_copilot_default_headers(
-            user_session.token if user_session is not None else Authenticator().get_api_key()
+        copilot_token: Final = (
+            user_session.token
+            if user_session is not None
+            else _get_github_copilot_shared_api_key(
+                get_api_key=Authenticator().get_api_key,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+            )
         )
+        copilot_headers: Final = get_copilot_default_headers(copilot_token)
         if extra_headers:
             copilot_headers.update(
                 cast("dict[str, str]", extra_headers)  # cast-ok: extra_headers is a str-valued request dict
