@@ -41,7 +41,7 @@ class AgentUsage(BaseModel):
 class AgentResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    output: tuple[OutputItem, ...] | None = None
+    output: tuple[OutputItem, ...]
     custom_outputs: object = None
     usage: AgentUsage | None = None
 

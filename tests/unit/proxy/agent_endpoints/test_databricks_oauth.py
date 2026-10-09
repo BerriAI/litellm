@@ -47,9 +47,7 @@ def _mock_http_handler(access_token="tok-abc", expires_in=3600, post_error=None)
         handler.post.side_effect = post_error
     else:
         response = MagicMock()
-        response.json = MagicMock(
-            return_value={"access_token": access_token, "expires_in": expires_in}
-        )
+        response.json = MagicMock(return_value={"access_token": access_token, "expires_in": expires_in})
         handler.post.return_value = response
     return handler
 
@@ -112,9 +110,7 @@ def test_parse_custom_scope():
     assert config.scope == "custom-scope"
 
 
-@pytest.mark.parametrize(
-    "missing_field", ["client_id", "client_secret", "workspace_url"]
-)
+@pytest.mark.parametrize("missing_field", ["client_id", "client_secret", "workspace_url"])
 def test_parse_raises_on_missing_field(missing_field):
     block = {
         "client_id": "cid",
@@ -180,9 +176,7 @@ async def test_fetch_token_posts_client_credentials_with_basic_auth():
     }
     # Databricks authenticates the client with HTTP Basic; it must be sent as a
     # header because litellm's AsyncHTTPHandler.post has no ``auth`` parameter.
-    assert call.kwargs["headers"]["Authorization"] == _expected_basic_auth(
-        "cid", "secret"
-    )
+    assert call.kwargs["headers"]["Authorization"] == _expected_basic_auth("cid", "secret")
     assert "auth" not in call.kwargs
 
 
@@ -305,9 +299,7 @@ async def test_http_status_error_raises_value_error():
     request = httpx.Request("POST", _config().token_url)
     error_response = httpx.Response(status_code=401, request=request)
     client = _mock_http_handler(
-        post_error=httpx.HTTPStatusError(
-            "unauthorized", request=request, response=error_response
-        )
+        post_error=httpx.HTTPStatusError("unauthorized", request=request, response=error_response)
     )
 
     with patch(
@@ -515,6 +507,20 @@ def test_parse_builds_config_from_flat_databricks_agent_fields():
     )
 
 
+def test_parse_flat_fields_take_the_workspace_from_an_os_environ_api_base(monkeypatch):
+    monkeypatch.setenv("MY_DBX_HOST", "https://adb-3.azuredatabricks.net/serving-endpoints")
+    config = parse_databricks_oauth_config(
+        {
+            "custom_llm_provider": "databricks_agent",
+            "api_base": "os.environ/MY_DBX_HOST",
+            "client_id": "sp-id",
+            "client_secret": "sp-secret",
+        }
+    )
+    assert config is not None
+    assert config.token_url == "https://adb-3.azuredatabricks.net/oidc/v1/token"
+
+
 def test_parse_flat_fields_prefer_an_explicit_workspace_url_for_an_app():
     config = parse_databricks_oauth_config(
         {
@@ -534,14 +540,23 @@ def test_parse_flat_fields_prefer_an_explicit_workspace_url_for_an_app():
 def test_parse_flat_fields_with_only_a_client_id_raise_on_the_missing_secret():
     with pytest.raises(ValueError, match="client_secret"):
         parse_databricks_oauth_config(
-            {"custom_llm_provider": "databricks_agent", "api_base": "https://adb-1.azuredatabricks.net", "client_id": "sp"}
+            {
+                "custom_llm_provider": "databricks_agent",
+                "api_base": "https://adb-1.azuredatabricks.net",
+                "client_id": "sp",
+            }
         )
 
 
 def test_parse_ignores_flat_client_fields_of_other_providers():
     assert (
         parse_databricks_oauth_config(
-            {"custom_llm_provider": "azure_ai", "client_id": "entra-id", "client_secret": "entra-secret", "tenant_id": "t"}
+            {
+                "custom_llm_provider": "azure_ai",
+                "client_id": "entra-id",
+                "client_secret": "entra-secret",
+                "tenant_id": "t",
+            }
         )
         is None
     )

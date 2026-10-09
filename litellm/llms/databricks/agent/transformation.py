@@ -10,8 +10,9 @@ from typing import TYPE_CHECKING, Final
 from urllib.parse import quote
 
 import httpx
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
+import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
@@ -80,7 +81,23 @@ def _body_model_field(api_base: object, model: str) -> Mapping[str, str]:
     return {"model": _required_endpoint_name(model)}
 
 
-def _input_item(message: AllMessageValues) -> Mapping[str, str]:
+class _InputContentPart(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: str = "unknown"
+
+
+class _InputMessage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    content: str | tuple[_InputContentPart, ...] | None = None
+
+
+def _drop_params_enabled(litellm_params: Mapping[str, object]) -> bool:
+    return litellm.drop_params is True or litellm_params.get("drop_params") is True
+
+
+def _input_item(message: AllMessageValues, drop_unsupported_content: bool) -> Mapping[str, str]:
     role: Final = message["role"]
     if role not in _INPUT_ROLES:
         raise DatabricksException(
@@ -90,7 +107,23 @@ def _input_item(message: AllMessageValues) -> Mapping[str, str]:
                 "send system, developer, user, or assistant messages"
             ),
         )
+    unsupported: Final = _non_text_content_types(message)
+    if unsupported and not drop_unsupported_content:
+        raise DatabricksException(
+            status_code=400,
+            message=(
+                f"databricks_agent sends text content only; remove the {', '.join(unsupported)} content "
+                "part(s) from the request, or set drop_params: true to drop them"
+            ),
+        )
     return {"role": role, "content": convert_content_list_to_str(message)}
+
+
+def _non_text_content_types(message: AllMessageValues) -> tuple[str, ...]:
+    content: Final = _InputMessage.model_validate(message).content
+    if not isinstance(content, tuple):
+        return ()
+    return tuple(sorted({part.type for part in content} - {"text"}))
 
 
 def _has_authorization(headers: Mapping[str, object]) -> bool:
@@ -168,9 +201,10 @@ class DatabricksAgentConfig(BaseConfig):
     ) -> dict[str, object]:  # mutable-ok: mirrors override contract
         passthrough: Final = {key: optional_params[key] for key in _PASSTHROUGH_PARAMS if key in optional_params}
         stream: Final = {"stream": True} if optional_params.get("stream") is True else {}
+        drop_unsupported_content: Final = _drop_params_enabled(litellm_params)
         return {
             **_body_model_field(litellm_params.get("api_base"), model),
-            "input": [_input_item(message) for message in messages],
+            "input": [_input_item(message, drop_unsupported_content) for message in messages],
             **stream,
             **passthrough,
         }
@@ -199,7 +233,7 @@ class DatabricksAgentConfig(BaseConfig):
             agent_response: Final = AgentResponse.model_validate_json(raw_response.content)
         except ValidationError as e:
             raise DatabricksException(
-                status_code=raw_response.status_code,
+                status_code=502,
                 message=f"Databricks agent returned a response that is not a ResponsesAgent response: {e}",
             )
 

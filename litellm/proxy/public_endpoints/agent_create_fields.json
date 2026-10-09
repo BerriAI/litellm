@@ -309,7 +309,7 @@
   {
     "agent_type": "databricks_agent",
     "agent_type_display_name": "Databricks Agent",
-    "description": "Connect to agents on the Databricks Agent Platform (Agent Bricks and Mosaic AI Agent Framework ResponsesAgents on Model Serving or Databricks Apps)",
+    "description": "Connect to Databricks Agent Platform ResponsesAgents on Model Serving or Databricks Apps",
     "logo_url": "/ui/assets/logos/databricks.svg",
     "credential_fields": [
       {

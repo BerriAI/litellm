@@ -104,7 +104,8 @@ def _flat_databricks_agent_oauth(litellm_params: Mapping[str, object]) -> Mappin
     return {
         "client_id": litellm_params.get("client_id"),
         "client_secret": litellm_params.get("client_secret"),
-        "workspace_url": litellm_params.get("workspace_url") or _workspace_origin(litellm_params.get("api_base")),
+        "workspace_url": litellm_params.get("workspace_url")
+        or _workspace_origin(_resolve_secret(litellm_params.get("api_base"))),
         "scope": litellm_params.get("scope"),
     }
 

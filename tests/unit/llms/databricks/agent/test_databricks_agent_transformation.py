@@ -117,6 +117,65 @@ def test_transform_request_rejects_roles_a_responses_agent_cannot_take() -> None
     assert info.value.status_code == 400
 
 
+@pytest.mark.parametrize(
+    "part",
+    [
+        {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+        {"type": "file", "file": {"file_id": "file-1"}},
+    ],
+)
+def test_transform_request_rejects_content_a_responses_agent_cannot_take(
+    part: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(DatabricksException, match=str(part["type"])) as info:
+        DatabricksAgentConfig().transform_request(
+            model="my-agent",
+            messages=[{"role": "user", "content": [{"type": "text", "text": "describe this"}, part]}],
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+    assert info.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    ("global_drop_params", "litellm_params"),
+    [(True, {}), (False, {"drop_params": True})],
+)
+def test_transform_request_drops_non_text_content_under_drop_params(
+    global_drop_params: bool, litellm_params: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+    body = DatabricksAgentConfig().transform_request(
+        model="my-agent",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe this"},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+                ],
+            }
+        ],
+        optional_params={},
+        litellm_params=litellm_params,
+        headers={},
+    )
+    assert body == {"input": [{"role": "user", "content": "describe this"}]}
+
+
+def test_transform_request_joins_text_content_parts() -> None:
+    body = DatabricksAgentConfig().transform_request(
+        model="my-agent",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "pi"}, {"type": "text", "text": "ng"}]}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert body == {"input": [{"role": "user", "content": "ping"}]}
+
+
 def test_validate_environment_keeps_a_minted_authorization_header_over_the_api_key() -> None:
     headers = DatabricksAgentConfig().validate_environment(
         headers={"authorization": "Bearer minted-oauth", "X-LiteLLM-User-Id": "u1"},
@@ -151,7 +210,10 @@ def test_output_text_joins_message_items_and_skips_tool_trace_items() -> None:
     output = [
         {"type": "function_call", "name": "lookup", "arguments": "{}", "call_id": "c1"},
         {"type": "function_call_output", "call_id": "c1", "output": "secret trace"},
-        {"type": "message", "content": [{"type": "output_text", "text": "Hello"}, {"type": "refusal", "refusal": "no"}]},
+        {
+            "type": "message",
+            "content": [{"type": "output_text", "text": "Hello"}, {"type": "refusal", "refusal": "no"}],
+        },
         {"type": "message", "content": [{"type": "output_text", "text": ", world"}]},
     ]
     assert output_text(AgentResponse.model_validate({"output": output}).output) == "Hello, world"
@@ -208,10 +270,10 @@ def test_transform_response_estimates_usage_when_the_agent_reports_none() -> Non
     assert response.usage.total_tokens == response.usage.prompt_tokens + response.usage.completion_tokens
 
 
-@pytest.mark.parametrize("body", ["<html>login</html>", "[]", '{"output": "pong"}'])
+@pytest.mark.parametrize("body", ["<html>login</html>", "[]", "{}", '{"output": "pong"}'])
 def test_transform_response_rejects_a_body_that_is_not_a_responses_agent_response(body: str) -> None:
     raw = httpx.Response(200, text=body, request=httpx.Request("POST", APP_URL))
-    with pytest.raises(DatabricksException, match="not a ResponsesAgent response"):
+    with pytest.raises(DatabricksException, match="not a ResponsesAgent response") as info:
         DatabricksAgentConfig().transform_response(
             model="my-agent",
             raw_response=raw,
@@ -223,6 +285,7 @@ def test_transform_response_rejects_a_body_that_is_not_a_responses_agent_respons
             litellm_params={},
             encoding=None,
         )
+    assert info.value.status_code == 502
 
 
 def test_stream_iterator_emits_deltas_once_and_whole_items_only_when_nothing_streamed() -> None:
@@ -258,7 +321,10 @@ async def test_acompletion_posts_responses_input_to_model_serving(httpx_transpor
     )
     sent = route.calls.last.request
     assert sent.headers["Authorization"] == "Bearer pat-1"
-    assert json.loads(sent.content) == {"input": [{"role": "user", "content": "ping"}], "custom_inputs": {"tenant": "t-1"}}
+    assert json.loads(sent.content) == {
+        "input": [{"role": "user", "content": "ping"}],
+        "custom_inputs": {"tenant": "t-1"},
+    }
     assert response.choices[0].message.content == "pong"
     assert response.model == "my-agent"
 

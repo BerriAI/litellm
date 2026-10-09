@@ -132,11 +132,7 @@ def _bridge_agent_request(
 ) -> Mapping[str, object]:
     card_url: Final[object] = (agent.agent_card_params or {}).get("url")
     api_base: Final = {"api_base": card_url} if card_url else {}
-    request_data: Final = {**api_base, **_bridge_request_data(data, litellm_params)}
-    verbose_proxy_logger.debug(
-        "[A2A] Routing %s through the completion bridge as %s", data.get("model"), request_data["model"]
-    )
-    return request_data
+    return {**api_base, **_bridge_request_data(data, litellm_params)}
 
 
 def _call_route(route_type: str, request_data: Mapping[str, object]) -> object:
