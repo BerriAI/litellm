@@ -344,6 +344,13 @@ def test_completion_stream_chunk_size_reaches_iter_bytes_but_not_converse_body()
     assert "stream_chunk_size" not in keys_at_every_depth(json.loads(data)), data
 
 
+def test_completion_keeps_count_tokens_params_out_of_converse_body() -> None:
+    _, post_spy = _stream_converse_completion_with_spied_client(count_tokens_params={"provider": "bedrock_mantle"})
+
+    data: Final = post_spy.call_args.kwargs["data"]
+    assert "count_tokens_params" not in keys_at_every_depth(json.loads(data)), data
+
+
 @pytest.mark.parametrize("request_kwargs", DEFAULT_CHUNKING_REQUESTS)
 def test_completion_uses_default_chunking_unless_a_valid_size_is_requested(
     request_kwargs: Mapping[str, object],

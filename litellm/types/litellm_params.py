@@ -151,6 +151,7 @@ class DeploymentOptions:
     order: int | None = None
     tag_regex: Sequence[str] | None = None
     max_file_size_mb: float | None = None
+    count_tokens_params: Mapping[str, str] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
