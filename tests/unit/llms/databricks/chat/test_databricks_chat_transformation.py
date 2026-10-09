@@ -2088,3 +2088,41 @@ def mock_chat_streaming_response_chunks() -> List[str]:
             }
         ),
     ]
+
+
+def test_databricks_json_schema_preserves_valid_ref_pointer():
+    """
+    Test that DatabricksConfig does not rewrite $ref pointers to '/$defs/X' (missing '#').
+    Databricks Model Serving expects valid JSON Schema pointers (e.g. '#/$defs/Person').
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/45617
+    """
+    import copy
+
+    from pydantic import BaseModel
+
+    class Person(BaseModel):
+        name: str
+
+    class Team(BaseModel):
+        p: Person
+
+    config = DatabricksConfig()
+    schema_from_pydantic = config.get_json_schema_from_pydantic_object(Team)
+    assert schema_from_pydantic is not None
+    assert schema_from_pydantic["json_schema"]["schema"]["properties"]["p"]["$ref"] == "#/$defs/Person"
+
+    raw_schema = {
+        "$defs": {"Person": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}},
+        "type": "object",
+        "properties": {"p": {"$ref": "#/$defs/Person"}},
+        "required": ["p"],
+    }
+    response_format = {"type": "json_schema", "json_schema": {"name": "P", "schema": raw_schema, "strict": True}}
+    optional = litellm.utils.get_optional_params(
+        model="system.ai.deepseek-v4-1-flash",
+        custom_llm_provider="databricks",
+        response_format=copy.deepcopy(response_format),
+    )
+    assert optional["response_format"]["json_schema"]["schema"]["properties"]["p"]["$ref"] == "#/$defs/Person"
+
+

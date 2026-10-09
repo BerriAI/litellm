@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_name_from_message,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
+from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.databricks import (
     AllDatabricksContentValues,
@@ -327,6 +328,19 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
         databricks_tool: Final = self.convert_anthropic_tool_to_databricks_tool(tool)
         return databricks_tool
+
+    def get_json_schema_from_pydantic_object(
+        self, response_format: type[BaseModel] | dict | None
+    ) -> dict | None:
+        """
+        Databricks Model Serving expects standard JSON Schema pointers (e.g. '#/$defs/{model}').
+        AnthropicConfig overrides this with ref_template='/$defs/{model}' (without leading '#'),
+        which Databricks rejects with:
+            INVALID_ARGUMENT: Invalid JSON schema - /$defs/{model}
+
+        Override to use the default type_to_response_format_param without the Anthropic ref_template rewrite.
+        """
+        return type_to_response_format_param(response_format=response_format)
 
     def remove_cache_control_flag_from_messages_and_tools(
         self,
