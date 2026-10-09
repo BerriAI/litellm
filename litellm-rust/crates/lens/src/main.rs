@@ -1,6 +1,6 @@
 use litellm_lens::{
     State, Storage, auth,
-    config::{Config, http_client},
+    config::{Config, RuntimeThreads, http_client},
     control::Control,
     provision, router,
     worker::Worker,
@@ -32,9 +32,10 @@ fn main() -> Result<(), litellm_lens::Error> {
         return Ok(());
     }
     let _ = litellm_tracing::Logger::new(Diagnostics).install_global();
+    let threads = RuntimeThreads::from_env()?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .max_blocking_threads(4)
+        .worker_threads(threads.workers)
+        .max_blocking_threads(threads.blocking)
         .enable_all()
         .build()?;
     let outcome = runtime.block_on(run());

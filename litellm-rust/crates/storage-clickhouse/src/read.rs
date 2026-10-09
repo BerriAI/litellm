@@ -1,7 +1,12 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::{collections::BTreeMap, io::Write, time::Duration};
 
+use flate2::write::GzDecoder;
 use litellm_http::Client;
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use reqwest::header::{ACCEPT_ENCODING, CONTENT_ENCODING};
+use serde::{
+    Deserialize, Serialize,
+    de::{DeserializeOwned, IgnoredAny},
+};
 
 use crate::{Connection, Error};
 
@@ -62,7 +67,9 @@ pub async fn execute_read(
     sql: &str,
     parameters: &BTreeMap<String, Parameter>,
 ) -> Result<String, Error> {
-    execute_read_with_limits(client, connection, sql, parameters, READ_LIMITS).await
+    let body = execute_read_with_limits(client, connection, sql, parameters, READ_LIMITS).await?;
+    decode_rows::<IgnoredAny>(&body)?;
+    String::from_utf8(body).map_err(|_| Error::InvalidResponse)
 }
 
 async fn execute_read_with_limits(
@@ -71,7 +78,7 @@ async fn execute_read_with_limits(
     sql: &str,
     parameters: &BTreeMap<String, Parameter>,
     limits: ReadLimits,
-) -> Result<String, Error> {
+) -> Result<Vec<u8>, Error> {
     if sql.trim().is_empty() {
         return Err(Error::EmptySql);
     }
@@ -91,6 +98,7 @@ async fn execute_read_with_limits(
                         | "result_overflow_mode"
                         | "max_execution_time"
                         | "wait_end_of_query"
+                        | "enable_http_compression"
                 )
         })
         .map(|(key, value)| (key.into_owned(), value.into_owned()))
@@ -103,6 +111,7 @@ async fn execute_read_with_limits(
         .append_pair("result_overflow_mode", "throw")
         .append_pair("max_execution_time", &limits.execution_seconds.to_string())
         .append_pair("wait_end_of_query", "1")
+        .append_pair("enable_http_compression", "1")
         .append_pair("default_format", "JSON");
 
     url.query_pairs_mut().extend_pairs(
@@ -114,6 +123,7 @@ async fn execute_read_with_limits(
     let request = client
         .post(url)
         .timeout(Duration::from_secs(15))
+        .header(ACCEPT_ENCODING, "gzip")
         .body(sql.to_owned());
     let mut response = request.send().await.map_err(|_| Error::Transport)?;
     if !response.status().is_success() {
@@ -127,21 +137,66 @@ async fn execute_read_with_limits(
         return Err(Error::QueryFailed(response.status().as_u16()));
     }
 
-    let mut body = Vec::new();
+    let capped = Capped {
+        bytes: Vec::new(),
+        limit: limits.response_bytes,
+    };
+    let mut sink = match response.headers().get(CONTENT_ENCODING) {
+        None => Sink::Identity(capped),
+        Some(encoding) if encoding == "gzip" => Sink::Gzip(GzDecoder::new(capped)),
+        Some(_) => return Err(Error::InvalidResponse),
+    };
     while let Some(chunk) = response.chunk().await.map_err(|_| Error::Transport)? {
-        if body.len() + chunk.len() > limits.response_bytes {
-            return Err(Error::ResponseTooLarge);
+        sink.write_all(&chunk).map_err(body_error)?;
+    }
+    sink.finish().map_err(body_error)
+}
+
+struct Capped {
+    bytes: Vec<u8>,
+    limit: usize,
+}
+
+impl Write for Capped {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.bytes.len() + buf.len() > self.limit {
+            return Err(std::io::Error::from(std::io::ErrorKind::FileTooLarge));
         }
-        body.extend_from_slice(&chunk);
+        self.bytes.extend_from_slice(buf);
+        Ok(buf.len())
     }
 
-    let json: serde_json::Value =
-        serde_json::from_slice(&body).map_err(|_| Error::InvalidResponse)?;
-    if json.get("exception").is_some() || !json.get("data").is_some_and(serde_json::Value::is_array)
-    {
-        return Err(Error::InvalidResponse);
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
-    String::from_utf8(body).map_err(|_| Error::InvalidResponse)
+}
+
+enum Sink {
+    Identity(Capped),
+    Gzip(GzDecoder<Capped>),
+}
+
+impl Sink {
+    fn write_all(&mut self, chunk: &[u8]) -> std::io::Result<()> {
+        match self {
+            Self::Identity(capped) => capped.write_all(chunk),
+            Self::Gzip(decoder) => decoder.write_all(chunk),
+        }
+    }
+
+    fn finish(self) -> std::io::Result<Vec<u8>> {
+        match self {
+            Self::Identity(capped) => Ok(capped.bytes),
+            Self::Gzip(decoder) => decoder.finish().map(|capped| capped.bytes),
+        }
+    }
+}
+
+fn body_error(error: std::io::Error) -> Error {
+    match error.kind() {
+        std::io::ErrorKind::FileTooLarge => Error::ResponseTooLarge,
+        _ => Error::InvalidResponse,
+    }
 }
 
 pub trait Query {
@@ -155,6 +210,7 @@ pub trait Query {
 #[derive(Deserialize)]
 struct Rows<T> {
     data: Vec<T>,
+    exception: Option<IgnoredAny>,
 }
 
 fn parameters<T: Serialize>(params: &T) -> Result<BTreeMap<String, Parameter>, Error> {
@@ -192,11 +248,15 @@ pub async fn fetch_json<Q: Query>(
     )
     .await?;
     decode_rows::<Q::Row>(&body)?;
-    Ok(body)
+    String::from_utf8(body).map_err(|_| Error::InvalidResponse)
 }
 
-fn decode_rows<T: DeserializeOwned>(body: &str) -> Result<Vec<T>, Error> {
-    serde_json::from_str::<Rows<T>>(body)
-        .map(|rows| rows.data)
-        .map_err(|_| Error::InvalidResponse)
+fn decode_rows<T: DeserializeOwned>(body: &[u8]) -> Result<Vec<T>, Error> {
+    match serde_json::from_slice::<Rows<T>>(body) {
+        Ok(Rows {
+            data,
+            exception: None,
+        }) => Ok(data),
+        _ => Err(Error::InvalidResponse),
+    }
 }
