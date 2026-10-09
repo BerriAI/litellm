@@ -20,6 +20,7 @@ import httpx2
 from httpx2._client import UseClientDefault
 from httpx2._types import AuthTypes
 from mcp import ClientSession, MCPError, ReadResourceResult, Resource, StdioServerParameters
+from mcp.client._input_required import run_input_required_driver
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
@@ -49,6 +50,7 @@ from mcp.types import (
     InitializeRequestParams,
     InitializeResult,
     InputRequiredResult,
+    InputResponses,
     ListPromptsRequest,
     ListPromptsResult,
     ListResourcesRequest,
@@ -100,6 +102,7 @@ from litellm.types.mcp import (
 
 if TYPE_CHECKING:
     from litellm.proxy._experimental.mcp_server.contracts import CatalogListRequest, CatalogListResult
+    from litellm.proxy._experimental.mcp_server.legacy_callbacks import ElicitationCallback
 
 
 def to_basic_auth(auth_value: str) -> str:
@@ -411,7 +414,7 @@ class MCPClient:
         aws_auth: httpx2.Auth | None = None,
         resolved_auth: httpx2.Auth | None = None,
         sampling_callback: Callable | None = None,
-        elicitation_callback: Callable | None = None,
+        elicitation_callback: "ElicitationCallback | None" = None,
         logging_callback: Callable | None = None,
         protocol_version: MCPUpstreamProtocol = "auto",
     ):
@@ -438,7 +441,7 @@ class MCPClient:
         self._resolved_auth: httpx2.Auth | None = resolved_auth
         self._last_initialize_instructions: str | None = None
         self._sampling_callback: Callable | None = sampling_callback
-        self._elicitation_callback: Callable | None = elicitation_callback
+        self._elicitation_callback: ElicitationCallback | None = elicitation_callback
         self._logging_callback: Callable | None = logging_callback
         # handle the basic auth value if provided
         if auth_value:
@@ -631,15 +634,6 @@ class MCPClient:
                         # The SDK closes pending requests when its message handler raises.
                         raise RuntimeError("MCP response stream failed")
 
-                    session_kwargs: Final = {
-                        name: callback
-                        for name, callback in (
-                            ("sampling_callback", self._sampling_callback),
-                            ("elicitation_callback", self._elicitation_callback),
-                            ("logging_callback", self._logging_callback),
-                        )
-                        if callback is not None
-                    }
                     # The SDK drops a response stream that ends without a JSON-RPC reply, so nothing else
                     # ever fails the request.
                     session_ctx: Final = ClientSession(
@@ -647,7 +641,9 @@ class MCPClient:
                         write_stream,
                         read_timeout_seconds=self.timeout,
                         message_handler=receive_message,
-                        **session_kwargs,
+                        sampling_callback=self._sampling_callback,
+                        elicitation_callback=self._elicitation_callback,
+                        logging_callback=self._logging_callback,
                     )
                     session: Final = await session_ctx.__aenter__()
                     try:
@@ -948,6 +944,28 @@ class MCPClient:
         """The error result ``call_tool`` returns when it swallows a failure (no re-execution)."""
         return error_text_result(exc)
 
+    async def _request_with_interaction(
+        self,
+        session: ClientSession,
+        request: Callable[[InputResponses | None, str | None], Awaitable[TSessionResult | InputRequiredResult]],
+        input_responses: InputResponses | None,
+        request_state: str | None,
+        allow_input_required: bool,
+    ) -> TSessionResult | InputRequiredResult:
+        from litellm.proxy._experimental.mcp_server.contracts import ClientInteraction
+        from litellm.proxy._experimental.mcp_server.interactions import LegacyClientInteraction, ModernClientInteraction
+
+        with anyio.fail_after(self.timeout):
+            first: Final = await request(input_responses, request_state)
+            if allow_input_required:
+                return await ModernClientInteraction(
+                    session, allow_elicitation=self._elicitation_callback is not None
+                ).complete(first, request)
+            if not isinstance(first, InputRequiredResult):
+                return first
+            interaction: Final[ClientInteraction] = LegacyClientInteraction(session)
+            return await run_input_required_driver(first, dispatch=interaction.request, retry=request)
+
     async def call_tool(
         self,
         call_tool_request_params: MCPCallToolRequestParams,
@@ -990,11 +1008,25 @@ class MCPClient:
                 )
                 if not any(tool.name == call_tool_request_params.name for tool in tools):
                     raise MCPError(code=-32603, message="Tool schema is unavailable from the bounded upstream catalog")
-            return await session.call_tool(
-                name=call_tool_request_params.name,
-                arguments=call_tool_request_params.arguments,
-                progress_callback=on_progress,
-                allow_input_required=allow_input_required,
+
+            async def request(
+                responses: InputResponses | None, state: str | None
+            ) -> MCPCallToolResult | InputRequiredResult:
+                return await session.call_tool(
+                    name=call_tool_request_params.name,
+                    arguments=call_tool_request_params.arguments,
+                    input_responses=responses,
+                    request_state=state,
+                    progress_callback=on_progress,
+                    allow_input_required=True,
+                )
+
+            return await self._request_with_interaction(
+                session,
+                request,
+                call_tool_request_params.input_responses,
+                call_tool_request_params.request_state,
+                allow_input_required,
             )
 
         try:
@@ -1129,15 +1161,32 @@ class MCPClient:
             # Return empty list instead of raising to allow graceful degradation
             return ListPromptsResult(prompts=[])
 
-    async def get_prompt(self, get_prompt_request_params: GetPromptRequestParams) -> GetPromptResult:
+    async def get_prompt(
+        self, get_prompt_request_params: GetPromptRequestParams, *, allow_input_required: bool = False
+    ) -> GetPromptResult | InputRequiredResult:
         """Fetch a prompt definition from the MCP server."""
         verbose_logger.info("MCP client fetching prompt '%s'", get_prompt_request_params.name)
 
         async def _get_prompt_operation(session: ClientSession):
             verbose_logger.debug("MCP client sending get_prompt request to session")
-            return await session.get_prompt(
-                name=get_prompt_request_params.name,
-                arguments=get_prompt_request_params.arguments,
+
+            async def request(
+                responses: InputResponses | None, state: str | None
+            ) -> GetPromptResult | InputRequiredResult:
+                return await session.get_prompt(
+                    name=get_prompt_request_params.name,
+                    arguments=get_prompt_request_params.arguments,
+                    input_responses=responses,
+                    request_state=state,
+                    allow_input_required=True,
+                )
+
+            return await self._request_with_interaction(
+                session,
+                request,
+                get_prompt_request_params.input_responses,
+                get_prompt_request_params.request_state,
+                allow_input_required,
             )
 
         try:
@@ -1285,13 +1334,37 @@ class MCPClient:
             # Return empty list instead of raising to allow graceful degradation
             return ListResourceTemplatesResult(resource_templates=[])
 
-    async def read_resource(self, url: AnyUrl) -> ReadResourceResult:
+    async def read_resource(
+        self,
+        url: AnyUrl,
+        *,
+        input_responses: InputResponses | None = None,
+        request_state: str | None = None,
+        allow_input_required: bool = False,
+    ) -> ReadResourceResult | InputRequiredResult:
         """Fetch resource contents from the MCP server."""
         verbose_logger.info("MCP client fetching resource '%s'", url)
 
         async def _read_resource_operation(session: ClientSession):
             verbose_logger.debug("MCP client sending read_resource request to session")
-            return await session.read_resource(str(url))
+
+            async def request(
+                responses: InputResponses | None, state: str | None
+            ) -> ReadResourceResult | InputRequiredResult:
+                return await session.read_resource(
+                    str(url),
+                    input_responses=responses,
+                    request_state=state,
+                    allow_input_required=True,
+                )
+
+            return await self._request_with_interaction(
+                session,
+                request,
+                input_responses,
+                request_state,
+                allow_input_required,
+            )
 
         try:
             read_resource_result: Final = await self.run_with_session(_read_resource_operation)
