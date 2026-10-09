@@ -673,7 +673,7 @@ class TestTranslateMessagesToResponsesInput:
 
     def test_assistant_text_before_and_after_tool_use_preserves_order(self):
         """Text around tool_use stays in block order, not replayed after (#45470)."""
-        messages = [
+        messages: Final = [
             {"role": "user", "content": "weather in Paris?"},
             {
                 "role": "assistant",
@@ -695,7 +695,7 @@ class TestTranslateMessagesToResponsesInput:
                 ],
             },
         ]
-        result = _translate_messages(messages)
+        result: Final = _translate_messages(messages)
         assert [item["type"] for item in result] == [
             "message",
             "message",
