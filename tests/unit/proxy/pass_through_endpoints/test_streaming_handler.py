@@ -1,8 +1,8 @@
 import json
 import logging
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator
 from datetime import datetime
-from typing import Final, cast
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -254,7 +254,8 @@ async def test_failed_anthropic_stream_records_partial_usage_off_the_event_loop(
 async def test_stream_attempt_abandoned_for_a_retry_logs_nothing() -> None:
     model: Final = "claude-3-haiku"
     logging_obj: Final = _logging_obj()
-    logging_obj.litellm_params = {"metadata": {}}
+    litellm_params: Final[dict[str, object]] = {"metadata": {}}
+    logging_obj.litellm_params = litellm_params
     setattr(logging_obj, "_on_deferred_stream_complete", None)
     logging_obj.completion_start_time = None
     response: Final = httpx.Response(
@@ -274,7 +275,7 @@ async def test_stream_attempt_abandoned_for_a_retry_logs_nothing() -> None:
     )
 
     await gen.__anext__()
-    record_retry_attempt(cast(Mapping[str, object], logging_obj.litellm_params), 1, 2)
+    record_retry_attempt(litellm_params, 1, 2)
     await gen.aclose()
     await GLOBAL_LOGGING_WORKER.flush()
 
