@@ -179,7 +179,7 @@ def load_openapi_spec(filepath: str) -> Mapping[str, Any]:
 def _parse_openapi_spec(text: str) -> Mapping[str, Any]:
     """Parse JSON or YAML OpenAPI documents into a mapping."""
     try:
-        parsed: Any = json.loads(text)
+        parsed_json: Final[Any] = json.loads(text)
     except json.JSONDecodeError:
         import yaml
         from yaml.nodes import ScalarNode
@@ -191,8 +191,10 @@ def _parse_openapi_spec(text: str) -> Mapping[str, Any]:
                 return super().compose_node(parent, index)
 
             def flatten_mapping(self, node: object) -> None:
-                node_values = getattr(node, "value", ())
-                if any(key_node.tag == "tag:yaml.org,2002:merge" for key_node, _ in node_values):
+                if any(
+                    key_node.tag == "tag:yaml.org,2002:merge"
+                    for key_node, _ in getattr(node, "value", ())
+                ):
                     raise yaml.YAMLError("YAML merge keys are not supported")
                 super().flatten_mapping(node)
 
@@ -206,11 +208,14 @@ def _parse_openapi_spec(text: str) -> Mapping[str, Any]:
             _NoMergeSafeLoader.construct_yaml_int,
         )
 
-        parsed = yaml.load(text, Loader=_NoMergeSafeLoader)
+        parsed_yaml: Final[Any] = yaml.load(text, Loader=_NoMergeSafeLoader)
+        if not isinstance(parsed_yaml, dict):
+            raise TypeError("OpenAPI spec must be a JSON or YAML object")
+        return parsed_yaml
 
-    if not isinstance(parsed, dict):
+    if not isinstance(parsed_json, dict):
         raise TypeError("OpenAPI spec must be a JSON or YAML object")
-    return parsed
+    return parsed_json
 
 
 async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None) -> dict[str, Any]:
