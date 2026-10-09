@@ -9,6 +9,7 @@ from integration.translation.messages.bases.bedrock_converse import (
     CLAUDE_SONNET_4_6_TEST_CASE,
     CLAUDE_SONNET_5_5_TEST_CASE,
     CLAUDE_SONNET_5_TEST_CASE,
+    GROK_4_7_TEST_CASE,
 )
 from integration.translation.runner import assert_translation
 
@@ -22,6 +23,7 @@ from integration.translation.runner import assert_translation
         CLAUDE_OPUS_4_8_TEST_CASE,
         CLAUDE_SONNET_5_5_TEST_CASE,
         CLAUDE_OPUS_5_5_TEST_CASE,
+        GROK_4_7_TEST_CASE,
     ],
     ids=lambda case: case.id,
 )

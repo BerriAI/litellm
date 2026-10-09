@@ -2416,6 +2416,17 @@ def test_bedrock_tool_use_id_valid_ids_pass_through_unchanged():
     assert result["toolResult"]["toolUseId"] == "tooluse_Ab.c:1-2_3"
 
 
+def test_bedrock_tool_result_with_only_dropped_parts_sends_empty_text_block():
+    result = _convert_to_bedrock_tool_call_result(
+        {
+            "tool_call_id": "call_tool_search_1",
+            "role": "tool",
+            "content": [{"type": "tool_reference", "tool_name": "WebSearch"}],
+        }
+    )
+    assert result["toolResult"]["content"] == [{"text": ""}]
+
+
 def test_bedrock_tool_use_id_truncation_keeps_distinct_ids_distinct():
     prefix = "call_" + "z" * 70
     ids = {
@@ -4365,7 +4376,7 @@ async def test_bedrock_converse_messages_pt_async_user_message_without_content_a
 
 
 @pytest.mark.parametrize("content_less_tool_message", _CONTENT_LESS_TOOL_MESSAGES)
-def test_bedrock_converse_messages_pt_tool_message_without_content_yields_empty_tool_result(
+def test_bedrock_converse_messages_pt_tool_message_without_content_yields_empty_text_tool_result(
     content_less_tool_message: dict[str, object],
 ):
     result: Final = _bedrock_converse_messages_pt(
@@ -4377,12 +4388,12 @@ def test_bedrock_converse_messages_pt_tool_message_without_content_yields_empty_
     tool_result: Final = result[-1]["content"][0]["toolResult"]
     assert result[-1]["role"] == "user"
     assert tool_result["toolUseId"] == "call_1"
-    assert tool_result["content"] == []
+    assert tool_result["content"] == [{"text": ""}]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("content_less_tool_message", _CONTENT_LESS_TOOL_MESSAGES)
-async def test_bedrock_converse_messages_pt_async_tool_message_without_content_yields_empty_tool_result(
+async def test_bedrock_converse_messages_pt_async_tool_message_without_content_yields_empty_text_tool_result(
     content_less_tool_message: dict[str, object],
 ):
     result: Final = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
@@ -4393,7 +4404,7 @@ async def test_bedrock_converse_messages_pt_async_tool_message_without_content_y
 
     tool_result: Final = result[-1]["content"][0]["toolResult"]
     assert tool_result["toolUseId"] == "call_1"
-    assert tool_result["content"] == []
+    assert tool_result["content"] == [{"text": ""}]
 
 
 def test_bedrock_converse_messages_pt_blank_user_text_sends_the_continue_message_text():

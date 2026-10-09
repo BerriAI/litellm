@@ -3925,8 +3925,12 @@ def _build_bedrock_tool_result_content_blocks(
     if isinstance(message_content, str):
         return [BedrockToolResultContentBlock(text=message_content)], False
     if isinstance(message_content, list):
-        return _parse_bedrock_tool_result_content_list(message_content), False
-    return [], False
+        parsed_blocks: Final = _parse_bedrock_tool_result_content_list(message_content)
+        if parsed_blocks:
+            return parsed_blocks, False
+    # Some Converse models (e.g. xAI Grok) reject toolResult.content == [], e.g. when every part
+    # of an Anthropic tool_reference-only tool_result was dropped
+    return [BedrockToolResultContentBlock(text="")], False
 
 
 def _convert_to_bedrock_tool_call_result(

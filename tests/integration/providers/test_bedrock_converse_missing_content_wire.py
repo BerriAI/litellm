@@ -101,9 +101,9 @@ _CONVERSE_TOOL_USE: Final[dict[str, JsonValue]] = {
     "role": "assistant",
     "content": [{"toolUse": {"toolUseId": "call_1", "name": "get_weather", "input": {"city": "Boston"}}}],
 }
-_CONVERSE_EMPTY_TOOL_RESULT: Final[dict[str, JsonValue]] = {
+_CONVERSE_BLANK_TEXT_TOOL_RESULT: Final[dict[str, JsonValue]] = {
     "role": "user",
-    "content": [{"toolResult": {"toolUseId": "call_1", "content": []}}],
+    "content": [{"toolResult": {"toolUseId": "call_1", "content": [{"text": ""}]}}],
 }
 _NEUTRALIZED_TOOL_CALL: Final[dict[str, JsonValue]] = {
     "role": "assistant",
@@ -166,7 +166,7 @@ _MODIFY_PARAMS_CELLS: Final = (
         "r13",
         _PLAIN,
         (_QUESTION_TURN, _TOOL_CALL_TURN, _NO_CONTENT_TOOL),
-        (_CONVERSE_QUESTION, _CONVERSE_TOOL_USE, _CONVERSE_EMPTY_TOOL_RESULT),
+        (_CONVERSE_QUESTION, _CONVERSE_TOOL_USE, _CONVERSE_BLANK_TEXT_TOOL_RESULT),
         MappingProxyType({"tools": list(_TOOLS)}),
     ),
     _ModifyParamsCell("r14", _PLAIN, (_NO_CONTENT_SYSTEM, _QUESTION_TURN), (_CONVERSE_QUESTION,)),
@@ -368,7 +368,7 @@ def test_r03_httpx_raw_sse_user_without_content_after_an_assistant_turn_streams_
         assert _spend_row(identity)["status"] == "success"
 
 
-async def test_r04_openai_async_stream_tool_turn_without_content_sends_an_empty_tool_result(gateway: Gateway) -> None:
+async def test_r04_openai_async_stream_tool_turn_without_content_sends_a_blank_text_tool_result(gateway: Gateway) -> None:
     with wire_server(_converse_peer) as wire, gateway.scenario() as scenario:
         model: Final = _converse_deployment(scenario, wire)
         async with openai.AsyncOpenAI(
@@ -387,7 +387,7 @@ async def test_r04_openai_async_stream_tool_turn_without_content_sends_an_empty_
         (identity,) = {chunk.id for chunk in chunks}
         target, received = _only_received(wire)
         assert target == _STREAM_TARGET, target
-        assert received["messages"] == [_CONVERSE_QUESTION, _CONVERSE_TOOL_USE, _CONVERSE_EMPTY_TOOL_RESULT], received
+        assert received["messages"] == [_CONVERSE_QUESTION, _CONVERSE_TOOL_USE, _CONVERSE_BLANK_TEXT_TOOL_RESULT], received
         assert received["toolConfig"]["tools"][0]["toolSpec"]["name"] == "get_weather", received
         assert _spend_row(identity)["status"] == "success"
 
