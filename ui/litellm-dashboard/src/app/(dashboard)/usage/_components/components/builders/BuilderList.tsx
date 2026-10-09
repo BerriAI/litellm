@@ -12,6 +12,7 @@ import {
   type BuilderInsightBuilder,
   type BuilderSort,
 } from "./builderInsightsData";
+import { InlineCodeText } from "./InlineCodeText";
 
 const SORT_OPTIONS = [
   { value: "spend", label: "Spend" },
@@ -66,8 +67,13 @@ export function BuilderList({
                   {builderInitials(builder.name)}
                 </span>
                 <span className="min-w-0">
-                  <span className="block truncate text-sm font-medium text-foreground">{builder.name}</span>
-                  <span className="block truncate text-xs text-muted-foreground">{builder.archetype}</span>
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className="truncate text-sm font-medium text-foreground">{builder.name}</span>
+                    <span className="shrink-0 text-[11px] text-muted-foreground">{builder.archetype}</span>
+                  </span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    <InlineCodeText text={builder.tagline} />
+                  </span>
                 </span>
               </span>
               <span className="hidden items-center justify-start -space-x-1.5 sm:flex">

@@ -7,10 +7,11 @@ import { Button } from "@/components/ui/button";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { AgentMark } from "../overview/TopAgents";
 import { agentRowFor } from "../overview/agentCatalog";
-import { formatCompact, formatCompactUsd, formatUsd } from "../overview/overviewData";
+import { formatCompact, formatCompactUsd, formatCompactUsdTick, formatUsd } from "../overview/overviewData";
 import { Panel, Stat } from "../overview/Primitives";
 import { ActivityHeatmap } from "./ActivityHeatmap";
 import { aggregateModels, builderInitials, dailySeries, type BuilderInsightBuilder } from "./builderInsightsData";
+import { InlineCodeText } from "./InlineCodeText";
 import { MarkdownFile } from "./MarkdownFile";
 import { stackedUsageColor } from "@/components/shared/charts";
 
@@ -28,7 +29,12 @@ function DailySpend({ builder }: { builder: BuilderInsightBuilder }) {
         <BarChart data={data} margin={{ left: 0, right: 0, top: 4, bottom: 0 }}>
           <CartesianGrid vertical={false} />
           <XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={24} tickFormatter={(value) => String(value).slice(5)} />
-          <YAxis tickLine={false} axisLine={false} width={42} tickFormatter={(value) => formatCompactUsd(Number(value))} />
+          <YAxis
+            tickLine={false}
+            axisLine={false}
+            width={56}
+            tickFormatter={(value) => formatCompactUsdTick(Number(value))}
+          />
           <ChartTooltip
             content={
               <ChartTooltipContent
@@ -154,8 +160,12 @@ export function BuilderDetail({
               {builder.archetype}
             </Badge>
           </div>
-          <p className="mt-1 text-sm text-muted-foreground">{builder.tagline}</p>
-          <p className="mt-1 text-xs text-muted-foreground">{builder.uses}</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            <InlineCodeText text={builder.tagline} />
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            <InlineCodeText text={builder.uses} />
+          </p>
         </div>
         <div className="ml-auto flex items-center gap-2">
           <span className="text-xs text-muted-foreground">{builder.email}</span>
