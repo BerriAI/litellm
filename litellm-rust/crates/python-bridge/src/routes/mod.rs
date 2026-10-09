@@ -8,11 +8,9 @@ pub(crate) mod responses;
 pub(crate) mod token_counter;
 pub(crate) mod traces;
 
-use litellm_callbacks_legacy_python::{LegacyLogging, LoggingOperation, PublicCall};
+use litellm_callbacks_legacy_python::{LegacyLogging, LoggingOperation, PublicCall, body_hooks};
 use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol};
-use litellm_host_python::{
-    HookChain, PythonBinding, PythonCallHooks, PythonHostCalls, effective_py_args,
-};
+use litellm_host_python::{HookChain, PythonBinding, PythonHostCalls, effective_py_args};
 use pyo3::{
     prelude::*,
     types::{PyDict, PyMapping, PyTuple},
@@ -47,18 +45,22 @@ fn mapping_dict<'py>(value: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyDict>> 
     Ok(dict)
 }
 
+/// The hooks around a native call, outermost first: the legacy `@client` wrapper, the SDK
+/// preflight it runs, then the Python handler body the route would have run.
 fn call_hooks(
     py: Python<'_>,
     operation: LoggingOperation,
     call: &NativeCall<'_>,
     asynchronous: bool,
-) -> PyResult<(Py<PyDict>, impl PythonCallHooks + use<>)> {
+) -> PyResult<(Py<PyDict>, HookChain)> {
     let call = PublicCall::capture(&call.base, &call.args, &call.kwargs)?;
     let arguments = call.arguments(py);
-    Ok((
-        arguments,
-        LegacyLogging::new(py, operation, call, asynchronous),
-    ))
+    let body = body_hooks(py, operation, &call, asynchronous);
+    let hooks = HookChain::new()
+        .with(LegacyLogging::new(py, operation, call, asynchronous))
+        .with(crate::preflight::SdkPolicy)
+        .with_optional(body);
+    Ok((arguments, hooks))
 }
 
 fn run_public_call<H, M>(
@@ -73,7 +75,7 @@ fn run_public_call<H, M>(
     + Sync
     + 'static,
     host: H,
-    hooks: impl PythonCallHooks + 'static,
+    hooks: HookChain,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>>
 where
@@ -87,9 +89,7 @@ where
             start(py, arguments, request).map(crate::logger::LoggedMachine::new)
         },
         host,
-        HookChain::new()
-            .with(hooks)
-            .with(crate::preflight::SdkPolicy),
+        hooks,
         arguments,
         crate::lifecycle::call_options(asynchronous),
     )

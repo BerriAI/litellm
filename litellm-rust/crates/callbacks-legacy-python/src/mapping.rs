@@ -11,6 +11,7 @@ use crate::LegacyLogging;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CallBoundary {
     PrepareArguments,
+    PrepareRequest,
     BeforeProviderRequest,
     AfterProviderResponse,
     TransformResponse,
@@ -33,14 +34,14 @@ pub struct CallbackMapping {
     pub dispatch: Dispatch,
 }
 
-struct Binding<H> {
-    boundary: CallBoundary,
-    invoke: H,
-    callbacks: &'static [&'static str],
+pub(crate) struct Binding<H> {
+    pub(crate) boundary: CallBoundary,
+    pub(crate) invoke: H,
+    pub(crate) callbacks: &'static [&'static str],
 }
 
 impl<H> Binding<H> {
-    fn mappings(&self) -> impl Iterator<Item = CallbackMapping> {
+    pub(crate) fn mappings(&self) -> impl Iterator<Item = CallbackMapping> {
         self.callbacks.iter().map(|callback| CallbackMapping {
             callback,
             dispatch: Dispatch::Call(self.boundary),
@@ -132,6 +133,7 @@ pub fn callback_mappings() -> impl Iterator<Item = CallbackMapping> {
         .chain(FAILURE.mappings())
         .chain(OPEN.mappings())
         .chain(CHUNK.mappings())
+        .chain(crate::messages_body::callback_mappings())
         .chain(PYTHON_CALLBACKS.iter().copied())
 }
 
@@ -235,9 +237,6 @@ python_callbacks! {
         "async_log_stream_event",
         "async_post_mcp_tool_call_hook",
     ],
-    Dispatch::Python("litellm.llms.anthropic.pass_through.messages.handler") => [
-        "async_pre_request_hook",
-    ],
     Dispatch::Python("litellm.litellm_core_utils.streaming_handler") => [
         "async_post_call_streaming_deployment_hook",
     ],
@@ -252,10 +251,6 @@ python_callbacks! {
     Dispatch::Python("litellm.integrations.argilla") => ["async_dataset_hook"],
     Dispatch::Python("litellm.proxy.management_helpers.audit_logs") => ["async_log_audit_log_event"],
     Dispatch::Python("litellm.llms.custom_httpx.llm_http_handler") => [
-        "async_should_run_agentic_loop",
-        "async_run_agentic_loop",
-        "async_build_agentic_loop_plan",
-        "async_post_agentic_loop_response_hook",
         "async_agentic_loop_cleanup_hook",
         "async_should_run_chat_completion_agentic_loop",
         "async_run_chat_completion_agentic_loop",

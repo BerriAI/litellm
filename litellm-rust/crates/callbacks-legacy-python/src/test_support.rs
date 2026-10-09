@@ -89,6 +89,8 @@ FAKES = {
         'stream_success', list(chunks)
     ),
     'stream_failure': lambda logger, endpoint_type, request_body, chunks, error: logger.record('stream_failure', error),
+    'prepare_messages_request': lambda request: request['body'].prepare(request),
+    'transform_messages_response': lambda response, request: request['body'].transform(response, request),
 }
 assert FAKES.keys() == CONTRACT.keys(), sorted(FAKES.keys() ^ CONTRACT.keys())
 for name, fake in FAKES.items():

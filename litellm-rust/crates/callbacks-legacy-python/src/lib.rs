@@ -13,12 +13,14 @@ mod callbacks;
 mod deferred;
 mod logger;
 mod mapping;
+mod messages_body;
 mod python;
 pub use adapter::LegacyLogging;
 pub use call::PublicCall;
 pub(crate) use callbacks::{LegacyCallbacks, is_internal_call};
 pub(crate) use logger::{DeploymentHooks, PythonLogger, finalize, setup};
 pub use mapping::{CallBoundary, CallbackMapping, Dispatch, callback_mappings};
+pub use messages_body::{MessagesBody, body_hooks};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoggingOperation {

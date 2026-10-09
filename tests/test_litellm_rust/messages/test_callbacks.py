@@ -1,14 +1,21 @@
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
+from datetime import datetime
 from typing import Final
 
 import pytest
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.anthropic.pass_through.messages.handler import anthropic_messages
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.rust_bridge import catalog
 from litellm.rust_bridge.catalog import Route, RouteRule
 from litellm.rust_bridge.configuration import Rollout
+from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES
+from litellm.rust_bridge.public_call import native_call, signature
+from litellm.types.utils import Choices, ModelResponse
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
 from tests.test_litellm_rust.support.isolation import rebound
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
@@ -51,6 +58,230 @@ def arguments(server: RecordingServer, **kwargs: object) -> dict[str, object]:
 def assert_served_natively(server: RecordingServer) -> None:
     assert len(server.requests) == 1
     assert not server.requests[0].headers.get("user-agent", "").startswith("python-httpx")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked", (False, True), ids=("accepted", "blocked"))
+async def test_native_messages_deferred_success_waits_for_proxy_acceptance(
+    messages_server: RecordingServer, blocked: bool
+) -> None:
+    recorder: Final = RecordingLogger()
+    logger: Final = Logging(
+        model=MESSAGES_MODEL,
+        messages=list(MESSAGES),
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="deferred-messages",
+        function_id="deferred-messages",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logger.defer_async_logging = True
+    binding: Final = NATIVE_AMESSAGES.load()
+    assert binding is not None
+    response: Final = await binding(
+        native_call(signature(anthropic_messages), (), arguments(messages_server, litellm_logging_obj=logger))
+    )
+    assert isinstance(response, dict)
+    assert_served_natively(messages_server)
+    await drain_logging()
+    assert "async_log_success_event" not in recorder.names
+
+    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(logger, exception_raised=blocked)
+    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(logger, exception_raised=False)
+    await drain_logging()
+
+    assert getattr(logger, "_native_pending_logging", None) is None
+    if blocked:
+        assert "async_log_success_event" not in recorder.names
+    else:
+        success: Final = await recorder.wait_for_async("async_log_success_event")
+        assert len(success) == 1
+        assert success[0].response.choices[0].message.content == response["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_native_messages_pre_request_edits_reach_provider_in_the_caller_task(
+    messages_server: RecordingServer,
+) -> None:
+    import asyncio
+    from contextvars import ContextVar
+
+    caller: Final = asyncio.current_task()
+    marker: Final = ContextVar("native-messages-pre-request", default="caller")
+    tools: Final = [{"name": "lookup", "input_schema": {"type": "object"}}]
+    original_choice: Final = {"type": "auto"}
+    prepared_choice: Final = {"type": "tool", "name": "lookup"}
+
+    class Edit(CustomLogger):
+        async def async_pre_call_deployment_hook(
+            self, kwargs: dict[str, object], call_type: object
+        ) -> dict[str, object]:
+            return {**kwargs, "hook_order": "deployment"}
+
+        async def async_pre_request_hook(
+            self, model: str, messages: list[object], kwargs: dict[str, object]
+        ) -> dict[str, object]:
+            await asyncio.sleep(0)
+            assert asyncio.current_task() is caller
+            assert marker.get() == "caller"
+            assert kwargs["hook_order"] == "deployment"
+            assert kwargs["tool_choice"] is original_choice
+            marker.set("hook")
+            return {**kwargs, "tools": tools, "tool_choice": prepared_choice, "stop_sequences": ["callback-stop"]}
+
+    binding: Final = NATIVE_AMESSAGES.load()
+    assert binding is not None
+    with rebound(litellm, "callbacks", [Edit()]):
+        response: Final = await binding(
+            native_call(signature(anthropic_messages), (), arguments(messages_server, tool_choice=original_choice))
+        )
+
+    assert isinstance(response, dict)
+    assert_served_natively(messages_server)
+    assert messages_server.requests[0].body["tools"] == tools
+    assert messages_server.requests[0].body["stop_sequences"] == ["callback-stop"]
+    assert messages_server.requests[0].body["tool_choice"] == prepared_choice
+    assert response["content"] == MESSAGES_RESPONSE["content"]
+    assert marker.get() == "hook"
+
+
+@pytest.mark.asyncio
+async def test_native_messages_agentic_loop_runs_inside_the_wrapper_and_its_answer_is_what_gets_logged(
+    messages_server: RecordingServer,
+) -> None:
+    recorder: Final = RecordingLogger()
+    replacement: Final[Mapping[str, object]] = {
+        **MESSAGES_RESPONSE,
+        "content": [{"type": "text", "text": "from the agentic loop"}],
+    }
+    seen: Final[list[object]] = []
+
+    class Loop(CustomLogger):
+        async def async_should_run_agentic_loop(
+            self,
+            response: object,
+            model: str,
+            messages: object,
+            tools: object,
+            stream: bool,
+            custom_llm_provider: str,
+            kwargs: dict[str, object],
+        ) -> tuple[bool, dict[str, object]]:
+            seen.append(response)
+            assert kwargs["api_key"] == "test-key"
+            return True, {}
+
+        async def async_run_agentic_loop(
+            self,
+            tools: object,
+            model: str,
+            messages: object,
+            response: object,
+            anthropic_messages_provider_config: object,
+            anthropic_messages_optional_request_params: object,
+            logging_obj: object,
+            stream: bool,
+            kwargs: dict[str, object],
+        ) -> object:
+            return replacement
+
+        async def async_post_call_success_deployment_hook(
+            self, request_data: object, response: object, call_type: object
+        ) -> None:
+            seen.append(response)
+
+    binding: Final = NATIVE_AMESSAGES.load()
+    assert binding is not None
+    with rebound(litellm, "callbacks", [Loop()]):
+        response: Final = await binding(
+            native_call(signature(anthropic_messages), (), arguments(messages_server, callbacks=[recorder]))
+        )
+
+    assert_served_natively(messages_server)
+    assert isinstance(response, dict)
+    assert dict(response)["content"] == replacement["content"]
+    assert len(seen) == 2
+    assert isinstance(seen[0], dict) and seen[0]["content"] == MESSAGES_RESPONSE["content"]
+    assert seen[1] is response
+    success: Final = await recorder.wait_for_async("async_log_success_event")
+    assert len(success) == 1
+    logged: Final = success[0].response
+    assert isinstance(logged, ModelResponse)
+    choice: Final = logged.choices[0]
+    assert isinstance(choice, Choices)
+    assert choice.message.content == "from the agentic loop"
+
+
+@pytest.mark.asyncio
+async def test_native_messages_pre_request_failure_never_sends_or_replays_provider_work(
+    messages_server: RecordingServer,
+) -> None:
+    messages_server.expected_requests = 0
+    failure: Final = RuntimeError("callback rejected")
+    recorder: Final = RecordingLogger()
+
+    class Reject(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.failure: Exception | None = None
+
+        async def async_pre_request_hook(self, model: str, messages: list[object], kwargs: dict[str, object]) -> None:
+            raise failure
+
+        async def async_post_call_failure_deployment_hook(
+            self, request_data: object, exception: Exception, call_type: object
+        ) -> None:
+            self.failure = exception
+
+    binding: Final = NATIVE_AMESSAGES.load()
+    assert binding is not None
+    reject: Final = Reject()
+    with rebound(litellm, "callbacks", [reject]), pytest.raises(RuntimeError) as raised:
+        await binding(native_call(signature(anthropic_messages), (), arguments(messages_server, callbacks=[recorder])))
+
+    assert raised.value is failure
+    assert isinstance(reject.failure, RuntimeError)
+    assert str(reject.failure) == str(failure)
+    assert messages_server.requests == []
+    failures: Final = recorder.wait_for("async_log_failure_event")
+    assert len(failures) == 1
+    assert failures[0].kwargs["exception"] is failure
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_request_preparation_stops_before_provider_and_terminal_callbacks(
+    messages_server: RecordingServer,
+) -> None:
+    messages_server.expected_requests = 0
+    import asyncio
+
+    started: Final = asyncio.Event()
+    hold: Final = asyncio.Event()
+    recorder: Final = RecordingLogger()
+
+    class Wait(CustomLogger):
+        async def async_pre_request_hook(self, model: str, messages: list[object], kwargs: dict[str, object]) -> None:
+            started.set()
+            await hold.wait()
+
+    binding: Final = NATIVE_AMESSAGES.load()
+    assert binding is not None
+    with rebound(litellm, "callbacks", [Wait()]):
+        task: Final = asyncio.ensure_future(
+            binding(native_call(signature(anthropic_messages), (), arguments(messages_server, callbacks=[recorder])))
+        )
+        try:
+            await asyncio.wait_for(started.wait(), timeout=5)
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    await drain_logging()
+    assert messages_server.requests == []
+    assert "async_log_failure_event" not in recorder.names
+    assert "async_log_success_event" not in recorder.names
 
 
 @pytest.mark.asyncio
@@ -181,7 +412,12 @@ def test_native_sync_messages_stream_relays_provider_events_and_logs_success_onc
 def test_native_sync_messages_returns_the_provider_message(messages_server: RecordingServer) -> None:
     recorder: Final = RecordingLogger()
 
-    response: Final = litellm.anthropic.messages.create(**arguments(messages_server, callbacks=[recorder]))
+    class AsyncOnly(CustomLogger):
+        async def async_pre_request_hook(self, model: str, messages: list[object], kwargs: dict[str, object]) -> None:
+            raise AssertionError("asynchronous request hooks cannot run on synchronous Messages")
+
+    with rebound(litellm, "callbacks", [AsyncOnly()]):
+        response: Final = litellm.anthropic.messages.create(**arguments(messages_server, callbacks=[recorder]))
 
     assert_served_natively(messages_server)
     assert response["content"] == MESSAGES_RESPONSE["content"]

@@ -1,10 +1,11 @@
 from types import MappingProxyType
 from typing import Final
 
-from litellm.rust_bridge.messages.route_host import response
 import pytest
+
 import litellm
 from litellm.rust_bridge.messages import route_host
+from litellm.rust_bridge.messages.route_host import response
 
 
 def test_response_is_a_detached_public_messages_dict() -> None:

@@ -107,5 +107,12 @@
     "request_body",
     "chunks",
     "error"
+  ],
+  "prepare_messages_request": [
+    "request"
+  ],
+  "transform_messages_response": [
+    "response",
+    "request"
   ]
 }
