@@ -6145,19 +6145,32 @@ def completion_with_retries(*args, **kwargs):
     except Exception as e:
         raise Exception(f"tenacity import failed please run `pip install tenacity`. Error{e}")
 
-    num_retries: Final = kwargs.pop("num_retries", 3)
-    initial_exception: Final = kwargs.pop("_initial_retry_exception", None)
-    # reset retries in .completion()
-    kwargs["max_retries"] = 0
-    kwargs["num_retries"] = 0
-    retry_strategy: Final[RetryStrategy] = kwargs.pop("retry_strategy", "constant_retry")
-    original_function: Final = kwargs.pop("original_function", completion)
+    num_retries: Final = kwargs.get("num_retries", 3)
+    initial_exception: Final = kwargs.get("_initial_retry_exception")
+    retry_strategy: Final[RetryStrategy] = kwargs.get("retry_strategy", "constant_retry")
+    original_function: Final = kwargs.get("original_function", completion)
+    completion_kwargs: Final = {
+        **{
+            key: value
+            for key, value in kwargs.items()
+            if key
+            not in (
+                "num_retries",
+                "_initial_retry_exception",
+                "retry_strategy",
+                "original_function",
+                "max_retries",
+            )
+        },
+        "max_retries": 0,
+        "num_retries": 0,
+    }
     fallback_wait: Final = (
         tenacity.wait_exponential(multiplier=1, max=10)
         if retry_strategy == "exponential_backoff_retry"
         else tenacity.wait_fixed(0)
     )
-    retryer = tenacity.Retrying(
+    retryer: Final = tenacity.Retrying(
         wait=partial(_completion_retry_wait, fallback_wait=fallback_wait),
         stop=tenacity.stop_after_attempt(num_retries),
         reraise=True,
@@ -6166,7 +6179,7 @@ def completion_with_retries(*args, **kwargs):
         initial_retry_after: Final = _completion_retry_after(initial_exception)
         if initial_retry_after is not None:
             retryer.sleep(initial_retry_after)
-    return retryer(original_function, *args, **kwargs)
+    return retryer(original_function, *args, **completion_kwargs)
 
 
 async def acompletion_with_retries(*args, **kwargs):
