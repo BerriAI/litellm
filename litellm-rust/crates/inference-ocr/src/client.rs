@@ -6,7 +6,8 @@ use litellm_llms::base_llm::ocr::{error::Error, handler::OcrClient};
 use litellm_llms_types::formats::ocr::LiteLLMOcrResponse;
 
 use super::{
-    handler::perform_ocr_request,
+    handler::execute,
+    provider_config::resolve_provider_config,
     types::{LiteLLMOcrRequest, OcrDocumentInput, ResolvedOcrRequest},
 };
 
@@ -36,8 +37,8 @@ impl OcrRoute {
     #[tracing::instrument(name = "litellm.route", skip_all, fields(
         route = "ocr",
         model = %request.model,
-        resolved_model = %request.model,
-        provider = <&str>::from(request.config.provider()),
+        provider,
+        resolved_model,
         stream = false,
         outcome
     ))]
@@ -48,12 +49,30 @@ impl OcrRoute {
         observers: Option<&ObservationSender>,
     ) -> Result<LiteLLMOcrResponse, Error> {
         litellm_inference::diagnostic::unary(async {
+            let original_model = request.requested_model.clone();
+            let custom_llm_provider = request.custom_llm_provider.clone();
             let caller_document = matches!(&request.document, OcrDocumentInput::Document(_));
-            let prepared = prepare_request_document(request).await?;
+            let request = resolve_document(request).await?;
+            let (provider, config) =
+                resolve_provider_config(&original_model, custom_llm_provider.as_deref())?;
+            litellm_inference::diagnostic::provider(
+                provider.model,
+                <&'static str>::from(provider.provider),
+            );
+            let secret_names = config.secret_names();
+            let secrets = self
+                .client
+                .secret_source()
+                .resolve(&secret_names)
+                .await
+                .map_err(|error| Error::Secret(Arc::new(error)))?;
             let execute: futures_util::future::BoxFuture<'_, Result<LiteLLMOcrResponse, Error>> =
-                Box::pin(perform_ocr_request(
+                Box::pin(execute(
                     &self.client,
-                    prepared,
+                    config,
+                    provider,
+                    request,
+                    secrets,
                     interceptors,
                     caller_document,
                     observers,
@@ -64,8 +83,7 @@ impl OcrRoute {
     }
 }
 
-#[tracing::instrument(name = "litellm.prepare", level = "debug", skip_all)]
-async fn prepare_request_document(
+async fn resolve_document(
     request: LiteLLMOcrRequest<OcrDocumentInput>,
 ) -> Result<ResolvedOcrRequest, Error> {
     if let OcrDocumentInput::Document(_) = &request.document {
