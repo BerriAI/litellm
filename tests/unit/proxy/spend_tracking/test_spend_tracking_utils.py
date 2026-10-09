@@ -6402,8 +6402,8 @@ def test_spend_logs_payload_whisper():
     payload: SpendLogsPayload = get_logging_payload(
         kwargs=kwargs,
         response_obj=response,
-        start_time=datetime.datetime.now(),
-        end_time=datetime.datetime.now(),
+        start_time=datetime.datetime(2026, 1, 15, 12, 0, 0),
+        end_time=datetime.datetime(2026, 1, 15, 12, 0, 0),
     )
 
     assert payload["call_type"] == "atranscription"
@@ -6437,8 +6437,8 @@ def test_spend_logs_payload_with_prompts_enabled(monkeypatch):
             model="gpt-5-mini",
             usage=litellm.Usage(completion_tokens=2, prompt_tokens=1, total_tokens=3),
         ),
-        "start_time": datetime.datetime.now(),
-        "end_time": datetime.datetime.now(),
+        "start_time": datetime.datetime(2026, 1, 15, 12, 0, 0),
+        "end_time": datetime.datetime(2026, 1, 15, 12, 0, 0),
     }
 
     standard_logging_payload = {
