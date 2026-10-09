@@ -194,6 +194,71 @@ def test_reader_url_assembled_when_host_set_and_url_unset(monkeypatch):
     )
 
 
+@pytest.mark.parametrize(
+    ("writer_override", "reader_override", "writer_region", "reader_region"),
+    [
+        (None, None, "us-east-1", "ap-northeast-1"),
+        ("eu-west-1", "us-west-2", "eu-west-1", "us-west-2"),
+        ("eu-west-1", None, "eu-west-1", "ap-northeast-1"),
+        (None, "us-west-2", "us-east-1", "us-west-2"),
+        ("  ", "", "us-east-1", "ap-northeast-1"),
+        (" eu-west-1 ", " us-west-2 ", "eu-west-1", "us-west-2"),
+    ],
+)
+def test_writer_and_reader_urls_sign_in_their_endpoint_regions(
+    monkeypatch: pytest.MonkeyPatch,
+    writer_override: str | None,
+    reader_override: str | None,
+    writer_region: str,
+    reader_region: str,
+) -> None:
+    for key, value in (("AWS_RDS_REGION", writer_override), ("AWS_RDS_READ_REPLICA_REGION", reader_override)):
+        if value is None:
+            monkeypatch.delenv(key, raising=False)
+        else:
+            monkeypatch.setenv(key, value)
+    monkeypatch.setenv("IAM_TOKEN_DB_AUTH", "true")
+    monkeypatch.setenv("AWS_REGION", "ap-northeast-1")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_DEFAULT_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_REGION_NAME", raising=False)
+    monkeypatch.delenv("AWS_PROFILE_NAME", raising=False)
+    monkeypatch.delenv("AWS_ROLE_NAME", raising=False)
+    monkeypatch.delenv("AWS_ROLE_ARN", raising=False)
+    monkeypatch.delenv("AWS_SESSION_NAME", raising=False)
+    monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN", raising=False)
+    monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+    monkeypatch.setenv("DATABASE_HOST", "writer.abc123.us-east-1.rds.amazonaws.com")
+    monkeypatch.setenv("DATABASE_HOST_READ_REPLICA", "reader.abc123.ap-northeast-1.rds.amazonaws.com")
+    monkeypatch.setenv("DATABASE_USER", "litellm_rds")
+    monkeypatch.setenv("DATABASE_NAME", "litellm_db")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL_READ_REPLICA", raising=False)
+
+    settings: Final = DatabaseURLSettings.from_env()
+    writer_url: Final = settings.build_writer_url()
+    reader_url: Final = settings.build_reader_url()
+
+    assert writer_url is not None
+    assert reader_url is not None
+    writer_password: Final = urllib.parse.urlsplit(writer_url).password
+    reader_password: Final = urllib.parse.urlsplit(reader_url).password
+    assert writer_password is not None
+    assert reader_password is not None
+    writer_token: Final = urllib.parse.unquote(writer_password)
+    reader_token: Final = urllib.parse.unquote(reader_password)
+    writer_query: Final = urllib.parse.urlsplit(writer_token).query
+    reader_query: Final = urllib.parse.urlsplit(reader_token).query
+    writer_credential: Final = urllib.parse.parse_qs(writer_query)["X-Amz-Credential"][0]
+    reader_credential: Final = urllib.parse.parse_qs(reader_query)["X-Amz-Credential"][0]
+
+    assert writer_credential.split("/")[2] == writer_region
+    assert reader_credential.split("/")[2] == reader_region
+
+
 def test_reader_url_not_clobbered_when_already_set(monkeypatch):
     """If the operator pinned DATABASE_URL_READ_REPLICA (e.g. a non-IAM
     reader), the model must leave it untouched even though

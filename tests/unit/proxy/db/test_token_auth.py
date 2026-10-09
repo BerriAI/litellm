@@ -11,6 +11,8 @@ a connection URL.
 import base64
 import json
 from datetime import datetime, timezone
+from typing import Final
+from urllib.parse import parse_qs, unquote, urlsplit
 from unittest.mock import patch
 
 import pytest
@@ -68,7 +70,38 @@ def test_rds_mint_delegates_to_the_sigv4_token_generator():
         db_host="writer.aurora.local",
         db_port="5432",
         db_user="litellm_rds",
+        region=None,
     )
+
+
+def test_rds_mint_signs_each_endpoint_in_its_hostname_region(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AWS_REGION", "ap-northeast-1")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_DEFAULT_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_REGION_NAME", raising=False)
+    monkeypatch.delenv("AWS_SESSION_NAME", raising=False)
+    monkeypatch.delenv("AWS_PROFILE_NAME", raising=False)
+    monkeypatch.delenv("AWS_ROLE_NAME", raising=False)
+    monkeypatch.delenv("AWS_ROLE_ARN", raising=False)
+    monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN", raising=False)
+    monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+
+    writer_token: Final = mint_database_token(
+        RdsIamTokenAuth(),
+        _endpoint(host="writer.abc123.us-east-1.rds.amazonaws.com", user="litellm_rds"),
+    )
+    reader_token: Final = mint_database_token(
+        RdsIamTokenAuth(),
+        _endpoint(host="reader.abc123.ap-northeast-1.rds.amazonaws.com", user="litellm_rds"),
+    )
+    writer_credential: Final = parse_qs(urlsplit(unquote(writer_token)).query)["X-Amz-Credential"][0]
+    reader_credential: Final = parse_qs(urlsplit(unquote(reader_token)).query)["X-Amz-Credential"][0]
+
+    assert writer_credential.split("/")[2] == "us-east-1"
+    assert reader_credential.split("/")[2] == "ap-northeast-1"
 
 
 def test_entra_mint_calls_the_injected_provider_and_encodes_the_token():
