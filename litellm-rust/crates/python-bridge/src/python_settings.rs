@@ -60,7 +60,7 @@ impl PythonSettings {
     }
 }
 
-fn missing_module(py: Python<'_>, error: &PyErr, expected: &str) -> PyResult<bool> {
+pub(crate) fn missing_module(py: Python<'_>, error: &PyErr, expected: &str) -> PyResult<bool> {
     if !error.is_instance_of::<PyModuleNotFoundError>(py) {
         return Ok(false);
     }

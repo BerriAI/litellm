@@ -60,6 +60,22 @@ pub struct LiteLlmParams {
     pub additional_fields: AdditionalFields,
 }
 
+impl LiteLlmParams {
+    /// The additional fields read as a typed value, for the per-provider params this struct
+    /// does not name (`aws_*`, `vertex_*`, ...). A field the type names but cannot hold is a
+    /// config error, as it is for Python's `GenericLiteLLMParams`.
+    pub fn additional<T: serde::de::DeserializeOwned>(&self) -> Result<T, crate::Error> {
+        let mapping = self
+            .additional_fields
+            .iter()
+            .map(|(name, value)| (serde_yaml_ng::Value::from(name.as_str()), value.clone()))
+            .collect();
+        Ok(serde_yaml_ng::from_value(serde_yaml_ng::Value::Mapping(
+            mapping,
+        ))?)
+    }
+}
+
 impl fmt::Debug for LiteLlmParams {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter

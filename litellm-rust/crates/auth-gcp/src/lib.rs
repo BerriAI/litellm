@@ -5,6 +5,7 @@ use litellm_auth_types::{
     CredentialPlacement, Error, InputSource, SecretValue, Sourced, http::apply_credential,
 };
 use moka::future::Cache;
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
@@ -32,6 +33,72 @@ pub const SECRET_NAMES: &[&str] = &[
     VERTEXAI_LOCATION_ENV,
     VERTEX_LOCATION_ENV,
 ];
+
+/// The Vertex AI fields of Python's `GenericLiteLLMParams`, both the current names and the
+/// `vertex_ai_*` spellings `VertexBase.safe_get_vertex_ai_*` still read.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VertexParams {
+    #[serde(default, deserialize_with = "optional_credential_text")]
+    pub vertex_credentials: Option<String>,
+    #[serde(default)]
+    pub vertex_project: Option<String>,
+    #[serde(default)]
+    pub vertex_location: Option<String>,
+    #[serde(default, deserialize_with = "optional_credential_text")]
+    pub vertex_ai_credentials: Option<String>,
+    #[serde(default)]
+    pub vertex_ai_project: Option<String>,
+    #[serde(default)]
+    pub vertex_ai_location: Option<String>,
+}
+
+impl VertexParams {
+    /// The wire names of every field, for hosts that project them out of a caller's kwargs.
+    pub const FIELDS: [&'static str; 6] = [
+        "vertex_credentials",
+        "vertex_project",
+        "vertex_location",
+        "vertex_ai_credentials",
+        "vertex_ai_project",
+        "vertex_ai_location",
+    ];
+
+    pub fn credentials(&self) -> Option<&str> {
+        non_blank(self.vertex_credentials.as_deref())
+            .or_else(|| non_blank(self.vertex_ai_credentials.as_deref()))
+    }
+
+    pub fn project(&self) -> Option<&str> {
+        non_blank(self.vertex_project.as_deref())
+            .or_else(|| non_blank(self.vertex_ai_project.as_deref()))
+    }
+
+    pub fn location(&self) -> Option<&str> {
+        non_blank(self.vertex_location.as_deref())
+            .or_else(|| non_blank(self.vertex_ai_location.as_deref()))
+    }
+}
+
+fn non_blank(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+/// A credential is a service account JSON text or a path to one; a YAML or kwargs mapping is
+/// accepted as the JSON text it spells, the way Python passes a dict through.
+fn optional_credential_text<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    match Option::<Value>::deserialize(deserializer)? {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(text)) => Ok(Some(text)),
+        Some(Value::Object(object)) => serde_json::to_string(&object)
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+        Some(other) => Err(serde::de::Error::custom(format!(
+            "vertex credentials must be a string or an object, got {other}"
+        ))),
+    }
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct VertexConfig {
@@ -66,6 +133,18 @@ impl VertexConfig {
             optional_string(params, &["vertex_project", "vertex_ai_project"])?,
             optional_string(params, &["vertex_location", "vertex_ai_location"])?,
         ))
+    }
+
+    /// The deployment's `litellm_params`, which a host already trusts the way it trusts its
+    /// own configuration.
+    pub fn from_params(params: &VertexParams) -> Self {
+        Self::new(
+            params
+                .credentials()
+                .map(|value| Sourced::new(SecretValue::new(value), InputSource::Deployment)),
+            params.project().map(str::to_string),
+            params.location().map(str::to_string),
+        )
     }
 
     pub fn or_configured(self, project_id: Option<&str>, location: Option<&str>) -> Self {
@@ -105,6 +184,32 @@ pub fn get_vertex_ai_project(
         .project_id()
         .map(str::to_string)
         .or_else(|| non_empty_env(env_lookup, VERTEXAI_PROJECT_ENV))
+}
+
+/// The project a request is billed to when nothing names it: the `project_id` inside the
+/// service account the call would authenticate with. Application default credentials carry
+/// no project that can be read without a token exchange, so they resolve to `None`.
+pub fn get_vertex_ai_project_from_credentials(
+    config: &VertexConfig,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    let text = match credential_source(config, env_lookup) {
+        CredentialSource::Inline(configured) => configured.expose().to_string(),
+        CredentialSource::Trusted(configured) => {
+            let configured = configured.expose();
+            match std::fs::read_to_string(configured) {
+                Ok(contents) if Path::new(configured).is_file() => contents,
+                _ => configured.to_string(),
+            }
+        }
+        CredentialSource::ApplicationCredentials(path) => std::fs::read_to_string(path).ok()?,
+        CredentialSource::Adc => return None,
+    };
+    serde_json::from_str::<Value>(&text)
+        .ok()?
+        .get("project_id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
 pub fn get_vertex_ai_location(

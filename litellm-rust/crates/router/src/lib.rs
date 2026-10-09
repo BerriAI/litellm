@@ -10,11 +10,11 @@ pub use deployment::Deployment;
 pub struct Router(HashMap<String, Deployment>);
 
 impl Router {
-    pub fn from_model_list(model_list: &[Model]) -> Self {
+    pub fn from_model_list(model_list: &[Model]) -> Result<Self, litellm_config::Error> {
         model_list
             .iter()
             .map(|model| {
-                (
+                Ok((
                     model.model_name.clone(),
                     Deployment {
                         model: model.litellm_params.model.clone(),
@@ -25,9 +25,10 @@ impl Router {
                             .map(|value| value.expose().to_string()),
                         api_base: model.litellm_params.api_base.clone(),
                         custom_llm_provider: model.litellm_params.custom_llm_provider.clone(),
+                        litellm_params: model.litellm_params.additional()?,
                         ..Deployment::default()
                     },
-                )
+                ))
             })
             .collect()
     }

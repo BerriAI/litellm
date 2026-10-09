@@ -206,7 +206,7 @@ async fn messages_cache_identity_follows_resolved_configuration_and_request_call
         let cache = ScopedCache::new(cache.clone(), CacheScope::Shared);
         support::messages_route(secrets.clone()).with_cache(cache).execute(MessagesCall {
             body: serde_json::from_value(json!({"model":"anthropic/cache-test-model","messages":[{"role":"user","content":"hello"}],"max_tokens":32})).unwrap(),
-            api_key:None,api_base:None,custom_llm_provider:None,extra_headers:None,provider_specific_header:None,timeout:None,shaping:Default::default(),
+            api_key:None,api_base:None,custom_llm_provider:None,litellm_params:Default::default(),extra_headers:None,provider_specific_header:None,timeout:None,shaping:Default::default(),
         }, &hooks, None).await.unwrap();
     }
     assert_eq!(hooks.calls.load(Ordering::SeqCst), 4);

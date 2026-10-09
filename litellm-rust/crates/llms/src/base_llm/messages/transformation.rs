@@ -1,9 +1,13 @@
 use litellm_llms_types::formats::messages::{MessagesRequest, MessagesResponse};
+use serde_json::Value;
 
 use super::context::MessagesTransformContext;
 
 pub use crate::base_llm::auth::{Headers, ValidatedEnvironment};
-use crate::{Error, base_llm::messages::streaming::StreamDecoder};
+use crate::{
+    Error,
+    base_llm::{litellm_params::LitellmParams, messages::streaming::StreamDecoder},
+};
 
 pub const MESSAGES_PATH_SUFFIX: &str = "/v1/messages";
 
@@ -20,17 +24,10 @@ pub trait BaseMessagesConfig: Sync {
         &self,
         api_base: Option<&str>,
         model: &str,
+        litellm_params: &LitellmParams,
+        stream: bool,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error>;
-
-    fn complete_stream_url(
-        &self,
-        api_base: Option<&str>,
-        model: &str,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        self.get_complete_url(api_base, model, env_lookup)
-    }
 
     fn transform_anthropic_messages_request(
         &self,
@@ -58,6 +55,7 @@ pub trait BaseMessagesConfig: Sync {
         headers: Headers,
         api_key: Option<&str>,
         model: &str,
+        litellm_params: &LitellmParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error>;
 
@@ -74,6 +72,12 @@ pub trait BaseMessagesConfig: Sync {
 
     fn request_headers(&self, headers: Headers, _request: &MessagesRequest) -> Headers {
         headers
+    }
+
+    /// The JSON that goes on the wire, for a host whose body differs from the typed request:
+    /// Python's configs `pop("model")` when the model is addressed by the URL.
+    fn wire_body(&self, body: Value) -> Value {
+        body
     }
 }
 
@@ -94,6 +98,8 @@ mod tests {
             &self,
             _api_base: Option<&str>,
             _model: &str,
+            _litellm_params: &LitellmParams,
+            _stream: bool,
             _env_lookup: &dyn Fn(&str) -> Option<String>,
         ) -> Result<String, Error> {
             Ok(String::new())
@@ -104,6 +110,7 @@ mod tests {
             headers: Headers,
             _api_key: Option<&str>,
             _model: &str,
+            _litellm_params: &LitellmParams,
             _env_lookup: &dyn Fn(&str) -> Option<String>,
         ) -> Result<ValidatedEnvironment, Error> {
             Ok(ValidatedEnvironment {
