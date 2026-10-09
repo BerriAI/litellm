@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 from fastapi import HTTPException, status
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -325,20 +325,34 @@ def _router_serves_model(llm_router: LitellmRouter, model_name: str) -> bool:
     )
 
 
+class _MatchedModelInfo(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+
+
+class _MatchedDeployment(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model_info: _MatchedModelInfo
+
+
+_MATCHED_DEPLOYMENTS_ADAPTER: Final[TypeAdapter[tuple[_MatchedDeployment, ...]]] = TypeAdapter(
+    tuple[_MatchedDeployment, ...]
+)
+
+
 def _wildcard_forwards_missing_model(llm_router: LitellmRouter) -> bool:
     """Whether every wildcard deployment the router would pick for a request with no
     model copies the requested name into its target (`openai/*`), so the provider would
     get a made-up model instead of a fixed one like `openai/gpt-4o`."""
-    matched: Final = llm_router.pattern_router.get_deployments_by_pattern(model=None)  # pyright: ignore[reportArgumentType]  # mirrors the router's own lookup for a missing model
+    matched: Final = _MATCHED_DEPLOYMENTS_ADAPTER.validate_python(
+        llm_router.pattern_router.get_deployments_by_pattern(model=None)  # pyright: ignore[reportArgumentType, reportUnknownMemberType, reportUnknownArgumentType]  # mirrors the router's own lookup for a missing model; it returns untyped dicts
+    )
     targets: Final = tuple(
         deployment.litellm_params.model
         for matched_deployment in matched
-        if (
-            deployment := llm_router.get_deployment(
-                model_id=str((matched_deployment.get("model_info") or {}).get("id"))
-            )
-        )
-        is not None
+        if (deployment := llm_router.get_deployment(model_id=matched_deployment.model_info.id)) is not None
     )
     return all("*" in target for target in targets)
 

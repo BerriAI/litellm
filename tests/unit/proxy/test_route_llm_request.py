@@ -1921,10 +1921,13 @@ def test_router_default_ignored_for_model_the_router_does_not_merge_for(route_ty
 def test_router_default_applies_to_every_model_the_router_serves(model: str, wildcard_target: str | None) -> None:
     from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 
-    raise_if_required_body_param_missing(
-        route_type="anthropic_messages",
-        data={"model": model, "messages": []},
-        llm_router=_router_with_defaults({"max_tokens": 16}, wildcard_target=wildcard_target),
+    assert (
+        raise_if_required_body_param_missing(
+            route_type="anthropic_messages",
+            data={"model": model, "messages": []},
+            llm_router=_router_with_defaults({"max_tokens": 16}, wildcard_target=wildcard_target),
+        )
+        is None
     )
 
 
