@@ -11,6 +11,7 @@ from typing import Final
 import pytest
 from e2e_config import unique_marker
 from e2e_http import unwrap
+from e2e_metadata import Domain, Subject, meta
 from models import ChatBody, ChatMessage, ChatResponse, KeyGenerateBody, SpendLogsParams
 
 from rds_gateway import (
@@ -39,27 +40,32 @@ def _chat_once(gateway: RdsGateway, key: str) -> ChatResponse:
     )
 
 
+def _replica_spend_read_attempt(
+    gateway: RdsGateway, replica_since: datetime, request_id: str
+) -> list[ReplicaConnectionRow]:
+    read_since: Final = replica_now(
+        os.environ["E2E_RDS_READER_HOST"],
+        gateway.reader_region,
+        os.environ["E2E_RDS_USER"],
+        os.environ["E2E_RDS_DATABASE"],
+    )
+    gateway.proxy.spend_logs(SpendLogsParams(request_id=request_id))
+    return replica_connections(
+        os.environ["E2E_RDS_READER_HOST"],
+        gateway.reader_region,
+        os.environ["E2E_RDS_USER"],
+        os.environ["E2E_RDS_DATABASE"],
+        replica_since,
+        read_since,
+    )
+
+
 def _replica_spend_read_witnesses(
     gateway: RdsGateway, replica_since: datetime, request_id: str, *, attempts: int = 5
 ) -> tuple[list[ReplicaConnectionRow], int]:
     """pg_stat_activity only keeps each connection's latest query, so retry the read+inspect pair."""
     for attempt in range(1, attempts + 1):
-        read_since = replica_now(
-            os.environ["E2E_RDS_READER_HOST"],
-            gateway.reader_region,
-            os.environ["E2E_RDS_USER"],
-            os.environ["E2E_RDS_DATABASE"],
-        )
-        gateway.proxy.spend_logs(SpendLogsParams(request_id=request_id))
-        connections = replica_connections(
-            os.environ["E2E_RDS_READER_HOST"],
-            gateway.reader_region,
-            os.environ["E2E_RDS_USER"],
-            os.environ["E2E_RDS_DATABASE"],
-            replica_since,
-            read_since,
-        )
-        if connections:
+        if connections := _replica_spend_read_attempt(gateway, replica_since, request_id):
             return connections, attempt
         if attempt < attempts:
             time.sleep(2)
@@ -90,6 +96,7 @@ class TestRdsIamCrossRegionReplica:
                 {"AWS_RDS_READ_REPLICA_REGION": hostname_region(os.environ["E2E_RDS_WRITER_HOST"])},
             )
 
+    @meta(Subject(domain=Domain.DB))
     def test_cross_region_writer_and_replica_serve_with_no_overrides(
         self, gateway: RdsGateway, replica_since: datetime
     ) -> None:
@@ -111,11 +118,10 @@ class TestRdsIamCrossRegionReplica:
         finally:
             gateway.proxy.delete_key(key)
 
+    @meta(Subject(domain=Domain.DB))
     def test_wrong_reader_override_falls_back_to_writer(self, wrong_reader_gateway: RdsGateway) -> None:
         log: Final = wrong_reader_gateway.log_text()
-        assert "Failed to connect to read replica DB" in log, (
-            "reader signed in the wrong region did not fail at boot"
-        )
+        assert "Failed to connect to read replica DB" in log, "reader signed in the wrong region did not fail at boot"
         assert "Falling back to the writer" in log, "writer fallback was not logged"
         key: Final = wrong_reader_gateway.proxy.generate_key(KeyGenerateBody())
         try:

@@ -18,11 +18,12 @@ import boto3
 import psycopg
 from e2e_config import INHERITED_ENV_PREFIXES, MASTER_KEY, available_port
 from e2e_http import NoBody
+from e2e_metadata import step
 from idp import stop_process_group
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient, build_proxy_client
 from psycopg.rows import class_row
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 RDS_HOSTNAME_PATTERN: Final = re.compile(r"\.([a-z0-9-]+)\.rds\.amazonaws\.com")
 THIRD_REGION_CANDIDATES: Final = ("us-west-2", "eu-west-1", "ap-southeast-2")
@@ -30,11 +31,15 @@ NOVA_MICRO_MODEL: Final = "e2e-rds-nova-micro"
 
 
 class ReplicaConnectionRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     pid: int
     state: str
 
 
 class ReplicaNowRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     now: datetime
 
 
@@ -53,6 +58,7 @@ def _replica_token(reader_host: str, reader_region: str, user: str) -> str:
     return client.generate_db_auth_token(reader_host, 5432, user)
 
 
+@step("Read the current time on the replica {reader_host}")
 def replica_now(reader_host: str, reader_region: str, user: str, database: str) -> datetime:
     with psycopg.Connection[ReplicaNowRow].connect(
         f"host={reader_host} port=5432 user={user} "
@@ -65,6 +71,7 @@ def replica_now(reader_host: str, reader_region: str, user: str, database: str) 
     return row.now
 
 
+@step("List connections on the replica {reader_host} that read LiteLLM_SpendLogs after {read_since}")
 def replica_connections(
     reader_host: str,
     reader_region: str,
@@ -99,6 +106,7 @@ class RdsGateway:
     _command: tuple[str, ...] = field(repr=False)
     _child: subprocess.Popen[bytes] | None = field(default=None, init=False, repr=False)
 
+    @step("Start the owned RDS gateway and wait for /health/liveliness")
     def start(self) -> None:
         with self.log_path.open("ab") as log:
             self._child = subprocess.Popen(
@@ -111,8 +119,7 @@ class RdsGateway:
         deadline: Final = time.monotonic() + 240
         while time.monotonic() < deadline:
             assert self._child.poll() is None, f"owned RDS gateway exited; inspect {self.log_path}"
-            result = self.proxy.transport.probe("/health/liveliness", params=NoBody())
-            if result.status_code == 200:
+            if self.proxy.transport.probe("/health/liveliness", params=NoBody()).status_code == 200:
                 return
             time.sleep(0.5)
         raise AssertionError(f"owned RDS gateway did not become ready; inspect {self.log_path}")
@@ -126,6 +133,7 @@ class RdsGateway:
         return self.log_path.read_text() if self.log_path.exists() else ""
 
 
+@step("Boot an owned proxy against the real RDS writer and replica with overrides {overrides}")
 def owned_rds_gateway(directory: Path, cleanup: ExitStack, overrides: Mapping[str, str]) -> RdsGateway:
     inputs: Final = ("E2E_RDS_WRITER_HOST", "E2E_RDS_READER_HOST", "E2E_RDS_USER", "E2E_RDS_DATABASE")
     for name in inputs:
@@ -146,11 +154,7 @@ def owned_rds_gateway(directory: Path, cleanup: ExitStack, overrides: Mapping[st
     base_url: Final = f"http://127.0.0.1:{port}"
 
     config: Final = directory / "rds-gateway.yaml"
-    config.write_text(
-        "model_list: []\n"
-        "general_settings:\n"
-        "  master_key: os.environ/LITELLM_MASTER_KEY\n"
-    )
+    config.write_text("model_list: []\ngeneral_settings:\n  master_key: os.environ/LITELLM_MASTER_KEY\n")
     stripped: Final = frozenset(
         (
             "DATABASE_URL",
