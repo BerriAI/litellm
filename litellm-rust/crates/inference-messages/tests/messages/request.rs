@@ -600,6 +600,51 @@ async fn metadata_is_reduced_to_the_user_id(call: MessagesCall, #[case] provider
 }
 
 #[rstest]
+#[case::not_streaming(false, ":rawPredict")]
+#[case::streaming(true, ":streamRawPredict?alt=sse")]
+#[tokio::test]
+async fn vertex_ai_addresses_the_model_in_the_url_and_not_in_the_body(
+    call: MessagesCall,
+    #[case] stream: bool,
+    #[case] suffix: &str,
+) {
+    let streamed = ResponseTemplate::new(200).set_body_raw(
+        "event: message_start\ndata: {\"type\":\"message_start\"}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        "text/event-stream",
+    );
+    let upstream = upstream([if stream { streamed } else { message_response() }]).await;
+
+    run(with_fields(
+        MessagesCall {
+            custom_llm_provider: Some("vertex_ai".into()),
+            litellm_params: serde_json::from_value(
+                json!({"vertex_project": "proj", "vertex_location": "us-east5"}),
+            )
+            .unwrap(),
+            api_base: Some(upstream.uri()),
+            extra_headers: headers([("Authorization", "Bearer caller-token")]),
+            ..with_model(call, "claude-sonnet-4-5@20250929")
+        },
+        json!({"stream": stream}),
+    ))
+    .await
+    .expect("messages call succeeds");
+
+    let request = only_request(&upstream).await;
+    assert_eq!(
+        request.url.path().to_string() + request.url.query().map_or("", |_| "?alt=sse"),
+        format!(
+            "/v1/projects/proj/locations/us-east5/publishers/anthropic/models/claude-sonnet-4-5@20250929{suffix}"
+        )
+    );
+    assert_eq!(request.header("authorization"), Some("Bearer caller-token"));
+    assert_eq!(request.header("anthropic-version"), None);
+    let body = request.json();
+    assert_eq!(body.get("model"), None);
+    assert_eq!(body["anthropic_version"], json!("vertex-2023-10-16"));
+}
+
+#[rstest]
 #[case::numeric_user_id(json!({"metadata": {"user_id": 7}}))]
 #[case::missing_max_tokens(json!({"max_tokens": null}))]
 #[tokio::test]
