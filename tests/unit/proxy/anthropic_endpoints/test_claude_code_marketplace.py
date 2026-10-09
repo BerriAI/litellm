@@ -597,3 +597,111 @@ async def test_enable_disable_delete_plugin_reject_non_admin():
 
     table = litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable
     assert (await table.find_unique(where={"name": name})).enabled is True
+
+
+@pytest.mark.asyncio
+async def test_register_plugin():
+    plugin_name = "test-plugin"
+
+    request = RegisterPluginRequest(
+        name=plugin_name,
+        source={"source": "github", "repo": "test-org/test-repo"},
+        version="1.0.0",
+        description="Test plugin for unit tests",
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key=MASTER_KEY,
+        user_id="test-user",
+    )
+
+    response = await register_plugin(
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert response.status == "success"
+    assert response.action == "created"
+    assert response.plugin.name == plugin_name
+    assert response.plugin.version == "1.0.0"
+    assert response.plugin.enabled is True
+
+    stored_plugin = await litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable.find_unique(
+        where={"name": plugin_name}
+    )
+    assert stored_plugin is not None
+    assert stored_plugin.name == plugin_name
+
+
+@pytest.mark.asyncio
+async def test_get_marketplace():
+    plugin_name = "test-marketplace-plugin"
+
+    request = RegisterPluginRequest(
+        name=plugin_name,
+        source={"source": "github", "repo": "test-org/marketplace-test"},
+        version="2.0.0",
+        description="Test plugin for marketplace test",
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key=MASTER_KEY,
+        user_id="test-user",
+    )
+
+    await register_plugin(
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    response = await get_marketplace(request=MagicMock())
+
+    body = json.loads(response.body.decode())
+
+    assert body["name"] == "litellm"
+    assert "plugins" in body
+
+    our_plugin = next((p for p in body["plugins"] if p["name"] == plugin_name), None)
+    assert our_plugin is not None
+    assert our_plugin["source"] == {
+        "source": "github",
+        "repo": "test-org/marketplace-test",
+    }
+    assert our_plugin["version"] == "2.0.0"
+
+
+@pytest.mark.asyncio
+async def test_register_plugin_git_subdir():
+    plugin_name = "test-subdir-plugin"
+
+    request = RegisterPluginRequest(
+        name=plugin_name,
+        source={
+            "source": "git-subdir",
+            "url": "https://github.com/test-org/monorepo.git",
+            "path": "plugins/my-plugin",
+        },
+        version="1.0.0",
+        description="Test git-subdir plugin",
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key=MASTER_KEY,
+        user_id="test-user",
+    )
+
+    response = await register_plugin(
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert response.status == "success"
+    assert response.action == "created"
+    assert response.plugin.name == plugin_name
+    assert response.plugin.source["source"] == "git-subdir"
+    assert response.plugin.source["url"] == "https://github.com/test-org/monorepo.git"
+    assert response.plugin.source["path"] == "plugins/my-plugin"
+    assert response.plugin.enabled is True

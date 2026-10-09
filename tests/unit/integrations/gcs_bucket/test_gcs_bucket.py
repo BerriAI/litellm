@@ -1,27 +1,11 @@
-import io
-
-
-import asyncio
 import json
-import logging
-import tempfile
-from litellm._uuid import uuid
-
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import pytest
 
-import litellm
-from litellm import completion
-from litellm._logging import verbose_logger
-from litellm.integrations.gcs_bucket.gcs_bucket import (
-    GCSBucketLogger,
-    StandardLoggingPayload,
-)
-from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 
 
-# This is the response payload that GCS would return.
 mock_response_data = {
     "id": "chatcmpl-9870a859d6df402795f75dc5fca5b2e0",
     "trace_id": None,
@@ -60,9 +44,7 @@ mock_response_data = {
     "model_group": "fake-openai-endpoint",
     "model_id": "b68d56d76b0c24ac9462ab69541e90886342508212210116e300441155f37865",
     "requester_ip_address": "127.0.0.1",
-    "messages": [
-        {"role": "user", "content": [{"type": "text", "text": "very gm to u"}]}
-    ],
+    "messages": [{"role": "user", "content": [{"type": "text", "text": "very gm to u"}]}],
     "response": {
         "id": "chatcmpl-9870a859d6df402795f75dc5fca5b2e0",
         "created": 1677652288,
@@ -112,12 +94,9 @@ mock_response_data = {
 
 
 @pytest.mark.asyncio
-async def test_get_payload_current_day():
-    """
-    Verify that the payload is returned when it is found on the current day.
-    """
+async def test_get_payload_current_day(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     gcs_logger = GCSBucketLogger()
-    # Use January 1, 2024 as the current day
     start_time = datetime(2024, 1, 1, tzinfo=timezone.utc)
     request_id = mock_response_data["id"]
 
@@ -128,19 +107,14 @@ async def test_get_payload_current_day():
 
     gcs_logger.download_gcs_object = fake_download
 
-    payload = await gcs_logger.get_request_response_payload(
-        request_id, start_time, None
-    )
+    payload = await gcs_logger.get_request_response_payload(request_id, start_time, None)
     assert payload is not None
     assert payload["id"] == request_id
 
 
 @pytest.mark.asyncio
-async def test_get_payload_next_day():
-    """
-    Verify that if the payload is not found on the current day,
-    but is available on the next day, it is returned.
-    """
+async def test_get_payload_next_day(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     gcs_logger = GCSBucketLogger()
     start_time = datetime(2024, 1, 1, tzinfo=timezone.utc)
     request_id = mock_response_data["id"]
@@ -152,19 +126,14 @@ async def test_get_payload_next_day():
 
     gcs_logger.download_gcs_object = fake_download
 
-    payload = await gcs_logger.get_request_response_payload(
-        request_id, start_time, None
-    )
+    payload = await gcs_logger.get_request_response_payload(request_id, start_time, None)
     assert payload is not None
     assert payload["id"] == request_id
 
 
 @pytest.mark.asyncio
-async def test_get_payload_previous_day():
-    """
-    Verify that if the payload is not found on the current or next day,
-    but is available on the previous day, it is returned.
-    """
+async def test_get_payload_previous_day(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     gcs_logger = GCSBucketLogger()
     start_time = datetime(2024, 1, 1, tzinfo=timezone.utc)
     request_id = mock_response_data["id"]
@@ -176,18 +145,14 @@ async def test_get_payload_previous_day():
 
     gcs_logger.download_gcs_object = fake_download
 
-    payload = await gcs_logger.get_request_response_payload(
-        request_id, start_time, None
-    )
+    payload = await gcs_logger.get_request_response_payload(request_id, start_time, None)
     assert payload is not None
     assert payload["id"] == request_id
 
 
 @pytest.mark.asyncio
-async def test_get_payload_not_found():
-    """
-    Verify that if none of the three days contain the payload, None is returned.
-    """
+async def test_get_payload_not_found(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     gcs_logger = GCSBucketLogger()
     start_time = datetime(2024, 1, 1, tzinfo=timezone.utc)
     request_id = mock_response_data["id"]
@@ -197,7 +162,5 @@ async def test_get_payload_not_found():
 
     gcs_logger.download_gcs_object = fake_download
 
-    payload = await gcs_logger.get_request_response_payload(
-        request_id, start_time, None
-    )
+    payload = await gcs_logger.get_request_response_payload(request_id, start_time, None)
     assert payload is None

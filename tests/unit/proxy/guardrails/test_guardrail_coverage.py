@@ -800,6 +800,58 @@ async def test_openai_moderation_reads_model_name_at_call_time(
     fake_router.amoderation.assert_awaited_once_with(model=expected_model, input="hello")
 
 
+@pytest.mark.asyncio
+async def test_openai_moderation_error_raising(monkeypatch):
+    from enterprise.enterprise_hooks.openai_moderation import (
+        ENTERPRISE_OpenAI_Moderation,
+    )
+    from litellm.proxy.utils import hash_token
+    from litellm.types.llms.openai import OpenAIModerationResponse
+
+    monkeypatch.setattr(litellm, "openai_moderations_model_name", "omni-moderation-latest")
+    openai_mod = ENTERPRISE_OpenAI_Moderation()
+    user_api_key_dict = UserAPIKeyAuth(api_key=hash_token("sk-98765"))
+
+    llm_router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "omni-moderation-latest",
+                "litellm_params": {
+                    "model": "omni-moderation-latest",
+                    "api_key": "fake-key",
+                },
+            }
+        ]
+    )
+
+    mock_response = MagicMock(spec=OpenAIModerationResponse)
+    mock_response.results = [MagicMock(flagged=True)]
+
+    async def mock_amoderation(*args, **kwargs):
+        return mock_response
+
+    llm_router.amoderation = mock_amoderation
+
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", llm_router)
+
+    with pytest.raises(Exception, match="Violated content safety policy") as exc_info:
+        await openai_mod.async_moderation_hook(
+            data={
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "fuck off you're the worst",
+                    }
+                ]
+            },
+            user_api_key_dict=user_api_key_dict,
+            call_type="completion",
+        )
+    assert "Violated content safety policy" in str(exc_info.value)
+
+
 # ── Google Text Moderation ────────────────────────────────────────────────────
 
 
