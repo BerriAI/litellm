@@ -4060,8 +4060,12 @@ oauth_token_exchange_litellm_params: Final = (
     "token_exchange_profile",
     "token_exchange_scope",
 )
+github_copilot_oauth_litellm_params: Final = ("github_copilot_auth_type",)
 server_owned_wif_litellm_params: Final = (
-    anthropic_wif_litellm_params + openai_wif_litellm_params + oauth_token_exchange_litellm_params
+    anthropic_wif_litellm_params
+    + openai_wif_litellm_params
+    + oauth_token_exchange_litellm_params
+    + github_copilot_oauth_litellm_params
 )
 secret_bearing_wif_litellm_params: Final = tuple(sorted(WIF_SECRET_BEARING_KEYS))
 

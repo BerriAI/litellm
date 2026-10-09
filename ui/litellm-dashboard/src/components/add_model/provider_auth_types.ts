@@ -12,7 +12,30 @@ export interface ProviderAuthType {
 
 const EMPTY_PROVIDER_AUTH_TYPES: readonly ProviderAuthType[] = [];
 
+export const GITHUB_COPILOT_AUTH_TYPE_KEY = "github_copilot_auth_type";
+export const GITHUB_COPILOT_PER_USER_AUTH_TYPE = "per_user_oauth";
+
 export const PROVIDER_AUTH_TYPES: Partial<Record<keyof typeof Providers, readonly ProviderAuthType[]>> = {
+  GITHUB_COPILOT: [
+    {
+      id: "shared_device_login",
+      label: "Shared device login",
+      description:
+        "One GitHub device login on the proxy host, stored in its token file, is used for every caller of models on this credential.",
+      fieldKeys: ["api_base", "api_key"],
+      requiredFieldKeys: [],
+    },
+    {
+      id: GITHUB_COPILOT_PER_USER_AUTH_TYPE,
+      label: "Per-user GitHub OAuth",
+      credentialOnly: true,
+      description:
+        "Each LiteLLM user connects their own GitHub account from LLM Credentials, and their requests use their own GitHub Copilot access. Users who have not connected get a 401.",
+      fieldKeys: [GITHUB_COPILOT_AUTH_TYPE_KEY],
+      requiredFieldKeys: [GITHUB_COPILOT_AUTH_TYPE_KEY],
+      fixedValues: { [GITHUB_COPILOT_AUTH_TYPE_KEY]: GITHUB_COPILOT_PER_USER_AUTH_TYPE },
+    },
+  ],
   MICROSOFT_365_COPILOT: [
     {
       id: "oauth_token_exchange",

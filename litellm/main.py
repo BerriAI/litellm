@@ -642,10 +642,17 @@ async def acompletion(
         "enable_json_schema_validation": enable_json_schema_validation,
     }
     if custom_llm_provider is None:
+        _supplemental: Final = cast(  # cast-ok: kwargs values are request-scoped objects
+            "dict[str, object]", {k: kwargs[k] for k in OPTIONAL_KWARGS_KEYS if k in kwargs}
+        )
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider,
-            api_base=kwargs.get("api_base") or base_url,
+            api_base=cast(  # cast-ok: api_base arrives as a str in the request kwargs
+                "str | None", kwargs.get("api_base")
+            )
+            or base_url,
+            litellm_params=(GenericLiteLLMParams.model_validate(_supplemental) if _supplemental else None),
         )
 
     fallbacks = fallbacks or litellm.model_fallbacks
@@ -2649,13 +2656,22 @@ def _complete_custom_openai(
         from litellm.llms.github_copilot.authenticator import Authenticator
         from litellm.llms.github_copilot.common_utils import (
             get_copilot_default_headers,
+            pin_session_authorization,
+        )
+        from litellm.llms.github_copilot.per_user_auth import (
+            require_github_copilot_user_session,
         )
 
-        copilot_auth: Final = Authenticator()
-        copilot_api_key: Final = copilot_auth.get_api_key()
-        copilot_headers: Final = get_copilot_default_headers(copilot_api_key)
+        user_session: Final = require_github_copilot_user_session(litellm_params)
+        copilot_headers: Final = get_copilot_default_headers(
+            user_session.token if user_session is not None else Authenticator().get_api_key()
+        )
         if extra_headers:
-            copilot_headers.update(extra_headers)
+            copilot_headers.update(
+                cast("dict[str, str]", extra_headers)  # cast-ok: extra_headers is a str-valued request dict
+            )
+        if user_session is not None:
+            pin_session_authorization(copilot_headers, user_session.token)
         extra_headers = copilot_headers
 
     use_base_llm_http_handler: Final = get_secret_bool("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER")
@@ -5790,6 +5806,8 @@ def completion(
                     *ANTHROPIC_WIF_KWARGS_KEYS,
                     *OPENAI_WIF_KWARGS_KEYS,
                     *OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
+                    "github_copilot_auth_type",
+                    "github_copilot_user_session",
                     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
                     "fireworks_forward_user_id",
                 )
@@ -6483,17 +6501,24 @@ def embedding(
     default_params: Final = [*openai_params, "aembedding", "extra_headers"]
     non_default_params: Final = filter_out_litellm_params(kwargs, excluding=default_params)
 
+    litellm_params_dict: Final = get_litellm_params(**kwargs)
+
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
         model=model,
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
         api_key=api_key,
+        litellm_params=GenericLiteLLMParams(**kwargs),
     )
 
     if dynamic_api_key is not None:
         api_key = dynamic_api_key
 
-    allowed_openai_params: Final[list[str] | None] = kwargs.get("allowed_openai_params", None)
+    allowed_openai_params: Final[list[str] | None] = (
+        cast(  # cast-ok: allowed_openai_params arrives as a str list in the request kwargs
+            "list[str] | None", kwargs.get("allowed_openai_params", None)
+        )
+    )
     optional_params: Final = get_optional_params_embeddings(
         model=model,
         user=user,
@@ -6517,8 +6542,6 @@ def embedding(
             kwargs=kwargs,
             model_info=kwargs.get("model_info"),
         )
-
-    litellm_params_dict: Final = get_litellm_params(**kwargs)
 
     logging: Final[LiteLLMLoggingObj] = litellm_logging_obj
     logging.update_environment_variables(

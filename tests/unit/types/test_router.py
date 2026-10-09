@@ -19,6 +19,7 @@ from litellm.types.utils import (
     CustomPricingLiteLLMParams,
     MirroredPricingParams,
     anthropic_wif_litellm_params,
+    github_copilot_oauth_litellm_params,
     oauth_token_exchange_litellm_params,
     openai_wif_litellm_params,
     server_owned_wif_litellm_params,
@@ -242,9 +243,7 @@ def test_model_info_rejects_offset_aware_access_window_times():
     with pytest.raises(ValidationError):
         ModelInfo(
             id="x",
-            access_windows=[
-                {"start": "22:00+05:00", "end": "06:00", "timezone": "UTC", "team_ids": ["t"]}
-            ],
+            access_windows=[{"start": "22:00+05:00", "end": "06:00", "timezone": "UTC", "team_ids": ["t"]}],
         )
 
 
@@ -333,8 +332,12 @@ def test_server_owned_registry_includes_anthropic_openai_and_oauth_token_exchang
         "token_exchange_profile",
         "token_exchange_scope",
     )
+    assert github_copilot_oauth_litellm_params == ("github_copilot_auth_type",)
     assert server_owned_wif_litellm_params == (
-        anthropic_wif_litellm_params + openai_wif_litellm_params + oauth_token_exchange_litellm_params
+        anthropic_wif_litellm_params
+        + openai_wif_litellm_params
+        + oauth_token_exchange_litellm_params
+        + github_copilot_oauth_litellm_params
     )
     assert set(openai_wif_litellm_params) == {
         "openai_identity_provider_id",

@@ -75,6 +75,16 @@ vi.mock("../networking", async () => {
           { key: "api_key", label: "Delegated Access Token", field_type: "password" },
         ],
       },
+      {
+        provider: "GITHUB_COPILOT",
+        provider_display_name: "Github Copilot",
+        litellm_provider: "github_copilot",
+        default_model_placeholder: "github_copilot/chat",
+        credential_fields: [
+          { key: "api_base", label: "API Base", field_type: "text" },
+          { key: "api_key", label: "API Key", field_type: "password" },
+        ],
+      },
     ]),
   };
 });
@@ -108,6 +118,16 @@ vi.mock("@/app/(dashboard)/hooks/providers/useProviderFields", () => ({
           { key: "token_exchange_scope", label: "Scope", field_type: "text" },
           { key: "token_exchange_audience", label: "Audience", field_type: "text" },
           { key: "api_key", label: "Delegated Access Token", field_type: "password" },
+        ],
+      },
+      {
+        provider: "GITHUB_COPILOT",
+        provider_display_name: "Github Copilot",
+        litellm_provider: "github_copilot",
+        default_model_placeholder: "github_copilot/chat",
+        credential_fields: [
+          { key: "api_base", label: "API Base", field_type: "text" },
+          { key: "api_key", label: "API Key", field_type: "password" },
         ],
       },
     ],
@@ -555,11 +575,11 @@ describe("AddModelForm", () => {
   });
 
   describe("credential-only provider auth types", () => {
-    const renderAsAdmin = async () => {
+    const renderAsAdmin = async (selectedProvider = Providers.MICROSOFT_365_COPILOT) => {
       const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
       mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
       const props = createTestProps();
-      props.selectedProvider = Providers.MICROSOFT_365_COPILOT;
+      props.selectedProvider = selectedProvider;
       renderWithProviders(<AddModelForm {...props} />);
       await screen.findByText("Existing Credentials");
       return props;
@@ -672,6 +692,94 @@ describe("AddModelForm", () => {
       await waitFor(() => expect(modelCreateCall).toHaveBeenCalledOnce());
       expect(vi.mocked(modelCreateCall).mock.calls[0][1].litellm_params).toMatchObject({
         api_key: "delegated-token",
+      });
+    });
+
+    it("creates a per-user GitHub credential and attaches it without sending its auth type inline", async () => {
+      const user = userEvent.setup();
+      vi.mocked(credentialCreateCall).mockClear();
+      vi.mocked(modelCreateCall).mockClear();
+      const props = await renderAsAdmin(Providers.GITHUB_COPILOT);
+
+      await chooseSelectOption(user, screen.getByRole("combobox", { name: "Auth Type:" }), "Per-user GitHub OAuth");
+      await user.click(screen.getByRole("button", { name: "Create credential" }));
+      const dialog = await screen.findByRole("dialog");
+      const providerSelect = within(dialog).getByPlaceholderText("Select a provider");
+      expect(providerSelect).toHaveValue(Providers.GITHUB_COPILOT);
+      expect(providerSelect).toBeDisabled();
+      expect(within(dialog).getByRole("combobox", { name: "Auth Type:" })).toHaveTextContent("Per-user GitHub OAuth");
+      fireEvent.change(within(dialog).getByLabelText("Credential Name:"), {
+        target: { value: "github-per-user" },
+      });
+      await user.click(within(dialog).getByRole("button", { name: "Add Credential" }));
+
+      await waitFor(() =>
+        expect(credentialCreateCall).toHaveBeenCalledWith("test-access-token", {
+          credential_name: "github-per-user",
+          credential_values: { github_copilot_auth_type: "per_user_oauth" },
+          credential_info: { custom_llm_provider: Providers.GITHUB_COPILOT },
+        }),
+      );
+      expect(props.form.getValues("litellm_credential_name")).toBe("github-per-user");
+
+      props.handleOk.mockImplementation(async () => {
+        await handleAddModelSubmit(
+          {
+            litellm_credential_name: props.form.getValues("litellm_credential_name"),
+            custom_llm_provider: Providers.GITHUB_COPILOT,
+            model_mappings: [
+              {
+                public_name: "copilot-model",
+                litellm_model: "github_copilot/chat",
+              },
+            ],
+          },
+          "test-access-token",
+          { resetFields: vi.fn() },
+        );
+        return true;
+      });
+      await user.click(screen.getByRole("button", { name: "Add Model" }));
+
+      await waitFor(() => expect(modelCreateCall).toHaveBeenCalledOnce());
+      const modelParams = vi.mocked(modelCreateCall).mock.calls[0][1].litellm_params;
+      expect(modelParams).toMatchObject({ litellm_credential_name: "github-per-user" });
+      expect(modelParams).not.toHaveProperty("github_copilot_auth_type");
+    });
+
+    it("keeps shared GitHub device login inline when adding a model", async () => {
+      const user = userEvent.setup();
+      vi.mocked(credentialCreateCall).mockClear();
+      vi.mocked(modelCreateCall).mockClear();
+      const props = await renderAsAdmin(Providers.GITHUB_COPILOT);
+
+      expect(await screen.findByRole("combobox", { name: "Auth Type:" })).toHaveTextContent("Shared device login");
+      expect(screen.queryByRole("button", { name: "Create credential" })).not.toBeInTheDocument();
+      fireEvent.change(screen.getByLabelText("API Key"), { target: { value: "shared-device-token" } });
+      props.handleOk.mockImplementation(async () => {
+        await handleAddModelSubmit(
+          {
+            api_key: "shared-device-token",
+            custom_llm_provider: Providers.GITHUB_COPILOT,
+            model_mappings: [
+              {
+                public_name: "copilot-model",
+                litellm_model: "github_copilot/chat",
+              },
+            ],
+          },
+          "test-access-token",
+          { resetFields: vi.fn() },
+        );
+        return true;
+      });
+
+      await user.click(screen.getByRole("button", { name: "Add Model" }));
+
+      await waitFor(() => expect(modelCreateCall).toHaveBeenCalledOnce());
+      expect(credentialCreateCall).not.toHaveBeenCalled();
+      expect(vi.mocked(modelCreateCall).mock.calls[0][1].litellm_params).toMatchObject({
+        api_key: "shared-device-token",
       });
     });
   });

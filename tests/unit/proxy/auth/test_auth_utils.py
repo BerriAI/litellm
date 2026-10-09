@@ -2498,6 +2498,67 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert out["organization"] == "org-attacker"
         assert out["extra_body"] == {"attacker": "value"}
 
+    def test_per_user_oauth_credential_survives_base_override(self):
+        # Fail-closed: a caller-redirected api_base must not drop
+        # litellm_credential_name / github_copilot_auth_type off a per-user
+        # deployment, which would flip the call to shared mode and send the
+        # admin's Copilot token to the attacker's host. Keeping them is safe
+        # because per-user mode ignores the caller api_base anyway.
+        from litellm.router_utils.clientside_credential_handler import (
+            get_dynamic_litellm_params,
+        )
+        from litellm.types.utils import CredentialItem
+
+        with patch.object(
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="copilot-cred",
+                    credential_values={"github_copilot_auth_type": "per_user_oauth"},
+                    credential_info={},
+                )
+            ],
+        ):
+            out = get_dynamic_litellm_params(
+                litellm_params={
+                    "model": "github_copilot/gpt-4o",
+                    "litellm_credential_name": "copilot-cred",
+                    "github_copilot_auth_type": "per_user_oauth",
+                },
+                request_kwargs={"api_base": "https://attacker.example"},
+            )
+        assert out["litellm_credential_name"] == "copilot-cred"
+        assert out["github_copilot_auth_type"] == "per_user_oauth"
+        assert out["api_base"] == "https://attacker.example"
+
+    def test_shared_oauth_credential_name_is_cleared_on_base_override(self):
+        from litellm.router_utils.clientside_credential_handler import (
+            get_dynamic_litellm_params,
+        )
+        from litellm.types.utils import CredentialItem
+
+        with patch.object(
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="copilot-cred",
+                    credential_values={"github_copilot_auth_type": "shared"},
+                    credential_info={},
+                )
+            ],
+        ):
+            out = get_dynamic_litellm_params(
+                litellm_params={
+                    "model": "github_copilot/gpt-4o",
+                    "litellm_credential_name": "copilot-cred",
+                    "github_copilot_auth_type": "shared",
+                },
+                request_kwargs={"api_base": "https://attacker.example"},
+            )
+        assert "github_copilot_auth_type" not in out
+
     def test_field_echo_does_not_preserve_admin_value(self):
         # Regression: a caller that echoes an admin-config field name with
         # an *empty* value (or any value) must not be able to keep the
@@ -4384,6 +4445,24 @@ def test_get_model_from_request_vertex_ai_passthrough(
 
     model = get_model_from_request(request_data, route)
     assert model == expected_model
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["github_copilot_auth_type", "user_provider_credentials", "github_copilot_user_session"],
+)
+def test_per_user_credential_slots_in_request_body_are_rejected(field: str) -> None:
+    """The per-user Copilot mode is decided by the stored credential's values and the caller's
+    connection by proxy-injected secret_fields; a body-supplied value could only spoof either."""
+    with pytest.raises(ValueError, match="Rejected Request") as error:
+        is_request_body_safe(
+            request_body={"model": "github_copilot/gpt-4o", field: "attacker-chosen"},
+            general_settings={},
+            llm_router=None,
+            model="github_copilot/gpt-4o",
+        )
+
+    assert field in str(error.value)
 
 
 def test_get_end_user_id_from_request_body_always_returns_str():

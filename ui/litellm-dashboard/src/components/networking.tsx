@@ -2599,6 +2599,59 @@ export const credentialDeleteCall = async (accessToken: string, credentialName: 
   }
 };
 
+export interface UserProviderConnection {
+  credential_name: string;
+  provider: string;
+  connected: boolean;
+  github_login: string | null;
+  connected_at: string | null;
+}
+
+export interface UserProviderConnectionsResponse {
+  connections: UserProviderConnection[];
+}
+
+export interface UserConnectionStartResponse {
+  user_code: string;
+  verification_uri: string;
+  expires_in: number;
+  interval: number;
+  flow_handle: string;
+}
+
+export type UserConnectionPollStatus = "pending" | "slow_down" | "expired" | "denied" | "no_copilot_seat" | "connected";
+
+export interface UserConnectionPollResponse {
+  status: UserConnectionPollStatus;
+  interval?: number | null;
+  github_login?: string | null;
+}
+
+const userConnectionPath = (credentialName: string): string =>
+  `/credentials/${encodeURIComponent(credentialName)}/user_connection`;
+
+export const userConnectionsListCall = (accessToken: string): Promise<UserProviderConnectionsResponse> =>
+  apiClient.get<UserProviderConnectionsResponse>("/credentials/user_connections", { accessToken });
+
+export const userConnectionStartCall = (
+  accessToken: string,
+  credentialName: string,
+): Promise<UserConnectionStartResponse> =>
+  apiClient.post<UserConnectionStartResponse>(`${userConnectionPath(credentialName)}/start`, { accessToken });
+
+export const userConnectionPollCall = (
+  accessToken: string,
+  credentialName: string,
+  flowHandle: string,
+): Promise<UserConnectionPollResponse> =>
+  apiClient.post<UserConnectionPollResponse>(`${userConnectionPath(credentialName)}/poll`, {
+    accessToken,
+    body: { flow_handle: flowHandle },
+  });
+
+export const userConnectionDeleteCall = (accessToken: string, credentialName: string): Promise<void> =>
+  apiClient.delete<void>(userConnectionPath(credentialName), { accessToken });
+
 export const credentialUpdateCall = async (
   accessToken: string,
   credentialName: string,
