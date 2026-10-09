@@ -11,7 +11,7 @@ import litellm
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.anthropic.pass_through.utils import is_reasoning_auto_summary_enabled
 from litellm.rust_bridge import failures
-from litellm.rust_bridge.public_call import optional_str
+from litellm.rust_bridge.public_call import optional_sequence, optional_str
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 
 _DROP_PATHS: Final = TypeAdapter(list[object])
@@ -25,7 +25,7 @@ class MessagesSettings:
 
 
 def _listed(value: object) -> tuple[object, ...]:
-    return tuple(value) if isinstance(value, (list, tuple)) else ()
+    return tuple(optional_sequence(value) or ())
 
 
 def decline_reason(request: Mapping[str, object]) -> str | None:

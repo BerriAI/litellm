@@ -369,8 +369,9 @@ def _responses_api_optional_request_param_names() -> frozenset[str]:
 
 
 def _custom_logger_callbacks(logging_obj: LiteLLMLoggingObj) -> list["CustomLogger"]:
-    dynamic_success_callbacks: Final = getattr(logging_obj, "dynamic_success_callbacks", None)
-    dynamic: Final = dynamic_success_callbacks if isinstance(dynamic_success_callbacks, (list, tuple)) else ()
+    from litellm.rust_bridge.public_call import optional_sequence
+
+    dynamic: Final = optional_sequence(getattr(logging_obj, "dynamic_success_callbacks", None)) or ()
     return list(resolve_custom_loggers((*litellm.callbacks, *dynamic)))
 
 
@@ -394,12 +395,11 @@ def overrides_agentic_loop_gate(callbacks: Iterable["CustomLogger"]) -> bool:
     """
     from litellm.integrations.custom_logger import CustomLogger
 
-    base_func: Final = CustomLogger.async_should_run_agentic_loop
-    base: Final = getattr(base_func, "__func__", base_func)
+    base_func: Final[object] = CustomLogger.async_should_run_agentic_loop
 
     def overridden(cb: "CustomLogger") -> bool:
-        cb_func: Final = getattr(type(cb), "async_should_run_agentic_loop", base_func)
-        return getattr(cb_func, "__func__", cb_func) is not base
+        cb_func: Final[object] = getattr(type(cb), "async_should_run_agentic_loop", base_func)
+        return getattr(cb_func, "__func__", cb_func) is not getattr(base_func, "__func__", base_func)
 
     return any(map(overridden, callbacks))
 
