@@ -42,7 +42,7 @@ jobs:
           - arch: arm64
             runner: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Build native Lens service
@@ -80,7 +80,7 @@ jobs:
           docker push "$IMAGE"
           mkdir -p digests
           docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE" > "digests/$ARCH"
-      - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: github.event_name != 'pull_request' && github.repository == 'BerriAI/litellm' && github.ref == 'refs/heads/main'
         with:
           name: lens-digest-${{ matrix.arch }}
@@ -95,7 +95,7 @@ jobs:
     permissions:
       packages: write
     steps:
-      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: lens-digest-*
           merge-multiple: true
