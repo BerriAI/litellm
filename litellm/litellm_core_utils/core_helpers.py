@@ -316,8 +316,12 @@ _router_callback_metadata_adapter: Final = TypeAdapter(Mapping[str, object])
 
 def get_router_callback_metadata(kwargs: Mapping[str, object]) -> Mapping[str, object]:
     litellm_params: Final = _router_callback_metadata_adapter.validate_python(kwargs.get("litellm_params") or {})
+    model_info: Final = _router_callback_metadata_adapter.validate_python(litellm_params.get("model_info") or {})
+    metadata_key: Final = model_info.get("router_metadata_variable_name")
+    if metadata_key in ("metadata", "litellm_metadata"):
+        return _router_callback_metadata_adapter.validate_python(litellm_params.get(str(metadata_key)) or {})
     return _router_callback_metadata_adapter.validate_python(
-        litellm_params.get(get_metadata_variable_name_from_kwargs(litellm_params)) or {}
+        litellm_params.get("litellm_metadata") or litellm_params.get("metadata") or {}
     )
 
 

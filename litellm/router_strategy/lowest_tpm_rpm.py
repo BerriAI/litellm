@@ -43,6 +43,11 @@ class LowestTPMLoggingHandler(CustomLogger):
         try:
             callback_metadata: Final = get_router_callback_metadata(callback_kwargs)
             local_only: Final = callback_metadata.get("router_cache_id", self.router_cache_id) != self.router_cache_id
+            measurement_cache: Final = (
+                self.router_cache
+                if local_only or self.router_cache.redis_cache is None
+                else self.router_cache.redis_cache
+            )
             """
             Update TPM/RPM usage on success
             """
@@ -73,7 +78,7 @@ class LowestTPMLoggingHandler(CustomLogger):
                 # ------------
 
                 ## TPM
-                request_count_dict = self.router_cache.get_cache(key=tpm_key, local_only=local_only) or {}
+                request_count_dict = measurement_cache.get_cache(key=tpm_key, local_only=local_only) or {}
                 request_count_dict[id] = request_count_dict.get(id, 0) + total_tokens
 
                 self.router_cache.set_cache(
@@ -81,7 +86,7 @@ class LowestTPMLoggingHandler(CustomLogger):
                 )
 
                 ## RPM
-                request_count_dict = self.router_cache.get_cache(key=rpm_key, local_only=local_only) or {}
+                request_count_dict = measurement_cache.get_cache(key=rpm_key, local_only=local_only) or {}
                 request_count_dict[id] = request_count_dict.get(id, 0) + 1
 
                 self.router_cache.set_cache(
@@ -105,6 +110,11 @@ class LowestTPMLoggingHandler(CustomLogger):
         try:
             callback_metadata: Final = get_router_callback_metadata(callback_kwargs)
             local_only: Final = callback_metadata.get("router_cache_id", self.router_cache_id) != self.router_cache_id
+            measurement_cache: Final = (
+                self.router_cache
+                if local_only or self.router_cache.redis_cache is None
+                else self.router_cache.redis_cache
+            )
             """
             Update TPM/RPM usage on success
             """
@@ -141,7 +151,7 @@ class LowestTPMLoggingHandler(CustomLogger):
                 # update cache
 
                 ## TPM
-                request_count_dict = await self.router_cache.async_get_cache(key=tpm_key, local_only=local_only) or {}
+                request_count_dict = await measurement_cache.async_get_cache(key=tpm_key, local_only=local_only) or {}
                 request_count_dict[id] = request_count_dict.get(id, 0) + total_tokens
 
                 await self.router_cache.async_set_cache(
@@ -149,7 +159,7 @@ class LowestTPMLoggingHandler(CustomLogger):
                 )
 
                 ## RPM
-                request_count_dict = await self.router_cache.async_get_cache(key=rpm_key, local_only=local_only) or {}
+                request_count_dict = await measurement_cache.async_get_cache(key=rpm_key, local_only=local_only) or {}
                 request_count_dict[id] = request_count_dict.get(id, 0) + 1
 
                 await self.router_cache.async_set_cache(

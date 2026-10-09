@@ -4175,6 +4175,7 @@ class Router:
         metadata_variable_name: Final = get_router_metadata_variable_name(
             function_name=function_name,
         )
+        model_info["router_metadata_variable_name"] = metadata_variable_name
 
         kwargs.setdefault(metadata_variable_name, {}).update(
             {

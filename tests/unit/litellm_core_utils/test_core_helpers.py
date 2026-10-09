@@ -1,7 +1,7 @@
 """Tests for litellm_core_utils.core_helpers module."""
 
 import logging
-from typing import Final
+from typing import Final, Literal
 
 import httpx
 import pytest
@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_parent_otel_span_from_kwargs,
     get_or_create_metadata_bucket,
     get_provider_response_headers_from_hidden_params,
+    get_router_callback_metadata,
     map_finish_reason,
     normalize_drop_params,
     process_response_headers,
@@ -586,3 +587,40 @@ class TestProviderResponseHeadersInHiddenParams:
 
         assert get_provider_response_headers_from_hidden_params(sibling) is None
         assert "additional_headers" not in sibling._hidden_params
+
+
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize("alternate_metadata", [None, {}, {"model_group": "wrong", "router_cache_id": "foreign"}])
+def test_router_callback_metadata_uses_the_server_selected_bucket(
+    metadata_key: Literal["metadata", "litellm_metadata"], alternate_metadata: dict[str, str] | None
+) -> None:
+    from litellm import Router
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+
+    router: Final = Router(model_list=[])
+    routing_metadata: Final = {"model_group": "test-model"}
+    alternate_key: Final = "litellm_metadata" if metadata_key == "metadata" else "metadata"
+    request_kwargs: Final = {metadata_key: routing_metadata, alternate_key: alternate_metadata}
+    deployment: Final = {
+        "model_name": "test-model",
+        "litellm_params": {"model": "openai/test-model"},
+        "model_info": {"id": "dep-1", "router_metadata_variable_name": alternate_key},
+    }
+    try:
+        router._update_kwargs_with_deployment(
+            deployment=deployment,
+            kwargs=request_kwargs,
+            function_name="generic_api_call" if metadata_key == "litellm_metadata" else "completion",
+        )
+        callback_params: Final = get_litellm_params(
+            metadata=request_kwargs.get("metadata"),
+            litellm_metadata=request_kwargs.get("litellm_metadata"),
+            model_info=request_kwargs["model_info"],
+        )
+        selected_metadata: Final = get_router_callback_metadata({"litellm_params": callback_params})
+
+        assert selected_metadata["router_cache_id"] == str(id(router.cache))
+        assert selected_metadata["model_group"] == routing_metadata["model_group"]
+        assert selected_metadata["model_info"]["id"] == deployment["model_info"]["id"]
+    finally:
+        router.discard()

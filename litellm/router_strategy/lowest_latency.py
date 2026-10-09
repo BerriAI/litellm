@@ -75,6 +75,11 @@ class LowestLatencyLoggingHandler(CustomLogger):
         try:
             callback_metadata: Final = get_router_callback_metadata(callback_kwargs)
             local_only: Final = callback_metadata.get("router_cache_id", self.router_cache_id) != self.router_cache_id
+            measurement_cache: Final = (
+                self.router_cache
+                if local_only or self.router_cache.redis_cache is None
+                else self.router_cache.redis_cache
+            )
             """
             Update latency usage on success
             """
@@ -146,7 +151,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 # ------------
                 parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
                 request_count_dict: Final = (
-                    self.router_cache.get_cache(
+                    measurement_cache.get_cache(
                         key=latency_key, parent_otel_span=parent_otel_span, local_only=local_only
                     )
                     or {}
@@ -211,6 +216,11 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 local_only: Final = (
                     callback_metadata.get("router_cache_id", self.router_cache_id) != self.router_cache_id
                 )
+                measurement_cache: Final = (
+                    self.router_cache
+                    if local_only or self.router_cache.redis_cache is None
+                    else self.router_cache.redis_cache
+                )
                 if not callback_metadata:
                     pass
                 else:
@@ -237,7 +247,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     """
                     latency_key: Final = f"{model_group}_map"
                     request_count_dict: Final = (
-                        await self.router_cache.async_get_cache(key=latency_key, local_only=local_only) or {}
+                        await measurement_cache.async_get_cache(key=latency_key, local_only=local_only) or {}
                     )
 
                     if id not in request_count_dict:
@@ -271,6 +281,11 @@ class LowestLatencyLoggingHandler(CustomLogger):
         try:
             callback_metadata: Final = get_router_callback_metadata(callback_kwargs)
             local_only: Final = callback_metadata.get("router_cache_id", self.router_cache_id) != self.router_cache_id
+            measurement_cache: Final = (
+                self.router_cache
+                if local_only or self.router_cache.redis_cache is None
+                else self.router_cache.redis_cache
+            )
             """
             Update latency usage on success
             """
@@ -341,10 +356,10 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 # ------------
                 parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
                 request_count_dict: Final = (
-                    await self.router_cache.async_get_cache(
+                    await measurement_cache.async_get_cache(
                         key=latency_key,
                         parent_otel_span=parent_otel_span,
-                        local_only=True,
+                        local_only=local_only,
                     )
                     or {}
                 )

@@ -35,6 +35,11 @@ class LowestCostLoggingHandler(CustomLogger):
         try:
             callback_metadata: Final = get_router_callback_metadata(callback_kwargs)
             local_only: Final = callback_metadata.get("router_cache_id", self.router_cache_id) != self.router_cache_id
+            measurement_cache: Final = (
+                self.router_cache
+                if local_only or self.router_cache.redis_cache is None
+                else self.router_cache.redis_cache
+            )
             """
             Update usage on success
             """
@@ -78,7 +83,7 @@ class LowestCostLoggingHandler(CustomLogger):
                 # Update usage
                 # ------------
 
-                request_count_dict: Final = self.router_cache.get_cache(key=cost_key, local_only=local_only) or {}
+                request_count_dict: Final = measurement_cache.get_cache(key=cost_key, local_only=local_only) or {}
 
                 # check local result first
 
@@ -114,6 +119,11 @@ class LowestCostLoggingHandler(CustomLogger):
         try:
             callback_metadata: Final = get_router_callback_metadata(callback_kwargs)
             local_only: Final = callback_metadata.get("router_cache_id", self.router_cache_id) != self.router_cache_id
+            measurement_cache: Final = (
+                self.router_cache
+                if local_only or self.router_cache.redis_cache is None
+                else self.router_cache.redis_cache
+            )
             """
             Update cost usage on success
             """
@@ -159,7 +169,7 @@ class LowestCostLoggingHandler(CustomLogger):
                 # ------------
 
                 request_count_dict: Final = (
-                    await self.router_cache.async_get_cache(key=cost_key, local_only=local_only) or {}
+                    await measurement_cache.async_get_cache(key=cost_key, local_only=local_only) or {}
                 )
 
                 if id not in request_count_dict:

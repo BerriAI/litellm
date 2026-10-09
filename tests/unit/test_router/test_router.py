@@ -24991,6 +24991,7 @@ def test_router_discard_unregisters_group_selectors() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize("has_shared_history", [False, True])
 @pytest.mark.parametrize(
     "strategy, is_async, is_timeout",
     [
@@ -25006,7 +25007,11 @@ def test_router_discard_unregisters_group_selectors() -> None:
     ],
 )
 async def test_multiple_routers_shared_cache_usage_not_doubled(
-    is_async: bool, is_timeout: bool, metadata_key: Literal["metadata", "litellm_metadata"], strategy: str
+    is_async: bool,
+    is_timeout: bool,
+    has_shared_history: bool,
+    metadata_key: Literal["metadata", "litellm_metadata"],
+    strategy: str,
 ) -> None:
     import fakeredis
     import fakeredis.aioredis
@@ -25048,6 +25053,17 @@ async def test_multiple_routers_shared_cache_usage_not_doubled(
             if strategy == "cost-based-routing"
             else "test-model_map"
         )
+        if has_shared_history:
+            seed_value: Final = (
+                tokens
+                if strategy == "usage-based-routing-v2"
+                else {"dep-1": tokens}
+                if strategy == "usage-based-routing"
+                else {"dep-1": {now.strftime("%Y-%m-%d-%H-%M"): {"tpm": tokens, "rpm": 1}, "latency": [0.0]}}
+            )
+            shared_cache.set_cache(cache_key, seed_value)
+            if strategy == "usage-based-routing":
+                shared_cache.set_cache(f"test-model:rpm:{now.strftime('%H-%M')}", {"dep-1": 1})
         response: Final = litellm.ModelResponse(
             usage=litellm.Usage(prompt_tokens=0, completion_tokens=tokens, total_tokens=tokens)
         )
@@ -25063,7 +25079,16 @@ async def test_multiple_routers_shared_cache_usage_not_doubled(
             },
             "litellm_params": {
                 metadata_key: {"router_cache_id": str(id(router_1.cache)), "model_group": "test-model"},
-                "model_info": {"id": "dep-1"},
+                ("litellm_metadata" if metadata_key == "metadata" else "metadata"): None,
+                "model_info": {"id": "dep-1", "router_metadata_variable_name": metadata_key},
+            },
+        }
+
+        later_kwargs: Final = {
+            **kwargs,
+            "litellm_params": {
+                **kwargs["litellm_params"],
+                metadata_key: {"router_cache_id": str(id(router_2.cache)), "model_group": "test-model"},
             },
         }
 
@@ -25078,25 +25103,36 @@ async def test_multiple_routers_shared_cache_usage_not_doubled(
             patch("litellm.router_strategy.lowest_cost.datetime", FixedDatetime),
             patch("litellm.router_strategy.lowest_latency.datetime", FixedDatetime),
         ):
-            for selector in (selector_2, selector_1):
-                if is_timeout:
-                    await selector.async_log_failure_event(kwargs, None, now, now)
-                elif is_async:
-                    await selector.async_log_success_event(kwargs, response, now, now)
-                else:
-                    selector.log_success_event(kwargs, response, now, now)
+            for callback_kwargs, selectors in (
+                (kwargs, (selector_2, selector_1)),
+                (later_kwargs, (selector_1, selector_2)),
+            ):
+                for selector in selectors:
+                    if is_timeout:
+                        await selector.async_log_failure_event(callback_kwargs, None, now, now)
+                    elif is_async:
+                        await selector.async_log_success_event(callback_kwargs, response, now, now)
+                    else:
+                        selector.log_success_event(callback_kwargs, response, now, now)
 
         for cache in (shared_cache, router_1.cache, router_2.cache):
             value: Final = cache.get_cache(cache_key, local_only=True)
+            history_count: Final = int(has_shared_history)
+            expected_count: Final = 2 + history_count
             if is_timeout:
-                assert len(value["dep-1"]["latency"]) == 1
+                assert len(value["dep-1"]["latency"]) == expected_count
             elif strategy == "usage-based-routing-v2":
-                assert value == tokens
+                assert value == tokens * (expected_count if cache is shared_cache else 2)
             elif strategy == "usage-based-routing":
-                assert value == {"dep-1": tokens}
-                assert cache.get_cache(f"test-model:rpm:{now.strftime('%H-%M')}", local_only=True) == {"dep-1": 1}
+                assert value == {"dep-1": tokens * expected_count}
+                assert cache.get_cache(f"test-model:rpm:{now.strftime('%H-%M')}", local_only=True) == {
+                    "dep-1": expected_count
+                }
             else:
-                assert value["dep-1"][now.strftime("%Y-%m-%d-%H-%M")] == {"tpm": tokens, "rpm": 1}
+                assert value["dep-1"][now.strftime("%Y-%m-%d-%H-%M")] == {
+                    "tpm": tokens * expected_count,
+                    "rpm": expected_count,
+                }
     finally:
         router_1.discard()
         router_2.discard()
