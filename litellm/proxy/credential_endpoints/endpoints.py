@@ -924,7 +924,7 @@ async def update_credential(
             Mapping[object, object], merged_credential.credential_values
         )
         still_per_user: Final = merged_values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE
-        if credential.credential_name != credential_name or not still_per_user:
+        if not still_per_user:
             await _purge_user_connections_for_credential(credential_name)
 
         return {"success": True, "message": "Credential updated successfully"}
