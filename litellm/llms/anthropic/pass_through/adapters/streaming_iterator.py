@@ -21,7 +21,6 @@ from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.hidden_params import set_hidden_params
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
     AppliedEdit,
     CompactionBlock,
@@ -64,9 +63,12 @@ def _optional_attr_sequence(obj: object, name: str) -> Sequence[object]:
 
 
 def _error_status_and_message(exc: Exception) -> tuple[int, str]:
-    if isinstance(exc, (BaseLLMException, MidStreamFallbackError)):
-        return exc.status_code, exc.message
-    return 500, str(exc) or "Upstream stream ended before completion"
+    status_code: Final = _optional_attr(exc, "status_code")
+    message: Final = _optional_attr(exc, "message")
+    return (
+        status_code if isinstance(status_code, int) and not isinstance(status_code, bool) else 500,
+        message if isinstance(message, str) and message else str(exc) or "Upstream stream ended before completion",
+    )
 
 
 def _provider_error(exc: Exception) -> Exception:
@@ -1067,7 +1069,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         "Anthropic Adapter - failure handler raised while reporting a mid-stream error: %s",
                         failure_handler_error,
                     )
-            yield _mid_stream_error_sse_event(e)
+            yield _mid_stream_error_sse_event(provider_error)
 
     def _increment_content_block_index(self):
         self.current_content_block_index += 1
