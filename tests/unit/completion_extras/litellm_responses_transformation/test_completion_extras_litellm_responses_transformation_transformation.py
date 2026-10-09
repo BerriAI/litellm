@@ -3337,9 +3337,7 @@ def _bridge_message(
 ) -> "ResponseOutputMessage":
     return ResponseOutputMessage(
         id=item_id,
-        content=[
-            ResponseOutputText(annotations=annotations or [], text=text, type="output_text", logprobs=[])
-        ],
+        content=[ResponseOutputText(annotations=annotations or [], text=text, type="output_text", logprobs=[])],
         role="assistant",
         status="completed",
         type="message",
@@ -3554,28 +3552,128 @@ def test_chunk_parser_streams_commentary_deltas_to_provider_specific_fields() ->
 
     iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
     chunks: Final = (
-        {"type": "response.output_item.added", "output_index": 0,
-         "item": {"type": "message", "id": "msg_1", "phase": "commentary", "role": "assistant"}},
-        {"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0,
-         "content_index": 0, "delta": "Let me answer that."},
-        {"type": "response.output_item.added", "output_index": 1,
-         "item": {"type": "message", "id": "msg_2", "phase": "final_answer", "role": "assistant"}},
-        {"type": "response.output_text.delta", "item_id": "msg_2", "output_index": 1,
-         "content_index": 0, "delta": '{"city": "Paris"}'},
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {"type": "message", "id": "msg_1", "phase": "commentary", "role": "assistant"},
+        },
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "Let me answer that.",
+        },
+        {
+            "type": "response.output_item.added",
+            "output_index": 1,
+            "item": {"type": "message", "id": "msg_2", "phase": "final_answer", "role": "assistant"},
+        },
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_2",
+            "output_index": 1,
+            "content_index": 0,
+            "delta": '{"city": "Paris"}',
+        },
     )
 
     results: Final = [iterator.chunk_parser(chunk) for chunk in chunks]
 
-    joined_content: Final = "".join(
-        r.choices[0].delta.content or "" for r in results if r.choices
-    )
+    joined_content: Final = "".join(r.choices[0].delta.content or "" for r in results if r.choices)
     joined_commentary: Final = "".join(
-        (r.choices[0].delta.provider_specific_fields or {}).get("commentary", "")
-        for r in results
-        if r.choices
+        (r.choices[0].delta.provider_specific_fields or {}).get("commentary", "") for r in results if r.choices
     )
     assert joined_content == '{"city": "Paris"}'
     assert joined_commentary == "Let me answer that."
+
+
+def test_convert_response_output_raw_message_with_malformed_content_returns_no_choices() -> None:
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        ({"type": "message", "role": "assistant", "content": "not-a-part-list"},)
+    )
+
+    assert choices == []
+
+
+def test_convert_response_output_raw_message_without_output_text_falls_back_to_callback() -> None:
+    from litellm.types.utils import Choices, Message
+
+    raw_message: Final = {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "refusal", "refusal": "no"}],
+    }
+
+    def callback(item, index):
+        return (
+            Choices(message=Message(role="assistant", content="from callback"), finish_reason="stop", index=index),
+            index + 1,
+        )
+
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (raw_message,), handle_raw_dict_callback=callback
+    )
+
+    assert len(choices) == 1
+    assert choices[0].message.content == "from callback"
+
+    empty_choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (raw_message,), handle_raw_dict_callback=lambda item, index: (None, index)
+    )
+    assert empty_choices == []
+
+
+def test_convert_response_output_keeps_url_citation_without_numeric_indices_unshifted() -> None:
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (
+            {
+                "type": "message",
+                "id": "msg_1",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "abc", "annotations": []}],
+            },
+            {
+                "type": "message",
+                "id": "msg_2",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "Paris",
+                        "annotations": [
+                            {"type": "url_citation", "title": "Weather", "url": "https://example.com/weather"}
+                        ],
+                    }
+                ],
+            },
+        )
+    )
+
+    assert len(choices) == 1
+    assert choices[0].message.content == "abcParis"
+    assert choices[0].message.annotations == [
+        {"type": "url_citation", "title": "Weather", "url": "https://example.com/weather"}
+    ]
+
+
+def test_convert_response_output_folds_callback_choice_for_unknown_raw_item() -> None:
+    from litellm.types.utils import Choices, Message
+
+    def callback(item, index):
+        return (
+            Choices(message=Message(role="assistant", content="cb text "), finish_reason="stop", index=index),
+            index + 1,
+        )
+
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        ({"type": "unknown_future_item", "id": "u_1"}, _bridge_message("msg_1", "tail")),
+        handle_raw_dict_callback=callback,
+    )
+
+    assert len(choices) == 1
+    assert choices[0].message.content == "cb text tail"
+    assert choices[0].finish_reason == "stop"
 
 
 def test_convert_tools_to_responses_format_flattens_nested_custom_tool():
