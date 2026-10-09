@@ -321,10 +321,10 @@ assert original == {}
 assert first.adopted is arguments and second.adopted is arguments
 assert first.adopted['policy'] == second.adopted['policy'] == 'configured'
 assert first.model == second.model == 'model'
-assert final_response == ((response, 'a'), 'b')
+assert final_response == ((response, 'b'), 'a')
 assert [(name, kind) for name, kind, value in log] == [
-    ('a', 'prepare'), ('b', 'prepare'), ('a', 'success'), ('b', 'success'),
-    ('a', 'stream'), ('b', 'stream'), ('a', 'stream'), ('b', 'stream'),
+    ('a', 'prepare'), ('b', 'prepare'), ('b', 'success'), ('a', 'success'),
+    ('b', 'stream'), ('a', 'stream'), ('b', 'stream'), ('a', 'stream'),
 ]
 assert log[2][2] is final_response and log[3][2] is final_response
 assert log[6][2] is response and log[7][2] is response
@@ -396,7 +396,7 @@ fn terminal_failure_does_not_skip_later_hooks(
             .unwrap();
         py.run(
             c"
-assert [name for name, kind, value in log] == ['a', 'b', 'c']
+assert [name for name, kind, value in log] == ['c', 'b', 'a']
 assert all(kind == log[0][1] for name, kind, value in log)
 assert all(value is selected for name, kind, value in log)
 ",
@@ -448,7 +448,7 @@ fn cancellation_stops_notification_dispatch(scripts: Py<PyDict>, #[case] asynchr
         let mut hooks = chain(py, &scripts, asynchronous);
         let locals = scripts.bind(py);
         py.run(
-            c"first.error = asyncio.CancelledError()",
+            c"second.error = asyncio.CancelledError()",
             Some(locals),
             Some(locals),
         )
@@ -469,7 +469,7 @@ fn cancellation_stops_notification_dispatch(scripts: Py<PyDict>, #[case] asynchr
                 .is_instance_of::<pyo3::exceptions::asyncio::CancelledError>(py)
         );
         py.run(
-            c"assert len(log) == 1 and log[0][0] == 'a'",
+            c"assert len(log) == 1 and log[0][0] == 'b'",
             Some(locals),
             Some(locals),
         )
