@@ -1094,7 +1094,9 @@ _PREDICATE_QUESTIONS: Final[tuple[Mapping[str, object], ...]] = (
 )
 _PREDICATE_REQUESTS: Final[tuple[Mapping[str, object], ...]] = (
     MappingProxyType({"input": "review", "questions": _PREDICATE_QUESTIONS}),
-    MappingProxyType({"state": "review", "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}}}),
+    MappingProxyType(
+        {"state": "review", "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}}}
+    ),
 )
 _PREDICATE_REQUEST_IDS: Final = ("input_format", "state_format")
 
@@ -1149,10 +1151,14 @@ async def test_safety_identifier_is_dropped_from_the_wire_under_drop_params(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("request_kwargs", _PREDICATE_REQUESTS, ids=_PREDICATE_REQUEST_IDS)
-async def test_safety_identifier_reaches_openai_without_drop_params(
-    request_kwargs: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("drop_params", (False, True), ids=("strict", "drop_params"))
+async def test_safety_identifier_reaches_openai_whether_or_not_params_are_dropped(
+    drop_params: bool,
+    request_kwargs: Mapping[str, object],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "drop_params", drop_params)
     monkeypatch.setattr(litellm, "api_base", None)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.delenv("OPENAI_API_BASE", raising=False)
@@ -1177,8 +1183,9 @@ async def test_safety_identifier_reaches_openai_without_drop_params(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("request_kwargs", _PREDICATE_REQUESTS, ids=_PREDICATE_REQUEST_IDS)
 async def test_non_string_safety_identifier_is_rejected_before_http(
-    request_kwargs: Mapping[str, object], respx_mock: respx.MockRouter
+    request_kwargs: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
     route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
     invalid_safety_identifier: Final[Mapping[str, object]] = MappingProxyType({"safety_identifier": 7})
 
@@ -1188,3 +1195,29 @@ async def test_non_string_safety_identifier_is_rejected_before_http(
         )
 
     assert not route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_kwargs", _PREDICATE_REQUESTS, ids=_PREDICATE_REQUEST_IDS)
+async def test_non_string_safety_identifier_is_dropped_from_the_wire_under_drop_params(
+    request_kwargs: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    dropped_safety_identifier: Final[Mapping[str, object]] = MappingProxyType(
+        {"safety_identifier": 7, "drop_params": True}
+    )
+
+    await litellm.adecisions(
+        model="openai/gpt-6-luna", api_key="caller-key", **request_kwargs, **dropped_safety_identifier
+    )
+
+    assert route.called
+    assert json.loads(respx_mock.calls[0].request.content) == {
+        "model": "gpt-6-luna",
+        "input": "review",
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    }

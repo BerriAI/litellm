@@ -1,6 +1,6 @@
 import math
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -540,17 +540,24 @@ def test_openai_keeps_a_system_one_format_safety_identifier_on_the_wire(gateway:
         assert call["body"] == {**_OPENAI.upstream_body(), "safety_identifier": _SAFETY_IDENTIFIER}
 
 
+@pytest.mark.parametrize("decide", (_decide, _decide_in_system_one_format), ids=("openai_format", "system_one_format"))
 @pytest.mark.parametrize("value", (7, [_SAFETY_IDENTIFIER]), ids=("numeric", "list"))
-def test_a_non_string_system_one_format_safety_identifier_is_refused_as_invalid(
-    gateway: Gateway, value: JsonValue
+def test_a_non_string_safety_identifier_is_refused_as_invalid_unless_the_deployment_drops_params(
+    gateway: Gateway, value: JsonValue, decide: Callable[..., httpx.Response]
 ) -> None:
     with gateway.scenario() as scenario:
         handle: Final = _register(scenario, _OPENAI.upstream_reply())
-        model: Final = _deployment(scenario, handle, _OPENAI)
-        response: Final = _decide_in_system_one_format(gateway, model, safety_identifier=value)
-        assert response.status_code == 400, response.text
-        assert "Invalid Decisions request" in response.text, response.text
+        strict: Final = _deployment(scenario, handle, _OPENAI)
+        refused: Final = decide(gateway, strict, safety_identifier=value)
+        assert refused.status_code == 400, refused.text
+        assert "Invalid Decisions request" in refused.text, refused.text
         assert _upstream_calls(gateway, handle) == []
+
+        dropping: Final = _deployment(scenario, handle, _OPENAI, drop_params=True)
+        accepted: Final = decide(gateway, dropping, safety_identifier=value)
+        assert accepted.status_code == 200, accepted.text
+        (call,) = _upstream_calls(gateway, handle)
+        assert call["body"] == _OPENAI.upstream_body()
 
 
 def test_litellm_settings_drop_params_drops_the_safety_identifier_for_a_strict_deployment(

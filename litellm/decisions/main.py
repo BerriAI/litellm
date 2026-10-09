@@ -113,6 +113,12 @@ def _drops_params(kwargs: Mapping[str, object]) -> bool:
     return litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True
 
 
+def _request_safety_identifier(safety_identifier: object, kwargs: Mapping[str, object]) -> str | None:
+    if isinstance(safety_identifier, str) or not _drops_params(kwargs):
+        return _SAFETY_IDENTIFIER_ADAPTER.validate_python(safety_identifier)
+    return None
+
+
 def _provider_ir_request(
     request: DecisionsRequestFormat,
     *,
@@ -172,10 +178,13 @@ def _prepare_call(
             llm_provider=provider,
         )
     try:
+        request_safety_identifier: Final = _request_safety_identifier(safety_identifier, kwargs)
         request: Final = _validate_request(
-            state=state, questions=questions, decision_input=decision_input, safety_identifier=safety_identifier
+            state=state,
+            questions=questions,
+            decision_input=decision_input,
+            safety_identifier=request_safety_identifier,
         )
-        validated_safety_identifier: Final = _SAFETY_IDENTIFIER_ADAPTER.validate_python(safety_identifier)
     except ValidationError as error:
         raise litellm.BadRequestError(
             message=f"Invalid Decisions request: {error}",
@@ -200,7 +209,7 @@ def _prepare_call(
 
     ir_request: Final = _provider_ir_request(
         request,
-        safety_identifier=validated_safety_identifier,
+        safety_identifier=request_safety_identifier,
         model=model,
         provider=provider,
         provider_config=provider_config,
