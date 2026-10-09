@@ -16358,6 +16358,10 @@ export interface paths {
          *         api_key (Optional[str]): Filter by API key.
          *         page (int): Page number for pagination.
          *         page_size (int): Number of items per page.
+         *         team_ids (Optional[str]): Comma-separated list of team IDs to restrict tag usage to.
+         *         exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
+         *         exclude_tags (Optional[str]): Comma-separated list of tags to exclude.
+         *         group_by (Optional[Literal["tag", "team"]]): Entity the breakdown buckets key on. "team" buckets by team_id.
          *
          *     Returns:
          *         SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
@@ -16900,6 +16904,10 @@ export interface paths {
          *         page (int): Page number for pagination.
          *         page_size (int): Number of items per page.
          *         exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
+         *         tags (Optional[str]): Comma-separated list of tags. When provided, activity is read from the
+         *             daily tag spend table restricted to the permitted teams.
+         *         exclude_tags (Optional[str]): Comma-separated list of tags to exclude.
+         *         group_by (Optional[Literal["team", "tag"]]): Entity the breakdown buckets key on. "tag" buckets by tag.
          *     Returns:
          *         SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
          */
@@ -73461,6 +73469,10 @@ export interface operations {
                 api_key?: string | null;
                 page?: number;
                 page_size?: number;
+                team_ids?: string | null;
+                exclude_team_ids?: string | null;
+                exclude_tags?: string | null;
+                group_by?: ("team" | "tag") | null;
             };
             header?: never;
             path?: never;
@@ -73498,6 +73510,10 @@ export interface operations {
                 api_key?: string | null;
                 tags?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
+                exclude_team_ids?: string | null;
+                exclude_tags?: string | null;
+                group_by?: ("team" | "tag") | null;
             };
             header?: never;
             path?: never;
@@ -73536,6 +73552,10 @@ export interface operations {
                 api_key?: string | null;
                 tags?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
+                exclude_team_ids?: string | null;
+                exclude_tags?: string | null;
+                group_by?: ("team" | "tag") | null;
             };
             header?: never;
             path?: never;
@@ -73575,6 +73595,10 @@ export interface operations {
                 api_key?: string | null;
                 tags?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
+                exclude_team_ids?: string | null;
+                exclude_tags?: string | null;
+                group_by?: ("team" | "tag") | null;
             };
             header?: never;
             path?: never;
@@ -73613,6 +73637,10 @@ export interface operations {
                 api_key?: string | null;
                 tags?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
+                exclude_team_ids?: string | null;
+                exclude_tags?: string | null;
+                group_by?: ("team" | "tag") | null;
             };
             header?: never;
             path?: never;
@@ -73651,6 +73679,10 @@ export interface operations {
                 api_key?: string | null;
                 tags?: string | null;
                 timezone?: number | null;
+                team_ids?: string | null;
+                exclude_team_ids?: string | null;
+                exclude_tags?: string | null;
+                group_by?: ("team" | "tag") | null;
             };
             header?: never;
             path?: never;
@@ -73806,6 +73838,10 @@ export interface operations {
                 start_date?: string | null;
                 /** @description Optional end date (YYYY-MM-DD). Must be given with start_date. */
                 end_date?: string | null;
+                /** @description Optional comma-separated team IDs. When provided, dynamic tags are limited to usage recorded under those teams, subject to the caller's team permissions, and stored tags are limited to names used in scope. */
+                team_ids?: string | null;
+                /** @description When true, only tag names with usage rows in the daily tag spend table are returned. Stored tags without usage are omitted. */
+                usage_only?: boolean;
             };
             header?: never;
             path?: never;
@@ -74151,6 +74187,9 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 exclude_team_ids?: string | null;
+                tags?: string | null;
+                exclude_tags?: string | null;
+                group_by?: ("team" | "tag") | null;
             };
             header?: never;
             path?: never;
@@ -74189,6 +74228,9 @@ export interface operations {
                 api_key?: string | null;
                 exclude_team_ids?: string | null;
                 timezone?: number | null;
+                tags?: string | null;
+                exclude_tags?: string | null;
+                group_by?: ("team" | "tag") | null;
             };
             header?: never;
             path?: never;
@@ -74228,6 +74270,9 @@ export interface operations {
                 api_key?: string | null;
                 exclude_team_ids?: string | null;
                 timezone?: number | null;
+                tags?: string | null;
+                exclude_tags?: string | null;
+                group_by?: ("team" | "tag") | null;
             };
             header?: never;
             path?: never;
@@ -74268,6 +74313,9 @@ export interface operations {
                 api_key?: string | null;
                 exclude_team_ids?: string | null;
                 timezone?: number | null;
+                tags?: string | null;
+                exclude_tags?: string | null;
+                group_by?: ("team" | "tag") | null;
             };
             header?: never;
             path?: never;
@@ -74307,6 +74355,9 @@ export interface operations {
                 api_key?: string | null;
                 exclude_team_ids?: string | null;
                 timezone?: number | null;
+                tags?: string | null;
+                exclude_tags?: string | null;
+                group_by?: ("team" | "tag") | null;
             };
             header?: never;
             path?: never;
@@ -74346,6 +74397,9 @@ export interface operations {
                 api_key?: string | null;
                 exclude_team_ids?: string | null;
                 timezone?: number | null;
+                tags?: string | null;
+                exclude_tags?: string | null;
+                group_by?: ("team" | "tag") | null;
             };
             header?: never;
             path?: never;
