@@ -24985,55 +24985,65 @@ def test_router_discard_unregisters_group_selectors() -> None:
         assert len(litellm.input_callback) == 0
 
 
-def test_multiple_usage_v2_routers_shared_cache_increment_not_doubled() -> None:
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+async def test_multiple_usage_v2_routers_shared_cache_increment_not_doubled(
+    is_async: bool, metadata_key: Literal["metadata", "litellm_metadata"]
+) -> None:
+    import fakeredis
+    import fakeredis.aioredis
+
+    server: Final = fakeredis.FakeServer()
+    redis_client: Final = fakeredis.FakeRedis(server=server)
+    async_client: Final = fakeredis.aioredis.FakeRedis(server=server)
+    with (
+        patch("litellm._redis.get_redis_client", return_value=redis_client),
+        patch("litellm._redis.get_redis_async_client", return_value=async_client),
+        patch("litellm._redis.get_redis_connection_pool", return_value=async_client.connection_pool),
+    ):
+        shared_cache: Final = RedisCache(host=str(id(server)))
+        shared_cache.init_async_client()
     router_1: Final = Router(
-        model_list=[{"model_name": "gpt-4", "litellm_params": {"model": "gpt-4"}}],
+        model_list=[{"model_name": "test-model", "litellm_params": {"model": "openai/test-model", "api_key": "fake"}}],
         routing_strategy="usage-based-routing-v2",
     )
     router_2: Final = Router(
-        model_list=[{"model_name": "gpt-4", "litellm_params": {"model": "gpt-4"}}],
+        model_list=[{"model_name": "test-model", "litellm_params": {"model": "openai/test-model", "api_key": "fake"}}],
         routing_strategy="usage-based-routing-v2",
     )
+    router_1.cache.attach_redis_cache(shared_cache)
+    router_2.cache.attach_redis_cache(shared_cache)
 
     try:
         selector_1: Final = router_1.lowesttpm_logger_v2
         selector_2: Final = router_2.lowesttpm_logger_v2
         assert selector_1 is not None and selector_2 is not None
 
-        shared_writes: Final[list[bool]] = []
-        original_increment_1: Final = router_1.cache.increment_cache
-        original_increment_2: Final = router_2.cache.increment_cache
-
-        def wrapped_increment_1(key: str, value: int, local_only: bool = False, **kwargs: object) -> int:
-            shared_writes.append(local_only)
-            return original_increment_1(key, value, local_only=local_only, **kwargs)
-
-        def wrapped_increment_2(key: str, value: int, local_only: bool = False, **kwargs: object) -> int:
-            shared_writes.append(local_only)
-            return original_increment_2(key, value, local_only=local_only, **kwargs)
-
-        setattr(router_1.cache, "increment_cache", wrapped_increment_1)
-        setattr(router_2.cache, "increment_cache", wrapped_increment_2)
-
-        now: Final = datetime.now()
+        now: Final = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        tokens: Final = 100
+        cache_key: Final = f"dep-1:test-model:tpm:{now.strftime('%H-%M')}"
         kwargs: Final = {
             "standard_logging_object": {
-                "model_group": "gpt-4",
+                "model_group": "test-model",
                 "model_id": "dep-1",
-                "total_tokens": 100,
-                "hidden_params": {"litellm_model_name": "gpt-4"},
+                "total_tokens": tokens,
+                "hidden_params": {"litellm_model_name": "test-model"},
             },
-            "litellm_params": {
-                "metadata": {
-                    "router_cache_id": str(id(router_1.cache)),
-                }
-            },
+            "litellm_params": {metadata_key: {"router_cache_id": str(id(router_1.cache))}},
         }
+        with patch("litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime", return_value=now):
+            for selector in (selector_2, selector_1):
+                if is_async:
+                    await selector.async_log_success_event(kwargs, None, now, now)
+                else:
+                    selector.log_success_event(kwargs, None, now, now)
 
-        selector_1.log_success_event(kwargs, None, now, now)
-        selector_2.log_success_event(kwargs, None, now, now)
-
-        assert shared_writes == [False, True]
+        assert int(redis_client.get(cache_key)) == tokens
+        assert router_1.cache.get_cache(cache_key, local_only=True) == tokens
+        assert router_2.cache.get_cache(cache_key, local_only=True) == tokens
     finally:
         router_1.discard()
         router_2.discard()
+        await async_client.aclose()
+        redis_client.close()
