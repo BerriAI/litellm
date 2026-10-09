@@ -150,9 +150,7 @@ class Upstream:
 
     def __init__(self, url: str) -> None:
         self.url = url.rstrip("/")
-        self.items: list[
-            dict[str, JsonValue]
-        ] = []  # mutable-ok: the observation feed is destructive, so drained records are kept for later lookups
+        self.items: tuple[dict[str, JsonValue], ...] = ()
 
     def drain(self) -> None:
         with httpx.Client(timeout=10, trust_env=False) as client:
@@ -161,7 +159,7 @@ class Upstream:
             )
         requests: Final = payload.get("requests")
         assert isinstance(requests, list)
-        self.items.extend(object_value(item) for item in requests if isinstance(item, dict))
+        self.items = (*self.items, *(object_value(item) for item in requests if isinstance(item, dict)))
 
     def calls(self, identity: str) -> tuple[dict[str, JsonValue], ...]:
         self.drain()

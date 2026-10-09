@@ -116,11 +116,18 @@ def _user_config(rig: _Rig, name: str, defaults: Mapping[str, JsonValue]) -> dic
 @pytest.mark.parametrize("source", ("deployment-param", "user-config-default", "user-config-null"))
 def test_positional_param_from_any_default_source_returns_400(rig: _Rig, route: str, source: str) -> None:
     path, error_route, name, param, extra = _POSITIONAL[route]
-    body: Final[dict[str, JsonValue]] = {"model": f"{name}-dep" if source == "deployment-param" else name, **extra}
-    if source == "user-config-default":
-        body["user_config"] = _user_config(rig, name, {param: "user config default"})
-    if source == "user-config-null":
-        body["user_config"] = None
+    user_config: Final[dict[str, JsonValue]] = (
+        {"user_config": _user_config(rig, name, {param: "user config default"})}
+        if source == "user-config-default"
+        else {"user_config": None}
+        if source == "user-config-null"
+        else {}
+    )
+    body: Final[dict[str, JsonValue]] = {
+        "model": f"{name}-dep" if source == "deployment-param" else name,
+        **extra,
+        **user_config,
+    }
     response: Final = post(rig.gateway, path, body)
     error: Final = invalid_request(response)
     assert error.get("param") == param, response.text
@@ -233,9 +240,11 @@ def test_model_outside_the_router_with_a_router_default_param(
     ),
 )
 def test_chat_user_config_shapes(rig: _Rig, user_config: object, message: str | None) -> None:
-    body: Final[dict[str, JsonValue]] = {"model": "audit-chat", "messages": USER_MESSAGES}
-    if user_config is not UNSET:
-        body["user_config"] = user_config  # pyright: ignore[reportArgumentType]  # the sad shapes are deliberately not JSON objects
+    body: Final[dict[str, JsonValue]] = {
+        "model": "audit-chat",
+        "messages": USER_MESSAGES,
+        **({} if user_config is UNSET else {"user_config": user_config}),  # pyright: ignore[reportAssignmentType]  # the sad shapes are deliberately not JSON objects
+    }
     response: Final = post(rig.gateway, "/v1/chat/completions", body)
     if message is None:
         assert response.status_code == 200, response.text
@@ -269,12 +278,11 @@ def test_null_user_config_serves_every_endpoint(
     rig: _Rig, endpoint: str, model: str, stream: bool, expected_max_tokens: int | None
 ) -> None:
     body: Final[dict[str, JsonValue]] = {
-        **ENDPOINT_BODIES[endpoint],
+        **{key: value for key, value in ENDPOINT_BODIES[endpoint].items() if key != "max_tokens"},
         "model": model,
         "user_config": None,
         **({"stream": True} if stream else {}),
     }
-    body.pop("max_tokens", None)
     if stream:
         status, lines = stream_lines(rig.gateway, ENDPOINT_PATHS[endpoint], body)
         assert status == 200, lines
@@ -313,7 +321,7 @@ def _openai_chat(rig: _Rig, asynchronous: bool) -> str | None:
 
     async def call() -> str | None:
         async with openai.AsyncOpenAI(base_url=base_url, api_key=rig.gateway.key, max_retries=0) as client:
-            completion = await client.chat.completions.create(
+            completion: Final = await client.chat.completions.create(
                 model="audit-chat",
                 messages=[{"role": "user", "content": "Hello"}],
                 extra_body={"user_config": None},
@@ -339,13 +347,13 @@ def _anthropic_message(rig: _Rig, asynchronous: bool) -> str:
 
     async def call() -> str:
         async with anthropic.AsyncAnthropic(base_url=base_url, api_key=rig.gateway.key, max_retries=0) as client:
-            message = await client.messages.create(
+            message: Final = await client.messages.create(
                 model="audit-message",
                 max_tokens=8,
                 messages=[{"role": "user", "content": "Hello"}],
                 extra_body={"user_config": None},
             )
-            block = message.content[0]
+            block: Final = message.content[0]
             assert isinstance(block, anthropic.types.TextBlock), message
             return block.text
 

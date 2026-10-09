@@ -10,7 +10,6 @@ import os
 import re
 import signal
 import uuid
-from collections import Counter
 from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -194,10 +193,8 @@ def _missing_model_cells(chaos: _Chaos) -> tuple[_Outcome, ...]:
 def _upstream_hits(slot: UpstreamSlot, markers: frozenset[str]) -> Mapping[str, int]:
     upstream: Final = Upstream(slot.url)
     upstream.drain()
-    found: Final = Counter(
-        marker for item in upstream.items for marker in markers if marker in json.dumps(item.get("body"))
-    )
-    return {marker: found.get(marker, 0) for marker in markers}
+    bodies: Final = tuple(json.dumps(item.get("body")) for item in upstream.items)
+    return {marker: sum(marker in body for body in bodies) for marker in markers}
 
 
 def _spend_markers(key: str, markers: frozenset[str]) -> Mapping[str, tuple[str, ...]]:

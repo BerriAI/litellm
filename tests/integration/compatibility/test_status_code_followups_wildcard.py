@@ -98,12 +98,17 @@ def wildcard(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFa
             yield _Wildcard(owned, identity)
 
 
-def _body(endpoint: str, shape: str, *, stream: bool) -> dict[str, JsonValue]:
-    body: Final[dict[str, JsonValue]] = {**ENDPOINT_BODIES[endpoint], **({"stream": True} if stream else {})}
+def _model_field(shape: str) -> dict[str, JsonValue]:
     value: Final = _MODEL_SHAPES[shape]
-    if value is not UNSET:
-        body["model"] = value  # pyright: ignore[reportArgumentType]  # None or "" by construction
-    return body
+    return {} if value is UNSET else {"model": value}  # pyright: ignore[reportReturnType]  # None or "" by construction
+
+
+def _body(endpoint: str, shape: str, *, stream: bool) -> dict[str, JsonValue]:
+    return {
+        **ENDPOINT_BODIES[endpoint],
+        **({"stream": True} if stream else {}),
+        **_model_field(shape),
+    }
 
 
 def _shown_model(shape: str) -> str:
@@ -223,9 +228,7 @@ def test_forwarding_wildcard_embeddings_without_a_model(wildcard: _Wildcard, sha
         "BUG: /v1/embeddings without a model behind a forwarding `*` -> `openai/*` wildcard still reaches the "
         "provider (model 'None/None' or ''), the omission the fix closed for chat/responses/messages; same on base"
     )
-    body: Final[dict[str, JsonValue]] = {"input": "Hello"}
-    if _MODEL_SHAPES[shape] is not UNSET:
-        body["model"] = _MODEL_SHAPES[shape]  # pyright: ignore[reportArgumentType]  # None or "" by construction
+    body: Final[dict[str, JsonValue]] = {"input": "Hello", **_model_field(shape)}
     response: Final = post(wildcard.gateway, "/v1/embeddings", body)
     assert response.status_code == 400, response.text
     assert_no_provider_call(wildcard.gateway, wildcard.identity)

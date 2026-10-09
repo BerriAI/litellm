@@ -216,9 +216,12 @@ def _responses_model(scenario: Scenario, response: StoredResponse) -> tuple[str,
 def test_responses_max_output_tokens_forwarding(gateway: Gateway, sent: object, forwarded: object) -> None:
     with gateway.scenario() as scenario:
         model, identity = _responses_model(scenario, json_response(RESPONSE))
-        body: Final[dict[str, JsonValue]] = {"model": model, "input": "Say pong", "store": False}
-        if sent is not UNSET:
-            body["max_output_tokens"] = sent  # pyright: ignore[reportArgumentType]  # the parametrized shapes are JSON values
+        body: Final[dict[str, JsonValue]] = {
+            "model": model,
+            "input": "Say pong",
+            "store": False,
+            **({} if sent is UNSET else {"max_output_tokens": sent}),  # pyright: ignore[reportAssignmentType]  # the parametrized shapes are JSON values
+        }
         response: Final = post(gateway, "/v1/responses", body)
         assert response.status_code == 200, response.text
         outbound: Final = one_outbound(gateway, identity)
@@ -336,9 +339,10 @@ def test_vector_store_file_attributes_reach_the_provider(
             if operation == "create"
             else f"/v1/vector_stores/{store}/files/file-audit"
         )
-        body: Final[dict[str, JsonValue]] = {"attributes": attributes}
-        if operation == "create":
-            body["file_id"] = "file-audit"
+        body: Final[dict[str, JsonValue]] = {
+            "attributes": attributes,
+            **({"file_id": "file-audit"} if operation == "create" else {}),
+        }
         response: Final = post(gateway, path, body)
         assert response.status_code == 200, response.text
         assert one_outbound(gateway, identity).get("attributes") == forwarded
