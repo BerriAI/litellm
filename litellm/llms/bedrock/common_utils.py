@@ -45,6 +45,7 @@ _ERROR_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
 _OPENAI_FAMILY_MODEL_RE: Final = re.compile(r"(^|[./])openai\.")
 _OPENAI_GPT_VERSION_RE: Final = re.compile(r"(^|[./])openai\.gpt-(\d{1,3})(?!\d)(?:\.(\d{1,3})(?!\d))?")
 _BEDROCK_RUNTIME_CHAT_COMPLETIONS_DEFAULT_SINCE: Final = (5, 6)
+_XAI_GROK_MODEL_RE: Final = re.compile(r"(^|[./])xai\.grok-")
 _BEDROCK_RUNTIME_CHAT_COMPLETIONS_ENDPOINT: Final = "/v1/chat/completions"
 BedrockRoute = Literal[
     "converse",
@@ -869,20 +870,36 @@ def _openai_gpt_version(model: str) -> tuple[int, int] | None:
     return int(match.group(2)), int(match.group(3) or 0)
 
 
+def _bedrock_runtime_chat_completions_default_family(model: str) -> bool:
+    if _XAI_GROK_MODEL_RE.search(model) is not None:
+        return True
+    gpt_version: Final = _openai_gpt_version(model)
+    return gpt_version is not None and gpt_version >= _BEDROCK_RUNTIME_CHAT_COMPLETIONS_DEFAULT_SINCE
+
+
 def bedrock_runtime_chat_completions_is_default(model: str) -> bool:
     """Whether a model with no route prefix goes to bedrock-runtime's native Chat Completions by default.
 
-    GPT 5.6 and newer (``openai.gpt-<major>[.<minor>]`` at or above 5.6, which gpt-oss never matches) whose
-    price-map row lists ``/v1/chat/completions`` in ``supported_endpoints``. Older GPT rows, gpt-oss and Grok
-    stay on Converse unless the ``chat_completions/`` prefix opts them in.
+    Grok (``xai.grok-*``) and GPT 5.6 and newer (``openai.gpt-<major>[.<minor>]`` at or above 5.6, which
+    gpt-oss never matches) whose price-map row lists ``/v1/chat/completions`` in ``supported_endpoints``.
+    Older GPT rows and gpt-oss stay on Converse unless the ``chat_completions/`` prefix opts them in.
     """
-    version: Final = _openai_gpt_version(model)
-    if version is None or version < _BEDROCK_RUNTIME_CHAT_COMPLETIONS_DEFAULT_SINCE:
+    if not _bedrock_runtime_chat_completions_default_family(model):
         return False
     return any(
         _price_map_entry_lists_endpoint(entry, _BEDROCK_RUNTIME_CHAT_COMPLETIONS_ENDPOINT)
         for entry in _bedrock_price_map_entries(model)
     )
+
+
+def bedrock_rejects_stop_sequences(model: str) -> bool:
+    """Whether AWS refuses stop sequences for this model on every Bedrock route.
+
+    Grok answers ``stopSequences`` on Converse and ``stop`` on native Chat Completions alike with
+    ``This model doesn't support the stopSequences field`` (Grok 4.6 and 4.7 checked live on 2026-10-09),
+    so litellm drops ``stop`` for it instead of forwarding it to a 400.
+    """
+    return _XAI_GROK_MODEL_RE.search(model) is not None
 
 
 def bedrock_runtime_chat_completions_serves_tools_with_reasoning(model: str) -> bool:
@@ -961,7 +978,9 @@ def bedrock_request_needs_converse(model: str, request_params: Mapping[str, obje
     AWS's native OpenAI surface, a ``model_id`` override (an application inference profile or provisioned
     throughput ARN) is only encoded into Converse's request URL and so stays on Converse like the
     ``bedrock/arn:...`` model form, ``stop`` stays on Converse where it fails loudly instead of silently
-    stopping hidden reasoning, operator-owned request metadata is only written onto the Converse body,
+    stopping hidden reasoning (except on models that reject stop sequences everywhere,
+    ``bedrock_rejects_stop_sequences``, where both routes drop it), operator-owned request metadata is only
+    written onto the Converse body,
     function tools (``tools`` or legacy ``functions``) on a model without
     ``supports_bedrock_runtime_chat_completions_tools_with_reasoning`` are rejected there unless
     ``reasoning_effort`` is exactly ``"none"``, and a ``response_format`` goes native only as
@@ -971,7 +990,12 @@ def bedrock_request_needs_converse(model: str, request_params: Mapping[str, obje
     handling everywhere, since AWS's native surface rejects that type with a 400 unless the prompt
     mentions json.
     """
-    if any(request_params.get(key) is not None for key in BEDROCK_CONVERSE_ONLY_REQUEST_KEYS):
+    converse_only_keys: Final = (
+        BEDROCK_CONVERSE_ONLY_REQUEST_KEYS - {"stop"}
+        if bedrock_rejects_stop_sequences(model)
+        else BEDROCK_CONVERSE_ONLY_REQUEST_KEYS
+    )
+    if any(request_params.get(key) is not None for key in converse_only_keys):
         return True
     if bedrock_request_metadata_is_owned():
         return True
@@ -1421,8 +1445,8 @@ class BedrockModelInfo(BaseLLMModelInfo):
         """
         Get the bedrock route for the given model.
 
-        GPT 5.6 and newer go to bedrock-runtime's native OpenAI Chat Completions by default
-        (``bedrock_runtime_chat_completions_is_default``) and ``chat_completions/`` opts any other model in;
+        Grok and GPT 5.6 and newer go to bedrock-runtime's native OpenAI Chat Completions by
+        default (``bedrock_runtime_chat_completions_is_default``) and ``chat_completions/`` opts any other model in;
         ``request_params`` (the caller's chat params) sends such a request to Converse when it needs a
         feature only Converse serves, and ``converse/`` pins a model to Converse. Every other OpenAI-family
         model stays on Converse without the prefix.
