@@ -446,7 +446,7 @@ def test_sync_rust_messages_calls_python_cache(recording_server: RecordingServer
     request: Final = NativeCall(
         args=(),
         kwargs=arguments,
-        bound={
+        base={
             "model": MESSAGES_MODEL,
             "messages": list(MESSAGES),
             "max_tokens": 32,

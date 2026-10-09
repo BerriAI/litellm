@@ -2,6 +2,7 @@ use std::path::Path;
 
 use litellm_testkit::{ClaudeCode, Codex, Configure, Error, Opencode, Settings, Version, Wire};
 use rstest::rstest;
+use strum::VariantArray;
 
 fn settings(wire: Wire) -> Settings {
     Settings {
@@ -121,7 +122,10 @@ fn opencode_uses_a_different_provider_package_for_every_wire() {
             .unwrap()
             .to_owned()
     };
-    let packages = [Wire::ChatCompletions, Wire::Responses, Wire::Messages].map(package);
+    let packages = Wire::VARIANTS
+        .iter()
+        .map(|wire| package(*wire))
+        .collect::<Vec<_>>();
 
     assert_eq!(
         packages

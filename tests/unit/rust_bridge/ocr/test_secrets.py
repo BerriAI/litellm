@@ -64,7 +64,7 @@ def _native_request(api_base: str) -> NativeCall:
     return NativeCall(
         args=(),
         kwargs=supplied,
-        bound={
+        base={
             "model": OCR_MODEL,
             "document": OCR_DOCUMENT,
             "api_key": None,

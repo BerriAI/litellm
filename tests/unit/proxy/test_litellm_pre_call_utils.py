@@ -1069,6 +1069,66 @@ async def test_add_litellm_data_to_request_strips_string_encoded_admin_injection
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "forged_field,forged_value",
+    [
+        ("fallback_depth", 1),
+        ("fallback_depth", True),
+        ("_target_order", 2),
+        ("attempted_targets", ["forged"]),
+    ],
+)
+async def test_add_litellm_data_to_request_strips_forged_fallback_hop_state(
+    forged_field: str, forged_value: object
+) -> None:
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/responses"
+    request_mock.url.__str__.return_value = "http://localhost/v1/responses"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "hop", "input": "hello", forged_field: forged_value},
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert forged_field not in updated
+    assert forged_field not in updated["proxy_server_request"]["body"]
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_keeps_the_request_max_fallbacks_cap() -> None:
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/responses"
+    request_mock.url.__str__.return_value = "http://localhost/v1/responses"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "hop", "input": "hello", "max_fallbacks": 0},
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert updated["max_fallbacks"] == 0
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_strips_user_control_fields():
     """Strip untrusted proxy-control fields before guardrails, logging, and headers read metadata."""
     request_mock = MagicMock(spec=Request)
