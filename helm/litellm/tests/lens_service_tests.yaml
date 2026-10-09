@@ -30,7 +30,7 @@ tests:
   - contains:
       path: spec.template.spec.containers[0].env
       content:
-        name: LITELLM_LENS_SERVICE_TOKEN
+        name: LENS_GATEWAY_SECRET
         valueFrom:
           secretKeyRef:
             name: lens-service
@@ -52,7 +52,7 @@ tests:
   - contains:
       path: spec.template.spec.containers[0].env
       content:
-        name: LITELLM_LENS_SERVICE_TOKEN
+        name: LENS_GATEWAY_SECRET
         valueFrom:
           secretKeyRef:
             name: lens-service

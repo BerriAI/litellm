@@ -784,61 +784,6 @@ def test_unconfigured_lifespan_receiver_returns_501(enabled: bool, monkeypatch: 
     storage.list_traces.assert_not_called()
 
 
-def test_lens_reads_from_the_lifespan_storage(monkeypatch: pytest.MonkeyPatch) -> None:
-    from litellm.proxy.lens.endpoints import router as lens_router
-
-    monkeypatch.setenv("LITELLM_LENS_URL", "http://lens.test")
-    monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "test-service-token-with-32-characters")
-    storage: Final = MagicMock(spec=ClickHouseStorage)
-    storage.ensure_schema = AsyncMock()
-    storage.lens_sample = AsyncMock(return_value=[])
-    tracing: Final = TraceReceiver(storage)
-
-    @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncGenerator[ProxyLifespanState, None]:
-        async with manage_tracing(True, lambda: tracing) as receiver:
-            state: Final[ProxyLifespanState] = {"tracing_receiver": receiver}
-            yield state
-
-    app: Final = FastAPI(lifespan=lifespan)
-    app.include_router(lens_router)
-    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
-    with TestClient(app) as client:
-        response: Final = client.post(
-            "/lens/preview/sample",
-            json={"selection": {"source": "requests", "service": "checkout"}},
-        )
-    assert response.status_code == 200, response.text
-    assert response.json()["executions"] == []
-    storage.lens_sample.assert_awaited_once()
-    params: Final = storage.lens_sample.await_args.args[0]
-    assert (params.all_teams, params.source, params.service, params.preview) == (1, "requests", "checkout", 1)
-
-
-def test_lens_reads_from_injected_storage_without_receiver() -> None:
-    from litellm.proxy.lens.endpoints import router as lens_router
-    from litellm.proxy.lens.sources import Storage
-
-    storage: Final = MagicMock(spec=Storage)
-    storage.lens_sample = AsyncMock(return_value=[])
-    app: Final = FastAPI()
-    app.include_router(lens_router)
-    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
-    app.dependency_overrides[provide_storage] = lambda: storage
-
-    with TestClient(app) as client:
-        response: Final = client.post(
-            "/lens/preview/sample",
-            json={"selection": {"source": "requests", "service": "checkout"}},
-        )
-
-    assert response.status_code == 200, response.text
-    assert response.json()["executions"] == []
-    storage.lens_sample.assert_awaited_once()
-    params: Final = storage.lens_sample.await_args.args[0]
-    assert (params.source, params.service, params.preview) == ("requests", "checkout", 1)
-
-
 @pytest.mark.parametrize(
     ("auth", "expected_scope"),
     (

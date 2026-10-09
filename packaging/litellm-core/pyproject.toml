@@ -57,7 +57,6 @@ include = [
     "litellm/proxy/model_insights_tasks.json",
     "litellm/proxy/common_utils/codex_base_instructions.md",
     "litellm/proxy/common_utils/codex_bundled_models_0.159.3.json",
-    "litellm/proxy/lens/prompts/*.md",
 ]
 exclude = [
     "litellm/proxy/_experimental/out",

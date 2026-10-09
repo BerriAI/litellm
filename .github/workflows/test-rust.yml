@@ -6,8 +6,6 @@ on:
       - "litellm-rust/**"
       - "litellm/rust_bridge/**"
       - "scripts/generate_trace_types.py"
-      - "scripts/generate_lens_contract.py"
-      - "litellm/proxy/lens/**"
       - "scripts/trace_codegen/**"
       - "tests/test_litellm_rust/**"
       - "litellm/integrations/custom_logger.py"
@@ -37,8 +35,6 @@ on:
       - "litellm-rust/**"
       - "litellm/rust_bridge/**"
       - "scripts/generate_trace_types.py"
-      - "scripts/generate_lens_contract.py"
-      - "litellm/proxy/lens/**"
       - "scripts/trace_codegen/**"
       - "tests/test_litellm_rust/**"
       - "litellm/integrations/custom_logger.py"
@@ -138,10 +134,6 @@ jobs:
       - name: Check generated trace contracts
         working-directory: .
         run: uv run scripts/generate_trace_types.py --check
-
-      - name: Check generated Lens contracts
-        working-directory: .
-        run: uv run scripts/generate_lens_contract.py --check
 
       - run: cargo nextest run --workspace --locked --features litellm-traces/schema,litellm-traces-clickhouse/schema
 

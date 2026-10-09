@@ -25,7 +25,6 @@ from uuid import uuid4
 import httpx
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
-from litellm.proxy.lens.ingestion import IngestionKeyCreated
 from litellm.rust_bridge.trace.generated.types import AllQueryScope, Trace
 from litellm.rust_bridge.trace.storage import ClickHouseStorage, Tenant, span_rows
 from litellm.tracing.config import trace_storage_config
@@ -56,6 +55,18 @@ class TenantIdentity(BaseModel):
     team_id: str
     api_key: str
     user: str
+
+
+class IngestionKeyRecord(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    id: str
+
+
+class IngestionKeyCreated(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    key: str
+    active: bool
+    record: IngestionKeyRecord
 
 
 class FixtureCapture(BaseModel):

@@ -23,10 +23,13 @@ export KUBECONFIG="$qa_dir/kubeconfig"
 kind create cluster --name "$cluster" \
   --image kindest/node:v1.32.2@sha256:f226345927d7e348497136874b6d207e0b32cc52154ad8323129352923a3142f \
   --wait 120s
-for component in gateway backend ui migrations monolith worker; do
+for component in gateway backend ui migrations monolith; do
   kind load docker-image --name "$cluster" "lens-ci-$component:v0.0.0-lens-ci"
+  docker tag "lens-ci-$component:v0.0.0-lens-ci" "lens-ci-$component:gateway-upgrade"
+  kind load docker-image --name "$cluster" "lens-ci-$component:gateway-upgrade"
 done
-helm dependency build helm/litellm-helm
+kind load docker-image --name "$cluster" lens-ci-worker:baseline lens-ci-worker:upgrade
+test -f helm/litellm-helm/charts/lens-0.1.0-dev.0.tgz
 
 api() {
   curl --fail-with-body --silent --show-error --max-time 20 \
@@ -119,8 +122,30 @@ spec:
         - name: clickhouse
           image: clickhouse/clickhouse-server:26.9.6.6@sha256:eb4870e7ca7ed70c259eebfcfbee6cf797017f6b5436c2926bbbfe3d4d28486e
           env: [{name: CLICKHOUSE_SKIP_USER_SETUP, value: "1"}]
+          volumeMounts:
+            - {name: keeper, mountPath: /etc/clickhouse-server/config.d/lens-keeper.xml, subPath: lens-keeper.xml}
           readinessProbe:
             httpGet: {path: /ping, port: 8123}
+      volumes:
+        - name: keeper
+          configMap: {name: clickhouse-keeper}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: clickhouse-keeper}
+data:
+  lens-keeper.xml: |
+    <clickhouse>
+      <keeper_server>
+        <tcp_port>9181</tcp_port><server_id>1</server_id>
+        <log_storage_path>/var/lib/clickhouse/coordination/log</log_storage_path>
+        <snapshot_storage_path>/var/lib/clickhouse/coordination/snapshots</snapshot_storage_path>
+        <coordination_settings><operation_timeout_ms>10000</operation_timeout_ms><quorum_reads>true</quorum_reads></coordination_settings>
+        <raft_configuration><server><id>1</id><hostname>127.0.0.1</hostname><port>9234</port></server></raft_configuration>
+      </keeper_server>
+      <zookeeper><node><host>127.0.0.1</host><port>9181</port></node></zookeeper>
+      <keeper_map_path_prefix>/lens/keeper-map</keeper_map_path_prefix>
+    </clickhouse>
 ---
 apiVersion: v1
 kind: Service
@@ -135,7 +160,7 @@ YAML
 fullnameOverride: lens
 lensWorker:
   enabled: true
-  image: {repository: lens-ci-worker, tag: v0.0.0-lens-ci, pullPolicy: Never}
+  image: {repository: lens-ci-worker, tag: baseline, pullPolicy: Never}
   serviceTokenSecret: {name: lens-secrets, key: service-token}
   clickhouseSecret: {name: lens-secrets, key: url}
   clickhouseDatabase: existing_traces
@@ -223,15 +248,37 @@ YAML
     "SELECT count() FROM existing_traces.otel_traces WHERE TraceId = '$trace_id'" | grep -qx 1
   "${install[@]}" || diagnose
   saved_trace
-  for pid in "${forward_pids[@]}"; do kill "$pid"; wait "$pid" 2>/dev/null || true; done
+  kubectl -n "$namespace" get deployments -l app.kubernetes.io/instance=lens -o json \
+    | jq -S '[.items[] | select(.metadata.name != "lens-lens-worker") | {name:.metadata.name,template:.spec.template}] | sort_by(.name)' \
+    > "$qa_dir/gateway-before.json"
+  "${install[@]}" --set lensWorker.image.tag=upgrade || diagnose
+  kubectl -n "$namespace" get deployments -l app.kubernetes.io/instance=lens -o json \
+    | jq -S '[.items[] | select(.metadata.name != "lens-lens-worker") | {name:.metadata.name,template:.spec.template}] | sort_by(.name)' \
+    > "$qa_dir/gateway-after.json"
+  cmp "$qa_dir/gateway-before.json" "$qa_dir/gateway-after.json"
+  saved_trace
+  "${install[@]}" || diagnose
+  saved_trace
+  kubectl -n "$namespace" get deployment lens-lens-worker -o json \
+    | jq -S .spec.template > "$qa_dir/lens-before.json"
+  gateway_upgrade=(--set image.tag=gateway-upgrade)
+  if [[ "$chart" == litellm ]]; then
+    gateway_upgrade=(--set gateway.image.tag=gateway-upgrade --set backend.image.tag=gateway-upgrade \
+      --set ui.image.tag=gateway-upgrade --set migrationJob.image.tag=gateway-upgrade)
+  fi
+  "${install[@]}" "${gateway_upgrade[@]}" || diagnose
+  kubectl -n "$namespace" get deployment lens-lens-worker -o json \
+    | jq -S .spec.template > "$qa_dir/lens-after.json"
+  cmp "$qa_dir/lens-before.json" "$qa_dir/lens-after.json"
+  for pid in "${forward_pids[@]}"; do kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; done
   forward_pids=()
   kubectl -n "$namespace" rollout restart "deployment/$control" deployment/lens-lens-worker
   kubectl -n "$namespace" rollout status "deployment/$control" --timeout=180s
   kubectl -n "$namespace" rollout status deployment/lens-lens-worker --timeout=180s
   forward "$control" 14418 "$control_port"
   saved_trace
-  printf '%s: fresh install, direct ingestion, custom database, upgrade, and restart passed\n' "$chart"
-  for pid in "${forward_pids[@]}"; do kill "$pid"; wait "$pid" 2>/dev/null || true; done
+  printf '%s: fresh install, ingestion, independent upgrades, Lens rollback, and restart passed\n' "$chart"
+  for pid in "${forward_pids[@]}"; do kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; done
   forward_pids=()
   kubectl delete namespace "$namespace" --wait=true
 done

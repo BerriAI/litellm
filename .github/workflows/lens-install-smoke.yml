@@ -2,6 +2,15 @@ name: Lens installation smoke
 
 on:
   workflow_dispatch:
+    inputs:
+      lens_image:
+        description: Verified baseline Lens image at ghcr.io/berriai/lens@sha256
+        required: true
+        type: string
+      lens_upgrade_image:
+        description: Compatible Lens upgrade image at ghcr.io/berriai/lens@sha256
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -28,8 +37,6 @@ jobs:
             dockerfile: migrations/Dockerfile
           - component: monolith
             dockerfile: Dockerfile
-          - component: worker
-            dockerfile: deploy/lens/Dockerfile
     env:
       COMPONENT: ${{ matrix.component }}
       DOCKERFILE: ${{ matrix.dockerfile }}
@@ -69,11 +76,38 @@ jobs:
           path: ${{ runner.temp }}/lens-install-images
       - name: Load the matching release images
         run: |
-          for component in gateway backend ui migrations monolith worker; do
+          for component in gateway backend ui migrations monolith; do
             archive="$RUNNER_TEMP/lens-install-images/lens-install-$component.tar.gz"
             gzip -dc "$archive" | docker load
             rm "$archive"
           done
+      - uses: sigstore/cosign-installer@3454372f43399081ed03b604cb2d021dabca52bb
+        with:
+          cosign-release: v2.4.3
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ vars.LENS_READ_USER || github.actor }}
+          password: ${{ secrets.LENS_READ_TOKEN }}
+      - name: Verify independent Lens images before loading them
+        env:
+          LENS_IMAGE: ${{ inputs.lens_image }}
+          LENS_UPGRADE_IMAGE: ${{ inputs.lens_upgrade_image }}
+          LENS_PUBLIC_KEY: ${{ vars.LENS_COSIGN_PUBLIC_KEY }}
+          LENS_PUBLIC_KEY_SHA256: ${{ vars.LENS_COSIGN_PUBLIC_KEY_SHA256 }}
+        shell: bash -euo pipefail {0}
+        run: |
+          [[ "$LENS_PUBLIC_KEY_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          printf '%s' "$LENS_PUBLIC_KEY" > "$RUNNER_TEMP/lens.pub"
+          echo "$LENS_PUBLIC_KEY_SHA256  $RUNNER_TEMP/lens.pub" | sha256sum --check
+          for image in "$LENS_IMAGE" "$LENS_UPGRADE_IMAGE"; do
+            [[ "$image" =~ ^ghcr.io/berriai/lens@sha256:[0-9a-f]{64}$ ]]
+            cosign verify --key "$RUNNER_TEMP/lens.pub" "$image" > /dev/null
+            cosign verify-attestation --key "$RUNNER_TEMP/lens.pub" --type spdxjson "$image" > /dev/null
+            docker pull "$image"
+          done
+          docker tag "$LENS_IMAGE" lens-ci-worker:baseline
+          docker tag "$LENS_UPGRADE_IMAGE" lens-ci-worker:upgrade
       - name: Install pinned Kubernetes test tools
         run: |
           curl --fail --location --output "$RUNNER_TEMP/kind" \

@@ -1,0 +1,6 @@
+dependencies:
+- name: lens
+  repository: oci://ghcr.io/berriai/charts
+  version: 0.1.0-dev.0
+digest: sha256:6b244c878890f10a093a297d70c9e68b2c3bda00fbbb56ab287e7ecee1d7bbcf
+generated: '2026-10-09T04:18:10.642706000Z'

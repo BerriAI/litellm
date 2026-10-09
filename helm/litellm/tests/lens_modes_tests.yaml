@@ -1,0 +1,95 @@
+---
+suite: Lens deployment modes
+templates:
+- gateway/configmap.yaml
+- backend/deployment.yaml
+- lens/deployment.yaml
+- lens/service.yaml
+- lens/clickhouse.yaml
+- lens/secrets.yaml
+- ingress.yaml
+values:
+- "./values/required.yaml"
+set:
+  lensWorker.publicUrl: https://traces.example
+tests:
+- it: retains the existing deployment before transferring its release ownership
+  template: lens/deployment.yaml
+  set:
+    lensWorker.mode: bundled
+    lensWorker.retainResources: true
+  asserts:
+  - equal:
+      path: metadata.annotations["helm.sh/resource-policy"]
+      value: keep
+- it: keeps the ingestion endpoint on an independently deployed Lens service
+  template: ingress.yaml
+  set:
+    ingress.enabled: true
+    lensWorker.mode: external
+    lensWorker.externalUrl: http://existing-lens:4318
+    lensWorker.externalServiceName: existing-lens
+    lensWorker.serviceTokenSecret.name: external-lens-signing
+  asserts:
+  - contains:
+      path: spec.rules[0].http.paths
+      content:
+        path: /lens-ingest
+        pathType: Prefix
+        backend:
+          service:
+            name: existing-lens
+            port: {number: 4318}
+- it: connects an external deployment without installing Lens resources
+  templates:
+  - lens/deployment.yaml
+  - lens/service.yaml
+  - lens/clickhouse.yaml
+  - lens/secrets.yaml
+  set:
+    lensWorker.mode: external
+    lensWorker.externalUrl: http://lens.other-namespace:4318
+    lensWorker.serviceTokenSecret.name: external-lens-signing
+  asserts:
+  - hasDocuments:
+      count: 0
+- it: sends delegated requests to the explicitly selected external Lens
+  template: backend/deployment.yaml
+  set:
+    lensWorker.mode: external
+    lensWorker.externalUrl: http://lens.other-namespace:4318
+    lensWorker.serviceTokenSecret.name: external-lens-signing
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: LITELLM_LENS_URL
+        value: http://lens.other-namespace:4318
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: LENS_GATEWAY_SECRET
+        valueFrom:
+          secretKeyRef:
+            name: external-lens-signing
+            key: service-token
+- it: disables Lens explicitly even with a retained legacy enable flag
+  template: lens/deployment.yaml
+  set:
+    lensWorker.mode: disabled
+    lensWorker.enabled: true
+  asserts:
+  - hasDocuments:
+      count: 0
+- it: bundles Lens through explicit mode selection
+  template: lens/deployment.yaml
+  set:
+    lensWorker.mode: bundled
+  asserts:
+  - hasDocuments:
+      count: 1
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: LENS_MODE
+        value: standalone

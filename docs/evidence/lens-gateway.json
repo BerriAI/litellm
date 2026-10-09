@@ -1,0 +1,264 @@
+{
+  "created_at": "2026-10-09T04:56:26.864Z",
+  "qualification": "Local source candidate, published release adoption pending",
+  "permissions": {
+    "created_at": "2026-10-09T04:51:00.472Z",
+    "trace": "3ae3c28413aeec05ac9c512f5a241ffe",
+    "results": [
+      {
+        "user": "admin",
+        "method": "GET",
+        "path": "/v1/traces/3ae3c28413aeec05ac9c512f5a241ffe",
+        "status": 200,
+        "traceId": "3ae3c28413aeec05ac9c512f5a241ffe"
+      },
+      {
+        "user": "admin",
+        "method": "GET",
+        "path": "/lens/signals",
+        "status": 200
+      },
+      {
+        "user": "viewer",
+        "method": "GET",
+        "path": "/v1/traces/3ae3c28413aeec05ac9c512f5a241ffe",
+        "status": 200,
+        "traceId": "3ae3c28413aeec05ac9c512f5a241ffe"
+      },
+      {
+        "user": "viewer",
+        "method": "GET",
+        "path": "/lens/signals",
+        "status": 200
+      },
+      {
+        "user": "viewer",
+        "method": "PUT",
+        "path": "/lens/signals",
+        "status": 403,
+        "error": "Only proxy admins can configure or run Lens"
+      },
+      {
+        "user": "owner",
+        "method": "GET",
+        "path": "/v1/traces/3ae3c28413aeec05ac9c512f5a241ffe",
+        "status": 200,
+        "traceId": "3ae3c28413aeec05ac9c512f5a241ffe"
+      },
+      {
+        "user": "owner",
+        "method": "GET",
+        "path": "/lens/signals",
+        "status": 403,
+        "error": "Lens requires proxy administrator access"
+      },
+      {
+        "user": "owner",
+        "method": "PUT",
+        "path": "/lens/signals",
+        "status": 403,
+        "error": "Only proxy admins can configure or run Lens"
+      },
+      {
+        "user": "other",
+        "method": "GET",
+        "path": "/v1/traces/3ae3c28413aeec05ac9c512f5a241ffe",
+        "status": 404,
+        "error": "Trace 3ae3c28413aeec05ac9c512f5a241ffe not found"
+      },
+      {
+        "user": "other",
+        "method": "GET",
+        "path": "/lens/signals",
+        "status": 403,
+        "error": "Lens requires proxy administrator access"
+      },
+      {
+        "user": "other",
+        "method": "PUT",
+        "path": "/lens/signals",
+        "status": 403,
+        "error": "Only proxy admins can configure or run Lens"
+      }
+    ],
+    "contract": {
+      "status": 409,
+      "body": {
+        "detail": "contract_version",
+        "code": "contract_version"
+      }
+    }
+  },
+  "billing": {
+    "created_at": "2026-10-09T04:52:55.367Z",
+    "model": "openai/gpt-6.1-sol",
+    "calls": [
+      {
+        "internal": false,
+        "status": 200,
+        "call_id": "426915ce-5aee-43df-8e3b-7b4ce54a13ab",
+        "cost": "8.400000000000001e-05",
+        "response_id": "chatcmpl-EWwsBOlHwlDgotfQ14ABIU0MxaHMn",
+        "usage": {
+          "completion_tokens": 6,
+          "prompt_tokens": 12,
+          "total_tokens": 18,
+          "completion_tokens_details": {
+            "accepted_prediction_tokens": 0,
+            "audio_tokens": 0,
+            "reasoning_tokens": 0,
+            "rejected_prediction_tokens": 0
+          },
+          "prompt_tokens_details": {
+            "audio_tokens": 0,
+            "cached_tokens": 0,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0
+          }
+        },
+        "answer": "ordinary billing proof"
+      },
+      {
+        "internal": true,
+        "status": 200,
+        "call_id": "7412583f-e8e6-4993-8d57-a5dfd41d9b07",
+        "cost": "8.400000000000001e-05",
+        "response_id": "chatcmpl-EWwsDjeG5ZF8I8qewy0134cIbsAyD",
+        "usage": {
+          "completion_tokens": 6,
+          "prompt_tokens": 12,
+          "total_tokens": 18,
+          "completion_tokens_details": {
+            "accepted_prediction_tokens": 0,
+            "audio_tokens": 0,
+            "reasoning_tokens": 0,
+            "rejected_prediction_tokens": 0
+          },
+          "prompt_tokens_details": {
+            "audio_tokens": 0,
+            "cached_tokens": 0,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0
+          }
+        },
+        "answer": "internal billing proof"
+      }
+    ],
+    "billing": [
+      {
+        "internal": false,
+        "status": 200,
+        "rows": [
+          {
+            "request_id": "chatcmpl-EWwsBOlHwlDgotfQ14ABIU0MxaHMn",
+            "spend": 0.00008400000000000001,
+            "user": "lens-qa-owner",
+            "total_tokens": 18
+          }
+        ]
+      },
+      {
+        "internal": true,
+        "status": 200,
+        "rows": [
+          {
+            "request_id": "chatcmpl-EWwsDjeG5ZF8I8qewy0134cIbsAyD",
+            "spend": 0.00008400000000000001,
+            "user": "lens-qa-owner",
+            "total_tokens": 18
+          }
+        ]
+      }
+    ],
+    "storage": [
+      {
+        "call_id": "426915ce-5aee-43df-8e3b-7b4ce54a13ab",
+        "request_id": "chatcmpl-EWwsBOlHwlDgotfQ14ABIU0MxaHMn",
+        "spend": 0.00008400000000000001,
+        "user": "lens-qa-owner",
+        "internal": false,
+        "prompt_redacted": false,
+        "response_redacted": false
+      },
+      {
+        "call_id": "7412583f-e8e6-4993-8d57-a5dfd41d9b07",
+        "request_id": "chatcmpl-EWwsDjeG5ZF8I8qewy0134cIbsAyD",
+        "spend": 0.00008400000000000001,
+        "user": "lens-qa-owner",
+        "internal": true,
+        "prompt_redacted": true,
+        "response_redacted": true
+      }
+    ]
+  },
+  "investigation": {
+    "created_at": "2026-10-09T04:55:58.235Z",
+    "lens_id": "b598954e-54d7-486f-8a10-2ce84876f587",
+    "run_id": "23f27a91-2bed-42ab-8de4-ced448d1c1f6",
+    "status": "completed",
+    "reviewed": 1,
+    "finding": {
+      "id": "cfb98535-6db3-40f4-b00d-216108a43e39",
+      "title": "Invoice payment claim contradicted the supplied lookup",
+      "citations": 4
+    },
+    "budget_denial": {
+      "cost": 0,
+      "error": "The service rejected a worker request (HTTP 402): This model request needs up to $1.932, but $1.000 remains in the investigation budget. Use a smaller deployment output allowance or increase the limit."
+    },
+    "cost": 0.04187490000000001,
+    "calls": [
+      {
+        "request_id": "chatcmpl-EWwv8mqPJ5CPwi2GFCpScDBZTAjzj",
+        "call_id": "c5ce106e-2016-4681-bde4-a262dc47c3ea",
+        "spend": 0.0175902,
+        "internal": true,
+        "prompt_redacted": true,
+        "contains_invoice_evidence": false,
+        "gateway_billing_agrees": true
+      },
+      {
+        "request_id": "chatcmpl-EWwv1q2x1i06HAzlJzcE0AkKsrsYf",
+        "call_id": "77c630ac-a9e1-452c-aa00-5fa26935cfce",
+        "spend": 0.009708500000000002,
+        "internal": true,
+        "prompt_redacted": true,
+        "contains_invoice_evidence": false,
+        "gateway_billing_agrees": true
+      },
+      {
+        "request_id": "chatcmpl-EWwuxgpSenXaB3943E0zWBED71LR1",
+        "call_id": "f6138414-b999-4d2c-a132-43c61bac0629",
+        "spend": 0.002288,
+        "internal": true,
+        "prompt_redacted": true,
+        "contains_invoice_evidence": false,
+        "gateway_billing_agrees": true
+      },
+      {
+        "request_id": "chatcmpl-EWwuldf8ANohSAA2mO08cc0DhWUlr",
+        "call_id": "915b3548-62a9-4cb9-8370-b0c5a994707a",
+        "spend": 0.0061472,
+        "internal": true,
+        "prompt_redacted": true,
+        "contains_invoice_evidence": false,
+        "gateway_billing_agrees": true
+      },
+      {
+        "request_id": "chatcmpl-EWwuh3bqLJNkdhzjjK1jmfqKn35Ra",
+        "call_id": "ca80554d-ebf1-4af4-9ca6-ee1994711b90",
+        "spend": 0.006141000000000001,
+        "internal": true,
+        "prompt_redacted": true,
+        "contains_invoice_evidence": false,
+        "gateway_billing_agrees": true
+      }
+    ],
+    "assertions": {
+      "run_cost_equals_gateway_and_lens_spend": true,
+      "all_runtime_calls_marked_internal": true,
+      "all_runtime_prompts_redacted": true
+    },
+    "review_url": "http://127.0.0.1:4491/ui/lens/?tab=investigations&lens=b598954e-54d7-486f-8a10-2ce84876f587"
+  }
+}

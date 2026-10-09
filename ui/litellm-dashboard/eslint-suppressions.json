@@ -231,9 +231,6 @@
     "max-lines": {
       "count": 1
     },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    },
     "react/no-unescaped-entities": {
       "count": 2
     }
