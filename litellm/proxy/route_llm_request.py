@@ -253,7 +253,10 @@ def _find_missing_required_body_param(
             param
             for param in missing_present_params
             if router_default_litellm_params.get(param) is None
-            and not any(deployment_params.get(param) is not None for deployment_params in candidate_litellm_params)
+            and (
+                route_type in _ROUTE_TYPES_WITH_POSITIONAL_REQUIRED_PARAM
+                or not any(deployment_params.get(param) is not None for deployment_params in candidate_litellm_params)
+            )
         ),
         None,
     )
@@ -262,22 +265,21 @@ def _find_missing_required_body_param(
     return MissingBodyParam(name=missing_param, model_deployments_loaded=bool(candidate_litellm_params))
 
 
-_ROUTE_TYPES_WITHOUT_ROUTER_DEFAULTS_MERGE: Final[frozenset[str]] = frozenset(
-    {
-        "asearch",
-        "acreate_agent",
-        "acreate_eval",
-        "acreate_run",
-        "aimage_generation",
-        "aspeech",
-        "atext_completion",
-        "atranscription",
-    }
+# The Router method takes the route's required param positionally, so it binds before
+# any default or deployment param is merged in, and only the request body can supply it.
+_ROUTE_TYPES_WITH_POSITIONAL_REQUIRED_PARAM: Final[frozenset[str]] = frozenset(
+    {"aimage_generation", "aspeech", "atext_completion", "atranscription"}
 )
 
+_ROUTE_TYPES_WITHOUT_ROUTER_DEFAULTS_MERGE: Final[frozenset[str]] = (
+    frozenset({"asearch", "acreate_agent", "acreate_eval", "acreate_run"}) | _ROUTE_TYPES_WITH_POSITIONAL_REQUIRED_PARAM
+)
 
-# Routes whose providers reject a request without a model; a wildcard deployment
-# must not stand in for the missing model on these.
+# The Router merges defaults on these only when `get_model_list` lists the model.
+_ROUTE_TYPES_MERGING_ONLY_LISTED_MODELS: Final[frozenset[str]] = frozenset({"amoderation"})
+
+# Routes whose providers reject a request without a model. A wildcard deployment that
+# forwards the requested name would send a made-up one, so it must not serve these.
 _ROUTE_TYPES_REQUIRING_MODEL: Final[frozenset[str]] = frozenset({"acompletion", "aresponses", "anthropic_messages"})
 
 
@@ -289,9 +291,11 @@ def _router_default_litellm_params(
     model_resolves: bool,
 ) -> Mapping[str, object]:
     # Mirror exactly the defaults the dispatching router will merge at dispatch time:
-    # user_config requests dispatch on their own throwaway Router; the listed route
-    # types either never pass through the router's merge or take the param positionally,
-    # which binds before the merge; and the merge only runs once a deployment resolves.
+    # the listed route types either never pass through the router's merge or take the
+    # param positionally, which binds before the merge; user_config requests dispatch on
+    # their own throwaway Router; and the merge only runs once a deployment resolves.
+    if route_type in _ROUTE_TYPES_WITHOUT_ROUTER_DEFAULTS_MERGE:
+        return {}
     user_config: Final[Mapping[str, object] | None] = (
         data.get("user_config") if isinstance(data.get("user_config"), Mapping) else None
     )
@@ -299,26 +303,44 @@ def _router_default_litellm_params(
         defaults: Final[Mapping[str, object] | None] = user_config.get("default_litellm_params")
         return defaults if isinstance(defaults, Mapping) else {}
     model_name: Final = data.get("model")
-    if route_type in _ROUTE_TYPES_WITHOUT_ROUTER_DEFAULTS_MERGE or not isinstance(model_name, str) or not model_name:
+    if not isinstance(model_name, str) or not model_name:
         return {}
     router_defaults: Final[Mapping[str, object] | None] = getattr(llm_router, "default_litellm_params", None)
     if not isinstance(router_defaults, Mapping) or llm_router is None:
         return {}
-    if not model_resolves and not _router_serves_model(llm_router, model_name):
+    if model_resolves:
+        return router_defaults
+    if route_type in _ROUTE_TYPES_MERGING_ONLY_LISTED_MODELS or not _router_serves_model(llm_router, model_name):
         return {}
     return router_defaults
 
 
 def _router_serves_model(llm_router: LitellmRouter, model_name: str) -> bool:
     """Whether dispatch reaches one of the router's deployments for a model that
-    `get_model_list` does not list: a deployment name, a team public name, an alias,
-    or a default deployment."""
+    `get_model_list` does not list: a deployment id or name, an alias, or a team public name."""
     return (
-        llm_router.default_deployment is not None
-        or llm_router.is_recognized_model(model_name)
+        llm_router.is_recognized_model(model_name)
         or model_name in llm_router.deployment_names  # pyright: ignore[reportUnknownMemberType]  # Router.deployment_names is an untyped list
         or model_name in llm_router.team_public_model_names
     )
+
+
+def _wildcard_forwards_missing_model(llm_router: LitellmRouter) -> bool:
+    """Whether every wildcard deployment the router would pick for a request with no
+    model copies the requested name into its target (`openai/*`), so the provider would
+    get a made-up model instead of a fixed one like `openai/gpt-4o`."""
+    matched: Final = llm_router.pattern_router.get_deployments_by_pattern(model=None)  # pyright: ignore[reportArgumentType]  # mirrors the router's own lookup for a missing model
+    targets: Final = tuple(
+        deployment.litellm_params.model
+        for matched_deployment in matched
+        if (
+            deployment := llm_router.get_deployment(
+                model_id=str((matched_deployment.get("model_info") or {}).get("id"))
+            )
+        )
+        is not None
+    )
+    return all("*" in target for target in targets)
 
 
 def _candidate_deployment_litellm_params(
@@ -841,7 +863,11 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                 return getattr(litellm, f"{route_type}")(**data)
             elif llm_router.default_deployment is not None or (
                 len(llm_router.pattern_router.patterns) > 0
-                and not (data["model"] is None and route_type in _ROUTE_TYPES_REQUIRING_MODEL)
+                and not (
+                    not data["model"]
+                    and route_type in _ROUTE_TYPES_REQUIRING_MODEL
+                    and _wildcard_forwards_missing_model(llm_router)
+                )
             ):
                 return getattr(llm_router, f"{route_type}")(**data)
             elif data["model"] in llm_router.deployment_names:

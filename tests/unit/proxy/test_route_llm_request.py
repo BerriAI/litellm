@@ -1762,19 +1762,23 @@ async def test_route_request_router_settings_override_skips_null_fields():
     assert "model_group_retry_policy" not in call_kwargs
 
 
-def _router_with_defaults(default_litellm_params: dict[str, object], *, wildcard: bool = False):
+def _router_with_defaults(default_litellm_params: dict[str, object], *, wildcard_target: str | None = None):
     import litellm
 
     model_list: Final[list[dict[str, object]]] = [
-        {"model_name": "served", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"}},
+        {
+            "model_name": "served",
+            "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+            "model_info": {"id": "served-deployment"},
+        },
         {
             "model_name": "team-internal",
             "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
             "model_info": {"id": "team-deployment", "team_id": "team-a", "team_public_model_name": "team-public"},
         },
     ]
-    if wildcard:
-        model_list.append({"model_name": "*", "litellm_params": {"model": "openai/*", "api_key": "test-key"}})
+    if wildcard_target is not None:
+        model_list.append({"model_name": "*", "litellm_params": {"model": wildcard_target, "api_key": "test-key"}})
     return litellm.Router(
         model_list=model_list,
         model_group_alias={"served-alias": "served"},
@@ -1787,7 +1791,6 @@ def test_router_defaults_never_cover_a_param_the_router_takes_positionally() -> 
     so a router-wide default for it never reaches the call."""
     import inspect
 
-    import litellm
     from litellm.proxy.route_llm_request import (
         _ROUTE_TYPES_WITHOUT_ROUTER_DEFAULTS_MERGE,  # pyright: ignore[reportPrivateUsage]  # the gate's route set
         REQUIRED_PRESENT_BODY_PARAMS_BY_ROUTE,
@@ -1807,7 +1810,6 @@ def test_router_defaults_never_cover_a_param_the_router_takes_positionally() -> 
 
     assert named_by_router == {"aimage_generation", "aspeech", "atext_completion", "atranscription"}
     assert named_by_router <= _ROUTE_TYPES_WITHOUT_ROUTER_DEFAULTS_MERGE
-    assert isinstance(router, litellm.Router)
 
 
 @pytest.mark.parametrize(
@@ -1835,7 +1837,14 @@ def test_router_default_for_positional_param_still_raises(route_type: str, param
     assert exc_info.value.param == param
 
 
-def test_router_default_ignored_for_model_the_router_does_not_serve() -> None:
+@pytest.mark.parametrize(
+    "route_type, param",
+    [
+        ("aimage_generation", "prompt"),
+        ("aspeech", "input"),
+    ],
+)
+def test_user_config_default_for_positional_param_still_raises(route_type: str, param: str) -> None:
     from litellm.proxy.route_llm_request import (
         ProxyMissingRequiredParamError,
         raise_if_required_body_param_missing,
@@ -1843,42 +1852,93 @@ def test_router_default_ignored_for_model_the_router_does_not_serve() -> None:
 
     with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
         raise_if_required_body_param_missing(
-            route_type="amoderation",
-            data={"model": "omni-moderation-2024-09-26"},
-            llm_router=_router_with_defaults({"input": "supplied-by-router-default"}),
+            route_type=route_type,
+            data={"model": "img", "user_config": {"model_list": [], "default_litellm_params": {param: "x"}}},
+            llm_router=None,
         )
 
-    assert exc_info.value.param == "input"
+    assert exc_info.value.param == param
+
+
+def test_deployment_param_for_positional_param_still_raises() -> None:
+    import litellm
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "img",
+                "litellm_params": {"model": "openai/gpt-image-1", "api_key": "test-key", "prompt": "a cat"},
+            }
+        ]
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(route_type="aimage_generation", data={"model": "img"}, llm_router=router)
+
+    assert exc_info.value.param == "prompt"
 
 
 @pytest.mark.parametrize(
-    "model, wildcard",
+    "route_type, model",
     [
-        pytest.param("served", False, id="model-name"),
-        pytest.param("served-alias", False, id="model-group-alias"),
-        pytest.param("openai/gpt-4o-mini", False, id="deployment-name"),
-        pytest.param("team-public", False, id="team-public-name"),
-        pytest.param("gpt-4.1", True, id="wildcard"),
+        pytest.param("anthropic_messages", "omni-moderation-2024-09-26", id="unknown-model"),
+        pytest.param("amoderation", "omni-moderation-2024-09-26", id="moderation-unknown-model"),
+        pytest.param("amoderation", "openai/gpt-4o-mini", id="moderation-deployment-name"),
+        pytest.param("amoderation", "served-deployment", id="moderation-deployment-id"),
     ],
 )
-def test_router_default_applies_to_every_model_the_router_serves(model: str, wildcard: bool) -> None:
+def test_router_default_ignored_for_model_the_router_does_not_merge_for(route_type: str, model: str) -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type=route_type,
+            data={"model": model, "messages": []},
+            llm_router=_router_with_defaults({"input": "supplied", "max_tokens": 16}),
+        )
+
+    assert exc_info.value.param in {"input", "max_tokens"}
+
+
+@pytest.mark.parametrize(
+    "model, wildcard_target",
+    [
+        pytest.param("served", None, id="model-name"),
+        pytest.param("served-alias", None, id="model-group-alias"),
+        pytest.param("openai/gpt-4o-mini", None, id="deployment-name"),
+        pytest.param("served-deployment", None, id="deployment-id"),
+        pytest.param("team-public", None, id="team-public-name"),
+        pytest.param("gpt-4.1", "openai/*", id="wildcard"),
+    ],
+)
+def test_router_default_applies_to_every_model_the_router_serves(model: str, wildcard_target: str | None) -> None:
     from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 
     raise_if_required_body_param_missing(
         route_type="anthropic_messages",
         data={"model": model, "messages": []},
-        llm_router=_router_with_defaults({"max_tokens": 16}, wildcard=wildcard),
+        llm_router=_router_with_defaults({"max_tokens": 16}, wildcard_target=wildcard_target),
     )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route_type", ["acompletion", "aresponses", "anthropic_messages"])
-async def test_missing_model_is_not_routed_to_a_wildcard_deployment(route_type: str) -> None:
-    router: Final = _router_with_defaults({}, wildcard=True)
+@pytest.mark.parametrize("model", [None, ""])
+async def test_missing_model_is_not_routed_to_a_forwarding_wildcard_deployment(
+    route_type: str, model: str | None
+) -> None:
+    router: Final = _router_with_defaults({}, wildcard_target="openai/*")
 
     with pytest.raises(ProxyModelNotFoundError):
         await route_request(
-            {"model": None, "input": "hi", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 8},
+            {"model": model, "input": "hi", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 8},
             router,
             None,
             route_type,
@@ -1886,13 +1946,35 @@ async def test_missing_model_is_not_routed_to_a_wildcard_deployment(route_type: 
 
 
 @pytest.mark.asyncio
-async def test_model_optional_route_still_reaches_a_wildcard_deployment_without_a_model() -> None:
-    router: Final = _router_with_defaults({}, wildcard=True)
-    list_batches: Final = MagicMock(return_value="listed")
-    object.__setattr__(router, "alist_batches", list_batches)
+async def test_missing_model_still_reaches_a_fixed_target_wildcard_deployment() -> None:
+    router: Final = _router_with_defaults({}, wildcard_target="openai/gpt-4o")
 
-    assert await route_request({"model": None}, router, None, "alist_batches") == "listed"
-    list_batches.assert_called_once_with(model=None)
+    response: Final = await (
+        await route_request(
+            {"model": None, "messages": [{"role": "user", "content": "hi"}], "mock_response": "fixed target"},
+            router,
+            None,
+            "acompletion",
+        )
+    )
+
+    assert response.choices[0].message.content == "fixed target"
+    assert response.model == "gpt-4o"
+
+
+@pytest.mark.asyncio
+async def test_model_optional_route_still_reaches_a_wildcard_deployment_without_a_model() -> None:
+    llm_router: Final = MagicMock()
+    llm_router.default_deployment = None
+    llm_router.model_names = []
+    llm_router.is_recognized_model.return_value = False
+    llm_router.router_general_settings.pass_through_all_models = False
+    llm_router.pattern_router.patterns = {"(.*)": []}
+    llm_router.pattern_router.get_deployments_by_pattern.return_value = []
+    llm_router.alist_batches.return_value = "listed"
+
+    assert await route_request({"model": None}, llm_router, None, "alist_batches") == "listed"
+    llm_router.alist_batches.assert_called_once_with(model=None)
 
 
 @pytest.mark.asyncio
