@@ -34,6 +34,7 @@ class TelemetrySettings(BaseSettings):
     groups: Annotated[str | None, AfterValidator(_valid_groups)] = None
     endpoint: HttpUrl | None = None
     settle_timeout_seconds: float = Field(default=2.0, ge=0)
+    retention_days: int = Field(default=30, gt=0)
 
 
 def load_settings() -> TelemetrySettings | ValidationError:
