@@ -2,14 +2,17 @@
 Constants and helpers for ChatGPT subscription OAuth.
 """
 
+import hashlib
 import os
 import platform
-from typing import Any, Final
+from typing import Final
 from uuid import uuid4
 
 import httpx
 
+from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.router import GenericLiteLLMParams
 
 # OAuth + API constants (derived from openai/codex)
 CHATGPT_AUTH_BASE: Final = "https://auth.openai.com"
@@ -250,35 +253,42 @@ def get_chatgpt_default_instructions() -> str:
     return os.getenv("CHATGPT_DEFAULT_INSTRUCTIONS") or CHATGPT_DEFAULT_INSTRUCTIONS
 
 
-def _normalize_litellm_params(litellm_params: Any | None) -> dict:
+def _normalize_litellm_params(litellm_params: dict[str, object] | GenericLiteLLMParams | None) -> dict[str, object]:
     if litellm_params is None:
         return {}
     if isinstance(litellm_params, dict):
         return litellm_params
-    if hasattr(litellm_params, "model_dump"):
-        try:
-            return litellm_params.model_dump()
-        except Exception:
-            return {}
-    if hasattr(litellm_params, "dict"):
-        try:
-            return litellm_params.dict()
-        except Exception:
-            return {}
-    return {}
+    try:
+        return litellm_params.model_dump()
+    except Exception:
+        return {}
 
 
-def get_chatgpt_session_id(litellm_params: object) -> str | None:
+def get_chatgpt_session_id(litellm_params: dict[str, object] | GenericLiteLLMParams | None) -> str | None:
     params: Final = _normalize_litellm_params(litellm_params)
-    for key in ("litellm_session_id", "session_id"):
-        value = params.get(key)
-        if value:
-            return str(value)
     metadata: Final = params.get("metadata")
-    if isinstance(metadata, dict):
-        value = metadata.get("session_id")
-        if value:
-            return str(value)
+    generated: Final = any(
+        True
+        for session_metadata in (metadata, params.get("litellm_metadata"))
+        if isinstance(session_metadata, dict) and session_metadata.get(SESSION_ID_GENERATED_METADATA_KEY)
+    )
+    if not generated:
+        for key in ("litellm_session_id", "session_id"):
+            value = params.get(key)
+            if value:
+                return str(value)
+        if isinstance(metadata, dict):
+            value = metadata.get("session_id")
+            if value:
+                return str(value)
+    prompt_cache_key: Final[object] = params.get("prompt_cache_key")
+    if prompt_cache_key:
+        key = str(prompt_cache_key)
+        safe = _safe_header_value(key)
+        # hashing avoids collisions from _safe_header_value's replacement char
+        return safe if safe == key else hashlib.sha256(key.encode("utf-8", "surrogatepass")).hexdigest()
+    if generated:
+        return None
     for key in ("litellm_trace_id", "litellm_call_id"):
         value = params.get(key)
         if value:
@@ -286,5 +296,5 @@ def get_chatgpt_session_id(litellm_params: object) -> str | None:
     return None
 
 
-def ensure_chatgpt_session_id(litellm_params: object) -> str:
+def ensure_chatgpt_session_id(litellm_params: dict[str, object] | GenericLiteLLMParams | None) -> str:
     return get_chatgpt_session_id(litellm_params) or str(uuid4())

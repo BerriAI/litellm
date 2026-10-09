@@ -4,6 +4,7 @@ Tests for ChatGPT subscription Responses API transformation
 Source: litellm/llms/chatgpt/responses/transformation.py
 """
 
+import hashlib
 import json
 from collections.abc import Generator
 from typing import Final
@@ -13,6 +14,10 @@ import httpx
 import pytest
 
 import litellm
+from litellm.llms.chatgpt.common_utils import (
+    ensure_chatgpt_session_id,
+    get_chatgpt_session_id,
+)
 from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.main import responses_api_bridge_check
@@ -394,3 +399,50 @@ class TestChatGPTResponsesAPITransformation:
 
         assert "ChatGPT upstream failed" in str(exc_info.value)
         assert exc_info.value.status_code == 502
+
+
+def test_explicit_session_ids_win():
+    assert get_chatgpt_session_id({"session_id": "s", "prompt_cache_key": "k"}) == "s"
+    assert get_chatgpt_session_id({"litellm_session_id": "ls", "prompt_cache_key": "k"}) == "ls"
+    assert get_chatgpt_session_id({"metadata": {"session_id": "ms"}, "prompt_cache_key": "k"}) == "ms"
+
+
+def test_prompt_cache_key_becomes_session_id():
+    assert get_chatgpt_session_id({"prompt_cache_key": "conv-abc"}) == "conv-abc"
+    assert ensure_chatgpt_session_id({"prompt_cache_key": "conv-abc"}) == "conv-abc"
+
+
+def test_prompt_cache_key_beats_internal_request_ids():
+    assert get_chatgpt_session_id({"litellm_call_id": "c", "prompt_cache_key": "k"}) == "k"
+    assert get_chatgpt_session_id({"litellm_trace_id": "t", "prompt_cache_key": "k"}) == "k"
+
+
+def test_unsafe_cache_keys_are_hashed_not_collapsed():
+    mangled_a = get_chatgpt_session_id({"prompt_cache_key": "a\nb"})
+    mangled_b = get_chatgpt_session_id({"prompt_cache_key": "a\tb"})
+    assert mangled_a == hashlib.sha256(b"a\nb").hexdigest()
+    assert mangled_b == hashlib.sha256(b"a\tb").hexdigest()
+    assert mangled_a != mangled_b
+
+
+def test_lone_surrogate_cache_keys_hash_to_distinct_session_ids():
+    high = get_chatgpt_session_id({"prompt_cache_key": json.loads('"conv-\\ud800"')})
+    low = get_chatgpt_session_id({"prompt_cache_key": json.loads('"conv-\\udc00"')})
+    assert high == hashlib.sha256(b"conv-\xed\xa0\x80").hexdigest()
+    assert low == hashlib.sha256(b"conv-\xed\xb0\x80").hexdigest()
+    assert high != low
+
+
+def test_generated_session_ids_are_skipped():
+    for metadata_key in ("metadata", "litellm_metadata"):
+        generated = {
+            "litellm_session_id": "gen",
+            metadata_key: {"session_id": "gen", "litellm_session_id_generated": True},
+        }
+        assert get_chatgpt_session_id({**generated, "prompt_cache_key": "k"}) == "k"
+        assert get_chatgpt_session_id(generated) is None
+        assert ensure_chatgpt_session_id(generated) != ensure_chatgpt_session_id(generated) != "gen"
+
+
+def test_uuid4_fallback_without_any_key():
+    assert ensure_chatgpt_session_id({}) != ensure_chatgpt_session_id({})
