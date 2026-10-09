@@ -175,9 +175,13 @@ def _without_audio_input_parts(input_items: list[object]) -> list[object]:
     return [_without_audio_input_parts_in_item(item) for item in input_items]
 
 
-def _supports_audio_input(model: str, litellm_params: Mapping[str, object]) -> bool:
+def _served_provider(litellm_params: Mapping[str, object]) -> str | None:
     custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
-    provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
+    return custom_llm_provider if isinstance(custom_llm_provider, str) else None
+
+
+def _supports_audio_input(model: str, litellm_params: Mapping[str, object]) -> bool:
+    provider: Final = _served_provider(litellm_params)
     base_model: Final = litellm_params.get("base_model")
     return litellm.supports_audio_input(model=model, custom_llm_provider=provider) or (
         isinstance(base_model, str)
@@ -737,14 +741,17 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         model: str,
         messages: list["AllMessageValues"],
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         headers: dict,
         litellm_logging_obj: "LiteLLMLoggingObj",
         client: object | None = None,
     ) -> dict:
+        provider: Final = _served_provider(litellm_params)
         base_model: Final = litellm_params.get("base_model")
-        supports_prompt_cache_breakpoint: Final = supports_openai_prompt_cache_breakpoint(model) or (
-            isinstance(base_model, str) and bool(base_model) and supports_openai_prompt_cache_breakpoint(base_model)
+        supports_prompt_cache_breakpoint: Final = supports_openai_prompt_cache_breakpoint(model, provider) or (
+            isinstance(base_model, str)
+            and bool(base_model)
+            and supports_openai_prompt_cache_breakpoint(base_model, provider)
         )
         converted_input_items, converted_instructions = self.convert_chat_completion_messages_to_responses_api(
             messages,
