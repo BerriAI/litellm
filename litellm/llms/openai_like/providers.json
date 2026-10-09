@@ -249,5 +249,10 @@
       "/v1/responses",
       "/v1/messages"
     ]
+  },
+  "wally": {
+    "base_url": "https://inference.runanywhere.ai/v1",
+    "api_key_env": "WALLY_API_KEY",
+    "api_base_env": "WALLY_API_BASE"
   }
 }
