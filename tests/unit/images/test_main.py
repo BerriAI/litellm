@@ -1,7 +1,10 @@
 import asyncio
+import concurrent.futures
+import itertools
 import json
+import threading
 from datetime import datetime
-from typing import Final
+from typing import Coroutine, Final, Protocol, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -12,6 +15,7 @@ from openai.types.image import Image
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import CallTypes, StandardLoggingPayload
 import os
 
@@ -212,7 +216,7 @@ async def test_aiml_image_generation_with_dynamic_api_key():
     captured_url = None
     captured_json_data = None
 
-    def capture_post_call(*args, **kwargs):
+    async def capture_post_call(*args, **kwargs):
         nonlocal captured_headers, captured_url, captured_json_data
         captured_url = kwargs.get("url") or (args[0] if args else None)
         captured_headers = kwargs.get("headers", {})
@@ -225,8 +229,10 @@ async def test_aiml_image_generation_with_dynamic_api_key():
         mock_response.text = json.dumps(mock_aiml_response)
         return mock_response
 
-    # Mock the HTTP client that actually makes the request (sync version for image generation)
-    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
         mock_post.side_effect = capture_post_call
 
         # Test with dynamic api_key
@@ -266,7 +272,7 @@ async def test_aiml_openai_gpt_image_2_request_uses_openai_param_shape():
     ``output_format``), and hits the correct upstream model name.
     """
     import json as _json
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     mock_aiml_response = {
         "created": 1703658209,
@@ -275,7 +281,7 @@ async def test_aiml_openai_gpt_image_2_request_uses_openai_param_shape():
 
     captured = {}
 
-    def capture_post_call(*args, **kwargs):
+    async def capture_post_call(*args, **kwargs):
         captured["url"] = kwargs.get("url") or (args[0] if args else None)
         captured["headers"] = kwargs.get("headers", {})
         captured["json"] = kwargs.get("json", {})
@@ -285,7 +291,10 @@ async def test_aiml_openai_gpt_image_2_request_uses_openai_param_shape():
         mock_response.text = _json.dumps(mock_aiml_response)
         return mock_response
 
-    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post") as mock_post:
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
         mock_post.side_effect = capture_post_call
 
         await litellm.aimage_generation(
@@ -343,3 +352,79 @@ async def test_azure_image_generation_request_body():
         call_args = mock_post.call_args
         request_json = call_args.kwargs.get("json", {})
         assert request_json == expected_body
+
+
+def test_aimage_generation_runs_vertex_requests_on_the_event_loop_not_the_executor(
+    respx_mock: respx.MockRouter,
+) -> None:
+    api_base: Final = "http://localhost:12348/generateContent"
+    response_json: Final = {
+        "candidates": [{"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1n"}}]}}],
+    }
+    arrivals: Final = itertools.count(1)
+    released: Final = threading.Event()
+
+    class AImageGeneration(Protocol):
+        def __call__(
+            self,
+            *,
+            model: str,
+            prompt: str,
+            api_base: str,
+            vertex_location: str,
+            client: AsyncHTTPHandler,
+        ) -> Coroutine[object, object, litellm.ImageResponse]: ...
+
+    aimage_generation: Final[AImageGeneration] = cast(AImageGeneration, getattr(litellm, "aimage_generation"))
+
+    def held_sync(request: httpx.Request) -> httpx.Response:
+        if next(arrivals) == 2:
+            released.set()
+        released.wait()
+        return httpx.Response(status_code=200, json=response_json)
+
+    respx_mock.post(api_base).mock(side_effect=held_sync)
+
+    async def scenario() -> tuple[litellm.ImageResponse, litellm.ImageResponse]:
+        asyncio.get_running_loop().set_default_executor(concurrent.futures.ThreadPoolExecutor(max_workers=1))
+        in_flight: Final = asyncio.Event()
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            if next(arrivals) == 2:
+                in_flight.set()
+            await in_flight.wait()
+            return httpx.Response(status_code=200, json=response_json)
+
+        client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(handler))
+        try:
+            return await asyncio.wait_for(
+                asyncio.gather(
+                    aimage_generation(
+                        model="vertex_ai/gemini-2.5-flash-image",
+                        prompt="a red circle",
+                        api_base=api_base,
+                        vertex_location="us-central1",
+                        client=client,
+                    ),
+                    aimage_generation(
+                        model="vertex_ai/gemini-2.5-flash-image",
+                        prompt="a red circle",
+                        api_base=api_base,
+                        vertex_location="us-central1",
+                        client=client,
+                    ),
+                ),
+                timeout=5,
+            )
+        finally:
+            released.set()
+
+    results: Final = asyncio.run(scenario())
+    first: Final = results[0]
+    second: Final = results[1]
+    assert isinstance(first, litellm.ImageResponse)
+    assert first.data is not None
+    assert cast(str | None, getattr(first.data[0], "b64_json")) == "aW1n"
+    assert isinstance(second, litellm.ImageResponse)
+    assert second.data is not None
+    assert cast(str | None, getattr(second.data[0], "b64_json")) == "aW1n"
