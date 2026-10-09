@@ -31320,6 +31320,8 @@ export interface components {
             credential_values?: {
                 [key: string]: unknown;
             } | null;
+            /** Display Name */
+            display_name?: string | null;
             /** Model Id */
             model_id?: string | null;
         };
@@ -31358,6 +31360,28 @@ export interface components {
             credential_values: {
                 [key: string]: unknown;
             };
+            /** Display Name */
+            display_name?: string | null;
+        };
+        /** CredentialView */
+        CredentialView: {
+            /** Credential Info */
+            credential_info: {
+                [key: string]: unknown;
+            };
+            /** Credential Name */
+            credential_name: string;
+            /** Credential Values */
+            credential_values: {
+                [key: string]: unknown;
+            };
+            /** Display Name */
+            display_name?: string | null;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "db" | "config";
         };
         /** CustomDimension */
         CustomDimension: {
@@ -48736,13 +48760,15 @@ export interface components {
                 [key: string]: unknown;
             };
             /** Credential Name */
-            credential_name: string;
+            credential_name?: string | null;
             /** Credential Values */
             credential_values?: {
                 [key: string]: unknown;
             } | null;
             /** Credential Values To Delete */
             credential_values_to_delete?: string[] | null;
+            /** Display Name */
+            display_name?: string | null;
             /** Model Id */
             model_id?: string | null;
         };
@@ -57258,7 +57284,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CredentialItem"];
+                    "application/json": components["schemas"]["CredentialView"];
                 };
             };
             /** @description Validation Error */
