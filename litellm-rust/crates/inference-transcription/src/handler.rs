@@ -1,27 +1,59 @@
 use std::time::Duration;
 
-use litellm_http::{Client, request::truncate_error_body};
-use litellm_llms::base_llm::auth::resolve_auth;
+use litellm_http::{
+    Client,
+    request::{string_headers, truncate_error_body, with_default_headers},
+};
+use litellm_llms::{
+    base_llm::{
+        audio_transcription::transformation::BaseAudioTranscriptionConfig,
+        auth::{ValidatedEnvironment, resolve_auth},
+    },
+};
+use litellm_secrets::source::Secrets;
 use serde_json::Value;
 
 use super::Error;
-use crate::{
-    constants::AUDIO_TRANSCRIPTION_TIMEOUT_SECS, types::ProviderAudioTranscriptionRequest,
-};
+use crate::{constants::AUDIO_TRANSCRIPTION_TIMEOUT_SECS, types::AudioTranscriptionRequest};
+use litellm_inference::provider::ResolvedProvider;
 
-pub async fn execute_audio_transcription_provider_call(
+pub(super) async fn execute(
     http: &Client,
     auth: &litellm_auth::AuthServices,
-    request: ProviderAudioTranscriptionRequest,
+    config: &'static dyn BaseAudioTranscriptionConfig,
+    provider: ResolvedProvider<'_>,
+    call: AudioTranscriptionRequest<'_>,
+    secrets: Secrets,
 ) -> Result<Value, Error> {
-    let env_lookup = |key: &str| request.secrets.get(key);
-    let authenticated = resolve_auth(auth, request.environment.clone(), &env_lookup).await?;
+    let env_lookup = |key: &str| secrets.get(key);
+    let forwarded = string_headers("audio transcription", call.extra_headers)?;
+    let validated = config.validate_environment(
+        forwarded,
+        provider.model,
+        &call.optional_params,
+        &env_lookup,
+    )?;
+    let environment = ValidatedEnvironment {
+        headers: with_default_headers(validated.headers, config.default_headers()),
+        auth: validated.auth,
+    };
+    let url = config.get_complete_url(
+        call.api_base,
+        provider.model,
+        &call.optional_params,
+        &env_lookup,
+    )?;
+    let filtered_params = config.map_transcription_params(&call.optional_params);
+    let body = config
+        .transform_audio_transcription_request(provider.model, call.audio, filtered_params)?
+        .body;
+    let authenticated = resolve_auth(auth, environment, &env_lookup).await?;
     let outbound = litellm_inference::outbound::outbound_request(
         authenticated,
-        request.url.clone(),
-        &request.body,
+        url,
+        &body,
         Some(
-            request
+            call
                 .timeout
                 .unwrap_or(Duration::from_secs(AUDIO_TRANSCRIPTION_TIMEOUT_SECS)),
         ),
@@ -47,8 +79,7 @@ pub async fn execute_audio_transcription_provider_call(
             error,
         ))
     })?;
-    Ok(request
-        .config
-        .transform_audio_transcription_response(&request.model, response_json)?
+    Ok(config
+        .transform_audio_transcription_response(provider.model, response_json)?
         .into_json())
 }
