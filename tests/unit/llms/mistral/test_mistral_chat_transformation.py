@@ -4,20 +4,18 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
-from litellm.types.llms.openai import AllMessageValues
-
-
 from litellm.llms.mistral.chat.transformation import (
     MistralChatResponseIterator,
     MistralConfig,
 )
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
 
 @pytest.mark.asyncio
 async def test_mistral_chat_transformation():
     mistral_config = MistralConfig()
-    result = mistral_config._transform_messages(
+    result = mistral_config.transform_messages(
         **{
             "messages": [
                 {
@@ -816,18 +814,14 @@ class TestMistralStripsOutputOnlyFields:
                     "role": "assistant",
                     "content": "Follow-up",
                     "reasoning_content": "Some internal reasoning text.",
-                    "thinking_blocks": [
-                        {"type": "thinking", "thinking": "step", "signature": "mistral"}
-                    ],
+                    "thinking_blocks": [{"type": "thinking", "thinking": "step", "signature": "mistral"}],
                 },
             ],
         )
 
         result = cast(
             List[AllMessageValues],
-            MistralConfig()._transform_messages(
-                messages=messages, model="mistral-medium-3-5"
-            ),
+            MistralConfig().transform_messages(messages=messages, model="mistral-medium-3-5"),
         )
 
         assistant_message = result[-1]
@@ -844,9 +838,7 @@ class TestMistralStripsOutputOnlyFields:
 
         result = cast(
             List[AllMessageValues],
-            MistralConfig()._transform_messages(
-                messages=messages, model="mistral-medium-3-5"
-            ),
+            MistralConfig().transform_messages(messages=messages, model="mistral-medium-3-5"),
         )
 
         assert result[0].get("reasoning_content") == "noise"
@@ -881,9 +873,7 @@ class TestMistralStripsOutputOnlyFields:
         ):
             result = cast(
                 List[AllMessageValues],
-                MistralConfig()._transform_messages(
-                    messages=messages, model="mistral-medium-3-5", is_async=False
-                ),
+                MistralConfig().transform_messages(messages=messages, model="mistral-medium-3-5", is_async=False),
             )
 
         assert "reasoning_content" not in result[-1]

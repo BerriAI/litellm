@@ -145,7 +145,7 @@ def _a2a_cost_params(litellm_params: Mapping[str, object] | None) -> Mapping[str
 
 
 def _card_http_kwargs(extra_headers: dict[str, str] | None) -> dict[str, object] | None:
-    return {"headers": extra_headers} if extra_headers else None  # mutable-ok: a2a-sdk's get_agent_card takes a dict
+    return {"headers": extra_headers} if extra_headers else None
 
 
 def _agent_card_path(litellm_params: Mapping[str, object]) -> str | None:
@@ -612,7 +612,7 @@ def _build_streaming_logging_obj(
         logging_obj.model_call_details["agent_id"] = agent_id
 
     _request_context: Final = (("metadata", metadata), ("proxy_server_request", proxy_server_request))
-    _litellm_params: Final = dict(  # mutable-ok: Logging.litellm_params is declared as a dict
+    _litellm_params: Final = dict(
         (*_a2a_cost_params(litellm_params).items(), *((key, value) for key, value in _request_context if value))
     )
 

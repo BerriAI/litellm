@@ -125,7 +125,7 @@ def _with_agentic_loop_metadata(kwargs_for_followup: Mapping[str, object]) -> Ma
     return MappingProxyType(
         {
             **kwargs_for_followup,
-            "litellm_metadata": dict(  # mutable-ok: the follow-up call's logging and proxy hooks write into litellm_metadata in place
+            "litellm_metadata": dict(
                 chain(
                     metadata.items() if isinstance(metadata, dict) else (),
                     (

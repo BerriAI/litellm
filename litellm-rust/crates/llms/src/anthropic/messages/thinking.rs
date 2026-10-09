@@ -1,15 +1,16 @@
-use litellm_python_compat::{json::from_json, repr::repr, truthy::truthy};
-use litellm_types::{
-    llms::{
-        anthropic_messages::anthropic_request::{
-            AnthropicMessagesOptionalParams, AnthropicMessagesRequest, EffortLevel, OutputConfig,
-            ThinkingConfig, ThinkingDisplay,
+use litellm_llms_types::{
+    formats::{
+        chat_completions::ReasoningEffort,
+        messages::{
+            EffortLevel, MessagesOptionalParams, MessagesRequest, OutputConfig, ThinkingConfig,
+            ThinkingDisplay,
         },
-        openai::ReasoningEffort,
     },
     recognized::Recognized,
 };
+use litellm_python_compat::{json::from_json, repr::repr, truthy::truthy};
 use serde_json::Value;
+use strum::VariantArray;
 
 use crate::base_llm::messages::context::{
     MessagesModelCapabilities, ThinkingBudgets, ThinkingContext,
@@ -54,14 +55,17 @@ fn unmapped_effort(effort: &Value) -> Error {
     Error::InvalidRequest(crate::ErrorDetail::InvalidChoice {
         field: "reasoning effort",
         actual: repr(&from_json(effort.clone())),
-        choices: ReasoningEffort::ALL.map(|effort| effort.as_str()).into(),
+        choices: ReasoningEffort::VARIANTS
+            .iter()
+            .map(|effort| <&'static str>::from(*effort))
+            .collect(),
     })
 }
 
 fn unsupported_effort(level: EffortLevel, model: &str) -> Error {
     Error::InvalidRequest(crate::ErrorDetail::UnsupportedValue {
         field: "effort",
-        value: level.as_str(),
+        value: <&'static str>::from(level),
         model: model.into(),
     })
 }
@@ -84,11 +88,11 @@ fn fit_budget_to_max_tokens(budget_tokens: u64, max_tokens: Option<u64>) -> Opti
     (max_tokens > ANTHROPIC_MIN_THINKING_BUDGET_TOKENS).then(|| budget_tokens.min(max_tokens - 1))
 }
 
-fn known_thinking(request: &AnthropicMessagesRequest) -> Option<&ThinkingConfig> {
+fn known_thinking(request: &MessagesRequest) -> Option<&ThinkingConfig> {
     request.params.thinking.as_ref().and_then(Recognized::known)
 }
 
-fn known_effort(request: &AnthropicMessagesRequest) -> Option<&Recognized<EffortLevel>> {
+fn known_effort(request: &MessagesRequest) -> Option<&Recognized<EffortLevel>> {
     request
         .params
         .output_config
@@ -134,21 +138,21 @@ fn legacy_reasoning_effort(
         Some(Recognized::Known(level)) => Ok((*level).into()),
         Some(Recognized::Unrecognized(value)) if truthy(&from_json(value.clone())) => value
             .as_str()
-            .and_then(ReasoningEffort::parse)
+            .and_then(|text| text.parse().ok())
             .ok_or_else(|| unmapped_effort(value)),
         None | Some(Recognized::Unrecognized(_)) => Ok(ReasoningEffort::Medium),
     }
 }
 
 fn translate_reasoning_effort(
-    request: AnthropicMessagesRequest,
+    request: MessagesRequest,
     context: &ThinkingContext,
-) -> Result<AnthropicMessagesRequest, Error> {
+) -> Result<MessagesRequest, Error> {
     let Some(reasoning_effort) = request.params.reasoning_effort else {
         return Ok(request);
     };
-    let request = AnthropicMessagesRequest {
-        params: AnthropicMessagesOptionalParams {
+    let request = MessagesRequest {
+        params: MessagesOptionalParams {
             reasoning_effort: None,
             ..request.params
         },
@@ -165,8 +169,8 @@ fn translate_reasoning_effort(
         output_effort(effort),
         budget_for_effort(&context.budgets, effort),
     ) else {
-        return Ok(AnthropicMessagesRequest {
-            params: AnthropicMessagesOptionalParams {
+        return Ok(MessagesRequest {
+            params: MessagesOptionalParams {
                 thinking: None,
                 output_config: None,
                 ..request.params
@@ -180,8 +184,8 @@ fn translate_reasoning_effort(
             return Err(unsupported_effort(level, &request.model));
         }
         let adaptive = ThinkingConfig::adaptive(Some(ThinkingDisplay::Summarized));
-        return Ok(AnthropicMessagesRequest {
-            params: AnthropicMessagesOptionalParams {
+        return Ok(MessagesRequest {
+            params: MessagesOptionalParams {
                 thinking: Some(
                     request
                         .params
@@ -198,8 +202,8 @@ fn translate_reasoning_effort(
         return Ok(request);
     };
     let enabled = ThinkingConfig::enabled(budget);
-    Ok(AnthropicMessagesRequest {
-        params: AnthropicMessagesOptionalParams {
+    Ok(MessagesRequest {
+        params: MessagesOptionalParams {
             thinking: Some(
                 request
                     .params
@@ -212,17 +216,14 @@ fn translate_reasoning_effort(
     })
 }
 
-fn drop_disabled_thinking(
-    request: AnthropicMessagesRequest,
-    context: &ThinkingContext,
-) -> AnthropicMessagesRequest {
+fn drop_disabled_thinking(request: MessagesRequest, context: &ThinkingContext) -> MessagesRequest {
     if !context.capabilities.thinking_always_on
         || !matches!(known_thinking(&request), Some(ThinkingConfig::Disabled(_)))
     {
         return request;
     }
-    AnthropicMessagesRequest {
-        params: AnthropicMessagesOptionalParams {
+    MessagesRequest {
+        params: MessagesOptionalParams {
             thinking: None,
             ..request.params
         },
@@ -231,9 +232,9 @@ fn drop_disabled_thinking(
 }
 
 fn translate_legacy_thinking_for_adaptive_model(
-    request: AnthropicMessagesRequest,
+    request: MessagesRequest,
     context: &ThinkingContext,
-) -> AnthropicMessagesRequest {
+) -> MessagesRequest {
     let capabilities = &context.capabilities;
     if !capabilities.supports_adaptive_thinking || capabilities.supports_legacy_thinking {
         return request;
@@ -248,8 +249,8 @@ fn translate_legacy_thinking_for_adaptive_model(
         .copied()
         .unwrap_or(0);
     let level = effort_for_budget(&context.budgets, budget, capabilities);
-    AnthropicMessagesRequest {
-        params: AnthropicMessagesOptionalParams {
+    MessagesRequest {
+        params: MessagesOptionalParams {
             thinking: Some(Recognized::Known(ThinkingConfig::adaptive(None))),
             output_config: with_default_effort(request.params.output_config, level),
             ..request.params
@@ -259,9 +260,9 @@ fn translate_legacy_thinking_for_adaptive_model(
 }
 
 fn translate_adaptive_effort_for_non_adaptive_model(
-    request: AnthropicMessagesRequest,
+    request: MessagesRequest,
     context: &ThinkingContext,
-) -> Result<AnthropicMessagesRequest, Error> {
+) -> Result<MessagesRequest, Error> {
     let capabilities = &context.capabilities;
     if capabilities.supports_adaptive_thinking {
         return Ok(request);
@@ -276,8 +277,8 @@ fn translate_adaptive_effort_for_non_adaptive_model(
         _ => true,
     };
     if supports_effort_param(capabilities) && (!adaptive_thinking || level_accepted) {
-        return Ok(AnthropicMessagesRequest {
-            params: AnthropicMessagesOptionalParams {
+        return Ok(MessagesRequest {
+            params: MessagesOptionalParams {
                 thinking: if adaptive_thinking {
                     None
                 } else {
@@ -293,8 +294,8 @@ fn translate_adaptive_effort_for_non_adaptive_model(
     } else {
         None
     };
-    Ok(AnthropicMessagesRequest {
-        params: AnthropicMessagesOptionalParams {
+    Ok(MessagesRequest {
+        params: MessagesOptionalParams {
             thinking: budget
                 .and_then(|budget| fit_budget_to_max_tokens(budget, request.params.max_tokens))
                 .map(|budget| Recognized::Known(ThinkingConfig::enabled(budget))),
@@ -306,9 +307,9 @@ fn translate_adaptive_effort_for_non_adaptive_model(
 }
 
 fn drop_incompatible_temperature_for_thinking(
-    request: AnthropicMessagesRequest,
+    request: MessagesRequest,
     context: &ThinkingContext,
-) -> AnthropicMessagesRequest {
+) -> MessagesRequest {
     if context.capabilities.supports_adaptive_thinking {
         return request;
     }
@@ -321,8 +322,8 @@ fn drop_incompatible_temperature_for_thinking(
     if !pinned || !(thinking_enabled || effort_enabled) {
         return request;
     }
-    AnthropicMessagesRequest {
-        params: AnthropicMessagesOptionalParams {
+    MessagesRequest {
+        params: MessagesOptionalParams {
             temperature: None,
             ..request.params
         },
@@ -331,9 +332,9 @@ fn drop_incompatible_temperature_for_thinking(
 }
 
 pub fn translate_thinking(
-    request: AnthropicMessagesRequest,
+    request: MessagesRequest,
     context: &ThinkingContext,
-) -> Result<AnthropicMessagesRequest, Error> {
+) -> Result<MessagesRequest, Error> {
     let request = translate_reasoning_effort(request, context)?;
     let request = drop_disabled_thinking(request, context);
     let request = translate_legacy_thinking_for_adaptive_model(request, context);
@@ -350,7 +351,7 @@ mod tests {
 
     const EFFORT_CHOICES: &str = "'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'";
 
-    fn request(fields: Value) -> AnthropicMessagesRequest {
+    fn request(fields: Value) -> MessagesRequest {
         let mut body = serde_json::json!({"model": "claude", "messages": [{"role": "user", "content": "Hello"}]});
         body.as_object_mut()
             .unwrap()
@@ -368,7 +369,7 @@ mod tests {
     fn translate(
         capabilities: MessagesModelCapabilities,
         fields: Value,
-    ) -> Result<AnthropicMessagesRequest, Error> {
+    ) -> Result<MessagesRequest, Error> {
         translate_thinking(request(fields), &context(capabilities))
     }
 

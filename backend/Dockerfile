@@ -44,6 +44,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-install-workspace --no-default-groups --no-editable \
         --extra proxy \
         --extra proxy-runtime \
+        --group admin-mcp \
         --extra extra_proxy \
         --extra semantic-router \
         --extra saml \
@@ -56,6 +57,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-default-groups --no-editable \
         --extra proxy \
         --extra proxy-runtime \
+        --group admin-mcp \
         --extra extra_proxy \
         --extra semantic-router \
         --extra saml \
@@ -71,6 +73,8 @@ RUN sed -i 's/\r$//' docker/component_entrypoint.sh && chmod +x docker/component
 
 # ---------- Runtime ----------
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
+ARG LITELLM_RELEASE_TAG=""
+ENV LITELLM_RELEASE_TAG=${LITELLM_RELEASE_TAG}
 
 USER root
 

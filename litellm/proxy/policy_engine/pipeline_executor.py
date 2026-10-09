@@ -8,7 +8,8 @@ pass/fail actions (allow, block, next, modify_response) and data forwarding.
 import copy
 import time
 from collections.abc import Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Final, Literal, TypeVar
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, Literal, TypeVar, cast
 
 from pydantic import BaseModel
 
@@ -29,6 +30,7 @@ from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_g
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
 )
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.policy_engine.pipeline_types import (
     PipelineExecutionResult,
     PipelineStep,
@@ -265,6 +267,30 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
         return recorder.inputs
 
 
+_PIPELINE_EVENT_HOOKS: Final = MappingProxyType(
+    {
+        "pre_call": GuardrailEventHooks.pre_call,
+        "post_call": GuardrailEventHooks.post_call,
+        "during_call": GuardrailEventHooks.during_call,
+    }
+)
+
+
+def _pipeline_stream_scope_allows(
+    callback: CustomGuardrail,
+    hook_input: Mapping[str, object],
+    mode: str,
+    streaming_chunks: list[object] | None,
+) -> bool:
+    event_type: Final = _PIPELINE_EVENT_HOOKS.get(mode)
+    if event_type is None:
+        return True
+    return callback.stream_scope_allows(
+        hook_input if streaming_chunks is None else {**hook_input, "stream": True},
+        event_type,
+    )
+
+
 def _prepare_hook_input(
     step: PipelineStep,
     callback: CustomGuardrail,
@@ -277,7 +303,7 @@ def _prepare_hook_input(
     pipeline may have already rewritten), same reason the normal sequential/parallel
     guardrail loops do this."""
     if "metadata" not in data:
-        data["metadata"] = {}  # mutable-ok: request metadata bucket, hooks mutate it
+        data["metadata"] = {}
     data["metadata"]["guardrails"] = [step.guardrail]
 
     scans_raw_request: Final = callback.scan_raw_request
@@ -285,7 +311,7 @@ def _prepare_hook_input(
         independent_snapshot(raw_request_snapshot) if scans_raw_request and raw_request_snapshot is not None else data
     )
     if hook_input is not data:
-        hook_input.setdefault("metadata", {})["guardrails"] = [step.guardrail]  # mutable-ok: request metadata shape
+        hook_input.setdefault("metadata", {})["guardrails"] = [step.guardrail]
     return hook_input, scans_raw_request
 
 
@@ -494,7 +520,7 @@ class PipelineExecutor:
         streaming_chunks: list[object] | None = None,  # mutable-ok: shared buffered-stream chunks, read per step
         endpoint_translation: "BaseTranslation | None" = None,
     ) -> tuple[
-        Literal["pass", "fail", "error"],
+        Literal["pass", "fail", "error", "skip"],
         dict | None,
         str | None,
         Exception | None,
@@ -504,7 +530,7 @@ class PipelineExecutor:
 
         Returns:
             Tuple of (outcome, modified_data, error_detail, original_exception):
-            - outcome: "pass", "fail", or "error"
+            - outcome: "pass", "fail", "error", or "skip"
             - modified_data: dict if guardrail returned modified data, else None
             - error_detail: error message string if fail/error, else None
             - original_exception: the exception the guardrail raised, so the
@@ -515,6 +541,10 @@ class PipelineExecutor:
         if callback is None:
             verbose_proxy_logger.warning("Pipeline: guardrail '%s' not found in callbacks", step.guardrail)
             return ("error", None, f"Guardrail '{step.guardrail}' not found", None)
+
+        hook_data: Final[Mapping[str, object]] = cast(Mapping[str, object], data)  # cast-ok: payload
+        if not _pipeline_stream_scope_allows(callback, hook_data, mode, streaming_chunks):
+            return ("skip", None, None, None)
 
         hook_input, scans_raw_request = _prepare_hook_input(step, callback, data, raw_request_snapshot)
         snapshot_entries_before: Final = len(_recorded_guardrail_information(hook_input))
@@ -634,7 +664,7 @@ def _allow_result(
     restored: Final = _restore_request_guardrails(working_data, request_data)
     return PipelineExecutionResult(
         terminal_action="allow",
-        step_results=list(step_results),  # mutable-ok: PipelineExecutionResult field is a list
+        step_results=list(step_results),
         modified_data=restored if restored != request_data else None,
     )
 
@@ -655,13 +685,13 @@ def _restore_request_guardrails(
         return working_data
     request_metadata: Final = request_data.get("metadata")
     original_guardrails: Final = request_metadata.get("guardrails") if isinstance(request_metadata, dict) else None
-    stripped: Final = {k: v for k, v in working_metadata.items() if k != "guardrails"}  # mutable-ok: request dict
+    stripped: Final = {k: v for k, v in working_metadata.items() if k != "guardrails"}
     if original_guardrails is not None:
-        restored: Final = {**stripped, "guardrails": original_guardrails}  # mutable-ok: request dict
-        return {**working_data, "metadata": restored}  # mutable-ok: request dict
+        restored: Final = {**stripped, "guardrails": original_guardrails}
+        return {**working_data, "metadata": restored}
     if not stripped and not isinstance(request_metadata, dict):
-        return {k: v for k, v in working_data.items() if k != "metadata"}  # mutable-ok: request dict
-    return {**working_data, "metadata": stripped}  # mutable-ok: request dict
+        return {k: v for k, v in working_data.items() if k != "metadata"}
+    return {**working_data, "metadata": stripped}
 
 
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
@@ -702,10 +732,13 @@ def _pipeline_action_for_outcome(step: PipelineStep, outcome: str) -> str:
     """
     Map pipeline step outcome to the configured action.
 
+    - skip -> next (stream_scope mismatch; do not apply on_pass/on_fail)
     - pass -> on_pass
     - fail -> on_fail (content/policy intervention)
     - error -> on_error if set, else on_fail (backward compatible)
     """
+    if outcome == "skip":
+        return "next"
     if outcome == "pass":
         return step.on_pass
     if outcome == "fail":

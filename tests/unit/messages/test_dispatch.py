@@ -3,9 +3,11 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Final, cast  # noqa: TID251  # narrows legacy callable signatures for inspect
 
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.llms.anthropic.pass_through.messages import handler as python_messages
+from litellm.messages import dispatch
 from litellm.messages.dispatch import (
     _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
     _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
@@ -14,16 +16,9 @@ from litellm.rust_bridge import catalog
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteRule, Rules
 from litellm.rust_bridge.configuration import Rollout
-from litellm.rust_bridge.messages.entrypoints import (
-    NATIVE_AMESSAGES,
-    NATIVE_MESSAGES,
-    LiteLLMMessagesRequest,
-    NativeAmessages,
-    NativeMessages,
-)
+from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES, NATIVE_MESSAGES, NativeAmessages, NativeMessages
+from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
-from pydantic import TypeAdapter
-from litellm.messages import dispatch
 
 MESSAGES: Final = [{"role": "user", "content": "hi"}]
 PYTHON_RULES: Final[Rules] = ()
@@ -67,9 +62,7 @@ def test_python_route_forwards_original_call_shape() -> None:
         return expected
 
     def native(
-        request: LiteLLMMessagesRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> AnthropicMessagesResponse:
         pytest.fail("Python-only dispatch must not call native")
 
@@ -78,7 +71,7 @@ def test_python_route_forwards_original_call_shape() -> None:
         kwargs,
         python=python,
         binding=messages_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+        native=lambda hook, request, call_args, call_kwargs: hook(request),
         rules=PYTHON_RULES,
     )
     assert result is expected
@@ -106,9 +99,7 @@ async def test_async_python_route_forwards_original_call_shape() -> None:
         return expected
 
     async def native(
-        request: LiteLLMMessagesRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> AnthropicMessagesResponse:
         pytest.fail("Python-only dispatch must not call native")
 
@@ -117,7 +108,7 @@ async def test_async_python_route_forwards_original_call_shape() -> None:
         kwargs,
         python=python,
         binding=amessages_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+        native=lambda hook, request, call_args, call_kwargs: hook(request),
         rules=PYTHON_RULES,
     )
     assert result is expected
@@ -139,17 +130,17 @@ def test_native_receives_normalized_request_and_original_call_shape() -> None:
         "custom_llm_provider": "anthropic",
         "litellm_metadata": metadata,
     }
-    captured: Final[list[tuple[LiteLLMMessagesRequest, tuple[object, ...], Mapping[str, object]]]] = []
+    captured: Final[list[tuple[NativeCall, tuple[object, ...], Mapping[str, object]]]] = []
     expected: Final = response("anthropic/claude-sonnet-4-5")
 
     def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: rejected fallback
         pytest.fail("Required Rust dispatch must not call Python")
 
     def native(
-        request: LiteLLMMessagesRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> AnthropicMessagesResponse:
+        args: Final = request.args
+        kwargs: Final = request.kwargs
         captured.append((request, args, kwargs))
         return expected
 
@@ -158,19 +149,19 @@ def test_native_receives_normalized_request_and_original_call_shape() -> None:
         kwargs,
         python=python,
         binding=messages_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+        native=lambda hook, request, call_args, call_kwargs: hook(request),
         rules=RUST_RULES,
     )
     assert result is expected
     request, call_args, call_kwargs = captured[0]
-    assert request.model == "anthropic/claude-sonnet-4-5"
-    assert request.messages is MESSAGES
-    assert request.max_tokens == 16
-    assert request.stream is True
-    assert request.api_key == "sk-test"
-    assert request.api_base == "https://example.invalid"
-    assert request.custom_llm_provider == "anthropic"
-    assert request.kwargs == {"litellm_metadata": metadata}
+    assert request.resolved["model"] == "anthropic/claude-sonnet-4-5"
+    assert request.resolved["messages"] is MESSAGES
+    assert request.resolved["max_tokens"] == 16
+    assert request.resolved["stream"] is True
+    assert request.resolved["api_key"] == "sk-test"
+    assert request.resolved["api_base"] == "https://example.invalid"
+    assert request.resolved["custom_llm_provider"] == "anthropic"
+    assert request.kwargs == kwargs
     assert request.kwargs["litellm_metadata"] is metadata
     assert call_args == args
     assert call_args[1] is MESSAGES
@@ -189,9 +180,7 @@ def test_internal_async_marker_bypasses_native() -> None:
         return expected
 
     def native(
-        request: LiteLLMMessagesRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> AnthropicMessagesResponse:
         pytest.fail("The async handler's inner sync call must stay on Python")
 
@@ -200,7 +189,7 @@ def test_internal_async_marker_bypasses_native() -> None:
         kwargs,
         python=python,
         binding=messages_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+        native=lambda hook, request, call_args, call_kwargs: hook(request),
         rules=RUST_RULES,
     )
     assert result is expected
@@ -223,9 +212,7 @@ def test_binding_errors_delegate_to_python(args: tuple[object, ...], kwargs: Map
         return expected
 
     def native(
-        request: LiteLLMMessagesRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> AnthropicMessagesResponse:
         pytest.fail("Binding failures must be delegated to Python")
 
@@ -234,7 +221,7 @@ def test_binding_errors_delegate_to_python(args: tuple[object, ...], kwargs: Map
         kwargs,
         python=python,
         binding=messages_binding(native),
-        native=lambda hook, request, call_args, call_kwargs: hook(request, call_args, call_kwargs),
+        native=lambda hook, request, call_args, call_kwargs: hook(request),
         rules=RUST_RULES,
     )
     assert result is expected
@@ -242,13 +229,11 @@ def test_binding_errors_delegate_to_python(args: tuple[object, ...], kwargs: Map
 
 
 def test_anthropic_create_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: Final[list[LiteLLMMessagesRequest]] = []
+    captured: Final[list[NativeCall]] = []
     expected: Final = response()
 
     def native(
-        request: LiteLLMMessagesRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> AnthropicMessagesResponse:
         captured.append(request)
         return expected
@@ -261,18 +246,16 @@ def test_anthropic_create_routes_through_dispatch(monkeypatch: pytest.MonkeyPatc
     finally:
         NATIVE_MESSAGES.reset()
     assert result is expected
-    assert [request.model for request in captured] == ["claude-sonnet-4-5"]
+    assert [request.resolved["model"] for request in captured] == ["claude-sonnet-4-5"]
 
 
 @pytest.mark.asyncio
 async def test_anthropic_acreate_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: Final[list[LiteLLMMessagesRequest]] = []
+    captured: Final[list[NativeCall]] = []
     expected: Final = response()
 
     async def native(
-        request: LiteLLMMessagesRequest,
-        args: tuple[object, ...],
-        kwargs: Mapping[str, object],
+        request: NativeCall,
     ) -> AnthropicMessagesResponse:
         captured.append(request)
         return expected
@@ -285,7 +268,7 @@ async def test_anthropic_acreate_routes_through_dispatch(monkeypatch: pytest.Mon
     finally:
         NATIVE_AMESSAGES.reset()
     assert result is expected
-    assert [request.model for request in captured] == ["claude-sonnet-4-5"]
+    assert [request.resolved["model"] for request in captured] == ["claude-sonnet-4-5"]
 
 
 @pytest.mark.asyncio
@@ -303,13 +286,11 @@ def test_sync_messages_request_projects_public_arguments() -> None:
     rules: Final[Rules] = (RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),)
     expected: Final = AnthropicMessagesResponse(model="claude-test")
 
-    def native(
-        request: LiteLLMMessagesRequest, args: tuple[object, ...], kwargs: Mapping[str, object]
-    ) -> AnthropicMessagesResponse:
-        assert request.model == "claude-test"
-        assert request.messages == MESSAGES
-        assert request.max_tokens == 10
-        assert request.custom_llm_provider == "anthropic"
+    def native(request: NativeCall) -> AnthropicMessagesResponse:
+        assert request.resolved["model"] == "claude-test"
+        assert request.resolved["messages"] == MESSAGES
+        assert request.resolved["max_tokens"] == 10
+        assert request.resolved["custom_llm_provider"] == "anthropic"
         return expected
 
     binding: Final[NativeBinding[NativeMessages]] = NativeBinding("messages", validate=lambda _: None)
@@ -324,7 +305,7 @@ def test_sync_messages_request_projects_public_arguments() -> None:
         },
         python=lambda *args, **kwargs: pytest.fail("required native route must handle this call"),
         binding=binding,
-        native=lambda hook, request, args, kwargs: hook(request, args, kwargs),
+        native=lambda hook, request, args, kwargs: hook(request),
         rules=rules,
     )
 
@@ -338,9 +319,7 @@ def test_messages_binding_error_delegates_unchanged_to_python() -> None:
     def python(*args: object, **kwargs: object) -> AnthropicMessagesResponse:
         return expected
 
-    def native(
-        request: LiteLLMMessagesRequest, args: tuple[object, ...], kwargs: Mapping[str, object]
-    ) -> AnthropicMessagesResponse:
+    def native(request: NativeCall) -> AnthropicMessagesResponse:
         pytest.fail("a call without max_tokens cannot project a request and must stay on Python")
 
     binding: Final[NativeBinding[NativeMessages]] = NativeBinding("messages", validate=lambda _: None)
@@ -350,7 +329,7 @@ def test_messages_binding_error_delegates_unchanged_to_python() -> None:
         {"model": "claude-test", "messages": MESSAGES, "custom_llm_provider": "anthropic"},
         python=python,
         binding=binding,
-        native=lambda hook, request, args, kwargs: hook(request, args, kwargs),
+        native=lambda hook, request, args, kwargs: hook(request),
         rules=rules,
     )
 
@@ -368,9 +347,7 @@ async def test_async_messages_falls_back_after_native_declines() -> None:
     expected: Final = AnthropicMessagesResponse(model="claude-test")
     rules: Final[Rules] = (RouteRule(Route.MESSAGES, Rollout.RUST_OPT_OUT),)
 
-    async def native(
-        request: LiteLLMMessagesRequest, args: tuple[object, ...], kwargs: Mapping[str, object]
-    ) -> AnthropicMessagesResponse:
+    async def native(request: NativeCall) -> AnthropicMessagesResponse:
         raise declined("unsupported")
 
     async def python(*args: object, **kwargs: object) -> AnthropicMessagesResponse:
@@ -383,7 +360,7 @@ async def test_async_messages_falls_back_after_native_declines() -> None:
         {"model": "claude-test", "messages": MESSAGES, "max_tokens": 10},
         python=python,
         binding=binding,
-        native=lambda hook, request, args, kwargs: hook(request, args, kwargs),
+        native=lambda hook, request, args, kwargs: hook(request),
         rules=rules,
     )
 
@@ -397,9 +374,7 @@ def test_internal_is_async_marker_bypasses_native() -> None:
     def python(*args: object, **kwargs: object) -> AnthropicMessagesResponse:
         return expected
 
-    def native(
-        request: LiteLLMMessagesRequest, args: tuple[object, ...], kwargs: Mapping[str, object]
-    ) -> AnthropicMessagesResponse:
+    def native(request: NativeCall) -> AnthropicMessagesResponse:
         pytest.fail("anthropic_messages' inner handler call must stay on Python")
 
     binding: Final[NativeBinding[NativeMessages]] = NativeBinding("messages", validate=lambda _: None)
@@ -415,7 +390,7 @@ def test_internal_is_async_marker_bypasses_native() -> None:
         },
         python=python,
         binding=binding,
-        native=lambda hook, request, args, kwargs: hook(request, args, kwargs),
+        native=lambda hook, request, args, kwargs: hook(request),
         rules=rules,
     )
 

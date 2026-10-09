@@ -22,7 +22,7 @@ def _round(response_id: str, response_cost: object) -> ResponsesAPIResponse:
             }
         )
     )
-    response._hidden_params["response_cost"] = response_cost
+    response.hidden_params["response_cost"] = response_cost
     return response
 
 
@@ -101,7 +101,7 @@ def test_billed_for_every_round_leaves_the_cost_to_the_caller_when_a_round_has_n
     billed: Final = billed_for_every_round(first=_round("resp_first", None), final=_round("resp_final", 0.004))
 
     assert billed.id == "resp_final"
-    assert billed._hidden_params["response_cost"] is None
+    assert billed.hidden_params["response_cost"] is None
 
 
 def test_billed_for_every_round_does_not_rebill_the_final_round_object():
@@ -109,5 +109,5 @@ def test_billed_for_every_round_does_not_rebill_the_final_round_object():
 
     billed: Final = billed_for_every_round(first=_round("resp_first", 0.001), final=final)
 
-    assert billed._hidden_params["response_cost"] == pytest.approx(0.005)
-    assert final._hidden_params["response_cost"] == 0.004
+    assert billed.hidden_params["response_cost"] == pytest.approx(0.005)
+    assert final.hidden_params["response_cost"] == 0.004

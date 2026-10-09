@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use litellm_core_utils::settings::{Lookup, ProcessEnvironment};
-use litellm_host_python::{from_py, json_object_field, run_async_value, run_sync_value, to_py};
+use litellm_host_python::{from_py, json_object_field, to_py};
 use litellm_secrets::{
     KeyManagementSettings, KeyManagementSystem, Secret, SecretManager, load_native_manager,
     read_secret_from_python_manager,
@@ -12,6 +12,8 @@ use pyo3::{
     prelude::*,
     types::PyDict,
 };
+
+use crate::execution::{run_async_value, run_sync_value};
 
 #[derive(Clone, PartialEq)]
 struct Configuration {

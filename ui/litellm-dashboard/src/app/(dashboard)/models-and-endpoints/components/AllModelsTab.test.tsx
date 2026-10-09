@@ -82,6 +82,14 @@ vi.mock("../../hooks/models/useModelCostMap", () => ({
 }));
 
 const mockTeams = [{ team_id: "team-1", team_alias: "Engineering" }];
+const mockCredentials = [
+  { credential_name: "openai-prod", display_name: "Prod OpenAI", credential_values: {}, credential_info: {} },
+];
+const mockUseCredentials = vi.hoisted(() => vi.fn());
+vi.mock("../../hooks/credentials/useCredentials", () => ({
+  useCredentials: mockUseCredentials,
+}));
+
 vi.mock("../../hooks/teams/useTeams", () => ({
   useTeams: () => ({ data: mockTeams, isLoading: false, error: null, refetch: vi.fn() }),
 }));
@@ -152,6 +160,35 @@ describe("AllModelsTab", () => {
     modelsInfoCalls.length = 0;
     setModelsInfo([makeRow()]);
     vi.spyOn(useAuthorizedModule, "default").mockReturnValue(MOCK_AUTHORIZED);
+    mockUseCredentials.mockImplementation(({ enabled = true }: { enabled?: boolean } = {}) => ({
+      data: enabled ? { credentials: mockCredentials } : undefined,
+      isLoading: false,
+    }));
+  });
+
+  describe("credential labels", () => {
+    const rowWithCredential = () => {
+      const row = makeRow();
+      return { ...row, litellm_params: { ...row.litellm_params, litellm_credential_name: "openai-prod" } };
+    };
+
+    it("shows the credential's display name for a proxy admin", async () => {
+      setModelsInfo([rowWithCredential()]);
+      renderWithProviders(<AllModelsTab {...defaultProps} />);
+
+      expect(await screen.findByText("Prod OpenAI")).toBeInTheDocument();
+      expect(mockUseCredentials).toHaveBeenLastCalledWith({ enabled: true });
+    });
+
+    it("skips the admin-only credential list for other roles and shows the raw name", async () => {
+      vi.spyOn(useAuthorizedModule, "default").mockReturnValue({ ...MOCK_AUTHORIZED, userRole: "Internal User" });
+      setModelsInfo([rowWithCredential()]);
+      renderWithProviders(<AllModelsTab {...defaultProps} />);
+
+      expect(await screen.findByText("openai-prod")).toBeInTheDocument();
+      expect(screen.queryByText("Prod OpenAI")).not.toBeInTheDocument();
+      expect(mockUseCredentials).toHaveBeenLastCalledWith({ enabled: false });
+    });
   });
 
   it("renders the fetched models and the server row count", async () => {

@@ -8,6 +8,7 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
+import { credentialOptions } from "@/components/shared/credentialOptions";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Info } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
@@ -24,7 +25,10 @@ import {
   type MountedFormValues,
 } from "../common_components/MountedFormField";
 import type { Team } from "../key_team_helpers/key_list";
-import { type CredentialItem, type ProviderCreateInfo, modelAvailableCall } from "../networking";
+import { type CredentialItem, type ProviderCreateInfo, credentialCreateCall, modelAvailableCall } from "../networking";
+import CredentialModal from "../model_add/CredentialModal";
+import { federatedProviderOf } from "../model_add/credential_federation";
+import { buildCredential, withoutRestrictedFields } from "../model_add/credential_form_helpers";
 import { ProviderLogo } from "../molecules/models/ProviderLogo";
 import AccessGroupTagsCombobox from "./AccessGroupTagsCombobox";
 import AdvancedSettings from "./advanced_settings";
@@ -34,6 +38,11 @@ import ConnectionErrorDisplay from "./model_connection_test";
 import ProviderSpecificFields from "./provider_specific_fields";
 import { TEST_MODES } from "./add_model_modes";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { credentialsKeys } from "@/app/(dashboard)/hooks/credentials/useCredentials";
+import { extractProxyErrorMessage } from "@/lib/http/client";
+import { toast } from "@/lib/toast";
+import { isProxyAdminRole } from "@/utils/roles";
+import { useQueryClient } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface AddModelFormProps {
@@ -44,7 +53,6 @@ interface AddModelFormProps {
   selectedProvider: string | null;
   setSelectedProvider: (provider: string | null) => void;
   providerModels: string[];
-  setProviderModelsFn: (provider: string | null) => void;
   getPlaceholder: (provider: string) => string;
   showAdvancedSettings: boolean;
   setShowAdvancedSettings: (show: boolean) => void;
@@ -68,7 +76,6 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   selectedProvider,
   setSelectedProvider,
   providerModels,
-  setProviderModelsFn,
   getPlaceholder,
   showAdvancedSettings,
   setShowAdvancedSettings,
@@ -91,6 +98,24 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   const guardrailsList = guardrailsData?.guardrails.map((g) => g.guardrail_name);
   const { data: tagsList } = useTags();
   const selectedCredentialName = useWatch({ control: form.control, name: "litellm_credential_name" });
+  const queryClient = useQueryClient();
+  const [isFederatedCredentialModalOpen, setIsFederatedCredentialModalOpen] = useState(false);
+  const canCreateFederatedCredential =
+    isProxyAdminRole(userRole ?? "") && federatedProviderOf(selectedProvider) !== null;
+
+  const handleCreateFederatedCredential = async (values: Record<string, unknown>) => {
+    const credential = buildCredential(values, withoutRestrictedFields(values));
+    try {
+      await credentialCreateCall(accessToken, credential);
+    } catch (error) {
+      toast.error(extractProxyErrorMessage(error));
+      return;
+    }
+    toast.success("Credential added successfully");
+    setIsFederatedCredentialModalOpen(false);
+    await queryClient.invalidateQueries({ queryKey: credentialsKeys.all });
+    form.setValue("litellm_credential_name", credential.credential_name, { shouldDirty: true });
+  };
 
   const handleTestConnection = async () => {
     setIsTestingConnection(true);
@@ -128,20 +153,10 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
     [sortedProviderMetadata],
   );
 
-  const credentialOptions: SearchSelectOption[] = useMemo(
-    () => [
-      { label: "None", value: "" },
-      ...credentials.map((credential) => ({
-        label: credential.credential_name,
-        value: credential.credential_name,
-      })),
-    ],
-    [credentials],
-  );
+  const credentialSelectOptions: SearchSelectOption[] = useMemo(() => credentialOptions(credentials), [credentials]);
 
   const applyProviderSelection = (provider: string | null) => {
     setSelectedProvider(provider);
-    setProviderModelsFn(provider);
     form.setValue("model", []);
     form.setValue("model_name", undefined);
   };
@@ -301,7 +316,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                           <SearchSelect
                             inputId={control.id}
                             placeholder="Select or search for existing credentials"
-                            options={credentialOptions}
+                            options={credentialSelectOptions}
                             value={(control.value as string | null | undefined) ?? ""}
                             onValueChange={(value) => control.onChange(value === "" ? null : value)}
                           />
@@ -317,6 +332,20 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                             <div className="grow border-t border-border"></div>
                           </div>
                           <ProviderSpecificFields selectedProvider={selectedProvider} />
+                          {canCreateFederatedCredential && (
+                            <div className="mb-4 flex flex-col items-start gap-2">
+                              <span className="text-sm text-muted-foreground">
+                                Workload identity federation is saved as a credential, then attached to this model.
+                              </span>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                onClick={() => setIsFederatedCredentialModalOpen(true)}
+                              >
+                                Use workload identity federation
+                              </Button>
+                            </div>
+                          )}
                         </>
                       )}
                       <div className="flex items-center my-4">
@@ -447,6 +476,17 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
         </CardContent>
       </Card>
 
+      {isFederatedCredentialModalOpen && (
+        <CredentialModal
+          open
+          mode="add"
+          initialProvider={selectedProvider}
+          initialAuthMethod="federation"
+          providerLocked
+          onCancel={() => setIsFederatedCredentialModalOpen(false)}
+          onSubmit={handleCreateFederatedCredential}
+        />
+      )}
       {/* Test Connection Results Modal */}
       <Dialog
         open={isResultModalVisible}

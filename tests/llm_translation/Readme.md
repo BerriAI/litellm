@@ -26,7 +26,6 @@ provider APIs. The reusable conftest plumbing lives in
 `tests/_vcr_conftest_common.py` and is wired into:
 
 - `tests/llm_translation/`
-- `tests/llm_responses_api_testing/`
 - `tests/audio_tests/`
 - `tests/batches_tests/`
 - `tests/guardrails_tests/`

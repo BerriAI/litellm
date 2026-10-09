@@ -321,3 +321,80 @@ through an emptyDir. Empty when the sidecar is off or uses 127.0.0.1 TCP.
 - name: LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS
   value: {{ .Values.collector.drainTimeoutSeconds | quote }}
 {{- end -}}
+
+{{- define "litellm.lensWorker.image" -}}
+{{- if .Values.lensWorker.image.digest -}}
+{{- if not (regexMatch "^sha256:[0-9a-f]{64}$" .Values.lensWorker.image.digest) -}}
+{{- fail "lensWorker.image.digest must be sha256 followed by 64 lowercase hex characters" -}}
+{{- end -}}
+{{- printf "%s@%s" .Values.lensWorker.image.repository .Values.lensWorker.image.digest -}}
+{{- else -}}
+{{- $backendTag := .Values.image.tag | default .Chart.AppVersion -}}
+{{- $releaseTag := ternary (printf "v%s" $backendTag) $backendTag (regexMatch "^[0-9]" $backendTag) -}}
+{{- $tag := .Values.lensWorker.image.tag | default $releaseTag -}}
+{{- $repository := .Values.lensWorker.image.repository -}}
+{{- if and (hasPrefix "sha-" $tag) (eq $repository "ghcr.io/berriai/litellm-lens-worker") -}}
+{{- $repository = "ghcr.io/berriai/litellm-lens-worker-dev" -}}
+{{- end -}}
+{{- printf "%s:%s" $repository $tag -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "litellm.gateway.collectorSocketDir" -}}
+{{- if and .Values.gateway.collector.enabled (hasPrefix "unix://" .Values.gateway.collector.address) -}}
+{{- dir (trimPrefix "unix://" .Values.gateway.collector.address) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+LITELLM_COLLECTOR_* env shared by the producer (gateway container) and the
+consumer (collector container), so both agree on the transport and the
+shutdown drain window.
+*/}}
+{{- define "litellm.gateway.collectorEnv" -}}
+{{- with .Values.gateway.collector }}
+- name: LITELLM_COLLECTOR_ENABLED
+  value: "true"
+- name: LITELLM_COLLECTOR_ADDRESS
+  value: {{ .address | quote }}
+- name: LITELLM_COLLECTOR_BUFFER_SIZE
+  value: {{ .bufferSize | quote }}
+- name: LITELLM_COLLECTOR_ON_UNAVAILABLE
+  value: {{ .onUnavailable | quote }}
+- name: LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS
+  value: {{ .drainTimeoutSeconds | quote }}
+{{- end }}
+{{- end -}}
+
+{{- define "litellm.lensWorker.labels" -}}
+{{- $labels := include "litellm.labels" . | fromYaml -}}
+{{- $_ := set $labels "app.kubernetes.io/name" (printf "%s-lens-worker" (include "litellm.name" . | trunc 51 | trimSuffix "-")) -}}
+{{- toYaml $labels -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.serviceTokenSecretName" -}}
+{{- .Values.lensWorker.serviceTokenSecret.name | default (printf "%s-lens-service" (include "litellm.fullname" .)) -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.bundledClickhouse" -}}
+{{- if and .Values.lensWorker.enabled .Values.lensWorker.clickhouse.enabled (not .Values.lensWorker.clickhouseSecret.name) -}}true{{- end -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.publicUrl" -}}
+{{- if .Values.lensWorker.publicUrl -}}
+{{- .Values.lensWorker.publicUrl -}}
+{{- else if .Values.lensWorker.ingress.enabled -}}
+{{- $tls := or (not (empty .Values.lensWorker.ingress.tls)) (hasKey .Values.lensWorker.ingress.annotations "alb.ingress.kubernetes.io/certificate-arn") -}}
+{{- printf "%s://%s" (ternary "https" "http" $tls) (required "lensWorker.ingress.host is required" .Values.lensWorker.ingress.host) -}}
+{{- else if and .Values.ingress.enabled (eq (len .Values.ingress.hosts) 1) -}}
+{{- $host := required "ingress.hosts[0].host is required" (first .Values.ingress.hosts).host -}}
+{{- $tls := or (not (empty .Values.ingress.tls)) (hasKey .Values.ingress.annotations "alb.ingress.kubernetes.io/certificate-arn") -}}
+{{- printf "%s://%s/lens-ingest" (ternary "https" "http" $tls) $host -}}
+{{- else -}}
+{{- fail "lensWorker.publicUrl is required when there is no single ingress hostname" -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.clickhouseName" -}}
+{{- printf "%s-lens-clickhouse" (include "litellm.fullname" . | trunc 47 | trimSuffix "-") -}}
+{{- end -}}

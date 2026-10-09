@@ -8,6 +8,10 @@ Before execution starts, perform only admission checks needed to select native e
 
 The host driver owns sequencing and terminal events; the bridge supplies fallible resource composition without exposing route types to the driver. An unstarted async call performs no resource setup. Setup errors after start follow the terminal failure contract and never authorize fallback or provider replay
 
-Use the shared `run_public_call` boundary with hooks supplied by bridge composition. `callbacks-legacy-python` owns legacy argument sharing and `Logging` dispatch behind `PublicCall` and `LegacyLogging`. Route bindings identify their neutral `Operation` and may retain the request needed for projection, but must not duplicate the legacy callback contract
+Use the shared `run_public_call` boundary with hooks supplied by bridge composition. `callbacks-legacy-python` owns legacy argument sharing and `Logging` dispatch behind `PublicCall` and `LegacyLogging`. Route bindings supply `callbacks-legacy-python::LoggingOperation` when composing legacy logging and may retain the request needed for projection, but must not duplicate the legacy callback contract
 
 Regression tests must observe that an unstarted call does no setup, hook and preflight rewrites affect resource configuration, setup failures reach the selected failure handler once, and provider work is not replayed. Retain existing read-point and object-identity guarantees while changing setup timing
+
+## Layout
+
+`messages/` is the reference shape. Each lifecycle route is a folder: `mod.rs` holds `run_<route>` and the thin sync and async `#[pyfunction]` entrypoints that take `NativeCall` and call it, `host.rs` holds the `PythonBinding` host, and anything else route-specific (projection, error mapping, extra pyclasses) gets its own sibling file. Scaffolded routes without a lifecycle (embeddings, audio transcription) stay a single `<route>.rs`

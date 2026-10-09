@@ -57,6 +57,81 @@ const baseParams: BuildComplexityRouterConfigParams = {
 };
 
 describe("buildComplexityRouterConfig", () => {
+  it.each(["heuristic_first", "hybrid"] as const)(
+    "persists the selected local heuristic for %s and preserves inactive v1 settings",
+    (classifierType) => {
+      const params = {
+        ...baseParams,
+        classifierType,
+        heuristicFirstMaxTier: "SIMPLE",
+        hybridBoundaryMargin: 0.1,
+        localHeuristic: "heuristic_v2" as const,
+        heuristicV2SuccessThreshold: 0,
+        tokenThresholds: { simple: 12, complex: 800 },
+        customDimensions: [{ id: "domain", name: "domain", weight: 0.2, keywords: ["billing"] }],
+      };
+      const expected = {
+        classifier_type: classifierType,
+        local_heuristic: "heuristic_v2",
+        heuristic_v2_success_threshold: 0,
+        token_thresholds: params.tokenThresholds,
+      };
+      expect(buildComplexityRouterConfig(params)).toMatchObject(expected);
+      expect(buildComplexityRouterConfig(params)).not.toHaveProperty("custom_dimensions");
+      expect(buildComplexityRouterConfig({ ...params, localHeuristic: "heuristic" })).toMatchObject({
+        local_heuristic: "heuristic",
+        custom_dimensions: [{ name: "domain", weight: 0.2, keywords: ["billing"] }],
+      });
+      expect(buildComplexityRouterConfig({ ...params, localHeuristic: undefined })).not.toHaveProperty(
+        "local_heuristic",
+      );
+    },
+  );
+
+  it.each(["heuristic", "heuristic_v2", "llm", "jev", "custom", "capability", "llm_v2"] as const)(
+    "omits the inactive chain selector under %s",
+    (classifierType) => {
+      expect(
+        buildComplexityRouterConfig({ ...baseParams, classifierType, localHeuristic: "heuristic_v2" }),
+      ).not.toHaveProperty("local_heuristic");
+    },
+  );
+
+  it.each([undefined, false, true])(
+    "keeps cache routing opt-in and uses eligible single-model tiers only when enabled: %s",
+    (enabled) => {
+      const config = buildComplexityRouterConfig({ ...baseParams, cacheAwareRouting: enabled });
+      expect(config.cache_aware_routing).toBe(enabled);
+      expect(Object.hasOwn(config, "cache_aware_routing")).toBe(enabled !== undefined);
+      expect(config.tiers).toEqual(
+        enabled ? Object.fromEntries(Object.entries(tiers).map(([tier, models]) => [tier, models[0]])) : tiers,
+      );
+      expect(config).not.toHaveProperty("cache_aware_routing_output_tokens");
+      expect(config).not.toHaveProperty("cache_aware_routing_timeout_ms");
+      expect(config).not.toHaveProperty("enable_context_window_escalation");
+      expect(config).not.toHaveProperty("max_tokens_from_tier_model");
+    },
+  );
+
+  it("keeps zero-output estimates and drops empty tiers without flattening real model pools", () => {
+    const params = {
+      ...baseParams,
+      cacheAwareRouting: true,
+      tiers: { ...tiers, MEDIUM: [], COMPLEX: ["first", "second"] },
+      cacheAwareRoutingOutputTokens: 0,
+      cacheAwareRoutingTimeoutMs: 750,
+    };
+    const config = buildComplexityRouterConfig(params);
+    const expected = {
+      cache_aware_routing: true,
+      cache_aware_routing_output_tokens: 0,
+      cache_aware_routing_timeout_ms: 750,
+      tiers: { SIMPLE: tiers.SIMPLE[0], COMPLEX: ["first", "second"], REASONING: tiers.REASONING[0] },
+    };
+    expect(config).toMatchObject(expected);
+    expect(config.tiers).not.toHaveProperty("MEDIUM");
+  });
+
   it("accepts built-in JEV defaults without an LLM classifier model", () => {
     expect(getClassifierModelError({ classifier_type: "jev" })).toBeNull();
   });
@@ -64,6 +139,8 @@ describe("buildComplexityRouterConfig", () => {
   it.each([
     { model: "" },
     { model: "   " },
+    { provider: "laya" as const, model: "unsupported" },
+    { provider: "bespoke" as const, model: "unsupported" },
     { timeout_ms: 0 },
     { timeout_ms: 1.5 },
     { timeout_ms: Number.NaN },
@@ -75,15 +152,38 @@ describe("buildComplexityRouterConfig", () => {
         classifier_type: "jev",
         jev_classifier_config: { model: "jev-latest", timeout_ms: 3000, ...patch },
       }),
-    ).toBe("Enter a JEV model, a positive whole-number timeout and a positive cooldown");
+    ).toBe("Enter a valid classifier model, a positive whole-number timeout and a positive cooldown");
   });
 
-  it.each([false, true])("serializes JEV with shared context and no LLM config, custom tiers: %s", (custom) => {
+  it.each([
+    ["bespoke", "nimble-latest"],
+    ["bespoke", "nimble"],
+    ["bespoke", "bespokelabs/Bespoke-Nimble-9B"],
+    ["jev", "custom-jev-model"],
+    [undefined, "custom-jev-model"],
+  ] as const)("accepts %s model %s before saving or testing", (provider, model) => {
+    expect(
+      getClassifierModelError({
+        classifier_type: "jev",
+        jev_classifier_config: { provider, model, timeout_ms: 3000 },
+      }),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["jev", "jev-latest", false],
+    ["jev", "jev-latest", true],
+    ["laya", "english", false],
+    ["laya", "english", true],
+    ["bespoke", "nimble-latest", false],
+    ["bespoke", "nimble-latest", true],
+  ] as const)("serializes %s/%s with shared context and no LLM config, custom tiers: %s", (provider, model, custom) => {
     const params: BuildComplexityRouterConfigParams = {
       ...baseParams,
       classifierType: "jev",
       jevClassifierConfig: {
-        model: "jev-test",
+        provider,
+        model,
         timeout_ms: 4500,
         instructions: "  Choose the configured tier  ",
         circuit_breaker_enabled: false,
@@ -108,15 +208,17 @@ describe("buildComplexityRouterConfig", () => {
       }),
     };
     const config = buildComplexityRouterConfig(params);
-    expect(config.classifier_type).toBe("jev");
+    expect(config.classifier_type).toBe("oss_classifier");
     const expectedJevConfig = {
-      model: "jev-test",
+      provider,
+      model,
       timeout_ms: 4500,
       instructions: "Choose the configured tier",
       circuit_breaker_enabled: false,
       circuit_breaker_cooldown_seconds: 12.5,
     };
-    expect(config.jev_classifier_config).toEqual(expectedJevConfig);
+    expect(config.opensource_classifier_config).toEqual(expectedJevConfig);
+    expect(config).not.toHaveProperty("jev_classifier_config");
     expect(config.classifier_context_window_size).toBe(4);
     expect(config.classifier_context_budget_chars).toBe(2000);
     expect(config.classifier_context_per_turn_chars).toBe(450);
@@ -139,15 +241,15 @@ describe("buildComplexityRouterConfig", () => {
       classifierType: "jev",
       jevClassifierConfig: { model: "jev-latest", timeout_ms: 3000, instructions: "  " },
     });
-    expect(jev.jev_classifier_config).toEqual({ model: "jev-latest", timeout_ms: 3000 });
+    expect(jev.opensource_classifier_config).toEqual({ provider: "jev", model: "jev-latest", timeout_ms: 3000 });
     const llmParams: BuildComplexityRouterConfigParams = {
       ...baseParams,
       classifierType: "llm",
       classifierLlmConfig: { model: "judge", timeout_ms: 1000 },
-      jevClassifierConfig: jev.jev_classifier_config,
+      jevClassifierConfig: jev.opensource_classifier_config,
     };
     const llm = buildComplexityRouterConfig(llmParams);
-    expect(llm).not.toHaveProperty("jev_classifier_config");
+    expect(llm).not.toHaveProperty("opensource_classifier_config");
   });
 
   it("forwards preset references and explicit overrides without materializing absent text on create", () => {
@@ -1300,13 +1402,16 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
       reasoningOverrideMinScore: 0.5,
       heuristicFirstMaxTier: "SIMPLE",
       hybridBoundaryMargin: 0.03,
+      localHeuristic: "heuristic",
       customTechnicalKeywords: ["kubernetes"],
       stallEscalationEnabled: true,
       stallEscalationWindow: 6,
       stallEscalationRepeatThreshold: 3,
     };
     // custom_dimensions only ever ship when the scorer decides, so "llm" cannot prove it emits.
-    const emittingType = key === "heuristic_first_max_tier" || key === "custom_dimensions" ? "heuristic_first" : "llm";
+    const emittingType = ["heuristic_first_max_tier", "custom_dimensions", "local_heuristic"].includes(key)
+      ? "heuristic_first"
+      : "llm";
     const typeForKey = key === "hybrid_boundary_margin" ? "hybrid" : emittingType;
     expect(buildComplexityRouterConfig({ ...baseParams, ...loaded, classifierType: typeForKey })).toHaveProperty(key);
     expect(build(loaded)).not.toHaveProperty(key);

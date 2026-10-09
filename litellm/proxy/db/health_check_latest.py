@@ -14,9 +14,11 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final
 
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, field_validator
+from pydantic import ConfigDict, JsonValue, TypeAdapter, field_validator
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.db.db_span import db_span
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -43,7 +45,7 @@ ORDER BY "model_id" ASC, "model_name" ASC, "checked_at" DESC
 """
 
 
-class LatestHealthCheckRow(BaseModel):
+class LatestHealthCheckRow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, protected_namespaces=())
 
     health_check_id: str
@@ -75,7 +77,8 @@ _ROWS_ADAPTER: Final = TypeAdapter(tuple[LatestHealthCheckRow, ...])
 
 
 async def query_latest_health_checks(prisma_client: PrismaClient) -> tuple[LatestHealthCheckRow, ...]:
-    rows: Final = await prisma_client.db.query_raw(LATEST_HEALTH_CHECKS_SQL)
+    async with db_span("latest_health_checks", "LiteLLM_HealthCheckTable"):
+        rows: Final = await prisma_client.db.query_raw(LATEST_HEALTH_CHECKS_SQL)
     return _ROWS_ADAPTER.validate_python(rows)
 
 
@@ -93,7 +96,8 @@ async def fetch_latest_health_checks_for_models(
     if not model_names:
         return ()
     try:
-        rows: Final = await prisma_client.db.query_raw(LATEST_HEALTH_CHECKS_FOR_MODELS_SQL, list(model_names))
+        async with db_span("latest_health_checks", "LiteLLM_HealthCheckTable"):
+            rows: Final = await prisma_client.db.query_raw(LATEST_HEALTH_CHECKS_FOR_MODELS_SQL, list(model_names))
         return _ROWS_ADAPTER.validate_python(rows)
     except Exception as query_err:  # noqa: BLE001  # a paged model list must not fail on its health decoration
         verbose_proxy_logger.error("Error getting latest health checks for models: %s", query_err)

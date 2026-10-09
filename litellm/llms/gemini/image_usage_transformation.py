@@ -1,4 +1,4 @@
-from typing import Any, Final
+from typing import Final
 
 from litellm.types.utils import ImageUsage, ImageUsageInputTokensDetails
 
@@ -51,7 +51,7 @@ def transform_gemini_image_usage(usage_metadata: dict) -> ImageUsage:
         if output_tokens > known_output_tokens:
             output_tokens_details.text_tokens += output_tokens - known_output_tokens
 
-    usage_payload: Final[dict[str, Any]] = {
+    usage_payload: Final[dict[str, object]] = {
         "input_tokens": usage_metadata.get("promptTokenCount", 0),
         "input_tokens_details": input_tokens_details,
         "output_tokens": output_tokens,
@@ -62,4 +62,4 @@ def transform_gemini_image_usage(usage_metadata: dict) -> ImageUsage:
         "completion_tokens_details": output_tokens_details.model_dump(),
         "output_tokens_details": output_tokens_details.model_dump(),
     }
-    return ImageUsage(**usage_payload)
+    return ImageUsage.model_validate(usage_payload)

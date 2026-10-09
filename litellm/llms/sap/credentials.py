@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -15,7 +15,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.llms.custom_httpx.http_handler import HTTPHandler, _get_httpx_client
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_httpx_client
 
 AUTH_ENDPOINT_SUFFIX: Final = "/oauth/token"
 
@@ -76,7 +76,7 @@ def _load_vcap() -> dict[str, Any]:
     return _load_json_env(VCAP_SERVICES_ENV_VAR) or {}
 
 
-def _get_vcap_service(label: str) -> dict[str, Any] | None:
+def _get_vcap_service(label: str) -> Mapping[str, object] | None:
     for services in _load_vcap().values():
         for svc in services:
             if svc.get("label") == label:
@@ -388,7 +388,7 @@ def _request_token(
                 handler = HTTPHandler(client=raw_client)
                 resp = handler.post(auth_url, data=data, timeout=timeout)
                 return _bearer_token_and_expiry(resp)
-        handler = _get_httpx_client()
+        handler = get_httpx_client()
         resp = handler.post(auth_url, data=data, timeout=timeout)
         return _bearer_token_and_expiry(resp)
     except Exception as e:

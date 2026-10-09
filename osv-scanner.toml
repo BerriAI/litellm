@@ -1,9 +1,14 @@
 [[IgnoredVulns]]
 id = "GHSA-w8v5-vhqr-4h9v"
-ignoreUntil = 2026-10-01
+ignoreUntil = 2026-11-01
 reason = "diskcache has no fixed release published; remove this entry once one exists"
 
 [[IgnoredVulns]]
 id = "GHSA-h7x2-h6g9-p789"
 ignoreUntil = 2026-10-14
 reason = "mlflow has no fixed release published (3.16.0, 2026-09-04, and master still store gateway secret api_base unvalidated); remove this entry once one exists"
+
+[[IgnoredVulns]]
+id = "GHSA-vfj7-8cjw-p6xm"
+ignoreUntil = 2026-11-03
+reason = "braces has no fixed release published (3.0.3, 2024-05-21, is latest and last_affected); dev-only via knip > fast-glob > micromatch; remove this entry once one exists"
