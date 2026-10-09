@@ -1165,7 +1165,10 @@ async def test_a_stored_fallback_target_cannot_carry_a_federation_field():
     so a stored key/team/global fallback could otherwise set the workspace a federation token is
     minted for. The request itself is already forbidden to carry these, and a stored setting is
     not a more trusted source than the request."""
-    with pytest.raises(ValueError, match="server-owned workload identity federation parameter"):
+    with pytest.raises(
+        ValueError,
+        match="server-owned workload identity federation or OAuth token exchange parameter",
+    ):
         await run_async_fallback(
             litellm_router=FakeRouter(),
             fallback_model_group=[{"model": "anthropic-backup", "anthropic_federation_workspace_id": "wrkspc_other"}],

@@ -453,6 +453,20 @@ model LiteLLM_MCPUserCredentials {
   @@unique([user_id, server_id])
 }
 
+// Per-user provider connections (e.g. GitHub Copilot OAuth) keyed by credential name
+model LiteLLM_UserProviderCredentials {
+  id               String   @id @default(uuid())
+  user_id          String
+  credential_name  String
+  provider         String
+  credential_b64   String
+  created_at       DateTime @default(now()) @map("created_at")
+  updated_at       DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@unique([user_id, credential_name])
+  @@index([credential_name])
+}
+
 // Per-user environment variable values for MCP servers.
 // values_b64 is an encrypted JSON object: {VAR_NAME: "value", ...}.
 model LiteLLM_MCPUserEnvVars {
@@ -1358,6 +1372,34 @@ model LiteLLM_DailyGatewayRequests {
   updated_at          DateTime @updatedAt
 
   @@id([date, category, route])
+  @@index([date])
+}
+
+model LiteLLM_DailyGatewayFailedRequests {
+  date            String
+  category        String
+  route           String
+  status_code     Int
+  failed_requests BigInt   @default(0)
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  @@id([date, category, route, status_code])
+  @@index([date])
+}
+
+model LiteLLM_DailyRequestErrors {
+  date            String
+  api_key         String
+  team_id         String   @default("")
+  user_id         String   @default("")
+  model_group     String   @default("")
+  status_code     Int
+  failed_requests BigInt   @default(0)
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  @@id([date, api_key, team_id, user_id, model_group, status_code])
   @@index([date])
 }
 
