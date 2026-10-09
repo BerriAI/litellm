@@ -6,6 +6,7 @@ import inspect
 import json
 import math
 import os
+import re
 import smtplib
 import ssl
 import sys
@@ -8598,6 +8599,41 @@ def normalize_route_for_root_path(route: str) -> str | None:
             return route[len(root_path) :]
         return None
     return route
+
+
+UI_CONFIG_ENDPOINT_PATTERN: Final = re.compile(
+    r"(?<![a-zA-Z0-9_/-])/(?:[a-zA-Z0-9_.-]+/)*\.well-known/litellm-ui-config"
+)
+UI_ASSET_PREFIX_PATTERN: Final = re.compile(r"(?<![a-zA-Z0-9_/-])/(?:[a-zA-Z0-9_.-]+/)*_next/")
+
+
+def rewrite_ui_content(
+    content: str,
+    server_root_path: str,
+    litellm_asset_prefix: str = "/litellm-asset-prefix",
+) -> str:
+    """
+    Rewrite packaged admin UI asset references and configuration endpoint paths
+    for a configured SERVER_ROOT_PATH.
+
+    This transformation is idempotent: repeatedly applying it for the same
+    server_root_path (e.g. across container or proxy restarts) preserves the
+    configured path instead of nesting it (e.g. /foo/foo/litellm/...).
+    """
+    if not server_root_path or server_root_path == "/":
+        return content
+
+    clean_root_path: Final = "/" + server_root_path.strip("/")
+
+    content_with_assets: Final = UI_ASSET_PREFIX_PATTERN.sub(f"{clean_root_path}/_next/", content)
+    content_with_prefix: Final = (
+        re.sub(rf"(?<![a-zA-Z0-9_/-]){re.escape(litellm_asset_prefix)}(?!/)", clean_root_path, content_with_assets)
+        if litellm_asset_prefix and litellm_asset_prefix != clean_root_path
+        else content_with_assets
+    )
+
+    target_endpoint: Final = f"{clean_root_path}/.well-known/litellm-ui-config"
+    return UI_CONFIG_ENDPOINT_PATTERN.sub(target_endpoint, content_with_prefix)
 
 
 def get_prisma_client_or_throw(message: str):
