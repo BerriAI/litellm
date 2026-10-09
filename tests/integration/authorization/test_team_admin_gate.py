@@ -424,8 +424,29 @@ def test_status_code(shared: TeamScenario, org_team: TeamScenario, route: Route,
             f"{caller} {call.method} {call.path}: {response.status_code} {response.text}"
         )
         if route.name == "team_update_budget_permitted":
-            assert read_rows(
-                'SELECT max_budget FROM "LiteLLM_TeamTable" WHERE team_id = %s', (s.team_id,)
-            ) == [{"max_budget": 4.0 if response.status_code == 200 else 5.0}]
+            assert read_rows('SELECT max_budget FROM "LiteLLM_TeamTable" WHERE team_id = %s', (s.team_id,)) == [
+                {"max_budget": 4.0 if response.status_code == 200 else 5.0}
+            ]
         if response.status_code == 200 and route.cleanup is not None:
             route.cleanup(s, object_value(response.json()))
+
+
+@pytest.mark.parametrize(
+    "caller",
+    [caller for caller in CALLERS if caller != "proxy_admin"],
+)
+def test_non_team_admin_patching_the_blocked_flag_gets_the_blocked_flag_refusal(
+    shared: TeamScenario, org_team: TeamScenario, caller: Caller
+) -> None:
+    """PATCHing only the blocked flag is refused with the documented
+    proxy-admin-only refusal, not the auto-router membership refusal the
+    member write path raises for bodies without auto-router permissions."""
+    team: Final = org_team if caller in ORG_CALLERS else shared
+    with team.gateway.scenario() as scenario:
+        s: Final = replace(team, scenario=scenario)
+        model_id: Final = s.model()
+        response: Final = s.gateway.request(
+            "PATCH", f"/model/{model_id}/update", {"blocked": False}, key=s.keys[caller]
+        )
+        assert response.status_code == 403, response.text
+        assert "Only proxy admins can change a model's blocked flag." in response.text
