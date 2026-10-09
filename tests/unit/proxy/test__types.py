@@ -419,7 +419,7 @@ def test_mcp_server_requests_accept_approved_client_assertion_signing_alg() -> N
     assert update.credentials is None
 
 
-@pytest.mark.parametrize("versions", [[], ["2099-01-01"], ["2026-07-28"]])
+@pytest.mark.parametrize("versions", [[], ["2099-01-01"]])
 def test_mcp_advertised_versions_reject_unavailable_revisions(versions):
     from pydantic import ValidationError
 

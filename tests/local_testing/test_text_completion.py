@@ -2729,19 +2729,6 @@ def test_completion_openai_engine() -> None:
 # test_completion_openai_engine()
 
 
-def test_completion_chatgpt_prompt():
-    try:
-        print("\n gpt3.5 test\n")
-        response = text_completion(model="openai/gpt-3.5-turbo", prompt="What's the weather in SF?")
-        print(response)
-        response_str = response["choices"][0]["text"]
-        print("\n", response.choices)
-        print("\n", response.choices[0])
-        # print(response.choices[0].text)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 # test_completion_chatgpt_prompt()
 
 

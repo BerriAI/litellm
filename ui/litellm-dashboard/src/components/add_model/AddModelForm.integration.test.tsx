@@ -164,7 +164,6 @@ const createTestProps = (userRole = "proxy_admin", userId = "user-1", isTeamAdmi
     mountedValues: () => projectMountedValues(registry, form.getValues),
     handleOk: vi.fn().mockResolvedValue(true),
     setSelectedProvider: vi.fn(),
-    setProviderModelsFn: vi.fn(),
     getPlaceholder: vi.fn((provider: string) => `Enter ${provider} model name`),
     setShowAdvancedSettings: vi.fn(),
     selectedProvider: Providers.OpenAI,
@@ -311,6 +310,18 @@ describe("AddModelForm", () => {
     expect(await screen.findByText("Provider")).toBeInTheDocument();
     expect((await screen.findAllByRole("button", { name: "Test Connect" })).length).toBeGreaterThan(0);
     expect(await screen.findByRole("button", { name: "Add Model" })).toBeInTheDocument();
+  });
+
+  it("offers the Evaluation decisions mode", async () => {
+    const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
+    mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
+
+    renderWithProviders(<AddModelForm {...createTestProps()} />);
+
+    await screen.findByText("Provider");
+    await userEvent.click(screen.getByRole("combobox", { name: "Mode" }));
+
+    expect(await screen.findByRole("option", { name: "Evaluation - /v1/decisions", exact: true })).toBeInTheDocument();
   });
 
   it("shows only the Close button in the connection test dialog footer", async () => {
