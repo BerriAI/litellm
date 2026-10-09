@@ -1569,7 +1569,7 @@ def _backfill_empty_streamed_output(
         _strip_provider_internal_item_fields(item) for _, item in sorted(merged.items())
     ]
     try:
-        setattr(response_obj, "output", backfilled_items)
+        setattr(response_obj, "output", backfilled_items)  # noqa: B010  # object-typed
     except (AttributeError, TypeError, ValueError):
         verbose_logger.debug("could not backfill empty response.output; model likely immutable")
 
