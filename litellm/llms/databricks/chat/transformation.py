@@ -62,7 +62,9 @@ from ...anthropic.chat.transformation import (
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 from ..common_utils import DatabricksBase, DatabricksException
 
-_RESPONSE_FORMAT_ADAPTER: Final[TypeAdapter[dict[str, object] | None]] = TypeAdapter(dict[str, object] | None)
+_RESPONSE_FORMAT_ADAPTER: (  # mutable-ok: mirrors the dict return contract of get_json_schema_from_pydantic_object
+    Final[TypeAdapter[dict[str, object] | None]]
+) = TypeAdapter(dict[str, object] | None)
 
 
 def _is_bare_assistant_message(message_dict: Mapping[str, object]) -> bool:
@@ -197,8 +199,11 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         return super().get_config()
 
     def get_json_schema_from_pydantic_object(
-        self, response_format: type[BaseModel] | dict[str, object] | None
-    ) -> dict[str, object] | None:
+        self,
+        response_format: (  # mutable-ok: matches BaseConfig override signature
+            type[BaseModel] | dict[str, object] | None
+        ),
+    ) -> dict[str, object] | None:  # mutable-ok: BaseConfig contract returns a dict
         return _RESPONSE_FORMAT_ADAPTER.validate_python(type_to_response_format_param(response_format=response_format))
 
     def get_required_params(self) -> list[ProviderField]:
