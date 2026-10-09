@@ -1,9 +1,11 @@
 import json
 import logging
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from datetime import datetime
-from unittest.mock import MagicMock
+from typing import Final, cast
+from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
 import litellm
@@ -18,7 +20,18 @@ from litellm.proxy.pass_through_endpoints.streaming_handler import (
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
+from litellm.router_utils.fallback_event_handlers import record_retry_attempt
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
+
+
+class _AnthropicTestStream(httpx.AsyncByteStream):
+    def __init__(self, chunks: tuple[bytes, ...]) -> None:
+        self._chunks: Final = chunks
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for chunk in self._chunks:
+            yield chunk
+
 
 MODEL = "gemini-stream-pricing-probe"
 PROMPT_TOKENS = 1000
@@ -235,3 +248,64 @@ async def test_failed_anthropic_stream_records_partial_usage_off_the_event_loop(
     partial_usage = logging_obj.record_partial_usage_for_failure.call_args.kwargs["usage"]
     assert partial_usage.completion_tokens > 100_000
     assert_loop_stayed_free(took, lags)
+
+
+@pytest.mark.asyncio
+async def test_stream_attempt_abandoned_for_a_retry_logs_nothing() -> None:
+    model: Final = "claude-3-haiku"
+    logging_obj: Final = _logging_obj()
+    logging_obj.litellm_params = {"metadata": {}}
+    setattr(logging_obj, "_on_deferred_stream_complete", None)
+    logging_obj.completion_start_time = None
+    response: Final = httpx.Response(
+        200,
+        stream=_AnthropicTestStream(tuple(_interrupted_anthropic_stream(model, "hi")[:2])),
+    )
+    recorder: Final = AsyncMock()
+    gen: Final = PassThroughStreamingHandler.chunk_processor(
+        response=response,
+        request_body={"model": model, "stream": True},
+        litellm_logging_obj=logging_obj,
+        endpoint_type=EndpointType.ANTHROPIC,
+        start_time=datetime.now(),
+        passthrough_success_handler_obj=PassThroughEndpointLogging(),
+        url_route="/v1/messages",
+        route_streaming_logging=recorder,
+    )
+
+    await gen.__anext__()
+    record_retry_attempt(cast(Mapping[str, object], logging_obj.litellm_params), 1, 2)
+    await gen.aclose()
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    recorder.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_stream_attempt_closed_without_a_retry_logs_once() -> None:
+    model: Final = "claude-3-haiku"
+    logging_obj: Final = _logging_obj()
+    logging_obj.litellm_params = {"metadata": {}}
+    setattr(logging_obj, "_on_deferred_stream_complete", None)
+    logging_obj.completion_start_time = None
+    response: Final = httpx.Response(
+        200,
+        stream=_AnthropicTestStream(tuple(_interrupted_anthropic_stream(model, "hi")[:2])),
+    )
+    recorder: Final = AsyncMock()
+    gen: Final = PassThroughStreamingHandler.chunk_processor(
+        response=response,
+        request_body={"model": model, "stream": True},
+        litellm_logging_obj=logging_obj,
+        endpoint_type=EndpointType.ANTHROPIC,
+        start_time=datetime.now(),
+        passthrough_success_handler_obj=PassThroughEndpointLogging(),
+        url_route="/v1/messages",
+        route_streaming_logging=recorder,
+    )
+
+    await gen.__anext__()
+    await gen.aclose()
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    recorder.assert_awaited_once()

@@ -1,8 +1,8 @@
 import traceback
-from collections.abc import Coroutine, Sequence
+from collections.abc import AsyncGenerator, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Final, Protocol
+from typing import Final, Protocol, cast
 
 import httpx
 
@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
+from litellm.router_utils.fallback_event_handlers import attempted_retries_for_request
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import StandardPassThroughResponseObject, Usage
 
@@ -138,19 +139,22 @@ class PassThroughStreamingHandler:
     @staticmethod
     async def chunk_processor(
         response: httpx.Response,
-        request_body: dict | None,
+        request_body: dict[str, object] | None,
         litellm_logging_obj: LiteLLMLoggingObj,
         endpoint_type: EndpointType,
         start_time: datetime,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
         route_streaming_logging: RouteStreamingLogging | None = None,
-    ):
+    ) -> AsyncGenerator[bytes, None]:
         resolved_route_streaming_logging: Final[RouteStreamingLogging] = (
             route_streaming_logging or PassThroughStreamingHandler.route_streaming_logging_to_handler
         )
         raw_bytes: Final[list[bytes]] = []
         resolved_request_body: Final[dict[str, object]] = request_body or {}
+        opened_on_attempt: Final = attempted_retries_for_request(
+            cast(Mapping[str, object], litellm_logging_obj.litellm_params)
+        )
 
         def _build_logging_coroutine() -> Coroutine[None, None, None]:
             return resolved_route_streaming_logging(
@@ -265,7 +269,11 @@ class PassThroughStreamingHandler:
             # the caller before this generator starts (see
             # _log_passthrough_upstream_failure); logging them again here as
             # a success would double-log the same request.
-            if not logging_scheduled and raw_bytes and response.status_code < 400:
+            superseded_by_retry: Final = (
+                attempted_retries_for_request(cast(Mapping[str, object], litellm_logging_obj.litellm_params))
+                > opened_on_attempt
+            )
+            if not logging_scheduled and raw_bytes and response.status_code < 400 and not superseded_by_retry:
                 logging_scheduled = True
                 try:
                     GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=_build_logging_coroutine())
