@@ -1,5 +1,4 @@
 import os
-import sys
 from litellm._uuid import uuid
 from functools import partial
 from typing import Optional
@@ -9,9 +8,6 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds-the parent directory to the system path
 
 import asyncio
 from unittest.mock import Mock
@@ -19,6 +15,7 @@ from unittest.mock import Mock
 import httpx
 
 from litellm.proxy.proxy_server import initialize_pass_through_endpoints
+from tests._master_key import MASTER_KEY
 
 
 # Mock the async_client used in the pass_through_request function
@@ -188,7 +185,7 @@ async def test_pass_through_endpoint_rpm_limit(
     proxy_logging_obj._init_litellm_callbacks()
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm.proxy.proxy_server, "prisma_client", "FAKE-VAR")
     setattr(litellm.proxy.proxy_server, "proxy_logging_obj", proxy_logging_obj)
 
@@ -292,7 +289,7 @@ async def test_pass_through_endpoint_sequential_rpm_limit(
     proxy_logging_obj._init_litellm_callbacks()
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm.proxy.proxy_server, "prisma_client", "FAKE-VAR")
     setattr(litellm.proxy.proxy_server, "proxy_logging_obj", proxy_logging_obj)
 
@@ -413,7 +410,7 @@ async def test_aaapass_through_endpoint_pass_through_keys_langfuse(
         proxy_logging_obj._init_litellm_callbacks()
 
         setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
-        setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+        setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
         setattr(litellm.proxy.proxy_server, "prisma_client", "FAKE-VAR")
         setattr(litellm.proxy.proxy_server, "proxy_logging_obj", proxy_logging_obj)
 

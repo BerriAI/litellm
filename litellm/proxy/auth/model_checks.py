@@ -13,7 +13,7 @@ from litellm.router import Router
 from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 from litellm.types.router import CredentialLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import LlmProviders
-from litellm.utils import get_valid_models
+from litellm.utils import ProviderConfigManager, get_valid_models
 
 _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
 
@@ -45,7 +45,14 @@ def get_provider_models(provider: str, litellm_params: LiteLLM_Params | None = N
     if provider in litellm.models_by_provider:
         provider_models: Final = get_valid_models(custom_llm_provider=provider, litellm_params=litellm_params)
         return provider_models
-    return None
+
+    try:
+        llm_provider: Final = LlmProviders(provider)
+    except ValueError:
+        return None
+    if ProviderConfigManager.get_provider_model_info(model=None, provider=llm_provider) is None:
+        return None
+    return get_valid_models(custom_llm_provider=provider, litellm_params=litellm_params)
 
 
 def _get_models_from_access_groups(
@@ -333,11 +340,11 @@ def expand_wildcard_deployments_for_model_info(
     on top of that: a wildcard deployment like model_name="*" / litellm_params.model="openai/*"
     becomes one entry per known openai model, matching /v1/models behaviour.
     """
-    expanded: Final[list[dict[str, Any]]] = []
+    expanded: Final[list[dict[str, object]]] = []
     for deployment in deployments:
         model_name = str(deployment.get("model_name") or "")
         raw_params = deployment.get("litellm_params")
-        litellm_params_dict: dict[str, Any] = raw_params if isinstance(raw_params, dict) else {}
+        litellm_params_dict: dict[str, object] = raw_params if isinstance(raw_params, dict) else {}
         litellm_model = str(litellm_params_dict.get("model") or "")
 
         # Determine the wildcard pattern to expand.
@@ -387,33 +394,22 @@ def _get_wildcard_models(
     all_wildcard_models: Final = []
     for model in unique_models:
         if _check_wildcard_routing(model=model):
-            if return_wildcard_routes:  # will add the wildcard route to the list eg: anthropic/*.
+            if return_wildcard_routes:
                 all_wildcard_models.append(model)
 
-            ## get litellm params from model
-            if llm_router is not None:
-                model_list = llm_router.get_model_list(model_name=model, team_id=team_id)
-                if model_list:
-                    for router_model in model_list:
-                        wildcard_models = get_known_models_from_wildcard(
+            models_to_remove.add(model)
+
+            model_list = llm_router.get_model_list(model_name=model, team_id=team_id) if llm_router else None
+            if model_list:
+                for router_model in model_list:
+                    all_wildcard_models.extend(
+                        get_known_models_from_wildcard(
                             wildcard_model=model,
                             litellm_params=LiteLLM_Params(**router_model["litellm_params"]),
                         )
-                        all_wildcard_models.extend(wildcard_models)
-                else:
-                    # Router has no deployment for this wildcard (e.g., BYOK team models)
-                    # Fall back to expanding from known provider models
-                    wildcard_models = get_known_models_from_wildcard(wildcard_model=model, litellm_params=None)
-                    if wildcard_models:
-                        models_to_remove.add(model)
-                        all_wildcard_models.extend(wildcard_models)
+                    )
             else:
-                # get all known provider models
-                wildcard_models = get_known_models_from_wildcard(wildcard_model=model, litellm_params=None)
-
-                if wildcard_models:
-                    models_to_remove.add(model)
-                    all_wildcard_models.extend(wildcard_models)
+                all_wildcard_models.extend(get_known_models_from_wildcard(wildcard_model=model, litellm_params=None))
 
     for model in models_to_remove:
         unique_models.remove(model)

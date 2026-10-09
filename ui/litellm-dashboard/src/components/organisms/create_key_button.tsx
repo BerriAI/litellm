@@ -11,31 +11,23 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
-import { Field, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
-import {
-  Combobox,
-  ComboboxContent,
-  ComboboxEmpty,
-  ComboboxInput,
-  ComboboxItem,
-  ComboboxList,
-} from "@/components/ui/combobox";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { MultiSelect, type MultiSelectOption } from "@/components/shared/MultiSelect";
-import { SearchSelect } from "@/components/shared/SearchSelect";
+import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
+import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
 import { ChevronDown, Info } from "lucide-react";
-import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
-import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { type Control, useForm, useWatch, type UseFormSetValue } from "react-hook-form";
-import { rolesWithWriteAccess } from "../../utils/roles";
+import { isProxyAdminRole, rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
+import SkillSelector from "../skills/SkillSelector";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
 import SchemaFormFields from "../common_components/check_openapi_schema";
@@ -60,7 +52,9 @@ import OrganizationDropdown from "../common_components/OrganizationDropdown";
 import ProjectDropdown from "../common_components/ProjectDropdown";
 import { CreateUserButton } from "../CreateUserButton";
 import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
+import { END_USER_BUDGET_HINT, EndUserBudgetSelect } from "../key_team_helpers/EndUserBudgetSelect";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
+import { ModelMaxBudget, ModelMaxBudgetEditor } from "../key_team_helpers/ModelMaxBudgetEditor";
 import { TagRateLimitEditor, TagRateLimitEntry } from "../key_team_helpers/TagRateLimitEditor";
 import {
   excludeProxyWideSentinel,
@@ -69,7 +63,6 @@ import {
 } from "../key_team_helpers/fetch_available_models_team_key";
 import { Team } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
-import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import { toast } from "@/lib/toast";
 import {
@@ -127,14 +120,18 @@ interface McpToolPermissionsFieldProps {
 }
 
 const McpToolPermissionsField: React.FC<McpToolPermissionsFieldProps> = ({ accessToken, control, setValue }) => {
-  const selection = useWatch({ control, name: "allowed_mcp_servers_and_groups" }) as { servers?: string[] } | undefined;
+  const selection = useWatch({ control, name: "allowed_mcp_servers_and_groups" }) as
+    | { servers?: string[]; accessGroups?: string[]; toolsets?: string[] }
+    | undefined;
   const toolPermissions = useWatch({ control, name: "mcp_tool_permissions" }) as Record<string, string[]> | undefined;
 
   return (
     <div className="mt-6">
       <MCPToolPermissions
         accessToken={accessToken}
-        selectedServers={(selection?.servers || []).filter((s: string) => s !== NO_MCP_SERVERS_SENTINEL)}
+        selectedServers={selection?.servers || []}
+        selectedAccessGroups={selection?.accessGroups || []}
+        selectedToolsets={selection?.toolsets || []}
         toolPermissions={toolPermissions || {}}
         onChange={(toolPerms) => setValue("mcp_tool_permissions", toolPerms)}
       />
@@ -164,14 +161,8 @@ interface CreateKeyProps {
 
 interface User {
   user_id: string;
-  user_email: string;
+  user_email: string | null;
   role?: string;
-}
-
-interface UserOption {
-  label: string;
-  value: string;
-  user: User;
 }
 
 export const fetchTeamModels = async (
@@ -269,7 +260,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [isCreateUserModalVisible, setIsCreateUserModalVisible] = useState(false);
   const [possibleUIRoles, setPossibleUIRoles] = useState<Record<string, Record<string, string>>>({});
-  const [userOptions, setUserOptions] = useState<UserOption[]>([]);
+  const [userOptions, setUserOptions] = useState<SearchSelectOption[]>([]);
   const [userSearchLoading, setUserSearchLoading] = useState<boolean>(false);
   const latestUserSearchRef = useRef(0);
   const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>([]);
@@ -280,6 +271,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
   const routerSettingsRef = useRef<RouterSettingsAccordionRef>(null);
   const [budgetLimits, setBudgetLimits] = useState<BudgetWindowEntry[]>([]);
+  const [modelMaxBudget, setModelMaxBudget] = useState<ModelMaxBudget>({});
   const [tagRateLimits, setTagRateLimits] = useState<TagRateLimitEntry[]>([]);
   const [budgetFallbacks, setBudgetFallbacks] = useState<Record<string, string[]>>({});
   const [budgetFallbacksKey, setBudgetFallbacksKey] = useState<number>(0);
@@ -347,7 +339,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     const fetchPrompts = async () => {
       try {
         const response = await getPromptsList(accessToken);
-        setPromptsList(response.prompts.map((prompt) => prompt.prompt_id));
+        setPromptsList(Array.from(new Set(response.prompts.map((prompt) => prompt.prompt_id))));
       } catch (error) {
         console.error("Failed to fetch prompts:", error);
       }
@@ -449,6 +441,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
         modelAliases,
         routerSettings: routerSettingsRef.current?.getValue() ?? routerSettings,
         budgetLimits,
+        modelMaxBudget,
         tagRateLimits,
         budgetFallbacks,
       };
@@ -577,7 +570,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     setUserSearchLoading(true);
     try {
       const params = new URLSearchParams();
-      params.append("user_email", searchText); // Always search by email
+      params.append("search", searchText);
       if (accessToken == null) {
         return;
       }
@@ -585,10 +578,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       if (!isLatestSearch()) return;
 
       const data: User[] = response;
-      const options: UserOption[] = data.map((user) => ({
-        label: `${user.user_email} (${user.user_id})`,
+      const options: SearchSelectOption[] = data.map((user) => ({
+        label: user.user_email ? `${user.user_email} (${user.user_id})` : user.user_id,
         value: user.user_id,
-        user,
       }));
 
       setUserOptions(options);
@@ -600,38 +592,36 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     }
   };
 
-  const handleUserSearch = useDebouncedCallback((text: string) => fetchUsers(text), { wait: DEBOUNCE_WAIT_MS });
-
-  const changeOrganization = (write: FieldWrite) => (orgId: string) => {
+  const changeOrganization = (write: FieldWrite) => (orgId: string | null) => {
     write(orgId);
-    setSelectedOrganizationId(orgId || null);
+    setSelectedOrganizationId(orgId);
     // Clear team and project when org changes
     setSelectedCreateKeyTeam(null);
     setSelectedProjectId(null);
-    form.setValue("team_id", undefined);
-    form.setValue("project_id", undefined);
+    form.setValue("team_id", null);
+    form.setValue("project_id", null);
   };
 
   const selectTeam = (team: Team | null) => {
     setSelectedCreateKeyTeam(team);
     setSelectedProjectId(null);
-    form.setValue("project_id", undefined);
+    form.setValue("project_id", null);
     // Auto-populate org from team for non-admin users
     if (team?.organization_id) {
       setSelectedOrganizationId(team.organization_id);
       form.setValue("organization_id", team.organization_id);
     } else if (!team) {
       setSelectedOrganizationId(null);
-      form.setValue("organization_id", undefined);
+      form.setValue("organization_id", null);
     }
   };
 
-  const changeProject = (write: FieldWrite) => (projectId: string) => {
+  const changeProject = (write: FieldWrite) => (projectId: string | null) => {
     write(projectId);
     if (!projectId) {
       setSelectedProjectId(null);
       setSelectedCreateKeyTeam(null);
-      form.setValue("team_id", undefined);
+      form.setValue("team_id", null);
       return;
     }
     setSelectedProjectId(projectId);
@@ -733,47 +723,31 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     {(control) => (
                       <div>
                         <div className="mb-2 flex">
-                          <Combobox
-                            items={userOptions}
-                            value={userOptions.find((option) => option.value === control.value) ?? null}
-                            filter={null}
-                            onValueChange={(option: UserOption | null) => control.onChange(option?.value)}
-                            onInputValueChange={handleUserSearch}
-                            isItemEqualToValue={(a: UserOption, b: UserOption) => a.value === b.value}
-                            itemToStringLabel={(option: UserOption) => option.label}
-                          >
-                            <ComboboxInput
-                              id={control.id}
-                              className="w-full"
-                              placeholder="Type email to search for users"
-                              aria-required={control["aria-required"]}
-                              aria-invalid={control["aria-invalid"]}
-                              aria-describedby={control["aria-describedby"]}
-                              showClear={control.value != null && control.value !== ""}
-                              onBlur={control.onBlur}
-                            />
-                            <ComboboxContent>
-                              <ComboboxEmpty>{userSearchLoading ? "Searching..." : "No users found"}</ComboboxEmpty>
-                              <ComboboxList>
-                                {(option: UserOption) => (
-                                  <ComboboxItem key={option.value} value={option} title={option.label}>
-                                    {option.label}
-                                  </ComboboxItem>
-                                )}
-                              </ComboboxList>
-                            </ComboboxContent>
-                          </Combobox>
+                          <PaginatedSearchSelect
+                            options={userOptions}
+                            value={typeof control.value === "string" ? control.value : undefined}
+                            onValueChange={control.onChange}
+                            onSearchChange={fetchUsers}
+                            isLoading={userSearchLoading}
+                            placeholder="Type email or user ID to search for users"
+                            emptyText="No users found"
+                            loadingText="Searching..."
+                            inputId={control.id}
+                            aria-required={control["aria-required"] === "true" ? true : undefined}
+                            aria-invalid={control["aria-invalid"] === "true" ? true : undefined}
+                            aria-describedby={control["aria-describedby"]}
+                          />
                           <Button variant="outline" className="ml-2" onClick={() => setIsCreateUserModalVisible(true)}>
                             Create User
                           </Button>
                         </div>
-                        <div className="text-xs text-muted-foreground">Search by email to find users</div>
+                        <div className="text-xs text-muted-foreground">Search by email or user ID to find users</div>
                       </div>
                     )}
                   </MountedFormField>
                 )}
                 {keyOwner === "agent" && (
-                  <div className="mt-4 p-4 bg-purple-50 border border-purple-200 rounded-md">
+                  <div className="mt-4 p-4 bg-purple-50 border border-purple-200 rounded-md dark:bg-purple-950 dark:border-purple-800">
                     <div className="mb-3">
                       <label htmlFor="create-key-agent" className="text-sm font-medium text-foreground">
                         Select Agent <span className="text-destructive">*</span>
@@ -783,8 +757,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                       inputId="create-key-agent"
                       placeholder="Select an agent"
                       emptyText="No agents found"
-                      value={selectedAgentId ?? undefined}
-                      onValueChange={(value) => setSelectedAgentId(value === "" ? null : value)}
+                      value={selectedAgentId}
+                      onValueChange={setSelectedAgentId}
                       options={agentsList.map((a) => ({
                         label: a.agent_name || a.agent_id,
                         value: a.agent_id,
@@ -810,7 +784,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   {(control) => (
                     <OrganizationDropdown
                       id={control.id}
-                      value={control.value as string | undefined}
+                      value={typeof control.value === "string" ? control.value : null}
                       organizations={organizations}
                       loading={isOrganizationsLoading}
                       disabled={userRole !== "Admin"}
@@ -836,7 +810,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   {(control) => (
                     <TeamDropdown
                       id={control.id}
-                      value={control.value as string | undefined}
+                      value={typeof control.value === "string" ? control.value : null}
                       onChange={control.onChange}
                       disabled={selectedProjectId !== null}
                       organizationId={selectedOrganizationId}
@@ -860,7 +834,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     {(control) => (
                       <ProjectDropdown
                         id={control.id}
-                        value={control.value as string | undefined}
+                        value={typeof control.value === "string" ? control.value : null}
                         projects={projects}
                         teamId={selectedCreateKeyTeam?.team_id}
                         loading={isProjectsLoading || !teams}
@@ -1048,7 +1022,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                             value={control.value as string | null | undefined}
                             showNeverResets
                             placeholder="Not set"
-                            onChange={control.onChange}
+                            onChange={(next) => control.onChange(next ?? undefined)}
                           />
                         )}
                       </MountedFormField>
@@ -1066,6 +1040,22 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                       <Field className="mt-4">
                         <FieldLabel>
                           <span>
+                            Per-Model Budgets{" "}
+                            <SimpleTooltip content="Cap spend on individual models, each with its own reset window. Enforced across every request this key makes; usage is reported on the key's info page.">
+                              <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                            </SimpleTooltip>
+                          </span>
+                        </FieldLabel>
+                        <ModelMaxBudgetEditor
+                          value={modelMaxBudget}
+                          onChange={setModelMaxBudget}
+                          availableModels={modelsToPick}
+                          premiumUser={premiumUser === true}
+                        />
+                      </Field>
+                      <Field className="mt-4">
+                        <FieldLabel>
+                          <span>
                             Budget Fallbacks{" "}
                             <SimpleTooltip content="When a model exceeds its per-model budget (model_max_budget), requests automatically reroute to fallback models instead of failing. Configure per-model budgets in Advanced Settings.">
                               <Info className="ml-1 inline size-3.5 align-text-bottom" />
@@ -1079,6 +1069,30 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           availableModels={modelsToPick}
                         />
                       </Field>
+                      {keyOwner === "service_account" && isProxyAdminRole(userRole ?? "") && (
+                        <MountedFormField
+                          className="mt-4"
+                          label={
+                            <span>
+                              Default Customer Budget{" "}
+                              <SimpleTooltip content={END_USER_BUDGET_HINT}>
+                                <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                              </SimpleTooltip>
+                            </span>
+                          }
+                          name="end_user_budget_id"
+                        >
+                          {(control) => (
+                            <EndUserBudgetSelect
+                              id={control.id}
+                              accessToken={accessToken}
+                              value={typeof control.value === "string" ? control.value : null}
+                              onChange={control.onChange}
+                              canEdit
+                            />
+                          )}
+                        </MountedFormField>
+                      )}
                       <MountedFormField
                         className="mt-4"
                         label={
@@ -1158,6 +1172,32 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                             onChange={control.onChange}
                             aria-invalid={control["aria-invalid"] ? true : undefined}
                             aria-describedby={control["aria-describedby"]}
+                          />
+                        )}
+                      </MountedFormField>
+                      <MountedFormField
+                        className="mt-4"
+                        label={
+                          <span>
+                            Tokens per day Limit (TPD){" "}
+                            <SimpleTooltip content="Daily token budget for batch submissions (/v1/batches). When set, batch input files are charged against this 24h window instead of the key's TPM/RPM limits. Online requests keep using TPM/RPM.">
+                              <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                            </SimpleTooltip>
+                          </span>
+                        }
+                        name="tpd_limit"
+                        help={`TPD cannot exceed team TPD limit: ${team?.tpd_limit !== null && team?.tpd_limit !== undefined ? team?.tpd_limit : "unlimited"}`}
+                        rules={ceilingRule(
+                          team?.tpd_limit,
+                          (limit) => `TPD limit cannot exceed team TPD limit: ${limit}`,
+                        )}
+                      >
+                        {(control) => (
+                          <NumericalInput
+                            {...control}
+                            value={control.value as number | string | undefined}
+                            step={1}
+                            width={400}
                           />
                         )}
                       </MountedFormField>
@@ -1253,40 +1293,42 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           />
                         )}
                       </MountedFormField>
-                      <MountedFormField
-                        label={
-                          <span>
-                            Disable Global Guardrails{" "}
-                            <SimpleTooltip content="When enabled, this key will bypass any guardrails configured to run on every request (global guardrails)">
-                              <a
-                                href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
-                              >
-                                <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                              </a>
-                            </SimpleTooltip>
-                          </span>
-                        }
-                        name="disable_global_guardrails"
-                        className="mt-4"
-                        help={
-                          canEditGuardrails
-                            ? "Bypass global guardrails for this key"
-                            : "Premium feature - Upgrade to disable global guardrails by key"
-                        }
-                      >
-                        {(control) => (
-                          <Switch
-                            id={control.id}
-                            checked={control.value === true}
-                            onCheckedChange={control.onChange}
-                            disabled={!canEditGuardrails}
-                            aria-describedby={control["aria-describedby"]}
-                          />
-                        )}
-                      </MountedFormField>
+                      {userRole != null && isProxyAdminRole(userRole) && (
+                        <MountedFormField
+                          label={
+                            <span>
+                              Disable Global Guardrails{" "}
+                              <SimpleTooltip content="When enabled, this key will bypass any guardrails configured to run on every request (global guardrails)">
+                                <a
+                                  href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
+                                >
+                                  <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                                </a>
+                              </SimpleTooltip>
+                            </span>
+                          }
+                          name="disable_global_guardrails"
+                          className="mt-4"
+                          help={
+                            canEditGuardrails
+                              ? "Bypass global guardrails for this key"
+                              : "Premium feature - Upgrade to disable global guardrails by key"
+                          }
+                        >
+                          {(control) => (
+                            <Switch
+                              id={control.id}
+                              checked={control.value === true}
+                              onCheckedChange={control.onChange}
+                              disabled={!canEditGuardrails}
+                              aria-describedby={control["aria-describedby"]}
+                            />
+                          )}
+                        </MountedFormField>
+                      )}
                       {canViewPolicies && (
                         <MountedFormField
                           label={
@@ -1569,6 +1611,36 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                         </CollapsibleContent>
                       </Collapsible>
 
+                      <Collapsible className="mt-4 mb-4 overflow-hidden rounded-lg border">
+                        <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
+                          <b>Skill Settings</b>
+                          <ChevronDown className={SECTION_CHEVRON_CLASS} />
+                        </CollapsibleTrigger>
+                        <CollapsibleContent className="px-4 pb-3">
+                          <MountedFormField
+                            label={
+                              <span>
+                                Allowed Skills{" "}
+                                <SimpleTooltip content="Enabled skills are visible to every key. Grant disabled (private) Claude Code plugins to this key here">
+                                  <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                                </SimpleTooltip>
+                              </span>
+                            }
+                            name="allowed_skills"
+                            help="Select private skills this key can access in the Claude Code marketplace"
+                          >
+                            {(control) => (
+                              <SkillSelector
+                                onChange={control.onChange}
+                                value={control.value as string[] | undefined}
+                                accessToken={accessToken}
+                                placeholder="Select skills (optional)"
+                              />
+                            )}
+                          </MountedFormField>
+                        </CollapsibleContent>
+                      </Collapsible>
+
                       {premiumUser ? (
                         <Collapsible className="mt-4 mb-4 overflow-hidden rounded-lg border">
                           <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
@@ -1741,6 +1813,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                               "budget_duration",
                               "tpm_limit",
                               "rpm_limit",
+                              "tpd_limit",
                               ...(disableCustomApiKeys ? ["key"] : []),
                             ]}
                           />

@@ -1,7 +1,15 @@
 import React, { useState, useEffect } from "react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  NUMERIC_CELL_CLASS,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { Download, FileText, FileWarning, Trash2, TriangleAlert, Upload } from "lucide-react";
 import { userCreateCall, invitationCreateCall, getProxyUISettings } from "./networking";
 import Papa from "papaparse";
@@ -525,7 +533,9 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
             {parsedData.length === 0 ? (
               <div className="mb-6">
                 <div className="flex items-center mb-4">
-                  <div className="w-8 h-8 rounded-full bg-info text-white flex items-center justify-center mr-3">1</div>
+                  <div className="w-8 h-8 rounded-full bg-info text-info-foreground flex items-center justify-center mr-3">
+                    1
+                  </div>
                   <h3 className="text-lg font-medium">Download and fill the template</h3>
                 </div>
 
@@ -604,7 +614,9 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                 </div>
 
                 <div className="flex items-center mb-4">
-                  <div className="w-8 h-8 rounded-full bg-info text-white flex items-center justify-center mr-3">2</div>
+                  <div className="w-8 h-8 rounded-full bg-info text-info-foreground flex items-center justify-center mr-3">
+                    2
+                  </div>
                   <h3 className="text-lg font-medium">Upload your completed CSV</h3>
                 </div>
 
@@ -669,7 +681,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                           className="sr-only"
                           onChange={handleFileInputChange}
                         />
-                        <Upload className="size-[30px] text-muted-foreground/70 mb-2" />
+                        <Upload className="size-[30px] text-muted-foreground mb-2" />
                         <p className="mb-1">Drag and drop your CSV file here</p>
                         <p className="text-sm text-muted-foreground mb-3">or</p>
                         <span className={buttonVariants({ variant: "outline", size: "sm" })}>Browse files</span>
@@ -697,7 +709,9 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
             ) : (
               <div className="mb-6">
                 <div className="flex items-center mb-4">
-                  <div className="w-8 h-8 rounded-full bg-info text-white flex items-center justify-center mr-3">3</div>
+                  <div className="w-8 h-8 rounded-full bg-info text-info-foreground flex items-center justify-center mr-3">
+                    3
+                  </div>
                   <h3 className="text-lg font-medium">
                     {parsedData.some((user) => user.status === "success" || user.status === "failed")
                       ? "User Creation Results"
@@ -792,7 +806,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                           <TableHead>Email</TableHead>
                           <TableHead>Role</TableHead>
                           <TableHead>Teams</TableHead>
-                          <TableHead>Budget</TableHead>
+                          <TableHead className={NUMERIC_CELL_CLASS}>Budget</TableHead>
                           <TableHead>Status</TableHead>
                         </TableRow>
                       </TableHeader>
@@ -803,7 +817,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                             <TableCell className="whitespace-normal break-words">{record.user_email}</TableCell>
                             <TableCell className="whitespace-normal break-words">{record.user_role}</TableCell>
                             <TableCell className="whitespace-normal break-words">{record.teams}</TableCell>
-                            <TableCell>{record.max_budget}</TableCell>
+                            <TableCell className={NUMERIC_CELL_CLASS}>{record.max_budget}</TableCell>
                             <TableCell className="whitespace-normal break-words">{renderStatusCell(record)}</TableCell>
                           </TableRow>
                         ))}

@@ -6,11 +6,11 @@ import { Check, CircleHelp, Copy, RefreshCw, TriangleAlert } from "lucide-react"
 import React, { useEffect, useMemo, useState } from "react";
 import { useWatch } from "react-hook-form";
 import { CopyToClipboard } from "react-copy-to-clipboard";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { toast } from "@/lib/toast";
 import { regenerateKeyCall } from "../networking";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -107,7 +107,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
       // formatted preview, otherwise downstream expiry parsing breaks.
       const updatedKeyData: Partial<KeyResponse> = {
         ...response,
-        token: response.token || response.key_id || selectedToken.token,
+        token: response.token_id || response.token || selectedToken.token,
         key_name: response.key,
         max_budget: formValues.max_budget,
         tpm_limit: formValues.tpm_limit,

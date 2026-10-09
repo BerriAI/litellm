@@ -10,6 +10,11 @@
 -- partitioned, so existing installs are unaffected until you run this.
 --
 -- IMPORTANT
+--   * After partitioning, `prisma db push` (including the proxy's
+--     --use_prisma_db_push startup mode) is NOT supported: it tries to rewrite
+--     the primary key back to ("request_id"), which Postgres rejects on a
+--     partitioned table. The proxy detects this and exits with guidance.
+--     Use the default startup path (`prisma migrate deploy`) instead.
 --   * Test on a staging copy first and take a backup.
 --   * Postgres cannot convert a populated table to partitioned in place, so this
 --     renames the old table aside and creates a fresh partitioned table.
@@ -48,6 +53,8 @@ ALTER INDEX IF EXISTS "LiteLLM_SpendLogs_end_user_idx"
     RENAME TO "LiteLLM_SpendLogs_legacy_end_user_idx";
 ALTER INDEX IF EXISTS "LiteLLM_SpendLogs_session_id_idx"
     RENAME TO "LiteLLM_SpendLogs_legacy_session_id_idx";
+ALTER INDEX IF EXISTS "LiteLLM_SpendLogs_api_key_startTime_idx"
+    RENAME TO "LiteLLM_SpendLogs_legacy_api_key_startTime_idx";
 
 CREATE TABLE "LiteLLM_SpendLogs" (
     LIKE "LiteLLM_SpendLogs_legacy" INCLUDING DEFAULTS INCLUDING GENERATED
@@ -72,6 +79,9 @@ CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_end_user_idx"
 
 CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_session_id_idx"
     ON "LiteLLM_SpendLogs" ("session_id");
+
+CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_api_key_startTime_idx"
+    ON "LiteLLM_SpendLogs" ("api_key", "startTime");
 
 -- Safety net: any row whose startTime has no explicit partition lands here so
 -- writes never fail. The cleanup job never drops the DEFAULT partition.

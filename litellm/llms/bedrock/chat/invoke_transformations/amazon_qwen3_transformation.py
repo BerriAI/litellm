@@ -6,7 +6,8 @@ Inherits from `AmazonInvokeConfig`
 Qwen3 + Invoke API Tutorial: https://docs.aws.amazon.com/bedrock/latest/userguide/invoke-imported-model.html
 """
 
-from typing import Any, Final
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -17,6 +18,9 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
@@ -40,7 +44,7 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
         top_k: int | None = None,
         stop: list[str] | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -167,7 +171,7 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

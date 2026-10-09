@@ -12,10 +12,11 @@ This module is dependency-injected: callers pass the proxy ``llm_router`` and
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
+from litellm.constants import SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -38,10 +39,10 @@ def resolve_embedding_router(
 
 
 def build_router_embedding_metadata(
-    request_metadata: dict[str, Any] | None,
-) -> dict[str, Any]:
+    request_metadata: Mapping[str, object] | None,
+) -> Mapping[str, object]:
     """Forward the caller's full metadata, flagged as a semantic-cache embedding."""
-    metadata: Final[dict[str, Any]] = dict(request_metadata or {})
+    metadata: Final = dict(request_metadata or {})
     metadata["semantic-cache-embedding"] = True
     return metadata
 
@@ -58,6 +59,13 @@ def resolve_embedding_max_input_tokens(
         return None
     deployment_max_input_tokens, _ = router.get_configured_token_limits(embedding_model)
     return deployment_max_input_tokens
+
+
+def resolve_embedding_timeout(configured_timeout: float | None) -> float:
+    """Explicit cache setting first, else the short semantic-cache default."""
+    if configured_timeout is not None:
+        return configured_timeout
+    return SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS
 
 
 def truncate_embedding_input(prompt: str, embedding_model: str, max_input_tokens: int | None) -> str:

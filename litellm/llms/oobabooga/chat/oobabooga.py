@@ -1,13 +1,16 @@
 import json
 from collections.abc import Callable
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.llms.custom_httpx.http_handler import get_httpx_client
 from litellm.utils import EmbeddingResponse, ModelResponse, Usage
 
 from ..common_utils import OobaboogaError
 from .transformation import OobaboogaConfig
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 oobabooga_config: Final = OobaboogaConfig()
 
@@ -62,7 +65,7 @@ def completion(
         additional_args={"complete_input_dict": data},
     )
     ## COMPLETION CALL
-    client: Final = _get_httpx_client()
+    client: Final = get_httpx_client()
     response: Final = client.post(
         completion_url,
         headers=headers,
@@ -92,7 +95,7 @@ def embedding(
     model_response: EmbeddingResponse,
     api_key: str | None,
     api_base: str | None,
-    logging_obj: Any,
+    logging_obj: "LiteLLMLoggingObj",
     optional_params: dict,
     encoding=None,
 ):

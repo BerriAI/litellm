@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from "react";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { keyCreateCall } from "./networking";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import { CircleAlert, CirclePlus, Copy, Info, KeyRound, Link } from "lucide-react";
 import { parseErrorMessage } from "./shared/errorUtils";
 import { toast } from "@/lib/toast";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardTitle } from "@/components/ui/card";

@@ -24,13 +24,15 @@ Three test scenarios per provider:
 import asyncio
 import wave
 from pathlib import Path
+from typing import Final
 
 import pytest
 
+from e2e_config import ws_base_url
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from realtime_client import (
     PROVIDERS,
     RealtimeProvider,
-    ws_base_url,
     realtime_model,
 )
 
@@ -73,7 +75,59 @@ from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService  # noq
 
 from pipecat_service import LiteLLMRealtimeLLMService  # noqa: E402
 
-PROVIDER_PARAMS = [pytest.param(p, id=p.id) for p in PROVIDERS]
+TOOL_PARAMS: Final = tuple(
+    pytest.param(
+        p,
+        id=p.id,
+        marks=meta(
+            Subject(
+                domain=Domain.LLM_TRANSLATION,
+                route=Route.REALTIME,
+                providers=(Provider(p.id),),
+                models=(p.litellm_params.model,),
+                capabilities=(Capability.FUNCTION_CALLING,),
+                mode=Mode.WEBSOCKET,
+            )
+        ),
+    )
+    for p in PROVIDERS
+)
+
+AUDIO_OUTPUT_PARAMS: Final = tuple(
+    pytest.param(
+        p,
+        id=p.id,
+        marks=meta(
+            Subject(
+                domain=Domain.LLM_TRANSLATION,
+                route=Route.REALTIME,
+                providers=(Provider(p.id),),
+                models=(p.litellm_params.model,),
+                capabilities=(Capability.AUDIO_OUTPUT,),
+                mode=Mode.WEBSOCKET,
+            )
+        ),
+    )
+    for p in PROVIDERS
+)
+
+AUDIO_INPUT_PARAMS: Final = tuple(
+    pytest.param(
+        p,
+        id=p.id,
+        marks=meta(
+            Subject(
+                domain=Domain.LLM_TRANSLATION,
+                route=Route.REALTIME,
+                providers=(Provider(p.id),),
+                models=(p.litellm_params.model,),
+                capabilities=(Capability.AUDIO_INPUT, Capability.AUDIO_OUTPUT),
+                mode=Mode.WEBSOCKET,
+            )
+        ),
+    )
+    for p in PROVIDERS
+)
 
 # PCM16 24 kHz mono WAV of "What is the weather in Paris?" (generated via macOS
 # `say` and resampled with audioop). Used by the server-VAD audio-input test.
@@ -193,7 +247,7 @@ async def _run_pipeline(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("provider", PROVIDER_PARAMS)
+@pytest.mark.parametrize("provider", TOOL_PARAMS)
 def test_pipecat_server_vad(
     scoped_key: str,
     realtime_models: dict[str, str],
@@ -208,7 +262,7 @@ def test_pipecat_server_vad(
     assert got_text, "no assistant text frames produced"
 
 
-@pytest.mark.parametrize("provider", PROVIDER_PARAMS)
+@pytest.mark.parametrize("provider", AUDIO_OUTPUT_PARAMS)
 def test_pipecat_audio_output(
     scoped_key: str,
     realtime_models: dict[str, str],
@@ -332,7 +386,7 @@ async def _run_audio_input_pipeline(
     return bool(capture.texts), capture.audio_bytes
 
 
-@pytest.mark.parametrize("provider", PROVIDER_PARAMS)
+@pytest.mark.parametrize("provider", AUDIO_INPUT_PARAMS)
 def test_pipecat_server_vad_audio_input(
     scoped_key: str,
     realtime_models: dict[str, str],

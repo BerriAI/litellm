@@ -1,7 +1,10 @@
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
 from litellm.types.utils import ImageObject, ImageResponse
 
@@ -9,10 +12,13 @@ from .transformation import FalAIBaseConfig
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class FalAIStableDiffusionConfig(FalAIBaseConfig):
@@ -123,7 +129,7 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
 
         return optional_params
 
-    def _map_image_size(self, size: str) -> Any:
+    def _map_image_size(self, size: str) -> str | Mapping[str, int]:
         """
         Map OpenAI size format to Stable Diffusion image_size format.
 
@@ -206,7 +212,7 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
@@ -242,7 +248,8 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
             model_response.data = []
 
         # Handle Stable Diffusion response format
-        images: Final = response_data.get("images", [])
+        response_object: Final = _JSON_OBJECT.validate_python(response_data)
+        images: Final = response_object.get("images", [])
         if isinstance(images, list):
             for image_data in images:
                 if isinstance(image_data, dict):
@@ -262,12 +269,15 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
                     )
 
         # Add additional metadata from Stable Diffusion response
-        if hasattr(model_response, "_hidden_params"):
-            if "seed" in response_data:
-                model_response._hidden_params["seed"] = response_data["seed"]
-            if "timings" in response_data:
-                model_response._hidden_params["timings"] = response_data["timings"]
-            if "has_nsfw_concepts" in response_data:
-                model_response._hidden_params["has_nsfw_concepts"] = response_data["has_nsfw_concepts"]
+        if hasattr(model_response, HIDDEN_PARAMS_ATTR):
+            hidden_params: Final = cast(  # cast-ok: preserve mapping operations on dynamic response metadata
+                dict[str, object], getattr(model_response, HIDDEN_PARAMS_ATTR)
+            )
+            if "seed" in response_object:
+                hidden_params["seed"] = response_object["seed"]
+            if "timings" in response_object:
+                hidden_params["timings"] = response_object["timings"]
+            if "has_nsfw_concepts" in response_object:
+                hidden_params["has_nsfw_concepts"] = response_object["has_nsfw_concepts"]
 
         return model_response

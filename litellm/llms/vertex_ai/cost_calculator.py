@@ -5,9 +5,9 @@ from typing import Final, Literal
 import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
-    _is_above_128k,
     generic_cost_per_token,
     get_vertex_regional_endpoint_uplift,
+    is_above_128k,
 )
 from litellm.types.utils import ModelInfo, Usage
 
@@ -64,6 +64,7 @@ def cost_per_character(
     usage: Usage,
     prompt_characters: float | None = None,
     completion_characters: float | None = None,
+    service_tier: str | None = None,
     vertex_location: str | None = None,
 ) -> tuple[float, float]:
     """
@@ -74,6 +75,8 @@ def cost_per_character(
         - custom_llm_provider: str, "vertex_ai-*"
         - prompt_characters: float, the number of input characters
         - completion_characters: float, the number of output characters
+        - service_tier: optional tier derived from Gemini trafficType
+          ("priority" for ON_DEMAND_PRIORITY, "flex" for FLEX/batch).
         - vertex_location: the Vertex AI location serving the request; non-global
           locations apply the model's regional-endpoint uplift multiplier
 
@@ -92,11 +95,12 @@ def cost_per_character(
             model=model,
             custom_llm_provider=custom_llm_provider,
             usage=usage,
+            service_tier=service_tier,
         )
     else:
         try:
             if (
-                _is_above_128k(tokens=prompt_characters * 4)  # 1 token = 4 char
+                is_above_128k(tokens=prompt_characters * 4)  # 1 token = 4 char
                 and model not in models_without_dynamic_pricing
             ):
                 ## check if character pricing, else default to token pricing
@@ -123,6 +127,7 @@ def cost_per_character(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 usage=usage,
+                service_tier=service_tier,
             )
 
     ## CALCULATE OUTPUT COST
@@ -131,12 +136,13 @@ def cost_per_character(
             model=model,
             custom_llm_provider=custom_llm_provider,
             usage=usage,
+            service_tier=service_tier,
         )
     else:
         completion_tokens: Final = usage.completion_tokens
         try:
             if (
-                _is_above_128k(tokens=completion_characters * 4)  # 1 token = 4 char
+                is_above_128k(tokens=completion_characters * 4)  # 1 token = 4 char
                 and model not in models_without_dynamic_pricing
             ):
                 assert (
@@ -162,6 +168,7 @@ def cost_per_character(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 usage=usage,
+                service_tier=service_tier,
             )
 
     vertex_uplift: Final = get_vertex_regional_endpoint_uplift(model_info, vertex_location)
@@ -179,14 +186,14 @@ def _handle_128k_pricing(
     prompt_tokens: Final = usage.prompt_tokens
     completion_tokens: Final = usage.completion_tokens
 
-    if _is_above_128k(tokens=prompt_tokens) and input_cost_per_token_above_128k_tokens is not None:
+    if is_above_128k(tokens=prompt_tokens) and input_cost_per_token_above_128k_tokens is not None:
         prompt_cost = prompt_tokens * input_cost_per_token_above_128k_tokens
     else:
         prompt_cost = prompt_tokens * (model_info["input_cost_per_token"] or 0.0)
 
     ## CALCULATE OUTPUT COST
     output_cost_per_token_above_128k_tokens = model_info.get("output_cost_per_token_above_128k_tokens")
-    if _is_above_128k(tokens=completion_tokens) and output_cost_per_token_above_128k_tokens is not None:
+    if is_above_128k(tokens=completion_tokens) and output_cost_per_token_above_128k_tokens is not None:
         completion_cost = completion_tokens * output_cost_per_token_above_128k_tokens
     else:
         completion_cost = completion_tokens * (model_info["output_cost_per_token"] or 0.0)

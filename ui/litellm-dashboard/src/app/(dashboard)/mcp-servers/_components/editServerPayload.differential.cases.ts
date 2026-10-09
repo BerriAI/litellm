@@ -14,6 +14,7 @@ const SERVER: MCPServer = {
   updated_at: "2024-01-01T00:00:00Z",
   updated_by: "user-1",
   mcp_access_groups: [],
+  rpm: undefined,
 };
 
 export const baseUi: EditServerUiState = {
@@ -45,6 +46,7 @@ const ROOT = {
   url: "https://example.com/mcp",
   auth_type: "none",
   max_concurrent_requests: undefined,
+  rpm: undefined,
   mcp_access_groups: [],
   extra_headers: [],
   static_headers: [],
@@ -255,11 +257,26 @@ export const CASES: readonly DifferentialCase[] = [
   },
 
   // --- credentials filtering ---
-  // ADMIN_CONFIG_CREDENTIAL_KEYS is exactly ["upstream_resource"], so only that key
-  // takes the blank-to-explicit-null branch. A blank client_id is dropped instead.
+  // Only a key in ADMIN_CONFIG_CREDENTIAL_KEYS takes the blank-to-explicit-null branch, which is
+  // what makes it clearable: the backend merge preserves an omitted key forever. A blank client_id
+  // is dropped instead.
   {
     label: "blank upstream_resource becomes an explicit null",
     values: { ...ROOT, auth_type: "oauth2", credentials: { upstream_resource: "", client_secret: "keep" } },
+    ui: {},
+  },
+  {
+    label: "blank upstream_token_header becomes an explicit null",
+    values: { ...ROOT, auth_type: "oauth2", credentials: { upstream_token_header: "", client_secret: "keep" } },
+    ui: {},
+  },
+  {
+    label: "a set upstream_token_header rides the credentials blob",
+    values: {
+      ...ROOT,
+      auth_type: "oauth2",
+      credentials: { upstream_token_header: "esb-oauth", client_secret: "keep" },
+    },
     ui: {},
   },
   {

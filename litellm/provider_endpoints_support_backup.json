@@ -528,6 +528,23 @@
         "interactions": true
       }
     },
+    "cognition": {
+      "display_name": "Cognition (`cognition`)",
+      "url": "https://docs.litellm.ai/docs/providers/cognition",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "cohere": {
       "display_name": "Cohere (`cohere`)",
       "url": "https://docs.litellm.ai/docs/providers/cohere",
@@ -542,6 +559,7 @@
         "moderations": false,
         "batches": false,
         "rerank": true,
+        "ocr": true,
         "a2a": true,
         "interactions": true
       }
@@ -600,6 +618,24 @@
         "interactions": true
       }
     },
+    "cortecs": {
+      "display_name": "Cortecs (`cortecs`)",
+      "url": "https://docs.litellm.ai/docs/providers/cortecs",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "custom": {
       "display_name": "Custom (`custom`)",
       "url": "https://docs.litellm.ai/docs/providers/custom_llm_server",
@@ -650,6 +686,42 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
+    "qwencloud": {
+      "display_name": "QwenCloud (`qwencloud`)",
+      "url": "https://docs.litellm.ai/docs/providers/qwencloud",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": true,
+        "image_generations": true,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": true,
+        "a2a": true,
+        "interactions": true
+      }
+    },
+    "qwen_ai_platform": {
+      "display_name": "Qianwen AI Platform (`qwen_ai_platform`)",
+      "url": "https://docs.litellm.ai/docs/providers/qwencloud",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": true,
+        "image_generations": true,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": true,
         "a2a": true,
         "interactions": true
       }
@@ -759,6 +831,24 @@
         "rerank": false,
         "a2a": true,
         "interactions": true
+      }
+    },
+    "edenai": {
+      "display_name": "Eden AI (`edenai`)",
+      "url": "https://docs.litellm.ai/docs/providers/edenai",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": true,
+        "image_generations": true,
+        "audio_transcriptions": true,
+        "audio_speech": true,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "interactions": false,
+        "video_generations": true
       }
     },
     "duckduckgo": {
@@ -1163,7 +1253,8 @@
         "files": true,
         "rerank": true,
         "a2a": true,
-        "interactions": true
+        "interactions": true,
+        "video_generations": true
       }
     },
     "huggingface": {
@@ -1407,7 +1498,7 @@
         "audio_transcriptions": false,
         "audio_speech": false,
         "moderations": false,
-        "batches": false,
+        "batches": true,
         "rerank": false,
         "ocr": true,
         "a2a": true,
@@ -1870,6 +1961,23 @@
         "interactions": true
       }
     },
+    "prism": {
+      "display_name": "Prism (`prism`)",
+      "url": "https://docs.litellm.ai/docs/providers/prism",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "recraft": {
       "display_name": "Recraft (`recraft`)",
       "url": "https://docs.litellm.ai/docs/providers/recraft",
@@ -1992,6 +2100,24 @@
         "interactions": true
       }
     },
+    "reka": {
+      "display_name": "Reka (`reka`)",
+      "url": "https://docs.litellm.ai/docs/providers/reka",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "scaleway": {
       "display_name": "Scaleway (`scaleway`)",
       "url": "https://docs.litellm.ai/docs/providers/scaleway",
@@ -2008,6 +2134,23 @@
         "rerank": false,
         "a2a": true,
         "interactions": true
+      }
+    },
+    "scx-ai": {
+      "display_name": "SCX.ai (`scx-ai`)",
+      "url": "https://docs.litellm.ai/docs/providers/scx_ai",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
       }
     },
     "snowflake": {
@@ -2211,7 +2354,7 @@
       }
     },
     "voyage": {
-      "display_name": "Voyage AI (`voyage`)",
+      "display_name": "VoyageAI by MongoDB (`voyage`)",
       "url": "https://docs.litellm.ai/docs/providers/voyage",
       "endpoints": {
         "chat_completions": false,

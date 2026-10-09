@@ -10,7 +10,7 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useCreateProject, ProjectCreateParams } from "@/app/(dashboard)/hooks/projects/useCreateProject";
 import { ProjectBaseForm } from "./ProjectBaseForm";
 import { emptyProjectFormValues, projectFormSchema } from "./projectFormSchema";
-import { buildProjectApiParams } from "./projectFormUtils";
+import { buildProjectCreateParams } from "./projectFormUtils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface CreateProjectModalProps {
@@ -25,7 +25,7 @@ function CreateProjectForm({ onClose }: { onClose: () => void }) {
 
   const handleSubmit = form.handleSubmit((values) => {
     const params: ProjectCreateParams = {
-      ...buildProjectApiParams(values),
+      ...buildProjectCreateParams(values),
       team_id: values.team_id,
     };
 

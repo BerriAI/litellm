@@ -1,7 +1,8 @@
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
 from litellm.types.utils import ImageObject, ImageResponse
 
@@ -9,6 +10,7 @@ from .transformation import FalAIBaseConfig
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -180,7 +182,7 @@ class FalAIImagen4Config(FalAIBaseConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
@@ -233,8 +235,11 @@ class FalAIImagen4Config(FalAIBaseConfig):
                     )
 
         # Add seed metadata from Imagen4 response
-        if hasattr(model_response, "_hidden_params"):
+        if hasattr(model_response, HIDDEN_PARAMS_ATTR):
+            hidden_params: Final = cast(  # cast-ok: preserve mapping operations on dynamic response metadata
+                dict[str, object], getattr(model_response, HIDDEN_PARAMS_ATTR)
+            )
             if "seed" in response_data:
-                model_response._hidden_params["seed"] = response_data["seed"]
+                hidden_params["seed"] = response_data["seed"]
 
         return model_response

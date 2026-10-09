@@ -1,9 +1,9 @@
 import React, { useRef, useState } from "react";
 import { Upload as UploadIcon, X } from "lucide-react";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { convertPromptFileToJson, createPromptCall } from "@/components/networking";
 import { toast } from "@/lib/toast";
-import { Field, FieldDescription, FieldGroup, FieldSeparator, FieldTitle } from "@/components/shared/form/field";
+import { Field, FieldDescription, FieldGroup, FieldSeparator, FieldTitle } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

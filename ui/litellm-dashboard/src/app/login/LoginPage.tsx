@@ -6,7 +6,7 @@ import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { exchangeLoginCode, getProxyBaseUrl, switchToWorkerUrl } from "@/components/networking";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { PasswordInput } from "@/components/shared/PasswordInput";
-import { Field, FieldGroup, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -21,7 +21,7 @@ import { consumeReturnUrl, getLoginUrl, getReturnUrl, isValidReturnUrl } from "@
 import { CircleAlert, Info, TriangleAlert, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useState } from "react";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { useWorker } from "@/hooks/useWorker";
 
 const loginSchema = z.object({

@@ -1,9 +1,9 @@
 import { useEffect } from "react";
-import { z } from "zod/v4";
+import { z } from "zod";
 
 import { useCloudZeroUpdateSettings } from "@/app/(dashboard)/hooks/cloudzero/useCloudZeroSettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Input } from "@/components/ui/input";
 import { TooltipProvider } from "@/components/ui/tooltip";

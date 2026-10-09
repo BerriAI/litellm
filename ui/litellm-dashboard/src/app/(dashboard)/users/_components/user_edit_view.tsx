@@ -1,13 +1,16 @@
 import React, { useMemo, useState } from "react";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { all_admin_roles } from "@/utils/roles";
 import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
+import { ModelMaxBudget, ModelMaxBudgetField } from "@/components/key_team_helpers/ModelMaxBudgetEditor";
+import { modelMaxBudgetUpdate } from "@/components/key_team_helpers/modelMaxBudgetPayload";
+import { useSeededState } from "@/components/key_team_helpers/useSeededState";
 import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
 import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
 import type { ObjectPermission } from "@/components/object_permission_types";
 import { MultiSelect } from "@/components/shared/MultiSelect";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -17,6 +20,15 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { CircleHelp } from "lucide-react";
+
+const RATE_LIMIT_ERROR = "Enter a non-negative whole number, or leave empty for unlimited";
+const isBlank = (value: string | number | null | undefined): boolean =>
+  value === null || value === undefined || String(value).trim() === "";
+const rateLimitField = z
+  .union([z.string(), z.number()])
+  .nullish()
+  .transform((value) => (isBlank(value) ? null : Number(value)))
+  .pipe(z.number({ error: RATE_LIMIT_ERROR }).int(RATE_LIMIT_ERROR).nonnegative(RATE_LIMIT_ERROR).nullable());
 
 interface UserEditViewProps {
   userData: any;
@@ -30,6 +42,7 @@ interface UserEditViewProps {
   possibleUIRoles: Record<string, Record<string, string>> | null;
   isBulkEdit?: boolean;
   objectPermission?: ObjectPermission | null;
+  premiumUser?: boolean;
 }
 
 const MCP_SELECTION_SHAPE = z.object({
@@ -49,23 +62,23 @@ const userEditShape = {
   models: z.array(z.string()),
   budget_duration: z.string().nullish(),
   metadata: z.string().nullish(),
+  tpm_limit: rateLimitField,
+  rpm_limit: rateLimitField,
   mcp_servers_and_groups: MCP_SELECTION_SHAPE.optional(),
   mcp_tool_permissions: z.record(z.string(), z.array(z.string())).optional(),
 };
 
-const budgetSchema = (unlimitedBudget: boolean) =>
+const userEditSchema = (unlimitedBudget: boolean) =>
   z.object({
     ...userEditShape,
     max_budget: z
       .union([z.string(), z.number()])
       .nullish()
-      .refine(
-        (value) => unlimitedBudget || (value !== "" && value !== null && value !== undefined),
-        "Please enter a budget or select Unlimited Budget",
-      ),
+      .refine((value) => unlimitedBudget || !isBlank(value), "Please enter a budget or select Unlimited Budget"),
   });
 
-type UserEditFormValues = z.infer<ReturnType<typeof budgetSchema>>;
+type UserEditFormInput = z.input<ReturnType<typeof userEditSchema>>;
+type UserEditFormValues = z.output<ReturnType<typeof userEditSchema>>;
 
 const buildMcpFieldValues = (objectPermission: ObjectPermission | null | undefined) => ({
   mcp_servers_and_groups: {
@@ -84,11 +97,18 @@ const toFormValues = (
   objectPermission: ObjectPermission | null | undefined,
   isBulkEdit: boolean,
   canEditMcpPermissions: boolean,
-): UserEditFormValues => {
+): UserEditFormInput => {
   const maxBudget = userData.user_info?.max_budget;
   const isUnlimited = maxBudget === null || maxBudget === undefined;
   return {
-    ...(isBulkEdit ? {} : { user_id: userData.user_id, user_email: userData.user_info?.user_email }),
+    ...(isBulkEdit
+      ? {}
+      : {
+          user_id: userData.user_id,
+          user_email: userData.user_info?.user_email,
+          tpm_limit: userData.user_info?.tpm_limit ?? "",
+          rpm_limit: userData.user_info?.rpm_limit ?? "",
+        }),
     user_alias: userData.user_info?.user_alias,
     user_role: userData.user_info?.user_role,
     models: userData.user_info?.models || [],
@@ -113,6 +133,9 @@ const parseMetadata = (metadata: string | null | undefined): ParsedMetadata => {
   }
 };
 
+const changedLimit = (value: number | null, stored: number | null | undefined): number | null | undefined =>
+  value === (stored ?? null) ? undefined : value;
+
 const labelWithHint = (label: string, hint: string): React.ReactNode => (
   <>
     {label}
@@ -135,10 +158,15 @@ export function UserEditView({
   possibleUIRoles,
   isBulkEdit = false,
   objectPermission,
+  premiumUser = false,
 }: UserEditViewProps) {
   const canEditMcpPermissions = !isBulkEdit && all_admin_roles.includes(userRole || "");
   const [unlimitedBudget, setUnlimitedBudget] = useState(false);
-  const schema = useMemo(() => budgetSchema(unlimitedBudget), [unlimitedBudget]);
+  const [modelMaxBudget, setModelMaxBudget] = useSeededState<ModelMaxBudget>(
+    userData.user_id,
+    () => userData.user_info?.model_max_budget ?? {},
+  );
+  const schema = useMemo(() => userEditSchema(unlimitedBudget), [unlimitedBudget]);
   const form = useZodForm(schema, {
     defaultValues: toFormValues(userData, objectPermission, isBulkEdit, canEditMcpPermissions),
   });
@@ -162,12 +190,20 @@ export function UserEditView({
       return;
     }
 
-    onSubmit({
-      ...values,
+    const { tpm_limit: tpmLimitInput, rpm_limit: rpmLimitInput, ...formValues } = values;
+    const modelBudgets = modelMaxBudgetUpdate(modelMaxBudget, userData.user_info?.model_max_budget);
+    const tpmLimit = changedLimit(tpmLimitInput, userData.user_info?.tpm_limit);
+    const rpmLimit = changedLimit(rpmLimitInput, userData.user_info?.rpm_limit);
+    const payload = {
+      ...formValues,
       ...("metadata" in values ? { metadata: metadata.value } : {}),
+      ...(modelBudgets !== undefined && { model_max_budget: modelBudgets }),
+      ...(tpmLimit !== undefined && { tpm_limit: tpmLimit }),
+      ...(rpmLimit !== undefined && { rpm_limit: rpmLimit }),
       max_budget:
         unlimitedBudget || values.max_budget === "" || values.max_budget === undefined ? null : values.max_budget,
-    });
+    };
+    onSubmit(payload);
   };
 
   const modelOptions = [
@@ -282,6 +318,70 @@ export function UserEditView({
             {({ id, value, onChange }) => <BudgetDurationDropdown id={id} value={value} onChange={onChange} />}
           </FormField>
 
+          {!isBulkEdit && (
+            <>
+              <FormField
+                control={form.control}
+                name="tpm_limit"
+                label={labelWithHint(
+                  "TPM Limit",
+                  "Applies across all keys owned by this user. Team and key limits still apply as ceilings.",
+                )}
+              >
+                {({ ref, value, onChange, ...control }) => (
+                  <Input
+                    {...control}
+                    ref={ref}
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={value ?? ""}
+                    onChange={(event) => onChange(event.target.value)}
+                    onWheel={(event) => event.currentTarget.blur()}
+                    placeholder="Unlimited"
+                  />
+                )}
+              </FormField>
+
+              <FormField
+                control={form.control}
+                name="rpm_limit"
+                label={labelWithHint(
+                  "RPM Limit",
+                  "Applies across all keys owned by this user. Team and key limits still apply as ceilings.",
+                )}
+              >
+                {({ ref, value, onChange, ...control }) => (
+                  <Input
+                    {...control}
+                    ref={ref}
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={value ?? ""}
+                    onChange={(event) => onChange(event.target.value)}
+                    onWheel={(event) => event.currentTarget.blur()}
+                    placeholder="Unlimited"
+                  />
+                )}
+              </FormField>
+            </>
+          )}
+
+          {/* Bulk edit forwards a fixed field list and has no single stored budget to
+              diff against, so the editor would silently discard whatever was typed. */}
+          {!isBulkEdit && (
+            <ModelMaxBudgetField
+              key={userData.user_id}
+              premiumUser={premiumUser}
+              value={modelMaxBudget}
+              onChange={setModelMaxBudget}
+              availableModels={userModels}
+              usage={userData.user_info?.model_max_budget_usage}
+              hint="Cap this user's spend on individual models, each with its own reset window. Applies across every key the user holds."
+            />
+          )}
+
           <FormField control={form.control} name="metadata" label="Metadata">
             {({ ref, value, ...control }) => (
               <Textarea {...control} ref={ref} value={value ?? ""} rows={4} placeholder="Enter metadata as JSON" />
@@ -311,6 +411,8 @@ export function UserEditView({
               <MCPToolPermissions
                 accessToken={accessToken || ""}
                 selectedServers={form.watch("mcp_servers_and_groups")?.servers || []}
+                selectedAccessGroups={form.watch("mcp_servers_and_groups")?.accessGroups || []}
+                selectedToolsets={form.watch("mcp_servers_and_groups")?.toolsets || []}
                 toolPermissions={form.watch("mcp_tool_permissions") || {}}
                 onChange={(toolPerms) => form.setValue("mcp_tool_permissions", toolPerms)}
               />

@@ -117,6 +117,11 @@ const ADMIN_AUTH = {
   Authorization: `Bearer ${users[Role.ProxyAdmin].password}`,
 };
 
+// Five probes 2s apart outlast the e2e stack's proxy_config_reload_interval_seconds of 7.
+const SETTLE_INTERVAL_MS = 2_000;
+const SETTLE_PROBES = 5;
+const SETTLE_TIMEOUT_MS = 60_000;
+
 /**
  * Apply a router_settings patch through the typed /config/update contract. The
  * server merges it over existing settings (request wins), so only the passed keys
@@ -131,6 +136,21 @@ async function patchRouterSettings(
     data: { router_settings: patch },
   });
   expect(res.ok(), `seed /config/update failed: ${res.status()} ${await res.text()}`).toBeTruthy();
+}
+
+/**
+ * Spreads its samples across more than one reload cycle: a single reply only proves the one
+ * replica that served it has reloaded, not the sibling still on the pre-update config.
+ */
+async function sampleStatuses(probe: () => Promise<number>): Promise<readonly number[]> {
+  return Array.from({ length: SETTLE_PROBES }).reduce<Promise<readonly number[]>>(
+    async (taken, _unused, index) => {
+      const sofar = await taken;
+      if (index > 0) await new Promise((resolve) => setTimeout(resolve, SETTLE_INTERVAL_MS));
+      return [...sofar, await probe()];
+    },
+    Promise.resolve([]),
+  );
 }
 
 test.describe("Router Settings - Loadbalancing", () => {
@@ -252,28 +272,34 @@ test.describe("Router Settings - Fallbacks serve the request", () => {
   });
 
   test("a request to an unreachable model is answered by its fallback", async ({ page, request }) => {
-    const chat = async () =>
-      request.post("/v1/chat/completions", {
-        headers: { ...ADMIN_AUTH, "Content-Type": "application/json" },
-        data: {
-          model: BROKEN_PRIMARY,
-          messages: [{ role: "user", content: "fallback probe" }],
-        },
-      });
+    const chatStatus = async () =>
+      (
+        await request.post("/v1/chat/completions", {
+          headers: { ...ADMIN_AUTH, "Content-Type": "application/json" },
+          data: {
+            model: BROKEN_PRIMARY,
+            messages: [{ role: "user", content: "fallback probe" }],
+          },
+        })
+      ).status();
 
-    // The control: it proves the reply below could only have come from the fallback.
-    expect((await chat()).status(), "broken primary unexpectedly succeeded on its own").toBeGreaterThanOrEqual(400);
+    // The control: every replica must reject, or the reply below could have come from one
+    // that was still serving a fallback left behind by an earlier attempt.
+    await expect
+      .poll(async () => (await sampleStatuses(chatStatus)).every((status) => status >= 400), {
+        timeout: SETTLE_TIMEOUT_MS,
+        message: "broken primary unexpectedly succeeded on its own",
+      })
+      .toBe(true);
 
     await patchRouterSettings(request, {
       fallbacks: [{ [BROKEN_PRIMARY]: [PRIMARY] }],
     } as Partial<NonNullable<ConfigYAML["router_settings"]>>);
 
-    // Same call now succeeds, served by the fallback model.
+    // One success is the whole claim here, so this waits for a first sighting rather than
+    // for every replica: demanding a streak would also assert a fallback hit rate.
     await expect
-      .poll(async () => (await chat()).status(), {
-        timeout: 30_000,
-        message: "fallback never took effect",
-      })
+      .poll(chatStatus, { timeout: SETTLE_TIMEOUT_MS, message: "fallback never took effect" })
       .toBe(200);
 
     // And the playground renders a reply for a model whose own upstream is down.

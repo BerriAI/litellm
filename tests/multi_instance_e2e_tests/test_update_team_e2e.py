@@ -1,3 +1,4 @@
+import os
 import pytest
 import asyncio
 import aiohttp
@@ -16,7 +17,7 @@ async def generate_team_key(
 ):
     """Helper function to generate a key for a specific team"""
     url = "http://0.0.0.0:4000/key/generate"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
     data: dict[str, Any] = {"team_id": team_id}
     if max_budget is not None:
         data["max_budget"] = max_budget
@@ -27,7 +28,7 @@ async def generate_team_key(
 async def update_team_block_status(session, team_id: str, blocked: bool, port: int):
     """Helper to update a team's 'blocked' status on a given instance port."""
     url = f"http://0.0.0.0:{port}/team/update"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
     data = {"team_id": team_id, "blocked": blocked}
     async with session.post(url, headers=headers, json=data) as response:
         return await response.json()
@@ -36,7 +37,7 @@ async def update_team_block_status(session, team_id: str, blocked: bool, port: i
 async def get_team_info(session, team_id: str, port: int):
     """Helper to retrieve team info from a specific instance port."""
     url = f"http://0.0.0.0:{port}/team/info"
-    headers = {"Authorization": "Bearer sk-1234"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}"}
     async with session.get(
         url, headers=headers, params={"team_id": team_id}
     ) as response:
@@ -87,7 +88,7 @@ async def test_team_blocking_behavior_multi_instance():
     """
     async with aiohttp.ClientSession() as session:
         headers = {
-            "Authorization": "Bearer sk-1234",
+            "Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}",
             "Content-Type": "application/json",
         }
 
@@ -143,7 +144,7 @@ async def test_team_blocking_behavior_multi_instance():
         assert team_info_4001["blocked"] is True, "Team should be blocked after update"
 
         # 8. Make a chat completion request on port 4000 with a new prompt; expect it to be blocked.
-        with pytest.raises(Exception) as excinfo:
+        with pytest.raises(Exception, match=r"(?i)blocked") as excinfo:
             await chat_completion_on_port(
                 session,
                 key=key,
@@ -157,7 +158,7 @@ async def test_team_blocking_behavior_multi_instance():
         ), f"Expected error indicating team blocked, got: {error_msg}"
 
         # 9. Make a chat completion request on port 4000 with a new prompt; expect it to be blocked.
-        with pytest.raises(Exception) as excinfo:
+        with pytest.raises(Exception, match=r"(?i)blocked") as excinfo:
             await chat_completion_on_port(
                 session,
                 key=key,
@@ -171,7 +172,7 @@ async def test_team_blocking_behavior_multi_instance():
         ), f"Expected error indicating team blocked, got: {error_msg}"
 
         # 9. Repeat the chat completion request with another new prompt; expect it to be blocked.
-        with pytest.raises(Exception) as excinfo_second:
+        with pytest.raises(Exception, match=r"(?i)blocked") as excinfo_second:
             await chat_completion_on_port(
                 session,
                 key=key,

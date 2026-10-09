@@ -27,7 +27,9 @@ from litellm.proxy._experimental.mcp_server.exceptions import (
 # tag-namespaced operationIds like "actions/download-job-logs-for-workflow-run"
 # which include '/'. Sanitize here so the same regex passes everywhere downstream.
 _OPENAPI_TOOL_NAME_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_-]")
-_OPENAPI_TOOL_NAME_MAX_LEN: Final = 128
+OPENAPI_TOOL_NAME_MAX_LEN: Final = 128
+
+_OPENAPI_TOOL_NAME_MAX_LEN: Final = OPENAPI_TOOL_NAME_MAX_LEN
 
 
 def sanitize_openapi_tool_name(raw_name: str) -> str:
@@ -41,18 +43,22 @@ def sanitize_openapi_tool_name(raw_name: str) -> str:
     if not raw_name:
         return raw_name
     sanitized: Final = _OPENAPI_TOOL_NAME_INVALID_CHARS.sub("_", raw_name).lower()
-    return sanitized[:_OPENAPI_TOOL_NAME_MAX_LEN]
+    return sanitized[:OPENAPI_TOOL_NAME_MAX_LEN]
 
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.url_utils import async_safe_get
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
+    header_value,
     httpxSpecialProvider,
 )
+from litellm.proxy._experimental.mcp_server.tool_outcome import JsonResult, TextResult, parse_http_body
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
+from litellm.types.mcp import MCPAuthType, credential_redirect_hook, custom_credential_slot
 
 
 class _OpenAPIJSONSchema(TypedDict, total=False):
@@ -102,21 +108,33 @@ HEADERS: Final[dict[str, str]] = {}
 # Per-request auth header override for BYOK servers.
 # Set this ContextVar before calling a local tool handler to inject the user's
 # stored credential into the HTTP request made by the tool function closure.
-_request_auth_header: contextvars.ContextVar[str | None] = contextvars.ContextVar("_request_auth_header", default=None)
+request_auth_header: Final[contextvars.ContextVar[str | None]] = contextvars.ContextVar(
+    "_request_auth_header", default=None
+)
+
+_request_auth_header: Final = request_auth_header
 
 # Per-request extra headers forwarded from the client request.
 # Populated from MCPServer.extra_headers names matched against raw request
 # headers in server.py before dispatching to a local/OpenAPI tool handler.
-_request_extra_headers: Final[contextvars.ContextVar[dict[str, str] | None]] = contextvars.ContextVar(
+request_extra_headers: Final[contextvars.ContextVar[dict[str, str] | None]] = contextvars.ContextVar(
     "_request_extra_headers", default=None
 )
+
+_request_extra_headers: Final = request_extra_headers
 
 # Per-request headers carrying the gateway-resolved upstream credential
 # (stored per-user OAuth token, minted M2M token, exchanged OBO token).
 # Set from MCPServerManager.resolve_openapi_upstream_auth; authoritative
 # over every other Authorization source in _merge_openapi_tool_request_headers.
-_request_resolved_auth_headers: Final[contextvars.ContextVar[dict[str, str] | None]] = contextvars.ContextVar(
+request_resolved_auth_headers: Final[contextvars.ContextVar[dict[str, str] | None]] = contextvars.ContextVar(
     "_request_resolved_auth_headers", default=None
+)
+
+_request_resolved_auth_headers: Final = request_resolved_auth_headers
+
+_request_upstream_url: Final[contextvars.ContextVar[str | None]] = contextvars.ContextVar(
+    "_request_upstream_url", default=None
 )
 
 
@@ -157,10 +175,14 @@ def load_openapi_spec(filepath: str) -> dict[str, Any]:
     return asyncio.run(load_openapi_spec_async(filepath))
 
 
-async def load_openapi_spec_async(filepath: str) -> dict[str, Any]:
+async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None) -> dict[str, Any]:
     if filepath.startswith("http://") or filepath.startswith("https://"):
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
-        r: Final[httpx.Response] = await async_safe_get(client, filepath)
+        r: Final[httpx.Response] = (
+            await async_safe_get(client, filepath)
+            if max_bytes is None
+            else await async_safe_get(client, filepath, max_response_bytes=max_bytes)
+        )
         r.raise_for_status()
         return r.json()
 
@@ -349,6 +371,35 @@ def build_input_schema(operation: _OpenAPIOperation) -> dict[str, object]:
     }
 
 
+async def _drop_credential_across_origin(request: httpx.Request) -> None:
+    """Apply this request's cross-origin credential guard, if it needs one.
+
+    Reads the per-request context rather than closing over it so the hook is one stable object, which
+    keeps the guarded client cacheable. A closure would key a new entry per call, and the handler it
+    built would never be closed.
+    """
+    guard: Final = credential_redirect_hook(
+        _request_upstream_url.get() or "", custom_credential_slot(request_resolved_auth_headers.get())
+    )
+    if guard is not None:
+        await guard(request)
+
+
+def _upstream_client() -> AsyncHTTPHandler:
+    """The HTTP client for one upstream call, guarded when a credential rides a custom slot.
+
+    A resolved credential outside ``Authorization`` is not stripped across origins by the client
+    itself, so this arm installs the same hook the MCP client uses. Both variants come from the
+    shared cache, so a guarded call reuses its connection pool like any other.
+    """
+    if custom_credential_slot(request_resolved_auth_headers.get()) is None:
+        return get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
+    return get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.MCP,
+        params={"event_hooks": {"request": [_drop_credential_across_origin]}},
+    )
+
+
 def _merge_openapi_tool_request_headers(
     static_headers: dict[str, str],
 ) -> dict[str, str]:
@@ -376,20 +427,20 @@ def _merge_openapi_tool_request_headers(
     Header names are compared case-insensitively so different casing cannot
     bypass the precedence rules.
     """
-    request_extra: Final = _request_extra_headers.get() or {}
+    request_extra: Final = request_extra_headers.get() or {}
     static: Final = static_headers or {}
 
     static_lower_names: Final = {k.lower() for k in static}
     effective_headers: dict[str, str] = {k: v for k, v in request_extra.items() if k.lower() not in static_lower_names}
     effective_headers.update(static)
 
-    override_auth: Final = _request_auth_header.get()
+    override_auth: Final = request_auth_header.get()
     if override_auth:
         for existing in [k for k in effective_headers if k.lower() == "authorization"]:
             del effective_headers[existing]
         effective_headers["Authorization"] = override_auth
 
-    resolved_auth_headers: Final = _request_resolved_auth_headers.get() or {}
+    resolved_auth_headers: Final = request_resolved_auth_headers.get() or {}
     for name, value in resolved_auth_headers.items():
         for existing in [k for k in effective_headers if k.lower() == name.lower()]:
             del effective_headers[existing]
@@ -418,7 +469,7 @@ def _raise_for_upstream_failure(
     if response.status_code == 401 and relays_upstream_auth:
         raise MCPUpstreamAuthError(
             status_code=response.status_code,
-            www_authenticate=response.headers.get("www-authenticate"),
+            www_authenticate=header_value(response.headers, "www-authenticate"),
             server_name=upstream,
         )
     raise MCPOpenApiUpstreamError(response.status_code, upstream)
@@ -432,6 +483,8 @@ def create_tool_function(
     headers: dict[str, str] | None = None,
     server_label: str | None = None,
     relays_upstream_auth: bool = False,
+    auth_type: MCPAuthType = None,
+    upstream_token_header: str | None = None,
 ):
     """Create a tool function for an OpenAPI operation.
 
@@ -455,7 +508,7 @@ def create_tool_function(
     path_params, query_params, body_params = extract_parameters(operation)
     original_method: Final = method.lower()
 
-    async def tool_function(**kwargs: object) -> str:
+    async def tool_function(**kwargs: object) -> TextResult | JsonResult:
         """
         Dynamically generated tool function.
 
@@ -464,6 +517,18 @@ def create_tool_function(
         by using **kwargs instead of named parameters.
         """
         effective_headers: Final = _merge_openapi_tool_request_headers(headers)
+        if auth_type is not None:
+            from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
+                raise_public,
+                validate_static_credential,
+            )
+            from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error, Ok
+
+            match validate_static_credential(auth_type, effective_headers, upstream_token_header, headers or ()):
+                case Error(error):
+                    raise_public(error)
+                case Ok():
+                    pass
 
         # Build URL from base_url and path
         url = base_url + path
@@ -477,7 +542,7 @@ def create_tool_function(
                     # Sanitize and encode path parameter to prevent traversal attacks
                     safe_value = _sanitize_path_parameter_value(param_value, param_name)
                 except ValueError as exc:
-                    return "Invalid path parameter: " + str(exc)
+                    return TextResult("Invalid path parameter: " + str(exc))
                 # Replace {param_name} or {{param_name}} in URL
                 url = url.replace("{" + param_name + "}", safe_value)
                 url = url.replace("{{" + param_name + "}}", safe_value)
@@ -510,8 +575,9 @@ def create_tool_function(
                 except (json.JSONDecodeError, TypeError):
                     json_body = {"data": body_value}
 
-        client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
+        client: Final = _upstream_client()
         upstream: Final = server_label or f"{original_method.upper()} {path}"
+        url_token: Final = _request_upstream_url.set(url)
 
         try:
             if original_method == "get":
@@ -525,13 +591,15 @@ def create_tool_function(
             elif original_method == "patch":
                 response = await client.patch(url, params=params, json=json_body, headers=effective_headers)
             else:
-                return f"Unsupported HTTP method: {original_method}"
+                return TextResult(f"Unsupported HTTP method: {original_method}")
         except MaskedHTTPStatusError as e:
             _raise_for_upstream_failure(e.response, upstream, relays_upstream_auth)
             raise
+        finally:
+            _request_upstream_url.reset(url_token)
 
         _raise_for_upstream_failure(response, upstream, relays_upstream_auth)
-        return response.text
+        return parse_http_body(response.text)
 
     return tool_function
 
@@ -564,7 +632,7 @@ def register_tools_from_openapi(spec: Mapping[str, Any], base_url: str) -> None:
                 while unique in used_names:
                     n += 1
                     suffix = f"_{n}"
-                    unique = tool_name[: _OPENAPI_TOOL_NAME_MAX_LEN - len(suffix)] + suffix
+                    unique = tool_name[: OPENAPI_TOOL_NAME_MAX_LEN - len(suffix)] + suffix
                 tool_name = unique
                 used_names.add(tool_name)
 

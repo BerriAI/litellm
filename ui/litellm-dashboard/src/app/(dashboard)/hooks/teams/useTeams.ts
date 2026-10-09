@@ -1,4 +1,11 @@
-import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient, UseQueryResult } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  QueryClient,
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+  UseQueryResult,
+} from "@tanstack/react-query";
 import { Team } from "@/components/key_team_helpers/key_list";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { fetchTeams } from "@/app/(dashboard)/networking";
@@ -18,6 +25,11 @@ export interface TeamsResponse {
 export interface DeletedTeam extends Team {
   deleted_at: string;
   deleted_by: string;
+}
+
+export interface DeletedTeamsResponse {
+  teams: DeletedTeam[];
+  total: number;
 }
 
 export interface TeamListCallOptions {
@@ -105,14 +117,15 @@ export const useTeamsTable = (
   });
 };
 
-const teamKeys = createQueryKeys("teams");
-export const useTeams = (): UseQueryResult<Team[]> => {
+export const teamKeys = createQueryKeys("teams");
+export const useTeams = (queryOptions: { enabled?: boolean } = {}): UseQueryResult<Team[]> => {
   const { accessToken, userId, userRole } = useAuthorized();
-  return useQuery<Team[]>({
+  const teamsQueryOptions = {
     queryKey: teamKeys.list({}),
     queryFn: async () => await fetchTeams(accessToken!, userId, userRole, null),
-    enabled: Boolean(accessToken),
-  });
+    enabled: Boolean(accessToken) && queryOptions.enabled !== false,
+  };
+  return useQuery<Team[]>(teamsQueryOptions);
 };
 
 const ALL_TEAMS_PAGE_SIZE = 100;
@@ -158,7 +171,8 @@ export const useTeam = (teamId?: string) => {
         throw new Error("Missing auth or teamId");
       }
 
-      return teamInfoCall(accessToken, teamId);
+      const { team_info } = (await teamInfoCall(accessToken, teamId)) as { team_info: Team };
+      return team_info;
     },
 
     initialData: () => {
@@ -172,6 +186,11 @@ export const useTeam = (teamId?: string) => {
 };
 
 const infiniteTeamKeys = createQueryKeys("infiniteTeams");
+
+export const invalidateTeamQueries = (queryClient: QueryClient) =>
+  Promise.all(
+    [teamsTableKeys, teamKeys, infiniteTeamKeys].map((keys) => queryClient.invalidateQueries({ queryKey: keys.all })),
+  );
 
 export const useInfiniteTeams = (pageSize: number = 50, search?: string, organizationId?: string | null) => {
   const { accessToken, userId, userRole } = useAuthorized();
@@ -209,7 +228,7 @@ const deletedTeamListCall = async (
   page: number,
   pageSize: number,
   options: TeamListCallOptions = {},
-) => {
+): Promise<DeletedTeamsResponse> => {
   /**
    * Get deleted teams from proxy
    */
@@ -251,14 +270,12 @@ const deletedTeamListCall = async (
       throw new Error(errorMessage);
     }
 
-    const data = await response.json();
+    const data: DeletedTeam[] | (Partial<DeletedTeamsResponse> & { teams: DeletedTeam[] }) = await response.json();
 
-    // Extract teams array from response if it's wrapped in a response object
-    // Otherwise return the data directly if it's already an array
-    if (data && typeof data === "object" && "teams" in data) {
-      return data.teams as DeletedTeam[];
+    if (Array.isArray(data)) {
+      return { teams: data, total: data.length };
     }
-    return data as DeletedTeam[];
+    return { teams: data.teams, total: data.total ?? data.teams.length };
   } catch (error) {
     console.error("Failed to list deleted teams:", error);
     throw error;
@@ -270,10 +287,10 @@ export const useDeletedTeams = (
   page: number,
   pageSize: number,
   options: TeamListCallOptions = {},
-): UseQueryResult<DeletedTeam[]> => {
+): UseQueryResult<DeletedTeamsResponse> => {
   const { accessToken } = useAuthorized();
 
-  return useQuery<DeletedTeam[]>({
+  return useQuery<DeletedTeamsResponse>({
     queryKey: deletedTeamKeys.list({ page, limit: pageSize, ...options }),
     queryFn: async () => await deletedTeamListCall(accessToken!, page, pageSize, options),
     enabled: Boolean(accessToken),

@@ -2,18 +2,12 @@
 # This tests litellm router with batch completion
 
 import asyncio
-import os
-import sys
 import time
 import traceback
 
 import openai
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
-import os
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
@@ -130,7 +124,7 @@ async def test_batch_completion_fastest_response_unit_test():
 @pytest.mark.asyncio
 async def test_batch_completion_fastest_response_streaming():
     litellm.set_verbose = True
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     router = litellm.Router(
         model_list=[

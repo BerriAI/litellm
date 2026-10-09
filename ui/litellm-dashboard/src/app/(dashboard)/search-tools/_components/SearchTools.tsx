@@ -1,7 +1,7 @@
 import { isAdminRole } from "@/utils/roles";
 import { useQuery } from "@tanstack/react-query";
 import React, { useState } from "react";
-import { z } from "zod/v4";
+import { z } from "zod";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import { toast } from "@/lib/toast";
 import {
@@ -11,7 +11,7 @@ import {
   updateSearchTool,
 } from "@/components/networking";
 import { PasswordInput } from "@/components/shared/PasswordInput";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
