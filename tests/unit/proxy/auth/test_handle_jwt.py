@@ -1509,34 +1509,28 @@ async def test_find_team_with_model_access_reports_team_route_allowlist_denial()
     jwt_handler: Final = JWTHandler()
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_allowed_routes=["/chat/completions"])
     team: Final = LiteLLM_TeamTable(team_id="team-route-denied", models=["gpt-4o-mini"])
+    user_api_key_cache: Final = DualCache()
+    user_api_key_cache.set_cache(key="team_id:team-route-denied", value=team)
+    prisma_client: Final = MagicMock()
+    prisma_team_table: Final = prisma_client.db.litellm_teamtable
+    prisma_team_table.find_unique = AsyncMock()
     proxy_server_module: Final = ModuleType("proxy_server")
     proxy_server_module.llm_router = None
 
-    with (
-        patch.dict(sys.modules, {"litellm.proxy.proxy_server": proxy_server_module}),
-        patch(
-            "litellm.proxy.auth.handle_jwt.get_team_object",
-            new_callable=AsyncMock,
-            return_value=team,
-        ),
-        patch(
-            "litellm.proxy.auth.handle_jwt.can_team_access_model",
-            new_callable=AsyncMock,
-            return_value=True,
-        ),
-    ):
+    with patch.dict(sys.modules, {"litellm.proxy.proxy_server": proxy_server_module}):
         with pytest.raises(HTTPException) as exc_info:
             await JWTAuthManager.find_team_with_model_access(
                 team_ids={"team-route-denied"},
                 requested_model="gpt-4o-mini",
                 route="/rag/query",
                 jwt_handler=jwt_handler,
-                prisma_client=None,
-                user_api_key_cache=MagicMock(),
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
                 parent_otel_span=None,
                 proxy_logging_obj=MagicMock(),
             )
 
+    prisma_team_table.find_unique.assert_not_awaited()
     assert exc_info.value.status_code == 403
     assert (
         exc_info.value.detail == "Team team-route-denied can access model gpt-4o-mini but route /rag/query "
