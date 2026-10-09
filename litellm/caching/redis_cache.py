@@ -705,7 +705,7 @@ class RedisCache(BaseCache):
             self.redis_flush_size: int = 100
         else:
             self.redis_flush_size = redis_flush_size
-        self.redis_version = "Unknown"
+        self.redis_version: str = "Unknown"
         try:
             if not coroutine_checker.is_async_callable(self.redis_client):
                 self.redis_version = self.redis_client.info()["redis_version"]
@@ -879,7 +879,7 @@ class RedisCache(BaseCache):
             # Fallback for unparseable versions (e.g., "v7.0.0", "latest")
             return DEFAULT_REDIS_MAJOR_VERSION
 
-    def set_cache(self, key, value, **kwargs):
+    def set_cache(self, key: str, value: object, **kwargs):
         ttl: Final = self.get_ttl(**kwargs)
         print_verbose(
             "Set Redis Cache: key: %s\nValue %s\nttl=%s, redis_version=%s",
@@ -1140,7 +1140,7 @@ class RedisCache(BaseCache):
         raise ValueError("Redis client does not support Lua script registration")
 
     @_redis_circuit_breaker_guard
-    async def async_set_cache(self, key, value, **kwargs):
+    async def async_set_cache(self, key: str | None, value: object, **kwargs):
         from redis.asyncio import Redis
 
         if key is None:
