@@ -19,10 +19,6 @@ use crate::{
     python_settings::{PythonSettings, Snapshot},
 };
 
-const VERTEX_PROJECT: FieldSpec<Option<String>> =
-    FieldSpec::new("vertex_project", |field| field.falsy_optional_string());
-const VERTEX_LOCATION: FieldSpec<Option<String>> =
-    FieldSpec::new("vertex_location", |field| field.falsy_optional_string());
 const ENABLE_AZURE_AD_TOKEN_REFRESH: FieldSpec<bool> =
     FieldSpec::new("enable_azure_ad_token_refresh", |field| {
         Ok(field.exact_true())
@@ -60,8 +56,6 @@ fn ocr_settings(py: Python<'_>) -> PyResult<OcrSettings> {
 
 fn project_provider_defaults(snapshot: &Snapshot<'_>) -> PyResult<OcrSettings> {
     Ok(OcrSettings {
-        vertex_project: snapshot.read(&VERTEX_PROJECT)?,
-        vertex_location: snapshot.read(&VERTEX_LOCATION)?,
         enable_azure_ad_token_refresh: snapshot.read(&ENABLE_AZURE_AD_TOKEN_REFRESH)?,
         ..OcrSettings::from_environment(&ProcessEnvironment)
     })
@@ -108,31 +102,29 @@ mod tests {
     use crate::python_settings::PythonSettings;
 
     #[rstest::rstest]
-    fn provider_defaults_distinguish_falsey_values_and_exact_true() {
+    fn provider_defaults_read_exact_true_only() {
         Python::initialize();
         Python::attach(|py| {
-            let value = py.eval(c"__import__('types').SimpleNamespace(vertex_project=[], vertex_location=0, enable_azure_ad_token_refresh=1)", None, None).unwrap();
+            let value = py
+                .eval(
+                    c"__import__('types').SimpleNamespace(enable_azure_ad_token_refresh=1)",
+                    None,
+                    None,
+                )
+                .unwrap();
             let snapshot = PythonSettings::ProviderDefaults.snapshot(value.clone());
-            let projected = super::project_provider_defaults(&snapshot).unwrap();
-            assert_eq!(projected.vertex_project, None);
-            assert_eq!(projected.vertex_location, None);
-            assert!(!projected.enable_azure_ad_token_refresh);
-            value.setattr("vertex_project", "project").unwrap();
-            value.setattr("vertex_location", "region").unwrap();
+            assert!(
+                !super::project_provider_defaults(&snapshot)
+                    .unwrap()
+                    .enable_azure_ad_token_refresh
+            );
             value
                 .setattr("enable_azure_ad_token_refresh", true)
                 .unwrap();
-            let next = super::project_provider_defaults(&snapshot).unwrap();
-            assert_eq!(next.vertex_project.as_deref(), Some("project"));
-            assert_eq!(next.vertex_location.as_deref(), Some("region"));
-            assert!(next.enable_azure_ad_token_refresh);
-            value.setattr("vertex_project", 1).unwrap();
-            let error = super::project_provider_defaults(&snapshot).err().unwrap();
-            assert!(error.is_instance_of::<pyo3::exceptions::PyValueError>(py));
             assert!(
-                error
-                    .to_string()
-                    .contains("provider_defaults.vertex_project")
+                super::project_provider_defaults(&snapshot)
+                    .unwrap()
+                    .enable_azure_ad_token_refresh
             );
         });
     }
