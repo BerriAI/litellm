@@ -5,6 +5,7 @@ import pytest
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 from litellm.llms.microsoft_365_copilot.chat.transformation import (
     Microsoft365CopilotChatConfig,
     build_chat_request,
@@ -12,6 +13,7 @@ from litellm.llms.microsoft_365_copilot.chat.transformation import (
     map_graph_response,
 )
 from litellm.llms.microsoft_365_copilot.common_utils import Microsoft365CopilotError
+from litellm.types.llms.anthropic import AllAnthropicPassThroughMessageValues
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import LlmProviders, Usage
 from litellm.utils import ProviderConfigManager, token_counter
@@ -69,7 +71,67 @@ def test_build_request_uses_provider_time_zone_and_omits_empty_history() -> None
     }
 
 
-def test_build_request_rejects_non_user_final_message() -> None:
+def test_build_request_uses_last_user_message_when_assistant_is_last() -> None:
+    messages: Final[list[AllMessageValues]] = TypeAdapter(list[AllMessageValues]).validate_python(
+        [
+            {"role": "user", "content": "the prompt"},
+            {"role": "assistant", "content": "the response"},
+        ]
+    )
+
+    request: Final = build_chat_request(messages=messages, optional_params={})
+
+    assert request == {
+        "message": {"text": "the prompt"},
+        "additionalContext": [{"text": "the response", "description": "assistant message"}],
+        "locationHint": {"timeZone": "UTC"},
+    }
+
+
+def test_build_request_uses_last_user_message_before_trailing_system() -> None:
+    environment: Final = "# Environment\nYou have been invoked in the following environment: ..."
+    messages: Final[list[AllMessageValues]] = TypeAdapter(list[AllMessageValues]).validate_python(
+        [
+            {"role": "user", "content": "whats 1+1"},
+            {"role": "system", "content": environment},
+        ]
+    )
+
+    request: Final = build_chat_request(messages=messages, optional_params={})
+
+    assert request == {
+        "message": {"text": "whats 1+1"},
+        "additionalContext": [{"text": environment, "description": "system message"}],
+        "locationHint": {"timeZone": "UTC"},
+    }
+
+
+def test_build_request_preserves_context_order_after_last_user_message() -> None:
+    messages: Final[list[AllMessageValues]] = TypeAdapter(list[AllMessageValues]).validate_python(
+        [
+            {"role": "system", "content": "system A"},
+            {"role": "user", "content": "question one"},
+            {"role": "assistant", "content": "response one"},
+            {"role": "user", "content": "question two"},
+            {"role": "system", "content": "system B"},
+        ]
+    )
+
+    request: Final = build_chat_request(messages=messages, optional_params={})
+
+    assert request == {
+        "message": {"text": "question two"},
+        "additionalContext": [
+            {"text": "system A", "description": "system message"},
+            {"text": "question one", "description": "user message"},
+            {"text": "response one", "description": "assistant message"},
+            {"text": "system B", "description": "system message"},
+        ],
+        "locationHint": {"timeZone": "UTC"},
+    }
+
+
+def test_build_request_requires_a_user_message() -> None:
     messages: Final[list[AllMessageValues]] = TypeAdapter(list[AllMessageValues]).validate_python(
         [{"role": "assistant", "content": "not a prompt"}]
     )
@@ -78,6 +140,33 @@ def test_build_request_rejects_non_user_final_message() -> None:
         build_chat_request(messages=messages, optional_params={})
 
     assert error.value.status_code == 400
+    assert str(error.value) == "at least one message must have role 'user'"
+
+
+def test_anthropic_adapter_preserves_trailing_system_context_for_m365() -> None:
+    environment: Final = "# Environment\nYou have been invoked in the following environment: ..."
+    desktop_messages: Final[list[AllAnthropicPassThroughMessageValues]] = cast(
+        list[AllAnthropicPassThroughMessageValues],
+        [
+            {"role": "user", "content": "whats 1+1"},
+            {"role": "system", "content": [{"type": "text", "text": environment}]},
+        ],
+    )
+    translated_messages: Final = TypeAdapter(list[AllMessageValues]).validate_python(
+        LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+            desktop_messages,
+            model="microsoft_365_copilot/chat",
+            custom_llm_provider="microsoft_365_copilot",
+        )
+    )
+
+    request: Final = build_chat_request(messages=translated_messages, optional_params={})
+
+    assert request == {
+        "message": {"text": "whats 1+1"},
+        "additionalContext": [{"text": environment, "description": "system message"}],
+        "locationHint": {"timeZone": "UTC"},
+    }
 
 
 def test_build_request_rejects_non_text_content() -> None:
