@@ -559,6 +559,11 @@ from litellm.proxy.db.proxy_worker_heartbeat import (
     PROXY_WORKER_HEARTBEAT_INTERVAL_SECONDS,
     ProxyWorkerHeartbeat,
 )
+from litellm.proxy.db.request_error_tracking import (
+    RequestErrorRedisBuffer,
+    flush_request_errors,
+    request_error_accumulator,
+)
 from litellm.proxy.db.spend_counter_reseed import END_USER_COUNTER_PREFIX, SpendCounterReseed
 from litellm.proxy.discovery_endpoints import (
     agent_skills_discovery_router,
@@ -695,6 +700,9 @@ from litellm.proxy.management_endpoints.password_endpoints import (
 )
 from litellm.proxy.management_endpoints.prompt_caching_requests import (
     router as prompt_caching_requests_router,
+)
+from litellm.proxy.management_endpoints.request_error_endpoints import (
+    router as request_error_router,
 )
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
@@ -1191,6 +1199,7 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
         # ClientNotConnectedError rather than persisting anything. Ordering this
         # inside the same guard is what keeps the two from drifting apart.
         await flush_gateway_requests(prisma_client, gateway_request_accumulator)
+        await flush_request_errors(prisma_client, request_error_accumulator)
         verbose_proxy_logger.debug("Disconnecting from Prisma")
         await prisma_client.disconnect()
 
@@ -2848,6 +2857,14 @@ def _gateway_request_redis_buffer() -> GatewayRequestRedisBuffer | None:
     if redis_cache is None or not writer.redis_update_buffer.should_commit_spend_updates_to_redis():
         return None
     return GatewayRequestRedisBuffer(redis_cache=redis_cache, pod_lock_manager=writer.pod_lock_manager)
+
+
+def _request_error_redis_buffer() -> RequestErrorRedisBuffer | None:
+    writer: Final = proxy_logging_obj.db_spend_update_writer
+    redis_cache: Final = writer.redis_update_buffer.redis_cache
+    if redis_cache is None or not writer.redis_update_buffer.should_commit_spend_updates_to_redis():
+        return None
+    return RequestErrorRedisBuffer(redis_cache=redis_cache, pod_lock_manager=writer.pod_lock_manager)
 
 
 ### REDIS QUEUE ###
@@ -10978,6 +10995,17 @@ class ProxyStartupEvent:
             seconds=batch_writing_interval,
             args=(prisma_client, gateway_request_accumulator, _gateway_request_redis_buffer()),
             id="update_gateway_requests_job",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
+
+        ### UPDATE FAILED REQUEST COUNTS BY CALLER AND STATUS ###
+        scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
+            flush_request_errors,
+            "interval",
+            seconds=batch_writing_interval,
+            args=(prisma_client, request_error_accumulator, _request_error_redis_buffer()),
+            id="update_request_errors_job",
             replace_existing=True,
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
         )
@@ -20342,6 +20370,7 @@ app.include_router(cache_settings_router)
 app.include_router(coordination_redis_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(gateway_request_router)
+app.include_router(request_error_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
 app.include_router(agent_skills_discovery_router)

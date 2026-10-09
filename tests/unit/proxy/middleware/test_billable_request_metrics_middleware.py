@@ -37,9 +37,7 @@ class FakeRecorder:
         self.calls: List[dict] = []
 
     def record(self, *, category: BillableCategory, route: str, status_code: int, model_id: Optional[str]) -> None:
-        self.calls.append(
-            {"category": category, "route": route, "status_code": status_code, "model_id": model_id}
-        )
+        self.calls.append({"category": category, "route": route, "status_code": status_code, "model_id": model_id})
 
 
 def _make_app(recorder: Optional[FakeRecorder], status_code: int = 200, model_id: Optional[str] = None) -> Starlette:
@@ -515,9 +513,9 @@ def test_varying_model_ids_fold_into_a_single_persisted_key():
 
     snapshot: Final = accumulator.drain()
     assert snapshot == {
-        GatewayRequestKey(date=frozen_now.strftime("%Y-%m-%d"), category="llm", route="/chat/completions"): (
-            GatewayRequestCounts(successful_requests=3, failed_requests=0)
-        )
+        GatewayRequestKey(
+            date=frozen_now.strftime("%Y-%m-%d"), category="llm", route="/chat/completions", status_code=200
+        ): (GatewayRequestCounts(successful_requests=3, failed_requests=0))
     }
 
 
