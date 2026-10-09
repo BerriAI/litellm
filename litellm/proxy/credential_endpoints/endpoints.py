@@ -181,8 +181,9 @@ def _not_found_unless_config_defined(credential_name: str, not_found_detail: str
     return ProxyException(
         message=f"Credential '{credential_name}' is defined in config and cannot be edited from the API or UI.",
         type=ProxyErrorTypes.validation_error.value,
-        code=status.HTTP_400_BAD_REQUEST,
+        code=status.HTTP_405_METHOD_NOT_ALLOWED,
         param="credential_name",
+        headers={"Allow": "GET"},
     )
 
 

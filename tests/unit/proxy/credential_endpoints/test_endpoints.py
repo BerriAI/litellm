@@ -999,7 +999,8 @@ class TestNonAdminCannotTouchAStoredWifCredential:
         with _repository_holding(None) as repository:
             response = _delete_credential("config-wif", auth=_as_admin)
 
-        assert response.status_code == 400, response.text
+        assert response.status_code == 405, response.text
+        assert response.headers["allow"] == "GET"
         assert "defined in config" in response.json()["error"]["message"]
         repository.delete_by_name.assert_awaited_once_with("config-wif")
         assert litellm.credential_list == [config_credential]
@@ -1198,7 +1199,8 @@ def test_delete_credential_leaves_a_credential_that_only_exists_in_memory_in_pla
 
     response = _delete_credential("from-config-yaml")
 
-    assert response.status_code == 400, response.text
+    assert response.status_code == 405, response.text
+    assert response.headers["allow"] == "GET"
     assert "defined in config" in response.json()["error"]["message"]
     assert [credential.credential_name for credential in litellm.credential_list] == ["from-config-yaml"]
 
@@ -1526,7 +1528,8 @@ class TestCredentialDisplayName:
         with _repository_holding(None) as repository:
             response = _patch_credential("openai-prod", {"display_name": "Prod", "credential_info": {}})
 
-        assert response.status_code == 400, response.text
+        assert response.status_code == 405, response.text
+        assert response.headers["allow"] == "GET"
         assert "defined in config" in response.json()["error"]["message"]
         repository.update_by_name.assert_not_awaited()
         assert litellm.credential_list == [config_credential]
