@@ -70,18 +70,26 @@ async fn http_responses_share_execution_and_hooks(call: ResponsesCall, #[case] h
     assert_eq!(sent.header("authorization"), Some("Bearer test-key"));
     assert_eq!(sent.header("x-hook"), Some("called"));
     assert_eq!(sent.json(), json!({"model":"test-model", "input":"hello"}));
-    assert!(matches!(
-        &host.events.0.lock().unwrap()[..],
+    let events = host.events.0.lock().unwrap();
+    let execution = match &events[..] {
         [
             CallEvent::Started { .. },
+            execution @ ..,
+            CallEvent::Succeeded { .. },
+        ] if hosted => execution,
+        execution if !hosted => execution,
+        _ => panic!("unexpected lifecycle events: {events:?}"),
+    };
+    assert!(matches!(
+        execution,
+        [
             CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { .. }),
             CallEvent::Execution(ExecutionEvent::ResultReady {
                 facts: ExecutionFacts {
                     source: ResultSource::Provider,
                     ..
                 }
-            }),
-            CallEvent::Succeeded { .. }
+            })
         ]
     ));
 }
@@ -129,15 +137,12 @@ async fn streaming_keeps_headers_and_bytes_and_finishes_after_consumption(
         };
         assert!(matches!(
             &host.events.0.lock().unwrap()[..],
-            [
-                CallEvent::Started { .. },
-                CallEvent::Execution(ExecutionEvent::ResultReady {
-                    facts: ExecutionFacts {
-                        source: ResultSource::Provider,
-                        ..
-                    }
-                }),
-            ]
+            [CallEvent::Execution(ExecutionEvent::ResultReady {
+                facts: ExecutionFacts {
+                    source: ResultSource::Provider,
+                    ..
+                }
+            }),]
         ));
         (
             head.headers,
@@ -146,29 +151,37 @@ async fn streaming_keeps_headers_and_bytes_and_finishes_after_consumption(
     };
     assert!(headers.contains(&("x-request-id".into(), "response-stream".into())));
     assert_eq!(bytes, body.as_bytes());
-    assert!(matches!(
-        &host.events.0.lock().unwrap()[..],
+    let events = host.events.0.lock().unwrap();
+    let execution = match &events[..] {
         [
             CallEvent::Started { .. },
-            CallEvent::Execution(ExecutionEvent::ResultReady {
-                facts: ExecutionFacts {
-                    source: ResultSource::Provider,
-                    ..
-                }
-            }),
-            CallEvent::Succeeded { .. }
-        ]
+            execution @ ..,
+            CallEvent::Succeeded { .. },
+        ] if hosted => execution,
+        execution if !hosted => execution,
+        _ => panic!("unexpected lifecycle events: {events:?}"),
+    };
+    assert!(matches!(
+        execution,
+        [CallEvent::Execution(ExecutionEvent::ResultReady {
+            facts: ExecutionFacts {
+                source: ResultSource::Provider,
+                ..
+            }
+        })]
     ));
 }
 
 #[rstest]
-#[case::http(429, json!({"error":"limited"}))]
-#[case::invalid_response(200, json!({"unexpected":true}))]
+#[case::http(429, json!({"error":"limited"}), false)]
+#[case::invalid_response(200, json!({"unexpected":true}), true)]
 #[tokio::test]
 async fn provider_failures_emit_failure_once(
     call: ResponsesCall,
     #[case] status: u16,
     #[case] body: serde_json::Value,
+    #[case] provider_response: bool,
+    #[values(false, true)] hosted: bool,
 ) {
     let upstream = upstream([ResponseTemplate::new(status).set_body_json(body)]).await;
     let host = RecordingCall::<Responses>::new(ResponsesCall {
@@ -176,25 +189,35 @@ async fn provider_failures_emit_failure_once(
         ..call
     });
     let call = host.request.lock().unwrap().take().unwrap();
-    assert!(
-        responses_route(no_secrets())
-            .execute(call, &host, None)
+    let route = responses_route(no_secrets());
+    let failed = if hosted {
+        litellm_host_native::in_process::run_hosted(route.machine(call, None), host.runtime())
             .await
             .is_err()
-    );
+    } else {
+        route.execute(call, &host, None).await.is_err()
+    };
+    assert!(failed);
     assert_eq!(received(&upstream).await.len(), 1);
     let events = host.events.0.lock().unwrap();
-    assert!(matches!(events.last(), Some(CallEvent::Failed { .. })));
-    assert_eq!(
-        events
-            .iter()
-            .filter(|event| matches!(
-                event,
-                CallEvent::Failed { .. } | CallEvent::Succeeded { .. }
-            ))
-            .count(),
-        1
-    );
+    let execution = match &events[..] {
+        [
+            CallEvent::Started { .. },
+            execution @ ..,
+            CallEvent::Failed { .. },
+        ] if hosted => execution,
+        execution if !hosted => execution,
+        _ => panic!("unexpected lifecycle events: {events:?}"),
+    };
+    assert_eq!(execution.len(), usize::from(provider_response));
+    if provider_response {
+        assert!(matches!(
+            execution,
+            [CallEvent::Execution(
+                ExecutionEvent::ProviderResponseReceived { .. }
+            )]
+        ));
+    }
 }
 
 #[rstest]
