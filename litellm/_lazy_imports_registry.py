@@ -22,6 +22,7 @@ LITELLM_LOGGING_NAMES: Final = (
 
 # Utils names that support lazy loading via _lazy_import_utils
 UTILS_NAMES: Final = (
+    "run_server",
     "exception_type",
     "get_optional_params",
     "get_response_string",
@@ -459,6 +460,7 @@ UTILS_MODULE_NAMES: Final = (
 
 # Import maps for registry pattern - reduces repetition
 _UTILS_IMPORT_MAP: Final = {
+    "run_server": ("litellm.proxy.proxy_cli", "run_server"),
     "exception_type": (".utils", "exception_type"),
     "get_optional_params": (".utils", "get_optional_params"),
     "get_response_string": (".utils", "get_response_string"),
