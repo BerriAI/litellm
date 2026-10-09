@@ -5,6 +5,7 @@ Fixtures under fixtures/ are sanitized `pi --mode json` output recorded from
 """
 
 import asyncio
+import itertools
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -67,11 +68,9 @@ def parse(obj: Mapping[str, object], state: PiStreamState) -> Sequence[Event]:
 
 
 def parse_all(name: str, state: PiStreamState | None = None) -> tuple[list[Event], PiStreamState]:
-    state = state or CONFIG.create_stream_state()
-    events = []
-    for obj in load_fixture(name):
-        events.extend(parse(obj, state))
-    return events, state
+    run_state = state or CONFIG.create_stream_state()
+    events = list(itertools.chain.from_iterable(parse(obj, run_state) for obj in load_fixture(name)))
+    return events, run_state
 
 
 def assistant_end(text: str, stop_reason: str, error: str | None = None) -> dict[str, object]:
@@ -214,11 +213,11 @@ async def collect(handler: CLIHarnessHandler, ctx: SessionContext, prompt: str) 
 async def started(
     sandbox: FakeSandbox | None = None, **kwargs: object
 ) -> tuple[CLIHarnessHandler, SessionContext, FakeSandbox]:
-    sandbox = sandbox or FakeSandbox()
+    box = sandbox or FakeSandbox()
     handler = CLIHarnessHandler(PiHarnessConfig())
-    ctx = make_ctx(sandbox, **kwargs)
+    ctx = make_ctx(box, **kwargs)
     await handler.start(ctx)
-    return handler, ctx, sandbox
+    return handler, ctx, box
 
 
 def flag(argv: Sequence[str], name: str) -> str:
@@ -454,7 +453,7 @@ def test_config_files_reject_values_that_are_not_json():
         {"mcpServers": {"moyai": "not-a-mapping"}},
     ],
 )
-def test_managed_keys_rejected(config):
+def test_managed_keys_rejected(config: Mapping[str, object]) -> None:
     with pytest.raises(OptionsMismatch):
         validate_user_config(config)
 
@@ -502,7 +501,7 @@ def test_validate_environment_rejects_wrong_options_managed_config_and_ask_mode(
 
 
 @pytest.mark.parametrize("key", sorted(MANAGED_ENV_KEYS))
-def test_managed_env_keys_rejected_instead_of_silently_ignored(key):
+def test_managed_env_keys_rejected_instead_of_silently_ignored(key: str) -> None:
     assert key in {PI_CONFIG_DIR_ENV, PI_TOKEN_ENV}
     with pytest.raises(OptionsMismatch, match=key):
         CONFIG.validate_environment(make_ctx(options=PiOptions(env={key: "/tmp/evil"})))
@@ -719,7 +718,7 @@ async def test_instructions_and_structured_output():
     assert json.loads(ctx.output_json) == {"city": "Paris", "country": "France"}
 
 
-async def test_skills_copied_to_private_skills_path(tmp_path):
+async def test_skills_copied_to_private_skills_path(tmp_path: Path) -> None:
     skill = tmp_path / "greeter"
     (skill / "ref").mkdir(parents=True)
     (skill / "SKILL.md").write_text("---\nname: greeter\ndescription: d\n---\nbody")
@@ -734,7 +733,7 @@ async def test_skills_copied_to_private_skills_path(tmp_path):
     assert "--no-skills" in cmd
 
 
-async def test_skill_without_manifest_rejected(tmp_path):
+async def test_skill_without_manifest_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match=r"SKILL\.md"):
         await started(skills=[str(tmp_path)])
 
