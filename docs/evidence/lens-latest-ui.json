@@ -1,0 +1,36 @@
+{
+  "source_repository": "BerriAI/lens",
+  "source_commit": "5846697965ba06a0370f83220b12d217884df9da",
+  "archive": "ui/litellm-dashboard/vendor/litellm-lens-ui-0.1.0-dev.0.tgz",
+  "sha256": "13d0bb9cfb9d6ad1af825b3f58cd58cc31ff1d77e3721d4b777099b3aada3fbb",
+  "integrity": "sha512-8pi0293hWU5gnrhecBvzk/pFm7np+5P0Oj5eXYQxQAIVl1MFZAPIiPay1gjFcEcC94JKYJytjZZQEdD4Rm07dg==",
+  "files": 389,
+  "all_files_equal_committed_source": true,
+  "installed_files_equal_archive": true,
+  "ui_tests": {
+    "lens": 178,
+    "host": 3
+  },
+  "production_builds": [
+    "packed standalone consumer",
+    "LiteLLM dashboard"
+  ],
+  "browser": {
+    "verified_at": "2026-10-09T18:14:42.708Z",
+    "embedded_horizontal_tabs": true,
+    "standalone_sidebar": true,
+    "desktop_keyboard_navigation": true,
+    "url_refresh": true,
+    "agent_selection_opens_live_traces": true,
+    "new_agent_dialog_opens": true,
+    "narrow_viewport": {
+      "width": 600,
+      "height": 900,
+      "document_width": 600,
+      "final_tab_reachable": true
+    },
+    "live_saved_finding_and_feedback": true,
+    "standalone_uses_demo_data": true,
+    "evidence_directory": "docs/evidence/lens-latest-ui"
+  }
+}
