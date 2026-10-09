@@ -1439,7 +1439,9 @@ async def test_redirect_from_openid_rejects_graph_error_payload_before_db_and_ke
     user_info_from_db: Final = AsyncMock(return_value=None)
     generate_key: Final = AsyncMock(return_value={"token": "sk-ui-key", "user_id": ""})
     mock_request, stack = _empty_identity_redirect_patches(None, user_info_from_db, generate_key)
-    graph_error: Final = MicrosoftSSOHandler.openid_from_response(response=_GRAPH_ME_ERROR_PAYLOAD, team_ids=[], user_role=None)
+    graph_error: Final = MicrosoftSSOHandler.openid_from_response(
+        response=_GRAPH_ME_ERROR_PAYLOAD, team_ids=[], user_role=None
+    )
 
     with stack, pytest.raises(HTTPException) as exc_info:
         await SSOAuthenticationHandler.get_redirect_response_from_openid(
@@ -1490,7 +1492,9 @@ async def test_redirect_from_openid_signs_a_custom_sso_user_in_as_the_matched_ac
 
 @pytest.mark.parametrize("custom_user_id", [None, "", "   ", 424242])
 @pytest.mark.asyncio
-async def test_redirect_from_openid_rejects_a_custom_sso_user_id_that_resolves_no_account(custom_user_id: object) -> None:
+async def test_redirect_from_openid_rejects_a_custom_sso_user_id_that_resolves_no_account(
+    custom_user_id: object,
+) -> None:
     user_info_from_db: Final = AsyncMock(return_value=None)
     generate_key: Final = AsyncMock(side_effect=AssertionError("A blank identity must not reach key generation"))
     mock_request, stack = _empty_identity_redirect_patches(
@@ -3429,7 +3433,7 @@ class TestCLIKeyRegenerationFlow:
             teams=[],
             models=[],
         )
-        mock_sso_result = CustomOpenID(id="test-user-123", email="test@example.com", team_ids=[])
+        mock_sso_result: Final = CustomOpenID(id="test-user-123", email="test@example.com", team_ids=[])
 
         mock_cache = MagicMock(redis_cache=None)
         mock_cache.get_cache.return_value = {
@@ -3599,7 +3603,7 @@ class TestCLIKeyRegenerationFlow:
         )
 
         # Mock SSO result
-        mock_sso_result = CustomOpenID(id="test-user-123", email="test@example.com", team_ids=[])
+        mock_sso_result: Final = CustomOpenID(id="test-user-123", email="test@example.com", team_ids=[])
 
         # Mock cache
         mock_cache = MagicMock(redis_cache=None)
@@ -7542,7 +7546,7 @@ class TestCliSsoAttributionMetadata:
             teams=[],
             models=[],
         )
-        mock_sso_result = CustomOpenID(
+        mock_sso_result: Final = CustomOpenID(
             id="cli-test-user",
             email="cli-test@example.com",
             display_name="cli-test-user",
@@ -7599,7 +7603,7 @@ class TestCliSsoAttributionMetadata:
             "user_code_verified": False,
             "session_data": None,
         }
-        mock_sso_result = CustomOpenID(
+        mock_sso_result: Final = CustomOpenID(
             id="cli-test-user",
             email="cli-test@example.com",
             display_name="cli-test-user",
@@ -7657,7 +7661,7 @@ class TestCliSsoAttributionMetadata:
             teams=["team1"],
             models=["gpt-4"],
         )
-        mock_sso_result = CustomOpenID(
+        mock_sso_result: Final = CustomOpenID(
             id="test-user-123",
             email="test@example.com",
             team_ids=[],
@@ -9664,7 +9668,10 @@ async def test_cli_completion_fails_the_login_when_team_lookup_fails():
 async def test_cli_completion_rejects_a_blank_provider_identity_before_db(parsed_user_id: str) -> None:
     flow: Final = {}
     defaults: Final = _cli_callback_kwargs(flow)
-    kwargs: Final = {**defaults, "parsed_openid_result": {**defaults["parsed_openid_result"], "user_id": parsed_user_id}}
+    kwargs: Final = {
+        **defaults,
+        "parsed_openid_result": {**defaults["parsed_openid_result"], "user_id": parsed_user_id},
+    }
     get_user_info_mock: Final = AsyncMock(return_value=_cli_callback_user_info([]))
 
     with (

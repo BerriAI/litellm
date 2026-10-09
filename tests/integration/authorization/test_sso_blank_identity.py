@@ -41,8 +41,8 @@ GRAPH_ERROR: Final = json.dumps(
     {"error": {"code": "Authentication_MissingOrMalformed", "message": "Access Token missing or malformed."}}
 ).encode()
 CUSTOM_SSO_MODULE: Final = """
-async def custom_sso(result):
-    email = getattr(result, "email", None) or ""
+async def custom_sso(result: object) -> dict[str, object] | None:
+    email: str = getattr(result, "email", None) or ""
     for prefix, user_id in (("mapped-blank-", " "), ("mapped-none-", None)):
         if email.startswith(prefix):
             return {
@@ -339,7 +339,10 @@ def _cli_report(proxy: Gateway, browser: httpx.Client, callback: httpx.Response,
         return f"{callback.status_code} {callback.text}"
     done: Final = _complete_cli(browser, callback, session)
     polled: Final = _poll(proxy, session)
-    return f"CLI login completed ({done.status_code}) and poll returned {polled.get('status')!r} for user_id={polled.get('user_id')!r}"
+    return (
+        f"CLI login completed ({done.status_code}) and poll returned {polled.get('status')!r} "
+        f"for user_id={polled.get('user_id')!r}"
+    )
 
 
 def test_dashboard_sign_in_is_refused_when_the_graph_profile_lookup_fails(
@@ -507,7 +510,8 @@ def test_sign_in_uses_the_matching_account_when_the_custom_mapping_leaves_the_us
         assert callback.status_code == 303 and session is not None, f"{callback.status_code} {callback.text}"
         assert session["user_id"] == account, session
         login: Final = _start_cli_login(proxy)
-        cli_callback: Final = _cli_callback(proxy, graph, browser, login, graph.profile(_profile(str(uuid.uuid4()), email)))
+        cli_hint: Final = graph.profile(_profile(str(uuid.uuid4()), email))
+        cli_callback: Final = _cli_callback(proxy, graph, browser, login, cli_hint)
         done: Final = _complete_cli(browser, cli_callback, login)
         assert done.status_code == 200 and CLI_SUCCESS_PAGE_TITLE in done.text, f"{done.status_code} {done.text}"
         ready: Final = _poll(proxy, login)
@@ -533,7 +537,9 @@ def test_sign_in_is_refused_while_the_graph_profile_service_is_down(
     entra: OwnedProxy, graph: Graph, clean_slate: None
 ) -> None:
     proxy: Final = entra.gateway
-    outage: Final = Reply(status=503, body=b'{"error": {"code": "serviceNotAvailable", "message": "Service unavailable"}}')
+    outage: Final = Reply(
+        status=503, body=b'{"error": {"code": "serviceNotAvailable", "message": "Service unavailable"}}'
+    )
     callback: Final = _dashboard_sign_in(proxy, graph, graph.profile(outage))
     assert callback.status_code == 401 and _session(callback) is None, f"{callback.status_code} {callback.text}"
     session: Final = _start_cli_login(proxy)
@@ -545,9 +551,7 @@ def test_sign_in_is_refused_while_the_graph_profile_service_is_down(
     assert _blank_accounts() == (), _blank_accounts()
 
 
-def test_concurrent_failed_profile_lookups_mint_no_session(
-    entra: OwnedProxy, graph: Graph, clean_slate: None
-) -> None:
+def test_concurrent_failed_profile_lookups_mint_no_session(entra: OwnedProxy, graph: Graph, clean_slate: None) -> None:
     proxy: Final = entra.gateway
     hints: Final = [graph.profile(Reply(status=401, body=GRAPH_ERROR)) for _ in range(8)]
     with ThreadPoolExecutor(max_workers=len(hints)) as pool:
@@ -569,7 +573,11 @@ def test_custom_mapped_sign_in_is_refused_when_the_account_lookup_loses_the_data
         owned_proxy_process(
             gateway_module,
             tmp_path,
-            {**_entra_environment(graph.wire.url), "DATABASE_URL": relayed_url, "PRISMA_HEALTH_WATCHDOG_ENABLED": "false"},
+            {
+                **_entra_environment(graph.wire.url),
+                "DATABASE_URL": relayed_url,
+                "PRISMA_HEALTH_WATCHDOG_ENABLED": "false",
+            },
             config=_custom_mapping_config(tmp_path),
             remove_environment=("PROXY_BASE_URL", "DATABASE_URL_READ_REPLICA"),
             workers=2,
