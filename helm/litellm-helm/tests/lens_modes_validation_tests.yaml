@@ -1,0 +1,52 @@
+---
+suite: Lens deployment mode validation
+templates:
+- configmap-litellm.yaml
+- deployment.yaml
+set:
+  lensWorker.publicUrl: https://traces.example
+tests:
+- it: requires a separate identity signing reference for external Lens
+  template: deployment.yaml
+  set:
+    lensWorker.mode: external
+    lensWorker.externalUrl: http://lens.other-namespace:4318
+    lensWorker.serviceTokenSecret.name: worker-service
+  asserts:
+  - failedTemplate:
+      errorMessage: lensWorker.gateway.secretName is required for external Lens
+- it: requires an external service address
+  template: deployment.yaml
+  set:
+    lensWorker.mode: external
+    lensWorker.serviceTokenSecret.name: external-lens-signing
+    lensWorker.gateway.secretName: external-lens-signing
+  asserts:
+  - failedTemplate:
+      errorMessage: lensWorker.externalUrl is required for external Lens
+- it: requires the shared server credential for an external service
+  template: deployment.yaml
+  set:
+    lensWorker.mode: external
+    lensWorker.externalUrl: http://lens.other-namespace:4318
+  asserts:
+  - failedTemplate:
+      errorMessage: lensWorker.serviceTokenSecret.name is required for external Lens
+- it: requires an agent reachable URL for external ingestion
+  template: deployment.yaml
+  set:
+    lensWorker.mode: external
+    lensWorker.externalUrl: http://lens.other-namespace:4318
+    lensWorker.serviceTokenSecret.name: external-lens-signing
+    lensWorker.gateway.secretName: external-lens-signing
+    lensWorker.publicUrl: ''
+  asserts:
+  - failedTemplate:
+      errorMessage: lensWorker.publicUrl is required for external Lens
+- it: rejects unsupported deployment modes
+  template: deployment.yaml
+  set:
+    lensWorker.mode: typo
+  asserts:
+  - failedTemplate:
+      errorMessage: lensWorker.mode must be bundled, external or disabled

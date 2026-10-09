@@ -40,6 +40,18 @@ from litellm.proxy.utils import ProxyLogging
 from litellm.proxy.utils import CallInfo
 
 
+@pytest.mark.parametrize("route", ("/lens/datasets", "/lens/tracing/keys"))
+def test_lens_management_does_not_require_an_inference_user_parameter(route: str) -> None:
+    from starlette.requests import Request
+
+    from litellm.proxy.auth.auth_checks import _enforce_user_param_check
+
+    request: Final = Request({"type": "http", "method": "POST", "path": route})
+    _enforce_user_param_check({"enforce_user_param": True}, request, {}, route)
+    with pytest.raises(Exception, match="'user' param not passed"):
+        _enforce_user_param_check({"enforce_user_param": True}, request, {}, "/v1/chat/completions")
+
+
 @pytest.mark.parametrize("customer_spend, customer_budget", [(0, 10), (10, 0)])
 @pytest.mark.asyncio
 async def test_get_end_user_object(customer_spend, customer_budget):

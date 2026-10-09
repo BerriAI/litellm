@@ -39,3 +39,6 @@ dependencies:
     version: "18.19.1"
     repository: oci://registry-1.docker.io/bitnamicharts
     condition: redis.enabled
+  - name: lens
+    version: 0.1.0-dev.0
+    repository: oci://ghcr.io/berriai/charts

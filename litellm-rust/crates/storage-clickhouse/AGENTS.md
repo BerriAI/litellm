@@ -2,7 +2,7 @@
 
 `litellm-storage-clickhouse` exports `Storage`, a writer and bounded reader derived from one ClickHouse URL and database. It also exports bounded HTTP read and insert execution
 
-The crate has no trace tables, OTLP types, or named trace queries. `litellm-traces-clickhouse` supplies those rules and uses this storage for both trace rows and spend rows
+The crate has no product tables, OTLP types, or named trace queries. `litellm-spend-clickhouse` supplies the gateway spend schema and row encoding
 
 It also applies embedded SQLx migrations through the `_sqlx_migrations` ledger
 

@@ -332,6 +332,8 @@ class RouteChecks:
             and "get_spend_routes" in getattr(valid_token, "permissions", [])
         ):
             pass
+        elif route == "/lens" or route.startswith("/lens/"):
+            pass  # Lens authorizes the delegated role, including its POST-based read endpoints.
         elif _user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value:
             RouteChecks._check_proxy_admin_viewer_access(
                 route=route,

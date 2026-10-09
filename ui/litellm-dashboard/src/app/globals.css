@@ -1,6 +1,7 @@
 @layer theme, base, components, utilities;
 
 @import "tailwindcss";
+@source "../../node_modules/@litellm/lens-ui/src";
 @import "tw-animate-css";
 
 @plugin '@headlessui/tailwindcss';

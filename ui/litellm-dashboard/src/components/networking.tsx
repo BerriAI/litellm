@@ -126,7 +126,7 @@ import type {
   TraceDetailQuery,
   TraceListQuery,
   TracePage,
-} from "./lens/traces/types";
+} from "@litellm/lens-ui";
 import {
   createApiClient,
   deriveErrorMessage,

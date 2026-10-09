@@ -35,6 +35,10 @@ mod _native {
     #[pymodule_export]
     use crate::routes::chat_completions::{acompletion, completion};
     #[pymodule_export]
+    use crate::routes::clickhouse_spend::{
+        NativeClickHouseSpendConfig, NativeClickHouseSpendStorage,
+    };
+    #[pymodule_export]
     use crate::routes::embeddings::{aembedding, embedding};
     #[pymodule_export]
     use crate::routes::messages::{amessages, messages};
@@ -45,9 +49,7 @@ mod _native {
     #[pymodule_export]
     use crate::routes::token_counter::TokenCounter;
     #[pymodule_export]
-    use crate::routes::traces::{
-        NativeTraceConfig, NativeTraceStorage, trace_encode_error, trace_span_rows,
-    };
+    use crate::routes::traces::trace_encode_error;
     #[cfg(feature = "huggingface")]
     #[pymodule_export]
     use crate::tokenizer::HuggingFaceEncoding;
@@ -106,10 +108,9 @@ mod tests {
                 "aresponses",
                 "ResponsesWebSocketConnection",
                 "NativeDiagnosticProcessor",
-                "NativeTraceConfig",
-                "NativeTraceStorage",
+                "NativeClickHouseSpendConfig",
+                "NativeClickHouseSpendStorage",
                 "trace_encode_error",
-                "trace_span_rows",
                 "TokenCounter",
                 "Tokenizer",
                 "gil_stats",

@@ -21,18 +21,17 @@ from litellm.constants import (
     CLICKHOUSE_MAX_RETRIES,
 )
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
-from litellm.rust_bridge.trace.storage import ClickHouseStorage
-from litellm.tracing.config import trace_storage_config
+from litellm.rust_bridge.clickhouse import ClickHouseSpendStorage, spend_storage_config
 
 
-def clickhouse_storage_from_env() -> ClickHouseStorage:
-    return ClickHouseStorage(trace_storage_config({}))
+def clickhouse_storage_from_env() -> ClickHouseSpendStorage:
+    return ClickHouseSpendStorage(spend_storage_config())
 
 
 class ClickHouseBatchLogger(CustomBatchLogger):
     table: ClassVar[str]
 
-    def __init__(self, storage: ClickHouseStorage | None = None) -> None:
+    def __init__(self, storage: ClickHouseSpendStorage | None = None) -> None:
         self.storage = storage or clickhouse_storage_from_env()
         self.rows_written = 0
         self.rows_dropped = 0

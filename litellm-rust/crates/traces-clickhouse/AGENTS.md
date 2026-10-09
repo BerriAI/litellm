@@ -1,8 +1,0 @@
-- Own trace schema, row encoding, SQL query adapters and reader provisioning; consume domain types from `litellm-traces`
-- Keep generic ClickHouse connections and HTTP execution in `litellm-storage-clickhouse`; keep PyO3 conversion in `python-bridge`
-- Keep schema definitions only in `migrations/NNNN_description.sql`, embedded by `sqlx::migrate!`
-- Treat retention TTLs as current configuration: change them in `RETENTION` in `src/schema.rs`, which every startup reapplies, never in a new migration
-- Require typed query parameters and SELECT-only readers with server-side limits and tenant isolation
-- Bound insert time and encoded bytes; preserve shared values and explicit retry deduplication
-- Test storage behavior through the public API against ClickHouse
-- Expose one top-level `Error` enum in `src/error.rs`; own trace failures and wrap storage errors with `#[from]` or `#[source]`

@@ -8,10 +8,10 @@ from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.rust_bridge.trace.storage import ClickHouseStorage
 from litellm.tracing import TraceReceiver
 from litellm.tracing.exporter import LensExporter
 from litellm.tracing.remote import LensConnection, RemoteTraceStore
+from litellm.tracing.storage import LensTraceStorage
 
 _RECEIVER_ADAPTER: Final[TypeAdapter[TraceReceiver | None]] = TypeAdapter(
     TraceReceiver | None, config=ConfigDict(arbitrary_types_allowed=True)
@@ -29,7 +29,7 @@ async def provide_receiver(request: Request) -> TraceReceiver | None:
     return _RECEIVER_ADAPTER.validate_python(getattr(request.state, "tracing_receiver", None))
 
 
-async def provide_storage(request: Request) -> ClickHouseStorage | None:
+async def provide_storage(request: Request) -> LensTraceStorage | None:
     tracing: Final = await provide_receiver(request)
     return tracing.storage if tracing is not None else None
 
@@ -56,7 +56,7 @@ async def manage_tracing(
         tracing: Final = (
             receiver_factory()
             if receiver_factory
-            else TraceReceiver(storage=ClickHouseStorage(RemoteTraceStore(client)))
+            else TraceReceiver(storage=LensTraceStorage(RemoteTraceStore(client)))
         )
         async with _export_requests(LensExporter(client)):
             yield tracing

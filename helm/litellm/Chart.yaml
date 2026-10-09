@@ -6,3 +6,8 @@ version: 0.1.0
 appVersion: "0.1.0"
 annotations:
   org.opencontainers.image.source: "https://github.com/BerriAI/litellm"
+
+dependencies:
+  - name: lens
+    version: 0.1.0-dev.0
+    repository: oci://ghcr.io/berriai/charts

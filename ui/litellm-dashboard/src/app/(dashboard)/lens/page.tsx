@@ -1,10 +1,10 @@
 "use client";
 
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { LensWorkspace } from "@/components/lens/LensWorkspace";
+import { EmbeddedLens } from "@/components/lens/EmbeddedLens";
 
 export default function LensPage() {
   const { accessToken, userRole, isViewOnly } = useAuthorized();
   if (!accessToken) return null;
-  return <LensWorkspace accessToken={accessToken} userRole={userRole ?? ""} readOnly={isViewOnly} />;
+  return <EmbeddedLens accessToken={accessToken} userRole={userRole ?? ""} readOnly={isViewOnly} />;
 }
