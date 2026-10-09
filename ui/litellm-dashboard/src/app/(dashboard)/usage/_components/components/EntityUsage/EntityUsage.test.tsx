@@ -165,6 +165,12 @@ vi.mock("@/components/common_components/team_multi_select", () => ({
   ),
 }));
 
+vi.mock("@/components/shared/PaginatedMultiSelect", () => ({
+  PaginatedMultiSelect: ({ onValueChange }: { onValueChange: (value: string[]) => void }) => (
+    <button onClick={() => onValueChange(["shared"])}>Tag Multi Select</button>
+  ),
+}));
+
 // Mock useTeams hook
 vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
   default: vi.fn(() => ({
@@ -1511,14 +1517,17 @@ describe("EntityUsage", () => {
       expect(screen.queryByText(TEAM_NOTE)).not.toBeInTheDocument();
     });
 
-    it("does not render the team filter or breakdown toggle on the team tab", async () => {
+    it("does not render the tag tab's team filter on the team tab", async () => {
       render(<EntityUsage {...defaultProps} entityType="team" />);
 
       await waitFor(() => {
         expect(mockTeamDailyActivityCall).toHaveBeenCalled();
       });
-      expect(screen.queryByRole("radio", { name: "Tag" })).not.toBeInTheDocument();
-      expect(mockTeamDailyActivityCall.mock.lastCall?.[0]).not.toHaveProperty("groupBy", "team");
+      // "Filter by tag" belongs to the Team tab; "Filter by team" is the entity filter, not the tag tab's slot.
+      expect(screen.getByText("Filter by tag")).toBeInTheDocument();
+      expect(mockTeamDailyActivityCall.mock.lastCall?.[0]).toEqual(
+        expect.objectContaining({ tags: null, groupBy: null }),
+      );
     });
 
     it("labels the spend section and breakdown column as Team in team grouping", async () => {
@@ -1596,6 +1605,105 @@ describe("EntityUsage", () => {
       expect(screen.getByRole("columnheader", { name: "Tag" })).toBeInTheDocument();
       expect(screen.getByText("top-keys-header:Tags")).toBeInTheDocument();
       expect(screen.getByText("Break down by")).toBeInTheDocument();
+    });
+  });
+
+  describe("team tab tag filter and breakdown", () => {
+    const TEAM_TAG_NOTE =
+      "These totals only count tagged requests, and a request with several tags counts once per tag, so they can differ from actual team spend. Clear the tag filter and break down by Team for exact team totals.";
+
+    const teamProps = { ...defaultProps, entityType: "team" as const };
+
+    it("sends no tags or group_by in the default request", async () => {
+      render(<EntityUsage {...teamProps} />);
+
+      await waitFor(() => {
+        expect(mockTeamDailyActivityCall).toHaveBeenCalled();
+      });
+      expect(mockTeamDailyActivityCall.mock.lastCall?.[0]).toEqual(
+        expect.objectContaining({ tags: null, groupBy: null }),
+      );
+      expect(screen.queryByText(TEAM_TAG_NOTE)).not.toBeInTheDocument();
+    });
+
+    it("sends tags when tags are picked and shows the note", async () => {
+      render(<EntityUsage {...teamProps} />);
+
+      await waitFor(() => {
+        expect(mockTeamDailyActivityCall).toHaveBeenCalled();
+      });
+      fireEvent.click(screen.getByText("Tag Multi Select"));
+
+      await waitFor(() => {
+        expect(mockTeamDailyActivityCall.mock.lastCall?.[0]).toEqual(
+          expect.objectContaining({ tags: ["shared"], groupBy: null }),
+        );
+      });
+      expect(await screen.findByText(TEAM_TAG_NOTE)).toBeInTheDocument();
+    });
+
+    it("scopes tag options to selected teams and drops the teamIds when none are selected", async () => {
+      render(<EntityUsage {...teamProps} />);
+
+      await waitFor(() => {
+        expect(mockTagListCall).toHaveBeenCalledWith(
+          "test-token",
+          expect.any(Date),
+          expect.any(Date),
+          expect.objectContaining({ usageOnly: true }),
+        );
+      });
+      expect(mockTagListCall.mock.lastCall?.[3]?.teamIds).toBeUndefined();
+
+      fireEvent.click(screen.getByText("Team Multi Select"));
+
+      await waitFor(() => {
+        expect(mockTagListCall).toHaveBeenCalledWith(
+          "test-token",
+          expect.any(Date),
+          expect.any(Date),
+          expect.objectContaining({ teamIds: ["team-1"], usageOnly: true }),
+        );
+      });
+    });
+
+    it("sends group_by=tag, renders tag-name rows under Spend Per Tag, and shows the note", async () => {
+      render(<EntityUsage {...teamProps} />);
+
+      await waitFor(() => {
+        expect(mockTeamDailyActivityCall).toHaveBeenCalled();
+      });
+      fireEvent.click(screen.getByRole("radio", { name: "Tag" }));
+
+      await waitFor(() => {
+        expect(mockTeamDailyActivityCall.mock.lastCall?.[0]).toEqual(expect.objectContaining({ groupBy: "tag" }));
+      });
+      expect(await screen.findByText("Spend Per Tag")).toBeInTheDocument();
+      expect(await screen.findByText(TEAM_TAG_NOTE)).toBeInTheDocument();
+      // mockSpendData's entity key is the tag-like id "tag-1"; it must still render as a row label
+      // while the team filter selection is empty, proving filterDataByTags is skipped.
+      expect(screen.queryAllByText(/tag-1|Tag 1/).length).toBeGreaterThan(0);
+    });
+
+    it("keeps tag-name rows visible in tag breakdown even with teams selected", async () => {
+      render(<EntityUsage {...teamProps} />);
+
+      await waitFor(() => {
+        expect(mockTeamDailyActivityCall).toHaveBeenCalled();
+      });
+      fireEvent.click(screen.getByText("Team Multi Select"));
+      fireEvent.click(screen.getByRole("radio", { name: "Tag" }));
+
+      await waitFor(() => {
+        expect(mockTeamDailyActivityCall.mock.lastCall?.[0]).toEqual(
+          expect.objectContaining({ entityIds: ["team-1"], groupBy: "tag" }),
+        );
+      });
+      // Without the filterDataByTags skip, "tag-1" would be filtered against ["team-1"] and vanish.
+      await waitFor(() => {
+        expect(screen.queryAllByText(/tag-1|Tag 1/).length).toBeGreaterThan(0);
+      });
+      expect(screen.getByRole("columnheader", { name: "Tag" })).toBeInTheDocument();
     });
   });
 });
