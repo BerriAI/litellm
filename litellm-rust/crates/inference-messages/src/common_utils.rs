@@ -44,13 +44,7 @@ pub(crate) fn messages_provider(provider: LlmProviders) -> Option<MessagesProvid
         LlmProviders::Anthropic => Some(MessagesProvider::Anthropic),
         LlmProviders::AzureAi => Some(MessagesProvider::AzureAi),
         LlmProviders::Bedrock => Some(MessagesProvider::Bedrock),
-        LlmProviders::AwsTextract
-        | LlmProviders::Cohere
-        | LlmProviders::Mistral
-        | LlmProviders::Openai
-        | LlmProviders::OpenaiLike
-        | LlmProviders::Reducto
-        | LlmProviders::VertexAi => None,
+        _ => None,
     }
 }
 

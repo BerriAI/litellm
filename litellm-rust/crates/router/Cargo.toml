@@ -9,6 +9,7 @@ repository.workspace = true
 litellm-config.workspace = true
 litellm-inference.workspace = true
 litellm-inference-messages.workspace = true
+litellm-router-types.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true

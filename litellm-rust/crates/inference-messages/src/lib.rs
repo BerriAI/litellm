@@ -15,7 +15,8 @@ use std::sync::Arc;
 
 pub use litellm_inference::RouteError as Error;
 pub use types::{
-    MessagesCall, MessagesCallResponse, MessagesSettings, MessagesShaping, messages_body,
+    MessagesCall, MessagesCallResponse, MessagesSettings, MessagesShaping, litellm_params,
+    messages_body,
 };
 
 #[derive(Clone)]
