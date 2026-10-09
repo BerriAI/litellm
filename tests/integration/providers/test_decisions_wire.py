@@ -271,6 +271,24 @@ def test_test_connection_evaluation_mode_uses_typesafe_decisions_path(gateway: G
         assert call["path"] == f"/{handle.scenario_id}{provider.path}"
 
 
+def test_test_connection_by_configured_alias_probes_the_stored_model(gateway: Gateway) -> None:
+    pytest.skip("BUG: /health/test_connection given only a configured alias sends the alias as the model")
+    provider: Final = _PROVIDERS[1]
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, _answer_body(provider))
+        model: Final = _deployment(scenario, handle, provider)
+        response: Final = gateway.request(
+            "POST",
+            "/health/test_connection",
+            {"litellm_params": {"model": model}, "mode": "evaluation"},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "success", response.text
+        (call,) = _upstream_calls(gateway, handle)
+        assert call["path"] == f"/{handle.scenario_id}{provider.path}"
+
+
 def test_repeated_identical_requests_each_reach_the_upstream_and_are_each_billed(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         handle: Final = _register(scenario, _answer_body(_PERPLEXITY))
