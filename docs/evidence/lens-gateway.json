@@ -632,20 +632,21 @@
     }
   },
   "embedded_ui": {
-    "qualification": "Exact published source pin verified; installed package passes companion integration tests and full production frontend build",
-    "companion_base_sha": "a54b38e779c5d960b2515e2807c1858cc5842b4d",
+    "qualification": "Exact published source pin verified; all 383 installed package files match Lens af29, clean standalone package build and companion integration/production frontend build pass",
+    "companion_base_sha": "99a4705a3093e0ecef3d8f05c656657af313d439",
     "package": {
       "path": "ui/litellm-dashboard/vendor/litellm-lens-ui-0.1.0-dev.0.tgz",
-      "sha256": "ae1303e59a8169bafbe2322bfec0c5b20e4cc94c46e62a17eaeb5cc7a2931d05",
-      "integrity": "sha512-Zhk75Cx87jPYfkt/OGEb1PaBmL9HPXo3cXNyDGncxgKv7ufryF5v3WIpJfZX6T/LM7xoh1TKxvmUTYS/9Yirjg==",
+      "sha256": "9857c81d91d3dae64dfc00d6d9277b10c19b2cf5b34360eb3e929ed712081927",
+      "integrity": "sha512-LUbDFIITjHkXo4NDbs/qGWbRW/EQK3O5q8/vHiPf0Koi5zCcbHdSrnNn68iNJQYUXMzrfFgLOkersPPljlMaUw==",
       "source": {
         "repository": "https://github.com/BerriAI/lens",
-        "commit": "0b8e2c23f73588c4b3e40e850edd1bad1654c19c",
+        "commit": "af29e72a67893e9eb1e682ad0aee656647c63d20",
         "source_directory": "src/ui/lib",
         "entries": 383,
         "all_package_files_match_commit": true,
-        "file_manifest_sha256": "28daacf6fc0ddf1b9776c52ea40512d28b313449aacc7782850f471b43c933b0",
-        "comparison": "Every regular package file matches the published commit byte for byte; LICENSE resolves at repository root"
+        "file_manifest_sha256": "9ea122fc31db9284f5c9fe363954e6ae1e82dace755843f743a5d4067991bb00",
+        "comparison": "Every regular package file matches the published commit byte for byte; LICENSE resolves at repository root",
+        "file_manifest_encoding": "JSON array in tar entry order, sorted object keys, compact separators"
       }
     },
     "sources": {
@@ -654,30 +655,48 @@
     },
     "checks": [
       {
-        "command": "npm ci --ignore-scripts --prefer-offline",
+        "command": "npm run qualify:ui-package (Lens repository)",
         "result": "passed",
         "log": {
-          "path": "/tmp/lens-host-clean-ui-install.log",
-          "sha256": "ca4b31e2c2ad9dce07c3b4f985850802bb1b311295e5d2c0a60a447529d320b4"
+          "path": "/tmp/lens-ui-af29-package-qualification.log",
+          "sha256": "8225577f83249a7c2bb0e25ed54d6b05a3c92ec8d9d01c6113e5aa66ad3cf493"
         }
       },
       {
-        "command": "npx vitest run src/components/lens/EmbeddedLens.integration.test.tsx 'src/app/(dashboard)/lens/page.test.tsx' --maxWorkers2",
+        "command": "npm install ./vendor/litellm-lens-ui-0.1.0-dev.0.tgz --ignore-scripts --package-lock-only --prefer-offline",
+        "result": "passed",
+        "log": {
+          "path": "/tmp/lens-host-af29-lock-refresh.log",
+          "sha256": "f77b4649b17c998b39708da9801486a3d26a630ff3b1bd42515c8a05d96442b4"
+        },
+        "lockfile_delta": "Only Lens package integrity changes; all dependency versions and other lock entries are unchanged"
+      },
+      {
+        "command": "npm ci --ignore-scripts --prefer-offline",
+        "result": "passed",
+        "log": {
+          "path": "/tmp/lens-host-af29-clean-install.log",
+          "sha256": "19a314eb0b3fbc3b41ea998485520886ffdce67051db97c4cbd72a646625e734"
+        }
+      },
+      {
+        "command": "npm exec -- vitest run src/components/lens/EmbeddedLens.integration.test.tsx 'src/app/(dashboard)/lens/page.test.tsx' --maxWorkers=2",
         "result": "passed",
         "files": 2,
         "tests": 7,
         "log": {
-          "path": "/tmp/lens-host-clean-ui-tests.log",
-          "sha256": "6f27f9f04290f3ccc26e1ccb782510ec68be95c697c8336d0fb245c37c56c485"
+          "path": "/tmp/lens-host-af29-ui-tests.log",
+          "sha256": "95a5619f6ab3c2af75af93ab80690a5ed4de4b96dff3a7520860f4eaefeaf2ae"
         }
       },
       {
         "command": "npm run build",
         "result": "passed",
         "includes_typecheck": true,
+        "static_routes": 55,
         "log": {
-          "path": "/tmp/lens-host-clean-ui-build.log",
-          "sha256": "4fa1a513c52f9715fb6eea3b7c8585b72aa14045a832651b9b44e80fb49dc6c1"
+          "path": "/tmp/lens-host-af29-ui-build.log",
+          "sha256": "6f0d21235f46f079f7e045b747d702775b5851787c8f95ea5fe0644538cd0230"
         }
       }
     ],
@@ -924,7 +943,106 @@
       "sha256": "a412ce369a6ba59cb9e170a4cd6c7575a831ee6632e4ebfc6c5637b1fb83c743",
       "second_path": "helm/litellm-helm/charts/lens-0.1.0-dev.0.tgz",
       "source_commit": "0b8e2c23f73588c4b3e40e850edd1bad1654c19c"
-    }
+    },
+    "metadata_filters_regression": {
+      "source_commit": "af29e72a67893e9eb1e682ad0aee656647c63d20",
+      "source": "src/ui/lib/src/components/lens/setup/fields/MetadataFilters.tsx",
+      "change": "Handle the render between adding a filter row and its watched value becoming available",
+      "before": "Populated-metadata duplicate-investigation test reproduces undefined.key crash",
+      "after": "All 31 InvestigationSetup integration tests and UI typecheck pass",
+      "coverage": [
+        "first/second append",
+        "sorted deduplicated metadata suggestions",
+        "remove and retain remaining key/value",
+        "edit/reappend suggestions",
+        "saved condition payload"
+      ],
+      "source_proof": {
+        "recorded_at": "2026-10-09T10:06:22.265072+00:00",
+        "commit": "af29e72a67893e9eb1e682ad0aee656647c63d20",
+        "scope": [
+          "src/ui/lib/src/components/lens/setup/fields/MetadataFilters.tsx",
+          "src/ui/lib/src/components/lens/setup/InvestigationSetup.integration.test.tsx"
+        ],
+        "change": "Guard a newly appended filter row until useWatch catches up with useFieldArray",
+        "before": {
+          "outcome": "new populated-metadata regression fails",
+          "message": "TypeError: Cannot read properties of undefined (reading 'key')",
+          "location": "MetadataFilters.tsx:57"
+        },
+        "after": {
+          "tests_passed": 31,
+          "test_files": 1,
+          "typecheck": "passed",
+          "full_suite_run": false
+        },
+        "independent_review": {
+          "agent": "dataset_storage",
+          "findings": []
+        },
+        "coverage": [
+          "duplicate investigation with loaded metadata",
+          "first and second append",
+          "sorted deduplicated suggestions by selected key",
+          "remove and reindex preserves remaining key/value",
+          "edit key updates suggestions",
+          "append after removal",
+          "saved filters preserve user selection"
+        ],
+        "warnings": [
+          "Existing jsdom canvas getContext warnings",
+          "Existing node localStorage-file warning",
+          "Default 80-column formatting does not match existing source; the 120-column check only flags 3 preexisting untouched assertions"
+        ],
+        "logs": {
+          "before": {
+            "path": "/tmp/lens-metadata-filters-before.log",
+            "sha256": "35f6d2f5079094ba2fe5402fd3a5b19b3e372b36925ff7d0ba386c8bbdca73d0"
+          },
+          "after": {
+            "path": "/tmp/lens-metadata-filters-after.log",
+            "sha256": "d98d7ced7ff8669681bfaa35f2020905667da2b8076bf5109451a274eb842009"
+          },
+          "typecheck": {
+            "path": "/tmp/lens-metadata-filters-typecheck.log",
+            "sha256": "3cea5e5e9f18766054450e04d337e51b49430c814478a4fed2bc965f97b17dc2"
+          }
+        },
+        "publication": "Lens af29 is published on main; this host package refresh pins that source, while final deployment images still require rebuilding and qualification",
+        "runtime_scope": "No Rust or backend source changes; the earlier 105 image still contains the UI crash until rebuilt"
+      },
+      "package_change": "Compared with the previously pinned 0b8e2c23 UI, MetadataFilters.tsx is the only changed packaged file"
+    },
+    "current_warnings": {
+      "build": [
+        "Existing Turbopack AVIF asset is emitted without optimization"
+      ],
+      "tests": [
+        "Existing jsdom canvas getContext notices",
+        "Existing node localStorage-file warning"
+      ],
+      "npm_audit": {
+        "result": "6 high findings, all in unchanged development-only dependency nodes",
+        "advisory": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+        "packages": [
+          "@next/eslint-plugin-next",
+          "braces",
+          "eslint-config-next",
+          "fast-glob",
+          "knip",
+          "micromatch"
+        ],
+        "dependency_versions_unchanged": true,
+        "all_affected_nodes_dev_only": true,
+        "report": {
+          "path": "/tmp/lens-host-af29-npm-audit.json",
+          "sha256": "05cb64a8d7a526250bb6ef4481524f2d8fee212855edbd86f505604750d2f0bd"
+        },
+        "no_automatic_major_upgrade_applied": true
+      }
+    },
+    "qualification_recorded_at": "2026-10-09T10:13:36.115860+00:00",
+    "remaining": "Current image/browser proof must adopt the Lens af29 UI; these build receipts do not certify older 105 images as containing the fix"
   },
   "publication_preflight": {
     "companion_integration_commit": "59b577dd0a7e238f212b0b18e70a8d15b95eb381",
