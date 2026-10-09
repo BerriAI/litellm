@@ -1407,11 +1407,11 @@ def test_filter_headers_for_aws_signature():
     expected_aws_headers = {
         "Content-Type": "application/json",
         "Host": "bedrock-runtime.us-east-1.amazonaws.com",
-        "x-amz-date": "20240101T120000Z",
-        "x-amz-security-token": "test-token",
     }
     assert filtered_headers == expected_aws_headers, f"Expected {expected_aws_headers}, got {filtered_headers}"
     excluded_headers = [
+        "x-amz-date",
+        "x-amz-security-token",
         "x-custom-header",
         "x-litellm-user-id",
         "x-forwarded-for",
