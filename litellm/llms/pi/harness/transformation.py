@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Final
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm.harness.errors import CapabilityUnsupported, HarnessError, OptionsMismatch
-from litellm.harness.options import PiOptions
+from litellm.harness.options import PiOptions, PiThinkingLevel
 from litellm.harness.types import (
     Capabilities,
     Event,
@@ -129,6 +129,8 @@ NATIVE_TO_NORMALIZED: Final[Mapping[str, str]] = MappingProxyType(
         "ls": "ls",
     }
 )
+
+PI_THINKING_LEVEL_MAP: Final[Mapping[str, str]] = MappingProxyType({"xhigh": "xhigh", "max": "max"})
 
 PI_BUILTIN_TOOLS: Final = frozenset({*NATIVE_TO_NORMALIZED, "codemode", "tool_search"})
 FAILED_STOP_REASONS: Final = frozenset({"error", "aborted"})
@@ -290,16 +292,24 @@ def session_model(ctx: SessionContext) -> str:
     return model
 
 
-def build_models_json(model: str, base_url: str) -> str:
+def build_models_json(model: str, base_url: str, thinking: PiThinkingLevel | None) -> str:
+    # pi clamps --thinking to "off" unless the model declares reasoning, and offers xhigh/max only when
+    # thinkingLevelMap names them. Declaring reasoning without a requested level would make pi send its
+    # default reasoning_effort on every call, so it is declared only when a level is asked for
+    reasoning: Final = (
+        MappingProxyType({"reasoning": True, "thinkingLevelMap": PI_THINKING_LEVEL_MAP})
+        if thinking is not None and thinking != "off"
+        else MappingProxyType({})
+    )
     provider: Final = MappingProxyType(
         {
             "baseUrl": base_url,
             "api": "openai-completions",
             "apiKey": f"${PI_TOKEN_ENV}",
-            "models": ({"id": model},),
+            "models": (MappingProxyType({"id": model, **reasoning}),),
         }
     )
-    return json.dumps({"providers": {PI_PROVIDER_ID: dict(provider)}})
+    return json.dumps({"providers": {PI_PROVIDER_ID: provider}}, default=_plain_json)
 
 
 def validate_user_config(config: Mapping[str, object]) -> None:
@@ -367,7 +377,7 @@ class PiHarnessConfig(BaseCLIHarnessConfig[PiOptions, PiStreamState]):
         model: Final = session_model(ctx)
         options: Final = self.get_options(ctx)
         base_url: Final = ctx.sandbox.host_url(ctx.endpoint.port).rstrip("/") + "/v1"
-        models_file: Final = (MODELS_FILENAME, build_models_json(model, base_url).encode("utf-8"))
+        models_file: Final = (MODELS_FILENAME, build_models_json(model, base_url, options.thinking).encode("utf-8"))
         instructions: Final = build_instructions(ctx)
         instructions_file: Final = (
             ((INSTRUCTIONS_FILENAME, instructions.encode("utf-8")),) if instructions is not None else ()

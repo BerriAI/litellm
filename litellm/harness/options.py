@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Literal, TypeAlias
 
+PiThinkingLevel: TypeAlias = Literal["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+
 
 def _no_config() -> Mapping[str, object]:
     return MappingProxyType({})
@@ -39,7 +41,7 @@ class OpenCodeOptions:
 
 @dataclass(frozen=True)
 class PiOptions:
-    thinking: Literal["off", "minimal", "low", "medium", "high", "xhigh", "max"] | None = None
+    thinking: PiThinkingLevel | None = None
     config: Mapping[str, object] = field(default_factory=_no_config)
     env: Mapping[str, str] = field(default_factory=_no_env)
 

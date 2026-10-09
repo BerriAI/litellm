@@ -10,6 +10,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import pytest
@@ -23,9 +24,9 @@ from litellm.harness.errors import (
     OptionsMismatch,
 )
 from litellm.harness.handlers.cli_handler import PERSIST_DIR_SCRIPT, CLIHarnessHandler
-from litellm.harness.options import OpenCodeOptions, PiOptions
+from litellm.harness.options import HarnessOptions, OpenCodeOptions, PiOptions, PiThinkingLevel
 from litellm.harness.sandbox.base import CompletedRun
-from litellm.harness.types import Event, Harness, Reasoning, Text, ToolCall, ToolResult
+from litellm.harness.types import Event, Harness, PermissionMode, Reasoning, Text, ToolCall, ToolResult
 from litellm.llms.base_llm.harness.transformation import (
     HarnessSessionSetup,
     HarnessTurnError,
@@ -60,21 +61,21 @@ MOYAI: Final = {"command": "/path/to/mcp-server", "args": [], "env": {}, "exposu
 CONFIG: Final = PiHarnessConfig()
 
 
-def load_fixture(name: str) -> list[dict[str, object]]:
-    return [json.loads(line) for line in (FIXTURES / name).read_text().splitlines() if line]
+def load_fixture(name: str) -> Sequence[Mapping[str, object]]:
+    return tuple(json.loads(line) for line in (FIXTURES / name).read_text().splitlines() if line)
 
 
 def parse(obj: Mapping[str, object], state: PiStreamState) -> Sequence[Event]:
     return CONFIG.transform_stream_line(obj, state)
 
 
-def parse_all(name: str, state: PiStreamState | None = None) -> tuple[list[Event], PiStreamState]:
+def parse_all(name: str, state: PiStreamState | None = None) -> tuple[Sequence[Event], PiStreamState]:
     run_state: Final = state or CONFIG.create_stream_state()
-    events: Final = list(itertools.chain.from_iterable(parse(obj, run_state) for obj in load_fixture(name)))
+    events: Final = tuple(itertools.chain.from_iterable(parse(obj, run_state) for obj in load_fixture(name)))
     return events, run_state
 
 
-def assistant_end(text: str, stop_reason: str, error: str | None = None) -> dict[str, object]:
+def assistant_end(text: str, stop_reason: str, error: str | None = None) -> Mapping[str, object]:
     error_field: Final = {"errorMessage": error} if error else {}
     return {
         "type": "message_end",
@@ -121,22 +122,29 @@ class FakeProcess:
         self.killed = True
 
 
+@dataclass(frozen=True, slots=True)
+class Exec:
+    cmd: Sequence[str]
+    env: Mapping[str, str]
+    cwd: str | None
+
+
 @dataclass
 class FakeSandbox:
     workdir: str = "/work"
     has_binary: bool = True
     persist_ok: bool = True
-    outputs: list[FakeProcess] = field(default_factory=list)
-    files: dict[str, bytes] = field(default_factory=dict)
-    execs: list[dict[str, object]] = field(default_factory=list)
-    runs: list[Sequence[str]] = field(default_factory=list)
+    outputs: tuple[FakeProcess, ...] = ()
+    files: Mapping[str, bytes] = field(default_factory=lambda: MappingProxyType({}))
+    execs: tuple[Exec, ...] = ()
+    runs: tuple[Sequence[str], ...] = ()
     tempdirs: int = 0
 
     async def exec(
         self, cmd: Sequence[str], *, env: Mapping[str, str] | None = None, cwd: str | None = None
     ) -> FakeProcess:
-        self.execs.append({"cmd": cmd, "env": dict(env or {}), "cwd": cwd})
-        return self.outputs.pop(0)
+        self.execs = (*self.execs, Exec(cmd=cmd, env=MappingProxyType(dict(env or {})), cwd=cwd))
+        return self.outputs[len(self.execs) - 1]
 
     async def run(
         self,
@@ -146,7 +154,7 @@ class FakeSandbox:
         cwd: str | None = None,
         timeout: float | None = None,
     ) -> CompletedRun:
-        self.runs.append(cmd)
+        self.runs = (*self.runs, cmd)
         if self.persist_ok:
             return CompletedRun("", "", 0)
         return CompletedRun("", "read-only fs", 1)
@@ -155,7 +163,7 @@ class FakeSandbox:
         return self.files[path]
 
     async def write(self, path: str, data: bytes) -> None:
-        self.files[path] = data
+        self.files = MappingProxyType({**self.files, path: data})
 
     def host_url(self, port: int) -> str:
         return f"http://host.docker.internal:{port}"
@@ -167,8 +175,8 @@ class FakeSandbox:
         self.tempdirs += 1
         return f"/tmp/pi-{self.tempdirs}"
 
-    async def snapshot(self) -> dict[str, str]:
-        return {}
+    async def snapshot(self) -> Mapping[str, str]:
+        return MappingProxyType({})
 
     async def close(self) -> None:
         return None
@@ -193,9 +201,15 @@ class Answer(BaseModel):
 
 def make_ctx(
     sandbox: FakeSandbox | None = None,
+    *,
     model: str | None = MODEL,
     endpoint: FakeEndpoint | None = DEFAULT_ENDPOINT,
-    **kwargs: object,
+    options: HarnessOptions | None = None,
+    permissions: PermissionMode = "full",
+    instructions: str | None = None,
+    output: type[BaseModel] | None = None,
+    skills: Sequence[str] = (),
+    disable_tools: Sequence[str] = (),
 ) -> SessionContext:
     return SessionContext(
         harness=Harness.PI,
@@ -203,7 +217,12 @@ def make_ctx(
         session_id="s1",
         model=model,
         endpoint=endpoint,
-        **kwargs,
+        options=options,
+        permissions=permissions,
+        instructions=instructions,
+        output=output,
+        skills=skills,
+        disable_tools=disable_tools,
     )
 
 
@@ -211,7 +230,7 @@ def setup_for(ctx: SessionContext) -> HarnessSessionSetup:
     return CONFIG.transform_session_setup(ctx, PRIVATE)
 
 
-def setup_models(setup: HarnessSessionSetup) -> dict[str, object]:
+def setup_models(setup: HarnessSessionSetup) -> Mapping[str, object]:
     return json.loads(setup.files[MODELS_FILENAME])
 
 
@@ -219,18 +238,14 @@ def fixture_proc(name: str, exit_code: int = 0) -> FakeProcess:
     return FakeProcess((FIXTURES / name).read_bytes(), exit_code=exit_code)
 
 
-async def collect(handler: CLIHarnessHandler, ctx: SessionContext, prompt: str) -> list[Event]:
+async def collect(handler: CLIHarnessHandler, ctx: SessionContext, prompt: str) -> Sequence[Event]:
     return [e async for e in handler.turn(ctx, prompt)]
 
 
-async def started(
-    sandbox: FakeSandbox | None = None, **kwargs: object
-) -> tuple[CLIHarnessHandler, SessionContext, FakeSandbox]:
-    box: Final = sandbox or FakeSandbox()
+async def started(ctx: SessionContext) -> CLIHarnessHandler:
     handler: Final = CLIHarnessHandler(PiHarnessConfig())
-    ctx: Final = make_ctx(box, **kwargs)
     await handler.start(ctx)
-    return handler, ctx, box
+    return handler
 
 
 def flag(argv: Sequence[str], name: str) -> str:
@@ -238,7 +253,7 @@ def flag(argv: Sequence[str], name: str) -> str:
     return args[args.index(name) + 1]
 
 
-def written_models(sandbox: FakeSandbox, private: str = PRIVATE) -> dict[str, object]:
+def written_models(sandbox: FakeSandbox, private: str = PRIVATE) -> Mapping[str, object]:
     return json.loads(sandbox.files[f"{private}/{MODELS_FILENAME}"])
 
 
@@ -303,7 +318,7 @@ def test_parse_mcp_tool_turn():
 
 def test_parse_api_error_records_error():
     events, state = parse_all("api_error.jsonl")
-    assert events == []
+    assert events == ()
     assert state.stop_reason == "error"
     assert "no healthy deployments" in state.error
 
@@ -478,7 +493,7 @@ def test_options_config_cannot_load_code_or_reroute_model():
 
 
 def test_build_models_json():
-    models: Final = json.loads(build_models_json("m1", "http://h:1/v1"))
+    models: Final = json.loads(build_models_json("m1", "http://h:1/v1", None))
     assert models == {
         "providers": {
             "litellm": {
@@ -489,6 +504,30 @@ def test_build_models_json():
             }
         }
     }
+
+
+REASONING_MODEL: Final = {"id": MODEL, "reasoning": True, "thinkingLevelMap": {"xhigh": "xhigh", "max": "max"}}
+
+
+@pytest.mark.parametrize(
+    ("thinking", "declared_model"),
+    [
+        (None, {"id": MODEL}),
+        ("off", {"id": MODEL}),
+        ("minimal", REASONING_MODEL),
+        ("high", REASONING_MODEL),
+        ("xhigh", REASONING_MODEL),
+        ("max", REASONING_MODEL),
+    ],
+)
+def test_thinking_declares_a_reasoning_model_only_when_a_level_is_requested(
+    thinking: PiThinkingLevel | None, declared_model: Mapping[str, object]
+) -> None:
+    models: Final = setup_models(setup_for(make_ctx(options=PiOptions(thinking=thinking))))
+    assert models["providers"]["litellm"]["models"] == [declared_model], (
+        "pi drops --thinking to off unless the model declares reasoning, and drops xhigh/max to high "
+        "unless thinkingLevelMap names them; declaring reasoning with no level makes pi send its default effort"
+    )
 
 
 def test_config_metadata():
@@ -630,34 +669,36 @@ def test_turn_response_paths():
 
 
 async def test_start_writes_token_only_in_env():
-    handler, ctx, sandbox = await started()
+    sandbox: Final = FakeSandbox(outputs=(fixture_proc("turn1_write_read.jsonl"),))
+    ctx: Final = make_ctx(sandbox)
+    handler: Final = await started(ctx)
     assert written_models(sandbox)["providers"]["litellm"]["apiKey"] == f"${PI_TOKEN_ENV}"
     assert all(TOKEN.encode() not in data for data in sandbox.files.values())
-    sandbox.outputs.append(fixture_proc("turn1_write_read.jsonl"))
     await collect(handler, ctx, "create hello.txt containing hi then read it")
-    call: Final = sandbox.execs[0]
-    assert TOKEN not in json.dumps(call["cmd"])
-    assert call["env"][PI_TOKEN_ENV] == TOKEN
+    assert TOKEN not in json.dumps(list(sandbox.execs[0].cmd))
+    assert sandbox.execs[0].env[PI_TOKEN_ENV] == TOKEN
 
 
 async def test_start_persists_sessions_dir():
-    sandbox: Final = (await started())[2]
-    assert sandbox.runs == [["sh", "-c", PERSIST_DIR_SCRIPT, "sh", "/tmp/pi-1/sessions", "pi/sessions"]]
+    sandbox: Final = FakeSandbox()
+    await started(make_ctx(sandbox))
+    assert sandbox.runs == (["sh", "-c", PERSIST_DIR_SCRIPT, "sh", "/tmp/pi-1/sessions", "pi/sessions"],)
 
 
 async def test_persist_failure_still_uses_private_sessions():
-    handler, ctx, sandbox = await started(FakeSandbox(persist_ok=False))
-    sandbox.outputs.append(fixture_proc("turn1_write_read.jsonl"))
-    await collect(handler, ctx, "x")
-    assert flag(sandbox.execs[0]["cmd"], "--session-dir") == "/tmp/pi-1/sessions"
+    sandbox: Final = FakeSandbox(persist_ok=False, outputs=(fixture_proc("turn1_write_read.jsonl"),))
+    ctx: Final = make_ctx(sandbox)
+    await collect(await started(ctx), ctx, "x")
+    assert flag(sandbox.execs[0].cmd, "--session-dir") == "/tmp/pi-1/sessions"
 
 
 async def test_turn_argv_env_and_session_continuation():
-    handler, ctx, sandbox = await started(options=PiOptions(env={"FOO": "1"}))
-    sandbox.outputs.append(fixture_proc("turn1_write_read.jsonl"))
+    sandbox: Final = FakeSandbox(outputs=(fixture_proc("turn1_write_read.jsonl"), fixture_proc("turn2_resume.jsonl")))
+    ctx: Final = make_ctx(sandbox, options=PiOptions(env={"FOO": "1"}))
+    handler: Final = await started(ctx)
     events: Final = await collect(handler, ctx, "create hello.txt containing hi then read it")
     first: Final = sandbox.execs[0]
-    assert first["cmd"] == [
+    assert first.cmd == [
         "pi",
         "--mode",
         "json",
@@ -672,59 +713,59 @@ async def test_turn_argv_env_and_session_continuation():
         "--tools",
         FULL_TOOLS,
     ]
-    assert first["cwd"] == "/work"
-    env: Final = first["env"]
-    assert env["PI_CODING_AGENT_DIR"] == "/tmp/pi-1/agent"
-    assert env["PI_OFFLINE"] == "1" and env["PI_TELEMETRY"] == "0"
-    assert env["FOO"] == "1"
+    assert first.cwd == "/work"
+    assert first.env["PI_CODING_AGENT_DIR"] == "/tmp/pi-1/agent"
+    assert first.env["PI_OFFLINE"] == "1" and first.env["PI_TELEMETRY"] == "0"
+    assert first.env["FOO"] == "1"
     assert any(isinstance(e, ToolCall) for e in events)
     assert ctx.final_text == "Done! hello.txt contains: hi"
     assert handler.native_session_id() == SESSION
 
-    sandbox.outputs.append(fixture_proc("turn2_resume.jsonl"))
     await collect(handler, ctx, "what file did you create?")
-    second: Final = sandbox.execs[1]["cmd"]
+    second: Final = sandbox.execs[1].cmd
     assert flag(second, "--session") == SESSION
     assert "what file" not in " ".join(second)
     assert ctx.final_text == "You asked me to create hello.txt."
 
 
 async def test_prompt_is_sent_on_stdin_not_argv():
-    handler, ctx, sandbox = await started()
     proc: Final = fixture_proc("turn1_write_read.jsonl")
-    sandbox.outputs.append(proc)
-    await collect(handler, ctx, "secret prompt text")
+    sandbox: Final = FakeSandbox(outputs=(proc,))
+    ctx: Final = make_ctx(sandbox)
+    await collect(await started(ctx), ctx, "secret prompt text")
     assert proc.stdin.data == b"secret prompt text" and proc.stdin.closed
-    assert "secret prompt text" not in sandbox.execs[0]["cmd"]
+    assert "secret prompt text" not in sandbox.execs[0].cmd
 
 
 async def test_resume_sets_session():
-    handler, ctx, sandbox = await started()
+    sandbox: Final = FakeSandbox(outputs=(fixture_proc("turn2_resume.jsonl"),))
+    ctx: Final = make_ctx(sandbox)
+    handler: Final = await started(ctx)
     await handler.resume(ctx, "prev-session")
-    sandbox.outputs.append(fixture_proc("turn2_resume.jsonl"))
     await collect(handler, ctx, "hi")
-    assert flag(sandbox.execs[0]["cmd"], "--session") == "prev-session"
+    assert flag(sandbox.execs[0].cmd, "--session") == "prev-session"
 
 
 async def test_read_only_and_disable_tools_argv():
-    handler, ctx, sandbox = await started(permissions="read-only", disable_tools=["grep"])
-    sandbox.outputs.append(fixture_proc("readonly_denied_bash.jsonl"))
-    events: Final = await collect(handler, ctx, "x")
-    cmd: Final = sandbox.execs[0]["cmd"]
+    sandbox: Final = FakeSandbox(outputs=(fixture_proc("readonly_denied_bash.jsonl"),))
+    ctx: Final = make_ctx(sandbox, permissions="read-only", disable_tools=("grep",))
+    events: Final = await collect(await started(ctx), ctx, "x")
+    cmd: Final = sandbox.execs[0].cmd
     assert flag(cmd, "--tools") == "read,grep,find,ls"
     assert flag(cmd, "--exclude-tools") == "grep"
     assert ToolResult(id="call_b1", output="Tool bash not found", is_error=True) in events
 
 
 async def test_instructions_and_structured_output():
-    handler, ctx, sandbox = await started(instructions="Be terse.", output=Answer)
+    proc: Final = fixture_proc("structured_output.jsonl")
+    sandbox: Final = FakeSandbox(outputs=(proc,))
+    ctx: Final = make_ctx(sandbox, instructions="Be terse.", output=Answer)
+    handler: Final = await started(ctx)
     written: Final = sandbox.files["/tmp/pi-1/instructions.md"].decode()
     assert written.startswith("Be terse.")
     assert '"city"' in written and "single JSON object" in written
-    proc: Final = fixture_proc("structured_output.jsonl")
-    sandbox.outputs.append(proc)
     await collect(handler, ctx, "x")
-    assert flag(sandbox.execs[0]["cmd"], "--append-system-prompt") == "/tmp/pi-1/instructions.md"
+    assert flag(sandbox.execs[0].cmd, "--append-system-prompt") == "/tmp/pi-1/instructions.md"
     assert '"city"' in proc.stdin.data.decode()
     assert json.loads(ctx.output_json) == {"city": "Paris", "country": "France"}
 
@@ -734,47 +775,49 @@ async def test_skills_copied_to_private_skills_path(tmp_path: Path) -> None:
     (skill / "ref").mkdir(parents=True)
     (skill / "SKILL.md").write_text("---\nname: greeter\ndescription: d\n---\nbody")
     (skill / "ref" / "notes.txt").write_text("n")
-    handler, ctx, sandbox = await started(skills=[str(skill)])
+    sandbox: Final = FakeSandbox(outputs=(fixture_proc("turn2_resume.jsonl"),))
+    ctx: Final = make_ctx(sandbox, skills=(str(skill),))
+    handler: Final = await started(ctx)
     assert sandbox.files["/tmp/pi-1/skills/greeter/SKILL.md"].startswith(b"---")
     assert sandbox.files["/tmp/pi-1/skills/greeter/ref/notes.txt"] == b"n"
-    sandbox.outputs.append(fixture_proc("turn2_resume.jsonl"))
     await collect(handler, ctx, "x")
-    cmd: Final = sandbox.execs[0]["cmd"]
+    cmd: Final = sandbox.execs[0].cmd
     assert flag(cmd, "--skill") == "/tmp/pi-1/skills"
     assert "--no-skills" in cmd
 
 
 async def test_skill_without_manifest_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match=r"SKILL\.md"):
-        await started(skills=[str(tmp_path)])
+        await started(make_ctx(skills=(str(tmp_path),)))
 
 
 async def test_missing_binary():
     with pytest.raises(HarnessInstallFailed, match="@earendil-works/pi-coding-agent"):
-        await started(FakeSandbox(has_binary=False))
+        await started(make_ctx(FakeSandbox(has_binary=False)))
 
 
 async def test_start_missing_endpoint_raises():
     with pytest.raises(HarnessError):
-        await started(endpoint=None)
+        await started(make_ctx(endpoint=None))
 
 
 async def test_mcp_servers_written_and_reachable():
-    handler, ctx, sandbox = await started(options=PiOptions(config={"mcpServers": {"moyai": MOYAI}}))
+    sandbox: Final = FakeSandbox(outputs=(fixture_proc("mcp_tool.jsonl"),))
+    ctx: Final = make_ctx(sandbox, options=PiOptions(config={"mcpServers": {"moyai": MOYAI}}))
+    handler: Final = await started(ctx)
     assert json.loads(sandbox.files["/tmp/pi-1/agent/mcp.json"]) == {"mcpServers": {"moyai": MOYAI}}
-    sandbox.outputs.append(fixture_proc("mcp_tool.jsonl"))
     events: Final = await collect(handler, ctx, "call the moyai echo tool")
-    assert flag(sandbox.execs[0]["cmd"], "--tools") == f"{FULL_TOOLS},mcp__*"
+    assert flag(sandbox.execs[0].cmd, "--tools") == f"{FULL_TOOLS},mcp__*"
     assert ToolResult(id="call_m1", output="moyai says: hello", is_error=False) in events
 
 
 async def test_wrong_options_and_ask_mode_rejected():
     with pytest.raises(OptionsMismatch):
-        await started(options=OpenCodeOptions())
+        await started(make_ctx(options=OpenCodeOptions()))
     with pytest.raises(OptionsMismatch):
-        await started(options=PiOptions(config={"sessionDir": "/elsewhere"}))
+        await started(make_ctx(options=PiOptions(config={"sessionDir": "/elsewhere"})))
     with pytest.raises(CapabilityUnsupported):
-        await started(permissions="ask")
+        await started(make_ctx(permissions="ask"))
 
 
 async def test_turn_before_start_raises():
@@ -784,23 +827,24 @@ async def test_turn_before_start_raises():
 
 
 async def test_api_error_raises_even_on_exit_zero():
-    handler, ctx, sandbox = await started()
-    sandbox.outputs.append(fixture_proc("api_error.jsonl", exit_code=0))
+    ctx: Final = make_ctx(FakeSandbox(outputs=(fixture_proc("api_error.jsonl", exit_code=0),)))
+    handler: Final = await started(ctx)
     with pytest.raises(HarnessTurnError, match="no healthy deployments"):
         await collect(handler, ctx, "x")
 
 
 async def test_nonzero_exit_raises_with_stderr_tail():
-    handler, ctx, sandbox = await started()
-    sandbox.outputs.append(FakeProcess(b"", stderr=b"line1\nfatal: bad flag\n", exit_code=2))
+    failing: Final = FakeProcess(b"", stderr=b"line1\nfatal: bad flag\n", exit_code=2)
+    ctx: Final = make_ctx(FakeSandbox(outputs=(failing,)))
+    handler: Final = await started(ctx)
     with pytest.raises(HarnessTurnError, match="code 2: line1\nfatal: bad flag"):
         await collect(handler, ctx, "x")
 
 
 async def test_early_close_kills_process_and_stop_is_idempotent():
-    handler, ctx, sandbox = await started()
     proc: Final = fixture_proc("turn1_write_read.jsonl")
-    sandbox.outputs.append(proc)
+    ctx: Final = make_ctx(FakeSandbox(outputs=(proc,)))
+    handler: Final = await started(ctx)
     gen: Final = handler.turn(ctx, "x")
     await gen.__anext__()
     await gen.aclose()
@@ -810,24 +854,24 @@ async def test_early_close_kills_process_and_stop_is_idempotent():
 
 
 async def test_long_jsonl_line_is_parsed():
-    handler, ctx, sandbox = await started()
     text: Final = "x" * 200_000
-    lines: Final = [
+    lines: Final = (
         {"type": "session", "version": 3, "id": "s"},
         {"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": text}},
         assistant_end(text, "stop"),
-    ]
-    sandbox.outputs.append(FakeProcess("\n".join(json.dumps(line) for line in lines).encode()))
-    events: Final = await collect(handler, ctx, "x")
+    )
+    stdout: Final = "\n".join(json.dumps(dict(line)) for line in lines).encode()
+    ctx: Final = make_ctx(FakeSandbox(outputs=(FakeProcess(stdout),)))
+    events: Final = await collect(await started(ctx), ctx, "x")
     assert events == [Text(delta=text)]
     assert ctx.final_text == text
 
 
 async def test_model_falls_back_to_endpoint_model():
-    handler, ctx, sandbox = await started(model=None, endpoint=FakeEndpoint(model="gw-model"))
-    sandbox.outputs.append(fixture_proc("turn1_write_read.jsonl"))
-    await collect(handler, ctx, "x")
-    assert flag(sandbox.execs[0]["cmd"], "--model") == "gw-model"
+    sandbox: Final = FakeSandbox(outputs=(fixture_proc("turn1_write_read.jsonl"),))
+    ctx: Final = make_ctx(sandbox, model=None, endpoint=FakeEndpoint(model="gw-model"))
+    await collect(await started(ctx), ctx, "x")
+    assert flag(sandbox.execs[0].cmd, "--model") == "gw-model"
     assert written_models(sandbox)["providers"]["litellm"]["models"] == [{"id": "gw-model"}]
 
 
