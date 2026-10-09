@@ -204,3 +204,6 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
         data["metadata"] = metadata
 
         return data
+
+
+PROXY_SensitiveDataRoutingHandler: Final = _PROXY_SensitiveDataRoutingHandler

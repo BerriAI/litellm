@@ -43,11 +43,11 @@ class FakeMCPServerManager:
         self.name_lookup_spy(server_name, client_ip)
         return self.servers_by_name.get(server_name)
 
-    def _is_server_accessible_from_ip(self, server: MCPServer, client_ip: str | None) -> bool:
+    def is_server_accessible_from_ip(self, server: MCPServer, client_ip: str | None) -> bool:
         self.ip_filter_spy(server, client_ip)
         return self.ip_accessible
 
-    def _build_mcp_server_table(self, server: MCPServer) -> LiteLLM_MCPServerTable:
+    def build_mcp_server_table(self, server: MCPServer) -> LiteLLM_MCPServerTable:
         return LiteLLM_MCPServerTable(
             server_id=server.server_id,
             alias=server.alias,
@@ -132,7 +132,7 @@ async def test_temp_resolution_precedes_db_and_registry() -> None:
     )
 
     assert resolved == ResolvedMCPServer(
-        table=manager._build_mcp_server_table(temporary_server),
+        table=manager.build_mcp_server_table(temporary_server),
         runtime=temporary_server,
         source="temp",
     )
@@ -179,7 +179,7 @@ async def test_registry_id_resolution_precedes_name() -> None:
     )
 
     assert resolved == ResolvedMCPServer(
-        table=manager._build_mcp_server_table(server),
+        table=manager.build_mcp_server_table(server),
         runtime=server,
         source="registry",
     )
@@ -244,7 +244,7 @@ async def test_db_lookup_none_skips_db_and_returns_registry_source() -> None:
     resolved: Final = await resolve_mcp_server(server.server_id, manager=manager, db_lookup=None)
 
     assert resolved == ResolvedMCPServer(
-        table=manager._build_mcp_server_table(server),
+        table=manager.build_mcp_server_table(server),
         runtime=server,
         source="registry",
     )
@@ -286,7 +286,7 @@ async def test_non_admin_temp_resolution_is_denied_before_allowed_lookup() -> No
     server: Final = _runtime_server()
     manager: Final = _manager(allowed_server_ids=(server.server_id,))
     resolved: Final = ResolvedMCPServer(
-        table=manager._build_mcp_server_table(server),
+        table=manager.build_mcp_server_table(server),
         runtime=server,
         source="temp",
     )
@@ -384,7 +384,7 @@ async def test_catalog_visibility_never_opens_temporary_setup_to_non_admins(
 ) -> None:
     server: Final = _runtime_server()
     manager: Final = _manager()
-    resolved: Final = ResolvedMCPServer(manager._build_mcp_server_table(server), server, source)
+    resolved: Final = ResolvedMCPServer(manager.build_mcp_server_table(server), server, source)
     operation: Final = authorize_mcp_server(
         resolved,
         _auth(),
@@ -553,3 +553,16 @@ async def test_target_catalog_does_not_reuse_admin_authorization_for_another_cal
         )
     assert (error.value.status_code, error.value.detail) == (403, {"error": "denied"})
     manager.allowed_servers_spy.assert_called_once_with(_auth())
+
+
+@pytest.mark.asyncio
+async def test_catalog_without_listing_dependency_fails_explicitly():
+    from mcp.types import ListToolsRequest
+
+    from litellm.proxy._experimental.mcp_server.contracts import OperationContext
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+    from litellm.proxy._experimental.mcp_server.server_resolution import MCPServerTargetCatalog
+
+    catalog = MCPServerTargetCatalog(MCPServerManager())
+    with pytest.raises(RuntimeError, match="listing dependency"):
+        await catalog.list(OperationContext(_caller=None), ListToolsRequest())

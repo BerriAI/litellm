@@ -19,6 +19,7 @@ import pytest
 
 from e2e_config import unique_marker
 from e2e_http import NoBody, StreamingResponse, unwrap
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from management_client import ManagementClient
 from models import (
@@ -31,6 +32,7 @@ pytestmark = pytest.mark.e2e
 
 TINY_BUDGET = 3e-6
 SPEND_MODEL = "claude-haiku-4-5"
+SYNTHETIC_BACKEND: Final = "openai/synthetic-detachment"
 
 
 class KeyToggleBlockBody(BaseModel):
@@ -161,13 +163,22 @@ def project_resources(client: ManagementClient) -> Iterator[ResourceManager]:
 
 class TestKeyManagementRoutes:
     @pytest.mark.covers("mgmt.key.update.persists")
+    @meta(
+        Subject(
+            domain=Domain.MANAGEMENT,
+            route=Route.KEY_MANAGEMENT,
+            providers=(Provider.OPENAI,),
+            models=(SYNTHETIC_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_project_detachment_preserves_key_scope_and_refreshes_auth(
         self, client: ManagementClient, project_resources: ResourceManager
     ) -> None:
         resources: Final = project_resources
         name: Final = f"e2e-detach-{unique_marker()}"
         model_id: Final = client.proxy.create_model(
-            name, LiteLLMParamsBody(model="openai/synthetic-detachment", api_key="synthetic", mock_response="orbit")
+            name, LiteLLMParamsBody(model=SYNTHETIC_BACKEND, api_key="synthetic", mock_response="orbit")
         )
         resources.defer(lambda: client.proxy.delete_model(model_id))
         org_id: Final = client.create_org(OrgNewBody(organization_alias=name, models=[name]))
@@ -222,6 +233,7 @@ class TestKeyManagementRoutes:
         assert denied.status_code in (401, 403), denied.body
 
     @pytest.mark.covers("mgmt.key.info.persists")
+    @meta(Subject(domain=Domain.MANAGEMENT, route=Route.KEY_MANAGEMENT))
     def test_info_reflects_the_fields_the_key_was_created_with(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -246,6 +258,7 @@ class TestKeyManagementRoutes:
         assert info.rpm_limit == 141414, f"/key/info reports rpm_limit {info.rpm_limit}, configured 141414"
 
     @pytest.mark.covers("mgmt.key.unblock.persists")
+    @meta(Subject(domain=Domain.MANAGEMENT, route=Route.KEY_MANAGEMENT))
     def test_unblock_flips_key_info_blocked_back(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -266,6 +279,7 @@ class TestKeyManagementRoutes:
         )
 
     @pytest.mark.covers("mgmt.key.health.happy_path")
+    @meta(Subject(domain=Domain.MANAGEMENT, route=Route.KEY_MANAGEMENT))
     def test_health_reports_the_calling_key_healthy(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -285,6 +299,7 @@ class TestKeyManagementRoutes:
         )
 
     @pytest.mark.covers("mgmt.key.bulk_update.happy_path")
+    @meta(Subject(domain=Domain.MANAGEMENT, route=Route.KEY_MANAGEMENT))
     def test_bulk_update_applies_max_budget_to_target_key(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -314,6 +329,15 @@ class TestKeyManagementRoutes:
         )
 
     @pytest.mark.covers("other.key_mgmt.spend_reset.resets_to_value")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.KEY_MANAGEMENT,
+            providers=(Provider.ANTHROPIC,),
+            models=(SPEND_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_reset_spend_zeroes_recorded_spend_and_lifts_the_budget_block(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -340,6 +364,7 @@ class TestKeyManagementRoutes:
         _ = _poll(client, call_allowed_again, "the key stayed budget-blocked after its spend was reset to 0")
 
     @pytest.mark.covers("mgmt.key.generate.admin_only")
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.KEY_MANAGEMENT))
     def test_generate_forbidden_for_non_admin_key(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -355,6 +380,7 @@ class TestKeyManagementRoutes:
         )
 
     @pytest.mark.covers("mgmt.key.delete.admin_only")
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.KEY_MANAGEMENT))
     def test_delete_forbidden_for_non_admin_key(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -374,6 +400,7 @@ class TestKeyManagementRoutes:
         )
 
     @pytest.mark.covers("mgmt.key.update.admin_only")
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.KEY_MANAGEMENT))
     def test_update_forbidden_for_non_admin_key(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:

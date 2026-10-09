@@ -1,3 +1,4 @@
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 use opentelemetry_proto::tonic::{
@@ -12,19 +13,26 @@ use super::{
 };
 use crate::{
     Error, Shared,
-    normalize::{SpanContext, normalize},
+    normalize::{CLAUDE_CODE_EVENTS_SCOPE, CLAUDE_CODE_SCOPE, SpanContext, normalize},
 };
 
 pub(super) fn flatten(
     request: ExportTraceServiceRequest,
     limits: DecodeLimits,
 ) -> Result<Vec<DecodedSpan>, Error> {
+    flatten_with_budget(request, limits).map(|(spans, _)| spans)
+}
+
+pub(super) fn flatten_with_budget(
+    request: ExportTraceServiceRequest,
+    limits: DecodeLimits,
+) -> Result<(Vec<DecodedSpan>, Budget), Error> {
     let mut budget = Budget::new(limits);
     let mut spans = Vec::new();
     for resource in request.resource_spans {
         append_resource(resource, &mut budget, &mut spans)?;
     }
-    Ok(spans)
+    Ok((spans, budget))
 }
 
 fn append_resource(
@@ -123,6 +131,10 @@ fn hex_bytes(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+pub(super) fn session_trace_id(session: &str) -> Vec<u8> {
+    Sha256::digest(format!("litellm.claude.session.v1\0{session}"))[..16].to_vec()
+}
+
 fn decoded_span(
     span: Span,
     resource_attributes: &Shared<BTreeMap<String, String>>,
@@ -132,7 +144,27 @@ fn decoded_span(
 ) -> Result<DecodedSpan, Error> {
     let status = span.status.unwrap_or_default();
     let parent_span_id = hex_bytes(&span.parent_span_id);
-    let span_attributes = attributes(span.attributes, budget)?;
+    let mut span_attributes = attributes(span.attributes, budget)?;
+    let original_trace_id = hex_bytes(&span.trace_id);
+    let trace_id = if matches!(
+        scope_name.as_str(),
+        CLAUDE_CODE_SCOPE | CLAUDE_CODE_EVENTS_SCOPE
+    ) && resource_attributes
+        .get("lens.session.capture")
+        .is_some_and(|value| value == "true")
+        && let Some(session) = span_attributes
+            .get("session.id")
+            .filter(|value| !value.is_empty())
+    {
+        let trace_id = hex_bytes(&session_trace_id(session));
+        let actor = span_attributes.get("agent_id").unwrap_or(session).clone();
+        budget.consume(original_trace_id.len() + actor.len() + 256)?;
+        span_attributes.insert("lens.original_trace_id".to_owned(), original_trace_id);
+        span_attributes.insert("gen_ai.agent.id".to_owned(), actor);
+        trace_id
+    } else {
+        original_trace_id
+    };
     let events = span
         .events
         .into_iter()
@@ -171,9 +203,9 @@ fn decoded_span(
                 .into_iter()
                 .flatten()
                 .map(|key| match key {
-                    crate::CallKey::LiteLlmRequest(id) | crate::CallKey::ProviderResponse(id) => {
-                        id.len() + size_of::<crate::CallKey>()
-                    }
+                    crate::CallKey::LiteLlmRequest(id)
+                    | crate::CallKey::ProviderResponse(id)
+                    | crate::CallKey::ProviderRequest(id) => id.len() + size_of::<crate::CallKey>(),
                     crate::CallKey::Transport | crate::CallKey::GatewayAttempt => {
                         size_of::<crate::CallKey>()
                     }
@@ -183,7 +215,7 @@ fn decoded_span(
             + normalization.display_name.as_ref().map_or(0, String::len),
     )?;
     Ok(DecodedSpan {
-        trace_id: hex_bytes(&span.trace_id),
+        trace_id,
         span_id: hex_bytes(&span.span_id),
         parent_span_id,
         trace_state: span.trace_state,

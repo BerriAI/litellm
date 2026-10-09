@@ -26,10 +26,11 @@ from litellm_enterprise.enterprise_callbacks.secret_detection import (
 
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.utils import hash_token
 
 AWS_KEY = "AKIAIOSFODNN7EXAMPLE"
 OPENAI_KEY = "sk-test-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH"
-SHORT_OPENAI_KEY = "sk-12345"
+SHORT_OPENAI_KEY = "sk-98765"
 UNICODE_DIGIT_SUFFIX = "sk-notification٣"
 STRIPE_LIVE_KEY = f"sk_live_{'1234567890' * 3}"
 URL_ENCODED_KEY = "Bearer%20sk-Ab3dEf6Gh7Ij8Kl9Mn0Pq2Rs3Tu4Vw5X"
@@ -989,3 +990,137 @@ async def test_legacy_nameless_instance_records_nothing():
 
     assert data["messages"][0]["content"] == "use [REDACTED] for auth"
     assert "standard_logging_guardrail_information" not in data["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_basic_secret_detection_chat():
+    secret_instance: Final = _ENTERPRISE_SecretDetection()
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=hash_token("sk-98765"))
+    local_cache: Final = DualCache()
+
+    test_data: Final = {
+        "messages": [
+            {
+                "role": "user",
+                "content": "Hey, how's it going, API_KEY = 'sk_1234567890abcdef'",
+            },
+            {
+                "role": "assistant",
+                "content": "Hello! I'm doing well. How can I assist you today?",
+            },
+            {
+                "role": "user",
+                "content": "this is my OPENAI_API_KEY = 'sk_1234567890abcdef'",
+            },
+            {
+                "role": "user",
+                "content": "My hi API Key is sk-Pc4nlxVoMz41290028TbMCxx, does it seem to be in the correct format?",
+            },
+            {"role": "user", "content": "i think it is +1 412-555-5555"},
+        ],
+        "model": "gpt-3.5-turbo",
+    }
+
+    await secret_instance.async_pre_call_hook(
+        cache=local_cache,
+        data=test_data,
+        user_api_key_dict=user_api_key_dict,
+        call_type="completion",
+    )
+
+    assert test_data == {
+        "messages": [
+            {"role": "user", "content": "Hey, how's it going, API_KEY = '[REDACTED]'"},
+            {
+                "role": "assistant",
+                "content": "Hello! I'm doing well. How can I assist you today?",
+            },
+            {"role": "user", "content": "this is my OPENAI_API_KEY = '[REDACTED]'"},
+            {
+                "role": "user",
+                "content": "My hi API Key is [REDACTED], does it seem to be in the correct format?",
+            },
+            {"role": "user", "content": "i think it is +1 412-555-5555"},
+        ],
+        "model": "gpt-3.5-turbo",
+    }, "Expect all API Keys to be masked"
+
+
+@pytest.mark.asyncio
+async def test_basic_secret_detection_text_completion():
+    secret_instance: Final = _ENTERPRISE_SecretDetection()
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=hash_token("sk-98765"))
+    local_cache: Final = DualCache()
+
+    test_data: Final = {
+        "prompt": "Hey, how's it going, API_KEY = 'sk_1234567890abcdef', my OPENAI_API_KEY = 'sk_1234567890abcdef' and i want to know what is the weather",
+        "model": "gpt-3.5-turbo",
+    }
+
+    await secret_instance.async_pre_call_hook(
+        cache=local_cache,
+        data=test_data,
+        user_api_key_dict=user_api_key_dict,
+        call_type="completion",
+    )
+
+    assert test_data == {
+        "prompt": "Hey, how's it going, API_KEY = '[REDACTED]', my OPENAI_API_KEY = '[REDACTED]' and i want to know what is the weather",
+        "model": "gpt-3.5-turbo",
+    }
+
+
+@pytest.mark.asyncio
+async def test_basic_secret_detection_embeddings():
+    secret_instance: Final = _ENTERPRISE_SecretDetection()
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=hash_token("sk-98765"))
+    local_cache: Final = DualCache()
+
+    test_data: Final = {
+        "input": "Hey, how's it going, API_KEY = 'sk_1234567890abcdef', my OPENAI_API_KEY = 'sk_1234567890abcdef' and i want to know what is the weather",
+        "model": "gpt-3.5-turbo",
+    }
+
+    await secret_instance.async_pre_call_hook(
+        cache=local_cache,
+        data=test_data,
+        user_api_key_dict=user_api_key_dict,
+        call_type="embedding",
+    )
+
+    assert test_data == {
+        "input": "Hey, how's it going, API_KEY = '[REDACTED]', my OPENAI_API_KEY = '[REDACTED]' and i want to know what is the weather",
+        "model": "gpt-3.5-turbo",
+    }
+
+
+@pytest.mark.asyncio
+async def test_basic_secret_detection_embeddings_list():
+    secret_instance: Final = _ENTERPRISE_SecretDetection()
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=hash_token("sk-98765"))
+    local_cache: Final = DualCache()
+
+    test_data: Final = {
+        "input": [
+            "hey",
+            "how's it going, API_KEY = 'sk_1234567890abcdef'",
+            "my OPENAI_API_KEY = 'sk_1234567890abcdef' and i want to know what is the weather",
+        ],
+        "model": "gpt-3.5-turbo",
+    }
+
+    await secret_instance.async_pre_call_hook(
+        cache=local_cache,
+        data=test_data,
+        user_api_key_dict=user_api_key_dict,
+        call_type="embedding",
+    )
+
+    assert test_data == {
+        "input": [
+            "hey",
+            "how's it going, API_KEY = '[REDACTED]'",
+            "my OPENAI_API_KEY = '[REDACTED]' and i want to know what is the weather",
+        ],
+        "model": "gpt-3.5-turbo",
+    }

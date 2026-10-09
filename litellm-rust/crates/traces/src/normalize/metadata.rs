@@ -15,35 +15,65 @@ pub enum AgentType {
 }
 
 #[derive(
-    Clone, Debug, Eq, PartialEq, Serialize, Deserialize, strum::EnumString, strum::Display,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    strum::EnumString,
+    strum::Display,
+    serde_with::DeserializeFromStr,
+    serde_with::SerializeDisplay,
 )]
-#[serde(from = "String", into = "String")]
-#[strum(serialize_all = "kebab-case")]
 pub enum Integration {
+    #[strum(serialize = "claude-code")]
     ClaudeCode,
+    #[strum(serialize = "claude-agent-sdk")]
     ClaudeAgentSdk,
+    #[strum(serialize = "openai-codex")]
     OpenaiCodex,
+    #[strum(serialize = "deepagents-code")]
     DeepagentsCode,
+    #[strum(serialize = "cursor")]
     Cursor,
+    #[strum(serialize = "pi")]
     Pi,
+    #[strum(serialize = "opencode")]
     Opencode,
+    #[strum(serialize = "copilot")]
     Copilot,
+    #[strum(serialize = "langchain")]
     Langchain,
+    #[strum(serialize = "langgraph")]
     Langgraph,
+    #[strum(serialize = "deepagents")]
     Deepagents,
+    #[strum(serialize = "autogen")]
     Autogen,
+    #[strum(serialize = "crewai")]
     Crewai,
+    #[strum(serialize = "google-adk")]
     GoogleAdk,
+    #[strum(serialize = "llama-index")]
     LlamaIndex,
+    #[strum(serialize = "mastra")]
     Mastra,
+    #[strum(serialize = "microsoft-agent-framework")]
     MicrosoftAgentFramework,
+    #[strum(serialize = "openai-agents")]
     OpenaiAgents,
+    #[strum(serialize = "pydantic-ai")]
     PydanticAi,
+    #[strum(serialize = "semantic-kernel")]
     SemanticKernel,
+    #[strum(serialize = "strands")]
     Strands,
+    #[strum(serialize = "vercel-ai-sdk")]
     VercelAiSdk,
+    #[strum(serialize = "instructor")]
     Instructor,
+    #[strum(serialize = "n8n")]
     N8n,
+    #[strum(serialize = "temporal")]
     Temporal,
     #[strum(default)]
     Other(String),
@@ -132,23 +162,36 @@ impl AgentMetadata {
 }
 
 #[derive(strum::EnumString, strum::IntoStaticStr)]
-#[strum(serialize_all = "snake_case")]
 enum MetadataField {
+    #[strum(serialize = "lc_agent_name")]
     LcAgentName,
+    #[strum(serialize = "ls_integration")]
     LsIntegration,
+    #[strum(serialize = "ls_agent_type")]
     LsAgentType,
+    #[strum(serialize = "ls_agent_purpose")]
     LsAgentPurpose,
+    #[strum(serialize = "ls_agent_runtime")]
     LsAgentRuntime,
     #[strum(serialize = "ls_agent_runtime_version", to_string = "ls_agent_version")]
     LsAgentVersion,
+    #[strum(serialize = "ls_trace_schema_version")]
     LsTraceSchemaVersion,
+    #[strum(serialize = "thread_id")]
     ThreadId,
+    #[strum(serialize = "ls_subagent_id")]
     LsSubagentId,
+    #[strum(serialize = "ls_subagent_type")]
     LsSubagentType,
+    #[strum(serialize = "ls_tool_name")]
     LsToolName,
+    #[strum(serialize = "ls_model_name")]
     LsModelName,
+    #[strum(serialize = "ls_provider")]
     LsProvider,
+    #[strum(serialize = "git_branch")]
     GitBranch,
+    #[strum(serialize = "git_commit_sha")]
     GitCommitSha,
     #[strum(serialize = "repository_url", to_string = "git_repo_url")]
     GitRepoUrl,

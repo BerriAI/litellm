@@ -1,9 +1,10 @@
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Final, Literal, cast  # noqa: TID251  # JSON chat rows have no typed constructor across roles
 
-from pydantic import BaseModel, ConfigDict, Field, model_serializer
+from pydantic import ConfigDict, Field, model_serializer
 from typing_extensions import TypedDict
 
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionToolCallChunk,
@@ -12,7 +13,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigM
 from litellm.types.utils import ChatCompletionMessageToolCall
 
 
-class GuardrailToolParam(BaseModel):
+class GuardrailToolParam(LiteLLMBaseModel):
     """A tool forwarded verbatim to the guardrail for inspection.
 
     ``extra="allow"`` keeps provider-specific keys. ``type`` is optional for
@@ -43,7 +44,7 @@ class GenericGuardrailAPIMetadata(TypedDict, total=False):
     user_api_key_org_id: str | None
 
 
-class GenericGuardrailAPIOptionalParams(BaseModel):
+class GenericGuardrailAPIOptionalParams(LiteLLMBaseModel):
     """Optional parameters for the Generic Guardrail API"""
 
     additional_provider_specific_params: dict[str, Any] | None = Field(
@@ -127,7 +128,7 @@ class GenericGuardrailAPIConfigModel(
         return "Generic Guardrail API"
 
 
-class GenericGuardrailAPIRequest(BaseModel):
+class GenericGuardrailAPIRequest(LiteLLMBaseModel):
     """Request model for the Generic Guardrail API"""
 
     input_type: Literal["request", "response"]

@@ -143,6 +143,16 @@ describe("useCredentials", () => {
     expect(credentialListCall).not.toHaveBeenCalled();
   });
 
+  it("does not call the API when the caller disables the query", async () => {
+    (credentialListCall as any).mockResolvedValue(mockCredentialsResponse);
+
+    const { result } = renderHook(() => useCredentials({ enabled: false }), { wrapper });
+
+    expect(result.current.isFetched).toBe(false);
+    expect(result.current.data).toBeUndefined();
+    expect(credentialListCall).not.toHaveBeenCalled();
+  });
+
   it("should return empty credentials array when API returns empty data", async () => {
     // Mock API returning empty credentials array
     (credentialListCall as any).mockResolvedValue({ credentials: [] });

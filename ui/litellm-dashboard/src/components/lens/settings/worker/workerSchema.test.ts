@@ -1,40 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { validateWorkerAddress, analysisAccessSchema, workerFormSchema } from "./workerSchema";
-import { workerSetupCommand } from "./workerCommand";
+import { expect, it } from "vitest";
+import { analysisAccessSchema, workerFormSchema } from "./workerSchema";
 
 const workerDefaults = {
   useExisting: false,
   analysisKey: null,
   access: { model: null, budget: "100" },
-  address: "http://localhost:4000",
 };
-
-describe("worker setup", () => {
-  it.each(["https://gateway.example/proxy", "http://host.docker.internal:4000"])("accepts %s", (address) => {
-    expect(() => validateWorkerAddress(address)).not.toThrow();
-  });
-
-  it.each(["ftp://gateway.example", "https://user:pass@gateway.example", "https://user@gateway.example"])(
-    "rejects %s",
-    (address) => {
-      expect(() => validateWorkerAddress(address)).toThrow("Enter an HTTP or HTTPS proxy URL without credentials");
-    },
-  );
-
-  it("rejects malformed addresses", () => {
-    expect(() => validateWorkerAddress("not a URL")).toThrow("Invalid URL");
-  });
-
-  it("quotes apostrophes literally and retains the pinned image and runtime restrictions", () => {
-    const image = "registry.example/lens-worker:v1.2.3-rc.4";
-    const command = workerSetupCommand("https://gateway.example/proxy?name=it's", "token'quoted", image);
-    expect(command).toContain("'LITELLM_URL=https://gateway.example/proxy?name=it'\\''s'");
-    expect(command).toContain("'LENS_WORKER_TOKEN=token'\\''quoted'");
-    expect(command).toContain("--read-only --cap-drop ALL");
-    expect(command).toContain("--security-opt no-new-privileges --add-host host.docker.internal:host-gateway");
-    expect(command.split("\n").at(-1)?.trim()).toBe(`'${image}'`);
-  });
-});
 
 it.each(["", "0", "-1", "NaN", "Infinity"])("rejects an invalid analysis budget: %s", (budget) => {
   const result = analysisAccessSchema.safeParse({ model: "analysis", budget });
@@ -51,15 +22,14 @@ it("requires a model and converts an accepted analysis budget to a number", () =
   });
 });
 
-it("validates the selected-key branch and non-empty proxy address with field paths", () => {
+it("requires a billing key when using existing access", () => {
   const result = workerFormSchema.safeParse({
     ...workerDefaults,
     useExisting: true,
-    address: " ",
   });
   expect(result.success).toBe(false);
   if (result.success) return;
-  expect(result.error.issues.map(({ path }) => path)).toEqual([["analysisKey"], ["address"]]);
+  expect(result.error.issues.map(({ path }) => path)).toEqual([["analysisKey"]]);
 });
 
 it("validates analysis access only when creating a new virtual key", () => {
