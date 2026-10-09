@@ -180,12 +180,14 @@ def test_key_budget_reservation_rejects_the_second_concurrent_pdf_request(rig: _
             futures: Final = tuple(
                 pool.submit(client.post, path, json=body, headers=headers) for path, body in requests
             )
-            eventually(
-                lambda: wire.received.qsize() + sum(1 for future in futures if future.done()),
-                lambda settled: settled >= 2,
-                seconds=60,
-            )
-            release.set()
+            try:
+                eventually(
+                    lambda: wire.received.qsize() + sum(1 for future in futures if future.done()),
+                    lambda settled: settled >= 2,
+                    seconds=60,
+                )
+            finally:
+                release.set()
             responses: Final = tuple(future.result(timeout=90) for future in futures)
         received: Final = wire.drain()
     assert sorted(response.status_code for response in responses) == [200, 422], [
