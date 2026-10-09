@@ -568,7 +568,18 @@ def test_prepare_payload_includes_litellm_metadata(
 
 
 def test_ensure_litellm_metadata_populates_from_user_api_key_dict() -> None:
-    """Verify _ensure_litellm_metadata populates litellm_metadata."""
+    """Verify _ensure_litellm_metadata populates the request's metadata bucket.
+
+    Updated for #45543. This asserted the literal `litellm_metadata` key, which
+    is what the old implementation created unconditionally -- and creating it on
+    a route whose bucket is `metadata` is the bug: every reader resolves the
+    bucket by presence, so a new key moves them all onto a near-empty dict. The
+    property being protected, that the key metadata reaches the guardrail, is
+    unchanged; it is now asserted on the resolved bucket.
+    """
+    from litellm.litellm_core_utils.core_helpers import (
+        get_metadata_variable_name_from_kwargs,
+    )
     from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
         _ensure_litellm_metadata,
     )
@@ -578,23 +589,37 @@ def test_ensure_litellm_metadata_populates_from_user_api_key_dict() -> None:
 
     _ensure_litellm_metadata(data, user_auth)
 
-    assert "litellm_metadata" in data
-    assert data["litellm_metadata"]["user_api_key_user_id"] == "u1"
-    assert data["litellm_metadata"]["user_api_key_team_id"] == "t1"
+    bucket_name = get_metadata_variable_name_from_kwargs(data)
+    assert bucket_name == "metadata"
+    assert data[bucket_name]["user_api_key_user_id"] == "u1"
+    assert data[bucket_name]["user_api_key_team_id"] == "t1"
 
 
-def test_ensure_litellm_metadata_noop_when_already_present() -> None:
-    """Verify _ensure_litellm_metadata does not overwrite existing litellm_metadata."""
+def test_ensure_litellm_metadata_does_not_overwrite_existing_values() -> None:
+    """Verify _ensure_litellm_metadata leaves values already in the bucket alone.
+
+    Updated for #45543. This asserted the bucket stayed *exactly*
+    `{"existing": "value"}`, because the old implementation returned early
+    whenever `litellm_metadata` was present and so added nothing at all. The
+    merge now runs on the resolved bucket via `setdefault`, so the property
+    worth protecting -- an existing value is never overwritten -- still holds,
+    and is asserted directly rather than through whole-dict equality. The key
+    metadata the guardrail needs is added alongside it.
+    """
     from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
         _ensure_litellm_metadata,
     )
 
     user_auth = UserAPIKeyAuth(user_id="should-not-appear")
-    data: dict = {"litellm_metadata": {"existing": "value"}}
+    data: dict = {"litellm_metadata": {"existing": "value", "user_api_key_user_id": "already-resolved"}}
 
     _ensure_litellm_metadata(data, user_auth)
 
-    assert data["litellm_metadata"] == {"existing": "value"}
+    # Still the `litellm_metadata` bucket: the fix resolves the bucket, it does
+    # not flip routes that genuinely use this one.
+    assert "metadata" not in data
+    assert data["litellm_metadata"]["existing"] == "value"
+    assert data["litellm_metadata"]["user_api_key_user_id"] == "already-resolved"
 
 
 class _CapturingClient:
