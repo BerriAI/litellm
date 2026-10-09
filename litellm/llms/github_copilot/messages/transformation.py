@@ -1,4 +1,4 @@
-from typing import Any, Final
+from typing import Any, Final, cast  # noqa: TID251  # narrows untyped request dicts at the session boundary
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.anthropic.pass_through.messages.transformation import (
@@ -70,7 +70,9 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         # session, never the caller-supplied api_base. rstrip so a
         # tenant-specific base with a trailing slash does not yield a
         # double-slash URL once "/v1/messages" is appended downstream.
-        user_session: Final = require_github_copilot_user_session(litellm_params)  # pyright: ignore[reportUnknownArgumentType]  # litellm_params arrives as an untyped request dict
+        user_session: Final = require_github_copilot_user_session(
+            cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
+        )
         dynamic_api_base: Final = (
             user_session.api_base
             if user_session is not None
@@ -93,7 +95,10 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
             if key not in headers:
                 headers[key] = value
         if user_session is not None:
-            pin_session_authorization(headers, user_session.token)
+            pin_session_authorization(
+                cast("dict[str, str]", headers),  # cast-ok: headers is a str-valued request dict at runtime
+                user_session.token,
+            )
 
         headers["openai-intent"] = "messages-proxy"
         headers["x-interaction-type"] = "messages-proxy"
@@ -127,7 +132,9 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         reuse it to avoid a second authenticator read, falling back to a fresh
         resolution only if it was not provided.
         """
-        user_session: Final = require_github_copilot_user_session(litellm_params)
+        user_session: Final = require_github_copilot_user_session(
+            cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
+        )
         resolved: Final = (
             (user_session.api_base if user_session is not None else None)
             or api_base

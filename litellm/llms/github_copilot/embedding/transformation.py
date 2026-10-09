@@ -8,7 +8,12 @@ https://github.com/caozhiyuan/copilot-api
 """
 
 import os
-from typing import TYPE_CHECKING, Any, Final
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    cast,  # noqa: TID251  # narrows untyped request dicts at the session boundary
+)
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
@@ -63,9 +68,13 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         """
         Validate environment and set up headers for GitHub Copilot API.
         """
-        user_session: Final = require_github_copilot_user_session(litellm_params)  # pyright: ignore[reportUnknownArgumentType]  # litellm_params arrives as an untyped request dict
+        user_session: Final = require_github_copilot_user_session(
+            cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
+        )
         if user_session is not None:
-            session_headers: Final = {**get_copilot_default_headers(user_session.token), **headers}
+            session_headers: Final = cast(  # cast-ok: both spreads are str-valued header dicts
+                "dict[str, str]", {**get_copilot_default_headers(user_session.token), **headers}
+            )
             pin_session_authorization(session_headers, user_session.token)
             return session_headers
         try:
@@ -108,7 +117,9 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         """
         Get the complete URL for GitHub Copilot Embedding API endpoint.
         """
-        user_session: Final = require_github_copilot_user_session(litellm_params)  # pyright: ignore[reportUnknownArgumentType]  # litellm_params arrives as an untyped request dict
+        user_session: Final = require_github_copilot_user_session(
+            cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
+        )
         effective_api_base = (
             (user_session.api_base if user_session is not None else None)
             or api_base

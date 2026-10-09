@@ -4,6 +4,7 @@ CRUD endpoints for storing reusable credentials.
 
 import time
 from collections.abc import Mapping
+from datetime import datetime
 from typing import (
     Annotated,
     Final,
@@ -172,9 +173,12 @@ class CredentialHelperUtils:
     @staticmethod
     def encrypt_credential_values(credential: CredentialItem, new_encryption_key: str | None = None) -> CredentialItem:
         """Encrypt values in credential.credential_values and add to DB"""
-        encrypted_credential_values: Final = {}
+        encrypted_credential_values: Final[dict[str, object]] = {}  # mutable-ok: built one entry per credential value
         for key, value in (credential.credential_values or {}).items():
-            encrypted_credential_values[key] = encrypt_value_helper(value, new_encryption_key)
+            encrypted_credential_values[key] = encrypt_value_helper(
+                cast("str", value),  # cast-ok: credential values are str at the encryption boundary
+                new_encryption_key,
+            )
 
         # Return a new object to avoid mutating the caller's credential, which
         # is kept in memory and should remain unencrypted.
@@ -390,7 +394,7 @@ async def get_credential_by_name(
 )
 async def get_credential_internal_issuer_jwks(
     credential_name: str = Path(..., description="The credential name, percent-decoded; may contain slashes"),
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI resolves the dependency from the default
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI resolves the dependency fro
 ):
     """
     Export the public JWKS for an anthropic ``internal_issuer`` credential, so the operator can
@@ -523,7 +527,7 @@ def _per_user_credential_names() -> tuple[str, ...]:
 async def list_user_connections(
     request: Request,
     fastapi_response: Response,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI resolves the dependency from the default
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI resolves the dependency fro
 ) -> UserProviderConnectionsResponse:
     """List the calling user's per-user provider connections."""
     from litellm.proxy.proxy_server import prisma_client
@@ -545,7 +549,7 @@ async def list_user_connections(
             if payload is not None:
                 github_logins[row.credential_name] = payload.github_login
             updated = getattr(row, "updated_at", None)
-            if updated is not None:
+            if isinstance(updated, datetime):
                 connected_at[row.credential_name] = updated.isoformat()
         return UserProviderConnectionsResponse(
             connections=[
@@ -589,7 +593,7 @@ async def start_user_connection(
     request: Request,
     fastapi_response: Response,
     credential_name: str = Path(..., description="The credential name, percent-decoded"),
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI resolves the dependency from the default
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI resolves the dependency fro
 ) -> UserConnectionStartResponse:
     """Begin a GitHub device flow for the calling user's connection to a per-user credential."""
     from litellm.llms.github_copilot.per_user_auth import astart_device_flow
@@ -636,7 +640,7 @@ async def poll_user_connection(
     fastapi_response: Response,
     body: UserConnectionPollRequest,
     credential_name: str = Path(..., description="The credential name, percent-decoded"),
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI resolves the dependency from the default
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI resolves the dependency fro
 ) -> UserConnectionPollResponse:
     """Poll the device flow once and persist the connection on completion."""
     from litellm.llms.github_copilot.per_user_auth import (
@@ -711,7 +715,7 @@ async def delete_user_connection(
     request: Request,
     fastapi_response: Response,
     credential_name: str = Path(..., description="The credential name, percent-decoded"),
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI resolves the dependency from the default
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI resolves the dependency fro
 ) -> UserConnectionDeleteResponse:
     """Disconnect the calling user's stored GitHub token for a per-user credential. Idempotent."""
     from litellm.llms.github_copilot.per_user_auth import evict_copilot_user_session

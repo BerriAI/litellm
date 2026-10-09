@@ -11,7 +11,8 @@ If given, generate a unique model_id for the deployment.
 Ensures cooldowns are applied correctly.
 """
 
-from typing import Final
+from collections.abc import MutableMapping
+from typing import Final, cast  # noqa: TID251  # narrows the untyped request dict for mutation
 
 from litellm.types.utils import server_owned_wif_litellm_params
 
@@ -119,20 +120,22 @@ def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> di
         # shared mode and send the admin's Copilot token to the redirected host.
         # Per-user mode ignores the caller's api_base anyway (the session's
         # validated host wins), so keeping the mode is fail-closed.
-        credential_name_value: Final[object] = litellm_params.get(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # litellm_params is the untyped request dict
+        credential_name_value: Final[object] = litellm_params.get(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # lite
             "litellm_credential_name"
         )
-        auth_type: Final[object] = litellm_params.get(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # litellm_params is the untyped request dict
+        auth_type: Final[object] = litellm_params.get(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # lite
             "github_copilot_auth_type"
         )
         per_user_credential_locked: Final = github_copilot_auth_mode(
-            credential_name_value,  # pyright: ignore[reportUnknownArgumentType]  # value comes from the untyped request dict
+            credential_name_value,  # pyright: ignore[reportUnknownArgumentType]  # value comes from the untyped request
             auth_type,  # pyright: ignore[reportUnknownArgumentType]  # value comes from the untyped request dict
         )
         for field in _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE:
             if per_user_credential_locked and field in ("litellm_credential_name", "github_copilot_auth_type"):
                 continue
-            litellm_params.pop(field, None)
+            cast(  # cast-ok: litellm_params is a mutable request dict at runtime
+                "MutableMapping[str, object]", litellm_params
+            ).pop(field, None)
             if field in request_kwargs:
                 litellm_params[field] = request_kwargs[field]
         litellm_params[DISABLE_WORKLOAD_IDENTITY_PARAM] = True

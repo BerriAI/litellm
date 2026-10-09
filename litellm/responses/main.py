@@ -670,7 +670,9 @@ async def aresponses(
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
                 model=model,
                 api_base=local_vars.get("base_url", None),
-                litellm_params=GenericLiteLLMParams(**kwargs),
+                litellm_params=GenericLiteLLMParams(
+                    **cast("dict[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
+                ),
             )
             # Update local_vars with detected provider (fixes #19782)
             local_vars["custom_llm_provider"] = custom_llm_provider
@@ -794,7 +796,7 @@ async def aresponses(
             # (mirrors litellm/main.py:1371 for chat completions)
             response.hidden_params["custom_llm_provider"] = custom_llm_provider
 
-        if response is None:  # pyright: ignore[reportUnnecessaryComparison]  # provider handlers can return None at runtime
+        if response is None:  # pyright: ignore[reportUnnecessaryComparison]  # provider handlers can return None at run
             raise ValueError(f"Got an unexpected None response from the Responses API: {response}")
 
         return response
@@ -1264,7 +1266,9 @@ def responses(
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
                 model=model,
                 api_base=local_vars.get("base_url", None),
-                litellm_params=GenericLiteLLMParams(**kwargs),
+                litellm_params=GenericLiteLLMParams(
+                    **cast("dict[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
+                ),
             )
             local_vars["custom_llm_provider"] = custom_llm_provider
 
@@ -1732,11 +1736,13 @@ async def aget_responses(
             response = init_response
 
         # Update the responses_api_response_id with the model_id
-        if not isinstance(response, ResponsesAPIResponse):  # pyright: ignore[reportUnnecessaryIsInstance]  # handlers can return non-ResponsesAPIResponse objects at runtime
+        if not isinstance(response, ResponsesAPIResponse):  # pyright: ignore[reportUnnecessaryIsInstance]  # handlers c
             return response
         return ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
             responses_api_response=response,
-            litellm_metadata=kwargs.get("litellm_metadata", {}),
+            litellm_metadata=cast(  # cast-ok: litellm_metadata is a plain dict when present
+                "dict[str, object]", kwargs.get("litellm_metadata", {})
+            ),
             custom_llm_provider=custom_llm_provider,
         )
     except Exception as e:
@@ -2174,7 +2180,9 @@ async def acompact_responses(
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
                 model=model,
                 api_base=local_vars.get("base_url", None),
-                litellm_params=GenericLiteLLMParams(**kwargs),
+                litellm_params=GenericLiteLLMParams(
+                    **cast("dict[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
+                ),
             )
             # Update local_vars with detected provider (fixes #19782)
             local_vars["custom_llm_provider"] = custom_llm_provider
@@ -2203,11 +2211,13 @@ async def acompact_responses(
             response = init_response
 
         # Update the responses_api_response_id with the model_id
-        if not isinstance(response, ResponsesAPIResponse):  # pyright: ignore[reportUnnecessaryIsInstance]  # handlers can return non-ResponsesAPIResponse objects at runtime
+        if not isinstance(response, ResponsesAPIResponse):  # pyright: ignore[reportUnnecessaryIsInstance]  # handlers c
             return response
         return ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
             responses_api_response=response,
-            litellm_metadata=kwargs.get("litellm_metadata", {}),
+            litellm_metadata=cast(  # cast-ok: litellm_metadata is a plain dict when present
+                "dict[str, object]", kwargs.get("litellm_metadata", {})
+            ),
             custom_llm_provider=custom_llm_provider,
         )
     except Exception as e:

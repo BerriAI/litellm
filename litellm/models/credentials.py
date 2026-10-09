@@ -22,7 +22,11 @@ class CredentialBase(LiteLLMBaseModel):
 
 
 class CredentialItem(CredentialBase):
-    credential_values: dict
+    credential_values: (
+        dict[  # mutable-ok: credential values are decrypted and merged in place by the credential endpoints
+            str, object
+        ]
+    )
     # PATCH-only instruction naming keys to drop from the stored credential_values. It describes an
     # edit rather than the credential, so it stays out of dumps: those feed config loading, the DB
     # write, and the in-memory list, none of which have a place for it.

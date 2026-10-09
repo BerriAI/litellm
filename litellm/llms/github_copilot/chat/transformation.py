@@ -87,7 +87,9 @@ class GithubCopilotConfig(OpenAIConfig):
         for message in messages:
             if message.get("role") == "system":
                 # Convert system message to assistant message
-                transformed_messages.append(cast(AllMessageValues, {**message, "role": "assistant"}))
+                transformed_messages.append(
+                    cast(AllMessageValues, {**message, "role": "assistant"})  # cast-ok: dict matches the union
+                )
             else:
                 transformed_messages.append(message)
 
@@ -111,10 +113,13 @@ class GithubCopilotConfig(OpenAIConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        parent_headers: Final = super().validate_environment(
-            headers, model, messages, optional_params, litellm_params, api_key, api_base
+        parent_headers: Final = cast(  # cast-ok: the parent validate_environment returns a plain dict at runtime
+            "dict[str, str]",
+            super().validate_environment(headers, model, messages, optional_params, litellm_params, api_key, api_base),
         )
-        user_session: Final = require_github_copilot_user_session(litellm_params)  # pyright: ignore[reportUnknownArgumentType]  # litellm_params arrives as an untyped request dict
+        user_session: Final = require_github_copilot_user_session(
+            cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
+        )
         session_token: Final = user_session.token if user_session is not None else None
         validated_headers: Final = {**self._copilot_headers(session_token), **parent_headers}
         if session_token is not None:

@@ -9,7 +9,7 @@ import hashlib
 import os
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import (
     Final,
@@ -323,12 +323,17 @@ def _do_exchange(github_token: str, credential_name: str, cache_key: str) -> Git
     return _session_from_response(response, credential_name, cache_key)
 
 
-async def _do_aexchange(github_token: str, credential_name: str, cache_key: str) -> GithubCopilotUserSession:
-    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+def _new_async_github_client() -> _AsyncGitHubClient:
+    from litellm.llms.custom_httpx import http_handler
 
-    client: Final = cast(  # cast-ok: pins the untyped litellm client to the local Protocol
-        _AsyncGitHubClient, get_async_httpx_client(_LLM_PROVIDER)
-    )
+    return cast(  # cast-ok: pins the untyped litellm client factory to the local Protocol
+        Callable[[str], _AsyncGitHubClient],
+        getattr(http_handler, "get_async_httpx_client"),  # noqa: B009  # getattr keeps the untyped factory out of membe
+    )(_LLM_PROVIDER)
+
+
+async def _do_aexchange(github_token: str, credential_name: str, cache_key: str) -> GithubCopilotUserSession:
+    client: Final = _new_async_github_client()
     try:
         response: Final = await client.get(
             DEFAULT_GITHUB_API_KEY_URL,
@@ -392,11 +397,7 @@ async def aexchange_github_token(
 
 
 async def astart_device_flow() -> GithubCopilotDeviceFlowStart:
-    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-
-    client: Final = cast(  # cast-ok: pins the untyped litellm client to the local Protocol
-        _AsyncGitHubClient, get_async_httpx_client(_LLM_PROVIDER)
-    )
+    client: Final = _new_async_github_client()
     device_code_url: Final = os.getenv("GITHUB_COPILOT_DEVICE_CODE_URL", DEFAULT_GITHUB_DEVICE_CODE_URL)
     client_id: Final = os.getenv("GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID)
     try:
@@ -435,11 +436,7 @@ async def astart_device_flow() -> GithubCopilotDeviceFlowStart:
 
 
 async def apoll_device_flow(device_code: str) -> GithubCopilotDeviceFlowPoll:
-    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-
-    client: Final = cast(  # cast-ok: pins the untyped litellm client to the local Protocol
-        _AsyncGitHubClient, get_async_httpx_client(_LLM_PROVIDER)
-    )
+    client: Final = _new_async_github_client()
     access_token_url: Final = os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_URL", DEFAULT_GITHUB_ACCESS_TOKEN_URL)
     client_id: Final = os.getenv("GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID)
     try:
@@ -504,11 +501,7 @@ def _poll_payload_from_response(response: httpx.Response) -> GithubCopilotDevice
 
 
 async def afetch_github_login(github_token: str) -> str:
-    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-
-    client: Final = cast(  # cast-ok: pins the untyped litellm client to the local Protocol
-        _AsyncGitHubClient, get_async_httpx_client(_LLM_PROVIDER)
-    )
+    client: Final = _new_async_github_client()
     try:
         response: Final = await client.get(
             "https://api.github.com/user",
@@ -653,8 +646,16 @@ def is_github_copilot_per_user_request(kwargs: Mapping[str, object]) -> bool:
     return isinstance(kwargs.get(GITHUB_COPILOT_USER_SESSION_KWARG_KEY), GithubCopilotUserSession)
 
 
-def _without_authorization(headers: Mapping[str, str]) -> Mapping[str, str]:
+def _without_authorization(headers: Mapping[str, object]) -> dict[str, object]:
     return {k: v for k, v in headers.items() if k.lower() != "authorization"}
+
+
+def _str_keyed_mapping(value: object) -> Mapping[str, object] | None:
+    return (
+        cast("Mapping[str, object]", value)  # cast-ok: request mappings are str-keyed
+        if isinstance(value, Mapping)
+        else None
+    )
 
 
 def _strip_caller_authorization(
@@ -667,21 +668,33 @@ def _strip_caller_authorization(
     for key in ("extra_headers", "headers"):
         value = kwargs.get(key)
         if isinstance(value, Mapping):
-            stripped = _without_authorization(value)
-            if len(stripped) != len(value):
+            stripped = _without_authorization(
+                cast("Mapping[str, object]", value)  # cast-ok: Mapping-checked request header dict
+            )
+            if len(stripped) != len(
+                cast("Mapping[object, object]", value)  # cast-ok: Mapping-checked request header dict
+            ):
                 kwargs[key] = stripped  # rebind-ok: kwargs is the request mutation channel
     optional_params: Final = kwargs.get("optional_params")
     if isinstance(optional_params, dict):
-        eh: Final = optional_params.get("extra_headers")
-        if isinstance(eh, Mapping):
+        eh: Final = _str_keyed_mapping(
+            cast("dict[str, object]", optional_params).get(  # cast-ok: optional_params is a plain str-keyed dict
+                "extra_headers"
+            )
+        )
+        if eh is not None:
             kwargs["optional_params"] = {  # rebind-ok: kwargs is the request mutation channel
                 **optional_params,
                 "extra_headers": _without_authorization(eh),
             }
     litellm_params: Final = kwargs.get("litellm_params")
     if isinstance(litellm_params, dict):
-        eh2: Final = litellm_params.get("extra_headers")
-        if isinstance(eh2, Mapping):
+        eh2: Final = _str_keyed_mapping(
+            cast("dict[str, object]", litellm_params).get(  # cast-ok: litellm_params is a plain str-keyed dict
+                "extra_headers"
+            )
+        )
+        if eh2 is not None:
             kwargs["litellm_params"] = {  # rebind-ok: kwargs is the request mutation channel
                 **litellm_params,
                 "extra_headers": _without_authorization(eh2),

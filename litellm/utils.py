@@ -149,7 +149,7 @@ def _snapshot_exception_for_hook(exception: Exception) -> Exception:
         # behavior for `raise ... from ...`), so this must be set after, not before.
         snapshot.__suppress_context__ = exception.__suppress_context__
         return snapshot
-    except Exception:  # noqa: BLE001  # any snapshot failure must fall back to the live object, not break the failure path
+    except Exception:  # noqa: BLE001  # any snapshot failure must fall back to the live object, not break the failure p
         return exception
 
 
@@ -1413,7 +1413,7 @@ async def _client_async_logging_helper(
 ):
     if (
         is_completion_with_fallbacks is False
-    ):  # don't log the parent event litellm.completion_with_fallbacks as a 'log_success_event', this will lead to double logging the same call - https://github.com/BerriAI/litellm/issues/7477
+    ):  # don't log the parent event litellm.completion_with_fallbacks as a 'log_success_event', this will lead to doubl
         print_verbose(
             f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}"
         )
@@ -1630,7 +1630,7 @@ def post_call_processing(
                                             and optional_params["response_format"].get("json_schema") is not None
                                         ):
                                             json_response_format = optional_params["response_format"]
-                                        elif _parsing._completions.is_basemodel_type(  # pyright: ignore[reportPrivateUsage]  # OpenAI parser helper is private
+                                        elif _parsing._completions.is_basemodel_type(  # pyright: ignore[reportPrivateUsage]  # Open
                                             optional_params["response_format"]
                                         ):
                                             json_response_format = type_to_response_format_param(
@@ -1742,7 +1742,7 @@ def client(original_function):
             load_credentials_from_list(kwargs)
             from litellm.llms.github_copilot.per_user_auth import attach_github_copilot_user_session
 
-            attach_github_copilot_user_session(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the untyped request dict
+            attach_github_copilot_user_session(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the un
             kwargs["litellm_logging_obj"] = logging_obj
             LLMCachingHandler: Final = _get_cached_llm_caching_handler()
             _llm_caching_handler: Final[LLMCachingHandler] = LLMCachingHandler(
@@ -1898,7 +1898,7 @@ def client(original_function):
                 end_time=end_time,
             )
 
-            # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
+            # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's dep
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
             if not is_internal_call.get():
                 # Copy the current context to propagate it to the background thread
@@ -1978,7 +1978,7 @@ def client(original_function):
             traceback_exception: Final = traceback.format_exc()
             end_time = datetime.datetime.now()
 
-            # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
+            # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's dep
             if logging_obj:
                 logging_obj.failure_handler(
                     e, traceback_exception, start_time, end_time
@@ -2033,7 +2033,7 @@ def client(original_function):
             load_credentials_from_list(kwargs)
             from litellm.llms.github_copilot.per_user_auth import aattach_github_copilot_user_session
 
-            await aattach_github_copilot_user_session(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the untyped request dict
+            await aattach_github_copilot_user_session(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # kwargs is
             logging_obj.llm_caching_handler = _llm_caching_handler
             # [OPTIONAL] CHECK BUDGET
             if litellm.max_budget:
@@ -2117,14 +2117,14 @@ def client(original_function):
             try:
                 result = await original_function(*args, **call_kwargs)
             except Exception as deployment_error:
-                _deployment_call_end_time = datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
+                _deployment_call_end_time = datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this
                 try:
                     await async_post_call_failure_deployment_hook(
                         request_data=call_kwargs,
                         exception=deployment_error,
                         call_type=call_type,
                     )
-                except BaseException:  # noqa: S110, BLE001  # hook dispatch - including cancellation mid-await - must never replace the real deployment failure, so there is nothing to do with what it raises
+                except BaseException:  # noqa: S110, BLE001  # hook dispatch - including cancellation mid-await - must n
                     pass
                 raise
             end_time = datetime.datetime.now()
@@ -2225,7 +2225,7 @@ def client(original_function):
             traceback_exception: Final = traceback.format_exc()
             # Reuse the timestamp taken right when the deployment call itself failed, before
             # the failure hook ran, so a slow callback doesn't inflate the reported duration.
-            end_time = _deployment_call_end_time if _deployment_call_end_time is not None else datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
+            end_time = _deployment_call_end_time if _deployment_call_end_time is not None else datetime.datetime.now()  # noqa: DTZ005  # matc
             if logging_obj and not _is_litellm_internal_call:
                 unbind_budget_reservation_from_callbacks(logging_obj.litellm_params)
                 try:
@@ -4363,7 +4363,7 @@ def pre_process_non_default_params(
         non_default_params, list
     ):  # fixes https://github.com/BerriAI/litellm/issues/4933
         tools: Final = non_default_params["tools"]
-        for tool in tools:  # clean out 'additionalProperties = False'. Causes vertexai/gemini OpenAI API Schema errors - https://github.com/langchain-ai/langchainjs/issues/5240
+        for tool in tools:  # clean out 'additionalProperties = False'. Causes vertexai/gemini OpenAI API Schema errors
             tool_function = tool.get("function", {})
             parameters = tool_function.get("parameters", None)
             if parameters is not None:
@@ -4898,7 +4898,7 @@ def get_optional_params(
             drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "nadir":
-        optional_params = litellm.NadirConfig().map_openai_params(  # rebind-ok: same optional_params rebinding every sibling provider branch does
+        optional_params = litellm.NadirConfig().map_openai_params(  # rebind-ok: same optional_params rebinding every si
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
@@ -5105,7 +5105,7 @@ def add_provider_specific_params_to_optional_params(
     """
 
     if custom_llm_provider in ["openai", "azure", "text-completion-openai"] + litellm.openai_compatible_providers:
-        # for openai, azure we should pass the extra/passed params within `extra_body` https://github.com/openai/openai-python/blob/ac33853ba10d13ac149b1fa3ca6dba7d613065c9/src/openai/resources/models.py#L46
+        # for openai, azure we should pass the extra/passed params within `extra_body` https://github.com/openai/openai-
         if _should_drop_param(k="extra_body", additional_drop_params=additional_drop_params) is False:
             extra_body: Final = dict(passed_params.pop("extra_body", None) or {})
             for k in passed_params:
@@ -7605,7 +7605,7 @@ def attempt_message_addition(final_messages, message, available_tokens, max_toke
     # if temp_message_tokens > max_tokens, try shortening temp_messages
     elif "function_call" not in message:
         verbose_logger.debug("attempting to shorten message to fit limit")
-        # fit updated_message to be within temp_message_tokens - max_tokens (aka the amount temp_message_tokens is greate than max_tokens)
+        # fit updated_message to be within temp_message_tokens - max_tokens (aka the amount temp_message_tokens is great
         updated_message: Final = shorten_message_to_fit_limit(message, available_tokens, model)
         if can_add_message(updated_message, final_messages, max_tokens, model):
             verbose_logger.debug("can add message, returning [updated_message] + final_messages")
@@ -8311,7 +8311,12 @@ def convert_list_message_to_dict(
     messages: Sequence[BaseModel | Mapping[str, object]],
 ) -> list[dict[str, object]]:  # mutable-ok: callers mutate the returned message dicts
     def _as_message_value(message: BaseModel | Mapping[str, object]) -> AllMessageValues:
-        return cast(AllMessageValues, convert_to_dict(message))  # cast-ok: message dicts satisfy the TypedDict shape
+        return cast(  # cast-ok: message dicts satisfy the TypedDict shape
+            AllMessageValues,
+            convert_to_dict(
+                cast("BaseModel | dict[str, object]", message)  # cast-ok: messages are dicts or pydantic models at runt
+            ),
+        )
 
     return [dict(cleanup_none_field_in_message(message=_as_message_value(message))) for message in messages]
 
@@ -8330,7 +8335,10 @@ def validate_and_fix_openai_messages(messages: list):
             message["tool_calls"] = jsonify_tools(tools=message["tool_calls"])
 
         convert_msg_to_dict = cast(  # cast-ok: message dicts satisfy the TypedDict shape
-            AllMessageValues, convert_to_dict(message)
+            AllMessageValues,
+            convert_to_dict(
+                cast("BaseModel | dict[str, object]", message)  # cast-ok: dicts or pydantic models at runtime
+            ),
         )
         cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)
         new_messages.append(cleaned_message)
