@@ -1277,3 +1277,69 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
         proxy_server.token_counter = original_token_counter
 
 
+@pytest.mark.asyncio
+async def test_local_token_counter_includes_system_and_framing():
+    import tiktoken
+
+    from litellm.litellm_core_utils.token_counter import count_cl100k_prompt_text
+
+    system = "sys text"
+    user = "user text"
+    encoder = tiktoken.get_encoding("cl100k_base")
+    expected = (
+        len(encoder.encode(system, disallowed_special=()))
+        + len(encoder.encode(user, disallowed_special=()))
+        + 100
+    )
+    assert (
+        count_cl100k_prompt_text(
+            system=system,
+            messages=[{"role": "user", "content": user}],
+            framing=100,
+        )
+        == expected
+    )
+
+    mock_deployment = {
+        "litellm_params": {"model": "databricks/system.ai.kimi-k3"},
+        "model_info": {},
+    }
+    mock_router = MagicMock()
+    mock_router.async_get_available_deployment = AsyncMock(return_value=mock_deployment)
+    original_router = getattr(litellm.proxy.proxy_server, "llm_router", None)
+    original_get = litellm.proxy.proxy_server._get_provider_token_counter
+    setattr(litellm.proxy.proxy_server, "llm_router", mock_router)
+    litellm.proxy.proxy_server._get_provider_token_counter = lambda *_args, **_kwargs: (
+        None,
+        None,
+        None,
+    )
+    try:
+        response = await token_counter(
+            request=TokenCountRequest(
+                model="databricks-kimi-k3",
+                system=system,
+                messages=[{"role": "user", "content": user}],
+            ),
+            call_endpoint=True,
+        )
+        assert response.total_tokens == expected
+        assert response.tokenizer_type == "cl100k_base"
+    finally:
+        setattr(litellm.proxy.proxy_server, "llm_router", original_router)
+        litellm.proxy.proxy_server._get_provider_token_counter = original_get
+
+
+@pytest.mark.asyncio
+async def test_bedrock_token_counter_skips_when_framing_configured():
+    counter = BedrockTokenCounter()
+    result = await counter.count_tokens(
+        model_to_use="global.moonshotai.kimi-k3",
+        messages=[{"role": "user", "content": "hello"}],
+        contents=None,
+        request_model="bedrock-kimi-k3",
+    )
+    assert result is not None
+    assert result.error is True
+
+

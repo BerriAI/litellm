@@ -1253,6 +1253,30 @@ def test_vertex_ai_moonshot_uses_openai_handler():
     )
 
 
+@pytest.mark.asyncio
+async def test_vertex_ai_token_counter_skips_zai_partner_count():
+    from unittest.mock import patch
+
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+    from litellm.types.utils import TokenCountResponse
+
+    token_counter = VertexAITokenCounter()
+    with patch(
+        "litellm.llms.vertex_ai.vertex_ai_partner_models.main.VertexAIPartnerModels.count_tokens"
+    ) as mock_partner_count_tokens:
+        result = await token_counter.count_tokens(
+            model_to_use="zai-org/glm-5.2-maas",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={"litellm_params": {}},
+            request_model="vertex-glm-5.2",
+        )
+        assert mock_partner_count_tokens.called is False
+        assert result is not None
+        assert isinstance(result, TokenCountResponse)
+        assert result.error is True
+
+
 def test_vertex_ai_zai_uses_openai_handler():
     """
     Ensure ZAI partner models re-use the OpenAI-format handler.
