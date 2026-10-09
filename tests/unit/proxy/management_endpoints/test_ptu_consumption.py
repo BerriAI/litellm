@@ -167,6 +167,33 @@ def test_rows_keyed_by_an_alias_a_deployment_id_or_a_provider_model_are_sized_li
     assert attached.metadata.total_ptu_hours == pytest.approx(float(len(names)))
 
 
+def test_rows_keyed_by_a_name_a_wildcard_route_serves_are_sized_by_its_shared_deployment(monkeypatch):
+    """A request the router served through a wildcard lands in a row keyed by the name it used,
+    which reports the PTU-hours of the shared deployment behind the pattern."""
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "ptu-*",
+                "litellm_params": {"model": "azure/gpt-4.1", "api_key": "sk-ptu", "api_base": "https://ptu.example"},
+                "model_info": {
+                    "id": "shared-ptu",
+                    "base_model": "azure/gpt-4.1",
+                    "ptu_count": 50,
+                    "cost_per_ptu_per_hour": 1.0,
+                    "ptu_effective_from": "2026-01-01T00:00:00Z",
+                    "ptu_shares": {"team-a": 30, "team-b": 20},
+                },
+            }
+        ]
+    )
+    one_hour: Final = _bucket(_metrics(prompt=_ONE_PTU_HOUR_OF_INPUT, completion=0))
+
+    attached: Final = with_ptu_consumption(_response(_day("2026-09-23", {"ptu-chat": one_hour})), router, "team-a")
+
+    assert attached.results[0].breakdown.model_groups["ptu-chat"].metrics.ptu_hours == pytest.approx(1.0)
+
+
 def _mixed_ptu_router() -> Router:
     """One group split between team-a on a gpt-4.1 PTU deployment and team-b on a gpt-5.5 one,
     beside an open pay-as-you-go deployment of gpt-4.1 in its own group."""

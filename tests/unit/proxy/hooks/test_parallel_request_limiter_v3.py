@@ -7908,6 +7908,34 @@ async def test_naming_the_shared_deployment_directly_draws_on_the_same_ceiling_a
 
 
 @pytest.mark.asyncio
+async def test_every_name_a_wildcard_route_serves_draws_on_its_shared_deployments_ceiling(monkeypatch):
+    """A shared deployment listed under a wildcard serves every name the pattern matches, so a
+    team that spent its share under one of those names cannot keep going under another."""
+    monkeypatch.setenv(PTU_COST_ATTRIBUTION_ENV_VAR, "true")
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    key = UserAPIKeyAuth(api_key=hash_token("sk-ptu"), team_id="t")
+
+    with patch("litellm.proxy.proxy_server.llm_router", _shared_ptu_router("ptu-*")):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=key,
+            cache=cache,
+            data={**_two_thirds_of_a_ptu_minute(), "model": "ptu-chat"},
+            call_type="acompletion",
+        )
+        with pytest.raises(HTTPException) as exc:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=key,
+                cache=cache,
+                data={**_two_thirds_of_a_ptu_minute(), "model": "ptu-summarize"},
+                call_type="acompletion",
+            )
+
+    assert exc.value.status_code == 429
+    assert "model_per_team_ptu" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_the_proxy_router_sets_no_ceiling_while_attribution_is_off(monkeypatch):
     monkeypatch.delenv(PTU_COST_ATTRIBUTION_ENV_VAR, raising=False)
     cache = DualCache()
@@ -7962,6 +7990,26 @@ def test_success_accounting_settles_the_ptu_counter_in_azure_normalized_tokens()
 
     ops = handler._build_success_event_pipeline_operations(
         kwargs=_ptu_success_kwargs(), response_obj=response, rate_limit_type="output"
+    )
+
+    assert _ptu_increment(handler, ops) == 300
+
+
+def test_pass_through_usage_settles_the_ptu_counter_in_azure_normalized_tokens():
+    """A pass-through response carries its usage beside the body rather than in it, and its 100
+    input and 50 output tokens still settle at 300 normalized tokens, not a raw count."""
+    resolve, _ = _ptu_ceiling_for("t", "test-model", tpm_limit=500, ratio=4.0)
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), ptu_team_ceiling_resolver=resolve
+    )
+
+    ops = handler._build_success_event_pipeline_operations(
+        kwargs={
+            **_ptu_success_kwargs(),
+            "combined_usage_object": Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        },
+        response_obj={"response": "upstream body was never parsed"},
+        rate_limit_type="output",
     )
 
     assert _ptu_increment(handler, ops) == 300
@@ -8036,6 +8084,34 @@ async def test_a_reservation_is_settled_even_after_the_teams_share_is_gone():
     ceiling["current"] = None
     ops = handler._build_success_event_pipeline_operations(
         kwargs=_ptu_success_kwargs(),
+        response_obj=_ptu_response(Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)),
+        rate_limit_type="total",
+    )
+
+    assert _ptu_increment(handler, ops) == 300 - stash.ptu_reserved_tokens
+
+
+@pytest.mark.asyncio
+async def test_a_reservation_is_settled_when_the_success_metadata_lost_the_team():
+    """Admission reserved on the team's PTU counter, so settlement credits that scope even when the
+    success event's logging metadata carries no team id, instead of leaving the reservation standing."""
+    cache = DualCache()
+    resolve, _ = _ptu_ceiling_for("t", "test-model", tpm_limit=2000, ratio=4.0)
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), ptu_team_ceiling_resolver=resolve
+    )
+    key = UserAPIKeyAuth(api_key=hash_token("sk-ptu"), team_id="t")
+
+    await handler.async_pre_call_hook(user_api_key_dict=key, cache=cache, data=_ptu_request(), call_type="acompletion")
+    stash = get_request_stash()
+    assert stash is not None
+    assert stash.ptu_reserved_tokens > 300
+
+    ops = handler._build_success_event_pipeline_operations(
+        kwargs={
+            **_ptu_success_kwargs(),
+            "standard_logging_object": {"metadata": {"user_api_key_hash": hash_token("sk-ptu")}},
+        },
         response_obj=_ptu_response(Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)),
         rate_limit_type="total",
     )

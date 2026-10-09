@@ -144,7 +144,10 @@ def _resolve_ptu_team_ceiling_via_proxy_router(team_id: str, model_group: str) -
     if llm_router is None or not is_ptu_cost_attribution_enabled():
         return None
     return team_ptu_ceiling(
-        llm_router.get_model_list() or (),
+        (
+            *(llm_router.get_model_list() or ()),
+            *(llm_router.get_model_list(model_name=model_group, team_id=team_id) or ()),
+        ),
         llm_router.model_list,  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # Router.model_list is a bare list
         team_id,
         model_group,
@@ -5102,7 +5105,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # than parsed out of the body) carry their usage in
         # ``combined_usage_object`` instead, and would otherwise never charge
         # the TPM window.
-        _usage: Usage | dict | None = None
+        _usage: Usage | dict[str, object] | None = None
         if isinstance(
             response_obj,
             (
@@ -5179,7 +5182,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         pipeline_operations.extend(
             self._build_team_ptu_tpm_ops(
                 standard_logging_metadata,  # pyright: ignore[reportUnknownArgumentType]  # untyped logging metadata
-                response_obj=response_obj,
+                usage_source=response_obj if _usage is None else _usage,
                 reconcile_model=reconcile_model,
                 reserved_scopes=reserved_scopes,
                 reserved_ceiling=stash.ptu_ceiling if stash is not None else None,
@@ -5193,7 +5196,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     def _build_team_ptu_tpm_ops(
         self,
         standard_logging_metadata: Mapping[str, object],
-        response_obj: object,
+        usage_source: object,
         reconcile_model: RateLimitedModel | None,
         reserved_scopes: Set[tuple[str, str]],
         reserved_ceiling: PTUTeamCeiling | None,
@@ -5205,10 +5208,20 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         ratio, the way Azure sizes a PTU.
 
         The reservation was taken in those units against the ceiling admission resolved, so that
-        ceiling settles it even after the share changed or went away; when usage cannot be
-        resolved it charges the raw total the other scopes charge so the reservation is never
-        left standing.
+        ceiling settles it even after the share changed or went away or the logging metadata lost
+        the team; when usage cannot be resolved it charges the raw total the other scopes charge
+        so the reservation is never left standing.
         """
+        reserved_ptu_scopes: Final = tuple(scope for scope in reserved_scopes if scope[0] == PTU_TEAM_DESCRIPTOR_KEY)
+        if reserved_ptu_scopes:
+            return self._build_reservation_aware_tpm_ops(
+                targets=reserved_ptu_scopes,
+                reserved_scopes=reserved_scopes,
+                actual_tokens=self._ptu_settlement_tokens(
+                    reserved_ceiling, self._resolve_reconciled_usage(usage_source), total_tokens
+                ),
+                reserved_tokens=reserved_tokens,
+            )
         team_id: Final = standard_logging_metadata.get("user_api_key_team_id")
         if reconcile_model is None or not isinstance(team_id, str) or not team_id:
             return ()
@@ -5217,17 +5230,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if reserved_ceiling is not None
             else self._ptu_team_ceiling_resolver(team_id, reconcile_model.group)
         )
-        reserved_ptu_scopes: Final = tuple(scope for scope in reserved_scopes if scope[0] == PTU_TEAM_DESCRIPTOR_KEY)
-        targets: Final = reserved_ptu_scopes or (
-            ((PTU_TEAM_DESCRIPTOR_KEY, f"{team_id}:{ceiling.model_group}"),) if ceiling is not None else ()
-        )
-        if not targets:
+        if ceiling is None:
             return ()
         return self._build_reservation_aware_tpm_ops(
-            targets=targets,
+            targets=((PTU_TEAM_DESCRIPTOR_KEY, f"{team_id}:{ceiling.model_group}"),),
             reserved_scopes=reserved_scopes,
             actual_tokens=self._ptu_settlement_tokens(
-                ceiling, self._resolve_reconciled_usage(response_obj), total_tokens
+                ceiling, self._resolve_reconciled_usage(usage_source), total_tokens
             ),
             reserved_tokens=reserved_tokens,
         )

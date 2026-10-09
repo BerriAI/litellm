@@ -77,8 +77,8 @@ def team_ptu_ceiling(
     ``requested_model`` add up to, else None when the team holds no share on a deployment with
     a known sizing row.
 
-    ``listed_rows`` is every row the router lists a name under, alias and routing-group copies
-    included, and ``deployments`` is the router's own deployments. A name resolves to the
+    ``listed_rows`` is every row the router lists a name under, alias, routing-group, and
+    wildcard-match copies included, and ``deployments`` is the router's own deployments. A name resolves to the
     deployments behind it, so a group, a routing group, a deployment id, and a provider model
     all count against the one ceiling of the group whose shared deployment the team can be
     served from.
