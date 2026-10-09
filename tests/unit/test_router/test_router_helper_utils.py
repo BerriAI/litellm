@@ -371,6 +371,33 @@ def test_update_kwargs_with_deployment(model_list):
     assert all(field in kwargs["metadata"] for field in set_fields)
 
 
+def test_update_kwargs_with_deployment_keeps_api_key_for_a_bedrock_deployment_without_a_forwarded_scope() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude-bedrock",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-haiku-4-5",
+                    "api_base": "https://bedrock-runtime.us-east-1.amazonaws.com",
+                },
+            }
+        ]
+    )
+    kwargs: Final[dict[str, object]] = {
+        "api_key": "sk-ant-sdk-caller-key",
+        "headers": {"x-api-key": "sk-ant-sdk-caller-key"},
+        "metadata": {"model_group": "claude-bedrock"},
+    }
+
+    deployment: Final = router.get_deployment_by_model_group_name(model_group_name="claude-bedrock")
+    assert deployment is not None
+
+    router._update_kwargs_with_deployment(deployment=deployment.model_dump(), kwargs=kwargs)
+
+    assert kwargs["api_key"] == "sk-ant-sdk-caller-key"
+    assert kwargs["headers"] == {"x-api-key": "sk-ant-sdk-caller-key"}
+
+
 def test_update_kwargs_with_default_litellm_params(model_list):
     """Test if the '_update_kwargs_with_default_litellm_params' function is working correctly"""
     router = Router(

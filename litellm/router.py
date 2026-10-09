@@ -185,8 +185,14 @@ from litellm.router_utils.batch_utils import (
 )
 from litellm.router_utils.client_initalization_utils import InitalizeCachedClient, MaxParallelRequestsLimit
 from litellm.router_utils.clientside_credential_handler import (
+    DEPLOYMENT_LITELLM_PARAMS,
+    STR_KEYED_MAPPING,
+    dispatched_audiences,
     get_dynamic_litellm_params,
+    headers_without_forwarded_api_key,
     is_clientside_credential,
+    is_forwarded_api_key,
+    stamped_forwarded_api_key_scope,
 )
 from litellm.router_utils.common_utils import (
     filter_team_based_models,
@@ -4169,6 +4175,25 @@ class Router:
         deployment_litellm_model_name = deployment["litellm_params"]["model"]
         deployment_api_base = deployment["litellm_params"].get("api_base")
         deployment_model_name: Final = deployment["model_name"]
+        request_view: Final = STR_KEYED_MAPPING.validate_python(kwargs)
+        forwarded_scope: Final = stamped_forwarded_api_key_scope(request_view)
+        dispatched: Final = (
+            frozenset[tuple[str, str] | None]()
+            if forwarded_scope is None
+            else dispatched_audiences(
+                DEPLOYMENT_LITELLM_PARAMS.validate_python(deployment["litellm_params"]), request_view
+            )
+        )
+        if forwarded_scope is not None and not dispatched.issubset(forwarded_scope.audiences):
+            verbose_router_logger.debug(
+                "dropping forwarded api_key: dispatched audiences %s outside %s",
+                dispatched,
+                forwarded_scope.audiences,
+            )
+            if is_forwarded_api_key(request_view.get("api_key"), forwarded_scope):
+                del kwargs["api_key"]  # rebind-ok: this method rewrites the dispatch kwargs by contract
+            for header_kwarg, headers in headers_without_forwarded_api_key(request_view, forwarded_scope).items():
+                kwargs[header_kwarg] = headers  # noqa: PERF403  # rebind-ok: kwargs is untyped, update() is unknown
         if is_clientside_credential(request_kwargs=kwargs):
             deployment_pydantic_obj: Final = self._handle_clientside_credential(
                 deployment=deployment, kwargs=kwargs, function_name=function_name
