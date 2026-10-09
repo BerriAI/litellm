@@ -1,9 +1,14 @@
 use std::collections::BTreeMap;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use litellm_http::Client;
-use litellm_traces::query::named::ReadAccessParams;
-use litellm_traces_cache::{ReadError, TraceReader};
-use litellm_traces_clickhouse::{ClickHouseTraces, Connection, InsertTable, insert_rows};
+use litellm_storage_clickhouse::{Query, fetch};
+use litellm_traces::query::named::{self as contracts, ReadAccessParams};
+use litellm_traces_cache::{ReadError, TraceReader, TraceStore};
+use litellm_traces_clickhouse::{
+    ClickHouseTraces, Connection, InsertTable, insert_rows,
+    query::named::{SpendByResponseIds, SpendByResponseIdsParams, SpendByResponseIdsRow},
+};
 use rstest::rstest;
 use serde_json::json;
 
@@ -230,7 +235,7 @@ async fn large_runs_remain_complete_under_default_reader_limits(
             .send()
             .await?
             .error_for_status()?;
-        for table in ["otel_traces AS o", "spend_logs FINAL"]
+        for table in ["otel_traces AS o", "spend_logs"]
             .into_iter()
             .take(if costed { 2 } else { 1 })
         {
@@ -816,6 +821,176 @@ async fn native_cost_correlation_survives_session_grouping_and_excludes_other_ow
     assert_eq!(
         detail.spans[0].spend_log_request_id.as_deref(),
         Some("log-key-a")
+    );
+    Ok(())
+}
+
+struct FinalSpend;
+
+impl Query for FinalSpend {
+    type Params = SpendByResponseIdsParams;
+    type Row = SpendByResponseIdsRow;
+    const SQL: &'static str = include_str!("queries/spend_final.sql");
+}
+
+fn spend_version(
+    request_id: &str,
+    fields: &[(&str, &str)],
+    end_offset_ms: i64,
+    cost: f64,
+) -> BTreeMap<String, serde_json::Value> {
+    let start_ms = 1_790_000_000_000_i64;
+    BTreeMap::from([
+        ("team_id".to_owned(), json!("team-a")),
+        ("user".to_owned(), json!("user-a")),
+        ("api_key".to_owned(), json!("key-a")),
+    ])
+    .into_iter()
+    .chain(
+        fields
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), json!(value))),
+    )
+    .chain([
+        ("request_id".to_owned(), json!(request_id)),
+        ("start_time".to_owned(), json!(start_ms)),
+        ("end_time".to_owned(), json!(start_ms + end_offset_ms)),
+        ("spend".to_owned(), json!(cost)),
+    ])
+    .collect()
+}
+
+fn sorted_spend(rows: Vec<contracts::SpendByResponseIdsRow>) -> TestResult<Vec<serde_json::Value>> {
+    let mut values = rows
+        .iter()
+        .map(serde_json::to_value)
+        .collect::<Result<Vec<_>, _>>()?;
+    values.sort_by_key(|row| row["request_id"].to_string());
+    Ok(values)
+}
+
+#[rstest]
+#[case::all_teams(true, "", &[], &[("foreign", 4.0), ("reassigned", 2.0)])]
+#[case::owned_by_user(false, "user-a", &[], &[])]
+#[case::team_member(false, "", &["team-a"], &[("reassigned", 2.0)])]
+#[tokio::test]
+async fn spend_lookup_matches_the_final_read_including_replaced_versions(
+    #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+    #[case] all_teams: bool,
+    #[case] user_id: &str,
+    #[case] team_ids: &[&str],
+    #[case] scoped: &[(&str, f64)],
+) -> TestResult {
+    let fixture = migrated_database?;
+    let client = &fixture.database.client;
+    let writer = Connection::writer(&fixture.database.url)?;
+    let managed = format!(
+        "resp_{}",
+        STANDARD
+            .encode("litellm:custom_llm_provider:openai;model_id:m;response_id:chatcmpl-upstream")
+    );
+    let inserts = [
+        vec![
+            spend_version("versioned", &[("response_id", "resp-versioned")], 1, 1.0),
+            spend_version("tied", &[("trace_id", "trace-a")], 2, 1.0),
+            spend_version("moved-away", &[("response_id", "resp-moved")], 1, 1.0),
+            spend_version("moved-in", &[("response_id", "unrelated")], 1, 1.0),
+            spend_version("managed", &[("response_id", managed.as_str())], 1, 0.5),
+            spend_version(
+                "provider",
+                &[("provider_request_id", "req-provider")],
+                1,
+                0.75,
+            ),
+            spend_version("gateway", &[("litellm_call_id", "call-a")], 1, 0.125),
+            spend_version("legacy-call", &[], 1, 0.0625),
+            spend_version("claimed-call", &[("litellm_call_id", "other-call")], 1, 9.0),
+            spend_version("empty-trace", &[("trace_id", "")], 1, 9.0),
+            spend_version("unrelated", &[("response_id", "nothing")], 1, 9.0),
+            spend_version("reassigned", &[("response_id", "resp-versioned")], 1, 1.0),
+            spend_version(
+                "foreign",
+                &[
+                    ("response_id", "resp-versioned"),
+                    ("team_id", "team-b"),
+                    ("user", "user-b"),
+                ],
+                1,
+                4.0,
+            ),
+        ],
+        vec![
+            spend_version("versioned", &[("response_id", "resp-versioned")], 5, 2.0),
+            spend_version("tied", &[("trace_id", "trace-a")], 2, 2.0),
+            spend_version("moved-away", &[("response_id", "unrelated")], 5, 2.0),
+            spend_version("moved-in", &[("response_id", "resp-moved-in")], 5, 2.0),
+            spend_version(
+                "reassigned",
+                &[("response_id", "resp-versioned"), ("user", "user-b")],
+                5,
+                2.0,
+            ),
+        ],
+        vec![
+            spend_version("versioned", &[("response_id", "resp-versioned")], 3, 3.0),
+            spend_version("tied", &[("trace_id", "trace-a")], 2, 3.0),
+        ],
+    ];
+    for rows in inserts {
+        insert_rows(client, &writer, DATABASE, InsertTable::SpendLogs, rows).await?;
+    }
+    let params = contracts::SpendByResponseIdsParams {
+        access: ReadAccessParams {
+            all_teams,
+            user_id: user_id.into(),
+            team_ids: team_ids.iter().map(|team| (*team).to_owned()).collect(),
+        },
+        response_ids: [
+            "resp-versioned",
+            "resp-moved",
+            "resp-moved-in",
+            "chatcmpl-upstream",
+        ]
+        .map(String::from)
+        .to_vec(),
+        provider_request_ids: vec!["req-provider".into()],
+        request_ids: ["call-a", "legacy-call", "claimed-call"]
+            .map(String::from)
+            .to_vec(),
+        trace_ids: vec!["trace-a".into(), String::new()],
+        start_ms: 1_789_999_999_000,
+        end_ms: 1_790_000_001_000,
+    };
+    let connection = Connection::reader(&fixture.database.url, DATABASE)?;
+    let named_params = SpendByResponseIdsParams::from(params.clone());
+    let expected = fetch::<FinalSpend>(client, &connection, &named_params).await?;
+    let named = fetch::<SpendByResponseIds>(client, &connection, &named_params).await?;
+    let batch = ClickHouseTraces::new(client.clone(), connection)
+        .spend(&params)
+        .await?;
+    let costs: BTreeMap<_, _> = batch
+        .iter()
+        .map(|row| (row.request_id.clone(), row.spend))
+        .collect();
+    let visible = [
+        ("gateway", 0.125),
+        ("legacy-call", 0.0625),
+        ("managed", 0.5),
+        ("moved-in", 2.0),
+        ("provider", 0.75),
+        ("tied", 3.0),
+        ("versioned", 2.0),
+    ]
+    .into_iter()
+    .chain(scoped.iter().copied())
+    .map(|(id, cost)| (id.to_owned(), Some(cost)))
+    .collect::<BTreeMap<_, _>>();
+    assert_eq!(costs, visible);
+    let expected = sorted_spend(expected.into_iter().map(|row| row.0).collect())?;
+    assert_eq!(sorted_spend(batch)?, expected);
+    assert_eq!(
+        sorted_spend(named.into_iter().map(|row| row.0).collect())?,
+        expected
     );
     Ok(())
 }

@@ -31,6 +31,7 @@ tokio.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+base64.workspace = true
 jsonschema = { version = "0.55.1", default-features = false }
 litellm-http = { workspace = true, features = ["test-support"] }
 rstest.workspace = true

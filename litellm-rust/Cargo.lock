@@ -4653,6 +4653,7 @@ name = "litellm-traces-clickhouse"
 version = "0.1.0"
 dependencies = [
  "askama",
+ "base64 0.22.1",
  "flate2",
  "futures-util",
  "hmac 0.12.1",
