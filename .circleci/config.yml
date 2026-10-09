@@ -3300,7 +3300,7 @@ workflows:
           cron: "17 0,6,12,18 * * *"
           filters:
             branches:
-              only: main
+              only: [main, rc/1.106.0]
     jobs: *migration_jobs
   routing_parity:
     when:
@@ -3318,7 +3318,7 @@ workflows:
         - << pipeline.parameters.run_migration_tests >>
         - not:
             equal: ["", << pipeline.parameters.routing_parity_base >>]
-    jobs:
+    jobs: &integration_jobs
       - integration_contracts:
           name: integration-<< matrix.suite >>
           matrix:
@@ -3377,39 +3377,39 @@ workflows:
         - << pipeline.parameters.run_migration_tests >>
         - not:
             equal: ["", << pipeline.parameters.routing_parity_base >>]
-    jobs:
+    jobs: &build_and_test_jobs
       - using_litellm_on_windows:
           filters:
             branches:
-              only: main
+              only: [main, rc/1.106.0]
       - windows_release_wheel:
           filters:
             branches:
-              only: main
+              only: [main, rc/1.106.0]
       - provider_replay_harness:
           filters:
             branches:
-              only: main
+              only: [main, rc/1.106.0]
       - base_sdk_install:
           filters:
             branches:
-              only: main
+              only: [main, rc/1.106.0]
       - local_testing_part1:
           filters:
             branches:
-              only: main
+              only: [main, rc/1.106.0]
       - local_testing_part2:
           filters:
             branches:
-              only: main
+              only: [main, rc/1.106.0]
       - langfuse_logging_unit_tests:
           filters:
             branches:
-              only: main
+              only: [main, rc/1.106.0]
       - litellm_router_testing:
           filters:
             branches:
-              only: main
+              only: [main, rc/1.106.0]
       - auth_ui_unit_tests
       - build_docker_database_image
       - e2e_ui_testing
@@ -3432,7 +3432,7 @@ workflows:
       - proxy_build_from_pip_tests:
           filters:
             branches:
-              only: main
+              only: [main, rc/1.106.0]
       - proxy_pass_through_endpoint_tests:
           requires:
             - build_docker_database_image
@@ -3442,52 +3442,52 @@ workflows:
       - llm_translation_testing:
           filters:
             branches:
-              only: main
+              only: [main, rc/1.106.0]
       - realtime_translation_testing:
           filters:
             branches:
-              only: main
+              only: [main, rc/1.106.0]
       - guardrails_testing
       - google_generate_content_endpoint_testing:
           filters:
             branches:
-              only: main
+              only: [main, rc/1.106.0]
       - ocr_testing:
           filters:
             branches:
-              only: main
+              only: [main, rc/1.106.0]
       - search_testing:
           filters:
             branches:
-              only: main
+              only: [main, rc/1.106.0]
       - batches_testing:
           filters:
             branches:
-              only: main
+              only: [main, rc/1.106.0]
       - litellm_utils_testing:
           filters:
             branches:
-              only: main
+              only: [main, rc/1.106.0]
       - pass_through_unit_testing:
           filters:
             branches:
-              only: main
+              only: [main, rc/1.106.0]
       - image_gen_testing:
           filters:
             branches:
-              only: main
+              only: [main, rc/1.106.0]
       - logging_testing:
           filters:
             branches:
-              only: main
+              only: [main, rc/1.106.0]
       - audio_testing:
           filters:
             branches:
-              only: main
+              only: [main, rc/1.106.0]
       - upload-coverage:
           filters:
             branches:
-              only: main
+              only: [main, rc/1.106.0]
           requires:
             - realtime_translation_testing
             - google_generate_content_endpoint_testing
@@ -3508,24 +3508,40 @@ workflows:
       - installing_litellm_on_python:
           filters:
             branches:
-              only: main
+              only: [main, rc/1.106.0]
       - installing_litellm_on_python_3_13:
           filters:
             branches:
-              only: main
+              only: [main, rc/1.106.0]
       - installing_litellm_on_python_v2_migration_resolver:
           filters:
             branches:
-              only: main
+              only: [main, rc/1.106.0]
       - helm_chart_testing:
           filters:
             branches:
-              only: main
+              only: [main, rc/1.106.0]
           requires:
             - build_docker_database_image
       - test_bad_database_url:
           filters:
             branches:
-              only: main
+              only: [main, rc/1.106.0]
           requires:
             - build_docker_database_image
+  integration_rc_scheduled:
+    triggers:
+      - schedule:
+          cron: "39 0,6,12,18 * * *"
+          filters:
+            branches:
+              only: rc/1.106.0
+    jobs: *integration_jobs
+  build_and_test_rc_scheduled:
+    triggers:
+      - schedule:
+          cron: "39 0,6,12,18 * * *"
+          filters:
+            branches:
+              only: rc/1.106.0
+    jobs: *build_and_test_jobs
