@@ -1152,7 +1152,10 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
             </div>
 
             {/* Scrollable content - inline vertical stepper */}
-            <div className="min-w-0 max-w-full max-h-[calc(80vh-120px)] overflow-x-auto overflow-y-auto px-4 py-4 sm:px-6">
+            <div
+              data-testid="guardrail-wizard-scroll-region"
+              className="min-w-0 max-w-full max-h-[calc(80vh-120px)] overflow-x-auto overflow-y-auto px-4 py-4 sm:px-6"
+            >
               <form onSubmit={(event) => event.preventDefault()}>
                 {stepConfigs.map((step, index) => {
                   const isDone = index < currentStep;
@@ -1187,7 +1190,9 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
                         </div>
 
                         {/* Expanded form content for current step */}
-                        {isCurrent && <div className="mt-3 min-w-0 max-w-full overflow-x-auto">{renderStepContent()}</div>}
+                        {isCurrent && (
+                          <div className="mt-3 min-w-0 max-w-full overflow-x-auto">{renderStepContent()}</div>
+                        )}
                       </div>
                     </div>
                   );
